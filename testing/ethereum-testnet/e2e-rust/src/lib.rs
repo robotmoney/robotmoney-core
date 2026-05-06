@@ -78,6 +78,18 @@ pub const DEPLOYER_PRIVATE_KEY_HEX: &str =
     "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
 pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa776";
 pub const PAUSER_ADDRESS_HEX: &str = "0x71bE63f3384f5fb98995898A86B02Fb2426c5788";
+/// Private key listed alongside `0x71bE63…` in
+/// `typescript-sdk/src/index.ts:getTestAccounts`. **Note: this key does
+/// not actually derive that address** (it derives
+/// `0x614561D2d143621E126e87831AEF287678B442b8`); the TS SDK
+/// constants disagree with each other. We keep the value here for
+/// parity with the SDK but Anvil-flavor scenarios that need to
+/// transact as the PAUSER use `anvil_impersonateAccount` via
+/// [`Fixture::pause_gateway`] instead — which works regardless of
+/// whether a matching key is known. Geth-flavor scenarios will need a
+/// genuinely matching key (issue #19).
+pub const PAUSER_PRIVATE_KEY_HEX: &str =
+    "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
 
 /// Errors raised by the harness itself. Failures from `rmpd`
@@ -519,6 +531,142 @@ impl Fixture {
     pub fn anvil_set_next_base_fee(&self, wei: u64) -> Result<(), HarnessError> {
         self.require_anvil("anvil_setNextBlockBaseFeePerGas")?;
         AnvilRpc::new(&self.rpc_url).set_next_base_fee(wei)
+    }
+
+    /// Send a transaction via `cast send` from an arbitrary private key.
+    ///
+    /// `private_key_hex` must be 0x-prefixed. `to` is the contract
+    /// address, `sig` is a Solidity-style call signature
+    /// (e.g. `"approve(address,uint256)"`), and `args` are the
+    /// stringified positional arguments. Returns the transaction hash on
+    /// success. Used by scenario tests to flip on-chain state
+    /// (`pause()`, `approve(...)`, `revokeAgent(...)`) without pulling in
+    /// a full alloy contract instance per test.
+    pub fn cast_send(
+        &self,
+        private_key_hex: &str,
+        to: Address,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<String, HarnessError> {
+        if which::which("cast").is_err() {
+            return Err(HarnessError::FoundryMissing("cast"));
+        }
+        let to_hex = format!("{to:#x}");
+        let mut cmd = Command::new("cast");
+        cmd.args([
+            "send",
+            "--rpc-url",
+            &self.rpc_url,
+            "--private-key",
+            private_key_hex,
+            &to_hex,
+            sig,
+        ]);
+        for a in args {
+            cmd.arg(a);
+        }
+        cmd.arg("--json");
+        let out = cmd.output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast send {sig} failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
+        Ok(v.get("transactionHash")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+
+    /// Approve `gateway` to pull `amount` USDC from the agent EOA.
+    /// Convenience wrapper over [`Self::cast_send`] that signs with
+    /// [`AGENT_PRIVATE_KEY`].
+    pub fn approve_usdc_from_agent(&self, amount: u128) -> Result<String, HarnessError> {
+        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        self.cast_send(
+            &agent_pk_hex,
+            self.usdc(),
+            "approve(address,uint256)",
+            &[&format!("{:#x}", self.gateway()), &amount.to_string()],
+        )
+    }
+
+    /// Pause the gateway by sending `pause()` from the PAUSER_ROLE
+    /// holder. Used by the `paused_blocks_deposit` scenario.
+    ///
+    /// On Anvil we use `anvil_impersonateAccount` to send the call as
+    /// `PAUSER_ADDRESS_HEX` directly — the TS SDK's listed PAUSER
+    /// private key does not derive the on-chain PAUSER_ROLE holder, so
+    /// signed-key-based dispatch would fail. The on-chain effect is the
+    /// same: `paused()` returns `true` afterwards.
+    pub fn pause_gateway(&self) -> Result<String, HarnessError> {
+        self.require_anvil("pause_gateway (impersonation)")?;
+        // 4-byte selector of `pause()`. Hard-coded rather than pulled
+        // through `RobotMoneyGateway::pauseCall` so the harness has zero
+        // dependency on which subset of the ABI the rmpd crate happens
+        // to expose at any given time.
+        let selector = &keccak256(b"pause()")[..4];
+        self.anvil_impersonate_send(PAUSER_ADDRESS_HEX, self.gateway(), selector)
+    }
+
+    /// `anvil_impersonateAccount` + `eth_sendTransaction` from `from`.
+    /// Returns the mined transaction hash. We pre-fund `from` with 1
+    /// ETH if it has zero balance so gas estimation succeeds.
+    fn anvil_impersonate_send(
+        &self,
+        from_hex: &str,
+        to: Address,
+        data: &[u8],
+    ) -> Result<String, HarnessError> {
+        let rpc = AnvilRpc::new(&self.rpc_url);
+        // Make sure the impersonated account has enough ETH to pay gas.
+        rpc.set_balance(from_hex, "0xde0b6b3a7640000")?; // 1 ETH
+        rpc.rpc("anvil_impersonateAccount", serde_json::json!([from_hex]))?;
+        let tx = serde_json::json!({
+            "from": from_hex,
+            "to": format!("{to:#x}"),
+            "data": format!("0x{}", hex::encode(data)),
+        });
+        let tx_hash_v = rpc.rpc("eth_sendTransaction", serde_json::json!([tx]))?;
+        let tx_hash = tx_hash_v
+            .as_str()
+            .ok_or_else(|| HarnessError::other("eth_sendTransaction: no string result"))?
+            .to_string();
+        // Stop impersonating regardless of receipt outcome.
+        let _ = rpc.rpc(
+            "anvil_stopImpersonatingAccount",
+            serde_json::json!([from_hex]),
+        );
+        // Anvil instant-mines, so the receipt is already available; check
+        // status to surface a revert immediately.
+        let receipt = rpc.rpc("eth_getTransactionReceipt", serde_json::json!([tx_hash]))?;
+        let status = receipt
+            .get("status")
+            .and_then(|x| x.as_str())
+            .unwrap_or("0x0");
+        if status != "0x1" {
+            return Err(HarnessError::other(format!(
+                "impersonated tx reverted: receipt={receipt}"
+            )));
+        }
+        Ok(tx_hash)
+    }
+
+    /// Revoke the agent's `AGENT_ROLE` by sending `revokeAgent(agent)`
+    /// from the deployer (which holds `ADMIN_ROLE`). Used by the
+    /// `unauthorized_agent_rejected` scenario.
+    pub fn revoke_agent(&self) -> Result<String, HarnessError> {
+        self.cast_send(
+            DEPLOYER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "revokeAgent(address)",
+            &[&format!("{:#x}", self.agent())],
+        )
     }
 
     /// Mint mock USDC to `recipient`. Calls `MockUSDC.mint(addr, amount)`
