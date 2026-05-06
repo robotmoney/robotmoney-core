@@ -621,6 +621,14 @@ the same concepts.
 - Commands that combine multiple reads include a `partial` flag and a
   per-field error list if some reads fail.
 
+See `docs/technical/rmpc-read-output-contract.md` for the operational
+decision record (issue #51): the shared envelope shape, the
+`PartialBuilder` aggregation seam, the `DecimalU256` / `DecimalU128`
+newtypes that enforce "decimal-string large integers" at the type
+level, and the surfaces every read-command batch must consume. Stub
+module lives at `clients/rust-payment-client/src/read_output.rs`. No
+read-command behavior changes from this scout.
+
 **Acceptance criteria.**
 
 - Agents can answer "is the vault healthy?", "what is my position?",
