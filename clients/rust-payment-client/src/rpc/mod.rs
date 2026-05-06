@@ -242,6 +242,26 @@ impl RpcClient {
     pub async fn get_logs(&self, filter: Value) -> Result<Vec<RawLog>> {
         self.call("eth_getLogs", json!([filter])).await
     }
+
+    /// `eth_getBlockByNumber(tag, false)` — returns just the timestamp
+    /// of the block at `block_number` (seconds since unix epoch). Used
+    /// by §9 read commands to compute time-keyed views (e.g. the
+    /// agent's current window id) deterministically against the pinned
+    /// block, not the daemon's wall clock. `false` for the second
+    /// `fullTransactions` arg keeps the response small.
+    pub async fn block_timestamp(&self, block_number: u64) -> Result<u64> {
+        let tag = format!("0x{block_number:x}");
+        let v: Value = self
+            .call("eth_getBlockByNumber", json!([tag, false]))
+            .await?;
+        let ts_hex = v
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RmpcError::ErrRpcDecode("block has no timestamp".to_string()))?;
+        let stripped = ts_hex.trim_start_matches("0x");
+        u64::from_str_radix(stripped, 16)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("timestamp hex: {e}")))
+    }
 }
 
 /// Minimal `eth_getLogs` log shape used by the daemon. Only the fields

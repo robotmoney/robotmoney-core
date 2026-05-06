@@ -70,4 +70,39 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Read vault state directly from chain (issue #49 / §9).
+    GetVault {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Read gateway state directly from chain (issue #49 / §9).
+    GetGateway {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Read an agent's authorization + window usage (issue #49 / §9).
+    GetAgent {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Target agent address, 0x-prefixed hex.
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Read role membership on the gateway for a target address
+    /// (issue #49 / §9).
+    GetRoles {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Target address, 0x-prefixed hex.
+        #[arg(long)]
+        address: String,
+        #[arg(long)]
+        pretty: bool,
+    },
 }
