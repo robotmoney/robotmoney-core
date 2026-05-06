@@ -1,0 +1,28 @@
+{
+    "name": "@robotmoney/ethereum-docker-testnet",
+    "version": "0.1.0",
+    "type": "module",
+    "description": "Local Ethereum multi-validator testnet harness for Robot Money (ported from Atomica)",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsc",
+        "test": "bun test",
+        "test:smoke": "bun test test/minimal-deployment.test.ts",
+        "clean": "rm -rf dist"
+    },
+    "dependencies": {
+        "dotenv": "^16.3.1",
+        "ethers": "^6.16.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.2.2",
+        "@types/node": "^20.8.2"
+    }
+}
