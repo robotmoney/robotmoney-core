@@ -19,17 +19,27 @@ on:
       - ".github/workflows/e2e-rust-ci.yml"
   workflow_dispatch:
 
+# Issue #37 dropped the Anvil-flavor job; the harness has a single
+# Geth+Lighthouse backend now. Per the project's stated tradeoff the
+# extra ~60s docker boot (vs Anvil's sub-second start) is acceptable in
+# exchange for one less harness shape to maintain.
+
 jobs:
-  anvil-smoke:
-    name: Anvil-flavor smoke test
+  geth-tests:
+    name: Geth+Lighthouse e2e scenarios
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -48,9 +58,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-e2e-geth-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-e2e-
+            ${{ runner.os }}-cargo-e2e-geth-
 
       - name: rmpc fmt + clippy
         working-directory: clients/rust-payment-client
@@ -64,50 +74,6 @@ jobs:
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
 
-      - name: Build rmpc binary
-        run: |
-          cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
-
-      - name: Anvil smoke test
-        working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --test anvil_smoke -- --nocapture
-
-  geth-tests:
-    name: Geth+Lighthouse-flavor scenario tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Verify Docker is available
-        run: |
-          docker version
-          docker compose version
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
-      - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-e2e-geth-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-e2e-geth-
-            ${{ runner.os }}-cargo-e2e-
-
       - name: Pre-pull Docker images
         working-directory: testing/ethereum-testnet/config
         run: docker compose pull --ignore-pull-failures || true
@@ -116,11 +82,37 @@ jobs:
         run: |
           cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
-      - name: Geth scenario tests
+      # Each test binary boots its own Geth devnet on port 8545. CI runs
+      # them sequentially so the port is never contended; tests within a
+      # binary serialize via `--test-threads=1`.
+      #
+      # The shared `Fixture` lives in a `static OnceLock` inside each
+      # test binary, so its `Drop` is NOT guaranteed to run at process
+      # exit (Rust does not destruct statics). We therefore tear the
+      # compose stack down explicitly between binaries — otherwise the
+      # next `compose up -d` finds containers Running with the volume
+      # already populated, recreates the `setup` service against the
+      # populated volume, and the genesis script fails with exit 1.
+
+      - name: e2e smoke test
         working-directory: testing/ethereum-testnet/e2e-rust
-        env:
-          RMPC_E2E_GETH: "1"
-        run: cargo test --release --test geth -- --test-threads=1 --nocapture
+        run: cargo test --release --test smoke -- --test-threads=1 --nocapture
+
+      - name: Tear down docker between binaries (post-smoke)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e scenario suite
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test scenarios -- --test-threads=1 --nocapture
+
+      - name: Tear down docker between binaries (post-scenarios)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e window-cap scenario
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test window_cap -- --test-threads=1 --nocapture
 
       - name: Tear down docker on failure
         if: always()

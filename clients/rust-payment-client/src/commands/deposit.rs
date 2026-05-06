@@ -192,6 +192,32 @@ pub fn run(args: Args) -> i32 {
         cfg.signer.allow_software_fallback,
     ) {
         Ok(s) => s,
+        Err(crate::signer::SignerError::ErrSoftwareSignerDisallowed) => {
+            // Operator policy refused the software keystore. Surface this
+            // as a structured refusal on stdout (mirroring other refusals
+            // like ErrConcurrentInvocation) so test harnesses and audit
+            // scrapers see `ErrSoftwareSignerDisallowed` without having to
+            // tail the rotating diagnostic file.
+            log::error!(
+                "rmpc deposit: ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true"
+            );
+            emit_refusal(
+                &DepositFailure {
+                    status: "refused",
+                    error: "ErrSoftwareSignerDisallowed".to_string(),
+                    message: Some(
+                        "[signer].allow_software_fallback must be true to use the software keystore"
+                            .to_string(),
+                    ),
+                    agent: None,
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
         Err(e) => {
             log::error!("rmpc deposit: signer load failed: {e}");
             return EXIT_STARTUP_FAIL;

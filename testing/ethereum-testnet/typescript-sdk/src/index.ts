@@ -436,13 +436,17 @@ export class EthereumDockerTestnet {
       "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
     return [
       { address: account0Address, privateKey: account0PrivateKey },
+      // Issue #37: corrected the pairings below — both lines previously
+      // listed an `address` that does not derive from the corresponding
+      // `privateKey`. Verifiable via
+      // `cast wallet address --private-key <hex>`.
       {
-        address: "0x71bE63f3384f5fb98995898A86B02Fb2426c5788",
+        address: "0x614561D2d143621E126e87831AEF287678B442b8",
         privateKey:
           "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710",
       },
       {
-        address: "0xFABB0ac9d68B0B445fB7357272Ff202C5651694a",
+        address: "0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241",
         privateKey:
           "0xab63b23eb7941c1251757e24b3d2350d2bc05c3c388d06f8fe6feafefb1e8c70",
       },

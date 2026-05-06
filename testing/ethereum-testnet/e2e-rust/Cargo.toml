@@ -2,7 +2,7 @@
 name = "rmpc-e2e"
 version = "0.1.0"
 edition = "2021"
-description = "End-to-end harness for rmpc against Anvil and the Geth+Lighthouse devnet."
+description = "End-to-end harness for rmpc against the Geth+Lighthouse devnet."
 license = "MIT"
 publish = false
 

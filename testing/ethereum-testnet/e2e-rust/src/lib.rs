@@ -2,22 +2,20 @@
 //!
 //! End-to-end test harness for `rmpc` (Rust payment daemon).
 //!
-//! Issue #17 / `docs/implementation-plan.md` §4.
+//! Issue #17 (scaffold), #18/#19 (scenarios), #37 (consolidation onto
+//! Geth+Lighthouse only).
 //!
-//! Two flavors:
+//! Single backend: boots the
+//! `testing/ethereum-testnet/config/docker-compose.yaml` Geth +
+//! Lighthouse stack from the host and runs `forge script` against it
+//! with overridable env so the deployed gateway matches the addresses
+//! the harness owns. Rationale for dropping the prior Anvil flavor: the
+//! project is not optimizing for fast feedback (#37), and parallel
+//! Anvil/Geth coverage was net cost — duplicate scenarios, two harness
+//! shapes, and impersonation paths that diverge from real-chain
+//! semantics.
 //!
-//! - [`Fixture::anvil`] — spawns a fresh `anvil` child process, deploys
-//!   the gateway stack via `forge script contracts/script/Deploy.s.sol`,
-//!   and prepares a per-test keystore + config TOML pointing at it. Fast
-//!   (sub-second blocks), used for logic-only scenarios.
-//! - [`Fixture::geth`] — boots the existing
-//!   `testing/ethereum-testnet/config/docker-compose.yaml` Geth +
-//!   Lighthouse stack plus the `docker-compose.deployer.yaml` overlay.
-//!   Slower (12-second block cadence), used for real-chain semantics.
-//!   Gated behind `RMPC_E2E_GETH=1` so plain `cargo test` doesn't
-//!   require Docker.
-//!
-//! Both flavors expose the same [`Fixture`] surface:
+//! [`Fixture`] surface:
 //!
 //! - Deployed addresses ([`Fixture::gateway`], [`Fixture::usdc`],
 //!   [`Fixture::vault`], [`Fixture::agent`]).
@@ -26,16 +24,17 @@
 //! - Subprocess helpers wrapping the `rmpc` binary
 //!   ([`Fixture::run_rmpc_self_check`], [`Fixture::run_rmpc_status`],
 //!   [`Fixture::run_rmpc_deposit`]).
-//! - Anvil-only helpers ([`Fixture::evm_snapshot`],
-//!   [`Fixture::evm_revert`], [`Fixture::anvil_set_next_base_fee`])
-//!   that no-op or panic when invoked on a Geth fixture.
+//! - On-chain state pokes ([`Fixture::pause_gateway`],
+//!   [`Fixture::unpause_gateway`], [`Fixture::revoke_agent`],
+//!   [`Fixture::reauthorize_agent`]) signed with real harness keys —
+//!   no `anvil_impersonateAccount`.
 //!
-//! The harness owns its tempdir and child processes; dropping the
-//! [`Fixture`] tears everything down.
+//! The harness owns its tempdir and the docker-compose stack; dropping
+//! the [`Fixture`] tears the stack down.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -50,10 +49,14 @@ const TEST_PASSPHRASE: &str = "rmpc-e2e-passphrase";
 
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// shared with the docker harness fixtures; never use on a real chain.
-/// The matching address is computed at runtime via
-/// [`agent_address`] (it is *not* the `0xFABB…` address listed in
-/// `typescript-sdk/src/index.ts`; that constant is incorrect for this
-/// privkey, see `cast wallet address`).
+/// The matching address is computed at runtime via [`agent_address`].
+/// Note: this key derives `0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241`,
+/// which **disagrees** with the agent address the docker
+/// `gateway-deployer` overlay hardcodes (`0xFABB0ac9…`); the harness
+/// runs `forge script` from the host with `AGENT_ADDRESS` set to
+/// [`agent_address`]'s output so the deployed `AGENT_ROLE` matches the
+/// keystore the harness writes. The TS SDK's `getTestAccounts` listing
+/// is similarly off — see `typescript-sdk/src/index.ts`.
 pub const AGENT_PRIVATE_KEY: [u8; 32] = [
     0xab, 0x63, 0xb2, 0x3e, 0xb7, 0x94, 0x1c, 0x12, 0x51, 0x75, 0x7e, 0x24, 0xb3, 0xd2, 0x35, 0x0d,
     0x2b, 0xc0, 0x5c, 0x3c, 0x38, 0x8d, 0x06, 0xf8, 0xfe, 0x6f, 0xea, 0xfe, 0xfb, 0x1e, 0x8c, 0x70,
@@ -64,34 +67,36 @@ pub const AGENT_PRIVATE_KEY: [u8; 32] = [
 /// script's `AGENT_ADDRESS` env, the keystore's address, and the
 /// rmpc config all flow from this one helper.
 pub fn agent_address() -> Address {
-    use k256::ecdsa::SigningKey;
-    let sk = SigningKey::from_bytes((&AGENT_PRIVATE_KEY).into())
-        .expect("static AGENT_PRIVATE_KEY is valid");
-    let vk = sk.verifying_key();
-    let pubkey = vk.to_encoded_point(/* compress = */ false);
-    // `pubkey.as_bytes()` is the SEC1 uncompressed form: 0x04 || X || Y.
-    let hash = keccak256(&pubkey.as_bytes()[1..]);
-    Address::from_slice(&hash[12..])
+    derive_address(&AGENT_PRIVATE_KEY)
 }
 
 /// Genesis-funded deployer / admin from the docker harness. Used as
-/// `--from` for `forge script` and as the Anvil-pre-funded sender.
+/// `--from` for `forge script` and as the deploy-time signer for
+/// admin-role on-chain pokes (revoke/reauthorize agent).
 pub const DEPLOYER_PRIVATE_KEY_HEX: &str =
     "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
 pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa776";
-pub const PAUSER_ADDRESS_HEX: &str = "0x71bE63f3384f5fb98995898A86B02Fb2426c5788";
-/// Private key listed alongside `0x71bE63…` in
-/// `typescript-sdk/src/index.ts:getTestAccounts`. **Note: this key does
-/// not actually derive that address** (it derives
-/// `0x614561D2d143621E126e87831AEF287678B442b8`); the TS SDK
-/// constants disagree with each other. We keep the value here for
-/// parity with the SDK but Anvil-flavor scenarios that need to
-/// transact as the PAUSER use `anvil_impersonateAccount` via
-/// [`Fixture::pause_gateway`] instead — which works regardless of
-/// whether a matching key is known. Geth-flavor scenarios will need a
-/// genuinely matching key (issue #19).
+
+/// Private key paired with `0x71bE63…` in `typescript-sdk/src/index.ts`.
+/// **The pairing is wrong** — this key derives
+/// `0x614561D2d143621E126e87831AEF287678B442b8`, *not* `0x71bE63…`. We
+/// keep the key value for parity with the SDK and use the
+/// actually-derived address ([`PAUSER_ADDRESS_HEX`]) when overriding
+/// the deploy script's `PAUSER_ADDRESS` env, so PAUSER_ROLE lands on an
+/// address whose key is known to the harness. This lets
+/// [`Fixture::pause_gateway`] dispatch via `cast send` rather than
+/// requiring `anvil_impersonateAccount` (which Geth does not expose).
 pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
+
+/// Address derived from [`PAUSER_PRIVATE_KEY_HEX`]. Verifiable via
+/// `cast wallet address --private-key 0x53321db7…`. Granted PAUSER_ROLE
+/// at deploy time by the harness (overrides the deploy script's
+/// default `PAUSER_ADDRESS` env).
+pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8";
+
+/// Genesis-funded EOA registered as the share receiver. Owned by the
+/// docker compose genesis allocation; not used as a signer in tests.
 pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
 
 /// Errors raised by the harness itself. Failures from `rmpc`
@@ -101,7 +106,7 @@ pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C726
 pub enum HarnessError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("foundry binary `{0}` not found on PATH; install via https://getfoundry.sh")]
+    #[error("required binary `{0}` not found on PATH; install via https://getfoundry.sh")]
     FoundryMissing(&'static str),
     #[error("RPC at {url} did not become healthy within {timeout:?}")]
     RpcTimeout { url: String, timeout: Duration },
@@ -111,7 +116,7 @@ pub enum HarnessError {
     DeploymentJson(PathBuf, String),
     #[error("rmpc binary not found at {0}")]
     RmpcBinaryMissing(PathBuf),
-    #[error("cargo build of rmpc +failed: {0}")]
+    #[error("cargo build of rmpc failed: {0}")]
     CargoBuildFailed(String),
     #[error("docker compose error: {0}")]
     Docker(String),
@@ -162,11 +167,6 @@ struct DeploymentJson {
     gateway_runtime_hash: String,
 }
 
-enum Backend {
-    Anvil { child: Child },
-    Geth { compose_dir: PathBuf },
-}
-
 /// Shared per-process artifacts: built `rmpc` binary path + the repo
 /// root path. We build the binary once for the whole test run.
 struct Shared {
@@ -176,12 +176,11 @@ struct Shared {
 
 static SHARED: Lazy<Mutex<Option<Shared>>> = Lazy::new(|| Mutex::new(None));
 
-/// A fully-wired test fixture. Drop tears down the backend.
+/// A fully-wired test fixture. Drop tears down the docker stack.
 pub struct Fixture {
-    backend: Backend,
+    compose_dir: PathBuf,
     /// Tempdir owning `keystore.json` + `rmpc.toml` + `state/`.
-    /// Drop-order: must outlive the child process so any post-drop
-    /// log inspection still works.
+    /// Drop-order: must outlive any post-drop log inspection.
     tmp: TempDir,
     rpc_url: String,
     chain_id: u64,
@@ -196,130 +195,23 @@ pub struct Fixture {
 impl Fixture {
     // ---- constructors ----------------------------------------------------
 
-    /// Boot a fresh Anvil instance, deploy the gateway stack, and
-    /// prepare a keystore + config TOML for `rmpc` invocations.
-    pub fn anvil() -> Result<Self, HarnessError> {
-        if which::which("anvil").is_err() {
-            return Err(HarnessError::FoundryMissing("anvil"));
-        }
-        if which::which("forge").is_err() {
-            return Err(HarnessError::FoundryMissing("forge"));
-        }
-
-        let shared = ensure_rmpc_built()?;
-        let tmp = TempDir::new()?;
-
-        let port = pick_free_port()?;
-        let rpc_url = format!("http://127.0.0.1:{port}");
-
-        // 31337 is Anvil's default chain id; keep it to match the
-        // hardcoded testnet expectations.
-        let chain_id: u64 = 31337;
-
-        // Spawn anvil. We seed an account with the deployer privkey by
-        // passing `--mnemonic-derivation-path` is overkill — instead use
-        // `--accounts` + `--balance` to pre-fund N default Anvil accounts,
-        // then send a one-shot `cast send` to top up our deployer
-        // address. Simpler: use `--block-base-fee-per-gas 0` and have
-        // the deployer fund itself by being one of the pre-funded
-        // anvil accounts via `--mnemonic` "test test ... junk". But we
-        // need the *specific* deployer EOA so the deploy script's role
-        // separation lines up. Do it via `--account 0xdeployerpk:bal`
-        // is not supported. The clean path: tell anvil to fund the
-        // deployer with `--genesis` is also not exposed.
-        //
-        // Workaround: pass `--accounts 0` and use the
-        // `--cache-path` + `--auto-impersonate` combination to
-        // skip-sign as the deployer. Simpler still: the JSON-RPC
-        // method `anvil_setBalance` lets us fund any address after
-        // boot. So: spawn anvil with default accounts (which gives us
-        // funded EOAs we don't actually use), then RPC `anvil_setBalance`
-        // for the four addresses the deploy script expects.
-        // Pipe to null — we don't drain anvil's stdout, and a piped
-        // pipe will eventually backpressure-stall the child.
-        let stdout = Stdio::null();
-        let stderr = Stdio::null();
-        let mut cmd = Command::new("anvil");
-        // Instant-mine on tx is the Anvil default — leave --block-time
-        // unset rather than pass 0 (which the CLI rejects).
-        cmd.arg("--port")
-            .arg(port.to_string())
-            .arg("--chain-id")
-            .arg(chain_id.to_string())
-            .stdout(stdout)
-            .stderr(stderr);
-        let child = cmd.spawn().map_err(HarnessError::from)?;
-        let backend = Backend::Anvil { child };
-
-        // Park the child even on early-error paths.
-        let mut fx_partial = PartialAnvil {
-            backend: Some(backend),
-        };
-
-        wait_for_rpc(&rpc_url, Duration::from_secs(20))?;
-
-        // Pre-fund the role addresses so the deploy script can broadcast.
-        let funder = AnvilRpc::new(&rpc_url);
-        let agent_hex = format!("{:#x}", agent_address());
-        for addr in [
-            DEPLOYER_ADDRESS_HEX.to_string(),
-            PAUSER_ADDRESS_HEX.to_string(),
-            agent_hex.clone(),
-            SHARE_RECEIVER_ADDRESS_HEX.to_string(),
-        ] {
-            funder.set_balance(&addr, "0xde0b6b3a7640000000")?; // 1000 ETH
-        }
-
-        // Run the deploy script with DEPLOYMENT_OUT pointing at the
-        // tmp dir so we don't pollute the repo's deployments/ folder.
-        let dep_out = tmp.path().join("deployment.json");
-        run_forge_deploy(&shared.repo_root, &rpc_url, &dep_out, &agent_hex)?;
-
-        let deployment = read_deployment(&dep_out)?;
-        if deployment.chain_id != chain_id {
-            return Err(HarnessError::DeploymentJson(
-                dep_out,
-                format!(
-                    "chain_id mismatch: deployment={}, anvil={}",
-                    deployment.chain_id, chain_id
-                ),
-            ));
-        }
-
-        let (keystore_path, config_path, state_dir) =
-            write_keystore_and_config(tmp.path(), &rpc_url, &deployment)?;
-
-        let backend = fx_partial.take();
-        Ok(Fixture {
-            backend,
-            tmp,
-            rpc_url,
-            chain_id,
-            deployment,
-            keystore_path,
-            config_path,
-            state_dir,
-            rmpc_bin: shared.rmpc_bin,
-            repo_root: shared.repo_root,
-        })
-    }
-
-    /// Boot the Docker Geth+Lighthouse devnet, run the gateway
-    /// deployer overlay, and prepare a keystore + config TOML.
+    /// Boot the Docker Geth+Lighthouse devnet, run the gateway deploy
+    /// script from the host, and prepare a keystore + config TOML for
+    /// `rmpc` invocations.
     ///
-    /// Requires Docker on PATH; expects the
+    /// Requires `docker`, `forge`, and `cast` on PATH; expects the
     /// `testing/ethereum-testnet/config/docker-compose.yaml` stack to
     /// be free to start (port 8545 unbound). Tears the stack down on
     /// drop.
-    pub fn geth() -> Result<Self, HarnessError> {
-        Self::geth_with_deploy_env(&[])
+    pub fn new() -> Result<Self, HarnessError> {
+        Self::with_deploy_env(&[])
     }
 
-    /// Like [`Self::geth`] but lets the caller pass extra env vars to
-    /// the `forge script Deploy` invocation. Used by the geth window
-    /// cap test to lower `AGENT_MAX_PER_WINDOW` so the suite can
-    /// exercise rollover without waiting 24 wall-clock hours.
-    pub fn geth_with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
+    /// Like [`Self::new`] but lets the caller pass extra env vars to
+    /// the `forge script Deploy` invocation. Used by the window-cap
+    /// test to lower `AGENT_MAX_PER_WINDOW` so the suite can exercise
+    /// rollover without waiting 24 wall-clock hours.
+    pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         if which::which("docker").is_err() {
             return Err(HarnessError::FoundryMissing("docker"));
         }
@@ -337,12 +229,11 @@ impl Fixture {
         // Bring up the entire devnet stack (setup → geth → beacon →
         // validators). `docker compose up -d` resolves the dependency
         // graph; without validators no blocks are produced and txs
-        // never mine, so we *must* start them. We deliberately do NOT
-        // use the `gateway-deployer` overlay — that container hardcodes
-        // an AGENT_ADDRESS that disagrees with [`AGENT_PRIVATE_KEY`],
-        // so AGENT_ROLE would be granted to an EOA whose key we don't
-        // have. Instead we run `forge script` from the host with the
-        // correct env, mirroring [`Fixture::anvil`].
+        // never mine. We deliberately do NOT use the `gateway-deployer`
+        // overlay — that container hardcodes addresses that disagree
+        // with our key constants. Instead we run `forge script` from
+        // the host with the correct env so PAUSER_ROLE / AGENT_ROLE
+        // land on EOAs whose keys the harness owns.
         let status = Command::new("docker")
             .arg("compose")
             .arg("-f")
@@ -374,8 +265,11 @@ impl Fixture {
         })?;
 
         // Deploy from the host using the genesis-prefunded deployer
-        // key. We point AGENT_ADDRESS at our derived agent EOA so the
-        // resulting AGENT_ROLE matches the keystore the harness writes.
+        // key. We point AGENT_ADDRESS at our derived agent EOA and
+        // PAUSER_ADDRESS at the EOA derived from
+        // [`PAUSER_PRIVATE_KEY_HEX`] so both roles end up on
+        // harness-owned signers. (Issue #37: drop the impersonation
+        // path that the previous Anvil flavor relied on.)
         let dep_out = tmp.path().join("deployment.json");
         let agent_hex = format!("{:#x}", agent_address());
         run_forge_deploy_with_env(
@@ -383,6 +277,7 @@ impl Fixture {
             &rpc_url,
             &dep_out,
             &agent_hex,
+            PAUSER_ADDRESS_HEX,
             extra_deploy_env,
         )
         .inspect_err(|_e| {
@@ -395,16 +290,18 @@ impl Fixture {
         let deployment = read_deployment(&dep_out)?;
         let chain_id = deployment.chain_id;
 
-        // Fund the agent EOA with ETH so it can pay gas. The deploy
-        // mints USDC to the agent but does not transfer ETH — on the
-        // genesis-funded devnet we top-up via a one-shot `cast send`.
+        // Fund EOAs that aren't part of the genesis allocation:
+        // - the agent (derived from AGENT_PRIVATE_KEY) needs gas;
+        // - the pauser (derived from PAUSER_PRIVATE_KEY_HEX) needs gas
+        //   to call `pause()` from `Fixture::pause_gateway`.
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000")?; // 1 ETH
+        fund_eth_from_deployer(&rpc_url, PAUSER_ADDRESS_HEX, "1000000000000000000")?; // 1 ETH
 
         let (keystore_path, config_path, state_dir) =
             write_keystore_and_config(tmp.path(), &rpc_url, &deployment)?;
 
         Ok(Fixture {
-            backend: Backend::Geth { compose_dir },
+            compose_dir,
             tmp,
             rpc_url,
             chain_id,
@@ -511,7 +408,7 @@ impl Fixture {
         Ok(out.into())
     }
 
-    /// Run rmpc +with arbitrary args + extra env, for ad-hoc tests
+    /// Run rmpc with arbitrary args + extra env, for ad-hoc tests
     /// (e.g. swapping the passphrase to verify startup-fail paths).
     pub fn run_rmpc_with<I, S>(
         &self,
@@ -533,37 +430,7 @@ impl Fixture {
         Ok(out.into())
     }
 
-    // ---- Anvil-only RPC pokes -------------------------------------------
-
-    fn require_anvil(&self, op: &str) -> Result<(), HarnessError> {
-        match self.backend {
-            Backend::Anvil { .. } => Ok(()),
-            Backend::Geth { .. } => Err(HarnessError::other(format!(
-                "{op} requires the Anvil backend (Geth devnet has no anvil_*/evm_* RPCs)"
-            ))),
-        }
-    }
-
-    /// `evm_snapshot` — returns the snapshot id as a 0x-prefixed hex
-    /// string. Anvil only.
-    pub fn evm_snapshot(&self) -> Result<String, HarnessError> {
-        self.require_anvil("evm_snapshot")?;
-        AnvilRpc::new(&self.rpc_url).evm_snapshot()
-    }
-
-    /// `evm_revert` — revert chain state to a previous snapshot.
-    /// Returns the boolean result. Anvil only.
-    pub fn evm_revert(&self, snap: &str) -> Result<bool, HarnessError> {
-        self.require_anvil("evm_revert")?;
-        AnvilRpc::new(&self.rpc_url).evm_revert(snap)
-    }
-
-    /// `anvil_setNextBlockBaseFeePerGas` — used by the fee-cap test
-    /// (#19). Anvil only.
-    pub fn anvil_set_next_base_fee(&self, wei: u64) -> Result<(), HarnessError> {
-        self.require_anvil("anvil_setNextBlockBaseFeePerGas")?;
-        AnvilRpc::new(&self.rpc_url).set_next_base_fee(wei)
-    }
+    // ---- on-chain pokes (signed with real harness keys) ------------------
 
     /// Send a transaction via `cast send` from an arbitrary private key.
     ///
@@ -571,9 +438,7 @@ impl Fixture {
     /// address, `sig` is a Solidity-style call signature
     /// (e.g. `"approve(address,uint256)"`), and `args` are the
     /// stringified positional arguments. Returns the transaction hash on
-    /// success. Used by scenario tests to flip on-chain state
-    /// (`pause()`, `approve(...)`, `revokeAgent(...)`) without pulling in
-    /// a full alloy contract instance per test.
+    /// success.
     pub fn cast_send(
         &self,
         private_key_hex: &str,
@@ -616,8 +481,7 @@ impl Fixture {
     }
 
     /// Approve `gateway` to pull `amount` USDC from the agent EOA.
-    /// Convenience wrapper over [`Self::cast_send`] that signs with
-    /// [`AGENT_PRIVATE_KEY`].
+    /// Convenience wrapper signing with [`AGENT_PRIVATE_KEY`].
     pub fn approve_usdc_from_agent(&self, amount: u128) -> Result<String, HarnessError> {
         let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
         self.cast_send(
@@ -628,70 +492,23 @@ impl Fixture {
         )
     }
 
-    /// Pause the gateway by sending `pause()` from the PAUSER_ROLE
-    /// holder. Used by the `paused_blocks_deposit` scenario.
-    ///
-    /// On Anvil we use `anvil_impersonateAccount` to send the call as
-    /// `PAUSER_ADDRESS_HEX` directly — the TS SDK's listed PAUSER
-    /// private key does not derive the on-chain PAUSER_ROLE holder, so
-    /// signed-key-based dispatch would fail. The on-chain effect is the
-    /// same: `paused()` returns `true` afterwards.
+    /// Pause the gateway by calling `pause()` from the PAUSER_ROLE
+    /// holder. Signs with [`PAUSER_PRIVATE_KEY_HEX`] (which derives
+    /// [`PAUSER_ADDRESS_HEX`], the EOA the harness grants PAUSER_ROLE
+    /// at deploy time).
     pub fn pause_gateway(&self) -> Result<String, HarnessError> {
-        self.require_anvil("pause_gateway (impersonation)")?;
-        // 4-byte selector of `pause()`. Hard-coded rather than pulled
-        // through `RobotMoneyGateway::pauseCall` so the harness has zero
-        // dependency on which subset of the ABI the rmpc crate happens
-        // to expose at any given time.
-        let selector = &keccak256(b"pause()")[..4];
-        self.anvil_impersonate_send(PAUSER_ADDRESS_HEX, self.gateway(), selector)
+        self.cast_send(PAUSER_PRIVATE_KEY_HEX, self.gateway(), "pause()", &[])
     }
 
-    /// `anvil_impersonateAccount` + `eth_sendTransaction` from `from`.
-    /// Returns the mined transaction hash. We pre-fund `from` with 1
-    /// ETH if it has zero balance so gas estimation succeeds.
-    fn anvil_impersonate_send(
-        &self,
-        from_hex: &str,
-        to: Address,
-        data: &[u8],
-    ) -> Result<String, HarnessError> {
-        let rpc = AnvilRpc::new(&self.rpc_url);
-        // Make sure the impersonated account has enough ETH to pay gas.
-        rpc.set_balance(from_hex, "0xde0b6b3a7640000")?; // 1 ETH
-        rpc.rpc("anvil_impersonateAccount", serde_json::json!([from_hex]))?;
-        let tx = serde_json::json!({
-            "from": from_hex,
-            "to": format!("{to:#x}"),
-            "data": format!("0x{}", hex::encode(data)),
-        });
-        let tx_hash_v = rpc.rpc("eth_sendTransaction", serde_json::json!([tx]))?;
-        let tx_hash = tx_hash_v
-            .as_str()
-            .ok_or_else(|| HarnessError::other("eth_sendTransaction: no string result"))?
-            .to_string();
-        // Stop impersonating regardless of receipt outcome.
-        let _ = rpc.rpc(
-            "anvil_stopImpersonatingAccount",
-            serde_json::json!([from_hex]),
-        );
-        // Anvil instant-mines, so the receipt is already available; check
-        // status to surface a revert immediately.
-        let receipt = rpc.rpc("eth_getTransactionReceipt", serde_json::json!([tx_hash]))?;
-        let status = receipt
-            .get("status")
-            .and_then(|x| x.as_str())
-            .unwrap_or("0x0");
-        if status != "0x1" {
-            return Err(HarnessError::other(format!(
-                "impersonated tx reverted: receipt={receipt}"
-            )));
-        }
-        Ok(tx_hash)
+    /// Unpause the gateway. Per `AccessRoles` docs, unpause is
+    /// asymmetric with pause: ADMIN_ROLE-only. Signs with the deployer
+    /// key.
+    pub fn unpause_gateway(&self) -> Result<String, HarnessError> {
+        self.cast_send(DEPLOYER_PRIVATE_KEY_HEX, self.gateway(), "unpause()", &[])
     }
 
     /// Revoke the agent's `AGENT_ROLE` by sending `revokeAgent(agent)`
-    /// from the deployer (which holds `ADMIN_ROLE`). Used by the
-    /// `unauthorized_agent_rejected` scenario.
+    /// from the deployer (which holds `ADMIN_ROLE`).
     pub fn revoke_agent(&self) -> Result<String, HarnessError> {
         self.cast_send(
             DEPLOYER_PRIVATE_KEY_HEX,
@@ -701,12 +518,36 @@ impl Fixture {
         )
     }
 
+    /// Re-grant the agent's `AGENT_ROLE` with the original deploy
+    /// policy. Used by tests that revoked the role to restore the
+    /// shared fixture for subsequent scenarios. The policy values
+    /// mirror Deploy.s.sol defaults; tests that need bespoke caps
+    /// should boot a dedicated fixture via [`Fixture::with_deploy_env`]
+    /// instead of relying on this re-grant.
+    pub fn reauthorize_agent(
+        &self,
+        max_per_payment: u128,
+        max_per_window: u128,
+    ) -> Result<String, HarnessError> {
+        let agent = format!("{:#x}", self.agent());
+        let share_receiver = format!("{:#x}", self.share_receiver());
+        // policy = (active=true, validUntil=type(uint64).max,
+        //          maxPerPayment, maxPerWindow, shareReceiver)
+        let policy = format!(
+            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver})"
+        );
+        self.cast_send(
+            DEPLOYER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "authorizeAgent(address,(bool,uint64,uint256,uint256,address))",
+            &[&agent, &policy],
+        )
+    }
+
     /// Mint mock USDC to `recipient`. Calls `MockUSDC.mint(addr, amount)`
     /// from the deployer (which has minter rights post-deploy). Returns
-    /// the tx hash. Works against either backend.
+    /// the tx hash.
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
-        // Use `cast send` to keep the harness implementation small.
-        // The deployer key is pre-funded on both Anvil and Geth.
         if which::which("cast").is_err() {
             return Err(HarnessError::FoundryMissing("cast"));
         }
@@ -744,65 +585,38 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        match &mut self.backend {
-            Backend::Anvil { child } => {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            Backend::Geth { compose_dir } => {
-                // Best-effort teardown. Don't panic in drop.
-                let _ = Command::new("docker")
-                    .args([
-                        "compose",
-                        "-f",
-                        "docker-compose.yaml",
-                        "-f",
-                        "docker-compose.deployer.yaml",
-                        "down",
-                        "-v",
-                        "--remove-orphans",
-                    ])
-                    .current_dir(compose_dir)
-                    .status();
-            }
-        }
-    }
-}
-
-// Helper wrapper that kills the spawned anvil if `anvil()` errors out
-// before returning the Fixture.
-struct PartialAnvil {
-    backend: Option<Backend>,
-}
-
-impl PartialAnvil {
-    fn take(&mut self) -> Backend {
-        self.backend
-            .take()
-            .expect("PartialAnvil::take called twice")
-    }
-}
-
-impl Drop for PartialAnvil {
-    fn drop(&mut self) {
-        if let Some(Backend::Anvil { mut child }) = self.backend.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        // Best-effort teardown. Don't panic in drop.
+        let _ = Command::new("docker")
+            .args([
+                "compose",
+                "-f",
+                "docker-compose.yaml",
+                "down",
+                "-v",
+                "--remove-orphans",
+            ])
+            .current_dir(&self.compose_dir)
+            .status();
     }
 }
 
 // ----- internals ---------------------------------------------------------
 
-fn parse_addr(s: &str) -> Address {
-    s.parse::<Address>().unwrap_or(Address::ZERO)
+/// Derive an EOA address from a 32-byte secp256k1 private key.
+/// Centralized so both [`agent_address`] and any future test-account
+/// derivations share one implementation.
+fn derive_address(privkey: &[u8; 32]) -> Address {
+    use k256::ecdsa::SigningKey;
+    let sk = SigningKey::from_bytes(privkey.into()).expect("static privkey is valid");
+    let vk = sk.verifying_key();
+    let pubkey = vk.to_encoded_point(/* compress = */ false);
+    // `pubkey.as_bytes()` is the SEC1 uncompressed form: 0x04 || X || Y.
+    let hash = keccak256(&pubkey.as_bytes()[1..]);
+    Address::from_slice(&hash[12..])
 }
 
-fn pick_free_port() -> Result<u16, HarnessError> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
+fn parse_addr(s: &str) -> Address {
+    s.parse::<Address>().unwrap_or(Address::ZERO)
 }
 
 fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
@@ -835,10 +649,10 @@ fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
     })
 }
 
-/// Poll `eth_blockNumber` until it reaches `target_height`. Used by
-/// the Geth flavor: the RPC port comes up before the consensus stack
-/// hands geth a payload, so we have to wait for actual block
-/// production before broadcasting transactions.
+/// Poll `eth_blockNumber` until it reaches `target_height`. The RPC
+/// port comes up before the consensus stack hands geth a payload, so
+/// we have to wait for actual block production before broadcasting
+/// transactions.
 fn wait_for_block_height(
     url: &str,
     target_height: u64,
@@ -876,9 +690,8 @@ fn wait_for_block_height(
 }
 
 /// Send `value_wei` from the genesis-funded deployer to `recipient_hex`
-/// via `cast send --value`. Used by the Geth flavor to fund EOAs that
-/// aren't part of the genesis allocation (notably the harness's agent
-/// derived from [`AGENT_PRIVATE_KEY`]). Returns the tx hash.
+/// via `cast send --value`. Used to fund EOAs that aren't part of the
+/// genesis allocation.
 fn fund_eth_from_deployer(
     rpc_url: &str,
     recipient_hex: &str,
@@ -912,20 +725,12 @@ fn fund_eth_from_deployer(
         .to_string())
 }
 
-fn run_forge_deploy(
-    repo_root: &Path,
-    rpc_url: &str,
-    dep_out: &Path,
-    agent_address_hex: &str,
-) -> Result<(), HarnessError> {
-    run_forge_deploy_with_env(repo_root, rpc_url, dep_out, agent_address_hex, &[])
-}
-
 fn run_forge_deploy_with_env(
     repo_root: &Path,
     rpc_url: &str,
     dep_out: &Path,
     agent_address_hex: &str,
+    pauser_address_hex: &str,
     extra_env: &[(&str, &str)],
 ) -> Result<(), HarnessError> {
     let mut cmd = Command::new("forge");
@@ -936,7 +741,7 @@ fn run_forge_deploy_with_env(
         .arg("--slow")
         .arg("-vvv")
         .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
-        .env("PAUSER_ADDRESS", PAUSER_ADDRESS_HEX)
+        .env("PAUSER_ADDRESS", pauser_address_hex)
         .env("AGENT_ADDRESS", agent_address_hex)
         .env("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX)
         .env("DEPLOYMENT_OUT", dep_out)
@@ -1070,85 +875,9 @@ fn ensure_rmpc_built() -> Result<Shared, HarnessError> {
     })
 }
 
-/// Returns `true` iff both `anvil` and `forge` are on PATH. Tests use
-/// this to skip-on-missing rather than fail when Foundry isn't
-/// installed locally.
-pub fn foundry_available() -> bool {
-    which::which("anvil").is_ok() && which::which("forge").is_ok()
-}
-
-/// Returns `true` iff `docker` is on PATH and the operator opted in
-/// via `RMPC_E2E_GETH=1`.
-pub fn geth_enabled() -> bool {
-    std::env::var("RMPC_E2E_GETH").ok().as_deref() == Some("1") && which::which("docker").is_ok()
-}
-
-// ----- Anvil JSON-RPC helpers --------------------------------------------
-
-struct AnvilRpc<'a> {
-    url: &'a str,
-    client: reqwest::blocking::Client,
-}
-
-impl<'a> AnvilRpc<'a> {
-    fn new(url: &'a str) -> Self {
-        Self {
-            url,
-            client: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("reqwest client"),
-        }
-    }
-
-    fn rpc(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, HarnessError> {
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params
-        });
-        let resp = self
-            .client
-            .post(self.url)
-            .json(&body)
-            .send()
-            .map_err(|e| HarnessError::other(format!("rpc {method}: {e}")))?;
-        let j: serde_json::Value = resp
-            .json()
-            .map_err(|e| HarnessError::other(format!("rpc {method} body: {e}")))?;
-        if let Some(err) = j.get("error") {
-            return Err(HarnessError::other(format!("rpc {method} error: {err}")));
-        }
-        j.get("result")
-            .cloned()
-            .ok_or_else(|| HarnessError::other(format!("rpc {method}: no result")))
-    }
-
-    fn set_balance(&self, addr: &str, hex_wei: &str) -> Result<(), HarnessError> {
-        self.rpc("anvil_setBalance", serde_json::json!([addr, hex_wei]))?;
-        Ok(())
-    }
-
-    fn evm_snapshot(&self) -> Result<String, HarnessError> {
-        let v = self.rpc("evm_snapshot", serde_json::json!([]))?;
-        v.as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| HarnessError::other("evm_snapshot: non-string result"))
-    }
-
-    fn evm_revert(&self, snap: &str) -> Result<bool, HarnessError> {
-        let v = self.rpc("evm_revert", serde_json::json!([snap]))?;
-        Ok(v.as_bool().unwrap_or(false))
-    }
-
-    fn set_next_base_fee(&self, wei: u64) -> Result<(), HarnessError> {
-        let hex = format!("0x{wei:x}");
-        self.rpc("anvil_setNextBlockBaseFeePerGas", serde_json::json!([hex]))?;
-        Ok(())
-    }
+/// Returns `true` iff `docker` and the foundry binaries (`forge`,
+/// `cast`) are on PATH. Tests use this to skip-on-missing rather than
+/// fail when prerequisites aren't installed locally.
+pub fn prerequisites_available() -> bool {
+    which::which("docker").is_ok() && which::which("forge").is_ok() && which::which("cast").is_ok()
 }
