@@ -105,4 +105,57 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Read an ERC-20 token balance for an address (USDC by default).
+    ///
+    /// Per docs/implementation-plan.md §9 / docs/technical/rmpc-read-output-contract.md.
+    GetBalance {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// 20-byte holder address, 0x-prefixed hex.
+        #[arg(long)]
+        address: String,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Read an ERC-20 allowance(owner, spender) on the configured USDC.
+    GetAllowance {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// 20-byte owner address, 0x-prefixed hex.
+        #[arg(long)]
+        owner: String,
+        /// 20-byte spender address, 0x-prefixed hex.
+        #[arg(long)]
+        spender: String,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Look up a gateway deposit by its on-chain id (`AgentDeposit.paymentId`).
+    GetDeposit {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// 32-byte deposit (payment) id, 0x-prefixed hex.
+        #[arg(long = "deposit-id")]
+        deposit_id: String,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Look up a transaction's receipt status by hash.
+    GetTx {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// 32-byte transaction hash, 0x-prefixed hex.
+        #[arg(long = "tx-hash")]
+        tx_hash: String,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
 }

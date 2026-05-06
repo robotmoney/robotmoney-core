@@ -29,6 +29,10 @@ fn main() {
         Command::GetGateway { config, .. } => Some(config.as_path()),
         Command::GetAgent { config, .. } => Some(config.as_path()),
         Command::GetRoles { config, .. } => Some(config.as_path()),
+        Command::GetBalance { config, .. } => Some(config.as_path()),
+        Command::GetAllowance { config, .. } => Some(config.as_path()),
+        Command::GetDeposit { config, .. } => Some(config.as_path()),
+        Command::GetTx { config, .. } => Some(config.as_path()),
     };
     init_logging_best_effort(config_path);
 
@@ -70,6 +74,27 @@ fn main() {
             address,
             pretty,
         } => commands::get_roles::run(&config, &address, pretty),
+        Command::GetBalance {
+            config,
+            address,
+            pretty,
+        } => commands::get_balance::run(&config, &address, pretty),
+        Command::GetAllowance {
+            config,
+            owner,
+            spender,
+            pretty,
+        } => commands::get_allowance::run(&config, &owner, &spender, pretty),
+        Command::GetDeposit {
+            config,
+            deposit_id,
+            pretty,
+        } => commands::get_deposit::run(&config, &deposit_id, pretty),
+        Command::GetTx {
+            config,
+            tx_hash,
+            pretty,
+        } => commands::get_tx::run(&config, &tx_hash, pretty),
     };
     std::process::exit(exit_code);
 }

@@ -7,8 +7,12 @@
 
 pub mod deposit;
 pub mod get_agent;
+pub mod get_allowance;
+pub mod get_balance;
+pub mod get_deposit;
 pub mod get_gateway;
 pub mod get_roles;
+pub mod get_tx;
 pub mod get_vault;
 pub mod self_check;
 pub mod status;
