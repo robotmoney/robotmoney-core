@@ -29,7 +29,7 @@
                 └───────────┘   └───────────┘   └────────────────┘
 ```
 
-The basket leg (VIRTUAL / ROBOT / BNKR / JUNO / ZFI / GIZA) is **not** a contract — it is client-side Uniswap routing orchestrated by `@robotmoney/cli`. The vault knows nothing about the basket.
+The basket leg (VIRTUAL / ROBOT / BNKR / JUNO / ZFI / GIZA) is **not** a contract — it is client-side Uniswap routing. The vault knows nothing about the basket.
 
 ---
 
@@ -230,9 +230,9 @@ The original `smart-contracts.md` was inferred from ABIs. Several claims were wr
 
 ---
 
-## 7. Functions not in CLI ABI (newly discovered)
+## 7. Functions not exposed by historical client tooling
 
-These exist in the source but are not in `packages/cli/src/lib/abi.ts` because the CLI never calls them:
+These exist in the source but were never called by the deprecated TypeScript CLI:
 
 | Function | Role | Notes |
 |---|---|---|
@@ -255,13 +255,11 @@ These exist in the source but are not in `packages/cli/src/lib/abi.ts` because t
 | `currentTargetBps()` | view | Equal-weight target in bps |
 | `isShutdown()` | view | Alias for `shutdown` state var |
 
-The CLI should consider exposing `getAdapterDrift()`, `isRebalanceAvailable()`, and `nextRebalanceAt()` in future `get-vault --verbose` output — these are directly useful for treasury monitoring.
+Future client tooling should consider surfacing `getAdapterDrift()`, `isRebalanceAvailable()`, and `nextRebalanceAt()` — these are directly useful for treasury monitoring.
 
 ---
 
 ## 8. References
 
 - Source files: [`../../contracts/`](../../contracts/)
-- CLI ABI (subset): [`../../packages/cli/src/lib/abi.ts`](../../packages/cli/src/lib/abi.ts)
-- Address constants: [`../../packages/cli/src/lib/addresses.ts`](../../packages/cli/src/lib/addresses.ts)
 - BaseScan vault: https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd

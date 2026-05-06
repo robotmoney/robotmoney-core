@@ -1,8 +1,8 @@
 # Robot Money — Project Roadmap
 
-> Scope: this is the **project-level** roadmap for Robot Money — the on-chain protocol, the website, the agent integrations, and the surrounding ecosystem work. The CLI/skill release log lives in [`CHANGELOG.md`](../CHANGELOG.md) at the repo root and is narrower in scope. Source of truth for protocol-side milestones is the public changelog at https://www.robotmoney.net/changelog; this file mirrors and contextualizes it for in-repo consumers.
+> Scope: this is the **project-level** roadmap for Robot Money — the on-chain protocol, the website, the agent integrations, and the surrounding ecosystem work. Source of truth for protocol-side milestones is the public changelog at https://www.robotmoney.net/changelog; this file mirrors and contextualizes it for in-repo consumers.
 
-The deployed protocol is currently at **Phase 4** of the public roadmap (see `docs/technical/smart-contracts.md` §10): single-bucket, equal-weight, governance-free, Base-only stable-yield vault with a CLI-orchestrated agent-token sidecar. Later phases (governance token mechanics, multi-bucket allocation, multi-chain) are out of scope for this repo's CLI but listed below for context.
+The deployed protocol is currently at **Phase 4** of the public roadmap (see `docs/technical/smart-contracts.md` §10): single-bucket, equal-weight, governance-free, Base-only stable-yield vault with a client-orchestrated agent-token sidecar. Later phases (governance token mechanics, multi-bucket allocation, multi-chain) are listed below for context.
 
 ---
 
@@ -13,7 +13,7 @@ The deployed protocol is currently at **Phase 4** of the public roadmap (see `do
 | 1 | Token launch ($ROBOTMONEY on Base via Bankr) | Shipped — 2026-03-12 |
 | 2 | Public website + protocol design docs | Shipped — 2026-03-12 |
 | 3 | Community channels (Telegram, X bot, Substack, exchange listings) | Shipped — Mar 2026 |
-| 4 | Vault v1 + 5% basket sidecar + CLI/skill | **Current** — vault live at `0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd`, CLI at `@robotmoney/cli` 0.2.1 |
+| 4 | Vault v1 + 5% basket sidecar | **Current** — vault live at `0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd` |
 | 5 | Allocation transparency + delegated-strategy tracking | In progress — see 2026-04-13 / 2026-04-14 / 2026-04-15 entries |
 | 6 | Research & risk publications | In progress — smart-contract risk + regime-detection surveys published |
 | 7+ | Multi-bucket allocation, `$ROBOTMONEY` weekly votes, `veRM`, multi-chain | Future — not on-chain in current contracts |
