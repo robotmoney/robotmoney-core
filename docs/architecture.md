@@ -365,6 +365,10 @@ or unredacted customer data.
 
 ## 15. Threats and Mitigations
 
+> The full attack taxonomy — including web2/dapp, off-chain agent,
+> economic, and process risks — lives in `docs/security-model.md`.
+> The table below is the agent-access-layer subset.
+
 | Threat | Mitigation | Residual risk |
 |---|---|---|
 | Prompt injection causes an unsafe deposit | Agent planner cannot sign; `rmpc` and gateway enforce role, caps, code hash, amount, deadline, and receiver policy | A valid agent can still deposit within configured caps |

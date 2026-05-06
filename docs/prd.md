@@ -225,6 +225,9 @@ spending bounds and can pause or revoke any agent at any time. See
   operating within published constraints.
 - **Autonomous-agent signing.** Specified separately in
   `docs/architecture.md`; out of PRD scope.
+- **Security posture.** The exhaustive web/web3/blockchain attack
+  taxonomy and our per-row assessment is in
+  `docs/security-model.md`.
 
 ## 8. Out of scope
 

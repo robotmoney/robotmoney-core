@@ -198,6 +198,12 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 
 ## 5. Trust model (from source)
 
+> This table covers contract-level trust assumptions confirmed from
+> source. The full security taxonomy — execution, accounting,
+> access, oracle, bridge, economic, dependency, monitoring,
+> off-chain agent, dapp/web2, infrastructure, operational, and
+> process — is in `docs/security-model.md`.
+
 | Risk | Mitigation (confirmed from source) |
 |---|---|
 | Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is a Safe multisig. `MAX_EXIT_FEE_BPS = 100` is an immutable ceiling — admin cannot set fees above 1% |
