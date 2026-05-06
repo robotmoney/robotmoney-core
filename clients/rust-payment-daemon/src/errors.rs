@@ -49,6 +49,21 @@ pub enum RmpdError {
 
     #[error("ErrTomlParse: TOML parse error: {0}")]
     ErrTomlParse(#[from] toml::de::Error),
+
+    /// Transport-level RPC failure — DNS, TCP, TLS, HTTP non-2xx, etc.
+    /// Anything that prevents us from getting a JSON-RPC response body.
+    #[error("ErrRpcTransport: JSON-RPC transport error: {0}")]
+    ErrRpcTransport(String),
+
+    /// Server returned a JSON-RPC error object (`{ "error": { code, message } }`).
+    /// Code is preserved verbatim — operator tooling matches on it.
+    #[error("ErrRpcServer: JSON-RPC server error code={code} message={message}")]
+    ErrRpcServer { code: i64, message: String },
+
+    /// The response body was malformed: not JSON, missing `result`, or the
+    /// `result` field could not be deserialised into the expected shape.
+    #[error("ErrRpcDecode: JSON-RPC response decode error: {0}")]
+    ErrRpcDecode(String),
 }
 
 pub type Result<T> = std::result::Result<T, RmpdError>;

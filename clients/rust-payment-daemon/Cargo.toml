@@ -13,9 +13,10 @@ path = "src/main.rs"
 [dependencies]
 # Per docs/implementation-plan-mvp.md §3.5
 alloy-primitives = "0.8"
-alloy-sol-types = "0.8"
+alloy-sol-types = { version = "0.8", features = ["json"] }
 alloy-consensus = "0.5"
 alloy-rpc-types = "0.5"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 aes-gcm = "0.10"
 argon2 = "0.5"
@@ -33,3 +34,4 @@ clap = { version = "4", features = ["derive"] }
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+mockito = "1"
