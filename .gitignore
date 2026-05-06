@@ -21,3 +21,7 @@ target/
 
 # Internal planning docs — not for public history
 plan.md
+
+# Local agent prompts (skills/commands/workflows) — staging dir + Claude Code state
+.agents/
+.claude/
