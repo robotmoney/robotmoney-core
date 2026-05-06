@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4 — Phase 1 Rust client
+//!
 //! `rmpc` — Robot Money payment client CLI entry point.
 //!
 //! All command logic lives in [`rust_payment_client::commands`]; this file

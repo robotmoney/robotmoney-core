@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4.8 — CLI surface
+//!
 //! `rmpc` subcommand implementations.
 //!
 //! Each module exposes a `run(...)` function that returns the process exit

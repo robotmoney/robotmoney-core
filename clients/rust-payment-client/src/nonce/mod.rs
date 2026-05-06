@@ -1,6 +1,8 @@
+//! Canonical: docs/implementation-plan.md §4.6 — Nonce management
+//!
 //! `nonce` — single-flight per-agent file lock.
 //!
-//! Per `docs/implementation-plan-mvp.md` §3.6 and issue #12. The MVP CLI
+//! Per `docs/implementation-plan.md` §3.6 and issue #12. The MVP CLI
 //! is single-flight: each `rmpc deposit` invocation acquires an
 //! exclusive OS-level advisory lock on
 //! `<state_dir>/agent-<address>.lock` and holds it across the entire

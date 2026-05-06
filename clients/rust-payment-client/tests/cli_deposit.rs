@@ -1,3 +1,5 @@
+//! Canonical: none — integration tests for `rmpc deposit`
+//!
 //! Integration tests for `rmpc deposit` (issue #16).
 //!
 //! The happy-path test wires a `mockito` server with the full preflight

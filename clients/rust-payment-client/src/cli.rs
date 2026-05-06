@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4.8 — CLI surface
+//!
 //! Argument parsing for the `rmpc` CLI.
 //!
 //! Lives in the library so integration tests can introspect the parser.

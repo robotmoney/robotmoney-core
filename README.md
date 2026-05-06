@@ -11,14 +11,14 @@ This repository hosts the in-development pieces that let agents transact against
 
 ## Status
 
-The MVP is merged on `dev`. See `docs/implementation-plan-mvp.md` for the build plan and PRs #22–#41 for the delivery history.
+The MVP is merged on `dev`. See `docs/implementation-plan.md` for the build plan and PRs #22–#41 for the delivery history.
 
 The pre-pivot TypeScript CLI (`@robotmoney/cli`) and its surrounding pnpm workspace lived on this repo's `main` branch and on `origin/main`; an archival copy together with its security review is preserved at `archive/ts-cli-security-review` (locked from deletion and force-push).
 
 ## Quick links
 
-- [Architecture proposal](docs/architecture-proposal-v0.md)
-- [MVP implementation plan](docs/implementation-plan-mvp.md)
+- [Architecture proposal](docs/architecture.md)
+- [MVP implementation plan](docs/implementation-plan.md)
 - [Project roadmap](docs/project-roadmap.md)
 - [Smart-contract reference](docs/technical/smart-contracts.md)
 - [Testing strategy](docs/testing-strategy-ethereum.md)

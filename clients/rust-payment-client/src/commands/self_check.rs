@@ -1,3 +1,6 @@
+//! Canonical: docs/implementation-plan.md §4.8 — CLI surface (self-check subcommand)
+//! (See also: docs/architecture.md §8 — Signer Backends)
+//!
 //! `rmpc self-check` — read-only backend report (v0 §9.2 + preflight snapshot).
 //!
 //! Loads the operator config, decrypts the configured signer, runs the

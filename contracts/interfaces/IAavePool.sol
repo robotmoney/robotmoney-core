@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — external Aave v3 pool integration interface
 pragma solidity ^0.8.24;
 
 /// @notice Minimal Aave V3 Pool interface used by AaveV3Adapter.

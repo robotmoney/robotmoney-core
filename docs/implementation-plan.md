@@ -1,11 +1,18 @@
 # MVP Implementation Plan — Rust Client, Gateway, Testing, Agent Surfaces
 
-> Companion to `docs/architecture-proposal-v0.md`. This plan covers the
-> full MVP sequence. Phase 1 is the buildable slice of v0: one chain,
-> one token, one gateway, one Rust client. Later phases add fork-based
-> smart-contract testing, direct chain-read tooling, agent-harness
-> installation, a simple explorer API/database, human-facing controls,
-> and a final OpenClaw demo.
+> **Status (2026-05-06).** Phase 1 (secure agent deposit
+> infrastructure) is complete: contracts, deploy script, Rust client,
+> preflight, fee policy, nonce lock, all 11 e2e scenarios across the
+> Anvil and Geth+Lighthouse layers, and the `rmpd` → `rmpc` rename
+> have all merged. Phases 2–7 are not yet started; their sections
+> below describe the target shape and acceptance criteria.
+
+> Companion to `docs/architecture.md`. This plan covers the
+> full MVP sequence. Phase 1 was the buildable slice of v0: one
+> chain, one token, one gateway, one Rust client. Later phases add
+> fork-based smart-contract testing, direct chain-read tooling,
+> agent-harness installation, a simple explorer API/database,
+> human-facing controls, and a final OpenClaw demo.
 >
 > **Relationship to the product.** Robot Money is the ERC-4626 yield
 > vault in `contracts/RobotMoneyVault.sol` plus its
@@ -63,24 +70,26 @@ mainnet configuration management.
 
 ## 1. Phase map
 
-| Phase | Theme | Primary outcome |
-|---|---|---|
-| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. |
-| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. |
-| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. |
-| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. |
-| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. |
-| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. |
-| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. |
+| Phase | Theme | Primary outcome | Status |
+|---|---|---|---|
+| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. | **DONE** (PRs #22–#36, #40, #43) |
+| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. | Not started |
+| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. | Not started |
+| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. | Not started |
+| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. | Not started |
+| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. | Not started |
+| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. | Not started |
 
-Phase 1 is specified in detail below because it is the current
-implementation branch. Phases 2-7 define the target shape and
-acceptance criteria; they are intentionally less prescriptive where the
-architecture is still open.
+Phase 1 is specified in detail below because it was the implementation
+branch through 2026-05; the spec is preserved as a record of what
+shipped. Phases 2–7 define the target shape and acceptance criteria;
+they are intentionally less prescriptive where the architecture is
+still open.
 
 These are internal MVP delivery phases for the Rust/agent-access work.
 They are not the same numbering scheme as the public Robot Money
-product roadmap phases in `docs/project-roadmap.md`.
+product roadmap (`docs/project-roadmap.md` is deprecated; the public
+roadmap lives at robotmoney.net/changelog).
 
 **Intentional tradeoffs.**
 
@@ -121,19 +130,23 @@ contracts/gateway/
   AccessRoles.sol               # role constants + AccessControl wiring
   interfaces/IGateway.sol
 
-clients/rmpc/
+clients/rust-payment-client/         # crate name; binary is `rmpc`
   Cargo.toml
   src/
-    main.rs                     # CLI: deposit / status / self-check
+    main.rs                     # binary entry; defers to lib::run
+    lib.rs                      # public surface for integration tests
+    cli.rs                      # clap parser
+    commands/                   # deposit / status / self-check
     config.rs                   # toml loader, address pinning, chain_id
-    signer/mod.rs               # AgentSigner trait
-    signer/software.rs          # encrypted-keystore secp256k1 (MVP)
-    gateway.rs                  # alloy-sol-types bindings + event decode
-    rpc.rs                      # minimal JSON-RPC over reqwest
-    policy.rs                   # preflight checks mirrored from contract
-    tx.rs                       # build/sign/broadcast EIP-1559 tx
-    fees.rs                     # gas pricing + fee-cap policy
-    nonce.rs                    # local nonce manager
+    signer/                     # AgentSigner trait + encrypted-keystore impl
+    gateway/                    # alloy-sol-types bindings + event decode
+    rpc/                        # minimal JSON-RPC over reqwest
+    policy/                     # preflight checks mirrored from contract
+    tx/                         # build/sign/broadcast EIP-1559 tx
+    fees/                       # gas pricing + fee-cap policy
+    nonce/                      # per-agent file lock + nonce read
+    replay_cache.rs             # local idempotency cache
+    logging.rs
     errors.rs
 
 testing/ethereum-testnet/
@@ -174,13 +187,14 @@ the agent's signing key).
 Storage:
 
 ```solidity
-IERC20    public immutable usdc;                       // pinned at construction
-IERC4626  public immutable vault;                      // RobotMoneyVault, pinned
+IERC20    public immutable usdcToken;                  // pinned at construction
+IERC4626  public immutable vaultContract;              // RobotMoneyVault, pinned
+                                                       // (exposed via usdc()/vault() views)
 
 struct AgentPolicy {
     bool    active;
     uint64  validUntil;
-    uint256 maxPerDeposit;
+    uint256 maxPerPayment;
     uint256 maxPerWindow;
     address shareReceiver;     // who gets rmUSDC; set by ADMIN, not the agent
 }
@@ -188,10 +202,11 @@ mapping(address => AgentPolicy) public agents;
 
 mapping(address => mapping(uint64 => uint256))         // per-agent windowed gross —
         public agentWindowGross;                       // NOT shared across agents
-mapping(bytes32 => bool) public usedDepositIds;
-bool public paused;
-uint64 public constant WINDOW_SECONDS = 86400;         // Unix-epoch-aligned;
+mapping(bytes32 => bool) public usedPaymentIds;
+bool private _paused;                                  // exposed via paused()
+uint64  public constant WINDOW_SECONDS    = 86400;     // Unix-epoch-aligned;
                                                        // see v0 §23.3
+uint256 public constant MAX_DEADLINE_SKEW = 600;       // seconds
 ```
 
 Functions (refuse anything else):
@@ -202,8 +217,11 @@ function deposit(
     uint256 amount,
     uint64  deadline,
     bytes32 idempotencyKey
-) external whenNotPaused onlyRole(AGENT_ROLE)
-    returns (bytes32 depositId, uint256 sharesMinted);
+) external onlyRole(AGENT_ROLE)
+    returns (bytes32 paymentId, uint256 sharesMinted);
+// Pause is enforced by an explicit `if (_paused) revert PausedError()`
+// at function head; the gateway uses custom errors throughout instead
+// of OZ's `whenNotPaused` modifier.
 
 function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE);
 function revokeAgent(address agent) external onlyRole(ADMIN_ROLE);
@@ -215,13 +233,13 @@ Events:
 
 ```solidity
 event AgentAuthorized(address indexed agent, uint64 validUntil,
-                      uint256 maxPerDeposit, uint256 maxPerWindow,
+                      uint256 maxPerPayment, uint256 maxPerWindow,
                       address shareReceiver);
 event AgentRevoked(address indexed agent);
 event Paused(address indexed by);
 event Unpaused(address indexed by);
 event AgentDeposit(
-    bytes32 indexed depositId,
+    bytes32 indexed paymentId,
     bytes32 indexed orderId,
     address indexed agent,
     address shareReceiver,
@@ -233,32 +251,32 @@ event AgentDeposit(
 
 Behavior of `deposit` (subset of v0 §20.1, retargeted to the vault):
 
-1. `amount > 0 && amount <= agents[msg.sender].maxPerDeposit`
-2. `block.timestamp <= deadline && deadline <= block.timestamp + 600`
+1. `amount > 0 && amount <= agents[msg.sender].maxPerPayment`
+2. `block.timestamp <= deadline && deadline <= block.timestamp + MAX_DEADLINE_SKEW`
 3. `agents[msg.sender].active && validUntil >= block.timestamp`
 4. `windowId = uint64(block.timestamp / WINDOW_SECONDS)`
 5. `agentWindowGross[msg.sender][windowId] + amount <= agents[msg.sender].maxPerWindow`
-6. `depositId = keccak256(abi.encode(block.chainid, address(this),
+6. `paymentId = keccak256(abi.encode(block.chainid, address(this),
    msg.sender, orderId, amount, idempotencyKey))`; revert if already
    used.
    - **`deadline` is intentionally excluded from the hash.**
      Idempotency is keyed on (caller, order, amount, idempotency
      key). Two requests with the same `(orderId, idempotencyKey)`
-     collapse to the same depositId regardless of deadline; the
-     second is rejected by `usedDepositIds`. This makes deadline a
+     collapse to the same paymentId regardless of deadline; the
+     second is rejected by `usedPaymentIds`. This makes deadline a
      *liveness* parameter, not an *identity* parameter.
-7. `usdc.safeTransferFrom(msg.sender, address(this), amount)` with
+7. `usdcToken.safeTransferFrom(msg.sender, address(this), amount)` with
    **balance-delta verification** (fee-on-transfer defense, v0 §25).
-8. `usdc.forceApprove(address(vault), amount)` (one-shot allowance,
-   reset to zero post-call).
-9. `sharesMinted = vault.deposit(amount, agents[msg.sender].shareReceiver)`
+8. `usdcToken.forceApprove(address(vaultContract), amount)` (one-shot
+   allowance, reset to zero post-call).
+9. `sharesMinted = vaultContract.deposit(amount, agents[msg.sender].shareReceiver)`
    — the gateway is the ERC-4626 caller; the receiver is the agent's
    pre-registered share-receiver address. Vault-side reverts (TVL
    cap, paused, shutdown) propagate; the gateway never holds shares.
-10. `usdc.forceApprove(address(vault), 0)` to clear residual.
+10. `usdcToken.forceApprove(address(vaultContract), 0)` to clear residual.
 11. Update `agentWindowGross[msg.sender][windowId] += amount` and
-    mark `usedDepositIds[depositId] = true`.
-12. emit `AgentDeposit(depositId, orderId, agent, shareReceiver,
+    mark `usedPaymentIds[paymentId] = true`.
+12. emit `AgentDeposit(paymentId, orderId, agent, shareReceiver,
     amount, sharesMinted, windowId)`.
 
 The gateway must never custody `rmUSDC`; the vault deposit and the
@@ -273,31 +291,26 @@ Matches v0 §6 but trimmed: only `signer/software.rs` is implemented.
 `signer/mod.rs` defines the trait so HSM/KMS land later without API
 churn.
 
-### 4.2 `AgentSigner` trait (verbatim from v0 §8.1, MVP-shrunk request)
+### 4.2 `AgentSigner` trait (matches v0 §8.1)
 
 ```rust
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::Address;
+use alloy_signer::Signature;
 
-pub trait AgentSigner {
+pub trait AgentSigner: Send + Sync {
     fn backend_kind(&self) -> SignerBackendKind;
     fn public_address(&self) -> Address;
-    fn sign_gateway_tx(&self, req: GatewayTxRequest) -> Result<SignedTx, SignerError>;
-}
-
-pub enum GatewayTxRequest {
-    Deposit {
-        order_id: B256,
-        amount: U256,                // matches contract uint256;
-                                     // never narrowed at the trust boundary
-        deadline: u64,
-        idempotency_key: B256,
-    },
+    fn sign_eip1559_hash(&self, hash: &[u8; 32])
+        -> Result<Signature, SignerError>;
 }
 ```
 
 The trait does **not** expose `sign_hash` / `sign_message` /
-`sign_typed_data`. Enforced at the type level so future backends
-cannot widen it.
+`sign_typed_data`. The only hash a caller can produce is the EIP-1559
+envelope hash for a known gateway-deposit transaction, which is
+constructed by the `tx` module from a typed `GatewayTxRequest` —
+keeping the trust boundary at the call site rather than inside the
+signer. Future backends cannot widen this.
 
 ### 4.3 Software signer
 
@@ -429,7 +442,7 @@ as a subprocess from the Rust harness's `setup()` fixture.
    `ErrAgentNotAuthorized`.
 3. `paused_blocks_deposit` *(Anvil)* — `PAUSER_ROLE` calls `pause()`;
    client preflight refuses to sign (no broadcast).
-4. `over_per_deposit_cap_rejected` *(Anvil)* — preflight rejects;
+4. `over_per_payment_cap_rejected` *(Anvil)* — preflight rejects;
    contract would also revert (asserted via debug-only bypass).
 5. `over_window_cap_rejected` *(Geth)* — two deposits whose sum
    exceeds `maxPerWindow` → second reverts on-chain. Geth-layer
@@ -462,18 +475,23 @@ test.
 
 ## 6. Phase 1 build order
 
-1. Contracts + role-separation deploy script + Foundry tests on Anvil.
-2. Mock USDC + deploy harness wired into the Docker testnet, plus a
-   bare `cast send` smoke (one tx) to confirm the stack — no TS SDK
-   detour.
-3. Rust crate skeleton + config loader + RPC + alloy bindings.
-   `rmpc self-check` can read state.
-4. Software signer + nonce lock + fee-cap policy + `deposit` happy
-   path. Tests 1–2, 10–11.
-5. Preflight + policy refusal + code-hash pinning. Tests 3–4, 7–8.
-6. Negative on-chain paths. Tests 5–6, 9.
+All six chunks shipped 2026-04 → 2026-05; recorded here for posterity.
 
-Each chunk is independently mergeable.
+1. ✅ Contracts + role-separation deploy script + Foundry tests on
+   Anvil. (PRs #23–#26, #29, #30)
+2. ✅ Mock USDC + deploy harness wired into the Docker testnet, plus a
+   bare `cast send` smoke (one tx) to confirm the stack — no TS SDK
+   detour. (PRs #23, #29)
+3. ✅ Rust crate skeleton + config loader + RPC + alloy bindings.
+   `rmpc self-check` can read state. (PRs #22, #25, #27, #32)
+4. ✅ Software signer + nonce lock + fee-cap policy + `deposit` happy
+   path. Tests 1–2, 10–11. (PRs #25, #28, #33)
+5. ✅ Preflight + policy refusal + code-hash pinning. Tests 3–4, 7–8.
+   (PR #31)
+6. ✅ Negative on-chain paths. Tests 5–6, 9. (PRs #34–#36)
+
+Final cleanups: audit findings, logging, `rmpd` → `rmpc` rename
+(PR #40); deprecated TypeScript CLI removed (PR #43).
 
 ## 7. Phase 1 open questions
 

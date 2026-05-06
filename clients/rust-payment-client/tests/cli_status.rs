@@ -1,3 +1,5 @@
+//! Canonical: none — integration tests for `rmpc status`
+//!
 //! Integration tests for `rmpc status --payment-id` (issue #15).
 //!
 //! Each test wires a `mockito` JSON-RPC server that answers a single

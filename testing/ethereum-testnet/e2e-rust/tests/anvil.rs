@@ -1,6 +1,8 @@
+//! Canonical: docs/implementation-plan.md §5 — Anvil-layer scenarios
+//!
 //! Anvil-layer scenario tests for `rmpc` (issue #18).
 //!
-//! Per `docs/implementation-plan-mvp.md` §4. These eight `#[test]`
+//! Per `docs/implementation-plan.md` §4. These eight `#[test]`
 //! functions exercise every refusal path the daemon is responsible for —
 //! preflight refusals, fee-cap refusals, lock contention, and the one
 //! happy-path failure mode (idempotent replay) that requires a

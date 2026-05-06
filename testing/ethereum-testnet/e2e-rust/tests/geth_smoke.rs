@@ -1,3 +1,5 @@
+//! Canonical: none — Geth+Lighthouse smoke test for the e2e harness scaffold
+//!
 //! Geth+Lighthouse smoke test for the e2e harness scaffold.
 //!
 //! Gated behind `RMPC_E2E_GETH=1` so plain `cargo test` doesn't

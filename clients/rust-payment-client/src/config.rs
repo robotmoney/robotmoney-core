@@ -1,6 +1,8 @@
+//! Canonical: docs/architecture.md §10 — Local State (operator config TOML loader)
+//!
 //! TOML configuration loader.
 //!
-//! Field set is fixed by `docs/implementation-plan-mvp.md` §3.4–§3.7 and
+//! Field set is fixed by `docs/implementation-plan.md` §3.4–§3.7 and
 //! issue #7. Unknown fields are rejected (`deny_unknown_fields`) so that a
 //! typo in operator config fails loudly instead of silently using a default.
 

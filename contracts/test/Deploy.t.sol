@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — Foundry test for contracts/script/Deploy.s.sol
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";

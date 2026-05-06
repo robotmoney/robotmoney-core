@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4.8 — CLI surface (status subcommand)
+//!
 //! `rmpc status --payment-id 0x…` — read-only payment lookup.
 //!
 //! Issues a single `eth_getLogs` filtered on the gateway address +

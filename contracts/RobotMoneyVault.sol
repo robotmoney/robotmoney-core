@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/prd.md §5.1 — Treasury (pooled USDC, share token, pause, shutdown)
+// (See also: docs/prd.md §7 — Trust)
 pragma solidity ^0.8.24;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";

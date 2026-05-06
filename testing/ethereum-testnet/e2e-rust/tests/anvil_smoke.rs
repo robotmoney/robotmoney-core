@@ -1,3 +1,5 @@
+//! Canonical: none — Anvil-flavor smoke test for the e2e harness scaffold
+//!
 //! Anvil-flavor smoke test for the e2e harness scaffold (issue #17).
 //!
 //! This is the trivial proof that `Fixture::anvil()` boots Anvil, runs

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/architecture.md §6 — Roles
+// (See also: docs/implementation-plan.md §3.1 — AccessRoles.sol)
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /// @title AccessRoles
 /// @notice Role constants and AccessControl wiring for the RobotMoney gateway.
-/// @dev Three roles, all distinct keys (see `docs/implementation-plan-mvp.md` §2.1):
+/// @dev Three roles, all distinct keys (see `docs/implementation-plan.md` §2.1):
 ///      - `ADMIN_ROLE`  — grants/revokes other roles, sets policy, unpauses.
 ///      - `PAUSER_ROLE` — `pause()` only. Asymmetric with unpause by design:
 ///        pausing is a stop-the-world tool that must be fast and unilateral

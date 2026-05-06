@@ -1,4 +1,4 @@
-# Architecture Proposal v0 — Autonomous-Agent Access to Robot Money
+# Architecture — Autonomous-Agent Access to Robot Money
 
 > **Status.** Robot Money remains the ERC-4626 yield vault in
 > `contracts/RobotMoneyVault.sol` plus its adapters. This document
@@ -11,7 +11,7 @@
 > parity: it covers guarded deposits, direct chain reads, and the agent
 > safety boundary. Reads, withdraw/redeem, basket routing, simulation,
 > wallet UX, and mainnet configuration are phased in
-> `docs/implementation-plan-mvp.md`.
+> `docs/implementation-plan.md`.
 
 ## 1. Product Boundary
 
@@ -120,23 +120,28 @@ The gateway must not:
 Core storage shape:
 
 ```solidity
-IERC20   public immutable usdc;
-IERC4626 public immutable vault;
+IERC20   public immutable usdcToken;
+IERC4626 public immutable vaultContract;
 
 struct AgentPolicy {
     bool active;
     uint64 validUntil;
-    uint256 maxPerDeposit;
+    uint256 maxPerPayment;
     uint256 maxPerWindow;
     address shareReceiver;
 }
 
 mapping(address => AgentPolicy) public agents;
 mapping(address => mapping(uint64 => uint256)) public agentWindowGross;
-mapping(bytes32 => bool) public usedDepositIds;
-bool public paused;
+mapping(bytes32 => bool) public usedPaymentIds;
+bool private _paused;                                  // exposed via paused()
 uint64 public constant WINDOW_SECONDS = 86400;
+uint256 public constant MAX_DEADLINE_SKEW = 600;
 ```
+
+The `usdcToken` / `vaultContract` storage names let the gateway also
+expose `usdc()` and `vault()` view functions matching the `IGateway`
+interface without colliding with the storage variables.
 
 Deposit function shape:
 
@@ -146,8 +151,14 @@ function deposit(
     uint256 amount,
     uint64 deadline,
     bytes32 idempotencyKey
-) external returns (bytes32 depositId, uint256 sharesMinted);
+) external returns (bytes32 paymentId, uint256 sharesMinted);
 ```
+
+The returned identifier is named `paymentId` because the gateway's
+abstraction is "policy-gated payments out of an agent's USDC balance",
+of which deposit is the first verb. The id namespace is reusable for
+future verbs (e.g. agent-initiated withdraw) without hardcoding
+"deposit".
 
 Deposit behavior:
 
@@ -155,13 +166,13 @@ Deposit behavior:
 2. Require caller has `AGENT_ROLE`.
 3. Require agent policy is active and unexpired.
 4. Require `amount > 0`.
-5. Require `amount <= maxPerDeposit`.
+5. Require `amount <= maxPerPayment`.
 6. Require `deadline` is current and within the maximum skew.
 7. Compute the current fixed window.
 8. Require `agentWindowGross[agent][window] + amount <= maxPerWindow`.
-9. Compute deterministic `depositId` from chain id, gateway, agent,
+9. Compute deterministic `paymentId` from chain id, gateway, agent,
    order id, amount, and idempotency key.
-10. Require `depositId` has not been used.
+10. Require `paymentId` has not been used.
 11. Pull exact USDC from the agent and verify the balance delta.
 12. Approve the vault for exactly this amount.
 13. Call `vault.deposit(amount, shareReceiver)`.
@@ -282,7 +293,7 @@ The gateway is the source of truth for safety.
 The Rust client should replace relevant TypeScript CLI reads with
 direct JSON-RPC reads, not explorer APIs.
 
-Initial read commands are scoped in `docs/implementation-plan-mvp.md`
+Initial read commands are scoped in `docs/implementation-plan.md`
 and include vault status, balances, agent policy, gateway config,
 roles, tx status, and allowance checks.
 
@@ -347,7 +358,7 @@ Every signing decision writes an audit record:
 - decision;
 - refusal reason when applicable;
 - tx hash when available;
-- deposit id when available.
+- payment id when available.
 
 Never log private keys, passphrases, seed phrases, cloud credentials,
 or unredacted customer data.
@@ -370,7 +381,7 @@ or unredacted customer data.
 ## 16. MVP Phase Link
 
 The implementation sequence lives in
-`docs/implementation-plan-mvp.md`.
+`docs/implementation-plan.md`.
 
 That plan defines:
 

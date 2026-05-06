@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/prd.md §5.2 — Bucket A (stable yield, multi-venue)
 pragma solidity ^0.8.24;
 
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";

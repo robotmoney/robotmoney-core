@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — Foundry test for contracts/gateway/RobotMoneyGateway.sol
 pragma solidity ^0.8.24;
 
 import {Test, Vm} from "forge-std/Test.sol";

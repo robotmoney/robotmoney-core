@@ -1,3 +1,5 @@
+//! Canonical: none — unit tests for the policy preflight module
+//!
 //! Preflight unit tests — drive a real `mockito` JSON-RPC server so the
 //! transport, encoder, and decoder stay in the loop. Each test exercises
 //! a single refusal path (or the happy path) by stubbing each

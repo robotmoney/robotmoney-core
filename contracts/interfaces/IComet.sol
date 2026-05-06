@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — external Compound v3 (Comet) integration interface
 pragma solidity ^0.8.24;
 
 /// @notice Minimal Compound V3 Comet interface used by CompoundV3Adapter.

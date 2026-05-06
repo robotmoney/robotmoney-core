@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4.3 — Software signer
+//!
 //! Encrypted-keystore software signer (§3.3).
 //!
 //! Layout on disk (JSON):

@@ -1,3 +1,5 @@
+//! Canonical: none — integration tests for `rmpc self-check`
+//!
 //! Integration tests for `rmpc self-check` (issue #15).
 //!
 //! Each test wires a `mockito` JSON-RPC server, builds a temp config +

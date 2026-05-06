@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4 — Phase 1 Rust client (operator-visible error catalog)
+//!
 //! Named error variants used across the rmpc codebase.
 //!
 //! Variant names are part of the operator-visible contract: the CLI prints

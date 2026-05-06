@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §10 — Local State (submitted-order cache)
+//!
 //! Client-side replay cache for `(order_id, idempotency_key, deadline)`
 //! tuples already submitted by this rmpc installation.
 //!

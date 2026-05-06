@@ -1,6 +1,13 @@
 # Robot Money — Project Roadmap
 
-> Scope: this is the **project-level** roadmap for Robot Money — the on-chain protocol, the website, the agent integrations, and the surrounding ecosystem work. Source of truth for protocol-side milestones is the public changelog at https://www.robotmoney.net/changelog; this file mirrors and contextualizes it for in-repo consumers.
+> **Deprecated (2026-05-06).** This roadmap is no longer maintained as
+> in-repo source of truth. The canonical docs are now `docs/prd.md`
+> (product), `docs/architecture.md` (architecture), and
+> `docs/implementation-plan.md` (build plan). The public-facing roadmap
+> lives at https://www.robotmoney.net/changelog. The content below is
+> retained for historical reference only and may be out of date.
+
+> Scope (historical): this was the **project-level** roadmap for Robot Money — the on-chain protocol, the website, the agent integrations, and the surrounding ecosystem work. Source of truth for protocol-side milestones is the public changelog at https://www.robotmoney.net/changelog; this file mirrored and contextualized it for in-repo consumers.
 
 The deployed protocol is currently at **Phase 4** of the public roadmap (see `docs/technical/smart-contracts.md` §10): single-bucket, equal-weight, governance-free, Base-only stable-yield vault with a client-orchestrated agent-token sidecar. Later phases (governance token mechanics, multi-bucket allocation, multi-chain) are listed below for context.
 

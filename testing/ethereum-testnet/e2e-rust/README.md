@@ -1,7 +1,7 @@
 # rmpc-e2e
 
 End-to-end harness for the Rust payment daemon (`rmpc`). Implements
-the scaffold called for in issue #17 / `docs/implementation-plan-mvp.md`
+the scaffold called for in issue #17 / `docs/implementation-plan.md`
 §4. The actual scenario tests land in #18 (Anvil layer) and #19
 (Geth+Lighthouse layer); this crate is the test runner they will use.
 

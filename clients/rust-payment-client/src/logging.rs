@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §14 — Audit Logging
+//!
 //! Diagnostic + audit logging for `rmpc`.
 //!
 //! Two parallel sinks:

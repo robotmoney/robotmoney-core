@@ -1,3 +1,5 @@
+//! Canonical: none — shared fixtures for rmpc integration tests
+//!
 //! Shared test fixtures for the `rmpc` CLI integration tests.
 //!
 //! These helpers build a temp keystore + temp config file pointing at a

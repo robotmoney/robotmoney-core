@@ -1,3 +1,5 @@
+//! Canonical: none — integration tests for the rmpc clap argument parser
+//!
 //! Integration tests for the `rmpc` CLI binary's argument parser.
 //!
 //! Each subcommand has its own dedicated integration target

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/architecture.md §5 — On-Chain Gateway
+// (See also: docs/implementation-plan.md §3.2 — RobotMoneyGateway.sol)
 pragma solidity ^0.8.24;
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
 /// @dev This is the surface downstream issues (#9 RobotMoneyGateway, #10 deploy
 ///      script, #13 forge tests) compile against. Keep it stable. Per the MVP
-///      plan (`docs/implementation-plan-mvp.md` §2.2), the gateway exposes a
+///      plan (`docs/implementation-plan.md` §2.2), the gateway exposes a
 ///      single state-mutating entrypoint for agents (`deposit`), admin
 ///      lifecycle calls, and a pause asymmetry (PAUSER pauses, ADMIN unpauses).
 interface IGateway {

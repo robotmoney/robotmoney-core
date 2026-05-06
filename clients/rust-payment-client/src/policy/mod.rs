@@ -1,7 +1,10 @@
+//! Canonical: docs/architecture.md §9 — Client Preflight
+//! (See also: docs/implementation-plan.md §4.4 — Preflight)
+//!
 //! `policy` module — client-side preflight that mirrors the on-chain
 //! `RobotMoneyGateway` policy.
 //!
-//! Per `docs/implementation-plan-mvp.md` §3.4 and issue #14: every check
+//! Per `docs/implementation-plan.md` §3.4 and issue #14: every check
 //! the contract enforces at execution time is replayed by `rmpc` *before*
 //! any signature is produced. A failure is a **hard refusal** — the daemon
 //! exits non-zero, emits a high-severity log line, and never broadcasts.

@@ -1,6 +1,8 @@
+//! Canonical: docs/implementation-plan.md §5 — Geth+Lighthouse-layer scenarios
+//!
 //! Geth + Lighthouse-layer scenario tests for `rmpc` (issue #19).
 //!
-//! Per `docs/implementation-plan-mvp.md` §4. These three `#[test]`
+//! Per `docs/implementation-plan.md` §4. These three `#[test]`
 //! functions exercise scenarios that depend on real PoS block
 //! production + finality semantics — the parts of the rmpc ↔ gateway
 //! contract that an instant-mine harness like Anvil cannot honestly

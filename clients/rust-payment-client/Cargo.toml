@@ -15,7 +15,7 @@ name = "rmpc"
 path = "src/main.rs"
 
 [dependencies]
-# Per docs/implementation-plan-mvp.md §3.5
+# Per docs/implementation-plan.md §3.5
 alloy-primitives = { version = "0.8", features = ["k256"] }
 alloy-sol-types = { version = "0.8", features = ["json"] }
 alloy-consensus = { version = "0.5", features = ["k256"] }

@@ -1,3 +1,5 @@
+//! Canonical: docs/implementation-plan.md §4 — Phase 1 Rust client (library surface for integration tests)
+//!
 //! `rust-payment-client` library crate.
 //!
 //! Re-exports the modules used by the `rmpc` binary so integration tests

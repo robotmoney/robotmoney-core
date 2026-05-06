@@ -5,10 +5,11 @@
 > specifies the product, not the order in which pieces ship and not
 > how they are built. Architecture, contract surfaces, signing paths,
 > tooling, schemas, and other implementation details live in
-> `docs/architecture-proposal-v0.md` (security architecture) and
-> `docs/implementation-plan-mvp.md` (build slice). Implementation
-> status and version history live in `docs/project-roadmap.md` and
-> `CHANGELOG.md`.
+> `docs/architecture.md` (security architecture) and
+> `docs/implementation-plan.md` (build slice). Implementation status
+> lives in the git history and the implementation plan;
+> `docs/project-roadmap.md` is deprecated (kept for historical
+> reference only).
 
 ## 1. Product
 
@@ -172,8 +173,8 @@ The fee recipient is administered by the protocol's multisig.
 Autonomous agents can deposit, withdraw, and observe the treasury
 through a programmatic interface. Agent operators set per-agent
 spending bounds and can pause or revoke any agent at any time. See
-`docs/architecture-proposal-v0.md` for the security architecture and
-`docs/implementation-plan-mvp.md` for the agent client.
+`docs/architecture.md` for the security architecture and
+`docs/implementation-plan.md` for the agent client.
 
 ### 5.6 Human-facing web application
 
@@ -223,7 +224,7 @@ spending bounds and can pause or revoke any agent at any time. See
   from a vote to an admin action is bounded by the multisig
   operating within published constraints.
 - **Autonomous-agent signing.** Specified separately in
-  `docs/architecture-proposal-v0.md`; out of PRD scope.
+  `docs/architecture.md`; out of PRD scope.
 
 ## 8. Out of scope
 
