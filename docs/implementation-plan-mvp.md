@@ -1,8 +1,11 @@
-# MVP Implementation Plan — Rust Payment Client + Deposit Gateway
+# MVP Implementation Plan — Rust Client, Gateway, Testing, Agent Surfaces
 
-> Companion to `docs/architecture-proposal-v0.md`. This plan is the
-> buildable slice of v0: one chain, one token, one gateway, one Rust
-> client.
+> Companion to `docs/architecture-proposal-v0.md`. This plan covers the
+> full MVP sequence. Phase 1 is the buildable slice of v0: one chain,
+> one token, one gateway, one Rust client. Later phases add fork-based
+> smart-contract testing, direct chain-read tooling, agent-harness
+> installation, a simple explorer API/database, human-facing controls,
+> and a final OpenClaw demo.
 >
 > **Relationship to the product.** Robot Money is the ERC-4626 yield
 > vault in `contracts/RobotMoneyVault.sol` plus its
@@ -12,29 +15,104 @@
 > wraps `vault.deposit()`. The gateway is the only contract an
 > agent's key may call; it pulls USDC from the agent, enforces
 > per-agent caps, and forwards into the vault.
+>
+> The Rust client is the replacement direction for the TypeScript CLI's
+> relevant supported features, but this MVP is not full CLI parity. It
+> does not implement adapter strategy, Morpho/Aave/Compound allocation,
+> OWS wallet UX, Permit2, withdraw/redeem flows, or the UniversalRouter
+> basket sidecar. Those require additional architecture work before
+> they move into `rmpc`.
 
 ## 0. Scope
 
-**In scope.** A single-chain (local Geth devnet), single-token (mock
-USDC), single-gateway system where a Rust daemon authenticates as an
-`AGENT_ROLE` key and calls one function — `deposit` — on a gateway
-that enforces per-agent allowlist, per-payment cap, per-window cap,
-pause, and **forwards the deposit into a `RobotMoneyVault`**. Vault
-shares (`rmUSDC`) settle to a configurable receiver registered with
-the gateway. Admin role is real (separate key, on-chain checks).
+**Phase 1 in scope.** A single-chain (local Geth devnet),
+single-token (mock USDC), single-gateway system where a Rust daemon
+authenticates as an `AGENT_ROLE` key and calls one function —
+`deposit` — on a gateway that enforces per-agent allowlist,
+per-deposit cap, per-window cap, pause, and **forwards the deposit into
+a `RobotMoneyVault`**. Vault shares (`rmUSDC`) route to a configurable
+receiver registered with the gateway. Admin role is real (separate
+key, on-chain checks).
 
-**Mock USDC + mock vault are the test target.** The MVP test suite
+**Full MVP in scope.** The full MVP is broader than phase 1. It also
+includes fork-based Robot Money contract tests, direct chain-read query
+commands in `rmpc`, agent-harness packaging for OpenCode and OpenClaw,
+a small explorer API/database for transaction and vault history, a
+human dapp for sensitive credential/policy actions, and a final
+OpenClaw-driven demo on a recent public-chain fork.
+
+**Mock USDC + mock vault are the phase 1 test target.** The phase 1 test suite
 runs against a 6-decimal `MockUSDC.sol` and a minimal `MockVault.sol`
 (or the real `RobotMoneyVault.sol` deployed in a single-adapter
 configuration) on Anvil and on the Docker devnet.
 
-**Out of scope (deferred).** Adapters/yield, ERC-4626 share token,
-master-batch Merkle confirmation (v0 §22), `MASTER_ROLE` in any form
-(see §2.3), refund/expiry, Permit2 / UniversalRouter, multi-RPC
-consensus, multi-backend signers (only software-encrypted for MVP),
-proxy upgradeability, governance.
+**Out of scope (deferred).** Implementing or changing the ERC-4626
+vault/share token, adapters/yield, master-batch Merkle confirmation
+(v0 §22), `MASTER_ROLE` in any form, reversal/expiry, Permit2
+/ UniversalRouter, withdraw/redeem flows, multi-RPC consensus,
+multi-backend signers (only software-encrypted for MVP), proxy
+upgradeability, governance.
 
-## 1. Components
+**Future replacement scope (TBD).** `rmpc` should replace the
+TypeScript CLI for the supported command surface that still matters.
+The design for full replacement is intentionally not specified in this
+MVP. Before those features are ported, separate architecture decisions
+are needed for read-command parity, withdraw/redeem safety, basket
+routing, simulation/state overrides, OWS or wallet-adapter UX, and
+mainnet configuration management.
+
+## 1. Phase map
+
+| Phase | Theme | Primary outcome |
+|---|---|---|
+| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. |
+| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. |
+| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. |
+| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. |
+| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. |
+| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. |
+| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. |
+
+Phase 1 is specified in detail below because it is the current
+implementation branch. Phases 2-7 define the target shape and
+acceptance criteria; they are intentionally less prescriptive where the
+architecture is still open.
+
+These are internal MVP delivery phases for the Rust/agent-access work.
+They are not the same numbering scheme as the public Robot Money
+product roadmap phases in `docs/project-roadmap.md`.
+
+**Intentional tradeoffs.**
+
+- **Wrapper deposit UX.** USDC is a plain ERC-20; it cannot tell the
+  vault who an agent intended to credit just from a token transfer.
+  The gateway therefore exposes an explicit `deposit(...)` entrypoint
+  and pulls USDC with `transferFrom`. This is less natural than
+  "send USDC to this address", but it gives deterministic
+  attribution, policy checks, and event emission.
+- **Software signer in MVP.** The production architecture prefers HSM,
+  Secure Enclave, TPM, or KMS-backed non-exportable keys. The MVP ships
+  only the encrypted software signer so the contract and client path
+  can be tested end-to-end. Operators must set
+  `[signer].allow_software_fallback = true` explicitly.
+- **No master review in MVP.** Human/master confirmation is useful for
+  high-value flows, but it adds latency and operational review. This
+  MVP uses per-agent and per-window caps only; master-batch approval is
+  deferred.
+- **Fixed window accounting.** The contract uses epoch-aligned
+  24-hour windows for the first implementation. A request timed around
+  the boundary can consume cap from two adjacent windows in a short
+  interval, so caps should be configured conservatively.
+
+## 2. Phase 1 — Secure Agent Deposit Infrastructure
+
+Goal: establish the minimum secure path for autonomous agents to
+deposit USDC into Robot Money through a constrained Rust client and a
+policy gateway. This phase proves the key security boundary: an agent
+key can deposit only through audited calldata, under on-chain caps, and
+with structured refusal/audit behavior.
+
+### 2.1 Components
 
 ```
 contracts/gateway/
@@ -43,7 +121,7 @@ contracts/gateway/
   AccessRoles.sol               # role constants + AccessControl wiring
   interfaces/IGateway.sol
 
-clients/rust-payment-client/
+clients/rmpc/
   Cargo.toml
   src/
     main.rs                     # CLI: deposit / status / self-check
@@ -68,9 +146,9 @@ Note: the e2e tests live under the existing `testing/ethereum-testnet/`
 tree (not a separate `testing/e2e/`) to keep the harness, contracts,
 and driver co-located.
 
-## 2. Contracts (smallest viable surface)
+## 3. Phase 1 Contracts (smallest viable surface)
 
-### 2.1 `AccessRoles.sol`
+### 3.1 `AccessRoles.sol`
 
 OpenZeppelin `AccessControl` with three roles, all distinct keys:
 
@@ -85,7 +163,7 @@ OpenZeppelin `AccessControl` with three roles, all distinct keys:
 or `PAUSER_ROLE`. Enforced in deploy script and asserted in a
 post-grant check.
 
-### 2.2 `RobotMoneyGateway.sol`
+### 3.2 `RobotMoneyGateway.sol`
 
 The gateway is a thin policy-gated wrapper around `vault.deposit()`.
 It pulls USDC from the agent, enforces per-agent caps, calls the
@@ -102,7 +180,7 @@ IERC4626  public immutable vault;                      // RobotMoneyVault, pinne
 struct AgentPolicy {
     bool    active;
     uint64  validUntil;
-    uint256 maxPerPayment;
+    uint256 maxPerDeposit;
     uint256 maxPerWindow;
     address shareReceiver;     // who gets rmUSDC; set by ADMIN, not the agent
 }
@@ -110,7 +188,7 @@ mapping(address => AgentPolicy) public agents;
 
 mapping(address => mapping(uint64 => uint256))         // per-agent windowed gross —
         public agentWindowGross;                       // NOT shared across agents
-mapping(bytes32 => bool) public usedPaymentIds;
+mapping(bytes32 => bool) public usedDepositIds;
 bool public paused;
 uint64 public constant WINDOW_SECONDS = 86400;         // Unix-epoch-aligned;
                                                        // see v0 §23.3
@@ -125,7 +203,7 @@ function deposit(
     uint64  deadline,
     bytes32 idempotencyKey
 ) external whenNotPaused onlyRole(AGENT_ROLE)
-    returns (bytes32 paymentId, uint256 sharesMinted);
+    returns (bytes32 depositId, uint256 sharesMinted);
 
 function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE);
 function revokeAgent(address agent) external onlyRole(ADMIN_ROLE);
@@ -137,13 +215,13 @@ Events:
 
 ```solidity
 event AgentAuthorized(address indexed agent, uint64 validUntil,
-                      uint256 maxPerPayment, uint256 maxPerWindow,
+                      uint256 maxPerDeposit, uint256 maxPerWindow,
                       address shareReceiver);
 event AgentRevoked(address indexed agent);
 event Paused(address indexed by);
 event Unpaused(address indexed by);
 event AgentDeposit(
-    bytes32 indexed paymentId,
+    bytes32 indexed depositId,
     bytes32 indexed orderId,
     address indexed agent,
     address shareReceiver,
@@ -155,19 +233,19 @@ event AgentDeposit(
 
 Behavior of `deposit` (subset of v0 §20.1, retargeted to the vault):
 
-1. `amount > 0 && amount <= agents[msg.sender].maxPerPayment`
+1. `amount > 0 && amount <= agents[msg.sender].maxPerDeposit`
 2. `block.timestamp <= deadline && deadline <= block.timestamp + 600`
 3. `agents[msg.sender].active && validUntil >= block.timestamp`
 4. `windowId = uint64(block.timestamp / WINDOW_SECONDS)`
 5. `agentWindowGross[msg.sender][windowId] + amount <= agents[msg.sender].maxPerWindow`
-6. `paymentId = keccak256(abi.encode(block.chainid, address(this),
+6. `depositId = keccak256(abi.encode(block.chainid, address(this),
    msg.sender, orderId, amount, idempotencyKey))`; revert if already
    used.
    - **`deadline` is intentionally excluded from the hash.**
      Idempotency is keyed on (caller, order, amount, idempotency
      key). Two requests with the same `(orderId, idempotencyKey)`
-     collapse to the same paymentId regardless of deadline; the
-     second is rejected by `usedPaymentIds`. This makes deadline a
+     collapse to the same depositId regardless of deadline; the
+     second is rejected by `usedDepositIds`. This makes deadline a
      *liveness* parameter, not an *identity* parameter.
 7. `usdc.safeTransferFrom(msg.sender, address(this), amount)` with
    **balance-delta verification** (fee-on-transfer defense, v0 §25).
@@ -179,23 +257,23 @@ Behavior of `deposit` (subset of v0 §20.1, retargeted to the vault):
    cap, paused, shutdown) propagate; the gateway never holds shares.
 10. `usdc.forceApprove(address(vault), 0)` to clear residual.
 11. Update `agentWindowGross[msg.sender][windowId] += amount` and
-    mark `usedPaymentIds[paymentId] = true`.
-12. emit `AgentDeposit(paymentId, orderId, agent, shareReceiver,
+    mark `usedDepositIds[depositId] = true`.
+12. emit `AgentDeposit(depositId, orderId, agent, shareReceiver,
     amount, sharesMinted, windowId)`.
 
 The gateway must never custody `rmUSDC`; the vault deposit and the
 share routing happen in the same call frame and the gateway's
 `rmUSDC` balance is asserted to be zero before and after.
 
-## 3. Rust client
+## 4. Phase 1 Rust client
 
-### 3.1 Crate layout
+### 4.1 Crate layout
 
 Matches v0 §6 but trimmed: only `signer/software.rs` is implemented.
 `signer/mod.rs` defines the trait so HSM/KMS land later without API
 churn.
 
-### 3.2 `AgentSigner` trait (verbatim from v0 §8.1, MVP-shrunk request)
+### 4.2 `AgentSigner` trait (verbatim from v0 §8.1, MVP-shrunk request)
 
 ```rust
 use alloy_primitives::{Address, B256, U256};
@@ -221,16 +299,16 @@ The trait does **not** expose `sign_hash` / `sign_message` /
 `sign_typed_data`. Enforced at the type level so future backends
 cannot widen it.
 
-### 3.3 Software signer
+### 4.3 Software signer
 
-- secp256k1 via `k256` crate (or alloy's signer abstraction; see §3.5).
+- secp256k1 via `k256` crate (or alloy's signer abstraction; see §4.5).
 - Key encrypted-at-rest with `aes-gcm` + Argon2 KDF; passphrase from
   env or stdin.
 - Plaintext key zeroized after each sign via `zeroize`.
 - Refuses to start unless `[signer].allow_software_fallback = true`.
   Emits a high-severity log line on startup (v0 §10.5).
 
-### 3.4 Preflight (mirrors contract, v0 §11)
+### 4.4 Preflight (mirrors contract, v0 §11)
 
 Before signing the client RPC-reads:
 
@@ -249,7 +327,7 @@ The MVP gateway is non-upgradeable, so the legitimate path for
 config bump. The full proxy-aware rotation flow (re-pinning across a
 timelock window) is specified in v0 §26.1.
 
-### 3.5 ABI encoding and Ethereum primitives
+### 4.5 ABI encoding and Ethereum primitives
 
 Use `alloy-primitives` + `alloy-sol-types` for typed ABI
 encoding/decoding and `alloy-consensus` (or equivalent) for EIP-1559
@@ -280,7 +358,7 @@ clap                = "*"
 The Rust binary must remain the only path to a signed deposit tx; no
 alloy provider is exposed externally.
 
-### 3.6 Nonce management
+### 4.6 Nonce management
 
 The MVP CLI is **single-flight**: each `rmpc deposit` invocation
 acquires an exclusive file lock on
@@ -290,7 +368,7 @@ invocations against the same agent address fail fast with
 `ErrConcurrentInvocation`. A full nonce manager (with pending-tx
 queue, replacement, gap recovery) is v1 work.
 
-### 3.7 Fee policy
+### 4.7 Fee policy
 
 EIP-1559 transactions only. Per-invocation behavior:
 
@@ -305,17 +383,17 @@ EIP-1559 transactions only. Per-invocation behavior:
 
 Defaults: `max_fee_per_gas_cap = 100 gwei` for MVP devnet runs.
 
-### 3.8 CLI surface
+### 4.8 CLI surface
 
 ```
 rmpc deposit --amount 100.00 --order-id 0x…
-rmpc status  --payment-id 0x…
+rmpc status  --deposit-id 0x…
 rmpc self-check                # backend report (v0 §9.2 JSON)
 ```
 
 JSON on stdout, exit 0 on success, named errors on failure.
 
-## 4. End-to-end test plan
+## 5. Phase 1 End-to-end test plan
 
 **Harness split.** Two layers, deliberately:
 
@@ -344,14 +422,14 @@ as a subprocess from the Rust harness's `setup()` fixture.
 **Scenarios** (each = one `#[test]`):
 
 1. `deposit_happy_path` *(Geth)* — admin authorizes agent, agent runs
-   `rmpc deposit`, assert `PaymentEscrowed` event + USDC balance delta
+   `rmpc deposit`, assert `AgentDeposit` event + USDC balance delta
    on gateway.
 2. `unauthorized_agent_rejected` *(Anvil)* — agent without
    `AGENT_ROLE` → contract reverts; client surfaces
    `ErrAgentNotAuthorized`.
 3. `paused_blocks_deposit` *(Anvil)* — `PAUSER_ROLE` calls `pause()`;
    client preflight refuses to sign (no broadcast).
-4. `over_per_payment_cap_rejected` *(Anvil)* — preflight rejects;
+4. `over_per_deposit_cap_rejected` *(Anvil)* — preflight rejects;
    contract would also revert (asserted via debug-only bypass).
 5. `over_window_cap_rejected` *(Geth)* — two deposits whose sum
    exceeds `maxPerWindow` → second reverts on-chain. Geth-layer
@@ -359,7 +437,7 @@ as a subprocess from the Rust harness's `setup()` fixture.
    block cadence.
 6. `idempotent_replay_rejected` *(Anvil)* — same `(orderId,
    idempotencyKey)` twice → second reverts with
-   `PaymentIdAlreadyUsed`.
+   `DepositIdAlreadyUsed`.
 7. `code_hash_mismatch_aborts` *(Anvil)* — flip pinned hash in config
    → client refuses to sign (hard refusal, not advisory).
 8. `software_fallback_disabled_aborts_startup` *(Anvil)* —
@@ -379,10 +457,10 @@ log.
 
 **Coverage targets.** Every `revert` in the gateway has a corresponding
 negative test; every preflight rule has a corresponding client-side
-test; every refusal in §3.4/§3.6/§3.7 has a corresponding client-side
+test; every refusal in §4.4/§4.6/§4.7 has a corresponding client-side
 test.
 
-## 5. Build order
+## 6. Phase 1 build order
 
 1. Contracts + role-separation deploy script + Foundry tests on Anvil.
 2. Mock USDC + deploy harness wired into the Docker testnet, plus a
@@ -397,8 +475,386 @@ test.
 
 Each chunk is independently mergeable.
 
-## 6. Open questions
+## 7. Phase 1 open questions
 
 1. **Fee-cap default.** `100 gwei` is generous for an L1 devnet but
    intentionally loud if it ever fires on a real chain. Operators on
    L2s should lower this an order of magnitude.
+
+## 8. Phase 2 — Forked Smart-Contract E2E
+
+Goal: test the actual Robot Money smart-contract stack against a
+recent fork of a public Ethereum-compatible chain, with real router,
+vault, token, and DEX interactions. This phase is separate from phase
+1's mock gateway/devnet suite: it answers "does the deployed-style
+Robot Money flow still work against current on-chain reality?"
+
+**Fork target.**
+
+- Default target is a recent Base mainnet fork, because Robot Money's
+  deployed contracts and USDC flow are Base-oriented.
+- The fork block must be pinned in CI for reproducibility, while local
+  runs may opt into "latest recent fork" mode for smoke testing.
+- The test harness must record chain id, fork block, RPC endpoint
+  label, deployed contract addresses, and tx hashes in test output.
+
+**Required scenarios.**
+
+1. `vault_deposit_redeem_smoke` — fund an ephemeral wallet with forked
+   USDC, approve the vault/gateway path, deposit, then redeem/withdraw
+   enough to prove share accounting and exit behavior.
+2. `dex_route_smoke` — execute the smallest meaningful basket or DEX
+   interaction still relevant to the replacement CLI scope, using real
+   router contracts and real pool state.
+3. `gas_estimate_reality_check` — estimate and execute the deposit
+   path, then assert actual gas used is within documented budgets.
+4. `abi_address_sanity` — assert every configured contract has code,
+   expected `decimals()`/`symbol()` where applicable, and selectors
+   decode against the current ABI.
+5. `failure_surface_smoke` — paused/cap/allowance/balance failures
+   produce stable refusal JSON and do not leave partial state.
+
+**Harness.**
+
+- Use Anvil fork mode for fast local and CI runs.
+- Prefer Rust integration tests once `rmpc` owns the command surface.
+  Existing TypeScript fork-test logic may be used as reference, not as
+  the long-term driver.
+- Every test uses an isolated ephemeral key and snapshot/revert.
+- No explorer APIs in the test path. Reads come from JSON-RPC calls
+  against the fork.
+
+**Outputs.**
+
+- A CI job that runs a pinned fork smoke subset.
+- A release-gated or manually-triggered job that runs the fuller fork
+  suite.
+- Fork fixtures for USDC funding, approval, vault reads, router reads,
+  and deterministic account setup.
+
+**Acceptance criteria.**
+
+- CI catches ABI/address drift against the pinned fork.
+- A developer can run the fork smoke locally with one documented
+  command and a public or configured RPC URL.
+- The fork suite fails with actionable errors: address mismatch, ABI
+  mismatch, route failure, gas budget exceeded, or command regression.
+
+## 9. Phase 3 — Direct Chain-Read Query Tooling
+
+Goal: make `rmpc` useful for observing Robot Money state without
+depending on Etherscan/Basescan, website APIs, or other explorer
+services. Agents and humans should be able to ask the Rust CLI what is
+true on-chain.
+
+**Principles.**
+
+- Direct JSON-RPC reads only for canonical chain state.
+- Explorer APIs may be optional enrichment later, but must not be the
+  source of truth for vault, role, balance, cap, or tx-status checks.
+- Output is stable JSON suitable for agents, shell scripts, and the
+  phase 5 explorer service.
+
+**Initial commands.**
+
+```text
+rmpc get-vault
+rmpc get-balance --address 0x...
+rmpc get-agent --agent 0x...
+rmpc get-gateway
+rmpc get-deposit --deposit-id 0x...
+rmpc get-tx --tx-hash 0x...
+rmpc get-allowance --owner 0x... --spender 0x...
+rmpc get-roles --address 0x...
+```
+
+Names may change before implementation, but the read surface must cover
+the same concepts.
+
+**Vault state.**
+
+- Vault address, asset address, share token metadata.
+- Total assets, total supply, share price, deposit caps, pause/shutdown
+  state, fee fields that are actually readable on-chain.
+- Adapter addresses, adapter balances, active adapter count, rebalance
+  availability, next rebalance timestamp, drift if exposed by the ABI.
+- Explicit `unknown` or `not_onchain` values where docs or website
+  claims exceed the deployed contract's read surface.
+
+**Gateway and agent state.**
+
+- Gateway code hash, chain id, configured USDC/vault addresses.
+- Agent policy: active, valid until, max per deposit, max per window,
+  current window usage, share receiver.
+- Role membership for ADMIN, PAUSER, AGENT, and any future roles.
+- Deposit/order status from gateway events and direct storage reads
+  where possible.
+
+**Output contract.**
+
+- All large integers are decimal strings.
+- Every command includes `chain_id`, `block_number`, and `source:
+  "json_rpc"`.
+- Commands that combine multiple reads include a `partial` flag and a
+  per-field error list if some reads fail.
+
+**Acceptance criteria.**
+
+- Agents can answer "is the vault healthy?", "what is my position?",
+  "can this agent deposit?", and "what happened to this tx?" from
+  `rmpc` alone.
+- No query command requires a block explorer API key.
+- Fork tests cover every read command against pinned contracts.
+
+## 10. Phase 4 — Agent-Harness Installation and Skill Loading
+
+Goal: install and exercise Robot Money inside agent runtimes, starting
+with OpenCode for manual agent interaction and OpenClaw for long-running
+agentic tasks.
+
+**Supported harnesses.**
+
+- **OpenCode** — manual interactive testing. A developer can load the
+  Robot Money skill, give the agent a task, inspect tool calls, and
+  iterate quickly.
+- **OpenClaw** — long-running task testing. The agent runs with
+  scheduled or goal-driven behavior against a fork/devnet, suitable for
+  phase 7.
+
+**Skill loading.**
+
+The canonical skill package must include:
+
+```text
+SKILL.md                 # when to use Robot Money
+references/read.md       # query commands and interpretation
+references/write.md      # deposit / credential / permission flows
+references/safety.md     # refusal cases, caps, fork-vs-mainnet warning
+references/examples.md   # minimal prompts and expected command traces
+```
+
+The skill must be harness-portable: avoid Claude-specific assumptions,
+avoid hidden prompt dependencies, and keep command examples aligned with
+`rmpc --help` output.
+
+**OpenCode installation.**
+
+- Document how to build/install `rmpc`.
+- Document how to register the skill with OpenCode.
+- Provide a local/fork config file and a "read-only first" prompt.
+- Provide a manual checklist for deposit simulation and refusal cases.
+
+**OpenClaw installation.**
+
+- Document how OpenClaw obtains the `rmpc` binary/config.
+- Document environment variables and secret handling.
+- Define how long-running tasks persist state: local state dir for
+  `rmpc`, OpenClaw task state for goals, and optional phase 5 API for
+  history.
+- Require fork/devnet mode by default; mainnet mode must be an explicit
+  operator action.
+
+**MCP decision.**
+
+MCP is desirable if the harness cannot safely or ergonomically execute
+shell commands, or if long-running OpenClaw tasks need a stable tool
+server with schemas, lifecycle, and structured errors. It is not
+required for the first OpenCode manual tests if shell execution is
+available.
+
+Decision criteria:
+
+- Build MCP if OpenClaw integration is materially simpler or safer with
+  long-lived tools than with process-per-call shell execution.
+- Defer MCP if both OpenCode and OpenClaw can run `rmpc` commands
+  directly with clean JSON and robust timeout handling.
+- If built, MCP must expose the same command schema as `rmpc`, fix
+  chain/config at server startup by default, restrict network binding
+  to localhost unless explicitly configured, and exclude interactive
+  secret prompts.
+
+**Acceptance criteria.**
+
+- OpenCode can load the skill and complete a read-only vault inspection
+  on a fork.
+- OpenCode can guide a human through a guarded deposit attempt on a
+  fork, including refusal handling.
+- OpenClaw can run a long-lived read/monitor task against a fork
+  without manual intervention.
+- The MCP decision is recorded as `build now`, `defer`, or `not needed`,
+  with rationale.
+
+## 11. Phase 5 — Simple Web Explorer API and Database
+
+Goal: provide a lightweight service for browsing Robot Money activity
+and serving recent state to web/UI consumers. This is not the source of
+truth for signing or safety decisions; it is an indexed convenience
+layer over chain data and `rmpc` outputs.
+
+**Service shape.**
+
+- Small HTTP API.
+- Relational database, preferably Postgres for production-like use and
+  SQLite only for local development if it materially simplifies setup.
+- Background indexer that reads JSON-RPC logs and selected state at
+  known blocks.
+- Idempotent ingestion keyed by `chain_id`, `block_number`, `log_index`,
+  and `tx_hash`.
+
+**Data model.**
+
+Minimum tables:
+
+```text
+chains
+contracts
+blocks
+transactions
+agent_deposits
+agent_policies
+vault_snapshots
+wallet_positions
+indexer_runs
+```
+
+Optional later tables:
+
+```text
+basket_routes
+governance_events
+buybacks
+agent_task_runs
+```
+
+**API endpoints.**
+
+```text
+GET /health
+GET /v1/chains/:chain_id/contracts
+GET /v1/vault/snapshot/latest
+GET /v1/vault/snapshots?from_block=&to_block=
+GET /v1/agents/:address
+GET /v1/agents/:address/deposits
+GET /v1/transactions/:tx_hash
+GET /v1/deposits/:deposit_id
+```
+
+**Boundaries.**
+
+- The API does not sign transactions.
+- The API does not authorize agents.
+- The API does not replace `rmpc` preflight checks.
+- Stale data must be marked with block number and indexed-at time.
+
+**Acceptance criteria.**
+
+- A local developer can start the API and DB, index a fork range, and
+  query deposit/vault history.
+- The API clearly distinguishes indexed data from live chain reads.
+- Phase 6 can use the API for display, while sensitive actions still
+  go through wallet/Rust-client flows.
+
+## 12. Phase 6 — Human Dapp for Commands and Credentials
+
+Goal: provide a human-facing interface for sensitive actions that should
+not be left to autonomous agents alone: granting permissions, creating
+or rotating agent credentials, configuring policy caps, and inspecting
+the consequences before execution.
+
+**Primary workflows.**
+
+1. Connect wallet.
+2. Select chain/environment.
+3. Inspect current vault/gateway/agent state.
+4. Create or register a new agent credential.
+5. Configure agent policy: share receiver, valid-until, max per
+   deposit, max per window.
+6. Grant/revoke roles or agent authorization.
+7. Pause/unpause where permitted.
+8. Export `rmpc` config for the agent runtime.
+
+**Credential model.**
+
+- The dapp may help generate a new agent public address or register an
+  existing one, but it must not silently take custody of private keys.
+- If browser-generated credentials are considered, that requires a
+  separate design review. Preferred path is: user creates/holds the
+  credential in the target signer backend, dapp registers the public
+  address and policy.
+- Any secret export must be explicit, encrypted where possible, and
+  labeled as unsafe for production if it is software-backed.
+
+**Execution model.**
+
+- Human wallet signs admin/policy transactions.
+- Dapp reads live chain state directly through RPC and may use phase 5
+  API for historical display.
+- Every transaction preview decodes target, calldata, role/policy
+  effect, and expected risk.
+
+**Acceptance criteria.**
+
+- A human can authorize an agent for fork/devnet use without touching
+  raw contract calldata.
+- A human can revoke that agent and verify `rmpc self-check` refuses
+  afterward.
+- Generated/exported config is sufficient for OpenCode/OpenClaw phase 4
+  setups.
+
+## 13. Phase 7 — OpenClaw E2E Demo on Recent Public-Chain Fork
+
+Goal: demonstrate the full autonomous loop without requiring the phase
+5 API or phase 6 dapp. The demo uses OpenClaw plus `rmpc` against a
+recent fork of a public Ethereum-compatible chain, with real
+contract/router state and isolated fork funds.
+
+**Why phase 7 excludes the web API and dapp.**
+
+The demo should prove the agent path itself: skill loading, tool use,
+direct chain reads, guarded deposit behavior, refusal handling, and
+long-running task management. The explorer API and dapp are useful
+operator surfaces, but they should not be required for the autonomous
+agent to function.
+
+**Demo setup.**
+
+- Start a recent fork with pinned block metadata recorded.
+- Deploy or configure the gateway/vault addresses for the demo path.
+- Create an ephemeral agent key and human/admin key.
+- Authorize the agent and fund it with forked USDC.
+- Install `rmpc` and the Robot Money skill into OpenClaw.
+- Run OpenClaw with a bounded task such as:
+  "Monitor vault status, verify the agent is authorized, deposit a
+  capped amount of USDC when safe, then report tx hash and resulting
+  position."
+
+**Required demo behaviors.**
+
+1. OpenClaw loads the skill and selects `rmpc` for Robot Money tasks.
+2. The agent performs direct chain reads before attempting a write.
+3. The agent refuses or asks for operator action if config, role,
+   balance, allowance, cap, or code hash checks fail.
+4. The agent performs a successful guarded deposit on the fork.
+5. The agent records tx hash, deposit id, vault position, and block
+   number.
+6. The agent continues running long enough to detect final status and
+   produce a concise final report.
+
+**Artifacts.**
+
+- Demo runbook.
+- Fork config and pinned block metadata.
+- OpenClaw config.
+- Skill package used for the run.
+- Captured command trace and JSON outputs.
+- Final report with tx hashes and state changes.
+
+**Acceptance criteria.**
+
+- The demo can be reproduced from a clean checkout with documented
+  prerequisites.
+- The agent never uses explorer APIs for safety-critical reads.
+- The demo does not require the phase 5 API or phase 6 dapp.
+- Failure cases are demonstrable by toggling one condition at a time:
+  unauthorized agent, insufficient allowance, paused gateway, fee cap,
+  and code-hash mismatch.
