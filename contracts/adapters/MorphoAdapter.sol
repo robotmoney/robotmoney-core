@@ -18,8 +18,11 @@ contract MorphoAdapter is IStrategyAdapter {
     IERC20   public immutable USDC;
     address  public immutable VAULT;
 
+    /// @notice Caller is not the configured `VAULT` address.
     error OnlyVault();
+    /// @notice `rescueToken` refused — the token is USDC or the Morpho vault share (protected vault assets).
     error CannotRescueProtectedToken();
+    /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
 
     modifier onlyVault() {

@@ -21,9 +21,13 @@ contract AaveV3Adapter is IStrategyAdapter {
     IAavePool public immutable POOL;
     address  public immutable VAULT;
 
+    /// @notice Caller is not the configured `VAULT` address.
     error OnlyVault();
+    /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
+    /// @notice `Pool.withdraw` returned fewer USDC than requested.
     error WithdrawShortfall(uint256 requested, uint256 actual);
+    /// @notice `rescueToken` refused — the token is USDC or the aToken (protected vault assets).
     error CannotRescueProtectedToken();
 
     modifier onlyVault() {

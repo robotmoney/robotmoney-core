@@ -22,9 +22,13 @@ contract CompoundV3Adapter is IStrategyAdapter {
     IComet  public immutable COMET;
     address public immutable VAULT;
 
+    /// @notice Caller is not the configured `VAULT` address.
     error OnlyVault();
+    /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
+    /// @notice `Comet.withdrawTo` returned fewer USDC than requested.
     error WithdrawShortfall(uint256 requested, uint256 actual);
+    /// @notice `rescueToken` refused — the token is USDC or the Comet share (protected vault assets).
     error CannotRescueProtectedToken();
 
     modifier onlyVault() {

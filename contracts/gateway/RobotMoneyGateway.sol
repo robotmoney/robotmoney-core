@@ -25,21 +25,37 @@ contract RobotMoneyGateway is AccessRoles, IGateway {
     // Errors
     // -------------------------------------------------------------------
 
+    /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
+    /// @notice Constructor-time check: vault.asset() does not match the configured USDC token.
     error AssetMismatch();
+    /// @notice Operation rejected because the gateway is paused (also re-thrown by `pause()` if already paused).
     error PausedError();
+    /// @notice `unpause()` called while the gateway was not paused.
     error NotPaused();
+    /// @notice Deposit amount is zero, or `authorizeAgent` policy has zero/inverted per-payment vs per-window caps.
     error InvalidAmount();
+    /// @notice Deposit amount exceeds the agent's `maxPerPayment` cap.
     error AmountExceedsPerPaymentCap();
+    /// @notice `block.timestamp > deadline` — the signed transaction's deadline has already passed.
     error DeadlineExpired();
+    /// @notice `deadline` is more than `MAX_DEADLINE_SKEW` seconds in the future.
     error DeadlineTooFar();
+    /// @notice Agent has no active policy (defensive — unreachable through current public API).
     error AgentNotAuthorized();
+    /// @notice Agent's policy `validUntil` is in the past.
     error AgentPolicyExpired();
+    /// @notice Cumulative deposits in the current window would exceed `maxPerWindow`.
     error WindowCapExceeded();
+    /// @notice Idempotency: this `paymentId` has already been consumed by a prior deposit.
     error PaymentIdAlreadyUsed();
+    /// @notice USDC `safeTransferFrom` delivered fewer tokens than requested (fee-on-transfer or rebasing token).
     error FeeOnTransferDetected();
+    /// @notice Pre/post-call invariant: gateway must never custody vault shares or leftover USDC across the call frame.
     error ShareCustodyInvariantViolated();
+    /// @notice `authorizeAgent` policy specifies `shareReceiver == address(0)`.
     error InvalidShareReceiver();
+    /// @notice `authorizeAgent` policy is inactive or `validUntil` is already in the past.
     error InvalidValidUntil();
 
     // -------------------------------------------------------------------

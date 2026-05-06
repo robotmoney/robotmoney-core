@@ -85,20 +85,35 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Errors ────────────────────────────────────────────────────────
 
+    /// @notice Deposit would push total managed assets above `tvlCap`.
     error TVLCapExceeded();
+    /// @notice A single deposit exceeds the per-deposit cap.
     error PerDepositCapExceeded();
+    /// @notice `rescueToken` refused because the token is the vault's own asset (USDC).
     error CannotRescueAsset();
+    /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
+    /// @notice Operation rejected because the vault has been permanently shut down.
     error VaultShutdown();
+    /// @notice Exit-fee bps argument exceeds `MAX_EXIT_FEE_BPS` (1%).
     error InvalidFee();
+    /// @notice Generic admin parameter validation failure (zero/out-of-range value).
     error InvalidParam();
+    /// @notice Adapter cap bps is zero or above `MAX_BPS`.
     error InvalidCap();
+    /// @notice Allocation to a single adapter would exceed its configured `capBps`.
     error ExceedsAdapterCap();
+    /// @notice Adapter registry already holds `MAX_ADAPTERS`; cannot add another.
     error MaxAdaptersReached();
+    /// @notice Provided adapter index is out of range or refers to an inactive entry.
     error AdapterNotFound();
+    /// @notice Cannot remove an adapter while it still custodies assets — withdraw first.
     error AdapterNotEmpty();
+    /// @notice Deposit/rebalance attempted while no adapter is active.
     error NoActiveAdapters();
+    /// @notice Keeper called `rebalance()` before `minRebalanceInterval` elapsed since `lastRebalanceAt`.
     error RebalanceTooSoon();
+    /// @notice Caller lacks `KEEPER_ROLE` (or `ADMIN_ROLE` where the rebalancer path also accepts it).
     error UnauthorizedRebalancer();
 
     // ─── Constructor ──────────────────────────────────────────────────
