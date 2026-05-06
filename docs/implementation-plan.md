@@ -558,6 +558,11 @@ Robot Money flow still work against current on-chain reality?"
 - The fork suite fails with actionable errors: address mismatch, ABI
   mismatch, route failure, gas budget exceeded, or command regression.
 
+See `docs/technical/fork-e2e-decisions.md` for the operational decision
+record (issue #47): chain target, block-pin mechanism, harness driver
+(Rust crate), CI vs manual-trigger split, per-test isolation, and the
+recommendation on issue #37 (drop Anvil flavor).
+
 ## 9. Phase 3 — Direct Chain-Read Query Tooling
 
 Goal: make `rmpc` useful for observing Robot Money state without
