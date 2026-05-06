@@ -7,8 +7,16 @@
 //!
 //! The MVP backend lives in [`software`] and decrypts a passphrase-protected
 //! keystore on demand.
+//!
+//! NB: alloy 0.5.4's `Signature` is the type the EIP-1559 envelope path
+//! (`tx::encode_signed`) consumes; the upstream type is marked deprecated
+//! pending a crate-wide upgrade to `PrimitiveSignature`. We silence the
+//! deprecation here because the wire format is unchanged — the upgrade is
+//! a separate workstream tracked alongside the alloy bump.
 
-use alloy_primitives::{Address, B256, U256};
+#![allow(deprecated)]
+
+use alloy_primitives::{Address, Signature as AlloySignature, B256, U256};
 use thiserror::Error;
 
 pub mod software;
@@ -114,6 +122,17 @@ pub trait AgentSigner: Send + Sync {
 
     /// Sign a structured gateway request, returning a [`SignedTx`].
     fn sign_gateway_tx(&self, req: GatewayTxRequest) -> Result<SignedTx, SignerError>;
+
+    /// Sign the raw 32-byte EIP-1559 transaction signing-hash and return an
+    /// alloy [`AlloySignature`] (with parity bit set for typed-tx use).
+    ///
+    /// This is a separate, narrowly-scoped method on the trait so the
+    /// daemon's `deposit` command can produce a wire-ready signature for
+    /// the RLP-encoded EIP-1559 envelope. It is **not** a generic signing
+    /// oracle — the envelope is computed by `tx::build_eip1559` from
+    /// fields the caller controls; signing arbitrary digests outside the
+    /// envelope or the structured `GatewayTxRequest` is not exposed.
+    fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError>;
 }
 
 /// Compute the canonical keccak256 digest for a [`GatewayTxRequest`].

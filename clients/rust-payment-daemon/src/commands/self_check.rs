@@ -68,7 +68,7 @@ pub struct ChecksOutput {
 }
 
 impl ChecksOutput {
-    fn from_report(r: &PreflightReport) -> Self {
+    pub(crate) fn from_report(r: &PreflightReport) -> Self {
         Self {
             chain_id_match: true,
             gateway_code_hash_match: r.gateway_runtime_hash_ok,
@@ -83,7 +83,30 @@ impl ChecksOutput {
         }
     }
 
-    fn unknown() -> Self {
+    /// Best-effort partial snapshot when only the [`RmpdError`] is
+    /// available. Mirrors the per-error logic that `self-check`'s `run`
+    /// uses for the same purpose.
+    pub(crate) fn from_err_partial(err: &RmpdError) -> Self {
+        let mut c = Self::unknown();
+        match err {
+            RmpdError::ErrChainIdMismatch => {}
+            RmpdError::ErrCodeHashMismatch => {
+                c.chain_id_match = true;
+            }
+            RmpdError::ErrGatewayPaused => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+                c.gateway_paused = true;
+            }
+            _ => {
+                c.chain_id_match = true;
+                c.gateway_code_hash_match = true;
+            }
+        }
+        c
+    }
+
+    pub(crate) fn unknown() -> Self {
         Self {
             chain_id_match: false,
             gateway_code_hash_match: false,
@@ -262,6 +285,8 @@ fn error_name(err: &RmpdError) -> &'static str {
         RmpdError::ErrRpcTransport(_) => "ErrRpcTransport",
         RmpdError::ErrRpcServer { .. } => "ErrRpcServer",
         RmpdError::ErrRpcDecode(_) => "ErrRpcDecode",
+        RmpdError::ErrTxReverted { .. } => "ErrTxReverted",
+        RmpdError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
     }
 }
 

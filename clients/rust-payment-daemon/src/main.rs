@@ -10,11 +10,25 @@ use rust_payment_daemon::commands;
 fn main() {
     let cli = Cli::parse();
     let exit_code = match cli.command {
-        Command::Deposit { .. } => {
-            // Issue #16 — still a stub.
-            println!("{{\"status\":\"unimplemented\"}}");
-            0
-        }
+        Command::Deposit {
+            config,
+            amount,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            pretty,
+        } => commands::deposit::run(commands::deposit::Args {
+            config_path: config,
+            amount,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            pretty,
+        }),
         Command::SelfCheck { config, pretty } => commands::self_check::run(&config, pretty),
         Command::Status {
             config,

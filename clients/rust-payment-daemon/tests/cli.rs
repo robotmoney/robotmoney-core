@@ -1,8 +1,9 @@
-//! Integration tests for the `rmpd` CLI subcommands that are still stubs.
+//! Integration tests for the `rmpd` CLI binary's argument parser.
 //!
-//! `self-check` (issue #15) and `status` (issue #15) have their own test
-//! files. `deposit` remains a stub until issue #16 lands; this file exists
-//! to keep that contract green.
+//! Each subcommand has its own dedicated integration target
+//! (`cli_self_check`, `cli_status`, `cli_deposit`) that exercises the
+//! happy-path JSON shape end-to-end. This file covers the small, fast
+//! parser-level guarantees that don't need an RPC fixture.
 
 use assert_cmd::Command;
 use predicates::str::contains;
@@ -12,16 +13,31 @@ fn rmpd() -> Command {
 }
 
 #[test]
-fn deposit_subcommand_prints_unimplemented_and_exits_zero() {
+fn deposit_subcommand_requires_config_amount_and_order_id() {
+    // No flags at all — clap must reject before any I/O.
     rmpd()
-        .args([
-            "deposit",
-            "--amount",
-            "100.00",
-            "--order-id",
-            "0x0000000000000000000000000000000000000000000000000000000000000001",
-        ])
+        .args(["deposit"])
+        .assert()
+        .failure()
+        .stderr(contains("--config"))
+        .stderr(contains("--amount"))
+        .stderr(contains("--order-id"));
+}
+
+#[test]
+fn deposit_help_includes_idempotency_and_deadline_flags() {
+    // Operator-discoverability: the optional flags must be in `--help`
+    // output so a fresh user can find them without grepping the source.
+    let out = rmpd()
+        .args(["deposit", "--help"])
         .assert()
         .success()
-        .stdout(contains("\"status\":\"unimplemented\""));
+        .get_output()
+        .clone();
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert!(s.contains("--idempotency-key"), "{s}");
+    assert!(s.contains("--deadline-secs"), "{s}");
+    assert!(s.contains("--receipt-timeout-secs"), "{s}");
+    assert!(s.contains("--gas-limit"), "{s}");
+    assert!(s.contains("--pretty"), "{s}");
 }

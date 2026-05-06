@@ -41,6 +41,17 @@ pub enum RmpdError {
     #[error("ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true")]
     ErrSoftwareSignerDisallowed,
 
+    /// The broadcast transaction was mined but reverted (`status == 0` in
+    /// the receipt). Carries the transaction hash so operators can pull
+    /// the trace.
+    #[error("ErrTxReverted: transaction reverted on-chain (tx_hash={tx_hash})")]
+    ErrTxReverted { tx_hash: String },
+
+    /// The deposit landed in a block but the gateway emitted no
+    /// `AgentDeposit` log — invariant violation. Operator must inspect.
+    #[error("ErrAgentDepositLogMissing: receipt has no AgentDeposit log (tx_hash={tx_hash})")]
+    ErrAgentDepositLogMissing { tx_hash: String },
+
     #[error("ErrConfig: configuration error: {0}")]
     ErrConfig(String),
 

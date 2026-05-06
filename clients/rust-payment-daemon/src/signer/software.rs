@@ -36,6 +36,12 @@
 //! The plaintext private key is held only inside [`SigningKey`] (which
 //! itself zeroizes on drop) and the temporary buffer used for AEAD is
 //! [`zeroize`]'d after use. We do NOT keep a long-lived plaintext copy.
+//!
+//! See [`super`]: `alloy_primitives::Signature` is deprecated upstream but
+//! still required by the EIP-1559 envelope path; deprecation is silenced
+//! at the module level.
+
+#![allow(deprecated)]
 
 use std::path::Path;
 
@@ -43,7 +49,9 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
-use alloy_primitives::{keccak256, Address};
+use alloy_primitives::{
+    keccak256, Address, Parity, Signature as AlloySignature, U256 as AlloyU256,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, RecoveryId, Signature, SigningKey};
 use serde::{Deserialize, Serialize};
@@ -377,6 +385,26 @@ impl AgentSigner for SoftwareSigner {
             signature: sig_bytes,
             digest,
         })
+    }
+
+    fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError> {
+        let (signature, recid): (Signature, RecoveryId) = self
+            .signing_key
+            .sign_prehash(hash.as_slice())
+            .map_err(|e| SignerError::ErrSign(e.to_string()))?;
+        // Normalise to low-S so the corresponding recovery id is canonical.
+        let (signature, recid) = if let Some(low) = signature.normalize_s() {
+            // s was high; flip parity to compensate for the s-flip.
+            let flipped = RecoveryId::from_byte(recid.to_byte() ^ 1)
+                .expect("recovery id 0/1 toggles within range");
+            (low, flipped)
+        } else {
+            (signature, recid)
+        };
+        let r = AlloyU256::from_be_slice(&signature.r().to_bytes());
+        let s = AlloyU256::from_be_slice(&signature.s().to_bytes());
+        let parity = Parity::Parity(recid.is_y_odd());
+        Ok(AlloySignature::new(r, s, parity))
     }
 }
 
