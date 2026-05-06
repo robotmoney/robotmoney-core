@@ -230,6 +230,36 @@ impl RpcClient {
         self.call("eth_getTransactionReceipt", json!([tx_hash]))
             .await
     }
+
+    /// `eth_getLogs` — query logs by address + topics. The filter object
+    /// follows the Ethereum JSON-RPC spec; callers pass the full JSON
+    /// object (including `fromBlock`/`toBlock`/`address`/`topics`) so this
+    /// method does not bake in any indexing strategy. Returns the raw
+    /// JSON-RPC `result` array; the daemon decodes individual entries via
+    /// the `gateway` ABI bindings.
+    pub async fn get_logs(&self, filter: Value) -> Result<Vec<RawLog>> {
+        self.call("eth_getLogs", json!([filter])).await
+    }
+}
+
+/// Minimal `eth_getLogs` log shape used by the daemon. Only the fields
+/// `rmpd status` reads are deserialised; anything else the node may
+/// include is ignored. Hex strings are kept as-is (decoded by the caller
+/// using `alloy-primitives` parsers) so this struct stays trivially
+/// `Deserialize`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawLog {
+    /// Contract that emitted the log.
+    pub address: Address,
+    /// Indexed parameters; first entry is the event signature hash.
+    pub topics: Vec<B256>,
+    /// ABI-encoded non-indexed parameters.
+    pub data: Bytes,
+    /// Block in which the log was included. Hex-encoded `0x…`.
+    pub block_number: U64,
+    /// Hash of the transaction that produced the log.
+    pub transaction_hash: B256,
 }
 
 #[cfg(test)]

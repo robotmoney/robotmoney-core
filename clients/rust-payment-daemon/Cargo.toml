@@ -6,6 +6,10 @@ description = "Robot Money payment daemon (rmpd) — signs and broadcasts gatewa
 license = "MIT"
 publish = false
 
+[lib]
+name = "rust_payment_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rmpd"
 path = "src/main.rs"

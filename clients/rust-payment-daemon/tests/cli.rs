@@ -1,7 +1,8 @@
-//! Integration tests for the `rmpd` CLI subcommands.
+//! Integration tests for the `rmpd` CLI subcommands that are still stubs.
 //!
-//! Per issue #7 every subcommand must currently exit 0 with the stub JSON
-//! payload `{"status":"unimplemented"}` on stdout.
+//! `self-check` (issue #15) and `status` (issue #15) have their own test
+//! files. `deposit` remains a stub until issue #16 lands; this file exists
+//! to keep that contract green.
 
 use assert_cmd::Command;
 use predicates::str::contains;
@@ -20,28 +21,6 @@ fn deposit_subcommand_prints_unimplemented_and_exits_zero() {
             "--order-id",
             "0x0000000000000000000000000000000000000000000000000000000000000001",
         ])
-        .assert()
-        .success()
-        .stdout(contains("\"status\":\"unimplemented\""));
-}
-
-#[test]
-fn status_subcommand_prints_unimplemented_and_exits_zero() {
-    rmpd()
-        .args([
-            "status",
-            "--payment-id",
-            "0x0000000000000000000000000000000000000000000000000000000000000001",
-        ])
-        .assert()
-        .success()
-        .stdout(contains("\"status\":\"unimplemented\""));
-}
-
-#[test]
-fn self_check_subcommand_prints_unimplemented_and_exits_zero() {
-    rmpd()
-        .arg("self-check")
         .assert()
         .success()
         .stdout(contains("\"status\":\"unimplemented\""));

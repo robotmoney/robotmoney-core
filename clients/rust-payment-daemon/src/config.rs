@@ -51,6 +51,7 @@ impl Config {
     }
 
     /// Parse from a TOML string.
+    #[allow(clippy::should_implement_trait)] // existing API; not a `FromStr` (returns RmpdError)
     pub fn from_str(s: &str) -> Result<Self> {
         toml::from_str::<Self>(s).map_err(RmpdError::from)
     }
