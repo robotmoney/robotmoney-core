@@ -12,10 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 # Per docs/implementation-plan-mvp.md §3.5
-alloy-primitives = "0.8"
+alloy-primitives = { version = "0.8", features = ["k256"] }
 alloy-sol-types = { version = "0.8", features = ["json"] }
-alloy-consensus = "0.5"
+alloy-consensus = { version = "0.5", features = ["k256"] }
 alloy-rpc-types = "0.5"
+alloy-rlp = "0.3"
+fs2 = "0.4"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 aes-gcm = "0.10"
