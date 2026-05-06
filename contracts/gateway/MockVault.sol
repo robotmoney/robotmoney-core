@@ -54,7 +54,7 @@ contract MockVault is ERC20 {
     /// @param  assets Amount of USDC (6 decimals) to deposit.
     /// @param  receiver Recipient of the freshly minted `rmUSDC` shares.
     /// @return shares Amount of `rmUSDC` minted (1:1 with assets).
-    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+    function deposit(uint256 assets, address receiver) external virtual returns (uint256 shares) {
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroReceiver();
 

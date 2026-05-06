@@ -199,7 +199,15 @@ contract RobotMoneyGateway is AccessRoles, IGateway {
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
 
-        // 3. policy active and not expired
+        // 3. policy active and not expired.
+        //
+        // Note: the `!p.active` branch is defensive and unreachable through
+        // the current public API — `authorizeAgent` requires `p.active==true`
+        // and `revokeAgent` `delete`s the policy AND revokes `AGENT_ROLE`,
+        // so any caller reaching this point with the role granted has
+        // `p.active==true`. Kept for defense-in-depth against future storage
+        // corruption / upgrade paths. Excluded from branch-coverage targets.
+        // coverage:unreachable
         if (!p.active) revert AgentNotAuthorized();
         if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
 

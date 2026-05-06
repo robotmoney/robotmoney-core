@@ -33,6 +33,45 @@ contract FeeOnTransferUSDC is MockUSDC {
     }
 }
 
+/// @dev Vault that mints an extra share to `msg.sender` (the gateway) on
+///      deposit, simulating a malicious / buggy 4626 implementation that
+///      re-routes shares to the caller. Trips the post-call rmUSDC custody
+///      invariant.
+contract ShareLeakVault is MockVault {
+    constructor(address asset_) MockVault(asset_) {}
+
+    function deposit(uint256 assets, address receiver)
+        external
+        override
+        returns (uint256 shares)
+    {
+        IERC20(address(assetToken)).transferFrom(msg.sender, address(this), assets);
+        shares = assets;
+        _mint(receiver, shares);
+        // Side-channel: also mint one rmUSDC share to the caller (gateway).
+        _mint(msg.sender, 1);
+    }
+}
+
+/// @dev Vault that under-pulls USDC on deposit so the gateway is left holding
+///      leftover stablecoin after the call — trips the post-call USDC custody
+///      invariant.
+contract UnderPullVault is MockVault {
+    constructor(address asset_) MockVault(asset_) {}
+
+    function deposit(uint256 assets, address receiver)
+        external
+        override
+        returns (uint256 shares)
+    {
+        // Pull `assets - 1` instead of `assets`. Gateway will end up with 1
+        // wei of USDC stuck in custody.
+        IERC20(address(assetToken)).transferFrom(msg.sender, address(this), assets - 1);
+        shares = assets;
+        _mint(receiver, shares);
+    }
+}
+
 contract RobotMoneyGatewayTest is Test {
     MockUSDC internal usdc;
     MockVault internal vault;
@@ -519,5 +558,87 @@ contract RobotMoneyGatewayTest is Test {
         fotGateway.deposit(
             bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i")
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Coverage gap fillers
+    // -------------------------------------------------------------------
+
+    function test_authorizeAgent_revertsOnZeroAgent() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
+        gateway.authorizeAgent(address(0), p);
+    }
+
+    function test_authorizeAgent_revertsOnExpiredValidUntil() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // validUntil strictly less than block.timestamp triggers
+        // InvalidValidUntil on the second active-policy check.
+        p.validUntil = uint64(block.timestamp - 1);
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.InvalidValidUntil.selector);
+        gateway.authorizeAgent(agent, p);
+    }
+
+    function test_revokeAgent_revertsOnZeroAgent() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
+        gateway.revokeAgent(address(0));
+    }
+
+    function test_deposit_revertsOnPreCallShareCustodyInvariant() public {
+        // Seed gateway with rmUSDC shares before any deposit. The pre-call
+        // invariant (line 222) must reject the call.
+        _authorize(agent, _defaultPolicy());
+        _fundAndApprove(agent, 100 * ONE_USDC);
+
+        // Mint shares directly into the gateway via the vault's ERC20
+        // facing — use `deal` to set its balance.
+        deal(address(vault), address(gateway), 1, true);
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
+        gateway.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
+    }
+
+    function test_deposit_revertsOnPostCallShareCustodyInvariant() public {
+        // Vault that mints an extra share to the gateway during deposit. Trips
+        // the post-call rmUSDC custody invariant (line 243-244).
+        ShareLeakVault leaky = new ShareLeakVault(address(usdc));
+        RobotMoneyGateway gw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser
+        );
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        vm.prank(admin);
+        gw.authorizeAgent(agent, p);
+
+        usdc.mint(agent, 100 * ONE_USDC);
+        vm.prank(agent);
+        usdc.approve(address(gw), 100 * ONE_USDC);
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
+        gw.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
+    }
+
+    function test_deposit_revertsOnPostCallUsdcCustodyInvariant() public {
+        // Vault that under-pulls USDC during deposit; gateway is left with
+        // leftover USDC. Trips the post-call USDC custody invariant (line 247-248).
+        UnderPullVault underPull = new UnderPullVault(address(usdc));
+        RobotMoneyGateway gw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser
+        );
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        vm.prank(admin);
+        gw.authorizeAgent(agent, p);
+
+        usdc.mint(agent, 100 * ONE_USDC);
+        vm.prank(agent);
+        usdc.approve(address(gw), 100 * ONE_USDC);
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
+        gw.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
     }
 }

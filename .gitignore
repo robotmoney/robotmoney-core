@@ -14,6 +14,7 @@ out/
 cache/
 broadcast/
 foundry.lock
+lcov.info
 
 # Internal planning docs — not for public history
 plan.md
