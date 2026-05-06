@@ -687,6 +687,8 @@ avoid hidden prompt dependencies, and keep command examples aligned with
 
 **MCP decision.**
 
+See `docs/technical/mcp-decision.md` for the recorded ADR (issue #55) — decision: **defer**.
+
 MCP is desirable if the harness cannot safely or ergonomically execute
 shell commands, or if long-running OpenClaw tasks need a stable tool
 server with schemas, lifecycle, and structured errors. It is not

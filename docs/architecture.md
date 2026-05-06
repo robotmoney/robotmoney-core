@@ -405,7 +405,8 @@ work and are separate from the public Robot Money roadmap phases.
 - Full TypeScript CLI replacement architecture for reads,
   withdraw/redeem, basket routing, simulation, and wallet UX.
 - HSM/KMS/Secure Enclave implementation order.
-- Whether MCP is needed for OpenClaw or can be deferred.
+- ~~Whether MCP is needed for OpenClaw or can be deferred.~~ Resolved
+  2026-05-06: **deferred**. See `docs/technical/mcp-decision.md` (issue #55).
 - Whether fixed windows are sufficient beyond MVP or should become
   rolling windows.
 - How the human dapp should create, import, or register agent
