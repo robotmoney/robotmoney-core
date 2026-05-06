@@ -16,5 +16,8 @@ broadcast/
 foundry.lock
 lcov.info
 
+# Rust / Cargo (Cargo.lock is checked in for binary crates)
+target/
+
 # Internal planning docs — not for public history
 plan.md
