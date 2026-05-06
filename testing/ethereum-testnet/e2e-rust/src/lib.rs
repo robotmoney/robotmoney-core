@@ -310,63 +310,93 @@ impl Fixture {
     /// be free to start (port 8545 unbound). Tears the stack down on
     /// drop.
     pub fn geth() -> Result<Self, HarnessError> {
+        Self::geth_with_deploy_env(&[])
+    }
+
+    /// Like [`Self::geth`] but lets the caller pass extra env vars to
+    /// the `forge script Deploy` invocation. Used by the geth window
+    /// cap test to lower `AGENT_MAX_PER_WINDOW` so the suite can
+    /// exercise rollover without waiting 24 wall-clock hours.
+    pub fn geth_with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         if which::which("docker").is_err() {
             return Err(HarnessError::FoundryMissing("docker"));
+        }
+        if which::which("forge").is_err() {
+            return Err(HarnessError::FoundryMissing("forge"));
+        }
+        if which::which("cast").is_err() {
+            return Err(HarnessError::FoundryMissing("cast"));
         }
         let shared = ensure_rmpd_built()?;
         let tmp = TempDir::new()?;
         let compose_dir = shared.repo_root.join("testing/ethereum-testnet/config");
         let rpc_url = "http://127.0.0.1:8545".to_string();
 
-        // Start the stack + run the deployer overlay one-shot. The
-        // deployer writes /repo/deployments/devnet.json, which on the
-        // host is `<repo_root>/deployments/devnet.json`.
+        // Bring up the entire devnet stack (setup → geth → beacon →
+        // validators). `docker compose up -d` resolves the dependency
+        // graph; without validators no blocks are produced and txs
+        // never mine, so we *must* start them. We deliberately do NOT
+        // use the `gateway-deployer` overlay — that container hardcodes
+        // an AGENT_ADDRESS that disagrees with [`AGENT_PRIVATE_KEY`],
+        // so AGENT_ROLE would be granted to an EOA whose key we don't
+        // have. Instead we run `forge script` from the host with the
+        // correct env, mirroring [`Fixture::anvil`].
         let status = Command::new("docker")
             .arg("compose")
             .arg("-f")
             .arg("docker-compose.yaml")
-            .arg("-f")
-            .arg("docker-compose.deployer.yaml")
             .arg("up")
             .arg("-d")
-            .arg("geth")
-            .arg("lighthouse")
             .current_dir(&compose_dir)
             .status()
             .map_err(HarnessError::from)?;
         if !status.success() {
             return Err(HarnessError::Docker(format!(
-                "compose up geth+lighthouse failed: {status:?}"
+                "compose up devnet failed: {status:?}"
             )));
         }
-        wait_for_rpc(&rpc_url, Duration::from_secs(120))?;
 
-        let dep_status = Command::new("docker")
-            .arg("compose")
-            .arg("-f")
-            .arg("docker-compose.yaml")
-            .arg("-f")
-            .arg("docker-compose.deployer.yaml")
-            .arg("up")
-            .arg("--abort-on-container-exit")
-            .arg("gateway-deployer")
-            .current_dir(&compose_dir)
-            .status()
-            .map_err(HarnessError::from)?;
-        if !dep_status.success() {
-            // Best-effort teardown.
+        // Wait for the EL RPC to come up (~30s).
+        wait_for_rpc(&rpc_url, Duration::from_secs(180))?;
+
+        // Wait for actual block production. RPC up != consensus up;
+        // until the beacon hands geth a payload and validators attest,
+        // `eth_blockNumber` stays at 0 and txs stay queued forever.
+        wait_for_block_height(&rpc_url, 1, Duration::from_secs(240)).inspect_err(|_e| {
+            // Best-effort teardown so a stuck stack doesn't poison
+            // subsequent test runs.
             let _ = Command::new("docker")
                 .args(["compose", "down", "-v", "--remove-orphans"])
                 .current_dir(&compose_dir)
                 .status();
-            return Err(HarnessError::Docker(format!(
-                "gateway-deployer failed: {dep_status:?}"
-            )));
-        }
+        })?;
 
-        let dep_path = shared.repo_root.join("deployments/devnet.json");
-        let deployment = read_deployment(&dep_path)?;
+        // Deploy from the host using the genesis-prefunded deployer
+        // key. We point AGENT_ADDRESS at our derived agent EOA so the
+        // resulting AGENT_ROLE matches the keystore the harness writes.
+        let dep_out = tmp.path().join("deployment.json");
+        let agent_hex = format!("{:#x}", agent_address());
+        run_forge_deploy_with_env(
+            &shared.repo_root,
+            &rpc_url,
+            &dep_out,
+            &agent_hex,
+            extra_deploy_env,
+        )
+        .inspect_err(|_e| {
+            let _ = Command::new("docker")
+                .args(["compose", "down", "-v", "--remove-orphans"])
+                .current_dir(&compose_dir)
+                .status();
+        })?;
+
+        let deployment = read_deployment(&dep_out)?;
         let chain_id = deployment.chain_id;
+
+        // Fund the agent EOA with ETH so it can pay gas. The deploy
+        // mints USDC to the agent but does not transfer ETH — on the
+        // genesis-funded devnet we top-up via a one-shot `cast send`.
+        fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000")?; // 1 ETH
 
         let (keystore_path, config_path, state_dir) =
             write_keystore_and_config(tmp.path(), &rpc_url, &deployment)?;
@@ -803,14 +833,101 @@ fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
     })
 }
 
+/// Poll `eth_blockNumber` until it reaches `target_height`. Used by
+/// the Geth flavor: the RPC port comes up before the consensus stack
+/// hands geth a payload, so we have to wait for actual block
+/// production before broadcasting transactions.
+fn wait_for_block_height(
+    url: &str,
+    target_height: u64,
+    timeout: Duration,
+) -> Result<(), HarnessError> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_blockNumber",
+        "params": []
+    });
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(resp) = client.post(url).json(&body).send() {
+            if let Ok(j) = resp.json::<serde_json::Value>() {
+                if let Some(s) = j.get("result").and_then(|v| v.as_str()) {
+                    if let Ok(n) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
+                        if n >= target_height {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+    }
+    Err(HarnessError::RpcTimeout {
+        url: url.to_string(),
+        timeout,
+    })
+}
+
+/// Send `value_wei` from the genesis-funded deployer to `recipient_hex`
+/// via `cast send --value`. Used by the Geth flavor to fund EOAs that
+/// aren't part of the genesis allocation (notably the harness's agent
+/// derived from [`AGENT_PRIVATE_KEY`]). Returns the tx hash.
+fn fund_eth_from_deployer(
+    rpc_url: &str,
+    recipient_hex: &str,
+    value_wei: &str,
+) -> Result<String, HarnessError> {
+    let out = Command::new("cast")
+        .args([
+            "send",
+            "--rpc-url",
+            rpc_url,
+            "--private-key",
+            DEPLOYER_PRIVATE_KEY_HEX,
+            "--value",
+            value_wei,
+            recipient_hex,
+            "--json",
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "cast send --value (fund eth) failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| HarnessError::other(format!("cast send fund eth json: {e}")))?;
+    Ok(v.get("transactionHash")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
 fn run_forge_deploy(
     repo_root: &Path,
     rpc_url: &str,
     dep_out: &Path,
     agent_address_hex: &str,
 ) -> Result<(), HarnessError> {
-    let out = Command::new("forge")
-        .args(["script", "contracts/script/Deploy.s.sol:Deploy"])
+    run_forge_deploy_with_env(repo_root, rpc_url, dep_out, agent_address_hex, &[])
+}
+
+fn run_forge_deploy_with_env(
+    repo_root: &Path,
+    rpc_url: &str,
+    dep_out: &Path,
+    agent_address_hex: &str,
+    extra_env: &[(&str, &str)],
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args(["script", "contracts/script/Deploy.s.sol:Deploy"])
         .args(["--rpc-url", rpc_url])
         .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
         .arg("--broadcast")
@@ -821,8 +938,11 @@ fn run_forge_deploy(
         .env("AGENT_ADDRESS", agent_address_hex)
         .env("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX)
         .env("DEPLOYMENT_OUT", dep_out)
-        .current_dir(repo_root)
-        .output()?;
+        .current_dir(repo_root);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output()?;
     if !out.status.success() {
         return Err(HarnessError::DeployFailed(format!(
             "forge script exited {:?}\nstdout:\n{}\nstderr:\n{}",

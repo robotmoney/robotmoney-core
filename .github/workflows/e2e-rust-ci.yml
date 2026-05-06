@@ -71,3 +71,58 @@ jobs:
       - name: Anvil smoke test
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --test anvil_smoke -- --nocapture
+
+  geth-tests:
+    name: Geth+Lighthouse-flavor scenario tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-geth-${{ hashFiles('clients/rust-payment-daemon/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-geth-
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Pre-pull Docker images
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose pull --ignore-pull-failures || true
+
+      - name: Build rmpd binary
+        run: |
+          cargo build --release --manifest-path clients/rust-payment-daemon/Cargo.toml --bin rmpd
+
+      - name: Geth scenario tests
+        working-directory: testing/ethereum-testnet/e2e-rust
+        env:
+          RMPD_E2E_GETH: "1"
+        run: cargo test --release --test geth -- --test-threads=1 --nocapture
+
+      - name: Tear down docker on failure
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true
