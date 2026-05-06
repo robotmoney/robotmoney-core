@@ -8,7 +8,7 @@
 # construction — matches the role-separation invariant.
 #
 # Output: deployments/<chain_id>.json at the repo root, consumed by
-# rmpd config + downstream tests (issues #14/#15/#16).
+# rmpc config + downstream tests (issues #14/#15/#16).
 #
 # Usage:
 #   testing/ethereum-testnet/scripts/deploy-gateway.sh [RPC_URL]

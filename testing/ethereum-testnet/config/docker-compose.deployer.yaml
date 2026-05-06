@@ -9,7 +9,7 @@
 # The container uses the pre-funded genesis accounts as ADMIN / PAUSER /
 # AGENT / SHARE_RECEIVER (distinct EOAs — see ../scripts/deploy-gateway.sh).
 # Output is written to /repo/deployments/devnet.json which is bind-mounted
-# back to the host so rmpd + the e2e harness can read it.
+# back to the host so rmpc ++ the e2e harness can read it.
 name: ethereum-testnet
 services:
   gateway-deployer:

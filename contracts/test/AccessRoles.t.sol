@@ -15,6 +15,24 @@ contract AccessRolesHarness is AccessRoles {
     function exposed_assertRoleSeparation(address account) external view {
         _assertRoleSeparation(account);
     }
+
+    /// @dev Test-only escape hatch that forges a role assignment without
+    ///      going through the `_grantRole` override. Used to verify that
+    ///      `_assertRoleSeparation` still catches an overlap that somehow
+    ///      slipped past the grant-time check (defense-in-depth).
+    ///
+    ///      OZ AccessControl stores `mapping(bytes32 => RoleData) _roles`
+    ///      at slot 0; `RoleData.hasRole[address]` lives at
+    ///      `keccak256(account || keccak256(role || 0))`.
+    function unsafe_forgeRole(bytes32 role, address account) external {
+        bytes32 slot = keccak256(
+            abi.encode(account, keccak256(abi.encode(role, uint256(0))))
+        );
+        // Write `true` (1) into the bool slot.
+        assembly {
+            sstore(slot, 1)
+        }
+    }
 }
 
 contract AccessRolesTest is Test {
@@ -107,12 +125,37 @@ contract AccessRolesTest is Test {
         assertTrue(roles.hasRole(AGENT, agent));
     }
 
-    function test_adminAndPauser_canCoexistOnSameAccount() public {
-        // Only AGENT is exclusive; ADMIN+PAUSER overlap is permitted.
+    // --- Pairwise disjointness: ADMIN, PAUSER, AGENT ------------------------
+
+    /// @dev Pauser key compromise must not also confer admin powers
+    ///      (and vice versa). The audit (H1) flagged that the previous
+    ///      implementation permitted this overlap.
+    function test_grantPauser_revertsIfAlreadyAdmin() public {
+        // `admin` already holds ADMIN_ROLE from the test fixture.
         vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         roles.grantRole(PAUSER, admin);
-        assertTrue(roles.hasRole(ADMIN, admin));
-        assertTrue(roles.hasRole(PAUSER, admin));
+    }
+
+    function test_grantAdmin_revertsIfAlreadyPauser() public {
+        // Grant PAUSER first, then attempt to grant ADMIN to the same account.
+        vm.prank(admin);
+        roles.grantRole(PAUSER, pauser);
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(ADMIN, pauser);
+    }
+
+    function test_adminAndPauser_cannotCoexistOnSameAccount() public {
+        // Sanity: a freshly-granted PAUSER cannot subsequently be made ADMIN.
+        vm.prank(admin);
+        roles.grantRole(PAUSER, stranger);
+        assertTrue(roles.hasRole(PAUSER, stranger));
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(ADMIN, stranger);
     }
 
     // --- assertRoleSeparation helper ----------------------------------------
@@ -129,6 +172,20 @@ contract AccessRolesTest is Test {
         vm.prank(admin);
         roles.grantRole(AGENT, agent);
         roles.exposed_assertRoleSeparation(agent);
+    }
+
+    function test_assertRoleSeparation_revertsOnAdminPauserOverlap() public {
+        // Defense in depth: even if a future regression let two roles
+        // co-exist on one account, the helper must catch it.
+        roles.unsafe_forgeRole(PAUSER, admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.exposed_assertRoleSeparation(admin);
+    }
+
+    function test_assertRoleSeparation_revertsOnAgentAdminOverlap() public {
+        roles.unsafe_forgeRole(AGENT, admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.exposed_assertRoleSeparation(admin);
     }
 
     function test_grantRole_unauthorizedCaller_reverts() public {

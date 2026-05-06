@@ -43,7 +43,7 @@ contracts/gateway/
   AccessRoles.sol               # role constants + AccessControl wiring
   interfaces/IGateway.sol
 
-clients/rust-payment-daemon/
+clients/rust-payment-client/
   Cargo.toml
   src/
     main.rs                     # CLI: deposit / status / self-check
@@ -282,9 +282,9 @@ alloy provider is exposed externally.
 
 ### 3.6 Nonce management
 
-The MVP CLI is **single-flight**: each `rmpd deposit` invocation
+The MVP CLI is **single-flight**: each `rmpc deposit` invocation
 acquires an exclusive file lock on
-`$RMPD_STATE_DIR/agent-<address>.lock` for the duration of
+`$RMPC_STATE_DIR/agent-<address>.lock` for the duration of
 `(eth_getTransactionCount → sign → broadcast → receipt)`. Concurrent
 invocations against the same agent address fail fast with
 `ErrConcurrentInvocation`. A full nonce manager (with pending-tx
@@ -308,9 +308,9 @@ Defaults: `max_fee_per_gas_cap = 100 gwei` for MVP devnet runs.
 ### 3.8 CLI surface
 
 ```
-rmpd deposit --amount 100.00 --order-id 0x…
-rmpd status  --payment-id 0x…
-rmpd self-check                # backend report (v0 §9.2 JSON)
+rmpc deposit --amount 100.00 --order-id 0x…
+rmpc status  --payment-id 0x…
+rmpc self-check                # backend report (v0 §9.2 JSON)
 ```
 
 JSON on stdout, exit 0 on success, named errors on failure.
@@ -334,7 +334,7 @@ JSON on stdout, exit 0 on success, named errors on failure.
 **Driver — Rust-native.** The e2e suite is a `cargo test` integration
 target in `testing/ethereum-testnet/e2e-rust/`. No TypeScript, no
 Hardhat. The harness exercises the Rust binary boundary directly:
-subprocess `rmpd` invocations, JSON-on-stdout assertions, real signing.
+subprocess `rmpc` invocations, JSON-on-stdout assertions, real signing.
 
 Anvil/Geth interaction from Rust uses `alloy-provider` for read calls
 and JSON-RPC pokes (`anvil_setNextBlockBaseFeePerGas`,
@@ -344,7 +344,7 @@ as a subprocess from the Rust harness's `setup()` fixture.
 **Scenarios** (each = one `#[test]`):
 
 1. `deposit_happy_path` *(Geth)* — admin authorizes agent, agent runs
-   `rmpd deposit`, assert `PaymentEscrowed` event + USDC balance delta
+   `rmpc deposit`, assert `PaymentEscrowed` event + USDC balance delta
    on gateway.
 2. `unauthorized_agent_rejected` *(Anvil)* — agent without
    `AGENT_ROLE` → contract reverts; client surfaces
@@ -369,12 +369,12 @@ as a subprocess from the Rust harness's `setup()` fixture.
    `AGENT_ROLE` to admin → assertion reverts.
 10. `fee_cap_exceeded_aborts` *(Anvil)* — set Anvil base fee above
     `max_fee_per_gas_cap` → client refuses with `ErrFeeCapExceeded`.
-11. `concurrent_invocation_locked` *(Anvil)* — two `rmpd deposit`
+11. `concurrent_invocation_locked` *(Anvil)* — two `rmpc deposit`
     processes against the same agent address; one wins, the other
     fails fast with `ErrConcurrentInvocation`.
 
 Per-test: pre-fund agent EOA with mock USDC and approve the gateway;
-run `rmpd` as subprocess and assert on JSON stdout + on-chain event
+run `rmpc` as subprocess and assert on JSON stdout + on-chain event
 log.
 
 **Coverage targets.** Every `revert` in the gateway has a corresponding
@@ -389,7 +389,7 @@ test.
    bare `cast send` smoke (one tx) to confirm the stack — no TS SDK
    detour.
 3. Rust crate skeleton + config loader + RPC + alloy bindings.
-   `rmpd self-check` can read state.
+   `rmpc self-check` can read state.
 4. Software signer + nonce lock + fee-cap policy + `deposit` happy
    path. Tests 1–2, 10–11.
 5. Preflight + policy refusal + code-hash pinning. Tests 3–4, 7–8.

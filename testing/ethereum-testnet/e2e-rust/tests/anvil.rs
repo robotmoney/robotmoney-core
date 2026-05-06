@@ -1,16 +1,16 @@
-//! Anvil-layer scenario tests for `rmpd` (issue #18).
+//! Anvil-layer scenario tests for `rmpc` (issue #18).
 //!
 //! Per `docs/implementation-plan-mvp.md` §4. These eight `#[test]`
 //! functions exercise every refusal path the daemon is responsible for —
 //! preflight refusals, fee-cap refusals, lock contention, and the one
 //! happy-path failure mode (idempotent replay) that requires a
 //! successful first deposit. Each test boots a fresh
-//! [`Fixture::anvil`], asserts on rmpd's JSON output **and** on
+//! [`Fixture::anvil`], asserts on rmpc's JSON output **and** on
 //! observable on-chain side effects (or absence thereof), and lets
 //! `Drop` tear the Anvil child process down.
 //!
 //! All eight tests skip cleanly with a printed warning when Foundry is
-//! not on PATH so `cargo test -p rmpd-e2e` stays runnable on developer
+//! not on PATH so `cargo test -p rmpc-e2e` stays runnable on developer
 //! machines that haven't installed it. CI installs Foundry, so the
 //! tests run for real there.
 //!
@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
-use rmpd_e2e::{Fixture, AGENT_PRIVATE_KEY};
+use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness; this matches the
@@ -43,14 +43,14 @@ const OVER_CAP_DEPOSIT: u128 = 20_000 * ONE_USDC;
 /// per test so we never accidentally re-use one across scenarios.
 fn order_id(label: &str) -> String {
     use alloy_primitives::keccak256;
-    let h = keccak256(format!("rmpd-e2e-issue-18-{label}").as_bytes());
+    let h = keccak256(format!("rmpc-e2e-issue-18-{label}").as_bytes());
     format!("{h:#x}")
 }
 
 /// Print + return `true` when Foundry is unavailable so tests can early
 /// out without flapping CI on dev machines.
 fn skip_if_no_foundry(test_name: &str) -> bool {
-    if !rmpd_e2e::foundry_available() {
+    if !rmpc_e2e::foundry_available() {
         eprintln!(
             "[{test_name}] foundry (anvil + forge) not on PATH; skipping. \
              Install via https://getfoundry.sh to run this test."
@@ -60,12 +60,12 @@ fn skip_if_no_foundry(test_name: &str) -> bool {
     false
 }
 
-/// Parse rmpd stdout as JSON, panicking with a helpful diagnostic on
+/// Parse rmpc stdout as JSON, panicking with a helpful diagnostic on
 /// failure. Tests rely on the JSON contract for the operator-visible
 /// fields documented in `commands/deposit.rs`.
 fn parse_json(stdout: &str, ctx: &str) -> Value {
     serde_json::from_str(stdout)
-        .unwrap_or_else(|e| panic!("{ctx}: rmpd stdout is not valid JSON: {e}\nstdout:\n{stdout}",))
+        .unwrap_or_else(|e| panic!("{ctx}: rmpc stdout is not valid JSON: {e}\nstdout:\n{stdout}",))
 }
 
 // ------------------------------------------------------------- scenario 1
@@ -90,13 +90,13 @@ fn unauthorized_agent_rejected() {
 
     let oid = order_id("unauthorized_agent_rejected");
     let run = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             SMALL_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid.clone(),
         ])
-        .expect("run rmpd deposit");
+        .expect("run rmpc deposit");
 
     assert_eq!(
         run.status.code(),
@@ -137,13 +137,13 @@ fn paused_blocks_deposit() {
 
     let oid = order_id("paused_blocks_deposit");
     let run = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             SMALL_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid,
         ])
-        .expect("run rmpd deposit");
+        .expect("run rmpc deposit");
 
     assert_eq!(
         run.status.code(),
@@ -187,13 +187,13 @@ fn over_per_payment_cap_rejected() {
 
     let oid = order_id("over_per_payment_cap_rejected");
     let run = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             OVER_CAP_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid,
         ])
-        .expect("run rmpd deposit");
+        .expect("run rmpc deposit");
 
     assert_eq!(
         run.status.code(),
@@ -228,7 +228,7 @@ fn over_per_payment_cap_rejected() {
 /// Issue #18 scenario 4: replaying the same `(orderId, idempotencyKey)`
 /// twice — the second call passes preflight (the gateway only learns
 /// the payment id is used at execution time) and reverts with
-/// `PaymentIdAlreadyUsed`, surfaced by rmpd as `ErrTxReverted`.
+/// `PaymentIdAlreadyUsed`, surfaced by rmpc +as `ErrTxReverted`.
 #[test]
 fn idempotent_replay_rejected() {
     if skip_if_no_foundry("idempotent_replay_rejected") {
@@ -244,13 +244,13 @@ fn idempotent_replay_rejected() {
 
     // First deposit must succeed.
     let first = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             SMALL_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid.clone(),
         ])
-        .expect("run rmpd deposit (first)");
+        .expect("run rmpc deposit (first)");
     assert!(
         first.status.success(),
         "first deposit should succeed; status={:?} stdout={} stderr={}",
@@ -270,13 +270,13 @@ fn idempotent_replay_rejected() {
 
     // Replay with the same orderId / idempotencyKey.
     let second = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             SMALL_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid,
         ])
-        .expect("run rmpd deposit (second)");
+        .expect("run rmpc deposit (second)");
     assert_eq!(
         second.status.code(),
         Some(2),
@@ -314,7 +314,7 @@ fn code_hash_mismatch_aborts() {
     let bad_hash = bitflip_hash(fx.gateway_runtime_hash());
     let tampered = original.replace(fx.gateway_runtime_hash(), &bad_hash);
     assert_ne!(tampered, original, "config bitflip must change content");
-    let bad_cfg = fx.tempdir().join("rmpd.bad-hash.toml");
+    let bad_cfg = fx.tempdir().join("rmpc.bad-hash.toml");
     std::fs::write(&bad_cfg, tampered).expect("write bad config");
 
     fx.approve_usdc_from_agent(SMALL_DEPOSIT)
@@ -323,10 +323,10 @@ fn code_hash_mismatch_aborts() {
     let oid = order_id("code_hash_mismatch_aborts");
     let mut env = HashMap::new();
     env.insert(
-        rmpd_e2e::PASSPHRASE_ENV_VAR.to_string(),
+        rmpc_e2e::PASSPHRASE_ENV_VAR.to_string(),
         fx.passphrase().to_string(),
     );
-    // Drive rmpd against the tampered config.
+    // Drive rmpc against the tampered config.
     let mut args: Vec<String> = vec!["deposit".into(), "--config".into()];
     args.push(bad_cfg.to_string_lossy().into_owned());
     args.push("--amount".into());
@@ -334,8 +334,8 @@ fn code_hash_mismatch_aborts() {
     args.push("--order-id".into());
     args.push(oid);
     let run = fx
-        .run_rmpd_with(&args, env)
-        .expect("run rmpd deposit (bad hash)");
+        .run_rmpc_with(&args, env)
+        .expect("run rmpc deposit (bad hash)");
 
     assert_eq!(
         run.status.code(),
@@ -370,7 +370,7 @@ fn bitflip_hash(h: &str) -> String {
 /// Issue #18 scenario 6: with `[signer].allow_software_fallback =
 /// false` the daemon refuses to start when the only available backend
 /// is the software keystore. This is a startup-time refusal that
-/// happens **before any RPC call** — proven by pointing rmpd at an
+/// happens **before any RPC call** — proven by pointing rmpc at an
 /// unreachable RPC URL and confirming it still exits non-zero with the
 /// right error.
 #[test]
@@ -399,13 +399,13 @@ fn software_fallback_disabled_aborts_startup() {
         tweaked.contains("http://127.0.0.1:1"),
         "must rewrite RPC url",
     );
-    let cfg = fx.tempdir().join("rmpd.no-fallback.toml");
+    let cfg = fx.tempdir().join("rmpc.no-fallback.toml");
     std::fs::write(&cfg, tweaked).expect("write tweaked config");
 
     let oid = order_id("software_fallback_disabled_aborts_startup");
     let mut env = HashMap::new();
     env.insert(
-        rmpd_e2e::PASSPHRASE_ENV_VAR.to_string(),
+        rmpc_e2e::PASSPHRASE_ENV_VAR.to_string(),
         fx.passphrase().to_string(),
     );
     let args: Vec<String> = vec![
@@ -418,8 +418,8 @@ fn software_fallback_disabled_aborts_startup() {
         oid,
     ];
     let run = fx
-        .run_rmpd_with(&args, env)
-        .expect("run rmpd deposit (no fallback)");
+        .run_rmpc_with(&args, env)
+        .expect("run rmpc deposit (no fallback)");
 
     assert!(
         !run.status.success(),
@@ -434,7 +434,7 @@ fn software_fallback_disabled_aborts_startup() {
     let combined = format!("{}\n{}", run.stdout, run.stderr);
     assert!(
         !combined.contains("127.0.0.1:1"),
-        "rmpd must not have made an RPC call to {} before refusing; combined output:\n{}",
+        "rmpc must not have made an RPC call to {} before refusing; combined output:\n{}",
         "http://127.0.0.1:1",
         combined,
     );
@@ -470,13 +470,13 @@ fn fee_cap_exceeded_aborts() {
 
     let oid = order_id("fee_cap_exceeded_aborts");
     let run = fx
-        .run_rmpd_deposit([
+        .run_rmpc_deposit([
             "--amount".to_string(),
             SMALL_DEPOSIT.to_string(),
             "--order-id".to_string(),
             oid,
         ])
-        .expect("run rmpd deposit");
+        .expect("run rmpc deposit");
 
     assert_eq!(
         run.status.code(),
@@ -497,12 +497,12 @@ fn fee_cap_exceeded_aborts() {
 
 // ------------------------------------------------------------- scenario 8
 
-/// Issue #18 scenario 8: two `rmpd deposit` invocations against the
+/// Issue #18 scenario 8: two `rmpc deposit` invocations against the
 /// same agent are mutually exclusive — one wins the per-agent file
 /// lock, the other refuses fast with `ErrConcurrentInvocation`.
 ///
 /// We orchestrate the race manually (rather than via
-/// `Fixture::run_rmpd_deposit`, which blocks) by spawning the two
+/// `Fixture::run_rmpc_deposit`, which blocks) by spawning the two
 /// children with `Stdio::piped()` and joining both. Anvil's instant-mine
 /// makes the winning deposit complete in well under a second, so we
 /// don't need a delay barrier — the loser's `flock` attempt overlaps
@@ -525,9 +525,9 @@ fn concurrent_invocation_locked() {
     let oid_b = order_id("concurrent_invocation_locked-b");
 
     let spawn = |oid: &str| -> std::process::Child {
-        Command::new(fx.rmpd_binary())
-            .env(rmpd_e2e::PASSPHRASE_ENV_VAR, fx.passphrase())
-            .env("RMPD_STATE_DIR", fx.state_dir())
+        Command::new(fx.rmpc_binary())
+            .env(rmpc_e2e::PASSPHRASE_ENV_VAR, fx.passphrase())
+            .env("RMPC_STATE_DIR", fx.state_dir())
             .arg("deposit")
             .arg("--config")
             .arg(fx.config_path())
@@ -538,7 +538,7 @@ fn concurrent_invocation_locked() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn rmpd deposit")
+            .expect("spawn rmpc deposit")
     };
 
     let child_a = spawn(&oid_a);

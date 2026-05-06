@@ -1,4 +1,4 @@
-//! End-to-end test harness for `rmpd` (Rust payment daemon).
+//! End-to-end test harness for `rmpc` (Rust payment daemon).
 //!
 //! Issue #17 / `docs/implementation-plan-mvp.md` §4.
 //!
@@ -12,7 +12,7 @@
 //!   `testing/ethereum-testnet/config/docker-compose.yaml` Geth +
 //!   Lighthouse stack plus the `docker-compose.deployer.yaml` overlay.
 //!   Slower (12-second block cadence), used for real-chain semantics.
-//!   Gated behind `RMPD_E2E_GETH=1` so plain `cargo test` doesn't
+//!   Gated behind `RMPC_E2E_GETH=1` so plain `cargo test` doesn't
 //!   require Docker.
 //!
 //! Both flavors expose the same [`Fixture`] surface:
@@ -21,9 +21,9 @@
 //!   [`Fixture::vault`], [`Fixture::agent`]).
 //! - The RPC URL ([`Fixture::rpc_url`]) and chain id
 //!   ([`Fixture::chain_id`]).
-//! - Subprocess helpers wrapping the `rmpd` binary
-//!   ([`Fixture::run_rmpd_self_check`], [`Fixture::run_rmpd_status`],
-//!   [`Fixture::run_rmpd_deposit`]).
+//! - Subprocess helpers wrapping the `rmpc` binary
+//!   ([`Fixture::run_rmpc_self_check`], [`Fixture::run_rmpc_status`],
+//!   [`Fixture::run_rmpc_deposit`]).
 //! - Anvil-only helpers ([`Fixture::evm_snapshot`],
 //!   [`Fixture::evm_revert`], [`Fixture::anvil_set_next_base_fee`])
 //!   that no-op or panic when invoked on a Geth fixture.
@@ -42,9 +42,9 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use tempfile::TempDir;
 
-pub use rust_payment_daemon::signer::software::PASSPHRASE_ENV_VAR;
+pub use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 
-const TEST_PASSPHRASE: &str = "rmpd-e2e-passphrase";
+const TEST_PASSPHRASE: &str = "rmpc-e2e-passphrase";
 
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// shared with the docker harness fixtures; never use on a real chain.
@@ -60,7 +60,7 @@ pub const AGENT_PRIVATE_KEY: [u8; 32] = [
 /// Derive the agent EOA address from [`AGENT_PRIVATE_KEY`]. Computed
 /// lazily so the harness stays a single source of truth — the deploy
 /// script's `AGENT_ADDRESS` env, the keystore's address, and the
-/// rmpd config all flow from this one helper.
+/// rmpc config all flow from this one helper.
 pub fn agent_address() -> Address {
     use k256::ecdsa::SigningKey;
     let sk = SigningKey::from_bytes((&AGENT_PRIVATE_KEY).into())
@@ -92,8 +92,8 @@ pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
 
-/// Errors raised by the harness itself. Failures from `rmpd`
-/// subprocesses are reported via [`RmpdRun`] without converting to
+/// Errors raised by the harness itself. Failures from `rmpc`
+/// subprocesses are reported via [`RmpcRun`] without converting to
 /// [`HarnessError`] — callers want to assert on stdout/stderr/status.
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
@@ -107,9 +107,9 @@ pub enum HarnessError {
     DeployFailed(String),
     #[error("deployment JSON {0}: {1}")]
     DeploymentJson(PathBuf, String),
-    #[error("rmpd binary not found at {0}")]
-    RmpdBinaryMissing(PathBuf),
-    #[error("cargo build of rmpd failed: {0}")]
+    #[error("rmpc binary not found at {0}")]
+    RmpcBinaryMissing(PathBuf),
+    #[error("cargo build of rmpc +failed: {0}")]
     CargoBuildFailed(String),
     #[error("docker compose error: {0}")]
     Docker(String),
@@ -123,17 +123,17 @@ impl HarnessError {
     }
 }
 
-/// Output of an `rmpd` subprocess invocation. UTF-8-decoded eagerly
-/// since rmpd promises text output (JSON on stdout, log lines on
+/// Output of an `rmpc` subprocess invocation. UTF-8-decoded eagerly
+/// since rmpc promises text output (JSON on stdout, log lines on
 /// stderr).
 #[derive(Debug)]
-pub struct RmpdRun {
+pub struct RmpcRun {
     pub status: std::process::ExitStatus,
     pub stdout: String,
     pub stderr: String,
 }
 
-impl From<Output> for RmpdRun {
+impl From<Output> for RmpcRun {
     fn from(o: Output) -> Self {
         Self {
             status: o.status,
@@ -165,11 +165,11 @@ enum Backend {
     Geth { compose_dir: PathBuf },
 }
 
-/// Shared per-process artifacts: built `rmpd` binary path + the repo
+/// Shared per-process artifacts: built `rmpc` binary path + the repo
 /// root path. We build the binary once for the whole test run.
 struct Shared {
     repo_root: PathBuf,
-    rmpd_bin: PathBuf,
+    rmpc_bin: PathBuf,
 }
 
 static SHARED: Lazy<Mutex<Option<Shared>>> = Lazy::new(|| Mutex::new(None));
@@ -177,7 +177,7 @@ static SHARED: Lazy<Mutex<Option<Shared>>> = Lazy::new(|| Mutex::new(None));
 /// A fully-wired test fixture. Drop tears down the backend.
 pub struct Fixture {
     backend: Backend,
-    /// Tempdir owning `keystore.json` + `rmpd.toml` + `state/`.
+    /// Tempdir owning `keystore.json` + `rmpc.toml` + `state/`.
     /// Drop-order: must outlive the child process so any post-drop
     /// log inspection still works.
     tmp: TempDir,
@@ -187,7 +187,7 @@ pub struct Fixture {
     keystore_path: PathBuf,
     config_path: PathBuf,
     state_dir: PathBuf,
-    rmpd_bin: PathBuf,
+    rmpc_bin: PathBuf,
     repo_root: PathBuf,
 }
 
@@ -195,7 +195,7 @@ impl Fixture {
     // ---- constructors ----------------------------------------------------
 
     /// Boot a fresh Anvil instance, deploy the gateway stack, and
-    /// prepare a keystore + config TOML for `rmpd` invocations.
+    /// prepare a keystore + config TOML for `rmpc` invocations.
     pub fn anvil() -> Result<Self, HarnessError> {
         if which::which("anvil").is_err() {
             return Err(HarnessError::FoundryMissing("anvil"));
@@ -204,7 +204,7 @@ impl Fixture {
             return Err(HarnessError::FoundryMissing("forge"));
         }
 
-        let shared = ensure_rmpd_built()?;
+        let shared = ensure_rmpc_built()?;
         let tmp = TempDir::new()?;
 
         let port = pick_free_port()?;
@@ -297,7 +297,7 @@ impl Fixture {
             keystore_path,
             config_path,
             state_dir,
-            rmpd_bin: shared.rmpd_bin,
+            rmpc_bin: shared.rmpc_bin,
             repo_root: shared.repo_root,
         })
     }
@@ -327,7 +327,7 @@ impl Fixture {
         if which::which("cast").is_err() {
             return Err(HarnessError::FoundryMissing("cast"));
         }
-        let shared = ensure_rmpd_built()?;
+        let shared = ensure_rmpc_built()?;
         let tmp = TempDir::new()?;
         let compose_dir = shared.repo_root.join("testing/ethereum-testnet/config");
         let rpc_url = "http://127.0.0.1:8545".to_string();
@@ -410,7 +410,7 @@ impl Fixture {
             keystore_path,
             config_path,
             state_dir,
-            rmpd_bin: shared.rmpd_bin,
+            rmpc_bin: shared.rmpc_bin,
             repo_root: shared.repo_root,
         })
     }
@@ -456,36 +456,36 @@ impl Fixture {
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
     }
-    pub fn rmpd_binary(&self) -> &Path {
-        &self.rmpd_bin
+    pub fn rmpc_binary(&self) -> &Path {
+        &self.rmpc_bin
     }
     pub fn passphrase(&self) -> &str {
         TEST_PASSPHRASE
     }
 
-    // ---- rmpd subprocess helpers ----------------------------------------
+    // ---- rmpc subprocess helpers ----------------------------------------
 
-    fn rmpd_command(&self) -> Command {
-        let mut cmd = Command::new(&self.rmpd_bin);
+    fn rmpc_command(&self) -> Command {
+        let mut cmd = Command::new(&self.rmpc_bin);
         cmd.env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
-            .env("RMPD_STATE_DIR", &self.state_dir);
+            .env("RMPC_STATE_DIR", &self.state_dir);
         cmd
     }
 
-    /// `rmpd self-check --config <cfg>` as a subprocess.
-    pub fn run_rmpd_self_check(&self) -> Result<RmpdRun, HarnessError> {
+    /// `rmpc self-check --config <cfg>` as a subprocess.
+    pub fn run_rmpc_self_check(&self) -> Result<RmpcRun, HarnessError> {
         let out = self
-            .rmpd_command()
+            .rmpc_command()
             .args(["self-check", "--config"])
             .arg(&self.config_path)
             .output()?;
         Ok(out.into())
     }
 
-    /// `rmpd status --config <cfg> --payment-id <id>` as a subprocess.
-    pub fn run_rmpd_status(&self, payment_id: &str) -> Result<RmpdRun, HarnessError> {
+    /// `rmpc status --config <cfg> --payment-id <id>` as a subprocess.
+    pub fn run_rmpc_status(&self, payment_id: &str) -> Result<RmpcRun, HarnessError> {
         let out = self
-            .rmpd_command()
+            .rmpc_command()
             .args(["status", "--config"])
             .arg(&self.config_path)
             .args(["--payment-id", payment_id])
@@ -493,14 +493,14 @@ impl Fixture {
         Ok(out.into())
     }
 
-    /// `rmpd deposit --config <cfg> [args...]` as a subprocess.
+    /// `rmpc deposit --config <cfg> [args...]` as a subprocess.
     /// `extra` lets callers append `--amount`, `--order-id`, etc.
-    pub fn run_rmpd_deposit<I, S>(&self, extra: I) -> Result<RmpdRun, HarnessError>
+    pub fn run_rmpc_deposit<I, S>(&self, extra: I) -> Result<RmpcRun, HarnessError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        let mut cmd = self.rmpd_command();
+        let mut cmd = self.rmpc_command();
         cmd.args(["deposit", "--config"]).arg(&self.config_path);
         for a in extra {
             cmd.arg(a);
@@ -509,18 +509,18 @@ impl Fixture {
         Ok(out.into())
     }
 
-    /// Run rmpd with arbitrary args + extra env, for ad-hoc tests
+    /// Run rmpc +with arbitrary args + extra env, for ad-hoc tests
     /// (e.g. swapping the passphrase to verify startup-fail paths).
-    pub fn run_rmpd_with<I, S>(
+    pub fn run_rmpc_with<I, S>(
         &self,
         args: I,
         extra_env: HashMap<String, String>,
-    ) -> Result<RmpdRun, HarnessError>
+    ) -> Result<RmpcRun, HarnessError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        let mut cmd = self.rmpd_command();
+        let mut cmd = self.rmpc_command();
         for (k, v) in extra_env {
             cmd.env(k, v);
         }
@@ -638,7 +638,7 @@ impl Fixture {
         self.require_anvil("pause_gateway (impersonation)")?;
         // 4-byte selector of `pause()`. Hard-coded rather than pulled
         // through `RobotMoneyGateway::pauseCall` so the harness has zero
-        // dependency on which subset of the ABI the rmpd crate happens
+        // dependency on which subset of the ABI the rmpc crate happens
         // to expose at any given time.
         let selector = &keccak256(b"pause()")[..4];
         self.anvil_impersonate_send(PAUSER_ADDRESS_HEX, self.gateway(), selector)
@@ -966,7 +966,7 @@ fn write_keystore_and_config(
     rpc_url: &str,
     dep: &DeploymentJson,
 ) -> Result<(PathBuf, PathBuf, PathBuf), HarnessError> {
-    use rust_payment_daemon::signer::software::SoftwareSigner;
+    use rust_payment_client::signer::software::SoftwareSigner;
 
     let keystore_path = tmp.join("keystore.json");
     SoftwareSigner::create_keystore(
@@ -979,7 +979,7 @@ fn write_keystore_and_config(
     let state_dir = tmp.join("state");
     std::fs::create_dir_all(&state_dir)?;
 
-    let config_path = tmp.join("rmpd.toml");
+    let config_path = tmp.join("rmpc.toml");
     let toml = format!(
         r#"chain_id              = {chain_id}
 rpc_url               = "{rpc_url}"
@@ -1008,11 +1008,11 @@ keystore_path           = "{keystore}"
 
 /// Locate the repo root by walking up from the crate's manifest dir
 /// until we hit a directory containing both `foundry.toml` and
-/// `clients/rust-payment-daemon`.
+/// `clients/rust-payment-client`.
 fn locate_repo_root() -> Result<PathBuf, HarnessError> {
     let mut p: PathBuf = env!("CARGO_MANIFEST_DIR").into();
     for _ in 0..8 {
-        if p.join("foundry.toml").exists() && p.join("clients/rust-payment-daemon").exists() {
+        if p.join("foundry.toml").exists() && p.join("clients/rust-payment-client").exists() {
             return Ok(p);
         }
         if !p.pop() {
@@ -1024,25 +1024,25 @@ fn locate_repo_root() -> Result<PathBuf, HarnessError> {
     ))
 }
 
-/// Build the `rmpd` binary once (release) and cache the path.
-fn ensure_rmpd_built() -> Result<Shared, HarnessError> {
+/// Build the `rmpc` binary once (release) and cache the path.
+fn ensure_rmpc_built() -> Result<Shared, HarnessError> {
     let mut guard = SHARED.lock().expect("SHARED mutex poisoned");
     if let Some(s) = guard.as_ref() {
         return Ok(Shared {
             repo_root: s.repo_root.clone(),
-            rmpd_bin: s.rmpd_bin.clone(),
+            rmpc_bin: s.rmpc_bin.clone(),
         });
     }
     let repo_root = locate_repo_root()?;
 
-    // Build the binary in the rmpd crate's own target dir to avoid
+    // Build the binary in the rmpc crate's own target dir to avoid
     // contention with any outer cargo invocation. We deliberately use
     // a release build so subsequent test invocations are fast; the
     // first invocation pays the build cost once per `cargo test` run.
-    let manifest = repo_root.join("clients/rust-payment-daemon/Cargo.toml");
-    let target_dir = repo_root.join("target/e2e-rmpd");
+    let manifest = repo_root.join("clients/rust-payment-client/Cargo.toml");
+    let target_dir = repo_root.join("target/e2e-rmpc");
     let out = Command::new("cargo")
-        .args(["build", "--release", "--bin", "rmpd", "--manifest-path"])
+        .args(["build", "--release", "--bin", "rmpc", "--manifest-path"])
         .arg(&manifest)
         .arg("--target-dir")
         .arg(&target_dir)
@@ -1054,17 +1054,17 @@ fn ensure_rmpd_built() -> Result<Shared, HarnessError> {
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-    let rmpd_bin = target_dir.join("release/rmpd");
-    if !rmpd_bin.exists() {
-        return Err(HarnessError::RmpdBinaryMissing(rmpd_bin));
+    let rmpc_bin = target_dir.join("release/rmpc");
+    if !rmpc_bin.exists() {
+        return Err(HarnessError::RmpcBinaryMissing(rmpc_bin));
     }
     *guard = Some(Shared {
         repo_root: repo_root.clone(),
-        rmpd_bin: rmpd_bin.clone(),
+        rmpc_bin: rmpc_bin.clone(),
     });
     Ok(Shared {
         repo_root,
-        rmpd_bin,
+        rmpc_bin,
     })
 }
 
@@ -1076,9 +1076,9 @@ pub fn foundry_available() -> bool {
 }
 
 /// Returns `true` iff `docker` is on PATH and the operator opted in
-/// via `RMPD_E2E_GETH=1`.
+/// via `RMPC_E2E_GETH=1`.
 pub fn geth_enabled() -> bool {
-    std::env::var("RMPD_E2E_GETH").ok().as_deref() == Some("1") && which::which("docker").is_ok()
+    std::env::var("RMPC_E2E_GETH").ok().as_deref() == Some("1") && which::which("docker").is_ok()
 }
 
 // ----- Anvil JSON-RPC helpers --------------------------------------------

@@ -1,16 +1,16 @@
-//! Geth + Lighthouse-layer scenario tests for `rmpd` (issue #19).
+//! Geth + Lighthouse-layer scenario tests for `rmpc` (issue #19).
 //!
 //! Per `docs/implementation-plan-mvp.md` §4. These three `#[test]`
 //! functions exercise scenarios that depend on real PoS block
-//! production + finality semantics — the parts of the rmpd ↔ gateway
+//! production + finality semantics — the parts of the rmpc ↔ gateway
 //! contract that an instant-mine harness like Anvil cannot honestly
 //! cover. Specifically:
 //!
 //! 1. `deposit_happy_path` — full pipeline against real Geth blocks;
-//!    asserts `AgentDeposit` log emission via `rmpd status` lookup and
+//!    asserts `AgentDeposit` log emission via `rmpc status` lookup and
 //!    USDC balance routing to the gateway → vault → share receiver.
 //! 2. `over_window_cap_rejected` — second deposit whose sum with the
-//!    first exceeds `maxPerWindow` is refused. rmpd's preflight reads
+//!    first exceeds `maxPerWindow` is refused. rmpc's preflight reads
 //!    `windowGross` from the gateway and short-circuits with
 //!    `ErrConfig` before broadcasting; if the preflight is ever
 //!    relaxed the same revert still surfaces as `ErrTxReverted` from
@@ -47,14 +47,14 @@
 //!
 //! ## Skip behavior
 //!
-//! Gated behind `RMPD_E2E_GETH=1` *and* a working `docker` binary.
+//! Gated behind `RMPC_E2E_GETH=1` *and* a working `docker` binary.
 //! Without either, every test in this file early-returns with a
-//! printed warning so plain `cargo test -p rmpd-e2e` stays runnable
+//! printed warning so plain `cargo test -p rmpc-e2e` stays runnable
 //! on dev machines that don't want a 90-second Docker boot.
 
 use std::sync::{Mutex, OnceLock};
 
-use rmpd_e2e::{Fixture, AGENT_PRIVATE_KEY, DEPLOYER_PRIVATE_KEY_HEX};
+use rmpc_e2e::{Fixture, AGENT_PRIVATE_KEY, DEPLOYER_PRIVATE_KEY_HEX};
 use serde_json::Value;
 
 /// USDC has 6 decimals throughout the harness.
@@ -80,27 +80,27 @@ const AGENT_MAX_PER_PAYMENT_E2E: &str = "200000000";
 /// payment-id collisions on the shared deployment.
 fn order_id(label: &str) -> String {
     use alloy_primitives::keccak256;
-    let h = keccak256(format!("rmpd-e2e-issue-19-{label}").as_bytes());
+    let h = keccak256(format!("rmpc-e2e-issue-19-{label}").as_bytes());
     format!("{h:#x}")
 }
 
 /// Print + return `true` when the Geth flavor is disabled.
 fn skip_if_no_geth(test_name: &str) -> bool {
-    if !rmpd_e2e::geth_enabled() {
+    if !rmpc_e2e::geth_enabled() {
         eprintln!(
-            "[{test_name}] RMPD_E2E_GETH!=1 or docker missing; skipping. \
-             Set RMPD_E2E_GETH=1 with Docker installed to run this test."
+            "[{test_name}] RMPC_E2E_GETH!=1 or docker missing; skipping. \
+             Set RMPC_E2E_GETH=1 with Docker installed to run this test."
         );
         return true;
     }
     false
 }
 
-/// Parse rmpd stdout as JSON, panicking with a helpful diagnostic on
+/// Parse rmpc stdout as JSON, panicking with a helpful diagnostic on
 /// failure.
 fn parse_json(stdout: &str, ctx: &str) -> Value {
     serde_json::from_str(stdout)
-        .unwrap_or_else(|e| panic!("{ctx}: rmpd stdout is not valid JSON: {e}\nstdout:\n{stdout}"))
+        .unwrap_or_else(|e| panic!("{ctx}: rmpc stdout is not valid JSON: {e}\nstdout:\n{stdout}"))
 }
 
 /// Shared fixture holder. Boot is paid by whichever test runs first;
@@ -152,10 +152,10 @@ fn deposit_args(amount: u128, oid: &str) -> [String; 6] {
 
 /// Issue #19 scenario 1 — happy-path deposit on the Geth devnet.
 ///
-/// Approves USDC from the agent, runs `rmpd deposit`, asserts the JSON
+/// Approves USDC from the agent, runs `rmpc deposit`, asserts the JSON
 /// reports success with a `payment_id` + `tx_hash`, then asserts on the
 /// observable on-chain side effects: USDC balance moved out of the
-/// agent and into the vault, and `rmpd status` finds the payment by
+/// agent and into the vault, and `rmpc status` finds the payment by
 /// id.
 #[test]
 fn deposit_happy_path() {
@@ -168,8 +168,8 @@ fn deposit_happy_path() {
 
         let oid = order_id("deposit_happy_path");
         let run = fx
-            .run_rmpd_deposit(deposit_args(HAPPY_DEPOSIT, &oid))
-            .expect("run rmpd deposit");
+            .run_rmpc_deposit(deposit_args(HAPPY_DEPOSIT, &oid))
+            .expect("run rmpc deposit");
         assert!(
             run.status.success(),
             "deposit must succeed; status={:?}\nstdout={}\nstderr={}",
@@ -193,9 +193,9 @@ fn deposit_happy_path() {
             "tx_hash should be 32-byte hex; got {tx_hash}"
         );
 
-        // `rmpd status` must locate the payment by id and report it as
+        // `rmpc status` must locate the payment by id and report it as
         // succeeded with a positive shares amount.
-        let st = fx.run_rmpd_status(&payment_id).expect("run rmpd status");
+        let st = fx.run_rmpc_status(&payment_id).expect("run rmpc status");
         assert!(
             st.status.success(),
             "status lookup must succeed; status={:?}\nstdout={}\nstderr={}",
@@ -209,7 +209,7 @@ fn deposit_happy_path() {
         // We assert on the discriminator: presence of `block_number`.
         assert!(
             sv.get("block_number").and_then(|v| v.as_u64()).is_some(),
-            "rmpd status should locate the deposit; stdout={}",
+            "rmpc status should locate the deposit; stdout={}",
             st.stdout
         );
         assert_eq!(
@@ -236,7 +236,7 @@ fn deposit_happy_path() {
 /// happy-path deposit's 100 USDC already accumulated this window)
 /// crosses the lowered 200-USDC `AGENT_MAX_PER_WINDOW`. The first leg
 /// must succeed, the second leg must revert with `ErrTxReverted` (the
-/// rmpd surface for `WindowCapExceeded()` on-chain).
+/// rmpc surface for `WindowCapExceeded()` on-chain).
 #[test]
 fn over_window_cap_rejected() {
     if skip_if_no_geth("over_window_cap_rejected") {
@@ -250,8 +250,8 @@ fn over_window_cap_rejected() {
         // Leg 1 — pushes window gross from 100 → 160 (still under 200).
         let oid_a = order_id("over_window_cap_rejected_a");
         let first = fx
-            .run_rmpd_deposit(deposit_args(CAP_TEST_FIRST_LEG, &oid_a))
-            .expect("run rmpd deposit (leg 1)");
+            .run_rmpc_deposit(deposit_args(CAP_TEST_FIRST_LEG, &oid_a))
+            .expect("run rmpc deposit (leg 1)");
         assert!(
             first.status.success(),
             "leg 1 should succeed (100+60=160 ≤ 200); status={:?}\nstdout={}\nstderr={}",
@@ -263,12 +263,12 @@ fn over_window_cap_rejected() {
         assert_eq!(v1["status"], "success", "stdout={}", first.stdout);
 
         // Leg 2 — would push gross to 220 > 200 cap. Must be refused
-        // (either by rmpd preflight as ErrConfig, or by the gateway as
+        // (either by rmpc preflight as ErrConfig, or by the gateway as
         // ErrTxReverted/WindowCapExceeded if preflight is bypassed).
         let oid_b = order_id("over_window_cap_rejected_b");
         let second = fx
-            .run_rmpd_deposit(deposit_args(CAP_TEST_SECOND_LEG, &oid_b))
-            .expect("run rmpd deposit (leg 2)");
+            .run_rmpc_deposit(deposit_args(CAP_TEST_SECOND_LEG, &oid_b))
+            .expect("run rmpc deposit (leg 2)");
         assert_eq!(
             second.status.code(),
             Some(2),
@@ -300,8 +300,8 @@ fn over_window_cap_rejected() {
 /// Issue #19 scenario 3 — admin trying to grant itself `AGENT_ROLE`
 /// reverts via the role-separation invariant in `AccessRoles`.
 ///
-/// We drive this via `cast send` rather than rmpd: the daemon never
-/// calls `authorizeAgent`, so plumbing this through rmpd would prove
+/// We drive this via `cast send` rather than rmpc: the daemon never
+/// calls `authorizeAgent`, so plumbing this through rmpc +would prove
 /// nothing about the gateway. The test calls `authorizeAgent(admin,
 /// policy)` from the admin EOA (which holds `ADMIN_ROLE` and
 /// `DEFAULT_ADMIN_ROLE`); the inner `_grantRole` override in
@@ -323,8 +323,8 @@ fn role_separation_invariant() {
         // shareReceiver value doesn't matter — the call reverts before
         // the policy is stored.
         let admin_hex = format!("{:#x}", fx.gateway()).to_lowercase();
-        let _ = admin_hex; // gateway addr; admin is rmpd_e2e::DEPLOYER_ADDRESS_HEX.
-        let admin = rmpd_e2e::DEPLOYER_ADDRESS_HEX;
+        let _ = admin_hex; // gateway addr; admin is rmpc_e2e::DEPLOYER_ADDRESS_HEX.
+        let admin = rmpc_e2e::DEPLOYER_ADDRESS_HEX;
         // Tuple encoding: (bool,uint64,uint256,uint256,address).
         let policy_tuple = format!("(true,18446744073709551615,1,1,{admin})");
 

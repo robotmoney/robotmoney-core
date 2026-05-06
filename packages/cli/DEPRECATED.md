@@ -4,7 +4,7 @@ This package is **deprecated and kept only for reference**. As of
 2026-05-06, the autonomous-agent access path to the Robot Money vault
 is being rebuilt as:
 
-- a Rust signing daemon (`rmpd`), and
+- a Rust signing daemon (`rmpc`), and
 - an on-chain policy gateway that wraps `vault.deposit()` with
   per-agent caps.
 

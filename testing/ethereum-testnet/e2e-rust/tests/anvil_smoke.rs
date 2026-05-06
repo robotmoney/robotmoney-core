@@ -2,7 +2,7 @@
 //!
 //! This is the trivial proof that `Fixture::anvil()` boots Anvil, runs
 //! the deploy script, ingests the deployment JSON, and that
-//! `rmpd self-check` runs against the result and returns `ok: true`.
+//! `rmpc self-check` runs against the result and returns `ok: true`.
 //!
 //! Real scenario coverage lives in #18 / #19 — this test only exercises
 //! the harness plumbing.
@@ -12,11 +12,11 @@
 //! machines without Foundry. CI installs Foundry, so the test runs
 //! for real there.
 
-use rmpd_e2e::Fixture;
+use rmpc_e2e::Fixture;
 
 #[test]
 fn anvil_self_check_ok() {
-    if !rmpd_e2e::foundry_available() {
+    if !rmpc_e2e::foundry_available() {
         eprintln!(
             "[anvil_smoke] foundry (anvil + forge) not on PATH; skipping. \
              Install via https://getfoundry.sh to run this test."
@@ -32,10 +32,10 @@ fn anvil_self_check_ok() {
     assert_ne!(fx.vault(), alloy_primitives::Address::ZERO);
 
     // self-check must exit 0 and report ok.
-    let out = fx.run_rmpd_self_check().expect("rmpd self-check");
+    let out = fx.run_rmpc_self_check().expect("rmpc self-check");
     assert!(
         out.status.success(),
-        "rmpd self-check exited non-zero: status={:?}, stdout={}, stderr={}",
+        "rmpc self-check exited non-zero: status={:?}, stdout={}, stderr={}",
         out.status,
         out.stdout,
         out.stderr

@@ -1,19 +1,19 @@
 //! Geth+Lighthouse smoke test for the e2e harness scaffold.
 //!
-//! Gated behind `RMPD_E2E_GETH=1` so plain `cargo test` doesn't
+//! Gated behind `RMPC_E2E_GETH=1` so plain `cargo test` doesn't
 //! require Docker. The full Docker stack takes ~30s to come up plus a
 //! few blocks to finalize before deposits land — overkill for the
 //! issue #17 scaffold, but exercising the boot/teardown plumbing here
 //! lets #19 (the real-chain scenarios) build on a trusted harness.
 
-use rmpd_e2e::Fixture;
+use rmpc_e2e::Fixture;
 
 #[test]
 fn geth_self_check_ok() {
-    if !rmpd_e2e::geth_enabled() {
+    if !rmpc_e2e::geth_enabled() {
         eprintln!(
-            "[geth_smoke] RMPD_E2E_GETH!=1 or docker missing; skipping. \
-             Set RMPD_E2E_GETH=1 with Docker installed to run this test."
+            "[geth_smoke] RMPC_E2E_GETH!=1 or docker missing; skipping. \
+             Set RMPC_E2E_GETH=1 with Docker installed to run this test."
         );
         return;
     }
@@ -21,10 +21,10 @@ fn geth_self_check_ok() {
     let fx = Fixture::geth().expect("boot geth devnet + deploy");
     assert_ne!(fx.gateway(), alloy_primitives::Address::ZERO);
 
-    let out = fx.run_rmpd_self_check().expect("rmpd self-check");
+    let out = fx.run_rmpc_self_check().expect("rmpc self-check");
     assert!(
         out.status.success(),
-        "rmpd self-check exited non-zero: status={:?}, stdout={}, stderr={}",
+        "rmpc self-check exited non-zero: status={:?}, stdout={}, stderr={}",
         out.status,
         out.stdout,
         out.stderr

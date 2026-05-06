@@ -1,20 +1,20 @@
 [package]
-name = "rmpd-e2e"
+name = "rmpc-e2e"
 version = "0.1.0"
 edition = "2021"
-description = "End-to-end harness for rmpd against Anvil and the Geth+Lighthouse devnet."
+description = "End-to-end harness for rmpc against Anvil and the Geth+Lighthouse devnet."
 license = "MIT"
 publish = false
 
 [lib]
-name = "rmpd_e2e"
+name = "rmpc_e2e"
 path = "src/lib.rs"
 
 [dependencies]
-# Re-use the rmpd library for keystore creation, gateway ABI, and
+# Re-use the rmpc library for keystore creation, gateway ABI, and
 # config types so the harness stays in lockstep with the binary it
 # drives. Path dep against the sibling crate.
-rust-payment-daemon = { path = "../../../clients/rust-payment-daemon" }
+rust-payment-client = { path = "../../../clients/rust-payment-client" }
 
 alloy-primitives = { version = "0.8", features = ["k256"] }
 alloy-sol-types = { version = "0.8", features = ["json"] }
