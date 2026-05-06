@@ -1,5 +1,12 @@
 # @robotmoney/cli
 
+> **DEPRECATED — kept for reference only.** This TypeScript CLI is no
+> longer the supported autonomous-agent client. The replacement
+> security architecture lives in `docs/architecture-proposal-v0.md`
+> and the build slice in `docs/implementation-plan-mvp.md` (Rust
+> daemon + on-chain policy gateway). Sources here are preserved for
+> historical reference and may not receive further updates.
+
 > **Experimental** — pre-v1.0. Command syntax and response schemas may change. Always review transactions before signing.
 
 CLI for the [Robot Money](https://robotmoney.net) stablecoin yield vault on Base. Built for AI agents and autonomous machines — every command emits JSON to stdout.

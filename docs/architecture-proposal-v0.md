@@ -1,22 +1,38 @@
-# Specification: Constrained Rust Payment Client + Single Gateway Smart Contract
+# Specification: Security Architecture for Autonomous-Agent Access to the Robot Money Vault
 
-> **Status — design proposal, not the deployed system.** This document
-> specifies a *future* agent-payment gateway. It is **not** a description of
-> the contracts currently in `contracts/` (`RobotMoneyVault.sol` and the
-> Aave/Compound/Morpho adapters), which implement an ERC-4626 yield vault
-> with a different surface, different roles (`ADMIN_ROLE`, `EMERGENCY_ROLE`,
-> `KEEPER_ROLE`), and no escrow / agent-registry / master-batch semantics.
-> When this document and the deployed vault disagree, the deployed vault is
-> authoritative for current behavior; this document is authoritative only
-> for the proposed agent-payment layer.
+> **Status — security architecture for the Robot Money vault.** The
+> product is the ERC-4626 yield vault in
+> `contracts/RobotMoneyVault.sol` plus its Aave/Compound/Morpho
+> adapters; see `docs/prd.md`. This document specifies the security
+> architecture that mediates *autonomous-agent* access to that vault:
+> a constrained Rust daemon with hardware-backed signing, plus a
+> single on-chain policy contract (the "gateway") that enforces
+> per-agent caps and bounded calldata before forwarding into the
+> vault.
 >
-> Section 37 (dead-man's-switch / auto-reversion) is a *separate* design
-> sketch layered on an ERC-4337 smart account. It is independent of
-> sections 1–36 and does not replace them. Treat §1–§36 and §37 as two
-> proposals filed in the same document for convenience.
+> The gateway is the only contract an autonomous agent's key may
+> call. It calls into the vault on the agent's behalf, within policy,
+> and routes the resulting shares to a pre-registered receiver. The
+> gateway never custodies vault shares.
 >
-> Section 38 (attack catalog) applies to the proposal in §1–§36 and is the
-> threat-model companion to §1.
+> **Reading guidance.** Earlier drafts of this document were written
+> for a generic agent-payment gateway and use "merchant" /
+> "settlement" / "refund" terminology throughout the body. For the
+> Robot Money vault context, read those terms as follows: the
+> "payee" is the vault; "settlement" is `vault.deposit(amount,
+> shareReceiver)`; "refund" is the standard ERC-4626 redemption
+> surface and is out of this layer's scope. The buildable slice in
+> `docs/implementation-plan-mvp.md` already uses vault-native
+> terminology.
+>
+> Section 37 (dead-man's-switch / auto-reversion) is a separate
+> design sketch layered on an ERC-4337 smart account. It is
+> independent of sections 1–36.
+>
+> Section 38 (attack catalog) is the threat-model companion to §1.
+>
+> For the buildable slice see `docs/implementation-plan-mvp.md`. For
+> the doc graph see §39.
 
 ## 0. System goal
 
@@ -1182,8 +1198,49 @@ Use fixed 24-hour windows for v1, with conservative thresholds.
 Add clear documentation:
 
 ```text
-Threshold applies per fixed UTC-style on-chain epoch, not arbitrary rolling 24-hour period.
+Threshold applies per fixed Unix-epoch-aligned 86400-second window
+(boundary at block.timestamp % 86400 == 0), not an arbitrary rolling
+24-hour period. The boundary coincides with UTC midnight only because
+the Unix epoch is anchored at 1970-01-01T00:00:00Z; the gateway has no
+notion of UTC, leap seconds, or local time.
 ```
+
+## 23.4 WindowState rollover
+
+The `WindowState` struct in §17 is per-window, keyed by `windowId` in
+storage:
+
+```solidity
+mapping(uint64 => WindowState) public windowStates;
+```
+
+Rollover is implicit, not explicit. There is no "reset" call and no
+maintenance gas paid by anyone:
+
+```text
+- Each new windowId opens a fresh WindowState on first write
+  (counters initialize from zero in cold storage).
+- Old windowStates remain in storage but are unreferenced by the
+  spend-accumulation rule (§18), which always reads
+  windowStates[currentWindowId].
+- Master batch confirmations (§20.2) bind to a specific windowId, so
+  late confirmations of a closed window write to that window's slot
+  without affecting the live one.
+- No background process, keeper, or admin call is needed for rollover.
+```
+
+Per-agent caps (`AgentPolicy.maxPerWindow` in §17) are enforced against
+a per-agent windowed counter, not the global `WindowState` counters
+above:
+
+```solidity
+mapping(address => mapping(uint64 => uint256)) public agentWindowGross;
+```
+
+The global `WindowState` is for cross-agent threshold accumulation
+(§18); the per-agent map is for `agent.maxPerPayment / maxPerWindow`
+enforcement. Conflating the two leaks one agent's traffic into another
+agent's cap and is a known footgun for derived MVPs.
 
 ---
 
@@ -1653,7 +1710,7 @@ A timelocked clawback layered onto a smart-account signing model: incoming funds
 Builds on a two-key smart-account design:
 
 - **B (binding/human key)** — held off-box on a hardware token. Used for enrollment, policy changes, and confirming deposits.
-- **H (hot key)** — held by an OWS-style signing daemon on the operator's machine. Signs day-to-day transactions within an on-chain policy.
+- **H (hot key)** — held by the Rust signing daemon on the operator's machine. Signs day-to-day transactions within an on-chain policy.
 - **Smart account** — ERC-4337 (or Safe with a custom validation module). Policy lives on-chain; H's `validateUserOp` enforces caps, allowlists, and now the confirmed/pending split.
 
 The dead-man's-switch adds a third tier: **anyone** can trigger reversion of unconfirmed deposits after the timeout. Mechanical safety net, no trusted party.
@@ -2204,7 +2261,7 @@ Documentation should warn against `MAX_UINT` approvals.
 A coherent three-tier authority model:
 
 - **B (binding/human key, off-box)** — enrolls H, sets policy, confirms deposits, can rotate everything.
-- **H (hot key, OWS daemon)** — spends *confirmed* balance within policy.
+- **H (hot key, signing daemon)** — spends *confirmed* balance within policy.
 - **Anyone** — can trigger reverts after timeout (mechanical safety net).
 
 This composes well with the existing policy primitives — caps, allowlists, epoch-based rotation — and gives the property we want: **a stolen H drains less, because new incoming value is on a leash held by B.**
@@ -2220,3 +2277,32 @@ Build order:
 3. Allowlist of auto-confirming senders (cuts friction).
 4. ERC-20 deposit entrypoint with explicit `refundAddress`.
 5. Keeper integration for auto-revert.
+
+---
+
+# 39. References
+
+This document is the design proposal for the agent-payment layer. It is
+*not* the deployed product. Companion documents:
+
+- `docs/implementation-plan-mvp.md` — runnable end-to-end slice of
+  §1–§36 (one chain, one token, one gateway, software signer). The
+  canonical "what to build first" pointer; every cut item is keyed back
+  to a section here.
+- `docs/prd.md` — product requirements for the *deployed* ERC-4626
+  vault (`contracts/RobotMoneyVault.sol` + adapters). Different
+  product, different surface, different roles. The agent-payment
+  gateway specified here does not interact with the vault and is not
+  yet implemented.
+- `docs/project-roadmap.md` — phased delivery plan; positions the
+  gateway as future work alongside the vault.
+- `docs/technical/smart-contracts.md` — reference for the deployed
+  contracts. Authoritative for current on-chain behavior.
+- `docs/technical/security-review.md` — finding-by-finding triage of
+  the deployed vault.
+- `docs/review-2026-05-06-022928.md` — doc-set critique that drove the
+  current revision (cross-product disambiguation, §21 paymentId,
+  §26.1 hash-pinning-vs-upgrade, §20.1/§20.4 refund destination,
+  §0.1 actor vocabulary).
+- `docs/testing-strategy-ethereum.md` — local Geth+Lighthouse devnet
+  harness used by the MVP plan's e2e suite.

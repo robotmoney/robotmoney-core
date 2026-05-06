@@ -60,7 +60,7 @@ For the CLI/skill release history that backs this repo, see [`CHANGELOG.md`](../
 |---|---|---|
 | 0.1.0 | 2026-04-14 | Initial release — read + `prepare-*` only. |
 | 0.1.1 | 2026-04-14 | Decoded ERC-4626 / ERC-20 custom errors. |
-| 0.1.2 | 2026-04-14 | OWS-signed `execute-*`, RPC fallback pool, gas-estimate fix. |
+| 0.1.2 | 2026-04-14 | Signed `execute-*`, RPC fallback pool, gas-estimate fix. |
 | 0.2.0 | 2026-04-27 | 5% agent basket leg + `get-basket-holdings` + sell flags. |
 | 0.2.1 | 2026-04-28 | Two-pass gas estimate so `execute-*` no longer aborts mid-sequence. |
 
