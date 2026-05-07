@@ -1,0 +1,39 @@
+name: docs validators
+
+# Drift catchers for documentation that has cross-cutting consumers.
+# These run unconditionally on every PR (not behind a `paths:` filter)
+# because the whole point is to catch drift introduced anywhere — a
+# downstream issue body change, an ADR rename, or a deleted heading
+# should all turn the workflow red.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  explorer-adr:
+    name: Explorer ADR drift (issue #56)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # Replaces two manual review items previously on issue #56:
+      #   (A) ADR addresses every scope item the issue body lists.
+      #   (B) Every open downstream explorer issue references the ADR
+      #       in its `## Canonical docs` section.
+      # `gh` is preinstalled on ubuntu-latest runners. GITHUB_TOKEN gives
+      # it read access to public-repo issues without extra config.
+      - name: Run explorer ADR validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_explorer_adr.py

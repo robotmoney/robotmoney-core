@@ -795,6 +795,12 @@ GET /v1/deposits/:deposit_id
 - Phase 6 can use the API for display, while sensitive actions still
   go through wallet/Rust-client flows.
 
+See `docs/technical/explorer-schema-decisions.md` for the operational
+decision record (issue #56) covering DB engine, indexer cadence,
+reorg handling, per-table idempotency keys, ingestion model
+(JSON-RPC canonical; rmpc outputs not ingested), and the explicit
+defer list for "optional later" tables.
+
 ## 12. Phase 6 — Human Dapp for Commands and Credentials
 
 Goal: provide a human-facing interface for sensitive actions that should
