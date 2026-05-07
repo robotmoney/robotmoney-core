@@ -1,0 +1,121 @@
+# Phase 5 — Explorer indexer + minimum tables.
+#
+# Canonical: docs/implementation-plan.md §11.
+# Decision record: docs/technical/explorer-schema-decisions.md (issue #56).
+# Implements: issue #57 / PR #76.
+#
+# - `unit` runs the schema, idempotency, and RPC-failure integration
+#   tests against a Postgres testcontainer. No fork RPC required.
+# - `fork-smoke` runs the full fork-anvil indexer test when
+#   RMPC_FORK_RPC_URL is configured. Skips cleanly without it.
+
+name: explorer-indexer
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/**"
+      - "testing/explorer-indexer/**"
+      - ".github/workflows/explorer-indexer.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/**"
+      - "testing/explorer-indexer/**"
+      - ".github/workflows/explorer-indexer.yml"
+  workflow_dispatch:
+
+env:
+  # Pinned fork block per the fork-e2e ADR §3.2. Keep in sync with
+  # `.github/workflows/fork-e2e.yml`.
+  RMPC_FORK_BLOCK: "23500000"
+
+jobs:
+  unit:
+    name: Schema + idempotency + RPC-failure (Postgres testcontainer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-explorer-indexer-
+
+      - name: fmt + clippy
+        working-directory: services/explorer-indexer
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Build tests
+        working-directory: services/explorer-indexer
+        run: cargo test --no-run
+
+      - name: Schema, idempotency, RPC-failure tests
+        working-directory: services/explorer-indexer
+        run: |
+          cargo test --test migrations -- --nocapture
+          cargo test --test idempotency -- --nocapture
+          cargo test --test rpc_failure -- --nocapture
+
+  fork-smoke:
+    name: Fork indexer smoke (RMPC_FORK_RPC_URL gated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-explorer-indexer-
+
+      - name: Build fork test
+        working-directory: services/explorer-indexer
+        run: cargo test --test fork_indexer --no-run
+
+      - name: Fork indexer smoke
+        working-directory: services/explorer-indexer
+        env:
+          RMPC_FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+        run: |
+          if [ -z "$RMPC_FORK_RPC_URL" ]; then
+            echo "::warning::RMPC_FORK_RPC_URL secret not configured; fork test will skip-clean."
+          fi
+          cargo test --test fork_indexer -- --nocapture

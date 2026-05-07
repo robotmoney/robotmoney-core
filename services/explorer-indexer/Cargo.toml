@@ -1,0 +1,51 @@
+[package]
+name = "explorer-indexer"
+version = "0.1.0"
+edition = "2021"
+description = "Robot Money explorer indexer — Postgres-backed, JSON-RPC-only, polls Base for the §11 minimum table set."
+license = "MIT"
+publish = false
+
+# Canonical: docs/implementation-plan.md §11 — Phase 5 — Simple Web Explorer API and Database.
+# Decision record: docs/technical/explorer-schema-decisions.md (issue #56).
+# Implements: issue #57 / PR #76.
+
+[lib]
+name = "explorer_indexer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "indexer"
+path = "src/main.rs"
+
+[dependencies]
+# Typed ABI decoding for IGateway + RobotMoneyVault events.
+alloy-primitives = { version = "0.8", features = ["k256"] }
+alloy-sol-types = { version = "0.8", features = ["json"] }
+
+# JSON-RPC transport. Async to play well with sqlx + tokio.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime + Postgres.
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "signal"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "bigdecimal", "chrono"] }
+bigdecimal = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+
+# Operational plumbing.
+clap = { version = "4", features = ["derive", "env"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hex = "0.4"
+
+[dev-dependencies]
+# Postgres-in-Docker for integration tests; skips cleanly when Docker is missing.
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+# Reuse Phase 2 fork-anvil harness for chain integration tests.
+rmpc-fork-e2e = { path = "../../testing/fork-e2e-rust" }
+which = "6"
+tempfile = "3"

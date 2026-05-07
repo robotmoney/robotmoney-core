@@ -1,0 +1,74 @@
+# Phase 4 — OpenClaw install + long-running task config.
+#
+# Canonical: docs/walkthroughs/openclaw-config.md
+# Implements: implementation-plan §10. Issue: #54.
+#
+# On every PR and on push to dev/main, run the four scripted tests
+# under testing/openclaw-config/. The mainnet-gate, secret-handling,
+# and doc-parity tests are fully hermetic. The long-running test
+# skips loud-clean when RMPC_FORK_RPC_URL is missing — same convention
+# as fork-e2e.yml.
+name: openclaw-config
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/openclaw-config.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/openclaw-config.yml"
+  workflow_dispatch:
+
+jobs:
+  openclaw-config:
+    name: OpenClaw harness + walkthrough parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'clients/rust-payment-client/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-
+
+      - name: Build rmpc
+        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Mainnet gate test
+        run: bash testing/openclaw-config/test_mainnet_gate.sh
+
+      - name: Secret-handling test
+        run: bash testing/openclaw-config/test_secret_handling.sh
+
+      - name: Doc-parity test
+        run: bash testing/openclaw-config/test_doc_parity.sh
+
+      - name: Long-running monitor test (fork or skip-clean)
+        env:
+          RMPC_FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+          RMPC_MONITOR_ITERATIONS: "3"
+          RMPC_MONITOR_INTERVAL_SECS: "1"
+        run: |
+          if [ -z "$RMPC_FORK_RPC_URL" ]; then
+            echo "::warning::RMPC_FORK_RPC_URL not set; long-running test will skip-clean."
+          fi
+          bash testing/openclaw-config/test_long_running.sh
