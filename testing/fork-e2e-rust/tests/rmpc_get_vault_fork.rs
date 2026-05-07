@@ -208,10 +208,14 @@ fn rmpc_get_vault_fork_base_mainnet() {
         !errors.is_empty(),
         "get-gateway: expected at least one named per-field error: {errors:?}"
     );
-    // Every error carries a `field` and `error` string (named-error AC).
+    // Every error carries a `field` and `message` string per
+    // read_output::FieldError — the wire key is "message", not "error".
     for e in errors {
         assert!(e["field"].is_string(), "error missing field: {e}");
-        assert!(e["error"].is_string(), "error missing error string: {e}");
+        assert!(
+            e["message"].is_string(),
+            "error missing message string: {e}"
+        );
     }
 
     // ---- get-agent: degradation path. -----------------------------
