@@ -2,10 +2,13 @@
 #
 # Canonical: docs/implementation-plan.md §13.
 # Decision record: docs/technical/demo-runbook.md (issue #62).
-# Implements: issue #61.
+# Implements: issues #61, #91.
 #
-# Two triggers:
+# Three triggers:
 #
+# - `pull_request` to dev/main runs the bounded `demo-failure-cases-smoke`
+#   job (issue #91) over only the five failure-case toggles, with a
+#   tight timeout, when files that affect the runbook surface change.
 # - `workflow_dispatch` runs the full happy-path demo plus all five
 #   failure-case toggles, captures `artifacts/demo/` and uploads them
 #   as workflow artifacts.
@@ -14,7 +17,8 @@
 #
 # The fork RPC URL must be configured as a repository secret named
 # `RMPC_FORK_RPC_URL`. Without it both `demo.sh` and
-# `test_failure_cases.sh` exit 0 with a printed skip line, so a
+# `test_failure_cases.sh` exit 0 with a printed skip line (and the
+# PR-smoke job emits a `::warning::` and `outcome=skipped`), so a
 # missing-secret state is loud but non-blocking.
 
 name: demo
@@ -25,10 +29,22 @@ on:
     # Nightly at 03:17 UTC. Off-peak relative to the rest of the CI
     # matrix; same convention as fork-e2e.yml's monthly bump cadence.
     - cron: "17 3 * * *"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/demo/**"
+      - "docs/technical/demo-runbook.md"
+      - "clients/rust-payment-client/**"
+      - "contracts/**"
+      - ".github/workflows/demo.yml"
 
 jobs:
   demo:
     name: OpenClaw E2E demo (happy path + 5 failure cases)
+    # The full demo only runs on manual dispatch and the nightly cron;
+    # the PR-time path is the bounded `demo-failure-cases-smoke` job
+    # below (issue #91).
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -73,3 +89,87 @@ jobs:
           path: artifacts/demo/
           if-no-files-found: ignore
           retention-days: 14
+
+  demo-failure-cases-smoke:
+    # Issue #91 — bounded PR-time smoke for failure-case toggles.
+    # Runs ONLY `testing/demo/test_failure_cases.sh` (the five named
+    # toggles per docs/technical/demo-runbook.md §3.4); the happy-path
+    # demo is intentionally excluded on PR. The script asserts each
+    # `final-report.json:outcome` contains the documented refusal
+    # substring and exits non-zero on any regression.
+    #
+    # Skip-clean semantics: when `RMPC_FORK_RPC_URL` is unset, the
+    # underlying `demo.sh` writes a `SKIPPED` marker per case and the
+    # wrapper exits 0; we surface that as a `::warning::` and an
+    # `outcome=skipped` step output so a missing-secret state is loud
+    # but non-blocking on PRs (matches fork-e2e.yml + openclaw-config.yml).
+    name: Demo failure-case PR smoke (5 toggles)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Tight bound per issue #91 AC-3 ("documented timeout"). Each of the
+    # five cases reuses the demo orchestrator's per-run anvil boot; 25
+    # minutes is the documented ceiling, well under the 60-minute full
+    # demo budget.
+    timeout-minutes: 25
+    env:
+      RMPC_FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry (anvil + cast)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'clients/rust-payment-client/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-
+
+      - name: Build rmpc
+        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Warn on missing fork RPC URL
+        if: env.RMPC_FORK_RPC_URL == ''
+        run: |
+          echo "::warning::RMPC_FORK_RPC_URL secret not configured; failure-case toggles will skip-clean. Set the secret in repo settings to actually exercise the runbook."
+
+      - name: Failure-case suite (PR smoke)
+        id: smoke
+        run: |
+          set -o pipefail
+          # `test_failure_cases.sh` exits 0 on full skip (no fork URL)
+          # and on full pass; exits 1 on any regression. Capture
+          # combined output so the step log carries the per-case
+          # [pass]/[fail]/[skip] lines for triage.
+          bash testing/demo/test_failure_cases.sh 2>&1 | tee failure-cases.log
+          rc=${PIPESTATUS[0]}
+          if grep -q "\[skip\] all failure cases skipped" failure-cases.log; then
+            echo "outcome=skipped" >>"$GITHUB_OUTPUT"
+          elif [ "$rc" -eq 0 ]; then
+            echo "outcome=passed" >>"$GITHUB_OUTPUT"
+          else
+            echo "outcome=failed" >>"$GITHUB_OUTPUT"
+          fi
+          exit "$rc"
+
+      - name: Upload failure-case smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-failure-cases-smoke-${{ github.run_id }}
+          path: |
+            failure-cases.log
+            artifacts/demo/
+          if-no-files-found: ignore
+          retention-days: 7
