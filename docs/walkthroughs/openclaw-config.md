@@ -200,7 +200,64 @@ skill directory and at the `rmpc` binary path. The skill's
 harness-portable (no Claude-specific assumptions, no hidden prompt
 state).
 
-## 9. What is intentionally not here
+## 10. CI secret: `RMPC_FORK_RPC_URL`
+
+The long-running test (`testing/openclaw-config/test_long_running.sh`)
+needs a Base-mainnet JSON-RPC URL to actually exercise the monitor
+loop against a fork. CI consumes the URL from the repo secret
+`RMPC_FORK_RPC_URL`.
+
+Behaviour matrix (enforced by `.github/workflows/openclaw-config.yml`):
+
+| `RMPC_FORK_RPC_URL` | Workflow step result | Artifact `outcome=` | Job exit |
+|---|---|---|---|
+| set, test passes | runs the harness for N iterations | `pass` | 0 |
+| set, test fails | runs and fails loud | `fail` | non-zero |
+| unset | emits `::warning::`, skips-clean | `skipped` | 0 |
+
+Every run uploads `openclaw-long-running-outcome` (containing
+`outcome.txt` + `test_long_running.log`) so the run page shows pass
+versus skipped without digging through logs. A subsequent assertion
+step fails the job if the artifact is missing or malformed.
+
+### Setting the secret
+
+Operator (repo admin) action — one-time per repo:
+
+```bash
+# Public Base mainnet RPC — free, read-only, fine for fork-based
+# read-only test traffic. No API key required.
+gh secret set RMPC_FORK_RPC_URL \
+  --repo lucky-tensor/robotmoney-skills \
+  --body "https://mainnet.base.org"
+```
+
+Or via the GitHub web UI: **Settings → Secrets and variables →
+Actions → New repository secret**. Name `RMPC_FORK_RPC_URL`, value the
+RPC URL.
+
+### RPC URL choices
+
+- **`https://mainnet.base.org`** — Base Foundation public RPC.
+  Free, no key. Rate-limited; fine for the bounded N=3 monitor test.
+  Recommended default.
+- **Alchemy / Infura / QuickNode Base mainnet endpoint** — paid /
+  keyed. Use this if the public RPC starts rate-limiting CI runs.
+- **A private archive node** — for forks deeper than the latest few
+  hundred blocks. Not required for the monitor test.
+
+The test only issues read calls (`rmpc get-vault`) so any Base mainnet
+JSON-RPC endpoint that supports `eth_call` and `eth_chainId` works.
+
+### Verifying after the secret is set
+
+After setting the secret, re-run the `openclaw-config` workflow. The
+`Long-running monitor test (fork or skip-clean)` step should print
+`PASS: bounded long-running monitor completed N clean iterations.`
+and the uploaded `openclaw-long-running-outcome` artifact should
+contain `outcome=pass`.
+
+## 11. What is intentionally not here
 
 - **MCP server.** Decision: defer. See `docs/technical/mcp-decision.md`.
 - **The demo runbook.** Phase 7 deliverable; out of scope for this
