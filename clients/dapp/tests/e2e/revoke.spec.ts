@@ -14,8 +14,10 @@ test("revoke preview renders structured fields", async ({ page }) => {
   await page.getByTestId("agent-input").fill("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
   await page.getByTestId("shareReceiver-input").fill("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC");
 
-  const fns = page.getByTestId("tx-preview-fn");
-  await expect(fns).toHaveCount(2); // authorize + revoke
-  const effects = await page.getByTestId("tx-preview-effect").allInnerTexts();
-  expect(effects.some((t) => /loses AGENT_ROLE/.test(t))).toBe(true);
+  // After issue #82 the page also renders a PauseFlow (pause + unpause
+  // previews), so scope to the revoke-form to avoid coupling to the
+  // total preview count on the page.
+  const revokeForm = page.getByTestId("revoke-form");
+  await expect(revokeForm.getByTestId("tx-preview-fn")).toHaveText("revokeAgent");
+  await expect(revokeForm.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");
 });

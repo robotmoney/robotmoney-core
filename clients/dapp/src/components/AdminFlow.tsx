@@ -20,6 +20,7 @@ import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { TxPreview } from "./TxPreview";
+import { PauseFlow } from "./PauseFlow";
 import { ConfigExportPanel } from "./ConfigExportPanel";
 import { resolveFlags } from "../lib/featureFlags";
 
@@ -220,6 +221,12 @@ export function AdminFlow(props: AdminFlowProps) {
           Sign authorizeAgent with wallet
         </button>
       </section>
+
+      <PauseFlow
+        gatewayAddress={props.gatewayAddress}
+        gatewayCodeHashVerified={props.gatewayCodeHashVerified}
+        envClass={props.envClass}
+      />
 
       <section data-testid="revoke-form">
         <h2>Revoke agent</h2>
