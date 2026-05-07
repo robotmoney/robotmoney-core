@@ -1,0 +1,48 @@
+[package]
+name = "explorer-api"
+version = "0.1.0"
+edition = "2021"
+description = "Robot Money explorer HTTP API — read-only over indexed Postgres."
+license = "MIT"
+publish = false
+
+# Canonical docs:
+# - docs/implementation-plan.md §11 (Phase 5 — Simple Web Explorer API and Database)
+# - docs/technical/explorer-schema-decisions.md (DB engine, idempotency keys, ingestion model)
+#
+# Boundary: this crate exposes only GET endpoints. It never signs, never
+# authorizes, never writes. The router is enforced by a build-time test
+# (tests/router_introspection.rs) that fails if any non-GET route appears
+# outside /health.
+
+[lib]
+name = "explorer_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "explorer-api"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "matched-path", "query"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.5", features = ["trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "chrono", "bigdecimal", "uuid"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+bigdecimal = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hex = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+testcontainers = { version = "0.23" }
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+serde_json = "1"
+insta = { version = "1", features = ["json"] }
