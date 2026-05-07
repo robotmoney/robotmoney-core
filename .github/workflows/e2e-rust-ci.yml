@@ -10,6 +10,7 @@ on:
       - "foundry.toml"
       - "plugins/robotmoney-cli/**"
       - ".github/workflows/e2e-rust-ci.yml"
+      - ".github/scripts/stress_nonce_race.sh"
   pull_request:
     branches: [main, dev]
     paths:
@@ -19,6 +20,7 @@ on:
       - "foundry.toml"
       - "plugins/robotmoney-cli/**"
       - ".github/workflows/e2e-rust-ci.yml"
+      - ".github/scripts/stress_nonce_race.sh"
   workflow_dispatch:
 
 # Issue #37 dropped the Anvil-flavor job; the harness has a single
@@ -140,3 +142,32 @@ jobs:
         if: always()
         working-directory: testing/ethereum-testnet/config
         run: docker compose down -v --remove-orphans || true
+
+  # Issue #89 — stress harness for the nonce racing test. Runs the test
+  # 100 times in succession and fails the job on the first failure. We
+  # split this into its own job so a single bad iteration is loud and
+  # cannot hide behind unrelated test output. No docker required.
+  nonce-race-stress:
+    name: Nonce racing-test stress (issue #89)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-nonce-stress-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nonce-stress-
+
+      - name: Run 100x stress
+        run: bash .github/scripts/stress_nonce_race.sh

@@ -165,39 +165,70 @@ mod tests {
         let _lb = AgentLock::acquire(dir.path(), &b).expect("disjoint addresses must not contend");
     }
 
-    /// Two threads racing on `acquire` for the same address: exactly one
-    /// must succeed; the other must see `ErrConcurrentInvocation`. The
-    /// barrier shrinks the race window so this is not just a serialised
-    /// pair of calls.
+    /// Two threads contending on `acquire` for the same address: while one
+    /// thread holds the lock, the other thread's acquire MUST fail with
+    /// `ErrConcurrentInvocation`. This is deterministic: the holder
+    /// acquires *before* the barrier releases, then both threads
+    /// rendezvous, the contender attempts to acquire while the holder is
+    /// guaranteed to still own the lock, and only after the contender has
+    /// observed contention does the holder release.
+    ///
+    /// The earlier "racing-only" formulation (both threads call `acquire`
+    /// after a single barrier and the test asserts exactly one winner)
+    /// was racy: if the contender's `try_lock_exclusive` arrived after
+    /// the holder had already dropped, both calls would succeed and the
+    /// `oks == 1` assertion would fail spuriously. We don't lose
+    /// coverage: a second test (`second_acquire_while_held_returns_…`)
+    /// already exercises the in-process held-lock semantics, and this
+    /// version additionally proves the result holds across threads
+    /// (different file descriptors) under a forced overlap.
     #[test]
     fn racing_threads_only_one_winner() {
         let dir = tempfile::tempdir().unwrap();
         let path: PathBuf = dir.path().to_path_buf();
-        let barrier = Arc::new(Barrier::new(2));
-        let b1 = barrier.clone();
-        let p1 = path.clone();
-        let h1 = thread::spawn(move || {
-            b1.wait();
-            AgentLock::acquire(&p1, &addr()).map(|l| {
-                // Hold for a beat so the other side sees contention.
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                drop(l);
-            })
+
+        // Holder thread acquires first, parks at the barrier with the
+        // lock still held, then waits for the contender to finish before
+        // releasing. Two barriers form the rendezvous: `start` (holder
+        // has the lock; contender may now race) and `done` (contender
+        // has its result; holder may release).
+        let start = Arc::new(Barrier::new(2));
+        let done = Arc::new(Barrier::new(2));
+
+        let p_holder = path.clone();
+        let s_holder = start.clone();
+        let d_holder = done.clone();
+        let holder = thread::spawn(move || -> Result<()> {
+            let lock = AgentLock::acquire(&p_holder, &addr())?;
+            s_holder.wait(); // signal: lock is held
+            d_holder.wait(); // wait until contender has observed contention
+            drop(lock);
+            Ok(())
         });
-        let b2 = barrier;
-        let h2 = thread::spawn(move || {
-            b2.wait();
-            AgentLock::acquire(&path, &addr()).map(drop)
+
+        let p_contender = path;
+        let s_contender = start;
+        let d_contender = done;
+        let contender = thread::spawn(move || -> Result<()> {
+            s_contender.wait(); // wait until holder has the lock
+            let result = AgentLock::acquire(&p_contender, &addr()).map(drop);
+            d_contender.wait(); // signal: contender done, holder may release
+            result
         });
-        let r1 = h1.join().unwrap();
-        let r2 = h2.join().unwrap();
-        let oks = [r1.is_ok(), r2.is_ok()].iter().filter(|x| **x).count();
-        let errs = [&r1, &r2]
-            .iter()
-            .filter(|r| matches!(r, Err(RmpcError::ErrConcurrentInvocation)))
-            .count();
-        assert_eq!(oks, 1, "exactly one acquire should win: {r1:?} / {r2:?}");
-        assert_eq!(errs, 1, "the loser must see ErrConcurrentInvocation");
+
+        let holder_result = holder.join().unwrap();
+        let contender_result = contender.join().unwrap();
+
+        holder_result.expect("holder must acquire successfully");
+        let err = contender_result.expect_err("contender must fail while holder is alive");
+        assert!(
+            matches!(err, RmpcError::ErrConcurrentInvocation),
+            "contender must see ErrConcurrentInvocation, got {err:?}"
+        );
+
+        // Sanity: after both threads exit, a fresh acquire must succeed
+        // (the holder's drop released the kernel-level lock).
+        AgentLock::acquire(dir.path(), &addr()).expect("post-race acquire must succeed");
     }
 
     #[test]
