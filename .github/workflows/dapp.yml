@@ -1,0 +1,126 @@
+name: dapp
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - ".github/workflows/dapp.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - ".github/workflows/dapp.yml"
+  workflow_dispatch:
+
+# Per the user memory "no fast-feedback optimization in test harness"
+# we boot a real anvil sidecar for the Playwright fork run and accept
+# the latency cost. The unit + lint job is fast and runs first; the
+# E2E job runs in parallel.
+
+jobs:
+  lint-unit:
+    name: lint + unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Format check
+        run: pnpm fmt
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm exec tsc -b
+
+      - name: Vitest (unit + snapshot)
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: playwright e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: lint-unit
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: Install Foundry (for anvil sidecar)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Playwright browsers
+        run: pnpm test:e2e:install
+
+      # Real anvil — see fork-e2e-decisions.md §3.5 for the ADR pattern.
+      # We use a local devnet (no fork URL) for the dapp E2E because the
+      # UI invariants we test do not require a forked block; a future
+      # follow-up wires the same harness as testing/fork-e2e-rust for
+      # the rmpc self-check round-trip.
+      - name: Start anvil sidecar
+        run: |
+          anvil --silent --port 8545 &
+          echo $! > anvil.pid
+          for i in {1..30}; do
+            if curl -sf -X POST -H 'content-type: application/json' \
+                 --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}' \
+                 http://127.0.0.1:8545 >/dev/null; then break; fi
+            sleep 1
+          done
+
+      - name: Run Playwright
+        env:
+          VITE_USE_MOCK_WALLET: "true"
+          VITE_FORK_RPC_URL: "http://127.0.0.1:8545"
+          VITE_ENV_CLASS: "fork"
+        run: pnpm test:e2e
+
+      - name: Stop anvil
+        if: always()
+        run: |
+          if [ -f anvil.pid ]; then kill "$(cat anvil.pid)" || true; fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: clients/dapp/playwright-report/
+          retention-days: 7
