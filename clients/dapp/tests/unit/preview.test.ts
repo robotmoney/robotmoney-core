@@ -4,7 +4,9 @@
  * and the risk classifier matrix from ADR §3.3.
  */
 import { describe, it, expect } from "vitest";
+import { encodeFunctionData } from "viem";
 import { buildPreview, classifyRisk, type PreviewContext } from "../../src/lib/preview";
+import { gatewayAbi, ROLE_HASH } from "../../src/lib/abi";
 
 const gateway = "0x1111111111111111111111111111111111111111" as const;
 const agent = "0x2222222222222222222222222222222222222222" as const;
@@ -66,5 +68,41 @@ describe("buildPreview", () => {
   it("flags high-cap authorize as high risk", () => {
     const big = { ...policy, maxPerWindow: 10_000_000_000n };
     expect(classifyRisk({ kind: "authorizeAgent", agent, policy: big }, baseCtx)).toBe("high");
+  });
+
+  // Issue #83: ADMIN_ROLE / PAUSER_ROLE grant + revoke previews.
+  describe("role grant / revoke (issue #83)", () => {
+    const account = agent;
+    for (const role of ["ADMIN_ROLE", "PAUSER_ROLE"] as const) {
+      it(`grant ${role} encodes the AccessControl.grantRole(role, account) calldata`, () => {
+        const p = buildPreview({ kind: "grantRole", role, account }, baseCtx);
+        expect(p.ok).toBe(true);
+        if (!p.ok) return;
+        const expected = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "grantRole",
+          args: [ROLE_HASH[role], account],
+        });
+        expect(p.calldata).toBe(expected);
+        expect(p.functionName).toBe("grantRole");
+        expect(p.risk).toBe("high");
+        expect(p.effect).toContain(role);
+      });
+
+      it(`revoke ${role} encodes the AccessControl.revokeRole(role, account) calldata`, () => {
+        const p = buildPreview({ kind: "revokeRole", role, account }, baseCtx);
+        expect(p.ok).toBe(true);
+        if (!p.ok) return;
+        const expected = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "revokeRole",
+          args: [ROLE_HASH[role], account],
+        });
+        expect(p.calldata).toBe(expected);
+        expect(p.functionName).toBe("revokeRole");
+        expect(p.risk).toBe("low");
+        expect(p.effect).toContain(role);
+      });
+    }
   });
 });

@@ -7,8 +7,8 @@
  */
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
-import { gatewayAbi } from "./abi";
-import type { AdminActionName } from "./abi";
+import { gatewayAbi, ROLE_HASH } from "./abi";
+import type { AdminActionName, RoleName } from "./abi";
 
 export type RiskClass = "low" | "medium" | "high" | "unsafe";
 
@@ -24,7 +24,9 @@ export type AdminAction =
   | { kind: "authorizeAgent"; agent: Address; policy: AgentPolicy }
   | { kind: "revokeAgent"; agent: Address }
   | { kind: "pause" }
-  | { kind: "unpause" };
+  | { kind: "unpause" }
+  | { kind: "grantRole"; role: RoleName; account: Address }
+  | { kind: "revokeRole"; role: RoleName; account: Address };
 
 export interface PreviewArg {
   name: string;
@@ -84,6 +86,17 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
       return "low";
     case "authorizeAgent":
       return action.policy.maxPerWindow > HIGH_CAP_THRESHOLD ? "high" : "medium";
+    case "grantRole":
+      // Granting any admin-tier role is "high" per ADR §3.3 risk table
+      // ("granting any admin role"). PAUSER is treated identically — it
+      // is privileged, even if its only power is `pause()`.
+      return "high";
+    case "revokeRole":
+      // Revoke is recoverable (admin can re-grant) and reduces blast
+      // radius, so "low" — consistent with revokeAgent above. The
+      // contract-side guard against revoking the only DEFAULT_ADMIN
+      // holder lives in AccessRoles.sol; the dapp does not pre-check.
+      return "low";
   }
 }
 
@@ -174,6 +187,52 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         effect =
           "Gateway exits paused state; deposit() resumes for AGENT_ROLE holders within policy.";
         break;
+      case "grantRole": {
+        functionName = "grantRole";
+        const roleHash = ROLE_HASH[action.role];
+        calldata = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "grantRole",
+          args: [roleHash, getAddress(action.account)],
+        });
+        args = [
+          {
+            name: "role",
+            raw: roleHash,
+            gloss: `${action.role} (keccak256 of role string)`,
+          },
+          {
+            name: "account",
+            raw: action.account,
+            gloss: `${action.role} holder ${shorten(action.account)}`,
+          },
+        ];
+        effect = roleEffectGrant(action.role, action.account);
+        break;
+      }
+      case "revokeRole": {
+        functionName = "revokeRole";
+        const roleHash = ROLE_HASH[action.role];
+        calldata = encodeFunctionData({
+          abi: gatewayAbi,
+          functionName: "revokeRole",
+          args: [roleHash, getAddress(action.account)],
+        });
+        args = [
+          {
+            name: "role",
+            raw: roleHash,
+            gloss: `${action.role} (keccak256 of role string)`,
+          },
+          {
+            name: "account",
+            raw: action.account,
+            gloss: `${action.role} holder ${shorten(action.account)}`,
+          },
+        ];
+        effect = roleEffectRevoke(action.role, action.account);
+        break;
+      }
     }
   } catch (err) {
     return { ok: false, reason: `Encoding failed: ${(err as Error).message}` };
@@ -204,6 +263,32 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
     risk: classifyRisk(action, ctx),
     calldata,
   };
+}
+
+/**
+ * Per-role grant effect text. Names the post-state delta in one line so
+ * the operator can sanity-check before signing (per ADR §3.3 row
+ * "role/policy effect").
+ */
+function roleEffectGrant(role: RoleName, account: Address): string {
+  const who = shorten(account);
+  switch (role) {
+    case "ADMIN_ROLE":
+      return `Address ${who} will hold ADMIN_ROLE; this lets it authorize/revoke agents, edit policy, and call unpause(). Mutually exclusive with AGENT_ROLE and PAUSER_ROLE on the same account (enforced by AccessRoles._grantRole).`;
+    case "PAUSER_ROLE":
+      return `Address ${who} will hold PAUSER_ROLE; this lets it call pause() (asymmetric — unpause requires ADMIN_ROLE). Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same account.`;
+  }
+}
+
+/** Per-role revoke effect text. Mirrors roleEffectGrant. */
+function roleEffectRevoke(role: RoleName, account: Address): string {
+  const who = shorten(account);
+  switch (role) {
+    case "ADMIN_ROLE":
+      return `Address ${who} loses ADMIN_ROLE; subsequent authorizeAgent/revokeAgent/unpause calls from this account revert. The contract still requires at least one DEFAULT_ADMIN_ROLE holder for recovery.`;
+    case "PAUSER_ROLE":
+      return `Address ${who} loses PAUSER_ROLE; subsequent pause() calls from this account revert. Other PAUSER_ROLE holders (if any) are unaffected.`;
+  }
 }
 
 function shorten(addr: string): string {

@@ -17,7 +17,7 @@ import {
   useReadContract,
 } from "wagmi";
 import { isAddress, type Address } from "viem";
-import { gatewayAbi } from "../lib/abi";
+import { gatewayAbi, ROLE_HASH, type RoleName } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { TxPreview } from "./TxPreview";
 import { PauseFlow } from "./PauseFlow";
@@ -54,6 +54,12 @@ export function AdminFlow(props: AdminFlowProps) {
   const [maxPerPayment, setMaxPerPayment] = useState("100000000"); // 100 USDC
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000"); // 1000 USDC
   const [shareReceiver, setShareReceiver] = useState("");
+
+  // ADMIN_ROLE / PAUSER_ROLE grant + revoke. Each role keeps its own
+  // address input so the operator can grant ADMIN to one signer and
+  // PAUSER to another without retyping. See issue #83 + ADR §3.3.
+  const [adminAccount, setAdminAccount] = useState("");
+  const [pauserAccount, setPauserAccount] = useState("");
 
   const { writeContract, isPending } = useWriteContract();
 
@@ -114,6 +120,41 @@ export function AdminFlow(props: AdminFlowProps) {
       abi: gatewayAbi,
       functionName: "revokeAgent",
       args: [revokeAction.agent],
+    });
+  };
+
+  // Builds a grant or revoke action for the given role iff the address
+  // input parses. Returns null otherwise so the preview block stays hidden
+  // and the wallet button stays disabled — same UX shape as the agent flow.
+  const validAdminAccount = isAddress(adminAccount);
+  const validPauserAccount = isAddress(pauserAccount);
+
+  const grantAdminAction: AdminAction | null = validAdminAccount
+    ? { kind: "grantRole", role: "ADMIN_ROLE", account: adminAccount as Address }
+    : null;
+  const revokeAdminAction: AdminAction | null = validAdminAccount
+    ? { kind: "revokeRole", role: "ADMIN_ROLE", account: adminAccount as Address }
+    : null;
+  const grantPauserAction: AdminAction | null = validPauserAccount
+    ? { kind: "grantRole", role: "PAUSER_ROLE", account: pauserAccount as Address }
+    : null;
+  const revokePauserAction: AdminAction | null = validPauserAccount
+    ? { kind: "revokeRole", role: "PAUSER_ROLE", account: pauserAccount as Address }
+    : null;
+
+  const grantAdminPreview = grantAdminAction ? buildPreview(grantAdminAction, ctx) : null;
+  const revokeAdminPreview = revokeAdminAction ? buildPreview(revokeAdminAction, ctx) : null;
+  const grantPauserPreview = grantPauserAction ? buildPreview(grantPauserAction, ctx) : null;
+  const revokePauserPreview = revokePauserAction ? buildPreview(revokePauserAction, ctx) : null;
+
+  // Shared writeContract dispatcher for grantRole/revokeRole. The
+  // function name maps to the AccessControl entry point on the gateway.
+  const submitRoleCall = (fn: "grantRole" | "revokeRole", role: RoleName, account: Address) => {
+    writeContract({
+      address: props.gatewayAddress,
+      abi: gatewayAbi,
+      functionName: fn,
+      args: [ROLE_HASH[role], account],
     });
   };
 
@@ -237,6 +278,104 @@ export function AdminFlow(props: AdminFlowProps) {
           onClick={onRevoke}
         >
           Sign revokeAgent with wallet
+        </button>
+      </section>
+
+      <section data-testid="admin-role-form">
+        <h2>ADMIN_ROLE grant / revoke</h2>
+        <p>
+          Mutually exclusive with AGENT_ROLE and PAUSER_ROLE per
+          <code> AccessRoles._grantRole</code>. Only DEFAULT_ADMIN_ROLE holders may grant.
+        </p>
+        <label>
+          ADMIN account address
+          <input
+            data-testid="admin-account-input"
+            value={adminAccount}
+            onChange={(e) => setAdminAccount(e.target.value)}
+            placeholder="0x..."
+          />
+        </label>
+        {grantAdminPreview && (
+          <div data-testid="grant-admin-preview-wrap">
+            <TxPreview preview={grantAdminPreview} />
+          </div>
+        )}
+        <button
+          data-testid="grant-admin-submit"
+          disabled={!isConnected || !grantAdminPreview?.ok || isPending}
+          onClick={() =>
+            grantAdminAction &&
+            grantAdminPreview?.ok &&
+            submitRoleCall("grantRole", "ADMIN_ROLE", grantAdminAction.account)
+          }
+        >
+          Sign grantRole(ADMIN_ROLE) with wallet
+        </button>
+        {revokeAdminPreview && (
+          <div data-testid="revoke-admin-preview-wrap">
+            <TxPreview preview={revokeAdminPreview} />
+          </div>
+        )}
+        <button
+          data-testid="revoke-admin-submit"
+          disabled={!isConnected || !revokeAdminPreview?.ok || isPending}
+          onClick={() =>
+            revokeAdminAction &&
+            revokeAdminPreview?.ok &&
+            submitRoleCall("revokeRole", "ADMIN_ROLE", revokeAdminAction.account)
+          }
+        >
+          Sign revokeRole(ADMIN_ROLE) with wallet
+        </button>
+      </section>
+
+      <section data-testid="pauser-role-form">
+        <h2>PAUSER_ROLE grant / revoke</h2>
+        <p>
+          PAUSER may call <code>pause()</code> only; <code>unpause()</code> requires ADMIN_ROLE.
+          Mutually exclusive with AGENT_ROLE and ADMIN_ROLE on the same account.
+        </p>
+        <label>
+          PAUSER account address
+          <input
+            data-testid="pauser-account-input"
+            value={pauserAccount}
+            onChange={(e) => setPauserAccount(e.target.value)}
+            placeholder="0x..."
+          />
+        </label>
+        {grantPauserPreview && (
+          <div data-testid="grant-pauser-preview-wrap">
+            <TxPreview preview={grantPauserPreview} />
+          </div>
+        )}
+        <button
+          data-testid="grant-pauser-submit"
+          disabled={!isConnected || !grantPauserPreview?.ok || isPending}
+          onClick={() =>
+            grantPauserAction &&
+            grantPauserPreview?.ok &&
+            submitRoleCall("grantRole", "PAUSER_ROLE", grantPauserAction.account)
+          }
+        >
+          Sign grantRole(PAUSER_ROLE) with wallet
+        </button>
+        {revokePauserPreview && (
+          <div data-testid="revoke-pauser-preview-wrap">
+            <TxPreview preview={revokePauserPreview} />
+          </div>
+        )}
+        <button
+          data-testid="revoke-pauser-submit"
+          disabled={!isConnected || !revokePauserPreview?.ok || isPending}
+          onClick={() =>
+            revokePauserAction &&
+            revokePauserPreview?.ok &&
+            submitRoleCall("revokeRole", "PAUSER_ROLE", revokePauserAction.account)
+          }
+        >
+          Sign revokeRole(PAUSER_ROLE) with wallet
         </button>
       </section>
 

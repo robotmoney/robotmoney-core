@@ -65,16 +65,58 @@ export const gatewayAbi = [
     ],
     outputs: [{ name: "", type: "bool" }],
   },
+  // OpenZeppelin AccessControl — used to grant/revoke ADMIN_ROLE and
+  // PAUSER_ROLE. Caller must hold the role's admin role (DEFAULT_ADMIN_ROLE
+  // for ADMIN/PAUSER per `contracts/gateway/AccessRoles.sol`).
+  {
+    type: "function",
+    name: "grantRole",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "revokeRole",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "role", type: "bytes32" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [],
+  },
 ] as const;
 
-export type AdminActionName = "authorizeAgent" | "revokeAgent" | "pause" | "unpause";
+export type AdminActionName =
+  | "authorizeAgent"
+  | "revokeAgent"
+  | "pause"
+  | "unpause"
+  | "grantRole"
+  | "revokeRole";
 
 /**
- * keccak256("ADMIN_ROLE") and keccak256("PAUSER_ROLE") — pre-computed so
- * the dapp never needs to hash at runtime. Keep in sync with
- * contracts/gateway/AccessRoles.sol.
+ * Role identifiers handled by the dapp's role grant/revoke flow.
+ * AGENT_ROLE has its own dedicated authorize/revoke surface (because it
+ * carries a policy struct); the role-bytes32 path here is for ADMIN_ROLE
+ * and PAUSER_ROLE only — AGENT_ROLE is intentionally excluded so the
+ * operator cannot grant it without setting a policy.
  */
-export const ADMIN_ROLE_HASH =
-  "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775" as const;
-export const PAUSER_ROLE_HASH =
-  "0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a" as const;
+export type RoleName = "ADMIN_ROLE" | "PAUSER_ROLE";
+
+/**
+ * keccak256 of the role string, matching `contracts/gateway/AccessRoles.sol`:
+ *   bytes32 public constant ADMIN_ROLE  = keccak256("ADMIN_ROLE");
+ *   bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+ * Hard-coded to keep the dapp pure and avoid an extra RPC round trip.
+ */
+export const ROLE_HASH: Record<RoleName, `0x${string}`> = {
+  ADMIN_ROLE: "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775",
+  PAUSER_ROLE: "0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a",
+};
+
+export const ADMIN_ROLE_HASH = ROLE_HASH.ADMIN_ROLE;
+export const PAUSER_ROLE_HASH = ROLE_HASH.PAUSER_ROLE;
