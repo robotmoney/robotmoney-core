@@ -122,6 +122,15 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
   - *`rmpc`-output-only.* Indexer becomes a passive recipient of operator queries; can never present a complete event history. Rejected.
   - *Indexer subscribes to a hypothetical `rmpc daemon` event stream.* No such daemon exists (per the architecture pivot memo, the gateway+daemon shape supersedes the vault+OWS shape but does not yet ship). Rejected as premature.
 
+### 3.5a Schema home — **`services/explorer-indexer/migrations/` is canonical; `clients/explorer-api` consumes it via `include_str!` (issue #87, PR #99)**
+
+- **Decision.** The nine §11 minimum-table migrations live in exactly one directory: `services/explorer-indexer/migrations/0001_minimum_tables.sql`. The api crate must not ship a parallel migrations directory. Its test harness reads the canonical SQL via `include_str!("../../../../services/explorer-indexer/migrations/0001_minimum_tables.sql")` and applies it to the testcontainer Postgres (`clients/explorer-api/tests/common/mod.rs`).
+- **Why.** Two copies of the same DDL drift silently. Issue #58 (the api scout) acknowledged the duplicate as a known follow-up; issue #87 closes it. The indexer is the natural owner because it writes; the api only reads.
+- **Enforcement.** Two CI checks gate this ADR section in `.github/workflows/explorer-schema.yml`:
+  1. `.github/scripts/check_explorer_migrations.py` fails if any `.sql` reappears under `clients/explorer-api/migrations/`.
+  2. `cargo test -p explorer-api --test canonical_schema` asserts byte-equality between the api's `include_str!` content and the file on disk in the indexer crate, AND asserts (with a Postgres testcontainer) that applying that migration yields the same nine §11 tables observed by `services/explorer-indexer/tests/migrations.rs`.
+- **Consequence for wire format.** Address and hash columns are `BYTEA` per ADR §3.4. The api hex-encodes them on the way out so the JSON wire format ("0x"-prefixed lower-case hex for addresses, decimal strings for `uint256`) is unchanged. The api's `Deposit` wire type carries `share_receiver` (the canonical column); there is no per-deposit `token` field — that was a divergence in the old api-owned schema and has been removed.
+
 ### 3.6 Optional later tables — explicit defer list
 
 - **Defer until the consumer issue lands.** §11 lists four "optional later" tables. None is built by Phase 5; each waits for a specific downstream consumer to file an issue that names the table as a blocker:

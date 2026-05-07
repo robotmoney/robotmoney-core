@@ -80,7 +80,10 @@ pub struct Deposit {
     pub tx_hash: String,
     pub payment_id: String,
     pub agent: String,
-    pub token: String,
+    /// `share_receiver` from the canonical `agent_deposits` row
+    /// (issue #87 — the canonical indexer schema names this column
+    /// `share_receiver`; there is no per-deposit `token` column).
+    pub share_receiver: String,
     pub amount: String,
     pub indexed_at: DateTime<Utc>,
 }

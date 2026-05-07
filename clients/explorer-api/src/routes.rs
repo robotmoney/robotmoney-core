@@ -13,6 +13,11 @@
 // Boundary (§11): only GET methods. Any other method on any path returns
 // 405. Any /v1/sign* or /v1/authorize* path falls through to a global 404
 // handler. The router-introspection test asserts no non-GET routes exist.
+//
+// Schema source: this crate reads the canonical schema owned by
+// `services/explorer-indexer/migrations/0001_minimum_tables.sql`
+// (issue #87). All address / hash columns are `BYTEA`; we hex-encode
+// on the way out to keep the JSON wire format stable.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -33,20 +38,21 @@ use crate::state::AppState;
 
 // Row-type aliases used by `query_as` calls. Postgres returns positional
 // tuples; declaring them here keeps clippy happy (`type_complexity`) and
-// makes the SELECT column lists self-documenting.
+// makes the SELECT column lists self-documenting. BYTEA columns are
+// returned as `Vec<u8>` and converted to hex strings on the way out.
 type DepositRow = (
     i64,
     i64,
     i32,
-    String,
-    String,
-    String,
-    String,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
     BigDecimal,
     DateTime<Utc>,
 );
-type SnapshotRow = (i64, String, i64, BigDecimal, BigDecimal, DateTime<Utc>);
-type TxRow = (i64, i64, String, Option<String>, i16, DateTime<Utc>);
+type SnapshotRow = (i64, Vec<u8>, i64, BigDecimal, BigDecimal, DateTime<Utc>);
+type TxRow = (i64, i64, Vec<u8>, Option<Vec<u8>>, i16, DateTime<Utc>);
 
 /// Build the application router. All routes are GET-only.
 pub fn router(state: AppState) -> Router {
@@ -92,19 +98,20 @@ async fn list_contracts(
     State(state): State<AppState>,
     Path(chain_id): Path<i64>,
 ) -> ApiResult<Json<ContractsResponse>> {
-    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
-        "SELECT address, kind, label FROM contracts WHERE chain_id = $1 ORDER BY address",
-    )
-    .bind(chain_id)
-    .fetch_all(&state.pool)
-    .await?;
+    // The canonical schema has no `label` column on `contracts`; surface
+    // it as null so the wire format stays stable for existing clients.
+    let rows: Vec<(Vec<u8>, String)> =
+        sqlx::query_as("SELECT address, kind FROM contracts WHERE chain_id = $1 ORDER BY address")
+            .bind(chain_id)
+            .fetch_all(&state.pool)
+            .await?;
     let contracts = rows
         .into_iter()
-        .map(|(address, kind, label)| Contract {
+        .map(|(address, kind)| Contract {
             chain_id,
-            address,
+            address: addr_to_hex(&address),
             kind,
-            label,
+            label: None,
         })
         .collect();
     let freshness = current_freshness(&state, chain_id).await?;
@@ -129,7 +136,7 @@ async fn latest_vault_snapshot(
         Some((chain_id, contract, block_number, total_assets, total_supply, indexed_at)) => {
             let snap = VaultSnapshot {
                 chain_id,
-                contract,
+                contract: addr_to_hex(&contract),
                 block_number,
                 total_assets: dec_to_string(&total_assets),
                 total_supply: dec_to_string(&total_supply),
@@ -165,19 +172,25 @@ async fn list_vault_snapshots(
             "to_block must be >= from_block".into(),
         ));
     }
+    // Optional contract filter is hex-decoded to BYTEA before binding so
+    // the SELECT does not have to mix string/bytes types.
+    let contract_bytes: Option<Vec<u8>> = match q.contract.as_deref() {
+        Some(s) => Some(decode_address_param(s)?),
+        None => None,
+    };
     let rows: Vec<SnapshotRow> = sqlx::query_as(
         "SELECT chain_id, contract, block_number, total_assets, total_supply, indexed_at \
          FROM vault_snapshots \
          WHERE block_number BETWEEN $1 AND $2 \
            AND ($3::BIGINT IS NULL OR chain_id = $3) \
-           AND ($4::TEXT  IS NULL OR contract = $4) \
+           AND ($4::BYTEA  IS NULL OR contract = $4) \
          ORDER BY block_number ASC \
          LIMIT 500",
     )
     .bind(from_block)
     .bind(to_block)
     .bind(q.chain_id)
-    .bind(q.contract.as_deref())
+    .bind(contract_bytes.as_deref())
     .fetch_all(&state.pool)
     .await?;
     let snapshots: Vec<VaultSnapshot> = rows
@@ -185,7 +198,7 @@ async fn list_vault_snapshots(
         .map(
             |(chain_id, contract, block_number, ta, ts, ia)| VaultSnapshot {
                 chain_id,
-                contract,
+                contract: addr_to_hex(&contract),
                 block_number,
                 total_assets: dec_to_string(&ta),
                 total_supply: dec_to_string(&ts),
@@ -210,17 +223,20 @@ async fn get_agent(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> ApiResult<Json<AgentResponse>> {
-    let address = normalize_address(&address)?;
+    let address_bytes = decode_address_param(&address)?;
+    // The canonical schema stores tombstones via `revoked = true`; the
+    // wire format keeps the legacy `authorized` boolean (= !revoked) and
+    // surfaces `max_per_window` as `cap` (the closest fit per ADR §3.5).
     let row: Option<(i64, bool, Option<BigDecimal>)> = sqlx::query_as(
-        "SELECT block_number, authorized, cap FROM agent_policies \
+        "SELECT block_number, revoked, max_per_window FROM agent_policies \
          WHERE agent = $1 ORDER BY block_number DESC, log_index DESC LIMIT 1",
     )
-    .bind(&address)
+    .bind(&address_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
-    let policy = row.map(|(block_number, authorized, cap)| AgentPolicy {
-        agent: address.clone(),
-        authorized,
+    let policy = row.map(|(block_number, revoked, cap)| AgentPolicy {
+        agent: addr_to_hex(&address_bytes),
+        authorized: !revoked,
         cap: cap.as_ref().map(dec_to_string),
         block_number,
     });
@@ -232,43 +248,16 @@ async fn list_agent_deposits(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> ApiResult<Json<DepositsResponse>> {
-    let address = normalize_address(&address)?;
+    let address_bytes = decode_address_param(&address)?;
     let rows: Vec<DepositRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, token, amount, indexed_at \
+        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
          FROM agent_deposits WHERE agent = $1 \
          ORDER BY block_number DESC, log_index DESC LIMIT 500",
     )
-    .bind(&address)
+    .bind(&address_bytes[..])
     .fetch_all(&state.pool)
     .await?;
-    let deposits: Vec<Deposit> = rows
-        .into_iter()
-        .map(
-            |(
-                chain_id,
-                block_number,
-                log_index,
-                tx_hash,
-                payment_id,
-                agent,
-                token,
-                amount,
-                indexed_at,
-            )| {
-                Deposit {
-                    chain_id,
-                    block_number,
-                    log_index,
-                    tx_hash,
-                    payment_id,
-                    agent,
-                    token,
-                    amount: dec_to_string(&amount),
-                    indexed_at,
-                }
-            },
-        )
-        .collect();
+    let deposits: Vec<Deposit> = rows.into_iter().map(deposit_from_row).collect();
     let freshness = match deposits.first() {
         Some(d) => Freshness {
             block_number: d.block_number,
@@ -286,22 +275,22 @@ async fn get_transaction(
     State(state): State<AppState>,
     Path(tx_hash): Path<String>,
 ) -> ApiResult<Json<TransactionResponse>> {
-    let tx_hash = normalize_tx_hash(&tx_hash)?;
+    let tx_hash_bytes = decode_hash_param(&tx_hash)?;
     let row: Option<TxRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, from_address, to_address, status, indexed_at \
+        "SELECT chain_id, block_number, from_addr, to_addr, status, indexed_at \
          FROM transactions WHERE tx_hash = $1 LIMIT 1",
     )
-    .bind(&tx_hash)
+    .bind(&tx_hash_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
-    let (chain_id, block_number, from_address, to_address, status, indexed_at) =
+    let (chain_id, block_number, from_addr, to_addr, status, indexed_at) =
         row.ok_or(ApiError::NotFound)?;
     let transaction = Transaction {
         chain_id,
-        tx_hash,
+        tx_hash: hash_to_hex(&tx_hash_bytes),
         block_number,
-        from_address,
-        to_address,
+        from_address: addr_to_hex(&from_addr),
+        to_address: to_addr.as_deref().map(addr_to_hex),
         status,
         indexed_at,
     };
@@ -319,27 +308,15 @@ async fn get_deposit(
     Path(deposit_id): Path<String>,
 ) -> ApiResult<Json<DepositResponse>> {
     // `deposit_id` is the on-chain `payment_id` (bytes32 hex).
-    let deposit_id = normalize_tx_hash(&deposit_id)?;
+    let payment_bytes = decode_hash_param(&deposit_id)?;
     let row: Option<DepositRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, token, amount, indexed_at \
+        "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
          FROM agent_deposits WHERE payment_id = $1 LIMIT 1",
     )
-    .bind(&deposit_id)
+    .bind(&payment_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
-    let (chain_id, block_number, log_index, tx_hash, payment_id, agent, token, amount, indexed_at) =
-        row.ok_or(ApiError::NotFound)?;
-    let deposit = Deposit {
-        chain_id,
-        block_number,
-        log_index,
-        tx_hash,
-        payment_id,
-        agent,
-        token,
-        amount: dec_to_string(&amount),
-        indexed_at,
-    };
+    let deposit = deposit_from_row(row.ok_or(ApiError::NotFound)?);
     Ok(Json(DepositResponse {
         freshness: Freshness {
             block_number: deposit.block_number,
@@ -349,28 +326,58 @@ async fn get_deposit(
     }))
 }
 
-/// Lowercase + 0x-prefix sanity check on a 20-byte address.
-fn normalize_address(s: &str) -> ApiResult<String> {
+fn deposit_from_row(row: DepositRow) -> Deposit {
+    let (
+        chain_id,
+        block_number,
+        log_index,
+        tx_hash,
+        payment_id,
+        agent,
+        share_receiver,
+        amount,
+        indexed_at,
+    ) = row;
+    Deposit {
+        chain_id,
+        block_number,
+        log_index,
+        tx_hash: hash_to_hex(&tx_hash),
+        payment_id: hash_to_hex(&payment_id),
+        agent: addr_to_hex(&agent),
+        share_receiver: addr_to_hex(&share_receiver),
+        amount: dec_to_string(&amount),
+        indexed_at,
+    }
+}
+
+/// Lower-case `0x`-prefixed hex string for an `address` BYTEA (any
+/// length — typically 20 bytes for an address, 32 for a hash).
+fn addr_to_hex(b: &[u8]) -> String {
+    format!("0x{}", hex::encode(b))
+}
+
+fn hash_to_hex(b: &[u8]) -> String {
+    addr_to_hex(b)
+}
+
+/// Validate a 20-byte 0x-prefixed address path parameter and return the
+/// raw bytes for binding to a BYTEA column.
+fn decode_address_param(s: &str) -> ApiResult<Vec<u8>> {
     let s = s.trim();
     if !s.starts_with("0x") || s.len() != 42 {
         return Err(ApiError::BadRequest("invalid address".into()));
     }
-    if hex::decode(&s[2..]).is_err() {
-        return Err(ApiError::BadRequest("invalid address hex".into()));
-    }
-    Ok(s.to_ascii_lowercase())
+    hex::decode(&s[2..]).map_err(|_| ApiError::BadRequest("invalid address hex".into()))
 }
 
-/// Lowercase + 0x-prefix sanity check on a 32-byte hash (tx_hash, payment_id).
-fn normalize_tx_hash(s: &str) -> ApiResult<String> {
+/// Validate a 32-byte 0x-prefixed hash (tx_hash, payment_id) path parameter.
+fn decode_hash_param(s: &str) -> ApiResult<Vec<u8>> {
     let s = s.trim();
     if !s.starts_with("0x") || s.len() != 66 {
         return Err(ApiError::BadRequest("invalid hash".into()));
     }
-    if hex::decode(&s[2..]).is_err() {
-        return Err(ApiError::BadRequest("invalid hash hex".into()));
-    }
-    Ok(s.to_ascii_lowercase())
+    hex::decode(&s[2..]).map_err(|_| ApiError::BadRequest("invalid hash hex".into()))
 }
 
 /// Read the most recent indexer cursor as the freshness header for
