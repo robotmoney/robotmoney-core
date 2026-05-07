@@ -85,3 +85,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 .github/scripts/check_demo_runbook.py
+
+  source-doc-reconciliation:
+    name: Source-doc reconciliation ADR drift (issue #92)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run source-doc reconciliation validator
+        run: python3 .github/scripts/check_source_doc_reconciliation.py

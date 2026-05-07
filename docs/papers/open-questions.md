@@ -1,5 +1,11 @@
 # Robot Money — Open Questions
 
+> **Cross-document contradictions in §1 are resolved.** See
+> `docs/technical/source-doc-reconciliation.md` (issue #92) for the
+> chosen answer per question, with rejected alternatives.
+> §2 (source-doc TODOs) and §3 (gaps) are tracked there for status
+> only — they remain open product-owner work.
+
 Unresolved questions derived from reading the three source documents in `docs/papers/`:
 
 - `Robot-Money-Whitepaper-v01.md` (Protocol Specification v0.1, February 2026)
@@ -16,6 +22,8 @@ These are points where two or more documents make incompatible claims. Each need
 
 ### 1.1 One token or two?
 
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.1](../technical/source-doc-reconciliation.md).*
+
 - **Whitepaper**: single `$ROBOTMONEY`, fixed 1B supply via Clanker v4, LP locked until 2100. Value accrues only through buyback-and-burn from prop-wallet realized gains. Explicitly: "no inflationary yield … staking $ROBOTMONEY does not earn more $ROBOTMONEY."
 - **Plan v4**: two-token path. `$RM v1` (Clanker community token) → `$RM v2` (custom contract with **staking and fee distribution**), v1→v2 exchange with early-mover bonus.
 - **PRD**: single `$RM`, governance only. No v1/v2.
@@ -25,6 +33,8 @@ These are points where two or more documents make incompatible claims. Each need
 **Why it matters:** Plan v4's "fee distribution to stakers" directly contradicts the whitepaper's burn-only accrual. The two cannot both be true. This also determines whether early `$RM` buyers face dilution/migration risk.
 
 ### 1.2 Vault: three-bucket from launch, or stables-first?
+
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.2](../technical/source-doc-reconciliation.md).*
 
 - **Whitepaper**: 33/33/33 stables / agent-token trading / revenue tokens **from day one**. Monthly bucket-weight rebalance.
 - **Plan v4**: stables-only genesis vault in Phase 1. Robot-coin baskets in Phase 3 (Weeks 8–16). Protocol/DeFi tokens Phase 4.
@@ -36,6 +46,8 @@ These are points where two or more documents make incompatible claims. Each need
 
 ### 1.3 Shortlist curation: top-down or bottom-up?
 
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.3](../technical/source-doc-reconciliation.md).*
+
 - **Whitepaper**: the protocol's agent runs the quant screen and **publishes** the shortlist of 10–15 tokens. Holders only rank.
 - **PRD**: any Analyst-tier (100M `$RM`) agent **proposes** tokens. 48h Approve/Reject inclusion vote at 3% quorum. 15-token cap with displacement rules.
 
@@ -44,6 +56,8 @@ These are points where two or more documents make incompatible claims. Each need
 **Why it matters:** Different governance topologies. Curated is faster and lower-overhead; proposal-driven creates `$RM` demand from projects wanting inclusion. The PRD's whole eligibility/tier/activity machinery only exists if the answer is proposal-driven.
 
 ### 1.4 Voting mechanic for weekly allocation
+
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.4](../technical/source-doc-reconciliation.md).*
 
 - **Whitepaper**: ranked-choice voting over the shortlist.
 - **PRD**: basis-point allocation (each agent distributes 0–10,000 bps across up to 15 tokens), weighted by `$RM` balance.
@@ -54,6 +68,8 @@ These are points where two or more documents make incompatible claims. Each need
 
 ### 1.5 Tier system: yes or no?
 
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.5](../technical/source-doc-reconciliation.md).*
+
 - **PRD**: four tiers (Observer / Participant 10M / Analyst 100M / Strategist 500M) with 14-day activity gate for Analyst+ governance actions.
 - **Whitepaper & Plan v4**: no tiers. Anyone with `$RM` can vote, linear weight.
 
@@ -62,6 +78,8 @@ These are points where two or more documents make incompatible claims. Each need
 **Why it matters:** The activity gate is the PRD's main sybil defense. Removing it weakens governance; keeping it requires the CFO Feed as a prerequisite product.
 
 ### 1.6 Vault structure: bucketed or flat?
+
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.6](../technical/source-doc-reconciliation.md).*
 
 - **Whitepaper**: Bucket A/B/C is structurally central (risk floor, alpha, middle ground). Monthly votes shift bucket *weights*.
 - **PRD**: flat list of up to 15 tokens with bps weights. No bucket vocabulary, no bucket-weight vote.
@@ -73,6 +91,8 @@ These are points where two or more documents make incompatible claims. Each need
 
 ### 1.7 Sequencing: what ships first?
 
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.7](../technical/source-doc-reconciliation.md).*
+
 - **Whitepaper**: vault contract Week 1–2, token Week 3, first deposits Weeks 4–8. Vault and token roughly simultaneous.
 - **Plan v4**: vault + token + agent persona simultaneous in Phase 1 (Weeks 1–2).
 - **PRD**: `$RM` is **already live and trading**; vault is **not yet shipped**; CFO Feed is the stopgap.
@@ -82,6 +102,8 @@ These are points where two or more documents make incompatible claims. Each need
 **Why it matters:** The whole strategic story differs. If the vault is not at launch, the whitepaper's day-one fee economics and prop-wallet seeding from launch fees are not yet operative, and `$RM` is purely speculative until the vault ships.
 
 ### 1.8 Customer wedge
+
+*Resolved in [`docs/technical/source-doc-reconciliation.md` §1.8](../technical/source-doc-reconciliation.md).*
 
 - **Whitepaper**: agents with **idle USDC** seeking diversified managed exposure.
 - **Plan v4**: agents **over-concentrated in their own token** seeking to de-risk into stables.

@@ -3,6 +3,15 @@
 
 **MVP v1.0 — March 2026 — Generative Ventures**
 
+> **Frozen historical artifact.** This PRD is **deprecated** as of
+> 2026-05-06 (architecture pivot). Where it conflicts with other
+> source papers in `docs/papers/`, the resolution is recorded in
+> `docs/technical/source-doc-reconciliation.md` (issue #92). The
+> forward-direction product spec is `docs/prd.md` and the
+> v0/MVP design lives in `docs/architecture.md` and
+> `docs/implementation-plan.md`. See the ADR before treating any
+> passage here as authoritative.
+
 This document specifies two products in build-order sequence. Product 1 ships first: an agent CFO feed where AI agents prove wallet ownership and $RM holdings, then publish financial research. Product 2 layers governance on top: $RM-weighted voting on allocation, token proposals, and shortlist management. Both products share the same identity and credentialing infrastructure.
 
 ---

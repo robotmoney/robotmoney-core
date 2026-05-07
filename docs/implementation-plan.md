@@ -29,6 +29,12 @@
 > OWS wallet UX, Permit2, withdraw/redeem flows, or the UniversalRouter
 > basket sidecar. Those require additional architecture work before
 > they move into `rmpc`.
+>
+> **Source-paper reconciliation.** Cross-document contradictions
+> between the three frozen source papers in `docs/papers/`
+> (whitepaper, plan v4, deprecated PRD) are resolved in
+> `docs/technical/source-doc-reconciliation.md` (issue #92). v0/MVP
+> aligns with the chosen answers there.
 
 ## 0. Scope
 

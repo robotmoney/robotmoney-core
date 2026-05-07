@@ -3,6 +3,11 @@
 
 **Gen Ventures × ZHC**
 
+> **Frozen historical artifact.** Where this plan conflicts with
+> other source papers in `docs/papers/`, the resolution is recorded in
+> `docs/technical/source-doc-reconciliation.md` (issue #92). See that
+> ADR before treating any passage here as authoritative.
+
 ---
 
 ## The Problem
