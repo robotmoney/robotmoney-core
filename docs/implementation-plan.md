@@ -849,6 +849,16 @@ the consequences before execution.
 - Generated/exported config is sufficient for OpenCode/OpenClaw phase 4
   setups.
 
+See `docs/technical/dapp-credential-decisions.md` for the operational
+decision record (issue #59) covering the agent-credential generation
+policy (register-only by default; browser-generated as a fork-mode-only
+labeled flow), the key-custody boundary (the dapp never persists a
+private key), the calldata-preview UX shape (target / function /
+decoded args / role-policy effect / risk class / raw calldata, with a
+hard refusal on decoder failure), and the `rmpc` config export format
+(TOML with an `unsafe_for_production` marker for software-backed
+signers).
+
 ## 13. Phase 7 — OpenClaw E2E Demo on Recent Public-Chain Fork
 
 Goal: demonstrate the full autonomous loop without requiring the phase
