@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical: docs/walkthroughs/openclaw-config.md §Secret handling
-# Issue: #54.
+# Issue: #114.
 #
 # Asserts the OpenClaw harness never exposes the signer passphrase:
 #

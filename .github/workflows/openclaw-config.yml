@@ -1,7 +1,7 @@
 # Phase 4 — OpenClaw install + long-running task config.
 #
 # Canonical: docs/walkthroughs/openclaw-config.md
-# Implements: implementation-plan §10. Issue: #54.
+# Implements: implementation-plan §10. Issue: #114.
 #
 # On every PR and on push to dev/main, run the four scripted tests
 # under testing/openclaw-config/. The mainnet-gate, secret-handling,

@@ -1,7 +1,7 @@
 # OpenClaw — install + long-running task config
 
 > Canonical: `docs/implementation-plan.md` §10 (Phase 4 — Agent-Harness
-> Installation and Skill Loading). Issue: #54.
+> Installation and Skill Loading). Issue: #114.
 
 This walkthrough documents how to install `rmpc`, register the Robot
 Money skill, configure environment variables and secrets, persist

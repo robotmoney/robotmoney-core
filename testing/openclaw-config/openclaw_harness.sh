@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical: docs/walkthroughs/openclaw-config.md
 # Implements: implementation-plan §10 (OpenClaw installation).
-# Issue:      #54.
+# Issue:      #114.
 #
 # OpenClaw harness wrapper around `rmpc`.
 #

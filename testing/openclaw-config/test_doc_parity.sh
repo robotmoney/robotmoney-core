@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical: docs/walkthroughs/openclaw-config.md
-# Issue: #54.
+# Issue: #114.
 #
 # Structural validator for the OpenClaw walkthrough doc:
 #
