@@ -45,6 +45,7 @@ fn main() {
             deadline_secs,
             receipt_timeout_secs,
             gas_limit,
+            fee_cap,
             pretty,
         } => commands::deposit::run(commands::deposit::Args {
             config_path: config,
@@ -54,6 +55,7 @@ fn main() {
             deadline_secs,
             receipt_timeout_secs,
             gas_limit,
+            fee_cap_wei: fee_cap,
             pretty,
         }),
         Command::SelfCheck { config, pretty } => commands::self_check::run(&config, pretty),

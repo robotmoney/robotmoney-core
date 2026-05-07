@@ -28,6 +28,49 @@ use crate::errors::{Result, RmpcError};
 /// 1 gwei in wei.
 pub const ONE_GWEI: u128 = 1_000_000_000;
 
+/// Per-chain default for `max_fee_per_gas_cap` (in wei) — issue #93.
+///
+/// Plan §7.1 used a single 100 gwei default, which is reasonable for L1
+/// devnet/mainnet but wildly loud on L2s like Base where typical
+/// `maxFeePerGas` lives in the sub-gwei range. Operators on Base would
+/// hit `ErrFeeCapExceeded` for normal traffic if they accepted the L1
+/// default.
+///
+/// Resolution order (see [`crate::config::Config::effective_max_fee_per_gas_cap`]):
+///
+///   1. Explicit CLI override (`--fee-cap` on deposit), if provided.
+///   2. Explicit `[fees].max_fee_per_gas_cap` in TOML, if provided.
+///   3. The per-chain default returned by this function.
+///   4. Otherwise: the [`UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI`] fallback,
+///      plus a `log::warn!` so the operator notices the unknown chain.
+///
+/// | Chain                | id     | default cap   |
+/// |----------------------|--------|---------------|
+/// | Ethereum mainnet     | 1      | 100 gwei      |
+/// | Base mainnet         | 8453   | 1 gwei        |
+/// | Base Sepolia         | 84532  | 1 gwei        |
+/// | Anvil / local devnet | 31337  | 1000 gwei     |
+/// | Other (unknown)      | —      | 100 gwei + warn |
+pub fn default_max_fee_per_gas_cap_wei(chain_id: u64) -> Option<u64> {
+    match chain_id {
+        // L1 mainnet — 100 gwei keeps us out of fee spikes.
+        1 => Some(100 * ONE_GWEI as u64),
+        // Base mainnet and Base Sepolia — typical fees are sub-gwei,
+        // so 1 gwei is the right "loud" ceiling.
+        8453 | 84532 => Some(ONE_GWEI as u64),
+        // Anvil / local devnet — effectively unlimited so local replay
+        // and roundtrip tests never trip the cap on synthetic fees.
+        31337 => Some(1_000 * ONE_GWEI as u64),
+        // Unknown chain id — caller falls back with a warning.
+        _ => None,
+    }
+}
+
+/// Fallback `max_fee_per_gas_cap` used when the chain id is not in the
+/// table from [`default_max_fee_per_gas_cap_wei`]. Matches the original
+/// plan §7.1 default so existing setups remain conservative.
+pub const UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI: u64 = 100 * ONE_GWEI as u64;
+
 /// Minimum priority fee floor — 1 gwei. See module docs.
 pub const PRIORITY_FEE_FLOOR_WEI: u128 = ONE_GWEI;
 

@@ -45,6 +45,11 @@ pub enum Command {
         /// vault writes on first interaction.
         #[arg(long = "gas-limit", default_value_t = 350_000)]
         gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
+        /// When set, this beats both the TOML `max_fee_per_gas_cap`
+        /// field and the per-chain default for any chain id.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
         /// Pretty-print the JSON output (multi-line, indented).
         #[arg(long)]
         pretty: bool,

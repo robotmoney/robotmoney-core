@@ -75,6 +75,10 @@ pub struct Args {
     pub deadline_secs: u64,
     pub receipt_timeout_secs: u64,
     pub gas_limit: u64,
+    /// Optional CLI override for `max_fee_per_gas_cap` in wei (issue #93).
+    /// When `Some(_)` it wins over both `[fees].max_fee_per_gas_cap` in
+    /// TOML and the per-chain default table.
+    pub fee_cap_wei: Option<u64>,
     pub pretty: bool,
 }
 
@@ -393,7 +397,7 @@ pub fn run(args: Args) -> i32 {
     let fees = match fee_history_res {
         Ok(fh) => match compute_fees(
             &fh,
-            cfg.max_fee_per_gas_cap as u128,
+            cfg.effective_max_fee_per_gas_cap(args.fee_cap_wei) as u128,
             cfg.max_priority_fee_per_gas_cap
                 .map_or(u128::MAX, |v| v as u128),
         ) {

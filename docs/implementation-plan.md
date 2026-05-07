@@ -394,7 +394,26 @@ EIP-1559 transactions only. Per-invocation behavior:
   `config.max_fee_per_gas_cap`, refuse with `ErrFeeCapExceeded` (no
   broadcast). The cap is operator policy, not best-effort.
 
-Defaults: `max_fee_per_gas_cap = 100 gwei` for MVP devnet runs.
+Defaults (issue #93 — per-chain, resolved at config load):
+
+| Chain                | id     | default `max_fee_per_gas_cap` |
+|----------------------|--------|-------------------------------|
+| Ethereum mainnet     | 1      | 100 gwei                      |
+| Base mainnet         | 8453   | 1 gwei                        |
+| Base Sepolia         | 84532  | 1 gwei                        |
+| Anvil / local devnet | 31337  | 1000 gwei (effectively unlimited) |
+| Other (unknown id)   | —      | 100 gwei + `log::warn!`       |
+
+Resolution order, highest priority first:
+
+1. `--fee-cap <wei>` on the rmpc subcommand (issue #93).
+2. `max_fee_per_gas_cap = <wei>` in the operator TOML.
+3. The per-chain default from the table above.
+4. Otherwise the unknown-chain fallback (100 gwei) plus a warn log.
+
+The TOML field is now optional; omitting it lets the per-chain table
+drive the cap, which keeps L2 deployments quiet without per-operator
+TOML edits.
 
 ### 4.8 CLI surface
 

@@ -31,7 +31,14 @@ pub struct Config {
     ///
     /// `u64` (max ≈ 1.8 × 10^19 wei = 18 ETH/gas) is far above any plausible
     /// cap. The TOML 0.8 wire format does not support `u128`.
-    pub max_fee_per_gas_cap: u64,
+    ///
+    /// Optional in TOML (issue #93). When omitted, the active value is
+    /// resolved from the per-chain default table — see
+    /// [`crate::fees::default_max_fee_per_gas_cap_wei`] and
+    /// [`Config::effective_max_fee_per_gas_cap`]. An explicit value here
+    /// always wins over the per-chain default.
+    #[serde(default)]
+    pub max_fee_per_gas_cap: Option<u64>,
     /// Operator-policy ceiling on `maxPriorityFeePerGas`, in wei.
     ///
     /// Mirrors `max_fee_per_gas_cap`: `compute_fees` refuses
@@ -148,6 +155,34 @@ impl Config {
         toml::from_str::<Self>(s).map_err(RmpcError::from)
     }
 
+    /// Resolve the effective `max_fee_per_gas_cap` for this config — issue #93.
+    ///
+    /// Resolution order:
+    ///
+    ///   1. `cli_override` if `Some(_)` (e.g. the rmpc `--fee-cap` flag).
+    ///   2. The TOML `max_fee_per_gas_cap` field if `Some(_)`.
+    ///   3. The per-chain default from
+    ///      [`crate::fees::default_max_fee_per_gas_cap_wei`] for `chain_id`.
+    ///   4. Otherwise: [`crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI`],
+    ///      with a `log::warn!` so the operator notices the unknown chain.
+    pub fn effective_max_fee_per_gas_cap(&self, cli_override: Option<u64>) -> u64 {
+        if let Some(v) = cli_override {
+            return v;
+        }
+        if let Some(v) = self.max_fee_per_gas_cap {
+            return v;
+        }
+        if let Some(v) = crate::fees::default_max_fee_per_gas_cap_wei(self.chain_id) {
+            return v;
+        }
+        log::warn!(
+            "rmpc config: chain_id {} has no default max_fee_per_gas_cap; falling back to {} wei. Set [fees].max_fee_per_gas_cap explicitly to silence.",
+            self.chain_id,
+            crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI
+        );
+        crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI
+    }
+
     /// Resolve the active state directory.
     ///
     /// Lookup order: `RMPC_STATE_DIR` env var → `[state_dir]` from
@@ -208,7 +243,7 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
             cfg.gateway_runtime_hash,
             "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
         );
-        assert_eq!(cfg.max_fee_per_gas_cap, 100_000_000_000u64);
+        assert_eq!(cfg.max_fee_per_gas_cap, Some(100_000_000_000u64));
         assert!(cfg.signer.allow_software_fallback);
         assert_eq!(
             cfg.signer.keystore_path,
@@ -301,6 +336,91 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
         assert_eq!(cfg.log.level, "info");
         assert_eq!(cfg.log.rotate_size_mb, 10);
         assert_eq!(cfg.log.keep_files, 14);
+    }
+
+    // -- issue #93 — per-chain fee-cap defaults -----------------------
+
+    /// Build a config with the given chain id and TOML override for
+    /// `max_fee_per_gas_cap`. `cap_line` should be a TOML line such as
+    /// `"max_fee_per_gas_cap = 7"` or empty to leave the field omitted.
+    fn cfg_for_chain(chain_id: u64, cap_line: &str) -> Config {
+        let body = format!(
+            r#"
+chain_id              = {chain_id}
+rpc_url               = "http://127.0.0.1:8545"
+gateway_address       = "0x0000000000000000000000000000000000000001"
+usdc_address          = "0x0000000000000000000000000000000000000002"
+vault_address         = "0x0000000000000000000000000000000000000003"
+gateway_runtime_hash  = "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+{cap_line}
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "/var/lib/rmpc/keystore.enc"
+"#
+        );
+        Config::from_str(&body).expect("parses")
+    }
+
+    #[test]
+    fn fee_cap_default_for_base_mainnet_is_one_gwei() {
+        let cfg = cfg_for_chain(8453, "");
+        assert_eq!(cfg.max_fee_per_gas_cap, None);
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 1_000_000_000);
+    }
+
+    #[test]
+    fn fee_cap_default_for_base_sepolia_is_one_gwei() {
+        let cfg = cfg_for_chain(84532, "");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 1_000_000_000);
+    }
+
+    #[test]
+    fn fee_cap_default_for_ethereum_mainnet_is_one_hundred_gwei() {
+        let cfg = cfg_for_chain(1, "");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 100_000_000_000);
+    }
+
+    #[test]
+    fn fee_cap_default_for_anvil_is_unlimited_high() {
+        // Anvil — 1000 gwei, well above any sane fee bid so local
+        // tests never trip the cap.
+        let cfg = cfg_for_chain(31337, "");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 1_000_000_000_000);
+    }
+
+    #[test]
+    fn fee_cap_unknown_chain_falls_back_to_one_hundred_gwei() {
+        // 424242 is not in the per-chain table; resolver must return
+        // the documented fallback. The `log::warn!` is fired but isn't
+        // observable from a unit test without extra plumbing — covered
+        // by the per-chain table tests above plus this fallback assert.
+        let cfg = cfg_for_chain(424_242, "");
+        assert_eq!(
+            cfg.effective_max_fee_per_gas_cap(None),
+            crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI
+        );
+    }
+
+    #[test]
+    fn fee_cap_explicit_toml_override_beats_chain_default() {
+        // Base default is 1 gwei; explicit TOML value of 42 wei must win.
+        let cfg = cfg_for_chain(8453, "max_fee_per_gas_cap = 42");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 42);
+    }
+
+    #[test]
+    fn fee_cap_cli_override_beats_toml_and_chain_default() {
+        // CLI override must win over both the explicit TOML value and
+        // the per-chain default — for any chain id.
+        let cfg = cfg_for_chain(1, "max_fee_per_gas_cap = 42");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(Some(7)), 7);
+
+        let cfg = cfg_for_chain(8453, "");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(Some(7)), 7);
+
+        let cfg = cfg_for_chain(424_242, "");
+        assert_eq!(cfg.effective_max_fee_per_gas_cap(Some(7)), 7);
     }
 
     #[test]
