@@ -129,6 +129,74 @@ jobs:
           path: clients/dapp/playwright-report/
           retention-days: 7
 
+  e2e-history-pane:
+    name: playwright e2e — history pane (flag on)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: lint-unit
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Playwright browsers
+        run: pnpm test:e2e:install
+
+      # Same anvil sidecar pattern as the default e2e job — the
+      # history-pane spec stubs the explorer API via Playwright route
+      # interception, so anvil only needs to keep the dapp's wagmi
+      # provider happy at boot.
+      - name: Start anvil sidecar
+        run: |
+          anvil --silent --port 8545 &
+          echo $! > anvil.pid
+          for i in {1..30}; do
+            if curl -sf -X POST -H 'content-type: application/json' \
+                 --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}' \
+                 http://127.0.0.1:8545 >/dev/null; then break; fi
+            sleep 1
+          done
+
+      - name: Run Playwright (flag on, history-pane spec)
+        env:
+          VITE_USE_MOCK_WALLET: "true"
+          VITE_FORK_RPC_URL: "http://127.0.0.1:8545"
+          VITE_ENV_CLASS: "fork"
+          VITE_HISTORY_PANE: "true"
+          VITE_EXPLORER_API_URL: "http://127.0.0.1:9999"
+        run: pnpm test:e2e tests/e2e/history-pane.spec.ts
+
+      - name: Stop anvil
+        if: always()
+        run: |
+          if [ -f anvil.pid ]; then kill "$(cat anvil.pid)" || true; fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-history-pane
+          path: clients/dapp/playwright-report/
+          retention-days: 7
+
   fork-roundtrip:
     name: dapp + rmpc fork-roundtrip
     runs-on: ubuntu-latest

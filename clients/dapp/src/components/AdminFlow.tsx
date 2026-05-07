@@ -22,7 +22,9 @@ import { buildPreview, type AdminAction, type PreviewContext } from "../lib/prev
 import { TxPreview } from "./TxPreview";
 import { PauseFlow } from "./PauseFlow";
 import { ConfigExportPanel } from "./ConfigExportPanel";
+import { HistoryPane } from "./HistoryPane";
 import { resolveFlags } from "../lib/featureFlags";
+import { resolveExplorerApiUrl } from "../lib/explorerApi";
 
 interface AdminFlowProps {
   gatewayAddress: Address;
@@ -378,6 +380,10 @@ export function AdminFlow(props: AdminFlowProps) {
           Sign revokeRole(PAUSER_ROLE) with wallet
         </button>
       </section>
+
+      {flags.historyPane && validAgent && (
+        <HistoryPane agent={agent as Address} apiUrl={resolveExplorerApiUrl(props.flagEnv)} />
+      )}
 
       {validAgent && validReceiver && (
         <ConfigExportPanel
