@@ -1,0 +1,27 @@
+[package]
+name = "opencode-walkthrough-tests"
+version = "0.1.0"
+edition = "2021"
+description = "Automated tests backing docs/walkthroughs/opencode-readonly-fork.md (issue #53)."
+license = "MIT"
+publish = false
+
+# Canonical: docs/implementation-plan.md §10 — Phase 4, Agent-Harness
+# Installation. Implements issue #53.
+#
+# This crate contains no library code of its own; it depends on
+# `rust-payment-client` (a path dependency on the rmpc crate) so that
+# the walkthrough's TOML config template is parsed by the *real* config
+# loader, and on a small set of utility deps for shelling out to rmpc
+# and (when an archive RPC is available) to anvil.
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rust-payment-client = { path = "../../clients/rust-payment-client" }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+which = "6"

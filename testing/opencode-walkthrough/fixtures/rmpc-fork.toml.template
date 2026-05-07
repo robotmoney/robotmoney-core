@@ -1,0 +1,24 @@
+# Read-only fork inspection config for the OpenCode walkthrough.
+# Canonical: docs/walkthroughs/opencode-readonly-fork.md
+#
+# This file is fork-only. Pointing it at mainnet would still refuse all
+# writes (no signer key is loaded), but operators must never edit a
+# mainnet config in a walkthrough shell — keep fork and prod configs in
+# separate directories.
+#
+# This template is parsed by the real `rust_payment_client::config::Config`
+# loader in `tests/config_template_parses.rs`; any drift between the
+# walkthrough's config block and the loader's accepted field set fails
+# CI.
+
+chain_id              = 8453
+rpc_url               = "http://127.0.0.1:8545"
+gateway_address       = "0x000000000000000000000000000000000000dEaD"
+usdc_address          = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+vault_address         = "0xCd9BB6428180c89cC0E5b9F1Bf6Bb98155Cf9CFf"
+gateway_runtime_hash  = "0x0000000000000000000000000000000000000000000000000000000000000000"
+max_fee_per_gas_cap   = 100000000000
+
+[signer]
+allow_software_fallback = true
+keystore_path            = "./keystore.json"

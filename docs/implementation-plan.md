@@ -673,7 +673,15 @@ avoid hidden prompt dependencies, and keep command examples aligned with
 - Document how to build/install `rmpc`.
 - Document how to register the skill with OpenCode.
 - Provide a local/fork config file and a "read-only first" prompt.
-- Provide a manual checklist for deposit simulation and refusal cases.
+- Provide a refusal-case demonstration backed by automated assertions.
+
+See [`docs/walkthroughs/opencode-readonly-fork.md`](walkthroughs/opencode-readonly-fork.md)
+for the read-only fork walkthrough (issue #53). The walkthrough is
+backed by [`testing/opencode-walkthrough/`](../testing/opencode-walkthrough/),
+a Rust test crate that asserts doc-vs-CLI parity, parses the shipped
+config template with the real `rmpc` config loader, and exercises the
+refusal envelope on every PR via
+[`.github/workflows/opencode-walkthrough.yml`](../.github/workflows/opencode-walkthrough.yml).
 
 **OpenClaw installation.**
 
