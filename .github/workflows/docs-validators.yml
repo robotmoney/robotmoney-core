@@ -27,12 +27,6 @@ jobs:
         with:
           python-version: "3.x"
 
-      # Replaces two manual review items previously on issue #56:
-      #   (A) ADR addresses every scope item the issue body lists.
-      #   (B) Every open downstream explorer issue references the ADR
-      #       in its `## Canonical docs` section.
-      # `gh` is preinstalled on ubuntu-latest runners. GITHUB_TOKEN gives
-      # it read access to public-repo issues without extra config.
       - name: Run explorer ADR validator
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,12 +45,25 @@ jobs:
         with:
           python-version: "3.x"
 
-      # Replaces two manual review items previously on issue #59:
-      #   (A) ADR addresses every scope item the issue body lists
-      #       (credential model, custody, calldata preview, config export).
-      #   (B) Downstream dapp implementation issue references the ADR
-      #       in its `## Canonical docs` section.
       - name: Run dapp credential ADR validator
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 .github/scripts/check_dapp_credential_adr.py
+
+  demo-runbook:
+    name: Demo runbook ADR drift (issue #62)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run demo runbook validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_demo_runbook.py
