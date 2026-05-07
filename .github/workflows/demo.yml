@@ -1,0 +1,75 @@
+# Phase 7 — OpenClaw E2E Demo on a Recent Public-Chain Fork.
+#
+# Canonical: docs/implementation-plan.md §13.
+# Decision record: docs/technical/demo-runbook.md (issue #62).
+# Implements: issue #61.
+#
+# Two triggers:
+#
+# - `workflow_dispatch` runs the full happy-path demo plus all five
+#   failure-case toggles, captures `artifacts/demo/` and uploads them
+#   as workflow artifacts.
+# - `schedule` runs the same job nightly so artifact freshness is
+#   visible in CI without a manual trigger.
+#
+# The fork RPC URL must be configured as a repository secret named
+# `RMPC_FORK_RPC_URL`. Without it both `demo.sh` and
+# `test_failure_cases.sh` exit 0 with a printed skip line, so a
+# missing-secret state is loud but non-blocking.
+
+name: demo
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 03:17 UTC. Off-peak relative to the rest of the CI
+    # matrix; same convention as fork-e2e.yml's monthly bump cadence.
+    - cron: "17 3 * * *"
+
+jobs:
+  demo:
+    name: OpenClaw E2E demo (happy path + 5 failure cases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RMPC_FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry (anvil + cast)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'clients/rust-payment-client/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-
+
+      - name: Build rmpc
+        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Happy-path demo run
+        run: bash testing/demo/demo.sh
+
+      - name: Failure-case suite
+        run: bash testing/demo/test_failure_cases.sh
+
+      - name: Upload demo artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-artifacts-${{ github.run_id }}
+          path: artifacts/demo/
+          if-no-files-found: ignore
+          retention-days: 14

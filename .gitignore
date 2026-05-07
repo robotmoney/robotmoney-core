@@ -25,3 +25,7 @@ plan.md
 # Local agent prompts (skills/commands/workflows) — staging dir + Claude Code state
 .agents/
 .claude/
+
+# Phase 7 demo run artifacts (per-run dirs under artifacts/demo/<timestamp>/).
+# Captured by testing/demo/demo.sh; uploaded by .github/workflows/demo.yml.
+artifacts/
