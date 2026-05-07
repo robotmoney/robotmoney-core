@@ -5,11 +5,15 @@ on:
     branches: [main, dev]
     paths:
       - "clients/dapp/**"
+      - "clients/rust-payment-client/**"
+      - "contracts/**"
       - ".github/workflows/dapp.yml"
   pull_request:
     branches: [main, dev]
     paths:
       - "clients/dapp/**"
+      - "clients/rust-payment-client/**"
+      - "contracts/**"
       - ".github/workflows/dapp.yml"
   workflow_dispatch:
 
@@ -122,5 +126,59 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
+          path: clients/dapp/playwright-report/
+          retention-days: 7
+
+  fork-roundtrip:
+    name: dapp + rmpc fork-roundtrip
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: lint-unit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        working-directory: clients/dapp
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Playwright browsers
+        working-directory: clients/dapp
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Issue #85 — drive the dapp UI to authorize then revoke against
+      # a freshly-deployed gateway on a local anvil, then shell out to
+      # `rmpc self-check` and assert exit code 2 + ErrAgentNotAuthorized
+      # on the refusal path and exit code 0 after re-authorize. The
+      # script handles boot, deploy, keystore mint, and Playwright
+      # invocation; it exits non-zero on any failure in the round-trip.
+      - name: Run fork-roundtrip harness
+        run: bash clients/dapp/scripts/run-fork-roundtrip.sh
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-fork-roundtrip
           path: clients/dapp/playwright-report/
           retention-days: 7

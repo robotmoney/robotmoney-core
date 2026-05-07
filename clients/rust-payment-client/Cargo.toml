@@ -14,6 +14,13 @@ path = "src/lib.rs"
 name = "rmpc"
 path = "src/main.rs"
 
+# Test-only helper that mints a software keystore from a raw private
+# key. Used by the dapp fork-roundtrip Playwright spec to build a
+# keystore for the agent EOA so `rmpc self-check` can decrypt it.
+[[bin]]
+name = "rmpc-keystore-import"
+path = "src/bin/rmpc_keystore_import.rs"
+
 [dependencies]
 # Per docs/implementation-plan.md §3.5
 alloy-primitives = { version = "0.8", features = ["k256"] }
