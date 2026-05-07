@@ -1,0 +1,49 @@
+# Canonical fixture: rmpc-config.toml as produced by the dapp.
+#
+# Source of truth: clients/dapp/src/lib/configExport.ts (function
+# `exportRmpcConfig`) + ADR docs/technical/dapp-credential-decisions.md §3.4.
+#
+# Values mirror the dapp's own unit-test base config
+# (clients/dapp/tests/unit/configExport.test.ts) — same chain id (anvil
+# 31337), same encoded uint256 caps, same gateway/vault/agent shape.
+#
+# This fixture is intentionally hand-written rather than generated at
+# build time so the test target stays self-contained (no Node toolchain
+# required for `cargo test`). Drift between this file and the dapp's
+# actual export is detected by `tests/dapp_toml_roundtrip.rs`, which
+# also asserts every required §3.4 field is present.
+#
+# When `clients/dapp/src/lib/configExport.ts` changes, regenerate this
+# fixture by running the TS export with the unit-test base config and
+# overwriting the file below. Keep the [signer] block on the
+# `encrypted_keystore` variant so `unsafe_for_production = true` is
+# exercised.
+
+schema_version = "1"
+unsafe_for_production = true
+
+[chain]
+chain_id = 31337
+name = "fork"
+rpc_url = "http://127.0.0.1:8545"
+
+[contracts]
+gateway = "0x0000000000000000000000000000000000000b00"
+vault = "0x0000000000000000000000000000000000000d00"
+gateway_code_hash = "0xabababababababababababababababababababababababababababababababab"
+
+[agent]
+address = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+
+[signer]
+kind = "encrypted_keystore"
+keystore_path = "./agent.keystore.json"
+keystore_format = "geth-v3"
+
+[policy]
+active = true
+valid_until = "2030-01-01T00:00:00.000Z"
+per_deposit_cap = "100000000"
+per_window_cap = "1000000000"
+window_seconds = 86400
+share_receiver = "0x00000000000000000000000000000000000000ee"

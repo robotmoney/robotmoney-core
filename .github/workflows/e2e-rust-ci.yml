@@ -94,6 +94,16 @@ jobs:
         working-directory: clients/rust-payment-client
         run: cargo test --test skill_docs_parity -- --nocapture
 
+      # Dapp -> rmpc TOML round-trip (issue #86): loads the dapp's
+      # exported TOML fixture through rmpc's real config loader, then
+      # invokes `rmpc self-check` against a mockito JSON-RPC happy
+      # path. Catches drift between
+      # `clients/dapp/src/lib/configExport.ts` and
+      # `clients/rust-payment-client/src/config.rs`. No docker required.
+      - name: Dapp TOML round-trip (issue #86)
+        working-directory: clients/rust-payment-client
+        run: cargo test --test dapp_toml_roundtrip -- --nocapture
+
       # Each test binary boots its own Geth devnet on port 8545. CI runs
       # them sequentially so the port is never contended; tests within a
       # binary serialize via `--test-threads=1`.
