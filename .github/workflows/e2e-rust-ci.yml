@@ -8,6 +8,7 @@ on:
       - "clients/rust-payment-client/**"
       - "contracts/**"
       - "foundry.toml"
+      - "plugins/robotmoney-cli/**"
       - ".github/workflows/e2e-rust-ci.yml"
   pull_request:
     branches: [main, dev]
@@ -16,6 +17,7 @@ on:
       - "clients/rust-payment-client/**"
       - "contracts/**"
       - "foundry.toml"
+      - "plugins/robotmoney-cli/**"
       - ".github/workflows/e2e-rust-ci.yml"
   workflow_dispatch:
 
@@ -81,6 +83,16 @@ jobs:
       - name: Build rmpc binary
         run: |
           cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      # Skill-package parity: verifies plugins/robotmoney-cli/ docs match
+      # `rmpc --help` (every documented command/flag exists, every
+      # subcommand is documented) and that the skill package is
+      # structurally loadable (plugin.json valid, SKILL.md frontmatter,
+      # references/*.md links resolve). Replaces the manual review items
+      # tracked on issue #52. No RPC fixture or docker required.
+      - name: Skill-package parity (issue #52)
+        working-directory: clients/rust-payment-client
+        run: cargo test --test skill_docs_parity -- --nocapture
 
       # Each test binary boots its own Geth devnet on port 8545. CI runs
       # them sequentially so the port is never contended; tests within a

@@ -1,0 +1,10 @@
+{
+  "name": "robotmoney-cli",
+  "version": "0.2.0",
+  "description": "Use the rmpc Rust client to read Robot Money vault/gateway state and submit guarded deposits.",
+  "author": "Robot Money",
+  "homepage": "https://robotmoney.net",
+  "repository": "https://github.com/robotmoney/robotmoney-skills",
+  "license": "Apache-2.0",
+  "skills": ["robotmoney-cli"]
+}
