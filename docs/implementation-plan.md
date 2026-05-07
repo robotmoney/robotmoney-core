@@ -859,6 +859,12 @@ hard refusal on decoder failure), and the `rmpc` config export format
 (TOML with an `unsafe_for_production` marker for software-backed
 signers).
 
+The browser-generated credential path named in §3.1 of that ADR is
+gated behind the security-review record at
+`docs/technical/dapp-browser-keygen-review.md` (issue #84). The
+feature flag `DAPP_BROWSER_KEYGEN_ENABLED` defaults to `false` and may
+not be enabled until that ADR's go/no-go conditions are met.
+
 ## 13. Phase 7 — OpenClaw E2E Demo on Recent Public-Chain Fork
 
 > Operational decision record: `docs/technical/demo-runbook.md` (issue

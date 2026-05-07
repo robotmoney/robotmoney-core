@@ -50,6 +50,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 .github/scripts/check_dapp_credential_adr.py
 
+  browser-keygen-adr:
+    name: Browser-keygen security-review ADR drift (issue #84)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run browser-keygen ADR validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_browser_keygen_adr.py
+
   demo-runbook:
     name: Demo runbook ADR drift (issue #62)
     runs-on: ubuntu-latest
