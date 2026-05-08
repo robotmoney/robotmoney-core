@@ -82,6 +82,7 @@ mainnet configuration management.
 | 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. | Not started |
 | 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. | Not started |
 | 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. | Not started |
+| 4.5 | Full-stack hosted devnet | Anvil fork, explorer indexer + API, dapp, and `rmpc` run together as one orchestrated stack (compose / k3d) suitable for hosting and demos. | Not started |
 | 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. | Not started |
 | 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. | Not started |
 | 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. | Not started |
@@ -654,6 +655,12 @@ level, and the surfaces every read-command batch must consume. Stub
 module lives at `clients/rust-payment-client/src/read_output.rs`. No
 read-command behavior changes from this scout.
 
+`rmpc status` predates the Phase 3 envelope (it ships in the Phase 1
+CLI surface, §4.8) and currently emits a flat response. Issue #149
+normalizes its success and not-found outputs into the same
+`Envelope<T>` shape as the get-* commands, so agents do not have to
+special-case one confirmation command.
+
 **Acceptance criteria.**
 
 - Agents can answer "is the vault healthy?", "what is my position?",
@@ -750,6 +757,49 @@ Decision criteria:
 - The MCP decision is recorded as `build now`, `defer`, or `not needed`,
   with rationale.
 
+## 10.5 Phase 4.5 — Full-stack hosted devnet
+
+Goal: orchestrate the services needed to host or demo Robot Money end
+to end as a single stack: an Anvil fork at a pinned block, the
+explorer indexer and API (with their Postgres), the dapp, and `rmpc`
+available for operator use. This phase precedes phase 5's API
+hardening and phase 7's OpenClaw demo by providing the deployment
+shape both rely on.
+
+**Scope.**
+
+- A `docker-compose.full-stack.yaml` (or equivalent k3d / Helm
+  manifests) that brings up Anvil, Postgres, `services/explorer-indexer`,
+  `clients/explorer-api`, `clients/dapp`, and the deployed gateway in
+  the right startup order with health checks.
+- Pinned fork block configuration via a single env var (e.g.
+  `RMPC_FORK_BLOCK`) consumed by every service that needs it.
+- Shared environment configuration: chain id, RPC URL, contract
+  addresses, Postgres DSN, explorer API base URL.
+- Fixture deployment hook so the gateway/vault contracts are deployed
+  into the Anvil fork before downstream services start indexing.
+
+**Boundaries.**
+
+- This phase orchestrates existing services; it does not add new
+  service responsibilities.
+- The compose/manifest is a hosting and demo aid, not a production
+  deployment artifact. Mainnet hosting decisions are out of scope.
+- Secrets handling for hosted environments is documented but not
+  productionized here.
+
+**Acceptance criteria.**
+
+- A developer can start the full stack with one documented command
+  and reach a working dapp pointed at the fork.
+- The explorer indexer and API report healthy against the same fork
+  block and gateway addresses the dapp is reading.
+- The OpenClaw phase 7 demo can be run against this stack without
+  bespoke per-service wiring.
+
+The scout for this phase is issue #148 (service seams, env vars,
+startup order, health checks); implementation is issue #146.
+
 ## 11. Phase 5 — Simple Web Explorer API and Database
 
 Goal: provide a lightweight service for browsing Robot Money activity
@@ -839,7 +889,9 @@ the consequences before execution.
 1. Connect wallet.
 2. Select chain/environment.
 3. Inspect current vault/gateway/agent state.
-4. Create or register a new agent credential.
+4. Create, register, or rotate an agent credential. Rotation is a
+   guided revoke-old + authorize-new flow with a decoded preview of
+   both transactions before either is signed (issue #150).
 5. Configure agent policy: share receiver, valid-until, max per
    deposit, max per window.
 6. Grant/revoke roles or agent authorization.
