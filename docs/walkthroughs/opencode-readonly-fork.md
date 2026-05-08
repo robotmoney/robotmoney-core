@@ -196,6 +196,7 @@ a Rust test crate that runs in CI on every PR via
 | `config_template_parses::fixture_parses_with_rmpc_config_loader` | The `rmpc-fork.toml.template` shipped under `fixtures/` deserializes with `rust_payment_client::config::Config`. |
 | `refusal_walkthrough::unknown_subcommand_refuses_with_nonzero_exit` | `rmpc not-a-real-subcommand` exits non-zero with stderr text — the structured refusal contract step 6 documents. |
 | `read_only_walkthrough::get_vault_against_fork` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |
+| `get_gateway_against_fork_is_partial` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the fork URL, runs `rmpc get-gateway`, asserts `partial: true` with at least one named per-field error — the documented degradation shape. |
 
 The two fork-driven tests skip cleanly when no archive RPC is
 configured, mirroring [`testing/fork-e2e-rust`](../../testing/fork-e2e-rust)

@@ -191,3 +191,65 @@ fn get_vault_against_fork_envelope_contract() {
 
     drop(anvil); // explicit teardown
 }
+
+#[test]
+fn get_gateway_against_fork_is_partial() {
+    let fork_url = skip_if_no_fork!();
+    let anvil = match boot_anvil(&fork_url) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("[opencode-walkthrough] skipping: {e}");
+            return;
+        }
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cfg = write_temp_config(&tmp, anvil.port);
+
+    let out = Command::new(rmpc_bin())
+        .args(["get-gateway", "--config"])
+        .arg(&cfg)
+        .output()
+        .expect("spawn rmpc get-gateway");
+
+    assert!(
+        out.status.success(),
+        "rmpc get-gateway must exit 0 even for partial reads; \
+         stderr=\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let v: Value =
+        serde_json::from_slice(&out.stdout).expect("rmpc get-gateway stdout is not valid JSON");
+
+    // Envelope contract.
+    assert!(
+        v.get("chain_id").is_some(),
+        "envelope missing chain_id: {v}"
+    );
+    assert_eq!(v["source"], "json_rpc", "source must be json_rpc: {v}");
+
+    // Documented degradation shape: gateway_address is dead EOA.
+    assert_eq!(
+        v["partial"], true,
+        "get-gateway must be partial=true when gateway is not deployed: {v}"
+    );
+    let errors = v["errors"]
+        .as_array()
+        .expect("errors must be an array when partial=true");
+    assert!(
+        !errors.is_empty(),
+        "get-gateway must report at least one named per-field error: {v}"
+    );
+    for e in errors {
+        assert!(
+            e["field"].is_string(),
+            "each error must carry a `field`: {e}"
+        );
+        assert!(
+            e["error"].is_string() || e["message"].is_string(),
+            "each error must carry an error/message string: {e}"
+        );
+    }
+
+    drop(anvil);
+}
