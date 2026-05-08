@@ -70,6 +70,44 @@ The nightly job:
 
 ---
 
+## G9 — No CI exercises OpenCode headless guarded deposit via skill
+
+**Status:** Closed by issue #137.
+
+**Gap description:** The OpenCode read test (G8) proved OpenCode could drive
+`rmpc` read commands headlessly, but never exercised the write path. The
+agent decision to proceed from the read prefix to a deposit — gated on the
+model interpreting SKILL.md safety rules — was completely untested. A broken
+deposit guard, wrong command ordering, or prompt misread would pass all
+existing CI.
+
+**Closure:**
+
+Workflow: `.github/workflows/opencode-headless-deposit.yml`
+Assertion script: `.github/scripts/assert_headless_deposit_transcript.py`
+
+The nightly job:
+- Installs OpenCode 1.14.29, `rmpc`, and `rmpc-keystore-import` from source.
+- Boots an Anvil fork at the pinned block with `--chain-id 8453`.
+- Runs `forge script contracts/script/Deploy.s.sol:Deploy` to deploy
+  MockUSDC + MockVault + RobotMoneyGateway on the fork.
+- Generates an ephemeral agent EOA; funds it with ETH and sets a USDC
+  allowance via `anvil_impersonateAccount`.
+- Creates an encrypted keystore for the agent via `rmpc-keystore-import`.
+- Invokes `opencode run` with the verbatim deposit task prompt from
+  `docs/technical/demo-runbook.md` §3.2 (env vars substituted).
+- Captures the NDJSON transcript and runs the assertion script.
+- Asserts `rmpc get-vault`, `rmpc get-agent`, `rmpc get-balance`,
+  `rmpc get-allowance`, `rmpc self-check` appear in that order before
+  `rmpc deposit`.
+- Asserts `rmpc deposit` exits 0.
+- Asserts `final-report.json:outcome == 'deposited'` and `tx_hash` is
+  a non-null hex string.
+- Asserts no explorer/dapp HTTP references in the transcript.
+- Skip-cleans when `ANTHROPIC_API_KEY` or `RMPC_FORK_RPC_URL` is absent.
+
+---
+
 ## Adding new gaps
 
 Add rows above this line following the `G<N>` numbering. Each gap entry must
