@@ -22,6 +22,14 @@ target/
 # Internal planning docs — not for public history
 plan.md
 
+# Confidential source papers (verbatim conversions + originals).
+# Kept local-only; analysis lives in docs/papers/open-questions.md.
+docs/papers/Robot-Money-Whitepaper-v01.md
+docs/papers/robot_money_plan_v4.md
+docs/papers/robot_money_prd.md
+docs/papers/*.pdf
+docs/papers/*.docx
+
 # Local agent prompts (skills/commands/workflows) — staging dir + Claude Code state
 .agents/
 .claude/

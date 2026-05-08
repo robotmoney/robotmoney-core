@@ -193,13 +193,17 @@ def main() -> int:
         print(f"OK: ADR covers all {len(nums)} §1 contradictions.")
 
     # (B) Source papers and open-questions reference the ADR.
+    # Source papers may be absent when they are intentionally gitignored
+    # (kept local-only per issue #147); skip the backlink check for those.
     backlink_targets: list[Path] = SOURCE_PAPERS + [OPEN_QUESTIONS_PATH]
     missing_backlinks: list[str] = []
+    checked: list[Path] = []
     for rel in backlink_targets:
         p = root / rel
         if not p.is_file():
-            missing_backlinks.append(f"{rel} (file missing)")
+            print(f"NOTE: {rel} not present locally — skipping backlink check.")
             continue
+        checked.append(rel)
         if ADR_REFERENCE_NEEDLE not in p.read_text(encoding="utf-8"):
             missing_backlinks.append(str(rel))
     if missing_backlinks:
@@ -213,7 +217,7 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
     else:
         print(
-            f"OK: all {len(backlink_targets)} source/companion docs "
+            f"OK: all {len(checked)} present source/companion docs "
             f"reference the ADR."
         )
 
