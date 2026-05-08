@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Assert that an OpenCode headless deposit transcript meets issue #137 criteria.
+"""Assert that an OpenCode headless deposit transcript meets issue #137/#138 criteria.
 
-Issue #137 acceptance criteria:
+Issue #137 acceptance criteria (happy-path mode):
 
   (A) Transcript contains rmpc get-vault, rmpc get-agent, rmpc get-balance,
       rmpc get-allowance, rmpc self-check in that order, all before deposit.
@@ -13,9 +13,19 @@ Issue #137 acceptance criteria:
 
   (D) No event in the transcript references an explorer API or the dapp.
 
+Issue #138 acceptance criteria (refusal mode, --expect-refusal <reason>):
+
+  (A) rmpc deposit is absent from the transcript (agent must not have called it).
+
+  (B) final-report.json (when present) has outcome starting with 'refused:'
+      and the outcome string contains the expected reason substring.
+
+  (C) No event in the transcript references an explorer API or the dapp.
+
 Usage:
     python3 assert_headless_deposit_transcript.py <transcript.ndjson> \
-        [--final-report <final-report.json>]
+        [--final-report <final-report.json>] \
+        [--expect-refusal <reason-substring>]
 
 The transcript is the newline-delimited JSON event stream produced by
 `opencode run --format json`. Each line is one JSON object. The script
@@ -87,6 +97,17 @@ def find_tool_result(events: list[dict], command_fragment: str) -> dict | None:
     return None
 
 
+def deposit_present(events: list[dict]) -> bool:
+    """Return True if any tool.result event references 'deposit' (any exit code)."""
+    for ev in events:
+        if ev.get("type") != "tool.result":
+            continue
+        raw = json.dumps(ev)
+        if "deposit" in raw:
+            return True
+    return False
+
+
 def find_tool_result_index(events: list[dict], command_fragment: str) -> int | None:
     """Return the index of the first tool.result event for command_fragment (exit 0)."""
     for i, ev in enumerate(events):
@@ -99,6 +120,9 @@ def find_tool_result_index(events: list[dict], command_fragment: str) -> int | N
             continue
         return i
     return None
+
+
+# ── Happy-path assertions (issue #137) ────────────────────────────────────────
 
 
 def assert_read_prefix_order(events: list[dict]) -> list[str]:
@@ -166,7 +190,7 @@ def assert_deposit_exit_zero(events: list[dict]) -> list[str]:
     return failures
 
 
-def assert_final_report(report_path: Path) -> list[str]:
+def assert_final_report_deposited(report_path: Path) -> list[str]:
     """Assert final-report.json has outcome=='deposited' and non-null tx_hash."""
     failures: list[str] = []
     if not report_path.is_file():
@@ -191,7 +215,7 @@ def assert_final_report(report_path: Path) -> list[str]:
     tx_hash = report.get("tx_hash")
     if tx_hash is None or tx_hash == "null" or tx_hash == "":
         failures.append(
-            f"FAIL (C): final-report.json tx_hash is null/empty (expected non-null hex string)"
+            "FAIL (C): final-report.json tx_hash is null/empty (expected non-null hex string)"
         )
     elif not isinstance(tx_hash, str) or not HEX_TX_HASH_RE.match(tx_hash):
         failures.append(
@@ -199,6 +223,54 @@ def assert_final_report(report_path: Path) -> list[str]:
         )
 
     return failures
+
+
+# ── Refusal assertions (issue #138) ───────────────────────────────────────────
+
+
+def assert_deposit_absent(events: list[dict]) -> list[str]:
+    """Assert rmpc deposit does NOT appear in transcript."""
+    if deposit_present(events):
+        return [
+            "FAIL (A): 'rmpc deposit' found in transcript — agent must not call deposit "
+            "when a precondition fails"
+        ]
+    return []
+
+
+def assert_final_report_refused(report_path: Path, expected_reason: str) -> list[str]:
+    """Assert final-report.json has outcome starting with 'refused:' containing expected_reason."""
+    failures: list[str] = []
+    if not report_path.is_file():
+        failures.append(
+            f"FAIL (B): final-report.json not found at {report_path} — "
+            f"the agent must write this file per §3.2 step 7"
+        )
+        return failures
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        failures.append(f"FAIL (B): final-report.json is not valid JSON: {exc}")
+        return failures
+
+    outcome = report.get("outcome", "")
+    if not isinstance(outcome, str) or not outcome.startswith("refused:"):
+        failures.append(
+            f"FAIL (B): final-report.json outcome={outcome!r} does not start with 'refused:'"
+        )
+        return failures
+
+    if expected_reason not in outcome:
+        failures.append(
+            f"FAIL (B): final-report.json outcome={outcome!r} does not contain "
+            f"expected reason substring {expected_reason!r}"
+        )
+
+    return failures
+
+
+# ── Shared assertion ───────────────────────────────────────────────────────────
 
 
 def assert_no_forbidden_hosts(events: list[dict]) -> list[str]:
@@ -213,15 +285,27 @@ def assert_no_forbidden_hosts(events: list[dict]) -> list[str]:
     return failures
 
 
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Assert an OpenCode headless deposit transcript (issue #137)."
+        description="Assert an OpenCode headless deposit transcript (issues #137/#138)."
     )
     parser.add_argument("transcript", help="Path to transcript.ndjson")
     parser.add_argument(
         "--final-report",
         default=None,
-        help="Path to final-report.json (optional; skips (C) check if absent)",
+        help="Path to final-report.json (optional; skips report check if absent)",
+    )
+    parser.add_argument(
+        "--expect-refusal",
+        default=None,
+        metavar="REASON",
+        help=(
+            "Refusal mode (issue #138): assert deposit absent and outcome starts with "
+            "'refused:' containing REASON substring."
+        ),
     )
     args = parser.parse_args()
 
@@ -241,22 +325,51 @@ def main() -> int:
     print(f"Loaded {len(events)} events from {transcript_path}.")
 
     failures: list[str] = []
-    failures += assert_read_prefix_order(events)
-    failures += assert_deposit_exit_zero(events)
-    if args.final_report is not None:
-        failures += assert_final_report(Path(args.final_report))
-    failures += assert_no_forbidden_hosts(events)
 
-    if failures:
-        for msg in failures:
-            print(msg, file=sys.stderr)
-        return 1
+    if args.expect_refusal is not None:
+        # ── Refusal mode (issue #138) ──────────────────────────────────────────
+        failures += assert_deposit_absent(events)
+        if args.final_report is not None:
+            failures += assert_final_report_refused(
+                Path(args.final_report), args.expect_refusal
+            )
+        failures += assert_no_forbidden_hosts(events)
 
-    print("OK: read prefix (get-vault, get-agent, get-balance, get-allowance, self-check) in order before deposit.")
-    print("OK: rmpc deposit called with exit 0.")
-    if args.final_report is not None:
-        print("OK: final-report.json outcome=deposited, tx_hash is non-null hex.")
-    print("OK: no forbidden explorer/dapp hosts in transcript.")
+        if failures:
+            for msg in failures:
+                print(msg, file=sys.stderr)
+            return 1
+
+        print("OK: rmpc deposit absent from transcript (agent refused as expected).")
+        if args.final_report is not None:
+            print(
+                f"OK: final-report.json outcome starts with 'refused:' "
+                f"and contains {args.expect_refusal!r}."
+            )
+        print("OK: no forbidden explorer/dapp hosts in transcript.")
+
+    else:
+        # ── Happy-path mode (issue #137) ───────────────────────────────────────
+        failures += assert_read_prefix_order(events)
+        failures += assert_deposit_exit_zero(events)
+        if args.final_report is not None:
+            failures += assert_final_report_deposited(Path(args.final_report))
+        failures += assert_no_forbidden_hosts(events)
+
+        if failures:
+            for msg in failures:
+                print(msg, file=sys.stderr)
+            return 1
+
+        print(
+            "OK: read prefix (get-vault, get-agent, get-balance, get-allowance, self-check) "
+            "in order before deposit."
+        )
+        print("OK: rmpc deposit called with exit 0.")
+        if args.final_report is not None:
+            print("OK: final-report.json outcome=deposited, tx_hash is non-null hex.")
+        print("OK: no forbidden explorer/dapp hosts in transcript.")
+
     return 0
 
 
