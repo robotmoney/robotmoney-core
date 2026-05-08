@@ -80,9 +80,7 @@ fn boot_anvil(fork_url: &str) -> Result<AnvilGuard, String> {
             args.push(block);
         }
     }
-    cmd.args(&args)
-    .stdout(Stdio::null())
-    .stderr(Stdio::piped());
+    cmd.args(&args).stdout(Stdio::null()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|e| format!("spawn anvil: {e}"))?;
 
     // Poll until anvil accepts connections (or 30s timeout).

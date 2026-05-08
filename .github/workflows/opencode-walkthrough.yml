@@ -50,6 +50,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -62,6 +64,12 @@ jobs:
           key: ${{ runner.os }}-cargo-opencode-walkthrough-${{ hashFiles('testing/opencode-walkthrough/Cargo.toml', 'clients/rust-payment-client/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-opencode-walkthrough-
+
+      - name: fmt + clippy
+        working-directory: testing/opencode-walkthrough
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
 
       - name: Build offline tests
         working-directory: testing/opencode-walkthrough
