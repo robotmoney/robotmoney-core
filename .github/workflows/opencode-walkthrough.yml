@@ -35,6 +35,10 @@ on:
       - ".github/workflows/opencode-walkthrough.yml"
   workflow_dispatch:
 
+# Pinned fork block — must match fork-e2e.yml. Refresh monthly via a chore PR.
+env:
+  RMPC_FORK_BLOCK: "23500000"
+
 jobs:
   offline-checks:
     name: Walkthrough parity + config + refusal (offline)

@@ -67,13 +67,20 @@ fn boot_anvil(fork_url: &str) -> Result<AnvilGuard, String> {
     }
     let port = pick_port();
     let mut cmd = Command::new("anvil");
-    cmd.args([
-        "--fork-url",
-        fork_url,
-        "--port",
-        &port.to_string(),
-        "--silent",
-    ])
+    let mut args = vec![
+        "--fork-url".to_string(),
+        fork_url.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+        "--silent".to_string(),
+    ];
+    if let Ok(block) = std::env::var("RMPC_FORK_BLOCK") {
+        if !block.is_empty() {
+            args.push("--fork-block-number".to_string());
+            args.push(block);
+        }
+    }
+    cmd.args(&args)
     .stdout(Stdio::null())
     .stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|e| format!("spawn anvil: {e}"))?;
