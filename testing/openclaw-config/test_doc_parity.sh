@@ -12,7 +12,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./_lib.sh
+# shellcheck source=testing/openclaw-config/_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
 
 DOC="${REPO_ROOT}/docs/walkthroughs/openclaw-config.md"
@@ -39,6 +39,7 @@ echo "checked ${#paths[@]} script path references"
 ensure_rmpc_built
 RMPC_REAL="${REPO_ROOT}/clients/rust-payment-client/target/debug/rmpc"
 HELP="$("$RMPC_REAL" --help 2>&1 || true)"
+# shellcheck disable=SC2016  # single-quoted regex patterns are intentional
 mapfile -t subs < <(grep -oE '`rmpc [a-z][a-z-]+`' "$DOC" \
     | sed -E 's/`rmpc ([a-z-]+)`/\1/' | sort -u)
 for s in "${subs[@]}"; do

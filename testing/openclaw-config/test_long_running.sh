@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./_lib.sh
+# shellcheck source=testing/openclaw-config/_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
 
 ITERATIONS="${RMPC_MONITOR_ITERATIONS:-3}"

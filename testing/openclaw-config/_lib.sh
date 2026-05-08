@@ -8,6 +8,7 @@
 #   commands, pinned at the local Geth devnet defaults.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck disable=SC2034  # used by scripts that source this lib
 HARNESS="${REPO_ROOT}/testing/openclaw-config/openclaw_harness.sh"
 
 ensure_rmpc_built() {

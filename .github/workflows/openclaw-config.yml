@@ -50,6 +50,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-rmpc-
 
+      - name: Shellcheck
+        run: shellcheck -x testing/openclaw-config/*.sh
+
       - name: Build rmpc
         run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
