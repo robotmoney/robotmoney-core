@@ -172,5 +172,22 @@ fn get_vault_against_fork_envelope_contract() {
         "envelope `source` must be `json_rpc`: {v}"
     );
 
+    // Envelope partial shape.
+    assert!(
+        v.get("partial").is_some(),
+        "envelope missing `partial`: {v}"
+    );
+    assert!(v.get("errors").is_some(), "envelope missing `errors`: {v}");
+
+    // Vault data — confirm the walkthrough config points at the right contract.
+    let data = &v["data"];
+    assert_eq!(
+        data["asset"].as_str().unwrap_or("").to_lowercase(),
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "get-vault data.asset must be Base USDC"
+    );
+    assert_eq!(data["symbol"], "rmUSDC", "get-vault data.symbol drift");
+    assert_eq!(data["decimals"], 6, "get-vault data.decimals drift");
+
     drop(anvil); // explicit teardown
 }
