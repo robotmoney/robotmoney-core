@@ -42,6 +42,34 @@ implementation issue.
 
 ---
 
+## G8 — No CI exercises OpenCode headless vault read via skill
+
+**Status:** Closed by issue #136.
+
+**Gap description:** All prior CI called `rmpc` directly from Rust or shell.
+No workflow routed through `opencode run`. A broken skill description,
+misconfigured plugin path, or mismatched `--format json` schema would pass all
+existing CI.
+
+**Closure:**
+
+Workflow: `.github/workflows/opencode-headless-read.yml`
+Assertion script: `.github/scripts/assert_headless_read_transcript.py`
+
+The nightly job:
+- Installs OpenCode 1.14.29 and `rmpc` from source.
+- Boots an Anvil fork at the pinned block.
+- Invokes `opencode run` with the step-5 read-only prompt from the
+  [walkthrough](../walkthroughs/opencode-readonly-fork.md).
+- Captures the NDJSON transcript and runs the assertion script.
+- Asserts `rmpc get-vault` exit 0 with valid JSON envelope
+  (`chain_id`, `block_number`, `source`).
+- Asserts `rmpc get-gateway` exit 0 with `partial: true`.
+- Asserts no explorer/dapp HTTP references in the transcript.
+- Skip-cleans when `ANTHROPIC_API_KEY` or `RMPC_FORK_RPC_URL` is absent.
+
+---
+
 ## Adding new gaps
 
 Add rows above this line following the `G<N>` numbering. Each gap entry must
