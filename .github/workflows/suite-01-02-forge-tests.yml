@@ -104,6 +104,46 @@ jobs:
       - name: forge test (invariant / fuzz)
         run: forge test --match-path "test/invariant/**" -vvv
 
+  fork-regressions:
+    name: forge-fork-vault-regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Run on push to main/dev so the full suite is always exercised on merged commits.
+    # On PRs the job still runs but the fork tests skip cleanly when the RPC secret is
+    # absent (contributor forks without the secret stay green).
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test (fork vault regressions)
+        env:
+          # When RMPC_FORK_RPC_URL is set (secret available), the tests run against a
+          # live Base archive fork.  When the secret is absent (contributor fork / PR),
+          # every test in VaultForkRegressions.t.sol skips cleanly via the _setUp()
+          # guard — the job still passes.
+          FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+        run: |
+          forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
+
   coverage:
     name: forge-coverage-gate
     runs-on: ubuntu-latest
