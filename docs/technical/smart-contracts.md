@@ -265,7 +265,57 @@ Future client tooling should consider surfacing `getAdapterDrift()`, `isRebalanc
 
 ---
 
-## 8. References
+## 8. ERC-4626 share scale and inflation-attack mitigation
+
+### 8.1 Virtual share offset
+
+`RobotMoneyVault._decimalsOffset()` returns `18`. This configures OpenZeppelin's ERC-4626 virtual shares to `10^18` and virtual assets to `1`, using the formula:
+
+```
+shares = assets × (totalSupply + 10^18) / (totalAssets + 1)   [floor]
+assets = shares × (totalAssets + 1) / (totalSupply + 10^18)   [floor]
+```
+
+With this offset the economic cost of a donation-based first-depositor inflation attack scales as `10^18` — an attacker would need to donate more than `10^18` times the virtual floor to manipulate the share price by even 1 unit. This is economically infeasible in practice.
+
+### 8.2 Raw-share scale (for integrators)
+
+The vault's share token reports `decimals() == 6` (matching USDC). The internal raw-share count is inflated by the `10^18` virtual factor:
+
+| Operation | Fresh vault (no prior deposits) | Steady-state (balanced TVL) |
+|---|---|---|
+| `previewDeposit(1e6)` | `1e24` raw shares | ≈ `1e24` raw shares (ratio stays ~1e18 per USDC) |
+| `previewMint(1e24)` | `1e6` USDC | ≈ `1e6` USDC |
+| `previewRedeem(1e24)` | `1e6` USDC (minus exit fee) | ≈ `1e6` USDC (minus exit fee) |
+| `previewWithdraw(1e6)` | ≈ `1e24` raw shares | ≈ `1e24` raw shares |
+
+**Integrators must not assume raw share amounts equal asset amounts.** Always use `convertToShares` / `convertToAssets` for on-chain math. For display, divide `balanceOf(user)` by `10 ** vault.decimals()` (i.e. by `1e6`).
+
+### 8.3 Admin seed deposit (deploy runbook)
+
+**Before opening the vault to the public, the deployer MUST perform a seed deposit.**
+
+Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply == 0` and `totalAssets == 0` has a share price backed only by virtual shares. The seed deposit ensures that real capital anchors the price before any public depositor arrives.
+
+**Minimum seed amount:** 1,000 USDC (1,000 × 10^6 = `1_000_000_000`).
+
+**Steps:**
+
+1. Deploy `RobotMoneyVault` (and adapter contracts).
+2. Register at least one active adapter via `addAdapter`.
+3. Approve the vault to spend USDC from the admin/deployer address:
+   ```solidity
+   USDC.approve(address(vault), 1_000_000_000);
+   ```
+4. Call `vault.deposit(1_000_000_000, adminAddress)` from the admin/deployer account.
+5. Verify `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0`.
+6. Only after steps 1–5 are confirmed: open the vault to the public (e.g. increase `tvlCap`, publish the vault address, authorize agents).
+
+The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seeding admin receives rmUSDC shares proportional to the seed and can participate in future withdrawals.
+
+---
+
+## 10. References
 
 - Source files: [`../../contracts/`](../../contracts/)
 - BaseScan vault: https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd

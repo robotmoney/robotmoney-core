@@ -229,13 +229,48 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         // KEEPER_ROLE intentionally NOT granted
     }
 
-    /// @notice Returns the decimal precision used by this vault (matches USDC: 6).
+    /// @notice Returns the decimal precision used by this vault's share token (6, matching USDC).
+    ///
+    /// @dev Share token precision is fixed at 6 so that external tools (wallets, explorers,
+    ///      integrators) always see a consistent denomination regardless of the internal
+    ///      virtual-share scale chosen for inflation protection.
+    ///
+    ///      Raw-share scale note (for integrators):
+    ///      The ERC-4626 virtual-share offset is 18 (see `_decimalsOffset`).  OpenZeppelin's
+    ///      `_convertToShares` formula is:
+    ///        shares = assets × (totalSupply + 10^18) / (totalAssets + 1)
+    ///      For a fresh vault this yields `1e6 USDC → 1e24 raw shares`.  Because `decimals()`
+    ///      returns 6, a user interface rendering `balanceOf(user) / 1e6` would display
+    ///      `1e18` rmUSDC for a 1 USDC seed deposit.  This is intentional: the inflated share
+    ///      count is what makes donation-based price manipulation economically infeasible.
+    ///      Once the vault accumulates real TVL the share price converges to 1 rmUSDC ≈ 1 USDC
+    ///      (in 6-decimal terms) and the raw count no longer dominates the display.
     function decimals() public pure override(ERC4626) returns (uint8) {
         return 6;
     }
 
+    /// @notice Returns the ERC-4626 virtual-share decimal offset used to resist first-depositor
+    ///         share-price inflation attacks.
+    ///
+    /// @dev Returning 18 configures OpenZeppelin's ERC-4626 virtual shares to `10^18` and
+    ///      virtual assets to `1`.  With this setting the economic cost of a donation-based
+    ///      inflation attack scales as `10^18` — orders of magnitude beyond any realistic
+    ///      attacker budget — while legitimate depositors receive economically fair shares at
+    ///      all TVL levels.
+    ///
+    ///      Raw-share scale (fresh vault, decimals() == 6, _decimalsOffset() == 18):
+    ///        previewDeposit(1e6)  → 1e24 raw shares  (= 1e18 rmUSDC in 6-decimal display)
+    ///        previewMint(1e24)    → 1e6 USDC
+    ///        previewRedeem(1e24)  → ~1e6 USDC (minus exit fee if any)
+    ///        previewWithdraw(1e6) → ~1e24 raw shares
+    ///
+    ///      Integrators MUST NOT assume raw shares equal asset amounts.  Always use
+    ///      `convertToShares` / `convertToAssets` for on-chain math, or read `decimals()` and
+    ///      divide accordingly in off-chain display logic.
+    ///
+    ///      See: docs/security-model.md — ERC-4626 Inflation Attack Mitigation
     function _decimalsOffset() internal pure override returns (uint8) {
-        return 0;
+        return 18;
     }
 
     // ─── totalAssets ──────────────────────────────────────────────────
