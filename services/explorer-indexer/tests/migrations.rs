@@ -8,6 +8,7 @@
 mod common;
 
 use common::try_pg_fixture;
+use explorer_indexer::db::CountTable;
 
 #[tokio::test]
 async fn migrations_create_all_nine_tables() {
@@ -15,20 +16,20 @@ async fn migrations_create_all_nine_tables() {
         return;
     };
     for t in [
-        "chains",
-        "contracts",
-        "blocks",
-        "transactions",
-        "agent_deposits",
-        "agent_policies",
-        "vault_snapshots",
-        "wallet_positions",
-        "indexer_runs",
+        CountTable::Chains,
+        CountTable::Contracts,
+        CountTable::Blocks,
+        CountTable::Transactions,
+        CountTable::AgentDeposits,
+        CountTable::AgentPolicies,
+        CountTable::VaultSnapshots,
+        CountTable::WalletPositions,
+        CountTable::IndexerRuns,
     ] {
-        let n = fx.db.count(t).await.expect(t);
+        let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
         // Nothing inserted yet — just confirms the table exists and
         // the COUNT(*) plan succeeds.
-        assert_eq!(n, 0, "table {t} should be empty");
+        assert_eq!(n, 0, "table {t:?} should be empty");
     }
 }
 

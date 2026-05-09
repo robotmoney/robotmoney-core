@@ -29,6 +29,43 @@ pub struct Db {
 /// (which does not call sqlx-cli) can still apply schema.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// All nine §11 tables that can be counted.
+///
+/// Using a typed enum instead of a raw `&str` ensures no caller can
+/// pass a user-controlled string to the dynamic `FORMAT` in
+/// [`Db::count`] (issue #165).  Adding a new variant here is
+/// intentionally explicit — the compiler will flag every incomplete
+/// `match` if you add one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CountTable {
+    Chains,
+    Contracts,
+    Blocks,
+    Transactions,
+    AgentDeposits,
+    AgentPolicies,
+    VaultSnapshots,
+    WalletPositions,
+    IndexerRuns,
+}
+
+impl CountTable {
+    /// Return the SQL table name for use in `FORMAT!("… FROM {}", …)`.
+    fn as_str(self) -> &'static str {
+        match self {
+            CountTable::Chains => "chains",
+            CountTable::Contracts => "contracts",
+            CountTable::Blocks => "blocks",
+            CountTable::Transactions => "transactions",
+            CountTable::AgentDeposits => "agent_deposits",
+            CountTable::AgentPolicies => "agent_policies",
+            CountTable::VaultSnapshots => "vault_snapshots",
+            CountTable::WalletPositions => "wallet_positions",
+            CountTable::IndexerRuns => "indexer_runs",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainId(pub i64);
 
@@ -374,25 +411,16 @@ impl Db {
         Ok(row)
     }
 
-    /// Row count for any of the nine tables. Used by integration tests
-    /// to assert non-empty / no-op-on-reindex.
+    /// Row count for any of the nine §11 tables.
     ///
-    /// # Security note (issue #165)
-    ///
-    /// This method is `pub` but has no production callers — every call site
-    /// is inside `tests/`. The `format!` dynamic SQL is safe *today* because
-    /// all callers pass hard-coded string literals. However, the `pub`
-    /// visibility is a latent footgun: a future caller could pass a
-    /// user-controlled string and create a SQL injection vector with no
-    /// visible warning at the call site.
-    ///
-    /// Fix tracked in issue #165: restrict to `#[cfg(test)]` (preferred) or
-    /// replace `&str` with a typed `Table` enum.
-    pub async fn count(&self, table: &str) -> Result<i64, DbError> {
-        // table is hard-coded by callers — we never accept user input
-        // here, so this is safe. (sqlx does not support placeholders
-        // for table names.)
-        let q = format!("SELECT COUNT(*)::BIGINT FROM {}", table);
+    /// Accepts a [`CountTable`] enum value instead of a raw `&str` so
+    /// no caller — current or future — can accidentally pass a
+    /// user-controlled string into the dynamic `FORMAT` statement
+    /// (issue #165).  `sqlx` does not support placeholder-binding for
+    /// identifiers, so the `format!()` is unavoidable; the enum
+    /// closes the injection surface at the type level.
+    pub async fn count(&self, table: CountTable) -> Result<i64, DbError> {
+        let q = format!("SELECT COUNT(*)::BIGINT FROM {}", table.as_str());
         let row: (i64,) = sqlx::query_as(&q).fetch_one(&self.pool).await?;
         Ok(row.0)
     }

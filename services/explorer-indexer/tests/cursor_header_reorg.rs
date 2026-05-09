@@ -19,7 +19,7 @@ mod common;
 
 use alloy_primitives::Address;
 use common::{try_pg_fixture, StubRpcServer};
-use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
+use explorer_indexer::{db::CountTable, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
 
 /// Build the minimal stub block JSON for a given number, hash, parent_hash,
 /// and timestamp.  The stub server returns this for `eth_getBlockByNumber`.
@@ -222,7 +222,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         )
         .await
         .unwrap();
-    assert_eq!(fx.db.count("agent_deposits").await.unwrap(), 1);
+    assert_eq!(fx.db.count(CountTable::AgentDeposits).await.unwrap(), 1);
 
     pre_reorg.shutdown();
 
@@ -277,7 +277,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
     // All stale rows above the root (-1 → root at -1 means wipe all) must
     // be deleted.  The agent_deposit seeded at block 100 must be gone.
     assert_eq!(
-        fx.db.count("agent_deposits").await.unwrap(),
+        fx.db.count(CountTable::AgentDeposits).await.unwrap(),
         0,
         "stale agent_deposit must be deleted after reorg"
     );
@@ -372,7 +372,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         )
         .await
         .unwrap();
-    assert_eq!(fx.db.count("agent_deposits").await.unwrap(), 1);
+    assert_eq!(fx.db.count(CountTable::AgentDeposits).await.unwrap(), 1);
 
     pre.shutdown();
 
@@ -422,7 +422,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
     // hash → "clean root"), delete only blocks 9–10, and leave the deposit
     // at block 8 alive.
     assert_eq!(
-        fx.db.count("agent_deposits").await.unwrap(),
+        fx.db.count(CountTable::AgentDeposits).await.unwrap(),
         0,
         "stale agent_deposit at block 8 must be deleted — walk_back must not stop at missing-hash block 9"
     );

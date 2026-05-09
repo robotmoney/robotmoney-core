@@ -19,7 +19,7 @@ mod common;
 
 use alloy_primitives::Address;
 use common::try_pg_fixture;
-use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
+use explorer_indexer::{db::CountTable, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn populates_nine_tables_and_reindex_is_idempotent() {
@@ -70,44 +70,56 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
 
     // All nine tables addressable.
     for t in [
-        "chains",
-        "contracts",
-        "blocks",
-        "transactions",
-        "agent_deposits",
-        "agent_policies",
-        "vault_snapshots",
-        "wallet_positions",
-        "indexer_runs",
+        CountTable::Chains,
+        CountTable::Contracts,
+        CountTable::Blocks,
+        CountTable::Transactions,
+        CountTable::AgentDeposits,
+        CountTable::AgentPolicies,
+        CountTable::VaultSnapshots,
+        CountTable::WalletPositions,
+        CountTable::IndexerRuns,
     ] {
-        let _ = fx.db.count(t).await.expect(t);
+        let _ = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
     }
     // Heartbeat snapshot must have landed at least once.
     assert!(
-        fx.db.count("vault_snapshots").await.unwrap() >= 1,
+        fx.db.count(CountTable::VaultSnapshots).await.unwrap() >= 1,
         "at least one vault_snapshots row from heartbeat"
     );
     // Bookkeeping rows present.
-    assert_eq!(fx.db.count("chains").await.unwrap(), 1);
-    assert_eq!(fx.db.count("contracts").await.unwrap(), 2);
-    assert!(fx.db.count("indexer_runs").await.unwrap() >= 1);
+    assert_eq!(fx.db.count(CountTable::Chains).await.unwrap(), 1);
+    assert_eq!(fx.db.count(CountTable::Contracts).await.unwrap(), 2);
+    assert!(fx.db.count(CountTable::IndexerRuns).await.unwrap() >= 1);
 
     // Second run — re-entering the same `last_indexed_block` produces
     // no net inserts beyond a fresh `indexer_runs` audit row.
-    let snap_before = fx.db.count("vault_snapshots").await.unwrap();
-    let dep_before = fx.db.count("agent_deposits").await.unwrap();
-    let pol_before = fx.db.count("agent_policies").await.unwrap();
-    let blk_before = fx.db.count("blocks").await.unwrap();
-    let tx_before = fx.db.count("transactions").await.unwrap();
+    let snap_before = fx.db.count(CountTable::VaultSnapshots).await.unwrap();
+    let dep_before = fx.db.count(CountTable::AgentDeposits).await.unwrap();
+    let pol_before = fx.db.count(CountTable::AgentPolicies).await.unwrap();
+    let blk_before = fx.db.count(CountTable::Blocks).await.unwrap();
+    let tx_before = fx.db.count(CountTable::Transactions).await.unwrap();
 
     let o2 = run_once(&fx.db, &rpc, &cfg).await.expect("run_once 2");
     assert!(o2.error.is_none());
 
-    assert_eq!(fx.db.count("vault_snapshots").await.unwrap(), snap_before);
-    assert_eq!(fx.db.count("agent_deposits").await.unwrap(), dep_before);
-    assert_eq!(fx.db.count("agent_policies").await.unwrap(), pol_before);
-    assert_eq!(fx.db.count("blocks").await.unwrap(), blk_before);
-    assert_eq!(fx.db.count("transactions").await.unwrap(), tx_before);
+    assert_eq!(
+        fx.db.count(CountTable::VaultSnapshots).await.unwrap(),
+        snap_before
+    );
+    assert_eq!(
+        fx.db.count(CountTable::AgentDeposits).await.unwrap(),
+        dep_before
+    );
+    assert_eq!(
+        fx.db.count(CountTable::AgentPolicies).await.unwrap(),
+        pol_before
+    );
+    assert_eq!(fx.db.count(CountTable::Blocks).await.unwrap(), blk_before);
+    assert_eq!(
+        fx.db.count(CountTable::Transactions).await.unwrap(),
+        tx_before
+    );
 
     // Tear down the anvil child.
     drop(fork);
