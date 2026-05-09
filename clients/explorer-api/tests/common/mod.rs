@@ -15,6 +15,12 @@
 // (`.github/scripts/check_explorer_migrations.py`) rejects any
 // `clients/explorer-api/migrations/*.sql` that would re-introduce a
 // local copy.
+//
+// Chain scoping (issue #178): `start_with_seed` serves the API scoped to
+// PRIMARY_CHAIN_ID (Base). A second fixture chain (SHADOW_CHAIN_ID, Ethereum)
+// is seeded with the same agent address, tx hash, and payment_id so
+// cross-chain isolation tests can assert that Base-scoped reads never return
+// Ethereum rows.
 
 use std::net::SocketAddr;
 
@@ -34,6 +40,11 @@ use explorer_api::{router, AppState};
 /// bytes).
 pub const CANONICAL_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0001_minimum_tables.sql");
+
+/// Primary chain used by the API instance under test.
+pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
+/// Shadow chain used only to prove cross-chain isolation (issue #178).
+pub const SHADOW_CHAIN_ID: i64 = 1; // Ethereum mainnet
 
 pub struct TestServer {
     pub addr: SocketAddr,
@@ -67,7 +78,9 @@ pub async fn start_with_seed() -> TestServer {
         .await
         .expect("bind");
     let addr = listener.local_addr().expect("local_addr");
-    let app = router(AppState::new(pool.clone()));
+    // Service is scoped to PRIMARY_CHAIN_ID (Base) — shadow chain rows must
+    // never appear in any API response.
+    let app = router(AppState::new(pool.clone(), PRIMARY_CHAIN_ID));
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
@@ -92,9 +105,14 @@ fn hex_bytes(s: &str) -> Vec<u8> {
     hex::decode(s.trim_start_matches("0x")).expect("hex literal")
 }
 
-/// Deterministic fixture: one chain, one contract, one indexer run, one
-/// deposit, one tx, one vault snapshot, one agent policy. Mirrors the
-/// canonical (BYTEA-typed) schema.
+/// Deterministic fixture seeded for two chains (issue #178 cross-chain isolation).
+///
+/// Primary chain (8453 — Base): canonical fixture used by existing tests.
+/// Shadow chain (1 — Ethereum): same agent address, tx hash, and payment_id
+/// as the Base rows but with distinct field values so a bleed is detectable:
+///   - agent policy: revoked=true  (Base: revoked=false → authorized=true)
+///   - transaction:  status=0      (Base: status=1)
+///   - deposit:      amount=9999999 (Base: amount=1000000)
 async fn seed_fixture(pool: &PgPool) {
     let indexed_at = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
     let block_ts: i64 = 1_735_732_800; // 2026-01-01T12:00:00Z as unix seconds.
@@ -104,115 +122,142 @@ async fn seed_fixture(pool: &PgPool) {
     let share_receiver = hex_bytes("5555555555555555555555555555555555555555");
     let block_hash = hex_bytes("00000000000000000000000000000000000000000000000000000000000000aa");
     let parent_hash = hex_bytes("00000000000000000000000000000000000000000000000000000000000000bb");
+    // Same tx_hash and payment_id on both chains — the canonical cross-chain
+    // collision case that issue #178 must prevent from leaking.
     let tx_hash = hex_bytes("2222222222222222222222222222222222222222222222222222222222222222");
     let payment_id = hex_bytes("4444444444444444444444444444444444444444444444444444444444444444");
     let order_id = hex_bytes("6666666666666666666666666666666666666666666666666666666666666666");
 
-    sqlx::query("INSERT INTO chains (chain_id, name, rpc_label) VALUES ($1, $2, $3)")
-        .bind(8453_i64)
-        .bind("base")
-        .bind("base-mainnet")
+    // --- chains ---
+    for (cid, name, label) in [
+        (PRIMARY_CHAIN_ID, "base", "base-mainnet"),
+        (SHADOW_CHAIN_ID, "ethereum", "eth-mainnet"),
+    ] {
+        sqlx::query("INSERT INTO chains (chain_id, name, rpc_label) VALUES ($1, $2, $3)")
+            .bind(cid)
+            .bind(name)
+            .bind(label)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    // --- contracts (both chains need a contract row for vault_snapshots FK) ---
+    for cid in [PRIMARY_CHAIN_ID, SHADOW_CHAIN_ID] {
+        sqlx::query(
+            "INSERT INTO contracts (chain_id, address, kind, deployed_block) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(cid)
+        .bind(&gateway[..])
+        .bind("gateway")
+        .bind(Some(900_i64))
         .execute(pool)
         .await
         .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO contracts (chain_id, address, kind, deployed_block) \
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(8453_i64)
-    .bind(&gateway[..])
-    .bind("gateway")
-    .bind(Some(900_i64))
-    .execute(pool)
-    .await
-    .unwrap();
+    // --- indexer_runs ---
+    for cid in [PRIMARY_CHAIN_ID, SHADOW_CHAIN_ID] {
+        sqlx::query(
+            "INSERT INTO indexer_runs (chain_id, started_at, finished_at, from_block, to_block, last_indexed_block, reorg_count, rows_inserted) \
+             VALUES ($1, $2, $2, $3, $4, $4, 0, 0)",
+        )
+        .bind(cid)
+        .bind(indexed_at)
+        .bind(900_i64)
+        .bind(1000_i64)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO indexer_runs (chain_id, started_at, finished_at, from_block, to_block, last_indexed_block, reorg_count, rows_inserted) \
-         VALUES ($1, $2, $2, $3, $4, $4, 0, 0)",
-    )
-    .bind(8453_i64)
-    .bind(indexed_at)
-    .bind(900_i64)
-    .bind(1000_i64)
-    .execute(pool)
-    .await
-    .unwrap();
+    // --- blocks ---
+    for cid in [PRIMARY_CHAIN_ID, SHADOW_CHAIN_ID] {
+        sqlx::query(
+            "INSERT INTO blocks (chain_id, block_number, hash, parent_hash, timestamp) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(cid)
+        .bind(1000_i64)
+        .bind(&block_hash[..])
+        .bind(&parent_hash[..])
+        .bind(block_ts)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO blocks (chain_id, block_number, hash, parent_hash, timestamp) \
-         VALUES ($1, $2, $3, $4, $5)",
-    )
-    .bind(8453_i64)
-    .bind(1000_i64)
-    .bind(&block_hash[..])
-    .bind(&parent_hash[..])
-    .bind(block_ts)
-    .execute(pool)
-    .await
-    .unwrap();
+    // --- transactions: same tx_hash on both chains, different status ---
+    for (cid, status) in [(PRIMARY_CHAIN_ID, 1_i16), (SHADOW_CHAIN_ID, 0_i16)] {
+        sqlx::query(
+            "INSERT INTO transactions (chain_id, tx_hash, block_number, tx_index, from_addr, to_addr, status, indexed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(cid)
+        .bind(&tx_hash[..])
+        .bind(1000_i64)
+        .bind(0_i32)
+        .bind(&agent[..])
+        .bind(Some(&gateway[..]))
+        .bind(status)
+        .bind(indexed_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO transactions (chain_id, tx_hash, block_number, tx_index, from_addr, to_addr, status, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    )
-    .bind(8453_i64)
-    .bind(&tx_hash[..])
-    .bind(1000_i64)
-    .bind(0_i32)
-    .bind(&agent[..])
-    .bind(Some(&gateway[..]))
-    .bind(1_i16)
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
+    // --- agent_deposits: same agent + same payment_id, different amount ---
+    for (cid, amount) in [(PRIMARY_CHAIN_ID, "1000000"), (SHADOW_CHAIN_ID, "9999999")] {
+        sqlx::query(
+            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, indexed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC, $11, $12)",
+        )
+        .bind(cid)
+        .bind(1000_i64)
+        .bind(0_i32)
+        .bind(&tx_hash[..])
+        .bind(&payment_id[..])
+        .bind(&order_id[..])
+        .bind(&agent[..])
+        .bind(&share_receiver[..])
+        .bind(amount)
+        .bind(amount)
+        .bind(1_i64)
+        .bind(indexed_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC, $11, $12)",
-    )
-    .bind(8453_i64)
-    .bind(1000_i64)
-    .bind(0_i32)
-    .bind(&tx_hash[..])
-    .bind(&payment_id[..])
-    .bind(&order_id[..])
-    .bind(&agent[..])
-    .bind(&share_receiver[..])
-    .bind("1000000")
-    .bind("1000000")
-    .bind(1_i64)
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
+    // --- agent_policies: same agent address, different revoked status ---
+    for (cid, revoked) in [(PRIMARY_CHAIN_ID, false), (SHADOW_CHAIN_ID, true)] {
+        sqlx::query(
+            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, revoked, valid_until, max_per_payment, max_per_window, share_receiver, indexed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9::NUMERIC, $10, $11)",
+        )
+        .bind(cid)
+        .bind(900_i64)
+        .bind(0_i32)
+        .bind(&tx_hash[..])
+        .bind(&agent[..])
+        .bind(revoked)
+        .bind(Some(2_000_000_000_i64))
+        .bind(Some("5000000"))
+        .bind(Some("5000000"))
+        .bind(Some(&share_receiver[..]))
+        .bind(indexed_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
-    sqlx::query(
-        "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, revoked, valid_until, max_per_payment, max_per_window, share_receiver, indexed_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9::NUMERIC, $10, $11)",
-    )
-    .bind(8453_i64)
-    .bind(900_i64)
-    .bind(0_i32)
-    .bind(&tx_hash[..])
-    .bind(&agent[..])
-    .bind(false)
-    .bind(Some(2_000_000_000_i64))
-    .bind(Some("5000000"))
-    .bind(Some("5000000"))
-    .bind(Some(&share_receiver[..]))
-    .bind(indexed_at)
-    .execute(pool)
-    .await
-    .unwrap();
-
+    // --- vault_snapshots (Base only; shadow chain has no snapshot to seed) ---
     sqlx::query(
         "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, exit_fee_bps, tvl_cap, paused, indexed_at) \
          VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9)",
     )
-    .bind(8453_i64)
+    .bind(PRIMARY_CHAIN_ID)
     .bind(&gateway[..])
     .bind(1000_i64)
     .bind("12345678")

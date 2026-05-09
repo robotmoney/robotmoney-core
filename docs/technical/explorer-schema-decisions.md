@@ -144,13 +144,34 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
 
 - **Why explicit defer matters.** Without this list, every Phase 5 PR would invite scope creep ("can we add basket_routes while we're here?"). The defer rule is mechanical: if the consumer issue is not open and merged-into-plan, the table is not added.
 
-## 4. Impact on `docs/implementation-plan.md` §11
+## 4. Chain scoping — explorer-api is a single-chain service (issue #178)
+
+- **Decision.** `explorer-api` is a *single-chain service*: the EIP-155 chain id it reads from is set once at startup via the `EXPLORER_API_CHAIN_ID` environment variable and stored in `AppState::chain_id`. No request parameter can override the configured chain. Every SQL query that touches a `chain_id` column binds `state.chain_id` unconditionally.
+
+- **Affected queries.** Four read paths were previously ambiguous (no `chain_id` filter):
+
+  | Handler | Table | Old predicate | New predicate |
+  | --- | --- | --- | --- |
+  | `get_agent` | `agent_policies` | `WHERE agent = $1` | `WHERE chain_id = $1 AND agent = $2` |
+  | `list_agent_deposits` | `agent_deposits` | `WHERE agent = $1` | `WHERE chain_id = $1 AND agent = $2` |
+  | `get_transaction` | `transactions` | `WHERE tx_hash = $1` | `WHERE chain_id = $1 AND tx_hash = $2` |
+  | `get_deposit` | `agent_deposits` | `WHERE payment_id = $1` | `WHERE chain_id = $1 AND payment_id = $2` |
+
+  Without chain scoping, a DB that indexes multiple chains returns the first matching row regardless of chain, violating the composite-PK invariant established in §3.4.
+
+- **Why startup binding and not a per-request param.** A per-request `?chain_id=` query param would allow any caller to read any chain the indexer has populated — an information-boundary violation and a potential vector for cross-chain identity confusion. Binding at startup makes the chain an *operator-controlled* deployment parameter, not a client-controlled input.
+
+- **Enforcement.** The integration tests in `clients/explorer-api/tests/` seed a second "shadow" chain (Ethereum mainnet, id 1) with the same agent address, tx hash, and payment_id as the Base fixture but with detectably different values (`authorized=false`, `status=0`, `amount=9999999`). Four cross-chain isolation tests (`get_agent_returns_only_configured_chain_policy`, `list_agent_deposits_returns_only_configured_chain_deposits`, `get_transaction_returns_only_configured_chain_row`, `get_deposit_returns_only_configured_chain_row`) assert that none of the shadow rows leak into Base-scoped API responses.
+
+- **Constraint cited.** §11 "explorer is never the source of truth for safety decisions" — returning a deposit or policy from the wrong chain would silently corrupt any safety check that consumed the result.
+
+## 5. Impact on `docs/implementation-plan.md` §11
 
 The decisions above are consistent with §11 as written. **No §11 acceptance criterion changes.** The §11 prose can be left unchanged; this ADR provides the missing operational detail (DB engine, cadence, confirmations depth, per-table PKs, ingestion-source rule, defer triggers) that §11 deliberately left out.
 
 A one-line cross-link is added to §11 directing readers to this ADR.
 
-## 5. Newly discovered integration points and risks
+## 6. Newly discovered integration points and risks
 
 - **`Source::Indexer` variant in `rmpc`.** `rmpc-read-output-contract.md` §5 anticipates a future variant. When that lands, the explorer API must expose a "data lineage" field on every response that names the JSON-RPC endpoint family used (e.g. `"alchemy_base_archive"`) and the tip-lag at indexed-at time. Out of scope for Phase 5 implementation; track when `Source::Indexer` is filed.
 - **Multi-chain readiness.** Every PK starts with `chain_id`, but the watched-contract list and event-decoder registration are per-chain. Phase 5 ships single-chain (Base mainnet, chain id 8453); multi-chain expansion is a schema-compatible additive change but requires new ADRs for cross-chain query semantics.
@@ -159,7 +180,7 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 - **`rmpc status` migration.** `rmpc-read-output-contract.md` §5 already lists the `rmpc status` migration as deferred. No interaction with this ADR; mentioned for completeness.
 - **Phase 6 dapp coupling.** Phase 6 (Human Dapp) reads from this API for display. The API contract (decimal-string `uint256`, block-pinned, indexed-at time) must land before Phase 6 implementation begins or Phase 6 will hand-roll its own RPC reads and the explorer becomes vestigial.
 
-## 6. References
+## 7. References
 
 - `docs/implementation-plan.md` §11 — Phase 5 — Simple Web Explorer API and Database (constraints this ADR resolves).
 - `docs/implementation-plan.md` §12 — Phase 6 Human Dapp (downstream consumer).

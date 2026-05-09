@@ -18,6 +18,14 @@
 // `services/explorer-indexer/migrations/0001_minimum_tables.sql`
 // (issue #87). All address / hash columns are `BYTEA`; we hex-encode
 // on the way out to keep the JSON wire format stable.
+//
+// Chain scoping (docs/technical/explorer-schema-decisions.md §4):
+// explorer-api is a single-chain service. `AppState::chain_id` is set at
+// startup from `EXPLORER_API_CHAIN_ID` and is the sole chain filter for
+// every query. The four ambiguous reads — get_agent, list_agent_deposits,
+// get_transaction, get_deposit — all bind `state.chain_id` so rows from
+// another chain can never be returned, even when two chains share the same
+// address or identifier.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -227,10 +235,14 @@ async fn get_agent(
     // The canonical schema stores tombstones via `revoked = true`; the
     // wire format keeps the legacy `authorized` boolean (= !revoked) and
     // surfaces `max_per_window` as `cap` (the closest fit per ADR §3.5).
+    // Chain scoping: filter agent_policies to state.chain_id so a shared agent
+    // address on another chain is invisible here (issue #178).
     let row: Option<(i64, bool, Option<BigDecimal>)> = sqlx::query_as(
         "SELECT block_number, revoked, max_per_window FROM agent_policies \
-         WHERE agent = $1 ORDER BY block_number DESC, log_index DESC LIMIT 1",
+         WHERE chain_id = $1 AND agent = $2 \
+         ORDER BY block_number DESC, log_index DESC LIMIT 1",
     )
+    .bind(state.chain_id)
     .bind(&address_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
@@ -249,11 +261,15 @@ async fn list_agent_deposits(
     Path(address): Path<String>,
 ) -> ApiResult<Json<DepositsResponse>> {
     let address_bytes = decode_address_param(&address)?;
+    // Chain scoping: filter agent_deposits to state.chain_id so deposits from
+    // the same agent address on another chain are excluded (issue #178).
     let rows: Vec<DepositRow> = sqlx::query_as(
         "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits WHERE agent = $1 \
+         FROM agent_deposits \
+         WHERE chain_id = $1 AND agent = $2 \
          ORDER BY block_number DESC, log_index DESC LIMIT 500",
     )
+    .bind(state.chain_id)
     .bind(&address_bytes[..])
     .fetch_all(&state.pool)
     .await?;
@@ -276,10 +292,13 @@ async fn get_transaction(
     Path(tx_hash): Path<String>,
 ) -> ApiResult<Json<TransactionResponse>> {
     let tx_hash_bytes = decode_hash_param(&tx_hash)?;
+    // Chain scoping: filter transactions to state.chain_id so a tx hash that
+    // exists on another chain cannot be returned here (issue #178).
     let row: Option<TxRow> = sqlx::query_as(
         "SELECT chain_id, block_number, from_addr, to_addr, status, indexed_at \
-         FROM transactions WHERE tx_hash = $1 LIMIT 1",
+         FROM transactions WHERE chain_id = $1 AND tx_hash = $2 LIMIT 1",
     )
+    .bind(state.chain_id)
     .bind(&tx_hash_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
@@ -309,10 +328,14 @@ async fn get_deposit(
 ) -> ApiResult<Json<DepositResponse>> {
     // `deposit_id` is the on-chain `payment_id` (bytes32 hex).
     let payment_bytes = decode_hash_param(&deposit_id)?;
+    // Chain scoping: filter agent_deposits to state.chain_id when looking up
+    // by payment_id so a deposit on another chain with the same bytes32 id
+    // cannot collide (issue #178).
     let row: Option<DepositRow> = sqlx::query_as(
         "SELECT chain_id, block_number, log_index, tx_hash, payment_id, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits WHERE payment_id = $1 LIMIT 1",
+         FROM agent_deposits WHERE chain_id = $1 AND payment_id = $2 LIMIT 1",
     )
+    .bind(state.chain_id)
     .bind(&payment_bytes[..])
     .fetch_optional(&state.pool)
     .await?;
