@@ -31,6 +31,7 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
+use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, PartialBuilder};
 use crate::rpc::{RawLog, RpcClient};
 
@@ -168,11 +169,23 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
 
     match outcome {
         Ok(((chain_id, block_number), Some(found))) => {
+            let network_env = NetworkEnv::from_chain_id(chain_id);
+            log::info!(
+                "rmpc status: network environment: {} (chain_id={})",
+                network_env.human_label(),
+                chain_id
+            );
             let env = PartialBuilder::new(chain_id, block_number, found).finish();
             emit(&env, pretty);
             EXIT_OK
         }
         Ok(((chain_id, block_number), None)) => {
+            let network_env = NetworkEnv::from_chain_id(chain_id);
+            log::info!(
+                "rmpc status: network environment: {} (chain_id={})",
+                network_env.human_label(),
+                chain_id
+            );
             // Not-found is a valid query result. Wrap in the shared envelope
             // so callers get chain_id/block_number/source on every response,
             // consistent with get-deposit/get-tx not-found behavior.

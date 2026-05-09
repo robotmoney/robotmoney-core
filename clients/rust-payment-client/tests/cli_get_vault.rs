@@ -162,6 +162,7 @@ async fn get_vault_clean_envelope_with_share_price() {
     assert_eq!(v["chain_id"], chain_id);
     assert_eq!(v["block_number"], block_no);
     assert_eq!(v["source"], "json_rpc");
+    assert_eq!(v["network_env"], "local_devnet");
     assert_eq!(v["partial"], false);
 
     let d = &v["data"];

@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::gateway::MockUsdc;
+use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, RpcClient};
 
@@ -120,6 +121,12 @@ pub fn run(config_path: &Path, owner_hex: &str, spender_hex: &str, pretty: bool)
 
     match result {
         Ok(env) => {
+            let network_env = NetworkEnv::from_chain_id(env.chain_id);
+            log::info!(
+                "rmpc get-allowance: network environment: {} (chain_id={})",
+                network_env.human_label(),
+                env.chain_id
+            );
             emit(&env, pretty);
             EXIT_OK
         }

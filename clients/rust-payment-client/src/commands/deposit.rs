@@ -39,6 +39,7 @@ use crate::errors::RmpcError;
 use crate::fees::compute_fees;
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
+use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::policy::{Preflight, PreflightInputs};
 use crate::rpc::RpcClient;
@@ -250,13 +251,22 @@ pub fn run(args: Args) -> i32 {
         tx_hash: None,
         payment_id: None,
     };
+    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
     log::info!(
-        "deposit: starting agent={} order_id={} amount={} chain_id={}",
+        "deposit: starting agent={} order_id={} amount={} chain_id={} network_env={}",
         audit.agent,
         audit.order_id,
         audit.amount,
-        audit.chain_id
+        audit.chain_id,
+        network_env.as_str()
     );
+    log::info!(
+        "deposit: network environment: {}",
+        network_env.human_label()
+    );
+    if let Some(warn) = network_env.production_warning() {
+        log::warn!("deposit: {warn}");
+    }
 
     // State dir for the per-agent lock + replay cache. Resolved via
     // `Config::resolve_state_dir`: env (`RMPC_STATE_DIR`) → TOML

@@ -36,6 +36,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
+use crate::network_env::NetworkEnv;
 use crate::read_output::{Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, RpcClient};
 
@@ -99,6 +100,12 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
     };
 
+    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
+    log::info!(
+        "rmpc get-gateway: network environment: {} (chain_id={})",
+        network_env.human_label(),
+        cfg.chain_id
+    );
     let env = match rt.block_on(read_gateway(&rpc, &cfg, gateway_addr)) {
         Ok(env) => env,
         Err(e) => {

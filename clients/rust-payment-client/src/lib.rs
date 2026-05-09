@@ -15,6 +15,7 @@ pub mod errors;
 pub mod fees;
 pub mod gateway;
 pub mod logging;
+pub mod network_env;
 pub mod nonce;
 pub mod policy;
 pub mod read_output;

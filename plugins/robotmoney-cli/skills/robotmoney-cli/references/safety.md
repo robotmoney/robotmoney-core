@@ -98,6 +98,23 @@ an explicit operator action expressed in the config:
   not retry, do not "wait and see", do not advise the user to disable the
   check. Surface and stop.
 
+## Network environment label
+
+All `rmpc` outputs include a machine-readable `network_env` field derived from
+the chain id at query time. The stable string values are:
+
+| `network_env`      | Chain id | Description                        |
+|--------------------|----------|------------------------------------|
+| `local_devnet`     | 31337    | Anvil / local devnet               |
+| `rm_testnet`       | 84532    | Robot Money testnet (Base Sepolia) |
+| `production_base`  | 8453     | Production Base mainnet            |
+| `unknown`          | other    | Unrecognised chain                 |
+
+Agents MUST include the `network_env` label in every summarized response.
+When `network_env == "production_base"`, agents MUST emit the production
+warning before any write action. Unknown chain ids must be reported verbatim;
+they do not bypass chain-id or code-hash checks.
+
 ## Operator surfaces
 
 These refusals are not the agent's to override:

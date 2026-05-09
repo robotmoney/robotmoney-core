@@ -58,6 +58,8 @@
 
 use serde::{Serialize, Serializer};
 
+use crate::network_env::NetworkEnv;
+
 /// Source of a read response. Locked to JSON-RPC for §9; future variants
 /// (e.g. `Indexer`) are explicitly out of scope and would require a new
 /// dev-scout to extend the contract.
@@ -111,6 +113,13 @@ pub struct Envelope<T: Serialize> {
     pub block_number: u64,
     /// Where the read came from. Locked to [`Source::JsonRpc`] in §9.
     pub source: Source,
+    /// Machine-readable network environment label derived from [`chain_id`].
+    ///
+    /// Stable values: `"local_devnet"`, `"rm_testnet"`, `"production_base"`,
+    /// `"unknown"`. Consumers MUST NOT match on the integer `chain_id`; they
+    /// SHOULD match on this string so the mapping can be extended without
+    /// breaking consumers.
+    pub network_env: NetworkEnv,
     /// `true` if any sub-read in a multi-read command failed. `false`
     /// for single-read commands and for fully-successful multi-reads.
     pub partial: bool,
@@ -177,6 +186,7 @@ impl<T: Serialize> PartialBuilder<T> {
             chain_id: self.chain_id,
             block_number: self.block_number,
             source: Source::JsonRpc,
+            network_env: NetworkEnv::from_chain_id(self.chain_id),
             partial: !self.errors.is_empty(),
             errors: self.errors,
             data: self.data,
@@ -245,6 +255,7 @@ mod tests {
         assert_eq!(v["chain_id"], 8453);
         assert_eq!(v["block_number"], 12_345_678);
         assert_eq!(v["source"], "json_rpc");
+        assert_eq!(v["network_env"], "production_base");
         assert_eq!(v["partial"], false);
         assert!(v["errors"].as_array().unwrap().is_empty());
     }
@@ -256,8 +267,27 @@ mod tests {
         let env = b.finish();
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(v["partial"], true);
+        assert_eq!(v["network_env"], "production_base");
         assert_eq!(v["errors"][0]["field"], "vault.totalAssets");
         assert_eq!(v["errors"][0]["message"], "eth_call reverted: 0x");
+    }
+
+    #[test]
+    fn envelope_network_env_reflects_chain_id() {
+        // Local devnet (31337)
+        let env: Envelope<EmptyData> = PartialBuilder::new(31337, 1, EmptyData {}).finish();
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["network_env"], "local_devnet");
+
+        // RM testnet (84532)
+        let env: Envelope<EmptyData> = PartialBuilder::new(84532, 1, EmptyData {}).finish();
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["network_env"], "rm_testnet");
+
+        // Unknown chain
+        let env: Envelope<EmptyData> = PartialBuilder::new(424_242, 1, EmptyData {}).finish();
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["network_env"], "unknown");
     }
 
     #[test]

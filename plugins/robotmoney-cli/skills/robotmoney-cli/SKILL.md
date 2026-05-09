@@ -113,6 +113,37 @@ The agent must surface — not suppress — these refusals:
 
 See [`references/safety.md`](references/safety.md) for the full table.
 
+## Network environment label
+
+Every `rmpc` command result includes a stable `network_env` field that
+identifies the active chain. Agents MUST report this label in every summarized
+response — do not omit it or substitute the raw `chain_id` integer.
+
+Stable label values:
+
+| `network_env` value  | Meaning                                    |
+|----------------------|--------------------------------------------|
+| `local_devnet`       | Anvil / local devnet (chain id 31337)      |
+| `rm_testnet`         | Robot Money testnet — Base Sepolia (84532) |
+| `production_base`    | Production Base mainnet (8453)             |
+| `unknown`            | Unrecognised chain id                      |
+
+When `network_env == "production_base"`, agents MUST surface the following
+warning before recommending or describing any write action:
+
+> **WARNING: connected to production Base mainnet — real assets are at risk.**
+
+The warning must appear in every agent response that summarizes a deposit,
+status, or self-check result issued against production Base.
+
+For read-only commands (`get-vault`, `get-gateway`, `get-agent`, `get-balance`,
+`get-allowance`, `get-deposit`, `get-tx`), the agent should note the
+`network_env` label in its response summary but does not need to gate on it.
+
+Unknown chain ids (`network_env == "unknown"`) must be surfaced verbatim; the
+agent must not bypass existing chain-id or code-hash refusals and must not
+assume such a chain is safe.
+
 ## Fork-vs-mainnet
 
 Default to fork or local devnet. Mainnet operation requires an explicit,

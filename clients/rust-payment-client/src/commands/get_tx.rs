@@ -32,6 +32,7 @@ use alloy_primitives::B256;
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU128, DecimalU256, Envelope, PartialBuilder};
 use crate::rpc::RpcClient;
 
@@ -143,6 +144,12 @@ pub fn run(config_path: &Path, tx_hash_hex: &str, pretty: bool) -> i32 {
 
     match outcome {
         Ok(Some(env)) => {
+            let network_env = NetworkEnv::from_chain_id(env.chain_id);
+            log::info!(
+                "rmpc get-tx: network environment: {} (chain_id={})",
+                network_env.human_label(),
+                env.chain_id
+            );
             emit(&env, pretty);
             EXIT_OK
         }

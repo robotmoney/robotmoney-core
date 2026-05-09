@@ -36,6 +36,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::gateway::{MockVault, RobotMoneyGateway};
+use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, RpcClient};
 
@@ -140,6 +141,12 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
     };
 
+    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
+    log::info!(
+        "rmpc get-vault: network environment: {} (chain_id={})",
+        network_env.human_label(),
+        cfg.chain_id
+    );
     let env = match rt.block_on(read_vault(&rpc, gateway_addr, vault_addr)) {
         Ok(e) => e,
         Err(e) => {

@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::errors::RmpcError;
+use crate::network_env::NetworkEnv;
 use crate::policy::{Preflight, PreflightInputs, PreflightReport};
 use crate::rpc::RpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
@@ -40,6 +41,11 @@ pub struct SelfCheckOutput {
     pub selected_backend: SignerBackendKind,
     pub agent_address: String,
     pub chain_id: u64,
+    /// Machine-readable network environment label derived from `chain_id`.
+    ///
+    /// Stable values: `"local_devnet"`, `"rm_testnet"`, `"production_base"`,
+    /// `"unknown"`. Consumers MUST NOT match on `chain_id` directly.
+    pub network_env: NetworkEnv,
     pub gateway: String,
     pub software_fallback_allowed: bool,
     pub key_exportable: bool,
@@ -238,10 +244,21 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
     };
 
+    let network_env = NetworkEnv::from_chain_id(chain_id);
+    log::info!(
+        "rmpc self-check: network environment: {} (chain_id={})",
+        network_env.human_label(),
+        chain_id
+    );
+    if let Some(warn) = network_env.production_warning() {
+        log::warn!("rmpc self-check: {warn}");
+    }
+
     let out = SelfCheckOutput {
         selected_backend: backend,
         agent_address: format!("{agent_address:#x}"),
         chain_id,
+        network_env,
         gateway: cfg.gateway_address.clone(),
         software_fallback_allowed: cfg.signer.allow_software_fallback,
         // The MVP only ships the software backend; capability flags below
@@ -324,6 +341,53 @@ mod tests {
         assert!(c.gateway_code_hash_match);
         assert!(!c.gateway_paused);
         assert!(c.agent_active);
+    }
+
+    #[test]
+    fn self_check_output_includes_network_env_field() {
+        use crate::network_env::NetworkEnv;
+        use crate::signer::SignerBackendKind;
+
+        let out = SelfCheckOutput {
+            selected_backend: SignerBackendKind::Software,
+            agent_address: "0xabcd".into(),
+            chain_id: 31337,
+            network_env: NetworkEnv::from_chain_id(31337),
+            gateway: "0x0001".into(),
+            software_fallback_allowed: true,
+            key_exportable: true,
+            device_bound: false,
+            timestamp: 0,
+            checks: ChecksOutput::unknown(),
+            ok: false,
+            error: None,
+        };
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["network_env"], "local_devnet");
+        assert_eq!(v["chain_id"], 31337u64);
+    }
+
+    #[test]
+    fn production_base_self_check_output_has_production_label() {
+        use crate::network_env::NetworkEnv;
+        use crate::signer::SignerBackendKind;
+
+        let out = SelfCheckOutput {
+            selected_backend: SignerBackendKind::Software,
+            agent_address: "0xabcd".into(),
+            chain_id: 8453,
+            network_env: NetworkEnv::from_chain_id(8453),
+            gateway: "0x0001".into(),
+            software_fallback_allowed: true,
+            key_exportable: true,
+            device_bound: false,
+            timestamp: 0,
+            checks: ChecksOutput::unknown(),
+            ok: false,
+            error: None,
+        };
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["network_env"], "production_base");
     }
 
     #[test]

@@ -52,6 +52,7 @@ async fn self_check_happy_path_emits_v92_report_and_exits_zero() {
         format!("{SIGNER_ADDRESS:#x}")
     );
     assert_eq!(v["chain_id"], chain_id);
+    assert_eq!(v["network_env"], "local_devnet");
     assert_eq!(
         v["gateway"].as_str().unwrap().to_lowercase(),
         format!("{GATEWAY:#x}")

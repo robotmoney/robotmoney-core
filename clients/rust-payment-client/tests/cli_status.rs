@@ -137,6 +137,7 @@ async fn status_found_emits_envelope_with_decoded_payment_record() {
     assert_eq!(v["chain_id"], chain_id);
     assert_eq!(v["block_number"], block_number);
     assert_eq!(v["source"], "json_rpc");
+    assert_eq!(v["network_env"], "local_devnet");
     assert_eq!(v["partial"], false);
     assert!(v["errors"].as_array().unwrap().is_empty());
 
@@ -195,6 +196,7 @@ async fn status_not_found_emits_envelope_with_not_found_data() {
     assert_eq!(v["chain_id"], chain_id);
     assert_eq!(v["block_number"], block_number);
     assert_eq!(v["source"], "json_rpc");
+    assert_eq!(v["network_env"], "local_devnet");
     assert_eq!(v["partial"], false);
     assert!(v["errors"].as_array().unwrap().is_empty());
 
