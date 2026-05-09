@@ -323,6 +323,181 @@ pub async fn count(&self, table: &str) -> Result<i64, DbError> {
 
 ---
 
+## Third-Pass Verification Addendum
+
+The review above was re-checked by walking the Solidity callable surface and the Rust binary/API/indexer entry paths. The original HIGH contract accounting findings still stand. The follow-up pass found the additional implementation bugs below.
+
+**Correction to Finding 1 remediation:** the recommendation to set `_decimalsOffset()` to `18` is directionally right for ERC-4626 inflation resistance, but the worked example in Finding 1 should be recalculated before implementation. OpenZeppelin's ERC-4626 virtual offset math uses virtual shares of `10 ** _decimalsOffset()` and virtual assets of `1`, so with this contract's explicit `decimals() == 6` override, a fresh `previewDeposit(1e6)` would not simply stay at `1e6` raw shares if `_decimalsOffset()` becomes `18`. The fix should choose share decimals and offset together, update tests around `previewDeposit`, `previewMint`, `previewWithdraw`, and `previewRedeem`, and document the intended raw-share scale.
+
+---
+
+### Finding 6 — MEDIUM: `rmpc` Replay Cache Key Does Not Match On-Chain `paymentId`
+
+**Files:** `clients/rust-payment-client/src/replay_cache.rs:30-49`, `clients/rust-payment-client/src/commands/deposit.rs:301-315`, `contracts/gateway/RobotMoneyGateway.sol:239-245`
+**Category:** Client idempotency / operational correctness
+**Confidence:** 0.94
+
+#### Code
+
+```rust
+// replay_cache.rs
+pub fn key(order_id: &str, idempotency_key: &str, deadline: u64) -> String {
+    format!(
+        "{}|{}|{}",
+        normalize_hex(order_id),
+        normalize_hex(idempotency_key),
+        deadline
+    )
+}
+```
+
+```solidity
+// RobotMoneyGateway.sol
+paymentId = keccak256(
+    abi.encode(
+        block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey
+    )
+);
+```
+
+#### Description
+
+The Rust replay cache is documented as a local guard that catches a previously submitted deposit before paying gas for an on-chain replay refusal. It does not actually key on the same tuple as the gateway.
+
+The gateway deliberately excludes `deadline` and includes `block.chainid`, `address(this)`, `msg.sender`, `orderId`, `amount`, and `idempotencyKey`. The local cache includes only `orderId`, `idempotencyKey`, and `deadline`.
+
+This creates both false negatives and false positives:
+
+- A normal retry with the same order/idempotency key and amount but a fresh CLI-computed deadline misses the local cache, signs, broadcasts, and then reverts on-chain with `PaymentIdAlreadyUsed`.
+- Two deposits with the same order/idempotency key and same deadline but different amounts collide locally even though the gateway would derive different `paymentId` values.
+- Reusing a state directory across chains, gateways, or agent keys can create local cache collisions that cannot occur on-chain.
+
+The on-chain protection still prevents duplicate deposits, so this is not a direct funds-loss issue. The bug is that the client-side "do not pay gas to discover the same dedupe on chain" guarantee is not true.
+
+#### Recommendation
+
+Make the cache key equal to the on-chain idempotency domain. The simplest implementation is to compute and store the same `paymentId` pre-broadcast:
+
+```text
+keccak256(abi.encode(chain_id, gateway_address, agent_address, order_id, amount, idempotency_key))
+```
+
+Then look up by that `paymentId` alone. Keep `deadline` as metadata in the JSON entry if useful for audit logs, but do not include it in the key.
+
+Also update the replay-cache tests: `different_deadline_misses` should become `same_payment_id_hits_across_deadline_changes`, and add coverage that different `amount`, `chain_id`, `gateway`, or `agent` values do not collide.
+
+---
+
+### Finding 7 — MEDIUM: Indexer Reorg Detection Is Disabled When the Cursor Block Has No Stored Header
+
+**File:** `services/explorer-indexer/src/indexer.rs:135-149`, `services/explorer-indexer/src/indexer.rs:197-203`, `services/explorer-indexer/src/indexer.rs:264-267`, `services/explorer-indexer/src/indexer.rs:273-299`
+**Category:** Indexer correctness / reorg handling
+**Confidence:** 0.90
+
+#### Code
+
+```rust
+// Reorg check only runs if there is a stored hash for last_indexed_block.
+if let Some(li) = last_indexed {
+    if let Some(stored_hash) = db.get_block_hash(cfg.chain_id, li).await? {
+        if let Some(header) = rpc.block_header(li as u64).await? {
+            if header.hash.0 != stored_hash {
+                let root = walk_back_to_match(db, rpc, cfg.chain_id, li).await?;
+                db.delete_above_block(cfg.chain_id, root).await?;
+                last_indexed = if root < 0 { None } else { Some(root) };
+                reorg_detected = true;
+            }
+        }
+    }
+}
+```
+
+```rust
+// But headers are only inserted for blocks with watched events.
+for &bn in &blocks_with_events {
+    let (header, txs) = rpc.block_with_txs(bn).await?;
+    db.insert_block(...).await?;
+}
+
+// The cursor still advances to target, even when target had no stored header.
+last_indexed_block: Some(target as i64),
+```
+
+#### Description
+
+The indexer advances `last_indexed_block` to the safe target every tick, but it only inserts `blocks` rows for blocks containing watched events. Most blocks will not contain watched Robot Money events. On the next tick, if the previous cursor block had no event, `db.get_block_hash(chain_id, last_indexed_block)` returns `None` and the reorg check silently does nothing.
+
+`walk_back_to_match` has the same problem: it treats a missing stored hash as a clean root:
+
+```rust
+} else {
+    // No stored hash for this height → already a clean root.
+    return Ok(n);
+}
+```
+
+That is not a valid reorg proof. It means a reorg can leave stale `agent_deposits`, `agent_policies`, `transactions`, and `vault_snapshots` rows in Postgres whenever the cursor sits on a no-event block, which is the common case. The API then serves stale indexed data as canonical history.
+
+#### Exploit / Failure Scenario
+
+1. Tick 1 indexes blocks `100..200`. A gateway deposit happened in block `150`, so block `150` and its event rows are stored. Block `200` had no watched event, so no `blocks` row for `200` is stored.
+2. The run records `last_indexed_block = 200`.
+3. A reorg replaces block `150`.
+4. Tick 2 checks `get_block_hash(chain_id, 200)`, gets `None`, and skips reorg recovery.
+5. The stale deposit from old block `150` remains in `agent_deposits` and can be returned by `/v1/deposits/:deposit_id` and `/v1/agents/:address/deposits`.
+
+#### Recommendation
+
+Persist at least the cursor block header (`target`) on every successful tick, even when no watched event occurred in that block. A stronger fix is to persist all safe-head cursor headers needed for reorg proofs, but the minimum is:
+
+- fetch and insert the `target` header before recording `last_indexed_block = target`;
+- make `walk_back_to_match` continue walking back on missing stored hashes instead of treating them as a clean root;
+- add an integration test where the first run advances through a no-event target block, a stored event block below it is reorged, and the next run deletes rows above the true matching root.
+
+---
+
+### Finding 8 — LOW: Explorer API Queries Cross Chain Boundaries
+
+**File:** `clients/explorer-api/src/routes.rs:211-215`, `clients/explorer-api/src/routes.rs:236-240`, `clients/explorer-api/src/routes.rs:259-263`, `clients/explorer-api/src/routes.rs:286-290`
+**Category:** API correctness / multi-chain data isolation
+**Confidence:** 0.82
+
+#### Code
+
+```rust
+// get_agent
+SELECT block_number, revoked, max_per_window FROM agent_policies
+WHERE agent = $1 ORDER BY block_number DESC, log_index DESC LIMIT 1
+
+// list_agent_deposits
+SELECT ... FROM agent_deposits WHERE agent = $1
+
+// get_transaction
+SELECT ... FROM transactions WHERE tx_hash = $1 LIMIT 1
+
+// get_deposit
+SELECT ... FROM agent_deposits WHERE payment_id = $1 LIMIT 1
+```
+
+#### Description
+
+The indexer schema is explicitly multi-chain: every relevant table includes `chain_id`, and the `/v1/chains/:chain_id/contracts` endpoint already exposes chain-scoped reads. Several other API routes ignore `chain_id` entirely.
+
+If the same database ever stores more than one chain, these endpoints can return the wrong chain's latest policy, deposit list, transaction, or deposit. The most likely user-visible failure is `/v1/agents/:address`, because the same EOA address often exists on many EVM chains and the query orders only by block number/log index across all chains.
+
+This is not a current single-chain deployment vulnerability, but it is a real implementation bug relative to the schema and route set.
+
+#### Recommendation
+
+Choose and enforce one API contract:
+
+- If the service is single-chain, configure a server-side `chain_id` in `AppState` and bind it in every query.
+- If the service is multi-chain, add `chain_id` to the affected paths or query parameters and require it for ambiguous resources.
+
+At minimum, add tests with two chains sharing the same agent address and prove `/v1/agents/:address` cannot return the other chain's policy.
+
+---
+
 ## What the Team Got Right
 
 This section is not courtesy — these are genuine strengths worth keeping as the project scales:
@@ -345,7 +520,10 @@ This section is not courtesy — these are genuine strengths worth keeping as th
 2. **Finding 4** (MorphoAdapter withdrawal amount) — one-line accounting fix; no deployment risk.
 3. **Finding 3** (gateway CEI) — reorder six lines; add `ReentrancyGuard`. No semantic change to current behaviour.
 4. **Finding 5** (vault unpause role) — one-line change; no functional impact today but encodes the correct invariant for when the emergency key is eventually delegated to a lower-quorum holder.
-5. **Latent SQL surface** — access-scope change or test-only annotation; no deployment required.
+5. **Finding 7** (indexer reorg cursor/header bug) — fix before relying on explorer data for operator decisions; stale event rows can survive common no-event cursor ticks.
+6. **Finding 6** (`rmpc` replay-cache key mismatch) — align local idempotency with on-chain `paymentId`; this is a small client patch plus tests.
+7. **Finding 8** (API chain scoping) — fix before indexing more than one chain into the same database.
+8. **Latent SQL surface** — access-scope change or test-only annotation; no deployment required.
 
 ---
 
