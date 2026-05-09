@@ -1,0 +1,93 @@
+# Canonical: docs/implementation-plan.md §Release & distribution
+#
+# WHY THIS WORKFLOW EXISTS
+# The dapp Dockerfile already exists but there was no automated path to publish the
+# image. Operators previously had to build manually and wire VITE_* env vars by hand.
+# This workflow builds the image on every v*.*.* tag and pushes it to GHCR so that
+# operators can pull a versioned, ready-to-run image.
+#
+# WHY GHCR WITH GITHUB_TOKEN
+# GHCR is tightly integrated with GitHub repositories and does not require any
+# additional secrets. GITHUB_TOKEN is granted write:packages permission automatically
+# during a workflow run, which is sufficient to push images to the org namespace.
+#
+# WHY BUILD-TIME VITE_* ARGS ARE DEFAULTED TO PLACEHOLDERS
+# Vite inlines env vars into the static bundle at build time. The CI image is built
+# with sane zero-value defaults (localhost RPC, zero-address contracts). Operators
+# must pass their own VITE_* values when building locally via docker-compose.yml — the
+# CI image is a distributable base, not a production-configured image.
+#
+# WHY :latest IS PUSHED ALONGSIDE THE TAG
+# docker compose and helm charts frequently pin to :latest for rapid iteration.
+# Providing both :tag and :latest eliminates the need for operators to look up the
+# current version in most workflows.
+#
+# GOTCHAS
+# - The workflow only fires on v*.*.* tags, never on branch pushes or pull requests.
+# - docker/metadata-action produces both the semver tag and :latest automatically.
+# - The Dockerfile expects the build context to be the repo root (not clients/dapp/)
+#   because it COPYs from clients/dapp/ explicitly. The context is therefore set to
+#   the repo root via the build-args context.
+# - The packages: write permission is required explicitly; the default token only has
+#   contents: read.
+
+name: release-dapp
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: build-and-push-dapp-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dapp
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: clients/dapp/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_FORK_RPC_URL=http://localhost:8545
+            VITE_EXPLORER_API_URL=http://localhost:8080
+            VITE_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000000
+            VITE_VAULT_ADDRESS=0x0000000000000000000000000000000000000000
+            VITE_GATEWAY_CODE_HASH_VERIFIED=false
+            VITE_ENV_CLASS=fork
+            VITE_USE_MOCK_WALLET=false
+            VITE_BROWSER_KEYGEN=false
+            VITE_HISTORY_PANE=false

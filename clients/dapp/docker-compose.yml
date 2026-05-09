@@ -1,0 +1,40 @@
+# Canonical: docs/implementation-plan.md §Release & distribution
+#
+# Operator one-command local deployment for the human dapp.
+#
+# Usage:
+#   cp .env.example .env          # fill in VITE_* values
+#   docker compose --env-file .env up
+#
+# The dapp will be available at http://localhost:5173
+#
+# All VITE_* variables are passed as build args to the Dockerfile. Vite
+# inlines them into the static bundle at build time — they are NOT runtime
+# environment variables. Any change to VITE_* vars requires a rebuild:
+#
+#   docker compose --env-file .env up --build
+#
+# The image can also be pulled from GHCR instead of built locally:
+#   IMAGE=ghcr.io/<org>/dapp:<version> docker compose up
+#
+# Note: this compose file is for standalone dapp deployment only.
+# For the full devnet stack (anvil + indexer + dapp), see issue #146.
+
+services:
+  dapp:
+    build:
+      context: ../..
+      dockerfile: clients/dapp/Dockerfile
+      args:
+        VITE_FORK_RPC_URL: ${VITE_FORK_RPC_URL:-http://localhost:8545}
+        VITE_EXPLORER_API_URL: ${VITE_EXPLORER_API_URL:-http://localhost:8080}
+        VITE_GATEWAY_ADDRESS: ${VITE_GATEWAY_ADDRESS:-0x0000000000000000000000000000000000000000}
+        VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:-0x0000000000000000000000000000000000000000}
+        VITE_GATEWAY_CODE_HASH_VERIFIED: ${VITE_GATEWAY_CODE_HASH_VERIFIED:-false}
+        VITE_ENV_CLASS: ${VITE_ENV_CLASS:-fork}
+        VITE_USE_MOCK_WALLET: ${VITE_USE_MOCK_WALLET:-false}
+        VITE_BROWSER_KEYGEN: ${VITE_BROWSER_KEYGEN:-false}
+        VITE_HISTORY_PANE: ${VITE_HISTORY_PANE:-false}
+    ports:
+      - "5173:5173"
+    restart: unless-stopped
