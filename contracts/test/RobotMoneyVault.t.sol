@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: none — Foundry tests for contracts/RobotMoneyVault.sol
 // Covers: issue #160 — ERC-4626 decimals offset and first-depositor inflation protection
+//         issue #161 — include idle vault USDC balance in totalAssets()
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -396,5 +397,102 @@ contract RobotMoneyVaultTest is Test {
 
         // With no exit fee, assetsOut should equal amount (minus rounding).
         assertApproxEqAbs(assetsOut, amount, 1, "redeem round-trip");
+    }
+
+    // ─── Issue #161: idle vault USDC reflected in totalAssets ─────────────────
+
+    /// @notice A direct USDC transfer to the vault (not via deposit) must be
+    ///         included in totalAssets().
+    function test_totalAssets_includesIdleVaultBalance() public {
+        // Seed via normal deposit so there is a baseline.
+        uint256 depositAmount = 10_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+
+        uint256 totalBefore = vault.totalAssets();
+
+        // Send USDC directly to the vault (models an attacker or routing overflow).
+        uint256 idleAmount = 5_000 * ONE_USDC;
+        usdc.mint(address(vault), idleAmount);
+
+        uint256 totalAfter = vault.totalAssets();
+        assertEq(totalAfter, totalBefore + idleAmount, "idle USDC must be counted in totalAssets");
+    }
+
+    /// @notice TVL cap must be enforced against the sum of adapter balances AND idle vault
+    ///         balance, so that idle USDC cannot be used to bypass the cap.
+    function test_tvlCap_enforcedIncludingIdleBalance() public {
+        // Deploy a vault with a tight TVL cap: 20 000 USDC.
+        uint256 cap = 20_000 * ONE_USDC;
+        VaultHarness tightVault = new VaultHarness(
+            IERC20(address(usdc)),
+            cap,
+            cap, // perDepositCap matches tvlCap
+            0,
+            feeRecipient,
+            admin
+        );
+        MockAdapter tightAdapter = new MockAdapter(address(usdc), address(tightVault));
+        vm.prank(admin);
+        tightVault.addAdapter(address(tightAdapter), 10_000);
+
+        // Deposit 15 000 USDC — within cap.
+        usdc.mint(alice, cap);
+        vm.prank(alice);
+        usdc.approve(address(tightVault), type(uint256).max);
+        vm.prank(alice);
+        tightVault.deposit(15_000 * ONE_USDC, alice);
+
+        // Directly send 4 000 USDC idle to the vault (e.g. from an external transfer).
+        usdc.mint(address(tightVault), 4_000 * ONE_USDC);
+
+        // totalAssets is now 15 000 (adapter) + 4 000 (idle) = 19 000.
+        assertEq(tightVault.totalAssets(), 19_000 * ONE_USDC, "totalAssets must include idle");
+
+        // A further deposit of 2 000 would push total to 21 000 > 20 000 cap → must revert.
+        usdc.mint(bob, 2_000 * ONE_USDC);
+        vm.prank(bob);
+        usdc.approve(address(tightVault), type(uint256).max);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.TVLCapExceeded.selector));
+        tightVault.deposit(2_000 * ONE_USDC, bob);
+    }
+
+    /// @notice UnroutedDeposit event is emitted when routing cannot place all assets
+    ///         (all adapter caps exhausted).
+    function test_routeDeposit_emitsUnroutedDeposit_whenCapsExhausted() public {
+        // Deploy a vault whose single adapter has a 50% cap and is already at cap.
+        // We set up a scenario where the adapter is already at 50% of totalAfter,
+        // so pass 2 also finds no headroom and remaining > 0.
+
+        // Use a cap-capped adapter: capBps = 5000 (50%)
+        VaultHarness capVault = new VaultHarness(
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+        );
+        MockAdapter capAdapter = new MockAdapter(address(usdc), address(capVault));
+        vm.prank(admin);
+        capVault.addAdapter(address(capAdapter), 5000); // 50% cap
+
+        usdc.mint(alice, 200_000 * ONE_USDC);
+        vm.prank(alice);
+        usdc.approve(address(capVault), type(uint256).max);
+
+        // First deposit: 100 000 USDC. Adapter cap is 50% = 50 000.
+        // pass1 routes 50 000, remaining=50 000. pass2 finds adapter already at cap.
+        // So 50 000 should be unrouted.
+        vm.expectEmit(true, true, true, true, address(capVault));
+        emit RobotMoneyVault.UnroutedDeposit(50_000 * ONE_USDC);
+        vm.prank(alice);
+        capVault.deposit(100_000 * ONE_USDC, alice);
+
+        // The idle USDC in the vault should be 50 000.
+        assertEq(
+            usdc.balanceOf(address(capVault)),
+            50_000 * ONE_USDC,
+            "idle USDC must remain in vault when unrouted"
+        );
+
+        // totalAssets includes the idle portion.
+        assertEq(capVault.totalAssets(), 100_000 * ONE_USDC, "totalAssets must include idle USDC");
     }
 }

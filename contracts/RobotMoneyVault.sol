@@ -163,6 +163,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     );
     /// @notice Emitted when the vault is permanently shut down.
     event Shutdown();
+    /// @notice Emitted when a deposit cannot be fully routed into adapters (e.g. all caps are full).
+    /// @param amount USDC that remains idle in the vault after both routing passes.
+    event UnroutedDeposit(uint256 amount);
 
     // ─── Errors ────────────────────────────────────────────────────────
 
@@ -275,9 +278,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── totalAssets ──────────────────────────────────────────────────
 
-    /// @notice Sum of live USDC values reported by all active strategy adapters.
+    /// @notice Sum of USDC held directly in the vault (idle) plus all active adapter balances.
+    /// @dev Idle USDC can accumulate via direct transfers or when `_routeDeposit` cannot place
+    ///      all assets (e.g. all adapter caps are exhausted). Including it here prevents NAV
+    ///      understatement and the associated TVL-cap bypass / share-price dilution described
+    ///      in docs/code-reviews/code-review-codex-20260508-1522.md — Finding 2.
     function totalAssets() public view override returns (uint256) {
-        uint256 sum = 0;
+        uint256 sum = IERC20(asset()).balanceOf(address(this)); // include idle vault balance
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (adapters[i].active) sum += adapters[i].adapter.totalAssets();
@@ -308,7 +315,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         // balance-sensitive strict equality that reentrancy could manipulate.
         if (amount == 0) return;
 
-        uint256 totalAfter = totalAssets() + amount;
+        // `totalAssets()` now includes the idle vault balance (the deposited USDC already sits
+        // in the vault at this point), so it already accounts for `amount`. Do NOT add `amount`
+        // again — that would double-count it.
+        uint256 totalAfter = totalAssets();
         uint256 targetBps = _targetBpsFor();
         uint256 remaining = amount;
         uint256 len = adapters.length;
@@ -340,6 +350,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
                 remaining -= allocation;
             }
         }
+
+        // Any USDC still unrouted (e.g. all adapter caps exhausted) stays idle in the vault.
+        // Emit an event so off-chain monitors can detect and react (e.g. trigger rebalance).
+        if (remaining > 0) emit UnroutedDeposit(remaining);
     }
 
     function _allocateTo(uint256 i, uint256 amount) internal {
