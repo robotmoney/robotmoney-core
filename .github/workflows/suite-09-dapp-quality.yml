@@ -1,0 +1,85 @@
+# Canonical: docs/testing/ci-suites.md §9
+#
+# WHY THIS SUITE EXISTS
+# The dApp handles key generation in the browser. A type error in the keygen path or a
+# build regression that ships undefined where a key should be can silently fail for
+# users without any visible error. This suite is the gate that ensures the dApp ships
+# as valid TypeScript, passes ESLint's security rules (no key material leaking to DOM
+# via console.log), and produces a working production bundle — all without needing a
+# running chain.
+#
+# WHY ALL STEPS ARE IN ONE JOB
+# These checks are fast (~3 min total) and always run together. Splitting them into
+# separate jobs would add GitHub Actions scheduling overhead for no parallelism benefit.
+# The one exception where splitting would matter is if tsc and vitest were independent
+# slow steps, but they are not.
+#
+# WHY --frozen-lockfile
+# The lockfile is the contract between the repo and the exact dependency versions that
+# were tested. Without --frozen-lockfile, pnpm may silently upgrade transitive
+# dependencies on every CI run, making builds non-reproducible and masking
+# dependency-introduced regressions.
+#
+# GOTCHAS
+# - pnpm fmt runs Prettier in check mode. If a developer commits auto-formatted code
+#   from an IDE that uses a different Prettier version, this step will fail with a diff.
+#   The fix is always to run pnpm fmt locally (not to bump the Prettier version in CI).
+# - pnpm build produces a Vite bundle. A successful build does not mean the app works
+#   at runtime — it only means the bundle is syntactically valid. The E2E tests in
+#   suite 10 cover runtime correctness.
+# - Node 22 is pinned. If a dependency drops Node 22 support, this step will fail at
+#   install time with a peer dependency error, not at test time.
+
+name: dapp-lint-typecheck-vitest-build
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - ".github/workflows/suite-09-dapp-quality.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - ".github/workflows/suite-09-dapp-quality.yml"
+  workflow_dispatch:
+
+jobs:
+  lint-build:
+    name: dapp-lint-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Prettier check
+        run: pnpm fmt
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: TypeScript type check
+        run: pnpm exec tsc -b
+
+      - name: Vitest
+        run: pnpm test
+
+      - name: Production build
+        run: pnpm build

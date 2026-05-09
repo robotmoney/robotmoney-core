@@ -1,0 +1,77 @@
+# Canonical: docs/testing/ci-suites.md §6
+#
+# WHY THIS SUITE EXISTS
+# rmpc's core logic (calldata encoding, preflight checks, nonce management, fee guards)
+# must be correct before any devnet or fork test runs. Unit tests here are fast (<2 min),
+# require no infrastructure, and catch the class of bugs that are most common during
+# active development: off-by-one in calldata packing, wrong rejection logic, JSON schema
+# drift. Suite 7 (devnet integration) depends on this suite being green — there is no
+# point paying for a Docker boot if the binary itself is broken.
+#
+# WHY cargo test --lib (NOT --tests)
+# --lib runs only the in-crate unit tests, not the integration test binaries in tests/.
+# The integration tests require a running chain and belong in suite 7. Running them here
+# would either fail (no chain) or silently skip, which is misleading.
+#
+# GOTCHAS
+# - The Cargo cache is scoped to clients/rust-payment-client/target, not the workspace
+#   root. If you add a workspace-level dependency that affects rmpc, the cache key
+#   (based on clients/rust-payment-client/Cargo.toml) may not invalidate. Widen the
+#   cache path or add the workspace Cargo.lock to the key if cross-crate cache misses
+#   become a problem.
+# - clippy -D warnings here and in suite 4 may produce different results because suite 4
+#   runs --all-features while this job runs with default features. A warning gated behind
+#   a feature flag will only appear in suite 4.
+
+name: rust-client-unit-tests
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/suite-06-rmpc-unit.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/suite-06-rmpc-unit.yml"
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: rmpc-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: cargo fmt --check
+        working-directory: clients/rust-payment-client
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: clients/rust-payment-client
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test --lib
+        working-directory: clients/rust-payment-client
+        run: cargo test --lib -- --nocapture

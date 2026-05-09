@@ -27,23 +27,23 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Roles ─────────────────────────────────────────────────────────
 
-    bytes32 public constant ADMIN_ROLE     = keccak256("ADMIN_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 public constant KEEPER_ROLE    = keccak256("KEEPER_ROLE");      // not granted at launch
+    bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE"); // not granted at launch
 
     // ─── Immutable bytecode constants — no role can change ─────────────
 
-    uint256 public constant MAX_EXIT_FEE_BPS             = 100;       // 1% absolute ceiling
-    uint256 public constant MAX_ADAPTERS                 = 20;
-    uint16  public constant MAX_BPS                      = 10000;
-    uint16  public constant MAX_REBALANCE_BPS_CEILING    = 5000;      // keeper can never move >50% per call
+    uint256 public constant MAX_EXIT_FEE_BPS = 100; // 1% absolute ceiling
+    uint256 public constant MAX_ADAPTERS = 20;
+    uint16 public constant MAX_BPS = 10000;
+    uint16 public constant MAX_REBALANCE_BPS_CEILING = 5000; // keeper can never move >50% per call
     uint256 public constant MIN_REBALANCE_INTERVAL_FLOOR = 1 hours;
 
     // ─── Adapter registry ──────────────────────────────────────────────
 
     struct AdapterInfo {
         IStrategyAdapter adapter;
-        uint16 capBps;          // max allocation % out of MAX_BPS — also acts as ramp control
+        uint16 capBps; // max allocation % out of MAX_BPS — also acts as ramp control
         bool active;
     }
     AdapterInfo[] public adapters;
@@ -55,12 +55,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     uint256 public exitFeeBps;
     address public feeRecipient;
 
-    bool public shutdown;                    // irreversible — once true, stays true forever
+    bool public shutdown; // irreversible — once true, stays true forever
 
     // ─── Rebalance throttling ──
 
-    uint16  public maxRebalanceBpsPerCall;   // initial: 2500 (25%)
-    uint256 public minRebalanceInterval;     // initial: 12 hours
+    uint16 public maxRebalanceBpsPerCall; // initial: 2500 (25%)
+    uint256 public minRebalanceInterval; // initial: 12 hours
     uint256 public lastRebalanceAt;
 
     // ─── Events ────────────────────────────────────────────────────────
@@ -74,13 +74,21 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     event Rebalanced(uint256 totalMoved);
     event MaxRebalanceBpsUpdated(uint16 oldBps, uint16 newBps);
     event MinRebalanceIntervalUpdated(uint256 oldInterval, uint256 newInterval);
-    event ExitFeeCharged(address indexed owner, address indexed receiver, uint256 grossAssets, uint256 fee, uint256 netAssets);
+    event ExitFeeCharged(
+        address indexed owner,
+        address indexed receiver,
+        uint256 grossAssets,
+        uint256 fee,
+        uint256 netAssets
+    );
     event TvlCapUpdated(uint256 oldCap, uint256 newCap);
     event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event EmergencyWithdrawCalled();
-    event EmergencyWithdrawAdapterCalled(uint256 indexed index, address indexed adapter, uint256 amount, bool success);
+    event EmergencyWithdrawAdapterCalled(
+        uint256 indexed index, address indexed adapter, uint256 amount, bool success
+    );
     event Shutdown();
 
     // ─── Errors ────────────────────────────────────────────────────────
@@ -126,7 +134,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         address _feeRecipient,
         address _admin
     ) ERC4626(_asset) ERC20("Robot Money USDC", "rmUSDC") {
-        if (_feeRecipient == address(0) || _admin == address(0)) revert ZeroAddress();
+        if (_feeRecipient == address(0) || _admin == address(0)) {
+            revert ZeroAddress();
+        }
         if (_exitFeeBps > MAX_EXIT_FEE_BPS) revert InvalidFee();
 
         tvlCap = _tvlCap;
@@ -134,8 +144,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         exitFeeBps = _exitFeeBps;
         feeRecipient = _feeRecipient;
 
-        maxRebalanceBpsPerCall = 2500;       // 25%
-        minRebalanceInterval   = 12 hours;
+        maxRebalanceBpsPerCall = 2500; // 25%
+        minRebalanceInterval = 12 hours;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
@@ -146,9 +156,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         // KEEPER_ROLE intentionally NOT granted
     }
 
-    function decimals() public pure override(ERC4626) returns (uint8) { return 6; }
+    function decimals() public pure override(ERC4626) returns (uint8) {
+        return 6;
+    }
 
-    function _decimalsOffset() internal pure override returns (uint8) { return 0; }
+    function _decimalsOffset() internal pure override returns (uint8) {
+        return 0;
+    }
 
     // ─── totalAssets ──────────────────────────────────────────────────
 
@@ -163,12 +177,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Deposit (atomic deposit-to-yield) ────────────────────────────
 
-    function _deposit(
-        address caller,
-        address receiver,
-        uint256 assets,
-        uint256 shares
-    ) internal override whenNotPaused nonReentrant {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
+        internal
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (shutdown) revert VaultShutdown();
         if (assets > perDepositCap) revert PerDepositCapExceeded();
         if (totalAssets() + assets > tvlCap) revert TVLCapExceeded();
@@ -179,6 +193,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     }
 
     function _routeDeposit(uint256 amount) internal {
+        // slither-disable-next-line incorrect-equality
+        // Justification: `amount == 0` is a safe early-return guard, not a
+        // balance-sensitive strict equality that reentrancy could manipulate.
         if (amount == 0) return;
 
         uint256 totalAfter = totalAssets() + amount;
@@ -189,7 +206,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         // Pass 1: fill toward min(equal target, capBps)
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!adapters[i].active) continue;
-            uint256 effectiveTarget = adapters[i].capBps < targetBps ? adapters[i].capBps : targetBps;
+            uint256 effectiveTarget =
+                adapters[i].capBps < targetBps ? adapters[i].capBps : targetBps;
             uint256 currentBalance = adapters[i].adapter.totalAssets();
             uint256 targetBalance = (totalAfter * effectiveTarget) / MAX_BPS;
             if (currentBalance >= targetBalance) continue;
@@ -257,6 +275,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
         _pullProportional(grossAssets);
 
+        // slither-disable-next-line reentrancy-no-eth
+        // Justification: `_withdraw` is `nonReentrant`; the `_burn` after
+        // external adapter calls is safe because reentry is blocked by the OZ guard.
         _burn(owner, shares);
 
         if (fee > 0) {
@@ -306,11 +327,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         if (adapter_ == address(0)) revert ZeroAddress();
         if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
         if (_activeAdapterCount() >= MAX_ADAPTERS) revert MaxAdaptersReached();
-        adapters.push(AdapterInfo({
-            adapter: IStrategyAdapter(adapter_),
-            capBps: capBps_,
-            active: true
-        }));
+        adapters.push(
+            AdapterInfo({adapter: IStrategyAdapter(adapter_), capBps: capBps_, active: true})
+        );
         emit AdapterAdded(adapters.length - 1, adapter_, capBps_);
     }
 
@@ -351,9 +370,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
             uint256 targetBalance = (totalAssetsCached * targetBps) / MAX_BPS;
             if (currentBalance <= targetBalance) continue;
             uint256 excess = currentBalance - targetBalance;
-            uint256 pull = (totalMoved + excess > maxMovePerCall)
-                ? (maxMovePerCall - totalMoved)
-                : excess;
+            uint256 pull =
+                (totalMoved + excess > maxMovePerCall) ? (maxMovePerCall - totalMoved) : excess;
             if (pull == 0) continue;
             uint256 actual = adapters[i].adapter.withdraw(pull);
             totalMoved += actual;
@@ -363,12 +381,17 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle > 0) _routeDeposit(idle);
 
+        // slither-disable-next-line reentrancy-eth
+        // Justification: `rebalance` is `nonReentrant`; the state write after
+        // external calls is safe because reentry is blocked by the OZ guard.
         lastRebalanceAt = block.timestamp;
         emit Rebalanced(totalMoved);
     }
 
     function adminRebalance(uint256[] calldata targetBalances)
-        external onlyRole(ADMIN_ROLE) nonReentrant
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
     {
         if (targetBalances.length != adapters.length) revert InvalidParam();
         uint256 len = adapters.length;
@@ -419,8 +442,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Emergency ────────────────────────────────────────────────────
 
-    function pause() external onlyRole(EMERGENCY_ROLE) { _pause(); }
-    function unpause() external onlyRole(EMERGENCY_ROLE) { _unpause(); }
+    function pause() external onlyRole(EMERGENCY_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(EMERGENCY_ROLE) {
+        _unpause();
+    }
 
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pause();
@@ -438,7 +466,11 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit EmergencyWithdrawCalled();
     }
 
-    function emergencyWithdrawAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) nonReentrant {
+    function emergencyWithdrawAdapter(uint256 index)
+        external
+        onlyRole(EMERGENCY_ROLE)
+        nonReentrant
+    {
         if (index >= adapters.length) revert AdapterNotFound();
         _pause();
         uint256 balance = adapters[index].adapter.totalAssets();
@@ -447,7 +479,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
             return;
         }
         try adapters[index].adapter.withdraw(balance) returns (uint256 actual) {
-            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), actual, true);
+            emit EmergencyWithdrawAdapterCalled(
+                index, address(adapters[index].adapter), actual, true
+            );
         } catch {
             emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, false);
         }
@@ -520,12 +554,25 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Views ────────────────────────────────────────────────────────
 
-    function adapterCount() external view returns (uint256) { return adapters.length; }
-    function isShutdown() external view returns (bool) { return shutdown; }
+    function adapterCount() external view returns (uint256) {
+        return adapters.length;
+    }
 
-    function getAdapterInfo(uint256 index) external view returns (
-        address adapterAddr, uint16 capBps, bool active, uint256 currentBalance, uint256 targetBps
-    ) {
+    function isShutdown() external view returns (bool) {
+        return shutdown;
+    }
+
+    function getAdapterInfo(uint256 index)
+        external
+        view
+        returns (
+            address adapterAddr,
+            uint16 capBps,
+            bool active,
+            uint256 currentBalance,
+            uint256 targetBps
+        )
+    {
         AdapterInfo memory info = adapters[index];
         return (
             address(info.adapter),
@@ -536,24 +583,28 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         );
     }
 
-    function getAdapterDrift() external view returns (
-        uint256[] memory currentBalances,
-        uint256[] memory targetBalances,
-        int256[] memory drifts
-    ) {
+    function getAdapterDrift()
+        external
+        view
+        returns (
+            uint256[] memory currentBalances,
+            uint256[] memory targetBalances,
+            int256[] memory drifts
+        )
+    {
         uint256 len = adapters.length;
         currentBalances = new uint256[](len);
-        targetBalances  = new uint256[](len);
-        drifts          = new int256[](len);
+        targetBalances = new uint256[](len);
+        drifts = new int256[](len);
 
-        uint256 total     = totalAssets();
+        uint256 total = totalAssets();
         uint256 targetBps = _targetBpsFor();
 
         for (uint256 i = 0; i < len; i++) {
             if (!adapters[i].active) continue;
             currentBalances[i] = adapters[i].adapter.totalAssets();
-            targetBalances[i]  = (total * targetBps) / MAX_BPS;
-            drifts[i]          = int256(currentBalances[i]) - int256(targetBalances[i]);
+            targetBalances[i] = (total * targetBps) / MAX_BPS;
+            drifts[i] = int256(currentBalances[i]) - int256(targetBalances[i]);
         }
     }
 

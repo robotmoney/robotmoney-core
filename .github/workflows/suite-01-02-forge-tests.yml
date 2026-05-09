@@ -1,0 +1,150 @@
+# Canonical: docs/testing/ci-suites.md §1–2
+#
+# WHY THIS SUITE EXISTS
+# RobotMoneyGateway is the trust boundary for all user funds. Any regression in its
+# access control, rounding, or event emission is a potential loss event. Unit tests
+# run on every contracts/** change so regressions are caught before review. Invariant
+# tests exercise stateful sequences a human reviewer would never enumerate manually —
+# they are the only reliable check against subtle share-accounting drift. Coverage is
+# gated (not just reported) because an uncovered branch in a vault contract is a known
+# audit finding that will block launch.
+#
+# WHY unit AND invariant ARE PARALLEL JOBS
+# They touch different test suites (test/ vs test/invariant/) and take similar wall time.
+# Running in parallel halves the feedback loop. coverage runs after both because it is
+# only worth paying for lcov instrumentation when the tests actually pass.
+#
+# WHY forge fmt --check RUNS IN unit (NOT A SEPARATE JOB)
+# Formatting failures are cheap to catch and almost always indicate a forgotten
+# `forge fmt` before push. Blocking the unit job immediately gives faster feedback
+# than a separate lint job. The invariant job skips the fmt check because it is already
+# caught by unit — no need to duplicate it.
+#
+# GOTCHAS
+# - The Foundry cache key includes all *.sol files. If the cache is stale after a
+#   dependency update in lib/, force a cache miss by bumping the key suffix.
+# - forge coverage uses --ir-minimum to keep instrumentation cheap. Without it the
+#   optimizer inlines everything and lcov reports misleading coverage gaps.
+# - check_gateway_coverage.py reads lcov.info from the working directory. If forge
+#   writes it elsewhere (e.g. after a Foundry version bump), the script will exit 1
+#   with a FileNotFoundError that looks like a test failure.
+# - invariant tests run with the default fuzzer seed. Flaky failures are almost always
+#   real invariant violations found on a specific seed; re-running locally with
+#   --fuzz-seed <seed> from the CI log will reproduce them.
+
+name: forge-unit-invariant-coverage
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/suite-01-02-forge-tests.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/suite-01-02-forge-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: forge-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge fmt --check
+        run: forge fmt --check
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test (unit)
+        run: forge test -vvv
+
+  invariant:
+    name: forge-invariant-fuzz-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test (invariant / fuzz)
+        run: forge test --match-path "test/invariant/**" -vvv
+
+  coverage:
+    name: forge-coverage-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [unit, invariant]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge coverage
+        run: forge coverage --report lcov --ir-minimum
+
+      - name: Enforce branch-coverage gate
+        run: python3 .github/scripts/check_gateway_coverage.py lcov.info

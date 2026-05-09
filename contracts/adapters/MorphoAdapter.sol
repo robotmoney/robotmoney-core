@@ -15,8 +15,8 @@ contract MorphoAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
     IERC4626 public immutable MORPHO_VAULT;
-    IERC20   public immutable USDC;
-    address  public immutable VAULT;
+    IERC20 public immutable USDC;
+    address public immutable VAULT;
 
     /// @notice Caller is not the configured `VAULT` address.
     error OnlyVault();
@@ -31,10 +31,12 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     constructor(address morphoVault_, address usdc_, address vault_) {
-        if (morphoVault_ == address(0) || usdc_ == address(0) || vault_ == address(0)) revert ZeroAddress();
+        if (morphoVault_ == address(0) || usdc_ == address(0) || vault_ == address(0)) {
+            revert ZeroAddress();
+        }
         MORPHO_VAULT = IERC4626(morphoVault_);
-        USDC         = IERC20(usdc_);
-        VAULT        = vault_;
+        USDC = IERC20(usdc_);
+        VAULT = vault_;
     }
 
     function deploy(uint256 amount) external onlyVault {
@@ -57,7 +59,9 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     function rescueTokens(address token, address to) external onlyVault {
-        if (token == address(USDC) || token == address(MORPHO_VAULT)) revert CannotRescueProtectedToken();
+        if (token == address(USDC) || token == address(MORPHO_VAULT)) {
+            revert CannotRescueProtectedToken();
+        }
         if (to == address(0)) revert ZeroAddress();
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);

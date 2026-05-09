@@ -1,0 +1,112 @@
+# Canonical: docs/testing/ci-suites.md §14
+#
+# WHY THIS SUITE EXISTS
+# The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.
+# If Fixture::new() is broken — because a Docker image changed, the genesis script
+# regressed, or a port mapping shifted — every one of those suites will fail at boot
+# time with a confusing "connection refused" error, not a "fixture broken" error. Validating
+# the fixture in isolation, on every change to the devnet config, means a broken fixture
+# is caught and diagnosed here, in ~5 min, rather than discovered as mysterious failures
+# across five other suites.
+#
+# WHY --test-threads=1
+# The smoke-test crate boots Geth+Lighthouse on a fixed port (8545). If multiple tests
+# run in parallel within the binary, they race to bind the same port and fail with
+# "address already in use". This is the same constraint as suite 7; the fix is the same.
+#
+# WHY cargo build RUNS BEFORE cargo test
+# The smoke-test crate includes a CLI binary (`cargo run smoke-test`). Building it
+# explicitly before the test run ensures that both the library and the binary compile
+# cleanly. Without this step, a binary-only compile error would be hidden by cargo test
+# (which does not build binaries by default).
+#
+# WHY THE SAFETY-NET TEARDOWN USES || true
+# The teardown runs with if: always(), including when the job is cancelled by GitHub
+# Actions (e.g. timeout). In that case, docker compose down may fail because the
+# container was never started. The || true prevents the teardown step from overwriting
+# the real failure exit code with a docker error exit code in the job summary.
+#
+# GOTCHAS
+# - The Cargo cache path is testing/smoke-test/target, not the workspace root target.
+#   This crate is not part of the main workspace Cargo.toml (by design — it has its own
+#   version pin for devnet tooling). If you add it to the workspace, move the cache path
+#   to target/ and add smoke-test/Cargo.toml to all other cache keys.
+# - The safety-net teardown runs docker compose down from testing/ethereum-testnet/config.
+#   This is the directory that contains the docker-compose.yml used by the fixture. If
+#   the fixture is ever moved or the compose file is renamed, update this path.
+
+name: smoke-test-devnet-boot-teardown
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "testing/smoke-test/**"
+      - "testing/ethereum-testnet/**"
+      - "contracts/**"
+      - ".github/workflows/suite-14-smoke-test.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/smoke-test/**"
+      - "testing/ethereum-testnet/**"
+      - "contracts/**"
+      - ".github/workflows/suite-14-smoke-test.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    name: smoke-test-devnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            testing/smoke-test/target
+          key: ${{ runner.os }}-cargo-smoke-test-${{ hashFiles('testing/smoke-test/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-smoke-test-
+
+      - name: cargo fmt --check
+        working-directory: testing/smoke-test
+        run: cargo fmt --check -p smoke-test
+
+      - name: cargo clippy
+        working-directory: testing/smoke-test
+        run: cargo clippy -p smoke-test --all-targets -- -D warnings
+
+      - name: cargo build (includes CLI binary)
+        working-directory: testing/smoke-test
+        run: cargo build -p smoke-test
+
+      - name: cargo test (boots devnet, deploys contracts, asserts RPC + blocks, tears down)
+        working-directory: testing/smoke-test
+        run: cargo test -p smoke-test --release -- --test-threads=1 --nocapture
+
+      - name: Safety-net teardown (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true

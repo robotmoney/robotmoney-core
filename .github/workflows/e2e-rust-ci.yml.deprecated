@@ -1,0 +1,176 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+name: e2e-rust harness
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "clients/rust-payment-client/**"
+      - "contracts/**"
+      - "foundry.toml"
+      - "plugins/robotmoney-cli/**"
+      - ".github/workflows/e2e-rust-ci.yml"
+      - ".github/scripts/stress_nonce_race.sh"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "clients/rust-payment-client/**"
+      - "contracts/**"
+      - "foundry.toml"
+      - "plugins/robotmoney-cli/**"
+      - ".github/workflows/e2e-rust-ci.yml"
+      - ".github/scripts/stress_nonce_race.sh"
+  workflow_dispatch:
+
+# Issue #37 dropped the Anvil-flavor job; the harness has a single
+# Geth+Lighthouse backend now. Per the project's stated tradeoff the
+# extra ~60s docker boot (vs Anvil's sub-second start) is acceptable in
+# exchange for one less harness shape to maintain.
+
+jobs:
+  geth-tests:
+    name: Geth+Lighthouse e2e scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-geth-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-geth-
+
+      - name: rmpc fmt + clippy
+        working-directory: clients/rust-payment-client
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: e2e-rust fmt + clippy
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Pre-pull Docker images
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose pull --ignore-pull-failures || true
+
+      - name: Build rmpc binary
+        run: |
+          cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      # Skill-package parity: verifies plugins/robotmoney-cli/ docs match
+      # `rmpc --help` (every documented command/flag exists, every
+      # subcommand is documented) and that the skill package is
+      # structurally loadable (plugin.json valid, SKILL.md frontmatter,
+      # references/*.md links resolve). Replaces the manual review items
+      # tracked on issue #52. No RPC fixture or docker required.
+      - name: Skill-package parity (issue #52)
+        working-directory: clients/rust-payment-client
+        run: cargo test --test skill_docs_parity -- --nocapture
+
+      # Dapp -> rmpc TOML round-trip (issue #86): loads the dapp's
+      # exported TOML fixture through rmpc's real config loader, then
+      # invokes `rmpc self-check` against a mockito JSON-RPC happy
+      # path. Catches drift between
+      # `clients/dapp/src/lib/configExport.ts` and
+      # `clients/rust-payment-client/src/config.rs`. No docker required.
+      - name: Dapp TOML round-trip (issue #86)
+        working-directory: clients/rust-payment-client
+        run: cargo test --test dapp_toml_roundtrip -- --nocapture
+
+      # Each test binary boots its own Geth devnet on port 8545. CI runs
+      # them sequentially so the port is never contended; tests within a
+      # binary serialize via `--test-threads=1`.
+      #
+      # The shared `Fixture` lives in a `static OnceLock` inside each
+      # test binary, so its `Drop` is NOT guaranteed to run at process
+      # exit (Rust does not destruct statics). We therefore tear the
+      # compose stack down explicitly between binaries — otherwise the
+      # next `compose up -d` finds containers Running with the volume
+      # already populated, recreates the `setup` service against the
+      # populated volume, and the genesis script fails with exit 1.
+
+      - name: e2e smoke test
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test smoke -- --test-threads=1 --nocapture
+
+      - name: Tear down docker between binaries (post-smoke)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e scenario suite
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test scenarios -- --test-threads=1 --nocapture
+
+      - name: Tear down docker between binaries (post-scenarios)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e window-cap scenario
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test window_cap -- --test-threads=1 --nocapture
+
+      - name: Tear down docker on failure
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true
+
+  # Issue #89 — stress harness for the nonce racing test. Runs the test
+  # 100 times in succession and fails the job on the first failure. We
+  # split this into its own job so a single bad iteration is loud and
+  # cannot hide behind unrelated test output. No docker required.
+  nonce-race-stress:
+    name: Nonce racing-test stress (issue #89)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-nonce-stress-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nonce-stress-
+
+      - name: Run 100x stress
+        run: bash .github/scripts/stress_nonce_race.sh

@@ -1,0 +1,170 @@
+# Canonical: docs/testing/ci-suites.md §7
+#
+# WHY THIS SUITE EXISTS
+# rmpc must work end-to-end against a real consensus layer (Geth + Lighthouse), not just
+# Anvil. The devnet runs a full PoS chain with real slot timing, which surfaces bugs in
+# confirmation logic, block-number handling, and receipt polling that Anvil's instant
+# finality hides. This is the suite that catches "works on anvil, breaks on mainnet"
+# regressions.
+#
+# WHY EACH TEST BINARY RUNS SEPARATELY WITH docker compose down -v BETWEEN THEM
+# Each test binary boots its own devnet on port 8545 using a shared Fixture in a
+# OnceLock. Rust does not destruct statics on process exit, so Drop on the Fixture is
+# not guaranteed to run — the compose stack is left running after the binary exits.
+# If the next binary runs compose up against an already-running stack, the genesis
+# setup container re-runs against a populated volume and exits 1, hanging the test.
+# The explicit teardown between binaries is load-bearing; do not remove it.
+#
+# WHY skill_docs_parity AND dapp_toml_roundtrip RUN HERE BEFORE THE DOCKER TESTS
+# These tests require the rmpc binary but no chain. Running them first means that if
+# the plugin manifest or TOML config drifts, CI fails fast (< 1 min) before paying
+# for the Docker boot. They are in this suite rather than suite 6 because they depend
+# on the release binary being built.
+#
+# WHY nonce-race-stress IS A SEPARATE JOB (NOT A STEP)
+# The race test runs 100 iterations of concurrent nonce acquisition and is sensitive to
+# runner load. Mixing it into geth-tests would make timing-dependent failures ambiguous
+# (is it the race or the chain interaction?). A separate job isolates the failure signal.
+#
+# GOTCHAS
+# - docker compose pull --ignore-pull-failures caches images before the tests start.
+#   If this step is removed, each compose up pulls images inline, adding 2–5 min and
+#   making the run non-hermetic (image tags can change between pulls).
+# - --test-threads=1 is required for all devnet test binaries. Parallel tests in the
+#   same binary would race on port 8545. Do not remove this flag.
+# - The "Tear down docker (always)" step uses if: always() so it fires even when an
+#   earlier step panics. Without it, a panicking test can leave the stack running and
+#   corrupt the next job on the same runner (self-hosted runners only, but worth noting).
+
+name: rust-client-devnet-integration
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "testing/smoke-test/**"
+      - "contracts/**"
+      - ".github/workflows/suite-07-rmpc-integration.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "testing/smoke-test/**"
+      - "contracts/**"
+      - ".github/workflows/suite-07-rmpc-integration.yml"
+  workflow_dispatch:
+
+jobs:
+  geth-tests:
+    name: rmpc-geth-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-rmpc-integration-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-integration-
+
+      - name: fmt + clippy (rmpc)
+        working-directory: clients/rust-payment-client
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: fmt + clippy (e2e-rust)
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Pre-pull Docker images
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose pull --ignore-pull-failures || true
+
+      - name: Build rmpc binary
+        run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Skill-package parity
+        working-directory: clients/rust-payment-client
+        run: cargo test --test skill_docs_parity -- --nocapture
+
+      - name: dApp TOML round-trip
+        working-directory: clients/rust-payment-client
+        run: cargo test --test dapp_toml_roundtrip -- --nocapture
+
+      - name: e2e smoke test
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test smoke -- --test-threads=1 --nocapture
+
+      - name: Tear down docker (post-smoke)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e scenario suite
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test scenarios -- --test-threads=1 --nocapture
+
+      - name: Tear down docker (post-scenarios)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e window-cap scenario
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test window_cap -- --test-threads=1 --nocapture
+
+      - name: Tear down docker (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true
+
+  nonce-race-stress:
+    name: rmpc-nonce-race-stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-nonce-stress-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nonce-stress-
+
+      - name: Run 100× stress
+        run: bash .github/scripts/stress_nonce_race.sh

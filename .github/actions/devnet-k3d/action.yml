@@ -1,0 +1,60 @@
+# Composite action: install k3d + bring up the full-stack devnet.
+#
+# The reusable workflow .github/workflows/_devnet-k3d.yml wraps this
+# action so that workflows which need the cluster *in the same job* (to
+# run their existing assertions) can share the same setup logic. Reusable
+# workflows run on their own runner and can't share cluster state, so
+# this composite is the right granularity for in-job consumers.
+#
+# The cluster's anvil-fork loads the checked-in fork-state fixture at
+# `testing/fixtures/fork-state/CURRENT.anvil-state`. No upstream RPC is
+# contacted at runtime; refresh the fixture offline with
+# `bash scripts/devnet/snapshot-fork.sh`.
+#
+# Canonical: docs/technical/full-stack-devnet.md
+# Issue: #146.
+
+name: Boot k3d devnet (composite)
+description: Install k3d, build images, apply manifests, wait for explorer-api /health.
+
+inputs:
+  chain-id:
+    description: "Anvil --chain-id."
+    required: false
+    default: "8453"
+  k3d-version:
+    description: "k3d release tag."
+    required: false
+    default: "v5.7.4"
+
+outputs:
+  anvil-rpc-url:
+    description: "Host-reachable anvil-fork JSON-RPC URL."
+    value: "http://127.0.0.1:8545"
+  explorer-api-url:
+    description: "Host-reachable explorer-api base URL."
+    value: "http://127.0.0.1:8080"
+  dapp-url:
+    description: "Host-reachable dapp base URL."
+    value: "http://127.0.0.1:5173"
+  postgres-url:
+    description: "Host-reachable postgres TCP endpoint (host:port)."
+    value: "127.0.0.1:5432"
+
+runs:
+  using: composite
+  steps:
+    - name: Install k3d
+      shell: bash
+      env:
+        K3D_TAG: ${{ inputs.k3d-version }}
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+          | TAG="$K3D_TAG" bash
+        k3d version
+
+    - name: Boot devnet
+      shell: bash
+      env:
+        FORK_CHAIN_ID: ${{ inputs.chain-id }}
+      run: bash scripts/devnet/k3d-up.sh

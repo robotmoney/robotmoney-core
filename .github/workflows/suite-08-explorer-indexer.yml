@@ -1,0 +1,127 @@
+# Canonical: docs/testing/ci-suites.md §8
+#
+# WHY THIS SUITE EXISTS
+# The explorer indexer is the read path for the dApp's deposit history. Silent
+# double-counting or orphaned rows after a reorg would show users incorrect balances.
+# The migration idempotency test exists because migrations run once on deploy and any
+# non-idempotent migration will crash a rollback or a fresh staging environment.
+#
+# WHY THE JOB SPLITS INTO fast AND devnet
+# Reorg handling requires a real Geth+Lighthouse chain with genuine fork-choice events —
+# Anvil produces instant finality and cannot produce reorgs. The fast job covers
+# everything that can be tested with a Postgres testcontainer alone (no Docker Compose
+# stack needed), which cuts its wall time to ~5 min. The devnet job runs in parallel
+# because it uses an entirely different environment with no shared state.
+#
+# WHY cargo test --no-run RUNS BEFORE THE INDIVIDUAL TEST STEPS
+# Compiling test binaries is the most expensive part of the fast job. Running it once
+# upfront means all three subsequent test steps use the cached binary. Without this,
+# each cargo test --test ... command recompiles from scratch, tripling build time.
+#
+# GOTCHAS
+# - The Postgres testcontainer is started by the test code itself, not by the CI job.
+#   If Docker is not available on the runner, the migrations test will fail with a
+#   confusing "connection refused" error, not a "Docker not found" error. The fast job
+#   deliberately omits a Docker availability check because it should not need compose;
+#   if you start seeing connection refused in migrations, verify the runner has Docker.
+# - fork_indexer requires Geth to produce at least two competing chain tips, which
+#   takes several seconds after boot. The test polls with a timeout; if Lighthouse is
+#   slow to start, the test may time out before a reorg occurs. If this flakes, check
+#   the Lighthouse boot logs first before suspecting the indexer logic.
+
+name: explorer-indexer-migrations-reorg
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/**"
+      - "testing/explorer-indexer/**"
+      - ".github/workflows/suite-08-explorer-indexer.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/**"
+      - "testing/explorer-indexer/**"
+      - ".github/workflows/suite-08-explorer-indexer.yml"
+  workflow_dispatch:
+
+jobs:
+  fast:
+    name: explorer-indexer-fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-explorer-indexer-
+
+      - name: fmt + clippy
+        working-directory: services/explorer-indexer
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Build test binaries
+        working-directory: services/explorer-indexer
+        run: cargo test --no-run
+
+      - name: Migration idempotency
+        working-directory: services/explorer-indexer
+        run: cargo test --test migrations -- --nocapture
+
+      - name: Block ingestion idempotency
+        working-directory: services/explorer-indexer
+        run: cargo test --test idempotency -- --nocapture
+
+      - name: RPC failure recovery
+        working-directory: services/explorer-indexer
+        run: cargo test --test rpc_failure -- --nocapture
+
+  devnet:
+    name: explorer-indexer-devnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-explorer-indexer-
+
+      - name: Fork indexer test (reorg + finality)
+        working-directory: services/explorer-indexer
+        run: cargo test --test fork_indexer -- --nocapture

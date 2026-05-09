@@ -1,0 +1,155 @@
+# Canonical: docs/testing/ci-suites.md §12
+#
+# WHY THIS SUITE EXISTS
+# OpenClaw is the Claude-native client. Unlike OpenCode, it has a different runtime
+# and a custom configuration harness (testing/openclaw-config/). The safety tests exist
+# because OpenClaw's config is more user-modifiable than OpenCode's — a misconfigured
+# OpenClaw could broadcast to mainnet if the fork gate is not enforced. The walkthrough
+# test proves that a full deposit, driven through the OpenClaw runtime, produces the
+# same transcript quality as the OpenCode headless run (suite 11b).
+#
+# WHY safety RUNS BEFORE walkthrough
+# The safety job verifies that OpenClaw cannot be misconfigured into a mainnet-live
+# state and that no secret material leaks into logs. A failed safety check means the
+# runtime itself is unsafe to run — there is no point invoking the long-running
+# walkthrough in that state.
+#
+# WHY shellcheck RUNS IN THE safety JOB
+# The openclaw-config harness is shell-script-driven. Shell bugs (unquoted variables,
+# missing set -e, path injection) in these scripts are a security concern because the
+# scripts handle private keys. shellcheck catches these statically without needing to
+# execute the scripts.
+#
+# WHY THE OUTCOME FILE EXISTS (outcome.txt)
+# The long-running walkthrough can legitimately skip (e.g. if the devnet fails to
+# produce a required block within the timeout) or fail for a transient reason. A plain
+# exit code would conflate "skipped" with "failed". The structured outcome file lets the
+# CI step distinguish between these cases and lets a downstream alerting system (or a
+# human reading the artifact) understand why the walkthrough did not produce a deposit.
+#
+# GOTCHAS
+# - test_mainnet_gate.sh and test_secret_handling.sh are shellscripts that run the
+#   OpenClaw binary with adversarial config. They must be run from within the
+#   testing/openclaw-config/ directory because they use relative paths to fixtures.
+#   If the working-directory is wrong, they will silently pass (fixture not found =
+#   no output to check = test passes vacuously).
+# - The walkthrough timeout is set inside test_long_running.sh, not in the CI job
+#   timeout-minutes. If the script hangs without exiting, the CI job will hit the
+#   60-minute GitHub timeout and produce a "Job was cancelled" failure rather than a
+#   "walkthrough timed out" failure. If you see unexpected cancellations, check whether
+#   the script's internal timeout is firing correctly.
+
+name: openclaw-safety-walkthrough
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "plugins/robotmoney-cli/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - ".github/workflows/suite-12-openclaw.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "plugins/robotmoney-cli/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - ".github/workflows/suite-12-openclaw.yml"
+  workflow_dispatch:
+
+jobs:
+  safety:
+    name: openclaw-safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: shellcheck openclaw scripts
+        run: shellcheck -x testing/openclaw-config/*.sh
+
+      - name: Build rmpc binary
+        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Mainnet gate test
+        working-directory: testing/openclaw-config
+        run: bash test_mainnet_gate.sh
+
+      - name: Secret handling test
+        working-directory: testing/openclaw-config
+        run: bash test_secret_handling.sh
+
+      - name: Doc parity test
+        working-directory: testing/openclaw-config
+        run: bash test_doc_parity.sh
+
+  walkthrough:
+    name: openclaw-walkthrough
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: safety
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Long-running deposit walkthrough
+        working-directory: testing/openclaw-config
+        run: bash test_long_running.sh
+
+      - name: Upload outcome artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-walkthrough-outcome
+          path: testing/openclaw-config/artifacts/long-running/outcome.txt
+
+      - name: Assert outcome is well-formed
+        run: |
+          set -euo pipefail
+          OUTCOME_FILE="testing/openclaw-config/artifacts/long-running/outcome.txt"
+          if ! grep -qE "^outcome=(pass|skipped|fail)$" "$OUTCOME_FILE"; then
+            echo "::error::outcome.txt missing valid 'outcome=' line" >&2
+            cat "$OUTCOME_FILE" >&2 || true
+            exit 1
+          fi
+          if ! grep -qE "^reason=" "$OUTCOME_FILE"; then
+            echo "::error::outcome.txt missing 'reason=' line" >&2
+            cat "$OUTCOME_FILE" >&2 || true
+            exit 1
+          fi
+          echo "Outcome artifact is well-formed."
+          cat "$OUTCOME_FILE"

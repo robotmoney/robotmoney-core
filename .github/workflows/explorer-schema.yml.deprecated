@@ -1,0 +1,78 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+name: explorer-schema
+
+# Issue #87 — guards the single-canonical-home invariant for the
+# explorer schema. Two layers:
+#
+# 1. A Python guard (`.github/scripts/check_explorer_migrations.py`)
+#    fails CI if any `.sql` reappears under `clients/explorer-api/migrations/`.
+# 2. A Rust integration test (`canonical_schema.rs`) boots Postgres via
+#    testcontainers, applies the canonical migration owned by
+#    `services/explorer-indexer/migrations/`, and asserts the same nine
+#    §11 minimum tables observed by the indexer's own `migrations.rs`
+#    test are also visible from the api crate's harness.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/migrations/**"
+      - "clients/explorer-api/migrations/**"
+      - "clients/explorer-api/tests/canonical_schema.rs"
+      - "clients/explorer-api/tests/common/mod.rs"
+      - ".github/scripts/check_explorer_migrations.py"
+      - ".github/workflows/explorer-schema.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "services/explorer-indexer/migrations/**"
+      - "clients/explorer-api/migrations/**"
+      - "clients/explorer-api/tests/canonical_schema.rs"
+      - "clients/explorer-api/tests/common/mod.rs"
+      - ".github/scripts/check_explorer_migrations.py"
+      - ".github/workflows/explorer-schema.yml"
+  workflow_dispatch:
+
+jobs:
+  duplicate-guard:
+    name: duplicate-migration guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run guard script
+        run: python3 .github/scripts/check_explorer_migrations.py
+
+  cross-crate-parity:
+    name: canonical-schema parity (api + indexer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: duplicate-guard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/explorer-api/target
+            services/explorer-indexer/target
+          key: ${{ runner.os }}-explorer-schema-${{ hashFiles('clients/explorer-api/Cargo.toml', 'services/explorer-indexer/Cargo.toml') }}
+
+      - name: explorer-api canonical_schema test
+        working-directory: clients/explorer-api
+        run: cargo test --test canonical_schema -- --test-threads=1
+
+      - name: explorer-indexer migrations test
+        working-directory: services/explorer-indexer
+        run: cargo test --test migrations -- --test-threads=1

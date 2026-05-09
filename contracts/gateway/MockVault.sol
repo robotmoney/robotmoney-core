@@ -24,12 +24,7 @@ contract MockVault is ERC20 {
 
     /// @notice ERC-4626-shaped Deposit event so off-chain indexers / tests
     ///         can watch share routing.
-    event Deposit(
-        address indexed sender,
-        address indexed receiver,
-        uint256 assets,
-        uint256 shares
-    );
+    event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
 
     constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC") {
         assetToken = IERC20(asset_);

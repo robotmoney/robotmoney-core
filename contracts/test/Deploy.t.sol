@@ -61,17 +61,13 @@ contract DeployTest is Test {
         assertTrue(active);
         assertGt(validUntil, block.timestamp);
         assertEq(maxPerPayment, script.DEFAULT_MAX_PER_PAYMENT());
-        assertEq(maxPerWindow,  script.DEFAULT_MAX_PER_WINDOW());
+        assertEq(maxPerWindow, script.DEFAULT_MAX_PER_WINDOW());
         assertEq(recv, shareReceiver);
     }
 
     function test_deploy_mintsTestUsdcToAgent() public {
         Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
-        assertEq(
-            d.usdc.balanceOf(agent),
-            script.DEFAULT_AGENT_USDC_MINT(),
-            "agent mint amount"
-        );
+        assertEq(d.usdc.balanceOf(agent), script.DEFAULT_AGENT_USDC_MINT(), "agent mint amount");
     }
 
     // --- Role-separation invariant (issue #10's headline test) ----------

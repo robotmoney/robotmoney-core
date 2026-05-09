@@ -1,0 +1,120 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+# Smoke test: verify OpenCode is installable at the pinned version and that
+# the robotmoney-cli plugin directory is structurally valid (plugin.json
+# parses, required files exist). No ANTHROPIC_API_KEY is required or used.
+#
+# Canonical: docs/technical/opencode-headless-invocation.md
+# Issue: #134
+
+name: opencode-plugin-smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev]
+    paths:
+      - "plugins/robotmoney-cli/**"
+      - ".github/workflows/opencode-plugin-smoke.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "plugins/robotmoney-cli/**"
+      - ".github/workflows/opencode-plugin-smoke.yml"
+
+jobs:
+  plugin-smoke:
+    name: OpenCode install + plugin-load smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.13"
+
+      - name: Install OpenCode at pinned version
+        run: bun install -g opencode-ai@1.14.29
+
+      - name: Confirm OpenCode version
+        run: |
+          opencode --version
+          INSTALLED=$(opencode --version 2>&1)
+          if [ "$INSTALLED" != "1.14.29" ]; then
+            echo "ERROR: expected 1.14.29, got $INSTALLED"
+            exit 1
+          fi
+          echo "opencode $INSTALLED confirmed."
+
+      - name: Confirm OpenCode --help exits 0
+        # Verifies the binary is functional without any API key.
+        run: opencode --help > /dev/null
+
+      - name: Validate plugin.json is well-formed JSON
+        run: |
+          PLUGIN_JSON="plugins/robotmoney-cli/plugin.json"
+          if ! python3 -m json.tool "$PLUGIN_JSON" > /dev/null; then
+            echo "ERROR: $PLUGIN_JSON is not valid JSON"
+            exit 1
+          fi
+          echo "plugin.json is valid JSON."
+
+      - name: Assert required plugin.json fields are present
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+
+          REQUIRED = ["name", "version", "description", "skills"]
+          with open("plugins/robotmoney-cli/plugin.json") as f:
+              d = json.load(f)
+
+          missing = [k for k in REQUIRED if k not in d]
+          if missing:
+              print(f"ERROR: plugin.json missing required fields: {missing}", file=sys.stderr)
+              sys.exit(1)
+
+          if not isinstance(d["skills"], list) or len(d["skills"]) == 0:
+              print("ERROR: plugin.json 'skills' must be a non-empty list", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"plugin.json OK — name={d['name']!r} version={d['version']!r} skills={d['skills']}")
+          EOF
+
+      - name: Assert each declared skill directory exists with a SKILL.md
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+
+          with open("plugins/robotmoney-cli/plugin.json") as f:
+              d = json.load(f)
+
+          base = "plugins/robotmoney-cli/skills"
+          errors = []
+          for skill in d["skills"]:
+              skill_md = os.path.join(base, skill, "SKILL.md")
+              if not os.path.isfile(skill_md):
+                  errors.append(f"  missing: {skill_md}")
+
+          if errors:
+              print("ERROR: the following skill files are missing:", file=sys.stderr)
+              for e in errors:
+                  print(e, file=sys.stderr)
+              sys.exit(1)
+
+          print(f"All {len(d['skills'])} skill(s) have SKILL.md — plugin load-check passed.")
+          EOF
+
+      - name: Summary
+        run: |
+          echo "### OpenCode plugin smoke — PASSED" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OpenCode 1.14.29 installed and functional (no API key required)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`plugins/robotmoney-cli/plugin.json\` is valid JSON with required fields" >> "$GITHUB_STEP_SUMMARY"
+          echo "- All declared skills have a \`SKILL.md\` entry point" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Full headless session testing (with ANTHROPIC_API_KEY) is out of scope for this smoke._" >> "$GITHUB_STEP_SUMMARY"

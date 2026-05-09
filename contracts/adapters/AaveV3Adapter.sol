@@ -16,10 +16,10 @@ import {IAavePool} from "../interfaces/IAavePool.sol";
 contract AaveV3Adapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
-    IERC20   public immutable USDC;
-    IERC20   public immutable A_TOKEN;     // aBasUSDC — balanceOf returns live USDC
+    IERC20 public immutable USDC;
+    IERC20 public immutable A_TOKEN; // aBasUSDC — balanceOf returns live USDC
     IAavePool public immutable POOL;
-    address  public immutable VAULT;
+    address public immutable VAULT;
 
     /// @notice Caller is not the configured `VAULT` address.
     error OnlyVault();
@@ -36,13 +36,16 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     constructor(address pool_, address usdc_, address aToken_, address vault_) {
-        if (pool_ == address(0) || usdc_ == address(0) || aToken_ == address(0) || vault_ == address(0)) {
+        if (
+            pool_ == address(0) || usdc_ == address(0) || aToken_ == address(0)
+                || vault_ == address(0)
+        ) {
             revert ZeroAddress();
         }
-        POOL    = IAavePool(pool_);
-        USDC    = IERC20(usdc_);
+        POOL = IAavePool(pool_);
+        USDC = IERC20(usdc_);
         A_TOKEN = IERC20(aToken_);
-        VAULT   = vault_;
+        VAULT = vault_;
     }
 
     function deploy(uint256 amount) external onlyVault {
@@ -67,7 +70,9 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     function rescueTokens(address token, address to) external onlyVault {
-        if (token == address(USDC) || token == address(A_TOKEN)) revert CannotRescueProtectedToken();
+        if (token == address(USDC) || token == address(A_TOKEN)) {
+            revert CannotRescueProtectedToken();
+        }
         if (to == address(0)) revert ZeroAddress();
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);

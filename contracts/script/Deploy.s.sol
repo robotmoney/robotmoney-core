@@ -116,9 +116,9 @@ contract Deploy is Script {
         p.pauser = vm.envAddress("PAUSER_ADDRESS");
         p.agent = vm.envAddress("AGENT_ADDRESS");
         p.shareReceiver = vm.envAddress("SHARE_RECEIVER_ADDRESS");
-        p.validUntil = uint64(_envOrDefault(
-            "AGENT_VALID_UNTIL", block.timestamp + DEFAULT_VALID_UNTIL_OFFSET
-        ));
+        p.validUntil = uint64(
+            _envOrDefault("AGENT_VALID_UNTIL", block.timestamp + DEFAULT_VALID_UNTIL_OFFSET)
+        );
         p.maxPerPayment = _envOrDefault("AGENT_MAX_PER_PAYMENT", DEFAULT_MAX_PER_PAYMENT);
         p.maxPerWindow = _envOrDefault("AGENT_MAX_PER_WINDOW", DEFAULT_MAX_PER_WINDOW);
         p.usdcMint = _envOrDefault("AGENT_USDC_MINT", DEFAULT_AGENT_USDC_MINT);
@@ -181,16 +181,11 @@ contract Deploy is Script {
         //    authorizeAgent already calls _assertRoleSeparation, but we
         //    repeat the public hasRole checks here as a belt-and-braces
         //    deploy invariant (and to emit a clear console line on failure).
-        require(d.gateway.hasRole(d.gateway.AGENT_ROLE(), d.agent),
-                "agent missing AGENT_ROLE");
-        require(!d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.agent),
-                "agent has ADMIN_ROLE");
-        require(!d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.agent),
-                "agent has PAUSER_ROLE");
-        require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin),
-                "admin missing ADMIN_ROLE");
-        require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser),
-                "pauser missing PAUSER_ROLE");
+        require(d.gateway.hasRole(d.gateway.AGENT_ROLE(), d.agent), "agent missing AGENT_ROLE");
+        require(!d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.agent), "agent has ADMIN_ROLE");
+        require(!d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.agent), "agent has PAUSER_ROLE");
+        require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin), "admin missing ADMIN_ROLE");
+        require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
 
         // 4. Mint test USDC to agent so it can deposit on the devnet.
         d.usdc.mint(d.agent, p.usdcMint);

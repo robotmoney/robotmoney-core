@@ -40,12 +40,7 @@ abstract contract AccessRoles is AccessControl {
     /// @dev Override that enforces full pairwise separation among
     ///      {ADMIN, PAUSER, AGENT} before any grant takes effect.
     ///      Reverts on any overlap.
-    function _grantRole(bytes32 role, address account)
-        internal
-        virtual
-        override
-        returns (bool)
-    {
+    function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
         if (role == AGENT_ROLE) {
             if (hasRole(ADMIN_ROLE, account) || hasRole(PAUSER_ROLE, account)) {
                 revert RoleSeparationViolated();

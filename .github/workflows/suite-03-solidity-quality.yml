@@ -1,0 +1,129 @@
+# Canonical: docs/testing/ci-suites.md §3
+#
+# WHY THIS SUITE EXISTS
+# The unit/invariant suite (suite 1–2) validates behaviour; this suite validates
+# quality signals that auditors and downstream integrators rely on. NatSpec on every
+# public/external function is a hard requirement for the audit engagement — a missing
+# @param tag on RobotMoneyGateway has caused audit delays in the past. Slither catches
+# a class of issues (reentrancy, unchecked return values, tx.origin auth) that unit
+# tests structurally cannot, because those tests don't adversarially vary call context.
+#
+# WHY slither NEEDS lint FIRST
+# Slither runs on forge build artifacts. If the build fails or the code doesn't
+# format-check, Slither produces noisy, misleading output and wastes several minutes
+# of runner time. Gating on lint ensures Slither only runs on clean, buildable code.
+#
+# WHY forge build --force IN lint
+# --force bypasses the incremental build cache so the lint job always sees a clean
+# compile. Without it, a cached artifact from a previous push can mask a new warning.
+#
+# GOTCHAS
+# - slither . reads foundry.toml to find the source root. If foundry.toml is moved
+#   or renamed, Slither will silently analyse nothing and exit 0.
+# - The dependency audit grep is intentionally conservative (major version check only).
+#   It will not catch a patch-level vulnerability; for that, use `forge install` with a
+#   pinned commit and track the OpenZeppelin security advisories separately.
+# - forge doc generates NatSpec documentation and fails if the source cannot be parsed.
+#   Every external/public function should have @notice, @param for each param, and
+#   @return for each return value. Internal helper functions are exempt. If a new
+#   function is added without NatSpec, documentation gaps will appear in the generated
+#   output — add the tags to maintain coverage.
+
+name: solidity-fmt-natspec-slither
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/suite-03-solidity-quality.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/suite-03-solidity-quality.yml"
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: solidity-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge fmt --check
+        run: forge fmt --check
+
+      - name: forge build --force
+        run: forge build --force
+
+      - name: forge doc (NatSpec coverage)
+        run: forge doc
+
+  slither:
+    name: solidity-slither
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Slither
+        run: pip install slither-analyzer
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge build (produce artifacts for Slither)
+        run: forge build
+
+      - name: slither static analysis
+        run: slither .
+
+      - name: Dependency audit (OZ + Aave interface versions)
+        run: |
+          set -euo pipefail
+          if grep -r '"@openzeppelin/contracts"' lib/ 2>/dev/null | grep -qE '"[0-3]\.|"4\.[0-8]\.'; then
+            echo "::error::Potentially vulnerable OpenZeppelin version detected" >&2
+            exit 1
+          fi
+          echo "Dependency audit passed."

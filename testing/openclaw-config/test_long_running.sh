@@ -24,9 +24,15 @@ source "${SCRIPT_DIR}/_lib.sh"
 ITERATIONS="${RMPC_MONITOR_ITERATIONS:-3}"
 INTERVAL="${RMPC_MONITOR_INTERVAL_SECS:-1}"
 
+# Outcome file location (read by the CI workflow's assert step).
+OUTCOME_DIR="${SCRIPT_DIR}/artifacts/long-running"
+mkdir -p "$OUTCOME_DIR"
+OUTCOME_FILE="${OUTCOME_DIR}/outcome.txt"
+
 if [[ -z "${RMPC_FORK_RPC_URL:-}" ]]; then
     echo "SKIP: RMPC_FORK_RPC_URL not set; skipping bounded long-running test."
     echo "      Set the secret to actually exercise the OpenClaw harness against Base fork."
+    printf 'outcome=skipped\nreason=RMPC_FORK_RPC_URL not set\n' > "$OUTCOME_FILE"
     exit 0
 fi
 
@@ -67,12 +73,14 @@ set -e
 if [[ $rc -ne 0 ]]; then
     echo "FAIL: harness exited $rc" >&2
     sed 's/^/  stderr: /' "$ERR" >&2
+    printf 'outcome=fail\nreason=harness exited %d\n' "$rc" > "$OUTCOME_FILE"
     exit 1
 fi
 
 # Each iteration prints one JSON envelope to stdout. Use python to
 # split on `}\n{` boundaries — the harness prints one banner line + N
 # JSON blobs; we strip the first non-JSON line before splitting.
+set +e
 python3 - "$OUT" "$ITERATIONS" <<'PY'
 import json, sys, re
 path, want = sys.argv[1], int(sys.argv[2])
@@ -103,5 +111,13 @@ for k, e in enumerate(envs, 1):
         sys.exit(1)
 print(f"OK: {len(envs)} envelopes parsed, chain_id sane in all of them.")
 PY
+py_rc=$?
+set -e
 
+if [[ $py_rc -ne 0 ]]; then
+    printf 'outcome=fail\nreason=JSON envelope validation failed\n' > "$OUTCOME_FILE"
+    exit 1
+fi
+
+printf 'outcome=pass\nreason=%d clean iterations of get-vault\n' "$ITERATIONS" > "$OUTCOME_FILE"
 echo "PASS: bounded long-running monitor completed $ITERATIONS clean iterations."

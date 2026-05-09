@@ -1,0 +1,96 @@
+# Canonical: docs/testing/ci-suites.md §13
+#
+# WHY THIS SUITE EXISTS
+# Several ADRs and runbooks have downstream consumers that depend on their structure —
+# the browser-keygen ADR is read by auditors, the explorer schema ADR is read by the
+# migration tooling, the demo runbook is followed live during investor demos. Drift in
+# these docs (a renamed heading, a deleted section) causes the consumer to break at the
+# worst possible time. These checks are the only automated signal that cross-cutting
+# documentation is staying in sync with the code.
+#
+# WHY NO paths: FILTER
+# Drift can be introduced by any change anywhere — a contract rename affects the gateway
+# coverage report, a schema change affects the explorer ADR, a runbook heading change
+# affects the demo validator. A paths filter would create a false sense of safety: a PR
+# that renames a contract but doesn't touch docs/ would skip the check that would catch
+# the drift. No paths filter means every PR pays a ~1 min cost; that is the right
+# tradeoff for cross-cutting invariants.
+#
+# WHY doc-validators AND schema-validators ARE SEPARATE JOBS
+# They use different checkers with no shared state. Running them in parallel means a
+# failure in one does not mask a failure in the other, and both results are reported
+# simultaneously in the PR check list.
+#
+# GOTCHAS
+# - Several validator scripts (check_browser_keygen_adr.py, check_dapp_credential_adr.py,
+#   check_demo_runbook.py, check_explorer_adr.py) use GH_TOKEN to read issue bodies from
+#   the GitHub API. If the token is absent or lacks repo read permissions, these scripts
+#   will fail with a 401 or a JSON parse error — not a "token missing" error. If you see
+#   unexpected 401s, check whether the GITHUB_TOKEN secret is correctly scoped.
+# - check_gateway_coverage.py is also used in suite 1–2 (coverage job). Here it checks
+#   for the presence and threshold of a previously-generated lcov.info. It does NOT
+#   re-run forge coverage. If called without a lcov.info file on disk, it exits 1 with
+#   FileNotFoundError.
+# - check_explorer_migrations.py enforces that migration SQL files exist only in
+#   services/explorer-indexer/migrations/. A developer who copies a migration to a
+#   scratch location during debugging and forgets to delete the copy will fail this check.
+
+name: doc-adr-runbook-migration-checks
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  doc-validators:
+    name: doc-validators
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Browser keygen ADR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_browser_keygen_adr.py
+
+      - name: dApp credential ADR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_dapp_credential_adr.py
+
+      - name: Demo runbook
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_demo_runbook.py
+
+      - name: Explorer schema ADR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_explorer_adr.py
+
+      - name: Source-doc reconciliation
+        run: python3 .github/scripts/check_source_doc_reconciliation.py
+
+  schema-validators:
+    name: schema-validators
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Explorer migrations single-canonical-home
+        run: python3 .github/scripts/check_explorer_migrations.py

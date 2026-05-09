@@ -125,11 +125,13 @@ cast send "$GATEWAY_ADDRESS" "revokeAgent(address)" "$AGENT_ADDRESS" \
 
 # ---- 3. Build rmpc + import keystore --------------------------------
 echo "fork-roundtrip: building rmpc + rmpc-keystore-import"
-cargo build --quiet --manifest-path "$RMPC_DIR/Cargo.toml" \
+# rust-payment-client is a workspace member; cargo puts artifacts in the
+# workspace-root target/, not the per-crate target/.
+cargo build --quiet --manifest-path "$REPO_ROOT/Cargo.toml" \
     --bin rmpc --bin rmpc-keystore-import
 
-RMPC_BIN="$RMPC_DIR/target/debug/rmpc"
-KEYSTORE_BIN="$RMPC_DIR/target/debug/rmpc-keystore-import"
+RMPC_BIN="$REPO_ROOT/target/debug/rmpc"
+KEYSTORE_BIN="$REPO_ROOT/target/debug/rmpc-keystore-import"
 
 echo "fork-roundtrip: minting keystore at $KEYSTORE_PATH"
 RMPC_IMPORT_PRIVKEY_HEX="$AGENT_PRIVKEY" \

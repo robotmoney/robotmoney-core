@@ -1,0 +1,106 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+name: docs validators
+
+# Drift catchers for documentation that has cross-cutting consumers.
+# These run unconditionally on every PR (not behind a `paths:` filter)
+# because the whole point is to catch drift introduced anywhere — a
+# downstream issue body change, an ADR rename, or a deleted heading
+# should all turn the workflow red.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  explorer-adr:
+    name: Explorer ADR drift (issue #56)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run explorer ADR validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_explorer_adr.py
+
+  dapp-credential-adr:
+    name: Dapp credential ADR drift (issue #59)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run dapp credential ADR validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_dapp_credential_adr.py
+
+  browser-keygen-adr:
+    name: Browser-keygen security-review ADR drift (issue #84)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run browser-keygen ADR validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_browser_keygen_adr.py
+
+  demo-runbook:
+    name: Demo runbook ADR drift (issue #62)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run demo runbook validator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_demo_runbook.py
+
+  source-doc-reconciliation:
+    name: Source-doc reconciliation ADR drift (issue #92)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run source-doc reconciliation validator
+        run: python3 .github/scripts/check_source_doc_reconciliation.py

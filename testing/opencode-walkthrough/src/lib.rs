@@ -46,10 +46,16 @@ pub fn config_template_path() -> PathBuf {
 /// Build the `rmpc` binary in the sibling `rust-payment-client` crate
 /// and return its path. Cached behind a [`OnceLock`] so multiple test
 /// targets sharing a process do not rebuild.
+///
+/// `rust-payment-client` is a workspace member, so cargo places the
+/// compiled binary in the workspace-root `target/debug/` rather than
+/// in the per-crate `clients/rust-payment-client/target/debug/`.
 pub fn rmpc_bin() -> &'static PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
-        let manifest = repo_root().join("clients/rust-payment-client/Cargo.toml");
+        // Use the workspace-root Cargo.toml so cargo resolves the shared
+        // target directory correctly for all workspace members.
+        let manifest = repo_root().join("Cargo.toml");
         let status = Command::new(env!("CARGO"))
             .args([
                 "build",
@@ -62,7 +68,8 @@ pub fn rmpc_bin() -> &'static PathBuf {
             .status()
             .expect("spawn cargo build for rmpc");
         assert!(status.success(), "cargo build --bin rmpc failed");
-        let bin = repo_root().join("clients/rust-payment-client/target/debug/rmpc");
+        // Workspace target dir: target/debug/, not clients/rust-payment-client/target/debug/.
+        let bin = repo_root().join("target/debug/rmpc");
         assert!(bin.exists(), "rmpc binary not at {bin:?} after build");
         bin
     })

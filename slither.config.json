@@ -1,0 +1,4 @@
+{
+    "filter_paths": "lib/,contracts/test/,contracts/script/",
+    "fail_on": "high"
+}

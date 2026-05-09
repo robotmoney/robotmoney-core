@@ -67,12 +67,9 @@ interface IGateway {
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
     /// @return paymentId       Hash committing chain/contract/agent/order/amount/key.
     /// @return sharesMinted    Vault shares minted to `shareReceiver`.
-    function deposit(
-        bytes32 orderId,
-        uint256 amount,
-        uint64 deadline,
-        bytes32 idempotencyKey
-    ) external returns (bytes32 paymentId, uint256 sharesMinted);
+    function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
+        external
+        returns (bytes32 paymentId, uint256 sharesMinted);
 
     /// @notice Set or replace the policy for `agent`. Restricted to `ADMIN_ROLE`.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;

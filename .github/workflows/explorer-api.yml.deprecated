@@ -1,0 +1,66 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+name: explorer-api
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/explorer-api/**"
+      - ".github/workflows/explorer-api.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/explorer-api/**"
+      - ".github/workflows/explorer-api.yml"
+  workflow_dispatch:
+
+# The integration test boots Postgres via testcontainers (real Docker
+# engine, not a faster substitute). Per the project's "no fast-feedback
+# optimization" memo, we accept the ~10s container start in exchange for
+# realism and a single SQL dialect (Postgres only — see
+# docs/technical/explorer-schema-decisions.md §3.1).
+
+jobs:
+  test:
+    name: explorer-api integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/explorer-api/target
+          key: ${{ runner.os }}-explorer-api-${{ hashFiles('clients/explorer-api/Cargo.toml') }}
+
+      - name: cargo fmt
+        working-directory: clients/explorer-api
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: clients/explorer-api
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test (router introspection)
+        working-directory: clients/explorer-api
+        run: cargo test --test router_introspection
+
+      - name: cargo test (endpoints)
+        working-directory: clients/explorer-api
+        run: cargo test --test endpoints -- --test-threads=1

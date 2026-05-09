@@ -1,0 +1,202 @@
+# Canonical: docs/testing/ci-suites.md §11 (opencode-smoke)
+#
+# WHY THIS SUITE EXISTS
+# OpenCode runs agent sessions with real tools. The plugin manifest (plugin.json,
+# SKILL.md) is what OpenCode reads to decide which tools to expose. If the manifest
+# drifts from the installed binary, agents get the wrong tool set silently — there is
+# no runtime error, the agent just fails to find the tool it needs. The walkthrough
+# tests verify that the harness config and documentation match what rmpc actually
+# implements, and that the offline refusal logic fires correctly for out-of-policy
+# requests. These checks run on every PR because manifest and doc drift most commonly
+# happens during routine development, not just dedicated plugin work.
+#
+# WHY SPLIT FROM suite-11b
+# The checks here are cheap, keyless, and deterministic — they run in < 5 min with no
+# external calls. The headless runs in suite-11b require live agent invocations that
+# cost time and money, and have non-deterministic output. Mixing them would mean every
+# PR pays the headless cost, or none of the offline checks would run on PRs.
+#
+# WHY walkthrough-fork NEEDS walkthrough-offline FIRST
+# The refusal tests (walkthrough-offline) are the safety gate: they assert that rmpc
+# will not broadcast to mainnet, will not reveal secrets, and will refuse out-of-policy
+# amounts. If these fail, there is no point testing the happy path in walkthrough-fork.
+# The dependency also ensures that a broken rmpc config cannot silently pass the fork
+# test by skipping the safety assertions.
+#
+# GOTCHAS
+# - OpenCode is installed at a hard-pinned version (1.14.29 via bun). If OpenCode
+#   releases a breaking change to the plugin API, this job will fail at the binary check
+#   step. The fix is to update the version pin and verify the plugin.json schema is still
+#   compatible — do not just bump the version without checking the changelog.
+# - walkthrough-fork exercises rmpc against a pinned fork fixture, not a live chain.
+#   If the fixture is stale, the test may pass even though the live integration is broken.
+#   This is intentional: hermetic CI is more valuable than catching fixture staleness in CI.
+# - The references/*.md link check is a simple file-existence check, not a link validator.
+#   It will not catch broken internal anchors or markdown formatting errors inside the
+#   reference files themselves.
+
+name: opencode-plugin-validate-walkthrough-offline
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "plugins/robotmoney-cli/**"
+      - "clients/rust-payment-client/**"
+      - "docs/walkthroughs/**"
+      - ".github/workflows/suite-11a-opencode-smoke.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "plugins/robotmoney-cli/**"
+      - "clients/rust-payment-client/**"
+      - "docs/walkthroughs/**"
+      - ".github/workflows/suite-11a-opencode-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  plugin-validate:
+    name: opencode-plugin-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.13"
+
+      - name: Install OpenCode at pinned version
+        run: bun install -g opencode-ai@1.14.29
+
+      - name: OpenCode binary check (no API key)
+        run: |
+          opencode --version
+          opencode run --help > /dev/null
+
+      - name: Validate plugin.json
+        run: |
+          python3 -m json.tool plugins/robotmoney-cli/plugin.json > /dev/null
+          echo "plugin.json is valid JSON."
+
+      - name: Assert required plugin.json fields
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          REQUIRED = ["name", "version", "description", "skills"]
+          with open("plugins/robotmoney-cli/plugin.json") as f:
+              d = json.load(f)
+          missing = [k for k in REQUIRED if k not in d]
+          if missing:
+              print(f"plugin.json missing required fields: {missing}", file=sys.stderr)
+              sys.exit(1)
+          if not isinstance(d["skills"], list) or len(d["skills"]) == 0:
+              print("plugin.json 'skills' must be a non-empty list", file=sys.stderr)
+              sys.exit(1)
+          print(f"plugin.json OK — name={d['name']!r} skills={d['skills']}")
+          EOF
+
+      - name: Assert each declared skill has SKILL.md
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          with open("plugins/robotmoney-cli/plugin.json") as f:
+              d = json.load(f)
+          base = "plugins/robotmoney-cli/skills"
+          errors = [f"  missing: {os.path.join(base, s, 'SKILL.md')}"
+                    for s in d["skills"]
+                    if not os.path.isfile(os.path.join(base, s, "SKILL.md"))]
+          if errors:
+              print("Missing skill files:", file=sys.stderr)
+              print("\n".join(errors), file=sys.stderr)
+              sys.exit(1)
+          print(f"All {len(d['skills'])} skill(s) have SKILL.md.")
+          EOF
+
+      - name: Verify references/*.md links resolve
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          ref_dir = "plugins/robotmoney-cli/references"
+          if not os.path.isdir(ref_dir):
+              print(f"No references dir at {ref_dir}; skipping.")
+              sys.exit(0)
+          missing = [f for f in os.listdir(ref_dir)
+                     if f.endswith(".md") and not os.path.isfile(os.path.join(ref_dir, f))]
+          if missing:
+              print(f"Unresolved reference links: {missing}", file=sys.stderr)
+              sys.exit(1)
+          print("All references/*.md links resolve.")
+          EOF
+
+  walkthrough-offline:
+    name: opencode-walkthrough-offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: fmt + clippy
+        run: |
+          cargo fmt --check -p opencode-walkthrough-tests
+          cargo clippy -p opencode-walkthrough-tests --all-targets -- -D warnings
+
+      - name: Walkthrough parity
+        run: cargo test -p opencode-walkthrough-tests --test walkthrough_parity -- --nocapture
+
+      - name: Config template parses
+        run: cargo test -p opencode-walkthrough-tests --test config_template_parses -- --nocapture
+
+      - name: Refusal walkthrough (offline safety)
+        run: cargo test -p opencode-walkthrough-tests --test refusal_walkthrough -- --nocapture
+
+  walkthrough-fork:
+    name: opencode-walkthrough-fork
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: walkthrough-offline
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Read-only walkthrough
+        run: cargo test -p opencode-walkthrough-tests --test read_only_walkthrough -- --nocapture

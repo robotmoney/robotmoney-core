@@ -22,11 +22,7 @@ contract FeeOnTransferUSDC is MockUSDC {
         return super.transfer(to, amount - fee);
     }
 
-    function transferFrom(address from, address to, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
         uint256 fee = amount / 100;
         // Pull full amount, route fee to burn, rest to receiver.
         super.transferFrom(from, address(0xdead), fee);
@@ -41,11 +37,7 @@ contract FeeOnTransferUSDC is MockUSDC {
 contract ShareLeakVault is MockVault {
     constructor(address asset_) MockVault(asset_) {}
 
-    function deposit(uint256 assets, address receiver)
-        external
-        override
-        returns (uint256 shares)
-    {
+    function deposit(uint256 assets, address receiver) external override returns (uint256 shares) {
         IERC20(address(assetToken)).transferFrom(msg.sender, address(this), assets);
         shares = assets;
         _mint(receiver, shares);
@@ -60,11 +52,7 @@ contract ShareLeakVault is MockVault {
 contract UnderPullVault is MockVault {
     constructor(address asset_) MockVault(asset_) {}
 
-    function deposit(uint256 assets, address receiver)
-        external
-        override
-        returns (uint256 shares)
-    {
+    function deposit(uint256 assets, address receiver) external override returns (uint256 shares) {
         // Pull `assets - 1` instead of `assets`. Gateway will end up with 1
         // wei of USDC stuck in custody.
         IERC20(address(assetToken)).transferFrom(msg.sender, address(this), assets - 1);
@@ -96,7 +84,8 @@ contract RobotMoneyGatewayTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
         vault = new MockVault(address(usdc));
-        gateway = new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser);
+        gateway =
+            new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser);
 
         adminRole = gateway.ADMIN_ROLE();
         pauserRole = gateway.PAUSER_ROLE();
@@ -181,13 +170,8 @@ contract RobotMoneyGatewayTest is Test {
 
         assertTrue(gateway.hasRole(agentRole, agent));
 
-        (
-            bool active,
-            uint64 validUntil,
-            uint256 maxPay,
-            uint256 maxWin,
-            address recv
-        ) = gateway.agents(agent);
+        (bool active, uint64 validUntil, uint256 maxPay, uint256 maxWin, address recv) =
+            gateway.agents(agent);
         assertTrue(active);
         assertEq(validUntil, p.validUntil);
         assertEq(maxPay, p.maxPerPayment);
@@ -260,7 +244,7 @@ contract RobotMoneyGatewayTest is Test {
         _authorize(agent, updated);
 
         assertTrue(gateway.hasRole(agentRole, agent));
-        (, , uint256 maxPay, , ) = gateway.agents(agent);
+        (,, uint256 maxPay,,) = gateway.agents(agent);
         assertEq(maxPay, 42 * ONE_USDC);
     }
 
@@ -273,7 +257,7 @@ contract RobotMoneyGatewayTest is Test {
         gateway.revokeAgent(agent);
 
         assertFalse(gateway.hasRole(agentRole, agent));
-        (bool active, , , , ) = gateway.agents(agent);
+        (bool active,,,,) = gateway.agents(agent);
         assertFalse(active);
     }
 
@@ -355,9 +339,8 @@ contract RobotMoneyGatewayTest is Test {
         bytes32 idem = keccak256("idem-1");
         uint64 deadline = uint64(block.timestamp + 60);
 
-        bytes32 expectedPaymentId = keccak256(
-            abi.encode(block.chainid, address(gateway), agent, orderId, amount, idem)
-        );
+        bytes32 expectedPaymentId =
+            keccak256(abi.encode(block.chainid, address(gateway), agent, orderId, amount, idem));
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
         vm.expectEmit(true, true, true, true, address(gateway));
@@ -366,8 +349,7 @@ contract RobotMoneyGatewayTest is Test {
         );
 
         vm.prank(agent);
-        (bytes32 paymentId, uint256 sharesMinted) =
-            gateway.deposit(orderId, amount, deadline, idem);
+        (bytes32 paymentId, uint256 sharesMinted) = gateway.deposit(orderId, amount, deadline, idem);
 
         assertEq(paymentId, expectedPaymentId);
         assertEq(sharesMinted, amount);
@@ -461,9 +443,7 @@ contract RobotMoneyGatewayTest is Test {
         _fundAndApprove(agent, 100 * ONE_USDC);
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.DeadlineTooFar.selector);
-        gateway.deposit(
-            bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 601), bytes32("i")
-        );
+        gateway.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 601), bytes32("i"));
     }
 
     function test_deposit_revertsOnExpiredPolicy() public {
@@ -499,9 +479,7 @@ contract RobotMoneyGatewayTest is Test {
         // Roll over to next window — should succeed.
         vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
         vm.prank(agent);
-        gateway.deposit(
-            bytes32("o4"), MAX_PER_PAYMENT, uint64(block.timestamp + 60), bytes32("i4")
-        );
+        gateway.deposit(bytes32("o4"), MAX_PER_PAYMENT, uint64(block.timestamp + 60), bytes32("i4"));
     }
 
     function test_deposit_revertsOnReplay_sameOrderAndIdempotencyKey() public {
@@ -556,9 +534,7 @@ contract RobotMoneyGatewayTest is Test {
 
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.FeeOnTransferDetected.selector);
-        fotGateway.deposit(
-            bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i")
-        );
+        fotGateway.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
     }
 
     // -------------------------------------------------------------------
@@ -607,9 +583,8 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that mints an extra share to the gateway during deposit. Trips
         // the post-call rmUSDC custody invariant (line 243-244).
         ShareLeakVault leaky = new ShareLeakVault(address(usdc));
-        RobotMoneyGateway gw = new RobotMoneyGateway(
-            IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser
-        );
+        RobotMoneyGateway gw =
+            new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser);
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(admin);
         gw.authorizeAgent(agent, p);

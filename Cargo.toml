@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "clients/rust-payment-client",
+    "clients/explorer-api",
+    "services/explorer-indexer",
+    "testing/smoke-test",
+    "testing/ethereum-testnet/e2e-rust",
+    "testing/fork-e2e-rust",
+    "testing/opencode-walkthrough",
+]

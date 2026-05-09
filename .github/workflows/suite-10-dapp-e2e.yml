@@ -1,0 +1,192 @@
+# Canonical: docs/testing/ci-suites.md §10
+#
+# WHY THIS SUITE EXISTS
+# The dApp's primary user-facing flow is: connect wallet → see vault state → deposit →
+# see confirmation. A type-correct build (suite 9) does not prove this flow works in a
+# real browser against a real contract. Playwright drives an actual Chromium instance
+# through the full interaction, catching issues that only appear with a live chain: wrong
+# contract address in the Vite env, MetaMask injection race, incorrect ethers.js call
+# encoding. The history pane and fork-roundtrip jobs cover the two other critical flows
+# (deposit history display, and the agent authorization/revoke lifecycle via rmpc).
+#
+# WHY THREE PARALLEL JOBS
+# Each job boots its own devnet, so they are fully independent. Running them in parallel
+# cuts wall time from ~45 min to ~15 min. The three flows test orthogonal code paths:
+# e2e tests the deposit flow UI, e2e-history-pane tests the explorer API integration,
+# and fork-roundtrip tests the dApp↔rmpc authorization contract.
+#
+# WHY PLAYWRIGHT REPORT IS UPLOADED ON FAILURE
+# Playwright captures screenshots and traces on test failure. Without uploading the
+# report, a flaky E2E failure produces only a text stack trace, which is rarely
+# sufficient to diagnose a browser-side issue. The artifact is retained for 30 days
+# (GitHub Actions default) and can be downloaded from the workflow run summary.
+#
+# GOTCHAS
+# - The devnet lifecycle is owned by the test code (via the smoke-test fixture). There
+#   is no explicit compose up/down in the CI steps. If the devnet fails to start, the
+#   Playwright tests will fail with a "connection refused" error on the RPC URL, not a
+#   devnet-specific error. Check the smoke-test crate (suite 14) first if devnet boot
+#   issues are suspected.
+# - VITE_HISTORY_PANE=true is only set in the e2e-history-pane job. The feature flag
+#   gates a UI component that should not appear in the default build. If a developer
+#   enables it globally in .env.example, the e2e job (without the flag) will fail
+#   because it asserts the pane is absent.
+# - fork-roundtrip installs only Chromium (not all browsers) to save 2–3 min of
+#   install time. If a test is added that requires Firefox or WebKit, add them to the
+#   playwright install command in that job only.
+
+name: dapp-playwright-e2e
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - "contracts/**"
+      - "testing/smoke-test/**"
+      - ".github/workflows/suite-10-dapp-e2e.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/dapp/**"
+      - "contracts/**"
+      - "testing/smoke-test/**"
+      - ".github/workflows/suite-10-dapp-e2e.yml"
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: dapp-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm test:e2e:install
+
+      - name: Run Playwright E2E
+        env:
+          VITE_USE_MOCK_WALLET: "true"
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-e2e
+          path: clients/dapp/playwright-report/
+
+  e2e-history-pane:
+    name: dapp-e2e-history-pane
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: clients/dapp
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm test:e2e:install
+
+      - name: Run history-pane E2E
+        env:
+          VITE_USE_MOCK_WALLET: "true"
+          VITE_HISTORY_PANE: "true"
+        run: pnpm test:e2e tests/e2e/history-pane.spec.ts
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-history-pane
+          path: clients/dapp/playwright-report/
+
+  fork-roundtrip:
+    name: dapp-fork-roundtrip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: clients/dapp/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: pnpm install
+        working-directory: clients/dapp
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: clients/dapp
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Fork round-trip
+        run: bash clients/dapp/scripts/run-fork-roundtrip.sh
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-fork-roundtrip
+          path: clients/dapp/playwright-report/

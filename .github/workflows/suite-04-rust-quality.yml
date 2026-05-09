@@ -1,0 +1,112 @@
+# Canonical: docs/testing/ci-suites.md §4
+#
+# WHY THIS SUITE EXISTS
+# clippy -D warnings is the project's primary defence against silent logic errors in Rust
+# (unused results, incorrect lifetime annotations, integer overflow in debug mode). The
+# doc-coverage gate exists because rmpc ships as a programmable library — undocumented
+# pub types cause downstream agents to misuse the API. Both checks are cheap enough to
+# run on every Rust change without slowing down PR feedback.
+#
+# WHY doc-coverage NEEDS lint FIRST
+# cargo doc runs a full build internally. There is no point building twice (once for
+# clippy, once for rustdoc) if the code has lint errors that will be fixed before merge.
+# Gating saves roughly 2–3 minutes per failed push.
+#
+# WHY cargo build --all-targets BEFORE cargo doc
+# cargo doc --no-deps will silently skip crates that fail to compile. The explicit build
+# step surfaces compile errors with the full error message; without it, a broken crate
+# just disappears from the rustdoc output and check_rustdoc_coverage.py reports false
+# coverage (nothing to cover = 100%).
+#
+# GOTCHAS
+# - The Cargo cache key hashes all four Cargo.toml files. Adding a new crate to the
+#   workspace requires adding its Cargo.toml to the key, otherwise the cache will never
+#   invalidate when that crate's dependencies change.
+# - cargo clippy --all-targets includes integration tests and benchmarks. A warning in a
+#   test helper file is still a hard failure. This is intentional: test code is real code.
+# - check_rustdoc_coverage.py parses the rustdoc.log warning lines. If rustdoc changes
+#   its warning format in a future Rust release, the script may silently under-count
+#   missing docs and pass. Pin the Rust toolchain version if this is a concern.
+
+name: rust-fmt-clippy-doc-coverage
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "services/explorer-indexer/**"
+      - ".github/workflows/suite-04-rust-quality.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "clients/rust-payment-client/**"
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "services/explorer-indexer/**"
+      - ".github/workflows/suite-04-rust-quality.yml"
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: rust-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml', 'services/explorer-indexer/Cargo.toml', 'testing/smoke-test/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-quality-
+
+      - name: cargo fmt --check (all crates)
+        run: cargo fmt --check --all
+
+      - name: cargo clippy (all crates, all targets)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  doc-coverage:
+    name: rust-doc-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml', 'services/explorer-indexer/Cargo.toml', 'testing/smoke-test/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-quality-
+
+      - name: cargo build --all-targets
+        run: cargo build --all-targets
+
+      - name: cargo doc + coverage check
+        run: |
+          cargo doc --no-deps --all-features 2>&1 | tee rustdoc.log
+          python3 .github/scripts/check_rustdoc_coverage.py rustdoc.log

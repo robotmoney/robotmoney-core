@@ -1,0 +1,191 @@
+# Canonical: docs/testing/ci-suites.md §11 (opencode-headless)
+#
+# WHY THIS SUITE EXISTS
+# The headless deposit and read tests are the only end-to-end proof that an AI agent,
+# given a plain-English prompt, will call the correct tools in the correct order and
+# produce a valid on-chain transaction. They catch regressions in prompt engineering,
+# tool schema definitions, and the rmpc output contract — none of which are detectable
+# by unit tests or structural checks. The refusal job runs first as a hard gate: an
+# agent that fails safety checks should never proceed to a live chain interaction.
+#
+# WHY NIGHTLY ONLY (NOT EVERY PR)
+# Each headless run invokes a live language model. This takes 3–10 min, costs API
+# credits, and has non-deterministic output that can produce false positives. Running
+# on every PR would slow down the feedback loop and create noise from model variability.
+# Nightly gives a daily signal on model/tool drift without blocking development.
+#
+# WHY refusal RUNS BEFORE deposit AND read
+# The refusal assertions are the safety contract: the agent must not broadcast to
+# mainnet, must not leak secrets, must reject out-of-policy amounts. If these fail, a
+# broken prompt or tool schema could send real transactions to the wrong network. The
+# dependency makes it structurally impossible to reach the live-chain steps with a
+# failing safety gate.
+#
+# WHY deposit AND read RUN IN PARALLEL (BOTH NEED refusal)
+# They test orthogonal agent configurations (deposit-enabled vs read-only) against
+# independent devnet instances. There is no shared state between them; running in
+# parallel cuts the nightly wall time roughly in half.
+#
+# GOTCHAS
+# - assert_headless_deposit_transcript.py validates tool-call ORDER, not just presence.
+#   The agent must call get-vault before self-check before deposit. If the model changes
+#   its reasoning order (common after a model version bump), this assertion fails even if
+#   the final transaction succeeds. Update the expected order in the script if the new
+#   order is intentional and correct.
+# - The deposit job funds the agent via anvil_setBalance, which sets the ETH balance
+#   directly without a transfer. This only works on Anvil/devnet. If this job is ever
+#   pointed at a non-Anvil chain, the funding step will silently do nothing and the
+#   deposit will fail with "insufficient funds" — which looks like an rmpc bug.
+# - OpenCode is pinned at a specific version. A nightly failure after a new OpenCode
+#   release is most likely a tool schema or prompt format change in the new version,
+#   not a regression in rmpc. Check the OpenCode changelog before debugging rmpc.
+
+name: opencode-headless-deposit-read
+
+on:
+  schedule:
+    - cron: "17 3 * * *"  # nightly
+  workflow_dispatch:
+
+jobs:
+  refusal:
+    name: opencode-refusal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Refusal transcript assertions
+        working-directory: clients/rust-payment-client
+        run: cargo test --test refusal_walkthrough -- --nocapture
+
+  deposit:
+    name: opencode-headless-deposit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: refusal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.13"
+
+      - name: Install OpenCode at pinned version
+        run: bun install -g opencode-ai@1.14.29
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Build rmpc binary
+        run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Deploy contracts on devnet
+        run: forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545
+
+      - name: Generate agent EOA + fund
+        run: |
+          set -euo pipefail
+          cargo run --release --manifest-path clients/rust-payment-client/Cargo.toml \
+            --bin rmpc-keystore-import -- --generate > agent.json
+          AGENT=$(jq -r '.address' agent.json)
+          cast rpc anvil_setBalance "$AGENT" "0xDE0B6B3A7640000" --rpc-url http://127.0.0.1:8545
+
+      - name: Headless deposit run
+        run: opencode run "deposit 1 USDC to the vault" --format json > headless-deposit.json
+
+      - name: Assert deposit transcript
+        run: python3 .github/scripts/assert_headless_deposit_transcript.py headless-deposit.json
+
+  read:
+    name: opencode-headless-read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: refusal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.13"
+
+      - name: Install OpenCode at pinned version
+        run: bun install -g opencode-ai@1.14.29
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-unit-
+
+      - name: Build rmpc binary
+        run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Deploy contracts + fund agent on devnet
+        run: forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545
+
+      - name: Read-only isolation assertions
+        working-directory: clients/rust-payment-client
+        run: cargo test --test refusal_walkthrough -- --nocapture
+
+      - name: Headless read run
+        run: opencode run "show me the vault state and my balance" --format json > headless-read.json
+
+      - name: Assert read transcript
+        run: python3 .github/scripts/assert_headless_read_transcript.py headless-read.json

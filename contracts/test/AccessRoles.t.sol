@@ -26,9 +26,7 @@ contract AccessRolesHarness is AccessRoles {
     ///      at slot 0; `RoleData.hasRole[address]` lives at
     ///      `keccak256(account || keccak256(role || 0))`.
     function unsafe_forgeRole(bytes32 role, address account) external {
-        bytes32 slot = keccak256(
-            abi.encode(account, keccak256(abi.encode(role, uint256(0))))
-        );
+        bytes32 slot = keccak256(abi.encode(account, keccak256(abi.encode(role, uint256(0)))));
         // Write `true` (1) into the bool slot.
         assembly {
             sstore(slot, 1)
@@ -194,9 +192,7 @@ contract AccessRolesTest is Test {
         vm.prank(stranger);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                stranger,
-                bytes32(0)
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, bytes32(0)
             )
         );
         roles.grantRole(AGENT, agent);

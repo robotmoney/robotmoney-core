@@ -1,0 +1,144 @@
+# DEPRECATED — this workflow is superseded by the rebuilt CI suite.
+# Do not modify; it will be removed when replacement workflows are in place.
+#
+# Phase 4 — OpenClaw install + long-running task config.
+#
+# Canonical: docs/walkthroughs/openclaw-config.md
+# Implements: implementation-plan §10. Issue: #114.
+#
+# On every PR and on push to dev/main, run the four scripted tests
+# under testing/openclaw-config/. The mainnet-gate, secret-handling,
+# and doc-parity tests are fully hermetic. The long-running test
+# skips loud-clean when RMPC_FORK_RPC_URL is missing — same convention
+# as fork-e2e.yml.
+name: openclaw-config
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/openclaw-config.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "testing/openclaw-config/**"
+      - "docs/walkthroughs/openclaw-config.md"
+      - "clients/rust-payment-client/**"
+      - ".github/workflows/openclaw-config.yml"
+  workflow_dispatch:
+
+jobs:
+  openclaw-config:
+    name: OpenClaw harness + walkthrough parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clients/rust-payment-client/target
+          key: ${{ runner.os }}-cargo-rmpc-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'clients/rust-payment-client/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rmpc-
+
+      - name: Shellcheck
+        run: shellcheck -x testing/openclaw-config/*.sh
+
+      - name: Build rmpc
+        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Mainnet gate test
+        run: bash testing/openclaw-config/test_mainnet_gate.sh
+
+      - name: Secret-handling test
+        run: bash testing/openclaw-config/test_secret_handling.sh
+
+      - name: Doc-parity test
+        run: bash testing/openclaw-config/test_doc_parity.sh
+
+      - name: Long-running monitor test (fork or skip-clean)
+        id: long_running
+        env:
+          RMPC_FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+          RMPC_MONITOR_ITERATIONS: "3"
+          RMPC_MONITOR_INTERVAL_SECS: "1"
+        run: |
+          set +e
+          mkdir -p artifacts/long-running
+          OUTCOME_FILE="artifacts/long-running/outcome.txt"
+          LOG_FILE="artifacts/long-running/test_long_running.log"
+
+          if [ -z "$RMPC_FORK_RPC_URL" ]; then
+            REASON="RMPC_FORK_RPC_URL secret not configured in repository settings; long-running fork test skipped. See docs/walkthroughs/openclaw-config.md §10 for setup instructions."
+            echo "::warning::${REASON}"
+            {
+              echo "outcome=skipped"
+              echo "reason=${REASON}"
+            } >"$OUTCOME_FILE"
+            echo "SKIPPED: ${REASON}" >"$LOG_FILE"
+            echo "outcome=skipped" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          bash testing/openclaw-config/test_long_running.sh >"$LOG_FILE" 2>&1
+          rc=$?
+          cat "$LOG_FILE"
+          if [ "$rc" -eq 0 ]; then
+            {
+              echo "outcome=pass"
+              echo "reason=test_long_running.sh exited 0 against RMPC_FORK_RPC_URL"
+            } >"$OUTCOME_FILE"
+            echo "outcome=pass" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "outcome=fail"
+            echo "reason=test_long_running.sh exited ${rc}"
+          } >"$OUTCOME_FILE"
+          echo "outcome=fail" >>"$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Upload long-running outcome artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-long-running-outcome
+          path: artifacts/long-running/
+          if-no-files-found: error
+
+      - name: Assert long-running outcome artifact is well-formed
+        if: always()
+        run: |
+          set -euo pipefail
+          OUTCOME_FILE="artifacts/long-running/outcome.txt"
+          if [ ! -f "$OUTCOME_FILE" ]; then
+            echo "::error::long-running outcome artifact missing at ${OUTCOME_FILE}"
+            exit 1
+          fi
+          OUTCOME_LINE="$(grep '^outcome=' "$OUTCOME_FILE" || true)"
+          REASON_LINE="$(grep '^reason=' "$OUTCOME_FILE" || true)"
+          case "$OUTCOME_LINE" in
+            outcome=pass|outcome=skipped|outcome=fail) ;;
+            *)
+              echo "::error::outcome artifact has invalid outcome line: '${OUTCOME_LINE}'"
+              exit 1
+              ;;
+          esac
+          if [ -z "$REASON_LINE" ]; then
+            echo "::error::outcome artifact missing reason= line"
+            exit 1
+          fi
+          echo "Long-running outcome artifact OK:"
+          cat "$OUTCOME_FILE"

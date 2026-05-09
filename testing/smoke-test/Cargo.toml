@@ -1,0 +1,30 @@
+[package]
+name = "smoke-test"
+version = "0.1.0"
+edition = "2021"
+description = "Devnet fixture library and CLI for Robot Money integration tests."
+license = "MIT"
+publish = false
+
+# Canonical: docs/testing/smoke-test-design.md
+# Implements: issue #146
+
+[lib]
+name = "smoke_test"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smoke-test"
+path = "src/bin/smoke-test.rs"
+
+[dependencies]
+alloy-primitives = { version = "0.8", features = ["k256"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+which = "6"
+hex = "0.4"
+thiserror = "1"
+ctrlc = "3"
