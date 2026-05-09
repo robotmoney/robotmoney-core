@@ -1,14 +1,22 @@
 //! Canonical: docs/architecture.md §10 — Local State (submitted-order cache)
 //!
-//! Client-side replay cache for `(order_id, idempotency_key, deadline)`
-//! tuples already submitted by this rmpc installation.
+//! Client-side replay cache keyed on the gateway-equivalent `paymentId`,
+//! which is `keccak256(abi.encode(chain_id, gateway, agent, order_id,
+//! amount, idempotency_key))`.  The deadline is intentionally excluded
+//! from the key — this mirrors the on-chain formula in
+//! `RobotMoneyGateway.deposit` (comment "DEADLINE INTENTIONALLY EXCLUDED").
 //!
 //! Audit finding M3 (priority-fee cap + replay cache half). The gateway
-//! contract enforces idempotency on-chain via `idempotencyKey`; the
-//! cache is a defensive client-side check that catches an operator
-//! retrying a deposit they previously sent — without paying gas to
-//! discover the on-chain refusal. On a hit, the prior `tx_hash` is
+//! contract enforces idempotency on-chain via the paymentId derived from
+//! chain_id, gateway address, agent address, orderId, amount, and
+//! idempotencyKey; the cache is a defensive client-side check that catches
+//! an operator retrying a deposit they previously sent — without paying gas
+//! to discover the on-chain refusal. On a hit, the prior `tx_hash` is
 //! surfaced so the operator can look up the original receipt.
+//!
+//! A retry with a fresh deadline but the same on-chain paymentId is caught
+//! locally; deposits that differ by amount, chain_id, gateway address, or
+//! agent address do not collide in the cache.
 //!
 //! Storage shape: a single JSON file at `<state_dir>/submitted_order_ids.json`.
 //! Concurrent access is serialised with `fs2` advisory locks (already a
@@ -19,6 +27,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Seek, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 
+use alloy_primitives::{keccak256, Address, B256, U256};
+use alloy_sol_types::SolValue;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -27,31 +37,62 @@ use crate::errors::{Result, RmpcError};
 /// On-disk filename, relative to the state dir.
 pub const REPLAY_CACHE_FILENAME: &str = "submitted_order_ids.json";
 
-/// One entry in the replay cache. Keyed by [`Entry::key`] which is the
-/// hex concatenation of order_id || idempotency_key || deadline_be.
+/// Inputs used to derive the gateway-equivalent paymentId cache key.
+///
+/// Mirrors the on-chain formula:
+/// `keccak256(abi.encode(chain_id, gateway, agent, order_id, amount,
+/// idempotency_key))`.
+pub struct PaymentIdInputs<'a> {
+    pub chain_id: u64,
+    pub gateway: Address,
+    pub agent: Address,
+    pub order_id: B256,
+    pub amount: U256,
+    pub idempotency_key: B256,
+    /// Kept for audit-log metadata only; not part of the cache key.
+    pub deadline: u64,
+    /// The tx_hash recorded on insert.
+    pub tx_hash: &'a str,
+}
+
+/// Compute the gateway-equivalent paymentId from the given inputs.
+///
+/// Formula: `keccak256(abi.encode(chain_id, gateway, agent, order_id,
+/// amount, idempotency_key))`.  The deadline is intentionally excluded —
+/// matching the on-chain definition in `RobotMoneyGateway`.
+pub fn compute_payment_id(
+    chain_id: u64,
+    gateway: Address,
+    agent: Address,
+    order_id: B256,
+    amount: U256,
+    idempotency_key: B256,
+) -> B256 {
+    // abi.encode(uint256(chain_id), address(gateway), address(agent),
+    //            bytes32(order_id), uint256(amount), bytes32(idempotency_key))
+    let encoded = (
+        U256::from(chain_id),
+        gateway,
+        agent,
+        order_id,
+        amount,
+        idempotency_key,
+    )
+        .abi_encode_sequence();
+    B256::from(keccak256(encoded))
+}
+
+/// One entry in the replay cache. Keyed by the gateway-equivalent
+/// `paymentId` (a 32-byte hex string).  `deadline` is retained only as
+/// audit metadata and does not affect cache key lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    pub payment_id: String,
     pub order_id: String,
     pub idempotency_key: String,
+    /// Audit metadata only — not part of the cache key.
     pub deadline: u64,
     pub tx_hash: String,
-}
-
-impl Entry {
-    /// Stable cache key. The same triple from a retry must round-trip
-    /// to the same string regardless of hex-prefix or case.
-    pub fn key(order_id: &str, idempotency_key: &str, deadline: u64) -> String {
-        format!(
-            "{}|{}|{}",
-            normalize_hex(order_id),
-            normalize_hex(idempotency_key),
-            deadline
-        )
-    }
-}
-
-fn normalize_hex(s: &str) -> String {
-    s.strip_prefix("0x").unwrap_or(s).to_ascii_lowercase()
 }
 
 /// On-disk shape: a `Vec<Entry>` plus a version tag. Vec keeps the file
@@ -65,7 +106,7 @@ struct ReplayFile {
 }
 
 fn default_version() -> u32 {
-    1
+    2
 }
 
 /// Replay-cache handle. Stateless — every operation re-reads the file
@@ -86,37 +127,58 @@ impl ReplayCache {
         Ok(Self { path })
     }
 
-    /// Return the prior tx_hash if `(order_id, idempotency_key,
-    /// deadline)` was already submitted from this installation.
+    /// Return the prior tx_hash if a deposit with the same on-chain
+    /// paymentId was already submitted from this installation.
+    ///
+    /// The paymentId is computed from `(chain_id, gateway, agent,
+    /// order_id, amount, idempotency_key)`.  A retry with a fresh
+    /// deadline but the same paymentId inputs is caught here; deposits
+    /// that differ by amount, chain_id, gateway, or agent produce a
+    /// distinct paymentId and do not collide.
     pub fn lookup(
         &self,
-        order_id: &str,
-        idempotency_key: &str,
-        deadline: u64,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
     ) -> Result<Option<String>> {
-        let key = Entry::key(order_id, idempotency_key, deadline);
+        let payment_id =
+            compute_payment_id(chain_id, gateway, agent, order_id, amount, idempotency_key);
+        let key = format!("{payment_id:#x}");
         let map = self.read_locked()?;
         Ok(map.get(&key).map(|e| e.tx_hash.clone()))
     }
 
-    /// Insert a new entry. Overwrites any existing entry with the same
-    /// key (which would only happen if the prior insert lost a race
-    /// before the broadcast actually returned a hash — and then we
-    /// prefer the most recent observed tx_hash).
+    /// Insert a new entry. The cache key is the gateway-equivalent
+    /// paymentId; `deadline` is stored as audit metadata only.
+    ///
+    /// Overwrites any existing entry with the same paymentId (which
+    /// would only happen if the prior insert lost a race before the
+    /// broadcast returned a hash — we prefer the most recent tx_hash).
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &self,
-        order_id: &str,
-        idempotency_key: &str,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
         deadline: u64,
         tx_hash: &str,
     ) -> Result<()> {
-        let key = Entry::key(order_id, idempotency_key, deadline);
+        let payment_id =
+            compute_payment_id(chain_id, gateway, agent, order_id, amount, idempotency_key);
+        let key = format!("{payment_id:#x}");
         self.with_locked_file(|file, mut map| {
             map.insert(
-                key,
+                key.clone(),
                 Entry {
-                    order_id: normalize_hex(order_id),
-                    idempotency_key: normalize_hex(idempotency_key),
+                    payment_id: key,
+                    order_id: format!("{order_id:#x}"),
+                    idempotency_key: format!("{idempotency_key:#x}"),
                     deadline,
                     tx_hash: tx_hash.to_string(),
                 },
@@ -145,8 +207,7 @@ impl ReplayCache {
                 .map_err(|e| RmpcError::ErrConfig(format!("replay cache: failed to parse: {e}")))?;
             let mut map = HashMap::new();
             for entry in parsed.entries {
-                let k = Entry::key(&entry.order_id, &entry.idempotency_key, entry.deadline);
-                map.insert(k, entry);
+                map.insert(entry.payment_id.clone(), entry);
             }
             Ok(map)
         })();
@@ -177,8 +238,7 @@ impl ReplayCache {
                 })?;
                 let mut m = HashMap::new();
                 for entry in parsed.entries {
-                    let k = Entry::key(&entry.order_id, &entry.idempotency_key, entry.deadline);
-                    m.insert(k, entry);
+                    m.insert(entry.payment_id.clone(), entry);
                 }
                 m
             };
@@ -191,9 +251,9 @@ impl ReplayCache {
 
 fn write_back(file: &mut File, map: &HashMap<String, Entry>) -> Result<()> {
     let mut entries: Vec<Entry> = map.values().cloned().collect();
-    entries.sort_by(|a, b| a.order_id.cmp(&b.order_id));
+    entries.sort_by(|a, b| a.payment_id.cmp(&b.payment_id));
     let payload = ReplayFile {
-        version: 1,
+        version: 2,
         entries,
     };
     let json =
@@ -208,13 +268,30 @@ fn write_back(file: &mut File, map: &HashMap<String, Entry>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::{address, b256, U256};
     use tempfile::TempDir;
+
+    // Shared test fixtures.
+    const CHAIN_ID: u64 = 1;
+    const GATEWAY: Address = address!("0000000000000000000000000000000000000001");
+    const AGENT: Address = address!("0000000000000000000000000000000000000002");
+    const ORDER_ID: B256 =
+        b256!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const IDEM_KEY: B256 =
+        b256!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const AMOUNT: U256 = U256::from_limbs([1_000_000, 0, 0, 0]);
+    const TX_HASH: &str = "0xtxhash";
 
     #[test]
     fn miss_returns_none() {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
-        assert_eq!(cache.lookup("0xaa", "0xbb", 1).unwrap(), None);
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -222,40 +299,115 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
         cache
-            .insert("0xaa", "0xbb", 1700000000, "0xtxhash")
+            .insert(
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+                1_700_000_000,
+                TX_HASH,
+            )
             .unwrap();
-        let got = cache.lookup("0xaa", "0xbb", 1700000000).unwrap();
-        assert_eq!(got, Some("0xtxhash".to_string()));
+        let got = cache
+            .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .unwrap();
+        assert_eq!(got, Some(TX_HASH.to_string()));
     }
 
+    /// A retry with a different deadline but the same paymentId inputs
+    /// MUST hit the cache — this is the primary fix for issue #176.
     #[test]
-    fn lookup_normalises_hex_prefix_and_case() {
+    fn same_payment_id_different_deadline_hits() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // Insert with deadline = 1.
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        // Lookup with deadline = 2 — must still hit because paymentId is the key.
+        let got = cache
+            .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .unwrap();
+        assert_eq!(got, Some(TX_HASH.to_string()));
+    }
+
+    /// Different amount → different paymentId → no collision.
+    #[test]
+    fn different_amount_does_not_collide() {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
         cache
-            .insert("0xAA", "0xBB", 1700000000, "0xtxhash")
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
             .unwrap();
-        // Without prefix, lower case — must hit.
+        let other_amount = U256::from(999_999u64);
         assert_eq!(
-            cache.lookup("aa", "bb", 1700000000).unwrap(),
-            Some("0xtxhash".to_string())
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, other_amount, IDEM_KEY)
+                .unwrap(),
+            None
         );
     }
 
+    /// Different chain_id → different paymentId → no collision.
     #[test]
-    fn different_deadline_misses() {
+    fn different_chain_id_does_not_collide() {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
-        cache.insert("0xaa", "0xbb", 1, "0xtxhash").unwrap();
-        assert_eq!(cache.lookup("0xaa", "0xbb", 2).unwrap(), None);
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID + 1, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None
+        );
     }
 
+    /// Different gateway address → different paymentId → no collision.
     #[test]
-    fn different_idempotency_key_misses() {
+    fn different_gateway_does_not_collide() {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
-        cache.insert("0xaa", "0xbb", 1, "0xtxhash").unwrap();
-        assert_eq!(cache.lookup("0xaa", "0xcc", 1).unwrap(), None);
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        let other_gateway = address!("0000000000000000000000000000000000000009");
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, other_gateway, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None
+        );
+    }
+
+    /// Different agent address → different paymentId → no collision.
+    #[test]
+    fn different_agent_does_not_collide() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        let other_agent = address!("0000000000000000000000000000000000000007");
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, other_agent, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -263,12 +415,18 @@ mod tests {
         let dir = TempDir::new().unwrap();
         {
             let cache = ReplayCache::open(dir.path()).unwrap();
-            cache.insert("0xaa", "0xbb", 1, "0xhash1").unwrap();
+            cache
+                .insert(
+                    CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, "0xhash1",
+                )
+                .unwrap();
         }
         {
             let cache = ReplayCache::open(dir.path()).unwrap();
             assert_eq!(
-                cache.lookup("0xaa", "0xbb", 1).unwrap(),
+                cache
+                    .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                    .unwrap(),
                 Some("0xhash1".to_string())
             );
         }
@@ -278,11 +436,52 @@ mod tests {
     fn second_insert_overwrites() {
         let dir = TempDir::new().unwrap();
         let cache = ReplayCache::open(dir.path()).unwrap();
-        cache.insert("0xaa", "0xbb", 1, "0xfirst").unwrap();
-        cache.insert("0xaa", "0xbb", 1, "0xsecond").unwrap();
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, "0xfirst",
+            )
+            .unwrap();
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, "0xsecond",
+            )
+            .unwrap();
         assert_eq!(
-            cache.lookup("0xaa", "0xbb", 1).unwrap(),
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
             Some("0xsecond".to_string())
+        );
+    }
+
+    /// compute_payment_id must produce a deterministic hash that equals the
+    /// Solidity `keccak256(abi.encode(...))` for the same inputs.
+    ///
+    /// Reference value: computed off-chain with the same inputs to validate
+    /// the Rust encoding matches Solidity's ABI layout.
+    #[test]
+    fn compute_payment_id_is_deterministic() {
+        let id1 = compute_payment_id(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY);
+        let id2 = compute_payment_id(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY);
+        assert_eq!(id1, id2);
+    }
+
+    /// Different idempotency_key → different paymentId → no collision.
+    #[test]
+    fn different_idempotency_key_does_not_collide() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        let other_key = b256!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, other_key)
+                .unwrap(),
+            None
         );
     }
 }

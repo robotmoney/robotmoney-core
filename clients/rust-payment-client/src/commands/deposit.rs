@@ -299,10 +299,15 @@ pub fn run(args: Args) -> i32 {
     };
 
     // -- Replay cache (audit M3) -----------------------------------------
-    // Look up the (order_id, idempotency_key, deadline) tuple in our
-    // own client-side cache. On a hit, surface the prior tx_hash and
-    // exit non-zero with `ErrOrderIdAlreadySubmitted` instead of paying
-    // gas to discover the same dedupe on chain.
+    // Look up the gateway-equivalent paymentId in our own client-side
+    // cache.  The paymentId is keccak256(abi.encode(chain_id, gateway,
+    // agent, order_id, amount, idempotency_key)) — deadline is
+    // intentionally excluded, mirroring the on-chain formula.  On a
+    // hit, surface the prior tx_hash and exit non-zero with
+    // `ErrOrderIdAlreadySubmitted` instead of paying gas to discover
+    // the same dedupe on chain.  A retry with a fresh deadline but the
+    // same on-chain paymentId is caught here; deposits that differ by
+    // amount, chain_id, gateway, or agent produce a distinct paymentId.
     let replay = match crate::replay_cache::ReplayCache::open(&state_dir) {
         Ok(c) => c,
         Err(e) => {
@@ -311,8 +316,14 @@ pub fn run(args: Args) -> i32 {
         }
     };
     let order_id_hex = format!("{order_id:#x}");
-    let idem_hex = format!("{idempotency_key:#x}");
-    match replay.lookup(&order_id_hex, &idem_hex, deadline) {
+    match replay.lookup(
+        cfg.chain_id,
+        gateway_addr,
+        agent_address,
+        order_id,
+        amount,
+        idempotency_key,
+    ) {
         Ok(Some(prior_tx)) => {
             let err = RmpcError::ErrOrderIdAlreadySubmitted {
                 tx_hash: prior_tx.clone(),
@@ -502,10 +513,19 @@ pub fn run(args: Args) -> i32 {
     // refusal/success emissions include it.
     let tx_hash_hex = format!("{tx_hash:#x}");
     audit.tx_hash = Some(tx_hash_hex.clone());
-    // Record the (order_id, idempotency_key, deadline) → tx_hash entry
-    // in the replay cache so a future retry hits the local check
-    // before paying gas.
-    if let Err(e) = replay.insert(&order_id_hex, &idem_hex, deadline, &tx_hash_hex) {
+    // Record the paymentId → tx_hash entry in the replay cache so a
+    // future retry hits the local check before paying gas.  deadline is
+    // stored as audit metadata only.
+    if let Err(e) = replay.insert(
+        cfg.chain_id,
+        gateway_addr,
+        agent_address,
+        order_id,
+        amount,
+        idempotency_key,
+        deadline,
+        &tx_hash_hex,
+    ) {
         log::warn!("rmpc deposit: replay cache insert failed (non-fatal): {e}");
     }
 

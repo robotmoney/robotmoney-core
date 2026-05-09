@@ -20,7 +20,8 @@
 //! 3. `deposit_happy_path` — full deposit pipeline, asserts on JSON +
 //!    on-chain side effects via `rmpc status`.
 //! 4. `idempotent_replay_rejected` — replaying `(orderId,
-//!    idempotencyKey)` reverts on chain, surfaced as `ErrTxReverted`.
+//!    idempotencyKey)` caught by local replay cache, surfaced as
+//!    `ErrOrderIdAlreadySubmitted`.
 //! 5. `over_per_payment_cap_rejected` — `amount > maxPerPayment`
 //!    refused by preflight (`ErrConfig`).
 //! 6. `paused_blocks_deposit` — `paused() == true` refused by
@@ -376,9 +377,9 @@ fn deposit_happy_path() {
 // ------------------------------------------------------------- scenario 4
 
 /// Replaying the same `(orderId, idempotencyKey)` twice — the second
-/// call passes preflight (the gateway only learns the payment id is
-/// used at execution time) and reverts with `PaymentIdAlreadyUsed`,
-/// surfaced by rmpc as `ErrTxReverted`.
+/// call is caught by the local replay cache (keyed on `paymentId`) and
+/// refused with `ErrOrderIdAlreadySubmitted` before any on-chain
+/// submission is attempted.
 #[test]
 fn idempotent_replay_rejected() {
     if skip_if_no_prereqs("idempotent_replay_rejected") {
@@ -422,10 +423,14 @@ fn idempotent_replay_rejected() {
         );
         let v2 = parse_json(&second.stdout, "idempotent_replay_rejected#2");
         assert_eq!(v2["status"], "refused");
-        assert_eq!(v2["error"], "ErrTxReverted", "stdout={}", second.stdout);
+        assert_eq!(
+            v2["error"], "ErrOrderIdAlreadySubmitted",
+            "stdout={}",
+            second.stdout
+        );
         assert!(
             v2["tx_hash"].as_str().is_some(),
-            "ErrTxReverted should carry tx_hash; stdout={}",
+            "ErrOrderIdAlreadySubmitted should carry prior tx_hash; stdout={}",
             second.stdout
         );
     });

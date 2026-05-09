@@ -480,6 +480,147 @@ async fn deposit_receipt_timeout_refuses() {
     assert!(v["tx_hash"].is_string());
 }
 
+/// A duplicate retry with the same (chain_id, gateway, agent, order_id,
+/// amount, idempotency_key) must be refused locally before signing or
+/// broadcasting, even if a different deadline is used on the second call.
+///
+/// Regression for issue #176: old cache keyed on (order_id,
+/// idempotency_key, deadline), so a fresh deadline produced a false
+/// negative and the second deposit would broadcast a gas-wasting duplicate.
+#[tokio::test]
+async fn deposit_duplicate_retry_refused_before_broadcast() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let amount = U256::from(123_456u64);
+    let shares = U256::from(987_654u64);
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(amount, shares),
+    )
+    .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+
+    // First deposit — succeeds and writes the replay cache entry.
+    let out1 = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", &state_dir)
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            &amount.to_string(),
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+            "--idempotency-key",
+            &format!("{IDEMPOTENCY_KEY:#x}"),
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let v1: Value = serde_json::from_str(String::from_utf8(out1.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v1["status"], "success");
+    let prior_tx = v1["tx_hash"].as_str().unwrap().to_string();
+
+    // Second invocation — same paymentId inputs but deadline will differ
+    // (the binary computes `now + deadline_secs` internally; since time
+    // has advanced even by one second the raw deadline value changes, but
+    // the cache key must still hit).  The binary should refuse locally
+    // before reaching eth_sendRawTransaction.
+    let out2 = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", &state_dir)
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            &amount.to_string(),
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+            "--idempotency-key",
+            &format!("{IDEMPOTENCY_KEY:#x}"),
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert_eq!(out2.status.code(), Some(2));
+    let v2: Value = serde_json::from_str(String::from_utf8(out2.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v2["status"], "refused");
+    assert_eq!(v2["error"], "ErrOrderIdAlreadySubmitted");
+    // The refusal must surface the tx_hash from the first deposit.
+    assert_eq!(v2["tx_hash"].as_str().unwrap(), prior_tx.as_str());
+}
+
+/// After a successful deposit the replay cache must contain an entry so
+/// subsequent calls (including non-duplicate ones) don't wipe state.
+/// This regression check ensures the non-duplicate path still writes
+/// a replay entry after broadcast / receipt handling.
+#[tokio::test]
+async fn deposit_non_duplicate_still_writes_replay_entry() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let amount = U256::from(5_000u64);
+    let shares = U256::from(4_000u64);
+    install_happy_path_mocks(&mut server, chain_id, SIGNER_ADDRESS).await;
+    install_post_preflight_mocks(
+        &mut server,
+        &receipt_with_agent_deposit_body(amount, shares),
+    )
+    .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let state_dir = unique_state_dir();
+
+    // Single successful deposit.
+    rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", &state_dir)
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            &amount.to_string(),
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+            "--idempotency-key",
+            &format!("{IDEMPOTENCY_KEY:#x}"),
+            "--receipt-timeout-secs",
+            "5",
+        ])
+        .assert()
+        .success();
+
+    // Verify the replay cache file was written.
+    let cache_file = state_dir.join("submitted_order_ids.json");
+    assert!(
+        cache_file.exists(),
+        "replay cache file should exist after a successful deposit"
+    );
+    let raw = std::fs::read_to_string(&cache_file).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn deposit_reverted_tx_emits_err_tx_reverted() {
     let mut server = mockito::Server::new_async().await;
