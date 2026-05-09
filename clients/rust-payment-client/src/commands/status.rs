@@ -1,16 +1,24 @@
-//! Canonical: docs/implementation-plan.md §4.8 — CLI surface (status subcommand)
+//! Canonical: docs/implementation-plan.md §4.8 / §9 — CLI surface (status subcommand)
+//! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc status --payment-id 0x…` — read-only payment lookup.
 //!
-//! Issues a single `eth_getLogs` filtered on the gateway address +
-//! `AgentDeposit` topic0 + `paymentId` topic1, decodes the matching log
-//! through the `RobotMoneyGateway::AgentDeposit` binding, and emits a
-//! stable JSON document on stdout.
+//! Issues three JSON-RPC calls:
+//! 1. `eth_chainId` — envelope header.
+//! 2. `eth_blockNumber` — envelope header.
+//! 3. `eth_getLogs` filtered on the gateway address + `AgentDeposit` topic0
+//!    + `paymentId` topic1 — the deposit record.
+//!
+//! Output follows the Phase 3 shared envelope (`read_output::Envelope<T>`)
+//! with `chain_id`, `block_number`, `source: "json_rpc"`, `partial`, `errors`,
+//! and `data`. This is the same envelope every `rmpc get-*` command uses
+//! (issue #149 migration from the old flat shape).
 //!
 //! Exit codes:
 //! - 0 — exactly one matching log found, decoded successfully.
-//! - 0 — no matching log found (output JSON carries `status: "not_found"`;
-//!   absence is a valid query result, not an error).
+//! - 0 — no matching log found; output JSON carries `data.status: "not_found"`.
+//!   Absence is a valid query result, not an error.
+//! - 2 — input parse failure (bad `--payment-id`).
 //! - 3 — config / RPC / decode failure (operator-actionable).
 
 use std::path::Path;
@@ -23,28 +31,39 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
+use crate::read_output::{DecimalU256, PartialBuilder};
 use crate::rpc::{RawLog, RpcClient};
 
 const EXIT_OK: i32 = 0;
+const EXIT_INPUT_FAIL: i32 = 2;
 const EXIT_STARTUP_FAIL: i32 = 3;
 
-/// Stable JSON shape on a successful (found) lookup. Field names are
-/// part of the operator-visible contract — downstream e2e tests (#19)
-/// match on them. Numeric values that may exceed `u64` are decimal
-/// strings to preserve precision through `JSON.parse`.
+/// `data` payload for a successful (found) `rmpc status` response.
+///
+/// Field names are part of the operator-visible contract — downstream e2e
+/// tests match on them. Large integers (`amount`, `shares_minted`) serialize
+/// as decimal strings via [`DecimalU256`] per the §9 read-output contract.
 #[derive(Debug, Serialize)]
 pub struct StatusFound {
     pub payment_id: String,
     pub order_id: String,
     pub agent: String,
     pub share_receiver: String,
-    pub amount: String,
-    pub shares_minted: String,
+    /// Deposit amount as a decimal string. Never a lossy JSON number.
+    pub amount: DecimalU256,
+    /// Shares minted as a decimal string. Never a lossy JSON number.
+    pub shares_minted: DecimalU256,
+    /// Log block number for the `AgentDeposit` event.
     pub block_number: u64,
     pub tx_hash: String,
 }
 
-/// Stable JSON shape when no matching `AgentDeposit` log exists.
+/// `data` payload when no `AgentDeposit` log exists for the given payment id.
+///
+/// Consistent with `get-deposit` / `get-tx` not-found representations: the
+/// payment id is echoed and a typed `status` field identifies the outcome.
+/// The wrapper `Envelope` still carries `chain_id`, `block_number`, `source`,
+/// `partial: false`, and `errors: []` so consumers need no special-casing.
 #[derive(Debug, Serialize)]
 pub struct StatusNotFound {
     pub payment_id: String,
@@ -65,7 +84,7 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
         Ok(b) => b,
         Err(e) => {
             log::error!("rmpc status: --payment-id is not a 32-byte hex string: {e}");
-            return EXIT_STARTUP_FAIL;
+            return EXIT_INPUT_FAIL;
         }
     };
 
@@ -97,7 +116,6 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
     };
 
     let topic0 = RobotMoneyGateway::AgentDeposit::SIGNATURE_HASH;
-
     let filter = json!({
         "address": gateway_addr,
         "fromBlock": "earliest",
@@ -105,50 +123,72 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
         "topics": [topic0, payment_id],
     });
 
-    let logs: Vec<RawLog> = match rt.block_on(rpc.get_logs(filter)) {
-        Ok(v) => v,
-        Err(e) => {
-            log::error!("rmpc status: eth_getLogs failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-
     let pid_hex = format!("{payment_id:#x}");
 
-    if logs.is_empty() {
-        let out = StatusNotFound {
-            payment_id: pid_hex,
-            status: "not_found",
-        };
-        emit(&out, pretty);
-        return EXIT_OK;
-    }
-
-    // The first matching log wins. (paymentId is indexed and the gateway
-    // rejects replays, so at most one log can ever match — but we don't
-    // assert on that here; e2e tests cover the invariant.)
-    let raw = &logs[0];
-    let log_data = LogData::new_unchecked(raw.topics.clone(), raw.data.clone());
-    let decoded = match RobotMoneyGateway::AgentDeposit::decode_log_data(&log_data, true) {
-        Ok(d) => d,
-        Err(e) => {
-            log::error!("rmpc status: failed to decode AgentDeposit log: {e}");
-            return EXIT_STARTUP_FAIL;
+    // Three-call outcome: chain_id + block_number + getLogs.
+    // `Ok((headers, None))` = not_found (valid, exit 0).
+    // `Ok((headers, Some(...)))` = found, emit envelope.
+    // `Err(msg)` = RPC/decode failure, exit 3.
+    type HeaderPair = (u64, u64);
+    type Outcome = Result<(HeaderPair, Option<StatusFound>), String>;
+    let outcome: Outcome = rt.block_on(async {
+        let chain_id = rpc
+            .chain_id()
+            .await
+            .map_err(|e| format!("eth_chainId: {e}"))?;
+        let block_number = rpc
+            .block_number()
+            .await
+            .map_err(|e| format!("eth_blockNumber: {e}"))?;
+        let logs: Vec<RawLog> = rpc
+            .get_logs(filter)
+            .await
+            .map_err(|e| format!("eth_getLogs: {e}"))?;
+        if logs.is_empty() {
+            return Ok(((chain_id, block_number), None));
         }
-    };
+        // The first matching log wins. paymentId is indexed and the gateway
+        // rejects replays, so at most one log can ever match.
+        let raw = &logs[0];
+        let log_data = LogData::new_unchecked(raw.topics.clone(), raw.data.clone());
+        let decoded = RobotMoneyGateway::AgentDeposit::decode_log_data(&log_data, true)
+            .map_err(|e| format!("AgentDeposit decode: {e}"))?;
+        let found = StatusFound {
+            payment_id: format!("{:#x}", decoded.paymentId),
+            order_id: format!("{:#x}", decoded.orderId),
+            agent: format!("{:#x}", decoded.agent),
+            share_receiver: format!("{:#x}", decoded.shareReceiver),
+            amount: DecimalU256(decoded.amount),
+            shares_minted: DecimalU256(decoded.sharesMinted),
+            block_number: raw.block_number.to::<u64>(),
+            tx_hash: format!("{:#x}", raw.transaction_hash),
+        };
+        Ok(((chain_id, block_number), Some(found)))
+    });
 
-    let out = StatusFound {
-        payment_id: format!("{:#x}", decoded.paymentId),
-        order_id: format!("{:#x}", decoded.orderId),
-        agent: format!("{:#x}", decoded.agent),
-        share_receiver: format!("{:#x}", decoded.shareReceiver),
-        amount: decoded.amount.to_string(),
-        shares_minted: decoded.sharesMinted.to_string(),
-        block_number: raw.block_number.to::<u64>(),
-        tx_hash: format!("{:#x}", raw.transaction_hash),
-    };
-    emit(&out, pretty);
-    EXIT_OK
+    match outcome {
+        Ok(((chain_id, block_number), Some(found))) => {
+            let env = PartialBuilder::new(chain_id, block_number, found).finish();
+            emit(&env, pretty);
+            EXIT_OK
+        }
+        Ok(((chain_id, block_number), None)) => {
+            // Not-found is a valid query result. Wrap in the shared envelope
+            // so callers get chain_id/block_number/source on every response,
+            // consistent with get-deposit/get-tx not-found behavior.
+            let not_found = StatusNotFound {
+                payment_id: pid_hex,
+                status: "not_found",
+            };
+            let env = PartialBuilder::new(chain_id, block_number, not_found).finish();
+            emit(&env, pretty);
+            EXIT_OK
+        }
+        Err(msg) => {
+            log::error!("rmpc status: {msg}");
+            EXIT_STARTUP_FAIL
+        }
+    }
 }
 
 fn emit<T: Serialize>(out: &T, pretty: bool) {
@@ -159,4 +199,106 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
     }
     .expect("status output serialises");
     println!("{json}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read_output::Envelope;
+    use alloy_primitives::U256;
+
+    #[test]
+    fn status_found_amounts_serialize_as_decimal_strings() {
+        let d = StatusFound {
+            payment_id: "0x11".into(),
+            order_id: "0x22".into(),
+            agent: "0xaa".into(),
+            share_receiver: "0xbb".into(),
+            amount: DecimalU256(U256::from(2_000_000u64)),
+            shares_minted: DecimalU256(U256::from(1_111_111u64)),
+            block_number: 99,
+            tx_hash: "0x33".into(),
+        };
+        let v = serde_json::to_value(d).unwrap();
+        // Large integers must be strings, never lossy JSON numbers.
+        assert!(v["amount"].is_string(), "amount must be a JSON string");
+        assert!(
+            v["shares_minted"].is_string(),
+            "shares_minted must be a JSON string"
+        );
+        assert_eq!(v["amount"], "2000000");
+        assert_eq!(v["shares_minted"], "1111111");
+        assert_eq!(v["block_number"], 99u64);
+    }
+
+    #[test]
+    fn status_found_large_u256_no_precision_loss() {
+        // 2^200 — outside any JSON number's safe range.
+        let big = U256::from(1u8) << 200;
+        let d = StatusFound {
+            payment_id: "0x01".into(),
+            order_id: "0x02".into(),
+            agent: "0x03".into(),
+            share_receiver: "0x04".into(),
+            amount: DecimalU256(big),
+            shares_minted: DecimalU256(U256::ZERO),
+            block_number: 1,
+            tx_hash: "0x05".into(),
+        };
+        let v = serde_json::to_value(d).unwrap();
+        assert_eq!(v["amount"].as_str().unwrap(), big.to_string());
+    }
+
+    #[test]
+    fn status_not_found_has_status_field() {
+        let d = StatusNotFound {
+            payment_id: "0xdeadbeef".into(),
+            status: "not_found",
+        };
+        let v = serde_json::to_value(d).unwrap();
+        assert_eq!(v["status"], "not_found");
+        assert_eq!(v["payment_id"], "0xdeadbeef");
+    }
+
+    #[test]
+    fn status_found_in_envelope_has_shared_envelope_fields() {
+        let found = StatusFound {
+            payment_id: "0x01".into(),
+            order_id: "0x02".into(),
+            agent: "0x03".into(),
+            share_receiver: "0x04".into(),
+            amount: DecimalU256(U256::from(500u64)),
+            shares_minted: DecimalU256(U256::from(499u64)),
+            block_number: 42,
+            tx_hash: "0x05".into(),
+        };
+        let env: Envelope<StatusFound> = PartialBuilder::new(8453, 12_000_000, found).finish();
+        let v = serde_json::to_value(&env).unwrap();
+        // All Phase 3 envelope top-level fields must be present.
+        assert_eq!(v["chain_id"], 8453u64);
+        assert_eq!(v["block_number"], 12_000_000u64);
+        assert_eq!(v["source"], "json_rpc");
+        assert_eq!(v["partial"], false);
+        assert!(v["errors"].as_array().unwrap().is_empty());
+        // data fields still reachable.
+        assert!(v["data"]["amount"].is_string());
+        assert_eq!(v["data"]["block_number"], 42u64);
+    }
+
+    #[test]
+    fn status_not_found_in_envelope_has_shared_envelope_fields() {
+        let not_found = StatusNotFound {
+            payment_id: "0xdeadbeef".into(),
+            status: "not_found",
+        };
+        let env: Envelope<StatusNotFound> = PartialBuilder::new(8453, 99_999, not_found).finish();
+        let v = serde_json::to_value(&env).unwrap();
+        assert_eq!(v["chain_id"], 8453u64);
+        assert_eq!(v["block_number"], 99_999u64);
+        assert_eq!(v["source"], "json_rpc");
+        assert_eq!(v["partial"], false);
+        assert!(v["errors"].as_array().unwrap().is_empty());
+        assert_eq!(v["data"]["status"], "not_found");
+        assert_eq!(v["data"]["payment_id"], "0xdeadbeef");
+    }
 }

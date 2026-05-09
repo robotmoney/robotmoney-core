@@ -95,10 +95,29 @@ and gap recovery) is v1 work.
 rmpc status --config <CONFIG> --payment-id <0x...> [--pretty]
 ```
 
-Looks up a previously submitted payment by its on-chain `paymentId`. Returns
-the same envelope used by `get-deposit`, plus the most recent observed
-status (`pending`, `included`, `reverted`, `unknown`). Use this for retry,
-follow-up, and cross-checking after a `deposit` invocation.
+Looks up a previously submitted payment by its on-chain `paymentId`. Output
+follows the Phase 3 shared envelope (`chain_id`, `block_number`,
+`source: "json_rpc"`, `partial`, `errors`, `data`) — the same envelope used by
+`get-deposit` and all other read commands. No explorer API is involved.
+
+On success, `data` contains:
+
+- `payment_id` — 32-byte hex, echoed from the query.
+- `order_id` — 32-byte hex.
+- `agent` — agent address (0x-prefixed).
+- `share_receiver` — address that received vault shares (0x-prefixed).
+- `amount` — deposit amount as a **decimal string** (never a lossy JSON number).
+- `shares_minted` — shares minted as a **decimal string**.
+- `block_number` — block number of the `AgentDeposit` log.
+- `tx_hash` — transaction hash (0x-prefixed hex).
+
+When no matching `AgentDeposit` log is found, `data` contains:
+
+- `payment_id` — echoed from the query.
+- `status: "not_found"` — typed absence result; exit code is still 0.
+
+Use `rmpc status` for retry, follow-up, and cross-checking after a `deposit`
+invocation.
 
 ---
 

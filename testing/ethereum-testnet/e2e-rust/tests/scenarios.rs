@@ -345,20 +345,27 @@ fn deposit_happy_path() {
             st.stdout,
             st.stderr
         );
+        // rmpc status emits the Phase 3 shared envelope: top-level fields
+        // (chain_id, block_number, source, partial, errors) plus the deposit
+        // record nested inside `data`. Tests must use sv["data"][…].
         let sv = parse_json(&st.stdout, "deposit_happy_path/status");
+        assert_eq!(sv["source"], "json_rpc", "stdout={}", st.stdout);
         assert!(
-            sv.get("block_number").and_then(|v| v.as_u64()).is_some(),
+            sv["data"]
+                .get("block_number")
+                .and_then(|v| v.as_u64())
+                .is_some(),
             "rmpc status should locate the deposit; stdout={}",
             st.stdout
         );
         assert_eq!(
-            sv["payment_id"].as_str(),
+            sv["data"]["payment_id"].as_str(),
             Some(payment_id.as_str()),
             "status payment_id roundtrip; stdout={}",
             st.stdout
         );
         assert_eq!(
-            sv["amount"].as_str(),
+            sv["data"]["amount"].as_str(),
             Some(SMALL_DEPOSIT.to_string().as_str()),
             "status amount; stdout={}",
             st.stdout

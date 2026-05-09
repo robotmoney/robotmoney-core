@@ -1,15 +1,21 @@
-//! Canonical: none — integration tests for `rmpc status`
+//! Canonical: docs/implementation-plan.md §4.8 / §9 — CLI integration tests for `rmpc status`
+//! ADR: docs/technical/rmpc-read-output-contract.md
 //!
-//! Integration tests for `rmpc status --payment-id` (issue #15).
+//! Integration tests for `rmpc status --payment-id` (issue #149).
 //!
-//! Each test wires a `mockito` JSON-RPC server that answers a single
-//! `eth_getLogs` request with a synthetic `AgentDeposit` log, builds a
-//! temp config + keystore via [`common::Fixture`], and invokes the binary
-//! via `assert_cmd`.
+//! Each test wires a `mockito` JSON-RPC server that answers three calls:
+//!   1. `eth_chainId` — envelope header.
+//!   2. `eth_blockNumber` — envelope header.
+//!   3. `eth_getLogs` filtered on the gateway address + `AgentDeposit` topic0.
+//!
+//! Asserts that stdout follows the Phase 3 shared envelope with `chain_id`,
+//! `block_number`, `source: "json_rpc"`, `partial`, `errors`, and `data`.
 
 mod common;
 
-use crate::common::{jrpc_result_raw, Fixture, GATEWAY, SHARE_RECEIVER, SIGNER_ADDRESS};
+use crate::common::{
+    jrpc_result, jrpc_result_raw, Fixture, GATEWAY, SHARE_RECEIVER, SIGNER_ADDRESS,
+};
 use alloy_primitives::{address, b256, hex as ahex, Address, Bytes, LogData, B256, U256};
 use alloy_sol_types::SolEvent;
 use assert_cmd::Command;
@@ -66,17 +72,48 @@ fn synthesize_agent_deposit_log() -> String {
     )
 }
 
-#[tokio::test]
-async fn status_found_emits_decoded_payment_record() {
-    let mut server = mockito::Server::new_async().await;
-    let chain_id = 31337u64;
+/// Install the three mocks required by the new envelope-aware `rmpc status`.
+async fn install_status_mocks(
+    server: &mut mockito::ServerGuard,
+    chain_id: u64,
+    block_number: u64,
+    logs_body: &str,
+) {
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{chain_id:x}")))
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{block_number:x}")))
+        .create_async()
+        .await;
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(json!({"method": "eth_getLogs"})))
         .with_status(200)
-        .with_body(jrpc_result_raw(&synthesize_agent_deposit_log()))
+        .with_body(jrpc_result_raw(logs_body))
         .create_async()
         .await;
+}
+
+#[tokio::test]
+async fn status_found_emits_envelope_with_decoded_payment_record() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let block_number = 9999u64;
+    install_status_mocks(
+        &mut server,
+        chain_id,
+        block_number,
+        &synthesize_agent_deposit_log(),
+    )
+    .await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let pid_hex = format!("{PAYMENT_ID:#x}");
@@ -95,37 +132,46 @@ async fn status_found_emits_decoded_payment_record() {
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
-    assert_eq!(v["payment_id"], pid_hex);
-    assert_eq!(v["order_id"], format!("{ORDER_ID:#x}"));
+
+    // Phase 3 envelope top-level fields.
+    assert_eq!(v["chain_id"], chain_id);
+    assert_eq!(v["block_number"], block_number);
+    assert_eq!(v["source"], "json_rpc");
+    assert_eq!(v["partial"], false);
+    assert!(v["errors"].as_array().unwrap().is_empty());
+
+    // Deposit fields inside `data`.
+    let data = &v["data"];
+    assert_eq!(data["payment_id"], pid_hex);
+    assert_eq!(data["order_id"], format!("{ORDER_ID:#x}"));
     assert_eq!(
-        v["agent"].as_str().unwrap().to_lowercase(),
+        data["agent"].as_str().unwrap().to_lowercase(),
         format!("{AGENT:#x}")
     );
     assert_eq!(
-        v["share_receiver"].as_str().unwrap().to_lowercase(),
+        data["share_receiver"].as_str().unwrap().to_lowercase(),
         format!(
             "{:#x}",
             address!("00000000000000000000000000000000000000ee")
         )
     );
-    assert_eq!(v["amount"], "123456");
-    assert_eq!(v["shares_minted"], "987654");
-    assert_eq!(v["block_number"], 16); // 0x10
-    assert_eq!(v["tx_hash"], format!("{TX_HASH:#x}"));
-    assert!(v.get("status").is_none());
+    // Large integers must be decimal strings, never JSON numbers.
+    assert_eq!(data["amount"], "123456");
+    assert_eq!(data["shares_minted"], "987654");
+    assert_eq!(data["block_number"], 16u64); // 0x10
+    assert_eq!(data["tx_hash"], format!("{TX_HASH:#x}"));
+    assert!(
+        data.get("status").is_none(),
+        "found record must not have a 'status' field"
+    );
 }
 
 #[tokio::test]
-async fn status_not_found_emits_status_object() {
+async fn status_not_found_emits_envelope_with_not_found_data() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getLogs"})))
-        .with_status(200)
-        .with_body(jrpc_result_raw("[]"))
-        .create_async()
-        .await;
+    let block_number = 8888u64;
+    install_status_mocks(&mut server, chain_id, block_number, "[]").await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let pid_hex = format!("{PAYMENT_ID:#x}");
@@ -144,22 +190,29 @@ async fn status_not_found_emits_status_object() {
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(v["payment_id"], pid_hex);
-    assert_eq!(v["status"], "not_found");
-    assert!(v.get("amount").is_none());
+
+    // Phase 3 envelope top-level fields present even for not-found.
+    assert_eq!(v["chain_id"], chain_id);
+    assert_eq!(v["block_number"], block_number);
+    assert_eq!(v["source"], "json_rpc");
+    assert_eq!(v["partial"], false);
+    assert!(v["errors"].as_array().unwrap().is_empty());
+
+    // Not-found data fields.
+    let data = &v["data"];
+    assert_eq!(data["payment_id"], pid_hex);
+    assert_eq!(data["status"], "not_found");
+    assert!(
+        data.get("amount").is_none(),
+        "not-found must not have 'amount'"
+    );
 }
 
 #[tokio::test]
 async fn status_pretty_flag_emits_multiline_json() {
     let mut server = mockito::Server::new_async().await;
     let chain_id = 31337u64;
-    server
-        .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getLogs"})))
-        .with_status(200)
-        .with_body(jrpc_result_raw("[]"))
-        .create_async()
-        .await;
+    install_status_mocks(&mut server, chain_id, 1, "[]").await;
 
     let fix = Fixture::build(&server.url(), chain_id);
     let pid_hex = format!("{PAYMENT_ID:#x}");

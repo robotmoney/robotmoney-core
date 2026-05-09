@@ -207,6 +207,10 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate `RMPC_STATE_DIR` so they don't race with each other.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const SAMPLE: &str = r#"
 chain_id              = 31337
@@ -289,16 +293,19 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
 
     #[test]
     fn resolve_state_dir_prefers_env_var_over_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let body = SAMPLE.replace("[signer]", "state_dir = \"/from/config\"\n\n[signer]");
         let cfg = Config::from_str(&body).expect("parses");
-        // SAFETY: unit test process, single-threaded for env access here.
+        // SAFETY: ENV_LOCK serialises all env-touching tests within this process.
         std::env::set_var("RMPC_STATE_DIR", "/from/env");
-        assert_eq!(cfg.resolve_state_dir().unwrap(), PathBuf::from("/from/env"));
+        let result = cfg.resolve_state_dir().unwrap();
         std::env::remove_var("RMPC_STATE_DIR");
+        assert_eq!(result, PathBuf::from("/from/env"));
     }
 
     #[test]
     fn resolve_state_dir_uses_config_when_env_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let body = SAMPLE.replace("[signer]", "state_dir = \"/from/config\"\n\n[signer]");
         let cfg = Config::from_str(&body).expect("parses");
         std::env::remove_var("RMPC_STATE_DIR");
@@ -310,6 +317,7 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
 
     #[test]
     fn resolve_state_dir_errors_when_neither_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let cfg = Config::from_str(SAMPLE).expect("parses");
         std::env::remove_var("RMPC_STATE_DIR");
         let err = cfg.resolve_state_dir().expect_err("must error");

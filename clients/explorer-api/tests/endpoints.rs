@@ -252,8 +252,7 @@ async fn get_agent_returns_only_configured_chain_policy() {
     // Shadow Ethereum policy: revoked=true → authorized=false.
     // If chain scoping is absent, the wrong row could be returned.
     assert_eq!(
-        body["policy"]["authorized"],
-        true,
+        body["policy"]["authorized"], true,
         "expected Base policy (authorized=true), got {:?}",
         body["policy"]
     );
@@ -275,10 +274,13 @@ async fn list_agent_deposits_returns_only_configured_chain_deposits() {
         .unwrap();
     let deposits = body["deposits"].as_array().expect("deposits array");
     // Exactly one deposit for this agent on Base; shadow Ethereum deposit must not appear.
-    assert_eq!(deposits.len(), 1, "expected exactly 1 Base deposit, got {deposits:?}");
     assert_eq!(
-        body["deposits"][0]["amount"],
-        "1000000",
+        deposits.len(),
+        1,
+        "expected exactly 1 Base deposit, got {deposits:?}"
+    );
+    assert_eq!(
+        body["deposits"][0]["amount"], "1000000",
         "expected Base amount=1000000, shadow amount=9999999 must not appear"
     );
 }
@@ -299,8 +301,7 @@ async fn get_transaction_returns_only_configured_chain_row() {
         .unwrap();
     // Base tx: status=1. Shadow Ethereum tx: status=0.
     assert_eq!(
-        body["transaction"]["status"],
-        1,
+        body["transaction"]["status"], 1,
         "expected Base tx status=1, shadow Ethereum status=0 must not appear"
     );
 }
@@ -321,8 +322,7 @@ async fn get_deposit_returns_only_configured_chain_row() {
         .unwrap();
     // Base deposit: amount=1000000. Shadow Ethereum deposit: amount=9999999.
     assert_eq!(
-        body["deposit"]["amount"],
-        "1000000",
+        body["deposit"]["amount"], "1000000",
         "expected Base deposit amount=1000000, shadow Ethereum amount=9999999 must not appear"
     );
 }
