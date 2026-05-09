@@ -44,7 +44,7 @@ A binding constraint already lives in user memory and applies across the project
 
   1. Read vault state via rmpc get-vault and report the current
      totalAssets and paused flag.
-  2. Read your own agent authorization via rmpc get-agent --address
+  2. Read your own agent authorization via rmpc get-agent --agent
      $AGENT_ADDRESS. If not authorized, stop and produce a refusal
      report; do not attempt a deposit.
   3. Read your forked-USDC balance and gateway allowance via
@@ -54,10 +54,10 @@ A binding constraint already lives in user memory and applies across the project
   4. Run rmpc self-check. If it fails, stop and produce a refusal
      report.
   5. If and only if all reads above pass, call rmpc deposit
-     --amount $DEPOSIT_AMOUNT --max-fee $MAX_FEE_BPS. Capture the
-     returned tx hash and deposit id.
-  6. Wait for the tx to mine, then call rmpc get-deposit --id <id>
-     and rmpc get-tx --hash <hash> and rmpc get-vault one more time.
+     --amount $DEPOSIT_AMOUNT --order-id $ORDER_ID --fee-cap $FEE_CAP_WEI.
+     Capture the returned tx hash and deposit id.
+  6. Wait for the tx to mine, then call rmpc get-deposit --deposit-id <id>
+     and rmpc get-tx --tx-hash <hash> and rmpc get-vault one more time.
   7. Produce a final report (final-report.json) with: agent address,
      pinned block, vault totalAssets before and after, deposit id,
      tx hash, gas used, and a one-line outcome ("deposited" or
@@ -76,7 +76,7 @@ A binding constraint already lives in user memory and applies across the project
 - **Locked success criteria** (the demo orchestrator script asserts each of these against the captured artifact set):
   1. OpenClaw exited with status 0 within the 10-minute hard timeout.
   2. The command trace (`command-trace.jsonl`) contains, in order, at least one each of: `rmpc get-vault`, `rmpc get-agent`, `rmpc get-balance`, `rmpc get-allowance`, `rmpc self-check`. (Exact ordering enforced for the read prefix; subsequent ordering is free.)
-  3. Either: (a) `rmpc deposit` is present in the trace AND the resulting tx hash appears in `final-report.json:tx_hash` AND the on-chain `totalAssets` increased by `$DEPOSIT_AMOUNT` (modulo fees within `$MAX_FEE_BPS`), OR (b) `rmpc deposit` is absent from the trace AND `final-report.json:outcome` starts with `refused:`.
+  3. Either: (a) `rmpc deposit` is present in the trace AND the resulting tx hash appears in `final-report.json:tx_hash` AND the on-chain `totalAssets` increased by `$DEPOSIT_AMOUNT` (modulo gas fees within `$FEE_CAP_WEI`), OR (b) `rmpc deposit` is absent from the trace AND `final-report.json:outcome` starts with `refused:`.
   4. No `rmpc` invocation references the explorer API, the dapp, or any non-RPC URL.
 - **Constraint cited:** §13 required behaviors 1–6 (skill loading, direct chain reads, refusal handling, guarded deposit, state capture, long-running completion) and acceptance criterion "agent never uses explorer APIs for safety-critical reads".
 - **Rejected alternatives:**
@@ -127,7 +127,7 @@ Each of the five failure cases listed in §13 acceptance criteria gets a single 
    ```
    Expected agent behavior per §3.2 prompt step 1 (vault paused flag visible in get-vault) and §3.2 prompt step 4 (`rmpc self-check` includes a pause check): refuse with `outcome: refused: gateway paused`.
 
-4. **Fee cap exceeded.** The agent's policy cap is set below the per-block gas-price ceiling implied by the deposit's gas estimate, so `rmpc deposit --max-fee $MAX_FEE_BPS` aborts before broadcast. Toggle command:
+4. **Fee cap exceeded.** The agent's policy cap is set below the per-block gas-price ceiling implied by the deposit's gas estimate, so `rmpc deposit --fee-cap $FEE_CAP_WEI` aborts before broadcast. Toggle command:
    ```
    # Re-authorize the agent with a deliberately-low fee cap.
    cast rpc anvil_impersonateAccount $ADMIN_ADDRESS --rpc-url $RMPC_FORK_RPC_URL
