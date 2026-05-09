@@ -1,0 +1,136 @@
+# Canonical: docs/implementation-plan.md §Release & distribution
+#
+# WHY THIS WORKFLOW EXISTS
+# Operators and developers need pre-built rmpc binaries without building from source.
+# Cross-compiling for all four targets (linux/amd64, linux/arm64, macos/amd64,
+# macos/arm64) and attaching the resulting tar.gz archives as GitHub Release assets
+# makes distribution frictionless — no Rust toolchain required.
+#
+# WHY CROSS FOR ARM TARGETS
+# GitHub-hosted runners are x86_64 only. arm64 cross-compilation is handled by the
+# cross-rs/cross action which wraps cargo in a Docker container with the appropriate
+# sysroot. Native runners are used for aarch64-apple-darwin (cross cannot produce
+# Apple silicon binaries; instead we build on macos-latest which is arm64 on GitHub).
+#
+# WHY WE STRIP BINARIES
+# Rust debug symbols roughly double binary size. strip removes them for release builds,
+# keeping the download payload small. strip on Linux is provided by the system; on macOS
+# it is bundled with Xcode.
+#
+# GOTCHAS
+# - The workflow only fires on v*.*.* tags, never on branch pushes or pull requests.
+# - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
+#   No new toolchain actions are introduced.
+# - cross-rs/cross requires Docker; ubuntu-latest runners include Docker by default.
+# - The macos-latest runner on GitHub Actions is currently arm64 (M1), so
+#   aarch64-apple-darwin is built natively and x86_64-apple-darwin is cross-compiled
+#   via the Rust cross-compilation target (no extra tooling needed — just the target).
+
+name: release-rmpc
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: false
+            os_label: linux-amd64
+
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+            os_label: linux-arm64
+
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: false
+            os_label: macos-amd64
+
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            cross: false
+            os_label: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (Linux ARM only)
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ matrix.target }}-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-${{ matrix.target }}-
+            ${{ runner.os }}-cargo-release-
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --package rust-payment-client \
+            --bin rmpc
+
+      - name: Build (cross — arm64 Linux)
+        if: matrix.cross
+        run: |
+          cross build --release --target ${{ matrix.target }} \
+            --package rust-payment-client \
+            --bin rmpc
+
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          strip target/${{ matrix.target }}/release/rmpc
+
+      - name: Strip binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          strip target/${{ matrix.target }}/release/rmpc
+
+      - name: Package tar.gz
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE="rmpc-${VERSION}-${{ matrix.os_label }}.tar.gz"
+          tar -czf "${ARCHIVE}" \
+            -C target/${{ matrix.target }}/release \
+            rmpc
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Smoke-test binary (linux/amd64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          ./target/${{ matrix.target }}/release/rmpc --version
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}
+          draft: false
+          fail_on_unmatched_files: true
