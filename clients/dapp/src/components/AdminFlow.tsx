@@ -25,6 +25,7 @@ import { ConfigExportPanel } from "./ConfigExportPanel";
 import { HistoryPane } from "./HistoryPane";
 import { resolveFlags } from "../lib/featureFlags";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
+import { composeRotationPreview } from "../rotation";
 
 interface AdminFlowProps {
   gatewayAddress: Address;
@@ -57,6 +58,41 @@ export function AdminFlow(props: AdminFlowProps) {
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000"); // 1000 USDC
   const [shareReceiver, setShareReceiver] = useState("");
 
+  // Rotation flow state: old agent address + new agent address + new policy.
+  // The rotation section is independent from the single-action authorize/revoke
+  // forms above. Both revoke (old) and authorize (new) previews must be OK
+  // before either wallet button is enabled.
+  const [rotationOldAgent, setRotationOldAgent] = useState("");
+  const [rotationNewAgent, setRotationNewAgent] = useState("");
+  const [rotationValidUntil, setRotationValidUntil] = useState(() =>
+    Math.floor(Date.now() / 1000 + 86400).toString(),
+  );
+  const [rotationMaxPerPayment, setRotationMaxPerPayment] = useState("100000000"); // 100 USDC
+  const [rotationMaxPerWindow, setRotationMaxPerWindow] = useState("1000000000"); // 1000 USDC
+  const [rotationShareReceiver, setRotationShareReceiver] = useState("");
+  const [rotationStep, setRotationStep] = useState<"idle" | "revoke-sent" | "done">("idle");
+
+  const validRotationOld = isAddress(rotationOldAgent);
+  const validRotationNew = isAddress(rotationNewAgent);
+  const validRotationReceiver = isAddress(rotationShareReceiver);
+
+  // Compose the rotation preview (pure, no wallet). May throw on invalid
+  // address combinations — caught below so the section degrades gracefully.
+  let rotationPreview: ReturnType<typeof composeRotationPreview> | null = null;
+  let rotationPreviewError: string | null = null;
+  if (validRotationOld && validRotationNew && validRotationReceiver) {
+    try {
+      rotationPreview = composeRotationPreview(rotationOldAgent, rotationNewAgent, {
+        shareReceiver: rotationShareReceiver,
+        validUntil: Number(rotationValidUntil),
+        maxPerDeposit: BigInt(rotationMaxPerPayment),
+        maxPerWindow: BigInt(rotationMaxPerWindow),
+      });
+    } catch (err) {
+      rotationPreviewError = (err as Error).message;
+    }
+  }
+
   // ADMIN_ROLE / PAUSER_ROLE grant + revoke. Each role keeps its own
   // address input so the operator can grant ADMIN to one signer and
   // PAUSER to another without retyping. See issue #83 + ADR §3.3.
@@ -69,6 +105,68 @@ export function AdminFlow(props: AdminFlowProps) {
     gateway: props.gatewayAddress,
     gatewayCodeHashVerified: props.gatewayCodeHashVerified,
     envClass: props.envClass,
+  };
+
+  // Build the on-chain previews via the existing preview pipeline so the
+  // TxPreview component renders structured fields for both rotation steps.
+  const rotationRevokeAction: AdminAction | null = validRotationOld
+    ? { kind: "revokeAgent", agent: rotationOldAgent as Address }
+    : null;
+  const rotationAuthorizeAction: AdminAction | null =
+    validRotationNew && validRotationReceiver
+      ? {
+          kind: "authorizeAgent",
+          agent: rotationNewAgent as Address,
+          policy: {
+            active: true,
+            validUntil: BigInt(rotationValidUntil),
+            maxPerPayment: BigInt(rotationMaxPerPayment),
+            maxPerWindow: BigInt(rotationMaxPerWindow),
+            shareReceiver: rotationShareReceiver as Address,
+          },
+        }
+      : null;
+
+  const rotationRevokePrev = rotationRevokeAction ? buildPreview(rotationRevokeAction, ctx) : null;
+  const rotationAuthorizePrev = rotationAuthorizeAction
+    ? buildPreview(rotationAuthorizeAction, ctx)
+    : null;
+
+  // Both previews must be structurally OK before either wallet button is enabled.
+  const rotationPreviewsOk =
+    rotationPreview !== null &&
+    rotationRevokePrev?.ok === true &&
+    rotationAuthorizePrev?.ok === true;
+
+  const onRotationRevoke = () => {
+    if (!rotationRevokeAction || !rotationRevokePrev?.ok) return;
+    writeContract({
+      address: props.gatewayAddress,
+      abi: gatewayAbi,
+      functionName: "revokeAgent",
+      args: [rotationRevokeAction.agent],
+    });
+    setRotationStep("revoke-sent");
+  };
+
+  const onRotationAuthorize = () => {
+    if (!rotationAuthorizeAction || !rotationAuthorizePrev?.ok) return;
+    writeContract({
+      address: props.gatewayAddress,
+      abi: gatewayAbi,
+      functionName: "authorizeAgent",
+      args: [
+        rotationAuthorizeAction.agent,
+        {
+          active: rotationAuthorizeAction.policy.active,
+          validUntil: rotationAuthorizeAction.policy.validUntil,
+          maxPerPayment: rotationAuthorizeAction.policy.maxPerPayment,
+          maxPerWindow: rotationAuthorizeAction.policy.maxPerWindow,
+          shareReceiver: rotationAuthorizeAction.policy.shareReceiver,
+        },
+      ],
+    });
+    setRotationStep("done");
   };
 
   const validAgent = isAddress(agent);
@@ -281,6 +379,113 @@ export function AdminFlow(props: AdminFlowProps) {
         >
           Sign revokeAgent with wallet
         </button>
+      </section>
+
+      <section data-testid="rotation-form">
+        <h2>Agent rotation (revoke old → authorize new)</h2>
+        <p>
+          Both previews must be confirmed before wallet signing begins. Do not close this dialog
+          between transactions.
+        </p>
+
+        {rotationPreview && (
+          <p data-testid="rotation-combined-risk" className="rotation-risk-banner">
+            {rotationPreview.combinedRiskAnnotation}
+          </p>
+        )}
+        {rotationPreviewError && (
+          <p data-testid="rotation-preview-error" className="error">
+            {rotationPreviewError}
+          </p>
+        )}
+
+        <label>
+          Old agent address (to revoke)
+          <input
+            data-testid="rotation-old-agent-input"
+            value={rotationOldAgent}
+            onChange={(e) => {
+              setRotationOldAgent(e.target.value);
+              setRotationStep("idle");
+            }}
+            placeholder="0x..."
+          />
+        </label>
+        <label>
+          New agent address (to authorize)
+          <input
+            data-testid="rotation-new-agent-input"
+            value={rotationNewAgent}
+            onChange={(e) => {
+              setRotationNewAgent(e.target.value);
+              setRotationStep("idle");
+            }}
+            placeholder="0x..."
+          />
+        </label>
+        <label>
+          Valid-until (unix seconds)
+          <input
+            data-testid="rotation-validUntil-input"
+            value={rotationValidUntil}
+            onChange={(e) => setRotationValidUntil(e.target.value)}
+          />
+        </label>
+        <label>
+          Max per payment (USDC base units)
+          <input
+            data-testid="rotation-maxPerPayment-input"
+            value={rotationMaxPerPayment}
+            onChange={(e) => setRotationMaxPerPayment(e.target.value)}
+          />
+        </label>
+        <label>
+          Max per window (USDC base units)
+          <input
+            data-testid="rotation-maxPerWindow-input"
+            value={rotationMaxPerWindow}
+            onChange={(e) => setRotationMaxPerWindow(e.target.value)}
+          />
+        </label>
+        <label>
+          Share receiver
+          <input
+            data-testid="rotation-shareReceiver-input"
+            value={rotationShareReceiver}
+            onChange={(e) => setRotationShareReceiver(e.target.value)}
+            placeholder="0x..."
+          />
+        </label>
+
+        <div data-testid="rotation-step1">
+          <h3>Step 1: revoke old agent</h3>
+          {rotationRevokePrev && <TxPreview preview={rotationRevokePrev} />}
+          <button
+            data-testid="rotation-revoke-submit"
+            disabled={!isConnected || !rotationPreviewsOk || rotationStep !== "idle" || isPending}
+            onClick={onRotationRevoke}
+          >
+            Step 1 — Sign revokeAgent(old) with wallet
+          </button>
+        </div>
+
+        <div data-testid="rotation-step2">
+          <h3>Step 2: authorize new agent</h3>
+          {rotationAuthorizePrev && <TxPreview preview={rotationAuthorizePrev} />}
+          <button
+            data-testid="rotation-authorize-submit"
+            disabled={
+              !isConnected || !rotationPreviewsOk || rotationStep !== "revoke-sent" || isPending
+            }
+            onClick={onRotationAuthorize}
+          >
+            Step 2 — Sign authorizeAgent(new) with wallet
+          </button>
+        </div>
+
+        {rotationStep === "done" && (
+          <p data-testid="rotation-complete">Rotation complete. Verify on-chain state.</p>
+        )}
       </section>
 
       <section data-testid="admin-role-form">
