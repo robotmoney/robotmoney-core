@@ -1,24 +1,28 @@
 /**
  * Config export panel — renders the TOML and offers a download link.
- * Per ADR §3.4 the dapp never auto-generates a passphrase and never
- * persists keys; this MVP component covers the public-info-only export
- * (signer.kind = hardware/kms). Software-backed-keystore exports are
- * deferred to the follow-up that lifts the feature flag.
+ *
+ * The exported TOML is directly loadable by `rmpc` via `Config::from_str`
+ * (flat schema, no translation helper required). See
+ * `clients/dapp/src/lib/configExport.ts` and
+ * `clients/rust-payment-client/src/config.rs`.
+ *
+ * For encrypted_keystore signers `allow_software_fallback = true` is emitted
+ * automatically. Hardware and KMS backends emit commented-out template fields
+ * until rmpc implements those backends.
  */
 import { useState } from "react";
 import type { Address } from "viem";
 import { exportRmpcConfig, type SignerKind } from "../lib/configExport";
-import type { AgentPolicy } from "../lib/preview";
 
 interface Props {
   gateway: Address;
   vault: Address;
-  gatewayCodeHash: string;
+  usdcAddress: Address;
+  /** keccak256(eth_getCode(gateway)) — non-zero for production deployments */
+  gatewayRuntimeHash: string;
   chainId: number;
-  chainName: string;
   rpcUrl: string;
   agent: Address;
-  policy: AgentPolicy;
 }
 
 export function ConfigExportPanel(props: Props) {
@@ -30,27 +34,24 @@ export function ConfigExportPanel(props: Props) {
   const [region, setRegion] = useState("us-east-1");
   const [keystorePath, setKeystorePath] = useState("./agent.keystore.json");
 
+  const signer =
+    signerKind === "hardware"
+      ? { kind: "hardware" as const, device, derivation_path: derivationPath }
+      : signerKind === "kms"
+        ? { kind: "kms" as const, provider, key_id: keyId, region }
+        : {
+            kind: "encrypted_keystore" as const,
+            keystore_path: keystorePath,
+          };
+
   const toml = exportRmpcConfig({
-    config: {
-      chain: { chain_id: props.chainId, name: props.chainName, rpc_url: props.rpcUrl },
-      contracts: {
-        gateway: props.gateway,
-        vault: props.vault,
-        gateway_code_hash: props.gatewayCodeHash,
-      },
-      agent: { address: props.agent },
-      signer:
-        signerKind === "hardware"
-          ? { kind: "hardware", device, derivation_path: derivationPath }
-          : signerKind === "kms"
-            ? { kind: "kms", provider, key_id: keyId, region }
-            : {
-                kind: "encrypted_keystore",
-                keystore_path: keystorePath,
-                keystore_format: "geth-v3",
-              },
-      policy: props.policy,
-    },
+    chain_id: props.chainId,
+    rpc_url: props.rpcUrl,
+    gateway_address: props.gateway,
+    usdc_address: props.usdcAddress,
+    vault_address: props.vault,
+    gateway_runtime_hash: props.gatewayRuntimeHash,
+    signer,
   });
 
   return (

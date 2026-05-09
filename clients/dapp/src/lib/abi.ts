@@ -57,6 +57,13 @@ export const gatewayAbi = [
   },
   {
     type: "function",
+    name: "usdc",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
     name: "hasRole",
     stateMutability: "view",
     inputs: [

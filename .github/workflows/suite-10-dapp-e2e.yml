@@ -31,6 +31,11 @@
 #   gates a UI component that should not appear in the default build. If a developer
 #   enables it globally in .env.example, the e2e job (without the flag) will fail
 #   because it asserts the pane is absent.
+# - e2e-history-pane does NOT install Foundry: the history-pane test stubs the
+#   explorer API via page.route and never touches a live chain. Omitting Foundry
+#   avoids a class of transient GitHub API 403 failures seen when the Foundry
+#   release-tag endpoint is rate-limited. If the test ever needs anvil, add the
+#   foundry-rs/foundry-toolchain step back to the e2e-history-pane job only.
 # - fork-roundtrip installs only Chromium (not all browsers) to save 2–3 min of
 #   install time. If a test is added that requires Firefox or WebKit, add them to the
 #   playwright install command in that job only.
@@ -81,6 +86,8 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
@@ -128,11 +135,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: clients/dapp/pnpm-lock.yaml
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
       - name: pnpm install
         run: pnpm install --frozen-lockfile
 
@@ -178,6 +180,8 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: pnpm install
         working-directory: clients/dapp

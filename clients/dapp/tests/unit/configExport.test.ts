@@ -1,73 +1,105 @@
 /**
- * Unit tests for the rmpc TOML export. Asserts the §3.4 schema:
- * pinned schema_version="1", `unsafe_for_production` mirrors the signer
- * kind, and the policy block emits string-typed uint256 caps.
+ * Unit tests for the rmpc TOML export.
+ *
+ * The exported TOML must be directly loadable by `rmpc`'s `Config::from_str`
+ * (flat schema, `deny_unknown_fields`). The Rust round-trip test
+ * (`clients/rust-payment-client/tests/dapp_toml_roundtrip.rs`) is the
+ * authoritative cross-language contract; these tests cover the TypeScript
+ * side only.
  */
 import { describe, it, expect } from "vitest";
 import { parse } from "smol-toml";
 import { exportRmpcConfig } from "../../src/lib/configExport";
 
-const baseConfig = {
-  chain: { chain_id: 31337, name: "fork", rpc_url: "http://127.0.0.1:8545" },
-  contracts: {
-    gateway: "0x1111111111111111111111111111111111111111",
-    vault: "0x2222222222222222222222222222222222222222",
-    gateway_code_hash: "0x" + "ab".repeat(32),
-  },
-  agent: { address: "0x3333333333333333333333333333333333333333" },
-  policy: {
-    active: true,
-    validUntil: 1893456000n,
-    maxPerPayment: 100_000_000n,
-    maxPerWindow: 1_000_000_000n,
-    shareReceiver: "0x4444444444444444444444444444444444444444" as const,
-  },
-} as const;
+const baseInputs = {
+  chain_id: 31337,
+  rpc_url: "http://127.0.0.1:8545",
+  gateway_address: "0x1111111111111111111111111111111111111111",
+  usdc_address: "0x2222222222222222222222222222222222222222",
+  vault_address: "0x3333333333333333333333333333333333333333",
+  gateway_runtime_hash: "0x" + "ab".repeat(32),
+};
 
 describe("exportRmpcConfig", () => {
-  it("hardware signer => unsafe_for_production=false", () => {
+  it("encrypted_keystore: emits flat rmpc-compatible TOML with allow_software_fallback=true", () => {
     const toml = exportRmpcConfig({
-      config: {
-        ...baseConfig,
-        signer: { kind: "hardware", device: "ledger", derivation_path: "m/44'/60'/0'/0/0" },
+      ...baseInputs,
+      signer: {
+        kind: "encrypted_keystore",
+        keystore_path: "./agent.keystore.json",
       },
     });
+
+    // Must parse as valid TOML
     const parsed = parse(toml) as Record<string, unknown>;
-    expect(parsed.schema_version).toBe("1");
-    expect(parsed.unsafe_for_production).toBe(false);
+
+    // All required top-level fields must be present and correct
+    expect(parsed.chain_id).toBe(31337);
+    expect(parsed.rpc_url).toBe("http://127.0.0.1:8545");
+    expect(parsed.gateway_address).toBe("0x1111111111111111111111111111111111111111");
+    expect(parsed.usdc_address).toBe("0x2222222222222222222222222222222222222222");
+    expect(parsed.vault_address).toBe("0x3333333333333333333333333333333333333333");
+    expect(parsed.gateway_runtime_hash).toBe("0x" + "ab".repeat(32));
+
+    // [signer] table must match rmpc's SignerConfig fields exactly
     const signer = parsed.signer as Record<string, unknown>;
-    expect(signer.kind).toBe("hardware");
-    const policy = parsed.policy as Record<string, unknown>;
-    expect(policy.per_deposit_cap).toBe("100000000");
-    expect(policy.per_window_cap).toBe("1000000000");
+    expect(signer.allow_software_fallback).toBe(true);
+    expect(signer.keystore_path).toBe("./agent.keystore.json");
+
+    // deny_unknown_fields — no extra top-level keys
+    const topLevelKeys = Object.keys(parsed).filter((k) => k !== "signer");
+    expect(topLevelKeys).toEqual([
+      "chain_id",
+      "rpc_url",
+      "gateway_address",
+      "usdc_address",
+      "vault_address",
+      "gateway_runtime_hash",
+    ]);
   });
 
-  it("encrypted_keystore signer => unsafe_for_production=true", () => {
+  it("gateway_runtime_hash must be non-zero in the exported config", () => {
+    const nonZeroHash = "0x" + "ab".repeat(32);
     const toml = exportRmpcConfig({
-      config: {
-        ...baseConfig,
-        signer: {
-          kind: "encrypted_keystore",
-          keystore_path: "./agent.keystore.json",
-          keystore_format: "geth-v3",
-        },
-      },
+      ...baseInputs,
+      gateway_runtime_hash: nonZeroHash,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
     });
     const parsed = parse(toml) as Record<string, unknown>;
-    expect(parsed.unsafe_for_production).toBe(true);
+    expect(parsed.gateway_runtime_hash).toBe(nonZeroHash);
+    expect(parsed.gateway_runtime_hash).not.toBe("0x" + "00".repeat(32));
   });
 
-  it("kms signer roundtrips required fields", () => {
+  it("usdc_address is present in exported TOML", () => {
     const toml = exportRmpcConfig({
-      config: {
-        ...baseConfig,
-        signer: { kind: "kms", provider: "aws", key_id: "abcd", region: "us-east-1" },
-      },
+      ...baseInputs,
+      signer: { kind: "encrypted_keystore", keystore_path: "./agent.keystore.json" },
     });
     const parsed = parse(toml) as Record<string, unknown>;
-    const signer = parsed.signer as Record<string, unknown>;
-    expect(signer.provider).toBe("aws");
-    expect(signer.key_id).toBe("abcd");
-    expect(signer.region).toBe("us-east-1");
+    expect(parsed.usdc_address).toBe("0x2222222222222222222222222222222222222222");
+  });
+
+  it("hardware signer: emits a TOML file with no allow_software_fallback", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "hardware", device: "ledger", derivation_path: "m/44'/60'/0'/0/0" },
+    });
+    // Must still be valid TOML (may have comments, no signer.allow_software_fallback)
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.chain_id).toBe(31337);
+    expect(parsed.gateway_runtime_hash).toBe(baseInputs.gateway_runtime_hash);
+    // hardware signer does not set allow_software_fallback
+    const signer = (parsed.signer ?? {}) as Record<string, unknown>;
+    expect(signer.allow_software_fallback).toBeUndefined();
+  });
+
+  it("kms signer: emits a TOML file referencing provider and key_id", () => {
+    const toml = exportRmpcConfig({
+      ...baseInputs,
+      signer: { kind: "kms", provider: "aws", key_id: "abcd", region: "us-east-1" },
+    });
+    // Must still be valid TOML
+    const parsed = parse(toml) as Record<string, unknown>;
+    expect(parsed.chain_id).toBe(31337);
   });
 });

@@ -54,6 +54,16 @@ export function AdminFlow(props: AdminFlowProps) {
   });
   const paused = Boolean(pausedData);
 
+  // Read the USDC token address from the gateway contract. Used by
+  // ConfigExportPanel so the exported config includes the real usdc_address.
+  const { data: usdcAddressData } = useReadContract({
+    address: props.gatewayAddress,
+    abi: gatewayAbi,
+    functionName: "usdc",
+    query: { enabled: isConnected },
+  });
+  const usdcAddress = (usdcAddressData as Address | undefined) ?? ("" as Address);
+
   const [agent, setAgent] = useState("");
   const [validUntil, setValidUntil] = useState(() =>
     Math.floor(Date.now() / 1000 + 86400).toString(),
@@ -619,18 +629,15 @@ export function AdminFlow(props: AdminFlowProps) {
         <ConfigExportPanel
           gateway={props.gatewayAddress}
           vault={props.vaultAddress}
-          gatewayCodeHash={"0x" + "00".repeat(32)}
+          usdcAddress={usdcAddress}
+          gatewayRuntimeHash={
+            props.gatewayVerificationState.status === "verified"
+              ? props.gatewayVerificationState.computedHash
+              : ""
+          }
           chainId={chainId}
-          chainName={props.envClass}
           rpcUrl={props.flagEnv.VITE_FORK_RPC_URL ?? "http://127.0.0.1:8545"}
           agent={agent as Address}
-          policy={{
-            active: true,
-            validUntil: BigInt(validUntil),
-            maxPerPayment: BigInt(maxPerPayment),
-            maxPerWindow: BigInt(maxPerWindow),
-            shareReceiver: shareReceiver as Address,
-          }}
         />
       )}
     </main>
