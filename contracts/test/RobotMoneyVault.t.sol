@@ -495,4 +495,54 @@ contract RobotMoneyVaultTest is Test {
         // totalAssets includes the idle portion.
         assertEq(capVault.totalAssets(), 100_000 * ONE_USDC, "totalAssets must include idle USDC");
     }
+
+    // ─── Pause / unpause role asymmetry (issue #164) ────────────────────────
+
+    /// @notice EMERGENCY_ROLE holder can call pause().
+    function test_pause_allowedForEmergencyRole() public {
+        address emergency = makeAddr("emergency");
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        vm.prank(admin);
+        vault.grantRole(emergencyRole, emergency);
+
+        vm.prank(emergency);
+        vault.pause();
+        assertTrue(vault.paused(), "vault must be paused");
+    }
+
+    /// @notice EMERGENCY_ROLE holder cannot call unpause() — must revert.
+    ///         A compromised emergency key can halt the vault (DoS) but cannot restart it.
+    function test_unpause_revertsForEmergencyRole() public {
+        address emergency = makeAddr("emergency");
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        vm.prank(admin);
+        vault.grantRole(emergencyRole, emergency);
+
+        // First pause so we can attempt an unpause.
+        vm.prank(emergency);
+        vault.pause();
+
+        // Emergency role alone must NOT be able to unpause.
+        vm.prank(emergency);
+        vm.expectRevert();
+        vault.unpause();
+    }
+
+    /// @notice ADMIN_ROLE holder can call unpause() after the vault has been paused.
+    function test_unpause_allowedForAdminRole() public {
+        address emergency = makeAddr("emergency");
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        vm.prank(admin);
+        vault.grantRole(emergencyRole, emergency);
+
+        // Pause via emergency role.
+        vm.prank(emergency);
+        vault.pause();
+        assertTrue(vault.paused(), "vault must be paused before unpause test");
+
+        // Admin unpauses — the only role permitted to restart the vault.
+        vm.prank(admin);
+        vault.unpause();
+        assertFalse(vault.paused(), "vault must be unpaused after admin unpause");
+    }
 }

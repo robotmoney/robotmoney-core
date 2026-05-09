@@ -29,7 +29,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     /// @notice Role that can manage adapters, set parameters, and rebalance.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
-    /// @notice Role that can pause, unpause, and perform emergency withdrawals.
+    /// @notice Role that can pause and perform emergency withdrawals.
+    ///         Asymmetric with unpause by design: a compromised emergency key can
+    ///         only halt the vault (DoS), not restart it. Unpause is restricted to
+    ///         `ADMIN_ROLE` so that resuming operations is deliberate and requires
+    ///         the higher-trust role — mirroring the gateway's `PAUSER_ROLE` /
+    ///         `ADMIN_ROLE` asymmetry documented in `AccessRoles.sol`.
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @notice Role for automated keeper rebalancing (not granted at launch).
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
@@ -593,8 +598,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         _pause();
     }
 
-    /// @notice Resume deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
-    function unpause() external onlyRole(EMERGENCY_ROLE) {
+    /// @notice Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
+    ///         Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
+    ///         unpausing is deliberate and requires the higher-trust admin role.
+    function unpause() external onlyRole(ADMIN_ROLE) {
         _unpause();
     }
 
