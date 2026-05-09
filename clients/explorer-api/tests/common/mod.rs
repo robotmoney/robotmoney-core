@@ -54,6 +54,13 @@ pub struct TestServer {
 }
 
 pub async fn start_with_seed() -> TestServer {
+    start_with_seed_and_cors(None).await
+}
+
+/// Boot a test server with an optional `CorsLayer` attached.
+///
+/// Pass `Some(layer)` from CORS-specific tests; `None` for all other tests.
+pub async fn start_with_seed_and_cors(cors: Option<tower_http::cors::CorsLayer>) -> TestServer {
     let container = Postgres::default()
         .start()
         .await
@@ -80,7 +87,11 @@ pub async fn start_with_seed() -> TestServer {
     let addr = listener.local_addr().expect("local_addr");
     // Service is scoped to PRIMARY_CHAIN_ID (Base) — shadow chain rows must
     // never appear in any API response.
-    let app = router(AppState::new(pool.clone(), PRIMARY_CHAIN_ID));
+    let base_app = router(AppState::new(pool.clone(), PRIMARY_CHAIN_ID));
+    let app = match cors {
+        Some(layer) => base_app.layer(layer),
+        None => base_app,
+    };
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });
