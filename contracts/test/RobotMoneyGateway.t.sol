@@ -61,6 +61,46 @@ contract UnderPullVault is MockVault {
     }
 }
 
+/// @dev Vault that attempts to re-enter `gateway.deposit()` during its own
+///      `deposit()` call, simulating a malicious/compromised vault reentrant
+///      callback. Expects the `nonReentrant` guard to block the second entry.
+contract ReentrantVault is MockVault {
+    RobotMoneyGateway public gateway;
+    bool public attackArmed;
+
+    // Parameters needed to attempt the second deposit call.
+    bytes32 public reentrantOrderId;
+    uint256 public reentrantAmount;
+    uint64 public reentrantDeadline;
+    bytes32 public reentrantIdemKey;
+
+    constructor(address asset_) MockVault(asset_) {}
+
+    function setGateway(RobotMoneyGateway gw) external {
+        gateway = gw;
+    }
+
+    function armAttack(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idemKey) external {
+        reentrantOrderId = orderId;
+        reentrantAmount = amount;
+        reentrantDeadline = deadline;
+        reentrantIdemKey = idemKey;
+        attackArmed = true;
+    }
+
+    function deposit(uint256 assets, address receiver) external override returns (uint256 shares) {
+        IERC20(address(assetToken)).transferFrom(msg.sender, address(this), assets);
+        shares = assets;
+        _mint(receiver, shares);
+
+        if (attackArmed) {
+            attackArmed = false;
+            // Attempt reentrancy — the nonReentrant modifier must block this.
+            gateway.deposit(reentrantOrderId, reentrantAmount, reentrantDeadline, reentrantIdemKey);
+        }
+    }
+}
+
 contract RobotMoneyGatewayTest is Test {
     MockUSDC internal usdc;
     MockVault internal vault;
@@ -616,5 +656,47 @@ contract RobotMoneyGatewayTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
         gw.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
+    }
+
+    // -------------------------------------------------------------------
+    // Reentrancy guard
+    // -------------------------------------------------------------------
+
+    function test_deposit_revertsOnReentrancyAttempt() public {
+        // Deploy a reentrant vault that tries to call gateway.deposit() from
+        // inside its own deposit() implementation. The nonReentrant modifier
+        // must prevent the second entry.
+        ReentrantVault reentrantVault = new ReentrantVault(address(usdc));
+        RobotMoneyGateway gw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(reentrantVault)), admin, pauser
+        );
+        reentrantVault.setGateway(gw);
+
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        vm.prank(admin);
+        gw.authorizeAgent(agent, p);
+
+        // Fund agent with enough for two deposits; approve the gateway.
+        uint256 amount = 100 * ONE_USDC;
+        usdc.mint(agent, 2 * amount);
+        vm.prank(agent);
+        usdc.approve(address(gw), 2 * amount);
+
+        // Arm the vault to attempt a reentrant deposit with a different
+        // idempotency key (so the paymentId check wouldn't be the blocker).
+        reentrantVault.armAttack(
+            bytes32("reentrant-order"),
+            amount,
+            uint64(block.timestamp + 60),
+            bytes32("reentrant-idem")
+        );
+
+        // The outer deposit triggers the vault which tries to re-enter;
+        // ReentrancyGuardReentrantCall must be thrown.
+        vm.prank(agent);
+        vm.expectRevert(bytes4(keccak256("ReentrancyGuardReentrantCall()")));
+        gw.deposit(
+            bytes32("outer-order"), amount, uint64(block.timestamp + 60), bytes32("outer-idem")
+        );
     }
 }

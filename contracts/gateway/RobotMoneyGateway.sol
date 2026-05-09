@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
@@ -18,7 +19,7 @@ import {IGateway} from "./interfaces/IGateway.sol";
 /// @dev Implements `docs/implementation-plan.md` §2.2. Custom errors only;
 ///      OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 ///      hash deliberately excludes `deadline`.
-contract RobotMoneyGateway is AccessRoles, IGateway {
+contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     using SafeERC20 for IERC20;
 
     // -------------------------------------------------------------------
@@ -193,9 +194,11 @@ contract RobotMoneyGateway is AccessRoles, IGateway {
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
-    /// @dev Implements §2.2 steps 1–12 verbatim.
+    /// @dev Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, `agentWindowGross`) are
+    ///      written before external calls (CEI pattern). `nonReentrant` provides defense-in-depth.
     function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
         external
+        nonReentrant
         onlyRole(AGENT_ROLE)
         returns (bytes32 paymentId, uint256 sharesMinted)
     {
@@ -241,29 +244,30 @@ contract RobotMoneyGateway is AccessRoles, IGateway {
             revert ShareCustodyInvariantViolated();
         }
 
+        // 7. EFFECTS: write state before any external call (CEI pattern).
+        agentWindowGross[msg.sender][windowId] = windowSoFar + amount;
+        usedPaymentIds[paymentId] = true;
+
         // slither-disable-start reentrancy-balance
         // Justification: The `balBefore` pattern below is intentional fee-on-transfer
-        // detection (§2.2 step 7) and a post-call invariant check (§2.2 step 12).
-        // Only `AGENT_ROLE` holders can reach this code, and the `usedPaymentIds`
-        // replay guard (step 6) prevents double-spend.  USDC does not implement
-        // transfer-hook callbacks, so reentrancy via `safeTransferFrom` is not
-        // possible in practice.  The `reentrancy-balance` detector fires on the
-        // structural pattern (balance-before / external-call / balance-comparison)
-        // regardless of real reachability.
+        // detection (§2.2 step 8) and a post-call invariant check (§2.2 step 12).
+        // Only `AGENT_ROLE` holders can reach this code. State effects (window gross,
+        // paymentId flag) are written above before any external call, satisfying the
+        // CEI pattern. `nonReentrant` provides defense-in-depth.
 
-        // 7. safeTransferFrom with balance-delta verification.
+        // 8. safeTransferFrom with balance-delta verification.
         uint256 balBefore = usdcToken.balanceOf(address(this));
         usdcToken.safeTransferFrom(msg.sender, address(this), amount);
         uint256 balAfter = usdcToken.balanceOf(address(this));
         if (balAfter - balBefore != amount) revert FeeOnTransferDetected();
 
-        // 8. one-shot allowance.
+        // 9. one-shot allowance.
         usdcToken.forceApprove(address(vaultContract), amount);
 
-        // 9. vault deposit; receiver = pre-registered shareReceiver.
+        // 10. vault deposit; receiver = pre-registered shareReceiver.
         sharesMinted = vaultContract.deposit(amount, p.shareReceiver);
 
-        // 10. clear residual allowance.
+        // 11. clear residual allowance.
         usdcToken.forceApprove(address(vaultContract), 0);
 
         // Post-call invariants:
@@ -276,10 +280,6 @@ contract RobotMoneyGateway is AccessRoles, IGateway {
             revert ShareCustodyInvariantViolated();
         }
         // slither-disable-end reentrancy-balance
-
-        // 11. update window gross + mark paymentId used.
-        agentWindowGross[msg.sender][windowId] = windowSoFar + amount;
-        usedPaymentIds[paymentId] = true;
 
         // 12. event.
         emit AgentDeposit(
