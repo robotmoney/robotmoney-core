@@ -17,11 +17,15 @@ contract MockUSDC is ERC20 {
     }
 
     /// @notice Mint test tokens to any address. No access control by design.
+    /// @param to     Recipient of the minted tokens.
+    /// @param amount Number of tokens to mint (6-decimal units).
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 
     /// @notice Burn test tokens from any address. No access control by design.
+    /// @param from   Address whose tokens are burned.
+    /// @param amount Number of tokens to burn (6-decimal units).
     function burn(address from, uint256 amount) external {
         _burn(from, amount);
     }

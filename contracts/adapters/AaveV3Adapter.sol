@@ -16,9 +16,13 @@ import {IAavePool} from "../interfaces/IAavePool.sol";
 contract AaveV3Adapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
+    /// @notice USDC token address used for deposits and withdrawals.
     IERC20 public immutable USDC;
-    IERC20 public immutable A_TOKEN; // aBasUSDC — balanceOf returns live USDC
+    /// @notice aBasUSDC rebasing token; `balanceOf(this)` returns live underlying USDC.
+    IERC20 public immutable A_TOKEN;
+    /// @notice Aave V3 Pool contract used for `supply` and `withdraw`.
     IAavePool public immutable POOL;
+    /// @notice Address of the RobotMoneyVault that owns this adapter.
     address public immutable VAULT;
 
     /// @notice Caller is not the configured `VAULT` address.
@@ -26,6 +30,8 @@ contract AaveV3Adapter is IStrategyAdapter {
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
     /// @notice `Pool.withdraw` returned fewer USDC than requested.
+    /// @param requested Amount of USDC requested for withdrawal.
+    /// @param actual    Amount of USDC actually received from the pool.
     error WithdrawShortfall(uint256 requested, uint256 actual);
     /// @notice `rescueToken` refused — the token is USDC or the aToken (protected vault assets).
     error CannotRescueProtectedToken();
@@ -48,6 +54,7 @@ contract AaveV3Adapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
         USDC.safeIncreaseAllowance(address(POOL), amount);
         POOL.supply(address(USDC), amount, address(this), 0);
@@ -57,6 +64,7 @@ contract AaveV3Adapter is IStrategyAdapter {
         }
     }
 
+    /// @inheritdoc IStrategyAdapter
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         uint256 actual = POOL.withdraw(address(USDC), amount, VAULT);
         if (amount != type(uint256).max && actual < amount) {
@@ -65,10 +73,12 @@ contract AaveV3Adapter is IStrategyAdapter {
         return actual;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function totalAssets() external view returns (uint256) {
         return A_TOKEN.balanceOf(address(this));
     }
 
+    /// @inheritdoc IStrategyAdapter
     function rescueTokens(address token, address to) external onlyVault {
         if (token == address(USDC) || token == address(A_TOKEN)) {
             revert CannotRescueProtectedToken();

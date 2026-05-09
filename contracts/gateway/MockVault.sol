@@ -16,7 +16,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract MockVault is ERC20 {
     using SafeERC20 for IERC20;
 
+    /// @notice Deposit amount is zero.
     error ZeroAmount();
+    /// @notice Share receiver is the zero address.
     error ZeroReceiver();
 
     /// @notice Underlying asset, pinned at construction.
@@ -24,6 +26,10 @@ contract MockVault is ERC20 {
 
     /// @notice ERC-4626-shaped Deposit event so off-chain indexers / tests
     ///         can watch share routing.
+    /// @param sender   Address that called `deposit` and supplied the assets.
+    /// @param receiver Address that received the minted shares.
+    /// @param assets   Amount of underlying USDC deposited.
+    /// @param shares   Amount of `rmUSDC` shares minted (1:1 with assets).
     event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
 
     constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC") {

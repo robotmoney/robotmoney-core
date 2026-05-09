@@ -62,8 +62,8 @@ contract Deploy is Script {
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
-    /// @dev Forge entrypoint. Wraps `runDeploy` in a `vm.startBroadcast`
-    ///      session driven by `--private-key` / `--sender`.
+    /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
+    /// @return d Struct containing all deployed contract addresses and key parameters.
     function run() external returns (Deployed memory d) {
         Params memory p = _readEnvParams();
         vm.startBroadcast();
@@ -75,6 +75,7 @@ contract Deploy is Script {
 
     /// @notice In-process variant for forge tests. Caller sets up `vm.prank`
     ///         or test-account context. No JSON is written.
+    /// @return d Struct containing all deployed contract addresses and key parameters.
     function runInProcess() external returns (Deployed memory d) {
         d = _doDeploy(_readEnvParams());
     }
@@ -82,6 +83,11 @@ contract Deploy is Script {
     /// @notice Direct-parameter variant for forge tests. Skips env-var
     ///         resolution so a noisy host environment (or another test's
     ///         residual `vm.setEnv`) cannot pollute the inputs.
+    /// @param admin_         Address to receive `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    /// @param pauser_        Address to receive `PAUSER_ROLE`.
+    /// @param agent_         Address to receive `AGENT_ROLE`.
+    /// @param shareReceiver_ Address that will receive minted vault shares.
+    /// @return d Struct containing all deployed contract addresses and key parameters.
     function runInProcessWith(
         address admin_,
         address pauser_,

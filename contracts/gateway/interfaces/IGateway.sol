@@ -33,6 +33,12 @@ interface IGateway {
     // Events
     // -------------------------------------------------------------------
 
+    /// @notice Emitted when an agent's policy is created or updated.
+    /// @param agent          Agent address whose policy was set.
+    /// @param validUntil     Policy expiry timestamp (Unix seconds).
+    /// @param maxPerPayment  Maximum USDC per single deposit call.
+    /// @param maxPerWindow   Maximum USDC per rolling window.
+    /// @param shareReceiver  Address receiving minted vault shares.
     event AgentAuthorized(
         address indexed agent,
         uint64 validUntil,
@@ -40,9 +46,23 @@ interface IGateway {
         uint256 maxPerWindow,
         address shareReceiver
     );
+    /// @notice Emitted when an agent's policy and role are revoked.
+    /// @param agent Agent address whose policy was removed.
     event AgentRevoked(address indexed agent);
+    /// @notice Emitted when the gateway is paused.
+    /// @param by Address that called `pause()`.
     event Paused(address indexed by);
+    /// @notice Emitted when the gateway is unpaused.
+    /// @param by Address that called `unpause()`.
     event Unpaused(address indexed by);
+    /// @notice Emitted on every successful agent deposit.
+    /// @param paymentId     Replay-protection hash for this payment.
+    /// @param orderId       Caller-supplied order identifier.
+    /// @param agent         Agent address that made the deposit.
+    /// @param shareReceiver Address that received the minted vault shares.
+    /// @param amount        Gross USDC deposited (6-decimal units).
+    /// @param sharesMinted  Vault shares minted to `shareReceiver`.
+    /// @param windowId      Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
     event AgentDeposit(
         bytes32 indexed paymentId,
         bytes32 indexed orderId,
@@ -72,9 +92,12 @@ interface IGateway {
         returns (bytes32 paymentId, uint256 sharesMinted);
 
     /// @notice Set or replace the policy for `agent`. Restricted to `ADMIN_ROLE`.
+    /// @param agent The agent address to authorize.
+    /// @param p     Policy parameters to assign to the agent.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;
 
     /// @notice Disable policy for `agent`. Restricted to `ADMIN_ROLE`.
+    /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
 
     /// @notice Stop-the-world pause. Restricted to `PAUSER_ROLE`.

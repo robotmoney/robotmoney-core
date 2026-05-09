@@ -18,8 +18,11 @@ import {IComet} from "../interfaces/IComet.sol";
 contract CompoundV3Adapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
+    /// @notice USDC token address used for deposits and withdrawals.
     IERC20 public immutable USDC;
+    /// @notice Compound V3 (Comet) contract; also the cUSDCv3 share token.
     IComet public immutable COMET;
+    /// @notice Address of the RobotMoneyVault that owns this adapter.
     address public immutable VAULT;
 
     /// @notice Caller is not the configured `VAULT` address.
@@ -27,6 +30,8 @@ contract CompoundV3Adapter is IStrategyAdapter {
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
     /// @notice `Comet.withdrawTo` returned fewer USDC than requested.
+    /// @param requested Amount of USDC requested for withdrawal.
+    /// @param actual    Amount of USDC actually received from Compound.
     error WithdrawShortfall(uint256 requested, uint256 actual);
     /// @notice `rescueToken` refused — the token is USDC or the Comet share (protected vault assets).
     error CannotRescueProtectedToken();
@@ -45,6 +50,7 @@ contract CompoundV3Adapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
         USDC.safeIncreaseAllowance(address(COMET), amount);
         COMET.supply(address(USDC), amount);
@@ -54,6 +60,7 @@ contract CompoundV3Adapter is IStrategyAdapter {
         }
     }
 
+    /// @inheritdoc IStrategyAdapter
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         // slither-disable-start reentrancy-balance
         // Justification: `preBalance`/`postBalance` is the standard balance-delta
@@ -76,10 +83,12 @@ contract CompoundV3Adapter is IStrategyAdapter {
         return actual;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function totalAssets() external view returns (uint256) {
         return COMET.balanceOf(address(this));
     }
 
+    /// @inheritdoc IStrategyAdapter
     function rescueTokens(address token, address to) external onlyVault {
         if (token == address(USDC) || token == address(COMET)) revert CannotRescueProtectedToken();
         if (to == address(0)) revert ZeroAddress();

@@ -27,16 +27,24 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Roles ─────────────────────────────────────────────────────────
 
+    /// @notice Role that can manage adapters, set parameters, and rebalance.
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    /// @notice Role that can pause, unpause, and perform emergency withdrawals.
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE"); // not granted at launch
+    /// @notice Role for automated keeper rebalancing (not granted at launch).
+    bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
 
     // ─── Immutable bytecode constants — no role can change ─────────────
 
-    uint256 public constant MAX_EXIT_FEE_BPS = 100; // 1% absolute ceiling
+    /// @notice Absolute ceiling on exit fee (100 bps = 1%).
+    uint256 public constant MAX_EXIT_FEE_BPS = 100;
+    /// @notice Maximum number of strategy adapters the vault can hold.
     uint256 public constant MAX_ADAPTERS = 20;
+    /// @notice Basis-points denominator (10 000 = 100%).
     uint16 public constant MAX_BPS = 10000;
-    uint16 public constant MAX_REBALANCE_BPS_CEILING = 5000; // keeper can never move >50% per call
+    /// @notice Keeper can never move more than 50% of TVL in a single rebalance call.
+    uint16 public constant MAX_REBALANCE_BPS_CEILING = 5000;
+    /// @notice Minimum enforced interval between rebalance calls (1 hour).
     uint256 public constant MIN_REBALANCE_INTERVAL_FLOOR = 1 hours;
 
     // ─── Adapter registry ──────────────────────────────────────────────
@@ -46,34 +54,80 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         uint16 capBps; // max allocation % out of MAX_BPS — also acts as ramp control
         bool active;
     }
+    /// @notice Ordered registry of all strategy adapters (active and inactive).
     AdapterInfo[] public adapters;
 
     // ─── Configurable params ──────────────────────────────────────────
 
+    /// @notice Maximum total assets under management; deposits revert above this.
     uint256 public tvlCap;
+    /// @notice Maximum USDC that a single deposit may contribute.
     uint256 public perDepositCap;
+    /// @notice Exit fee in basis points charged on withdrawals.
     uint256 public exitFeeBps;
+    /// @notice Recipient of collected exit fees.
     address public feeRecipient;
 
-    bool public shutdown; // irreversible — once true, stays true forever
+    /// @notice Whether the vault has been permanently shut down. Irreversible.
+    bool public shutdown;
 
     // ─── Rebalance throttling ──
 
-    uint16 public maxRebalanceBpsPerCall; // initial: 2500 (25%)
-    uint256 public minRebalanceInterval; // initial: 12 hours
+    /// @notice Maximum fraction of TVL a keeper may move in one rebalance call (bps).
+    uint16 public maxRebalanceBpsPerCall;
+    /// @notice Minimum time between consecutive rebalance calls (seconds).
+    uint256 public minRebalanceInterval;
+    /// @notice Timestamp of the most recent completed rebalance.
     uint256 public lastRebalanceAt;
 
     // ─── Events ────────────────────────────────────────────────────────
 
+    /// @notice Emitted when a new strategy adapter is registered.
+    /// @param index   Registry index of the new adapter.
+    /// @param adapter Address of the registered adapter contract.
+    /// @param capBps  Maximum allocation cap in basis points.
     event AdapterAdded(uint256 indexed index, address indexed adapter, uint16 capBps);
+    /// @notice Emitted when an adapter is deactivated (normal removal).
+    /// @param index   Registry index of the removed adapter.
+    /// @param adapter Address of the deactivated adapter contract.
     event AdapterRemoved(uint256 indexed index, address indexed adapter);
+    /// @notice Emitted when an adapter's allocation cap is updated.
+    /// @param index  Registry index of the adapter.
+    /// @param oldBps Previous cap in basis points.
+    /// @param newBps New cap in basis points.
     event AdapterCapUpdated(uint256 indexed index, uint16 oldBps, uint16 newBps);
+    /// @notice Emitted when an adapter is force-removed without withdrawing assets (emergency).
+    /// @param index      Registry index of the force-removed adapter.
+    /// @param adapter    Address of the adapter contract.
+    /// @param lossAmount Estimated assets lost due to force removal.
     event AdapterForceRemoved(uint256 indexed index, address indexed adapter, uint256 lossAmount);
+    /// @notice Emitted when USDC is allocated from the vault into an adapter.
+    /// @param index   Registry index of the target adapter.
+    /// @param adapter Address of the target adapter contract.
+    /// @param amount  Amount of USDC allocated (6-decimal units).
     event Allocated(uint256 indexed index, address indexed adapter, uint256 amount);
+    /// @notice Emitted when USDC is pulled from an adapter back to the vault.
+    /// @param index   Registry index of the source adapter.
+    /// @param adapter Address of the source adapter contract.
+    /// @param amount  Amount of USDC pulled (6-decimal units).
     event Pulled(uint256 indexed index, address indexed adapter, uint256 amount);
+    /// @notice Emitted at the end of a successful rebalance call.
+    /// @param totalMoved Total USDC redistributed across adapters (6-decimal units).
     event Rebalanced(uint256 totalMoved);
+    /// @notice Emitted when the per-call rebalance cap is updated.
+    /// @param oldBps Previous cap in basis points.
+    /// @param newBps New cap in basis points.
     event MaxRebalanceBpsUpdated(uint16 oldBps, uint16 newBps);
+    /// @notice Emitted when the minimum rebalance interval is updated.
+    /// @param oldInterval Previous minimum interval in seconds.
+    /// @param newInterval New minimum interval in seconds.
     event MinRebalanceIntervalUpdated(uint256 oldInterval, uint256 newInterval);
+    /// @notice Emitted when an exit fee is charged on a withdrawal.
+    /// @param owner      Share owner who initiated the withdrawal.
+    /// @param receiver   Address that received the net USDC.
+    /// @param grossAssets Gross USDC value of redeemed shares.
+    /// @param fee        Exit fee charged (grossAssets × exitFeeBps / MAX_BPS).
+    /// @param netAssets  Net USDC transferred to receiver (grossAssets − fee).
     event ExitFeeCharged(
         address indexed owner,
         address indexed receiver,
@@ -81,14 +135,33 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         uint256 fee,
         uint256 netAssets
     );
+    /// @notice Emitted when the TVL cap is updated.
+    /// @param oldCap Previous TVL cap (6-decimal USDC units).
+    /// @param newCap New TVL cap (6-decimal USDC units).
     event TvlCapUpdated(uint256 oldCap, uint256 newCap);
+    /// @notice Emitted when the per-deposit cap is updated.
+    /// @param oldCap Previous per-deposit cap (6-decimal USDC units).
+    /// @param newCap New per-deposit cap (6-decimal USDC units).
     event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
+    /// @notice Emitted when the exit fee is updated.
+    /// @param oldBps Previous exit fee in basis points.
+    /// @param newBps New exit fee in basis points.
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the fee recipient address is updated.
+    /// @param oldRecipient Previous fee recipient address.
+    /// @param newRecipient New fee recipient address.
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+    /// @notice Emitted when the emergency withdrawal flow is triggered (all adapters).
     event EmergencyWithdrawCalled();
+    /// @notice Emitted per-adapter during an emergency withdrawal.
+    /// @param index   Registry index of the adapter.
+    /// @param adapter Address of the adapter contract.
+    /// @param amount  Amount withdrawn (0 on failure or empty balance).
+    /// @param success Whether the adapter's withdraw call succeeded.
     event EmergencyWithdrawAdapterCalled(
         uint256 indexed index, address indexed adapter, uint256 amount, bool success
     );
+    /// @notice Emitted when the vault is permanently shut down.
     event Shutdown();
 
     // ─── Errors ────────────────────────────────────────────────────────
@@ -156,6 +229,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         // KEEPER_ROLE intentionally NOT granted
     }
 
+    /// @notice Returns the decimal precision used by this vault (matches USDC: 6).
     function decimals() public pure override(ERC4626) returns (uint8) {
         return 6;
     }
@@ -166,6 +240,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── totalAssets ──────────────────────────────────────────────────
 
+    /// @notice Sum of live USDC values reported by all active strategy adapters.
     function totalAssets() public view override returns (uint256) {
         uint256 sum = 0;
         uint256 len = adapters.length;
@@ -240,11 +315,15 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
 
+    /// @notice Estimate net USDC returned when redeeming `shares` (after exit fee).
+    /// @param shares Number of rmUSDC shares to simulate redeeming.
     function previewRedeem(uint256 shares) public view override returns (uint256) {
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         return _grossToNet(grossAssets);
     }
 
+    /// @notice Estimate shares required to receive exactly `assets` USDC net (after exit fee).
+    /// @param assets Target net USDC to receive.
     function previewWithdraw(uint256 assets) public view override returns (uint256) {
         uint256 grossAssets = _netToGross(assets);
         return _convertToShares(grossAssets, Math.Rounding.Ceil);
@@ -323,6 +402,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Adapter management ──────────────────────────────────────────
 
+    /// @notice Register a new strategy adapter. Restricted to `ADMIN_ROLE`.
+    /// @param adapter_ Address of the `IStrategyAdapter`-compatible contract.
+    /// @param capBps_  Maximum allocation cap in basis points (1–10 000).
     function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_ROLE) {
         if (adapter_ == address(0)) revert ZeroAddress();
         if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
@@ -333,6 +415,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit AdapterAdded(adapters.length - 1, adapter_, capBps_);
     }
 
+    /// @notice Deactivate an adapter. The adapter must hold zero assets. Restricted to `ADMIN_ROLE`.
+    /// @param index Registry index of the adapter to remove.
     function removeAdapter(uint256 index) external onlyRole(ADMIN_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         if (adapters[index].adapter.totalAssets() > 0) revert AdapterNotEmpty();
@@ -340,6 +424,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit AdapterRemoved(index, address(adapters[index].adapter));
     }
 
+    /// @notice Update the allocation cap for an existing adapter. Restricted to `ADMIN_ROLE`.
+    /// @param index     Registry index of the adapter.
+    /// @param newCapBps New maximum allocation cap in basis points (1–10 000).
     function setAdapterCap(uint256 index, uint16 newCapBps) external onlyRole(ADMIN_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         if (newCapBps == 0 || newCapBps > MAX_BPS) revert InvalidCap();
@@ -350,6 +437,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Rebalance ────────────────────────────────────────────────────
 
+    /// @notice Keeper-triggered equal-weight rebalance. Callable by `ADMIN_ROLE` or `KEEPER_ROLE`.
+    ///         Pulls excess from over-weight adapters and re-routes into under-weight adapters.
+    ///         Subject to `minRebalanceInterval` and `maxRebalanceBpsPerCall` throttles.
     function rebalance() external nonReentrant {
         if (!hasRole(ADMIN_ROLE, msg.sender) && !hasRole(KEEPER_ROLE, msg.sender)) {
             revert UnauthorizedRebalancer();
@@ -388,6 +478,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit Rebalanced(totalMoved);
     }
 
+    /// @notice Admin-specified precision rebalance: sets each adapter to an explicit target balance.
+    ///         Restricted to `ADMIN_ROLE`.
+    /// @param targetBalances Target USDC balance for each adapter (must match `adapters.length`).
     function adminRebalance(uint256[] calldata targetBalances)
         external
         onlyRole(ADMIN_ROLE)
@@ -426,6 +519,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit Rebalanced(totalMoved);
     }
 
+    /// @notice Update the per-call rebalance cap. Restricted to `ADMIN_ROLE`.
+    /// @param newBps New cap in basis points (1–5 000; must not exceed `MAX_REBALANCE_BPS_CEILING`).
     function setMaxRebalanceBpsPerCall(uint16 newBps) external onlyRole(ADMIN_ROLE) {
         if (newBps == 0 || newBps > MAX_REBALANCE_BPS_CEILING) revert InvalidParam();
         uint16 old = maxRebalanceBpsPerCall;
@@ -433,6 +528,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit MaxRebalanceBpsUpdated(old, newBps);
     }
 
+    /// @notice Update the minimum interval between rebalance calls. Restricted to `ADMIN_ROLE`.
+    /// @param newInterval New minimum interval in seconds (must be ≥ `MIN_REBALANCE_INTERVAL_FLOOR`).
     function setMinRebalanceInterval(uint256 newInterval) external onlyRole(ADMIN_ROLE) {
         if (newInterval < MIN_REBALANCE_INTERVAL_FLOOR) revert InvalidParam();
         uint256 old = minRebalanceInterval;
@@ -442,14 +539,18 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Emergency ────────────────────────────────────────────────────
 
+    /// @notice Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
     function pause() external onlyRole(EMERGENCY_ROLE) {
         _pause();
     }
 
+    /// @notice Resume deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
     function unpause() external onlyRole(EMERGENCY_ROLE) {
         _unpause();
     }
 
+    /// @notice Pause the vault and attempt to withdraw all assets from every active adapter.
+    ///         Uses `try/catch` so a failed adapter does not block others. Restricted to `EMERGENCY_ROLE`.
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pause();
         uint256 len = adapters.length;
@@ -466,6 +567,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit EmergencyWithdrawCalled();
     }
 
+    /// @notice Pause the vault and withdraw all assets from a single adapter. Restricted to `EMERGENCY_ROLE`.
+    /// @param index Registry index of the adapter to drain.
     function emergencyWithdrawAdapter(uint256 index)
         external
         onlyRole(EMERGENCY_ROLE)
@@ -487,6 +590,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         }
     }
 
+    /// @notice Force-remove an adapter without withdrawing its assets (last-resort action).
+    ///         Assets in the adapter are treated as lost. Restricted to `EMERGENCY_ROLE`.
+    /// @param index Registry index of the adapter to force-remove.
     function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         uint256 lossAmount = adapters[index].adapter.totalAssets();
@@ -494,6 +600,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit AdapterForceRemoved(index, address(adapters[index].adapter), lossAmount);
     }
 
+    /// @notice Permanently shut down the vault: set `shutdown = true` and zero the TVL cap.
+    ///         Irreversible. Restricted to `EMERGENCY_ROLE`.
     function shutdownVault() external onlyRole(EMERGENCY_ROLE) {
         shutdown = true;
         tvlCap = 0;
@@ -502,18 +610,24 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Param setters ────────────────────────────────────────────────
 
+    /// @notice Update the TVL cap. Restricted to `ADMIN_ROLE`.
+    /// @param newCap New maximum total assets in 6-decimal USDC units.
     function setTvlCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
         uint256 old = tvlCap;
         tvlCap = newCap;
         emit TvlCapUpdated(old, newCap);
     }
 
+    /// @notice Update the per-deposit cap. Restricted to `ADMIN_ROLE`.
+    /// @param newCap New maximum single-deposit amount in 6-decimal USDC units.
     function setPerDepositCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
         uint256 old = perDepositCap;
         perDepositCap = newCap;
         emit PerDepositCapUpdated(old, newCap);
     }
 
+    /// @notice Update the exit fee. Restricted to `ADMIN_ROLE`.
+    /// @param newBps New exit fee in basis points (0–`MAX_EXIT_FEE_BPS`).
     function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
         if (newBps > MAX_EXIT_FEE_BPS) revert InvalidFee();
         uint256 old = exitFeeBps;
@@ -521,6 +635,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit ExitFeeUpdated(old, newBps);
     }
 
+    /// @notice Update the fee recipient address. Restricted to `ADMIN_ROLE`.
+    /// @param newRecipient New address to receive collected exit fees.
     function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE) {
         if (newRecipient == address(0)) revert ZeroAddress();
         address old = feeRecipient;
@@ -528,6 +644,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit FeeRecipientUpdated(old, newRecipient);
     }
 
+    /// @notice Rescue accidentally-sent ERC-20 tokens (cannot rescue USDC or vault shares).
+    ///         Restricted to `ADMIN_ROLE`.
+    /// @param token ERC-20 token to rescue (must not be the vault asset or vault share token).
+    /// @param to    Recipient address for the rescued tokens.
     function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
         if (token == asset()) revert CannotRescueAsset();
         if (token == address(this)) revert CannotRescueAsset();
@@ -554,14 +674,23 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Views ────────────────────────────────────────────────────────
 
+    /// @notice Total number of adapters in the registry (active and inactive).
     function adapterCount() external view returns (uint256) {
         return adapters.length;
     }
 
+    /// @notice Whether the vault has been permanently shut down.
     function isShutdown() external view returns (bool) {
         return shutdown;
     }
 
+    /// @notice Detailed information about a single adapter entry.
+    /// @param index         Registry index of the adapter.
+    /// @return adapterAddr  Address of the adapter contract.
+    /// @return capBps       Maximum allocation cap in basis points.
+    /// @return active       Whether the adapter is currently active.
+    /// @return currentBalance Live USDC value held by the adapter.
+    /// @return targetBps    Current equal-weight target in basis points.
     function getAdapterInfo(uint256 index)
         external
         view
@@ -583,6 +712,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         );
     }
 
+    /// @notice Compute current vs. target balances and signed drift for every adapter.
+    /// @return currentBalances Live USDC values for each adapter (6-decimal units).
+    /// @return targetBalances  Equal-weight target USDC values for each adapter.
+    /// @return drifts          Signed difference (current − target) per adapter.
     function getAdapterDrift()
         external
         view
@@ -608,18 +741,22 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         }
     }
 
+    /// @notice Whether `minRebalanceInterval` has elapsed since the last rebalance.
     function isRebalanceAvailable() external view returns (bool) {
         return block.timestamp >= lastRebalanceAt + minRebalanceInterval;
     }
 
+    /// @notice Timestamp at which the next rebalance call will be permitted.
     function nextRebalanceAt() external view returns (uint256) {
         return lastRebalanceAt + minRebalanceInterval;
     }
 
+    /// @notice Number of currently active strategy adapters.
     function activeAdapterCount() external view returns (uint256) {
         return _activeAdapterCount();
     }
 
+    /// @notice Equal-weight target allocation per active adapter in basis points.
     function currentTargetBps() external view returns (uint256) {
         return _targetBpsFor();
     }

@@ -1,0 +1,127 @@
+# Canonical: docs/technical/natspec-coverage.md
+#
+# WHY THIS SUITE EXISTS
+# Solidity sources under contracts/ must have complete NatSpec on every
+# public/external function, event, error, and public state variable so that
+# auditors, integrators, and forge doc can produce accurate rendered docs.
+# Without a CI gate, coverage decays silently as new code lands.
+#
+# HOW IT WORKS
+# scripts/natspec/check.sh (the single source of truth for in-scope files and
+# the 100% threshold) runs a pure-Python static parser — no compilation needed,
+# no extra tooling, no network access.  The same script is invoked locally and
+# in CI, so the verdict is always reproducible.
+#
+# FIXTURE JOB
+# A second job injects a bare public function into an in-scope contract, asserts
+# the check exits non-zero (missing NatSpec detected), adds the required tags,
+# and asserts the check exits 0 (pass).  This proves the gate actually enforces
+# the rule on every PR.
+#
+# SCOPE / THRESHOLD DUPLICATION GUARD
+# A third job greps the repo for any file (other than the canonical config) that
+# encodes the threshold or scope list, and fails if a duplicate is found.
+#
+# LOCAL REPRODUCTION
+#   bash scripts/natspec/check.sh
+#
+# See docs/technical/natspec-coverage.md for full reference.
+
+name: natspec-coverage
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**/*.sol"
+      - "scripts/natspec/check.sh"
+      - ".github/workflows/natspec-coverage.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "contracts/**/*.sol"
+      - "scripts/natspec/check.sh"
+      - ".github/workflows/natspec-coverage.yml"
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — NatSpec coverage on all in-scope files
+  # ---------------------------------------------------------------------------
+  natspec-check:
+    name: natspec-coverage-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run NatSpec coverage check
+        run: bash scripts/natspec/check.sh
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Fixture test: gate fails without NatSpec, passes with it
+  # ---------------------------------------------------------------------------
+  natspec-fixture:
+    name: natspec-fixture-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fixture — bare function (must fail)
+        run: bash test/natspec/fixture.t.sh fail
+
+      - name: Fixture — documented function (must pass)
+        run: bash test/natspec/fixture.t.sh pass
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — Single-source guard: threshold and scope must not be duplicated
+  # ---------------------------------------------------------------------------
+  natspec-single-source:
+    name: natspec-single-source-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — threshold not duplicated outside canonical config
+        run: |
+          set -euo pipefail
+          # The canonical config is scripts/natspec/check.sh.
+          # No other file should encode NATSPEC_SCOPE or the 100% threshold.
+          CANONICAL="scripts/natspec/check.sh"
+          THIS_WORKFLOW=".github/workflows/natspec-coverage.yml"
+          HITS=$(grep -rn "NATSPEC_SCOPE\b" --include="*.sh" --include="*.yml" --include="*.yaml" . \
+                 | grep -v "${CANONICAL}:" \
+                 | grep -v "${THIS_WORKFLOW}:" || true)
+          if [[ -n "$HITS" ]]; then
+            echo "::error::NATSPEC_SCOPE defined outside canonical config:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "Single-source guard passed."
+
+  # ---------------------------------------------------------------------------
+  # Job 4 — Doc-presence check: natspec-coverage.md exists with required anchors
+  # ---------------------------------------------------------------------------
+  natspec-doc-check:
+    name: natspec-doc-presence-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert docs/technical/natspec-coverage.md exists and contains required anchors
+        run: |
+          set -euo pipefail
+          DOC="docs/technical/natspec-coverage.md"
+          if [[ ! -f "$DOC" ]]; then
+            echo "::error::$DOC is missing"
+            exit 1
+          fi
+          for anchor in "tool" "threshold" "in-scope-set" "local-command"; do
+            if ! grep -q "<!-- anchor: ${anchor} -->" "$DOC"; then
+              echo "::error::$DOC is missing anchor: <!-- anchor: ${anchor} -->"
+              exit 1
+            fi
+          done
+          echo "Doc presence check passed: $DOC contains all required anchors."

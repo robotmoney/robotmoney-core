@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 
+/// @title MorphoAdapter
 /// @notice Wraps the Morpho Gauntlet USDC Prime vault on Base.
 /// @dev MORPHO_VAULT is itself an ERC-4626 vault; shares are held by this adapter.
 ///      Deployed: 0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9 (Base mainnet)
@@ -14,8 +15,11 @@ import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 contract MorphoAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
+    /// @notice Morpho Gauntlet USDC Prime ERC-4626 vault address.
     IERC4626 public immutable MORPHO_VAULT;
+    /// @notice USDC token address used for deposits and withdrawals.
     IERC20 public immutable USDC;
+    /// @notice Address of the RobotMoneyVault that owns this adapter.
     address public immutable VAULT;
 
     /// @notice Caller is not the configured `VAULT` address.
@@ -39,6 +43,7 @@ contract MorphoAdapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
         USDC.safeIncreaseAllowance(address(MORPHO_VAULT), amount);
         MORPHO_VAULT.deposit(amount, address(this));
@@ -48,16 +53,19 @@ contract MorphoAdapter is IStrategyAdapter {
         }
     }
 
+    /// @inheritdoc IStrategyAdapter
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         MORPHO_VAULT.withdraw(amount, VAULT, address(this));
         return amount;
     }
 
+    /// @inheritdoc IStrategyAdapter
     function totalAssets() external view returns (uint256) {
         uint256 shares = MORPHO_VAULT.balanceOf(address(this));
         return MORPHO_VAULT.convertToAssets(shares);
     }
 
+    /// @inheritdoc IStrategyAdapter
     function rescueTokens(address token, address to) external onlyVault {
         if (token == address(USDC) || token == address(MORPHO_VAULT)) {
             revert CannotRescueProtectedToken();

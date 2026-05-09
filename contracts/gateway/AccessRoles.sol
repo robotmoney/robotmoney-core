@@ -24,8 +24,8 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 /// exposed via `_assertRoleSeparation` for use in deploy scripts and
 /// the gateway's `authorizeAgent`.
 abstract contract AccessRoles is AccessControl {
-    /// @dev Reverts when granting a role would cause an account to hold
-    ///      any two of {ADMIN, PAUSER, AGENT} simultaneously.
+    /// @notice Reverts when granting a role would cause an account to hold
+    ///         any two of {ADMIN, PAUSER, AGENT} simultaneously.
     error RoleSeparationViolated();
 
     /// @notice Grants/revokes other roles, sets policy, unpauses.
