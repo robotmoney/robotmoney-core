@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use alloy_primitives::{keccak256, Address};
 use serde::Deserialize;
@@ -409,56 +409,14 @@ fn parse_addr(s: &str) -> Address {
 }
 
 fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
-    let body = serde_json::json!({
-        "jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []
-    });
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Ok(resp) = client.post(url).json(&body).send() {
-            if resp.status().is_success() {
-                if let Ok(j) = resp.json::<serde_json::Value>() {
-                    if j.get("result").is_some() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    Err(HarnessError::RpcTimeout {
+    test_utils::wait_for_rpc(url, timeout).map_err(|_| HarnessError::RpcTimeout {
         url: url.to_string(),
         timeout,
     })
 }
 
 fn wait_for_block_height(url: &str, target: u64, timeout: Duration) -> Result<(), HarnessError> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
-    let body = serde_json::json!({
-        "jsonrpc": "2.0", "id": 1, "method": "eth_blockNumber", "params": []
-    });
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Ok(resp) = client.post(url).json(&body).send() {
-            if let Ok(j) = resp.json::<serde_json::Value>() {
-                if let Some(s) = j.get("result").and_then(|v| v.as_str()) {
-                    if let Ok(n) = u64::from_str_radix(s.trim_start_matches("0x"), 16) {
-                        if n >= target {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(1000));
-    }
-    Err(HarnessError::RpcTimeout {
+    test_utils::wait_for_block_height(url, target, timeout).map_err(|_| HarnessError::RpcTimeout {
         url: url.to_string(),
         timeout,
     })
@@ -543,16 +501,6 @@ fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
 /// Walk up from the crate manifest dir until we find the repo root
 /// (identified by `foundry.toml` + `clients/rust-payment-client`).
 pub fn locate_repo_root() -> Result<PathBuf, HarnessError> {
-    let mut p: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    for _ in 0..8 {
-        if p.join("foundry.toml").exists() && p.join("clients/rust-payment-client").exists() {
-            return Ok(p);
-        }
-        if !p.pop() {
-            break;
-        }
-    }
-    Err(HarnessError::other(
-        "could not locate repo root from CARGO_MANIFEST_DIR",
-    ))
+    test_utils::find_workspace_root()
+        .ok_or_else(|| HarnessError::other("could not locate repo root from CARGO_MANIFEST_DIR"))
 }

@@ -12,13 +12,17 @@
 //! changes in the deployed bytecode.
 
 use alloy_primitives::U256;
-use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_fork, ForkFixture, IRobotMoneyVault, IERC20};
+use rmpc_fork_e2e::{
+    addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
+};
 
 const DEPOSIT_USDC: u64 = 50_000_000; // 50 USDC (6 decimals)
 
 #[test]
 fn vault_deposit_redeem_smoke() {
-    skip_if_no_fork!();
+    // Requires live mainnet fork: funds ephemeral wallet with real USDC
+    // from the Base mainnet whale and interacts with the production vault.
+    skip_if_no_mainnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[vault_deposit_redeem_smoke] {}", fx.summary_line());
 

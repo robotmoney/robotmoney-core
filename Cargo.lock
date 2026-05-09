@@ -1371,6 +1371,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "doctests"
+version = "0.1.0"
+dependencies = [
+ "rust-payment-client",
+ "serde_json",
+ "tempfile",
+ "test-utils",
+ "which",
+]
+
+[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2720,16 +2731,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "opencode-walkthrough-tests"
-version = "0.1.0"
-dependencies = [
- "rust-payment-client",
- "serde_json",
- "tempfile",
- "which",
-]
-
-[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3391,6 +3392,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-utils",
  "thiserror 1.0.69",
  "which",
 ]
@@ -3956,6 +3958,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-utils",
  "thiserror 1.0.69",
  "which",
 ]
@@ -4349,6 +4352,14 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
+
+[[package]]
+name = "test-utils"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+]
 
 [[package]]
 name = "testcontainers"

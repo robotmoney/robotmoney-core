@@ -17,7 +17,8 @@
 use std::collections::BTreeSet;
 use std::fs;
 
-use opencode_walkthrough_tests::{repo_root, rmpc_help, walkthrough_md};
+use doctests::opencode::{rmpc_help, walkthrough_md};
+use test_utils::find_workspace_root;
 
 /// Read the walkthrough doc as a single string.
 fn doc_text() -> String {
@@ -294,7 +295,7 @@ fn skill_package_referenced_and_files_exist() {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for tok in cleaned.split(|c: char| c.is_whitespace() || "()[]<>".contains(c)) {
         let stripped = tok.trim_end_matches(|c: char| ".,;:!?\"'".contains(c));
-        for prefix in ["plugins/robotmoney-cli/", "testing/opencode-walkthrough/"] {
+        for prefix in ["plugins/robotmoney-cli/", "testing/doctests/"] {
             if let Some(_rest) = stripped.strip_prefix(prefix) {
                 if stripped.contains('.') || stripped.ends_with('/') {
                     paths.insert(stripped.to_string());
@@ -306,7 +307,7 @@ fn skill_package_referenced_and_files_exist() {
         !paths.is_empty(),
         "walkthrough must reference at least one concrete plugin or test file path"
     );
-    let root = repo_root();
+    let root = find_workspace_root().expect("workspace root");
     for p in &paths {
         let on_disk = root.join(p);
         assert!(

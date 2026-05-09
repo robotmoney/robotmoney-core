@@ -1,12 +1,5 @@
 # MVP Implementation Plan — Rust Client, Gateway, Testing, Agent Surfaces
 
-> **Status (2026-05-06).** Phase 1 (secure agent deposit
-> infrastructure) is complete: contracts, deploy script, Rust client,
-> preflight, fee policy, nonce lock, all 11 e2e scenarios across the
-> Anvil and Geth+Lighthouse layers, and the `rmpd` → `rmpc` rename
-> have all merged. Phases 2–7 are not yet started; their sections
-> below describe the target shape and acceptance criteria.
-
 > Companion to `docs/architecture.md`. This plan covers the
 > full MVP sequence. Phase 1 was the buildable slice of v0: one
 > chain, one token, one gateway, one Rust client. Later phases add
@@ -76,22 +69,21 @@ mainnet configuration management.
 
 ## 1. Phase map
 
-| Phase | Theme | Primary outcome | Status |
-|---|---|---|---|
-| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. | **DONE** (PRs #22–#36, #40, #43) |
-| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. | Not started |
-| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. | Not started |
-| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. | Not started |
-| 4.5 | Full-stack hosted devnet | Anvil fork, explorer indexer + API, dapp, and `rmpc` run together as one orchestrated stack (compose / k3d) suitable for hosting and demos. | Not started |
-| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. | Not started |
-| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. | Not started |
-| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. | Not started |
+| Phase | Theme | Primary outcome |
+|---|---|---|
+| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. |
+| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. |
+| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. |
+| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. |
+| 4.5 | Full-stack hosted devnet | Anvil fork, explorer indexer + API, dapp, and `rmpc` run together as one orchestrated stack (docker-compose) suitable for hosting and demos. |
+| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. |
+| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. |
+| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. |
 
-Phase 1 is specified in detail below because it was the implementation
-branch through 2026-05; the spec is preserved as a record of what
-shipped. Phases 2–7 define the target shape and acceptance criteria;
-they are intentionally less prescriptive where the architecture is
-still open.
+Phase 1 is specified in detail below; it was the first buildable slice
+and its spec is the most complete. Phases 2–7 define the target shape
+and acceptance criteria; they are intentionally less prescriptive where
+the architecture is still open.
 
 These are internal MVP delivery phases for the Rust/agent-access work.
 They are not the same numbering scheme as the public Robot Money
@@ -501,23 +493,16 @@ test.
 
 ## 6. Phase 1 build order
 
-All six chunks shipped 2026-04 → 2026-05; recorded here for posterity.
-
-1. ✅ Contracts + role-separation deploy script + Foundry tests on
-   Anvil. (PRs #23–#26, #29, #30)
-2. ✅ Mock USDC + deploy harness wired into the Docker testnet, plus a
+1. Contracts + role-separation deploy script + Foundry tests on Anvil.
+2. Mock USDC + deploy harness wired into the Docker testnet, plus a
    bare `cast send` smoke (one tx) to confirm the stack — no TS SDK
-   detour. (PRs #23, #29)
-3. ✅ Rust crate skeleton + config loader + RPC + alloy bindings.
-   `rmpc self-check` can read state. (PRs #22, #25, #27, #32)
-4. ✅ Software signer + nonce lock + fee-cap policy + `deposit` happy
-   path. Tests 1–2, 10–11. (PRs #25, #28, #33)
-5. ✅ Preflight + policy refusal + code-hash pinning. Tests 3–4, 7–8.
-   (PR #31)
-6. ✅ Negative on-chain paths. Tests 5–6, 9. (PRs #34–#36)
-
-Final cleanups: audit findings, logging, `rmpd` → `rmpc` rename
-(PR #40); deprecated TypeScript CLI removed (PR #43).
+   detour.
+3. Rust crate skeleton + config loader + RPC + alloy bindings.
+   `rmpc self-check` can read state.
+4. Software signer + nonce lock + fee-cap policy + `deposit` happy
+   path. Tests 1–2, 10–11.
+5. Preflight + policy refusal + code-hash pinning. Tests 3–4, 7–8.
+6. Negative on-chain paths. Tests 5–6, 9.
 
 ## 7. Phase 1 open questions
 
@@ -709,11 +694,11 @@ avoid hidden prompt dependencies, and keep command examples aligned with
 
 See [`docs/walkthroughs/opencode-readonly-fork.md`](walkthroughs/opencode-readonly-fork.md)
 for the read-only fork walkthrough (issue #53). The walkthrough is
-backed by [`testing/opencode-walkthrough/`](../testing/opencode-walkthrough/),
+backed by [`testing/doctests/`](../testing/doctests/),
 a Rust test crate that asserts doc-vs-CLI parity, parses the shipped
 config template with the real `rmpc` config loader, and exercises the
 refusal envelope on every PR via
-[`.github/workflows/opencode-walkthrough.yml`](../.github/workflows/opencode-walkthrough.yml).
+[`.github/workflows/suite-11a-opencode-smoke.yml`](../.github/workflows/suite-11a-opencode-smoke.yml).
 
 **OpenClaw installation.**
 
@@ -768,10 +753,9 @@ shape both rely on.
 
 **Scope.**
 
-- A `docker-compose.full-stack.yaml` (or equivalent k3d / Helm
-  manifests) that brings up Anvil, Postgres, `services/explorer-indexer`,
-  `clients/explorer-api`, `clients/dapp`, and the deployed gateway in
-  the right startup order with health checks.
+- A `docker-compose.full-stack.yaml` that brings up Anvil, Postgres,
+  `services/explorer-indexer`, `clients/explorer-api`, `clients/dapp`,
+  and the deployed gateway in the right startup order with health checks.
 - Pinned fork block configuration via a single env var (e.g.
   `RMPC_FORK_BLOCK`) consumed by every service that needs it.
 - Shared environment configuration: chain id, RPC URL, contract
@@ -798,7 +782,7 @@ shape both rely on.
   bespoke per-service wiring.
 
 The scout for this phase is issue #148 (service seams, env vars,
-startup order, health checks); implementation is issue #146.
+startup order, health checks); implementation is tracked in issue #146.
 
 ## 11. Phase 5 — Simple Web Explorer API and Database
 

@@ -9,9 +9,9 @@
 >
 > Every command, flag, and config field referenced in this document is
 > covered by an automated parity test in
-> [`testing/opencode-walkthrough/`](../../testing/opencode-walkthrough/).
+> [`testing/doctests/`](../../testing/doctests/).
 > If you change `rmpc` or this walkthrough, run
-> `cargo test --manifest-path testing/opencode-walkthrough/Cargo.toml`
+> `cargo test -p doctests`
 > before opening a PR — drift fails CI.
 
 This walkthrough sets up [OpenCode](https://github.com/sst/opencode) with
@@ -79,7 +79,7 @@ done.
 
 Save the following as `./rmpc-fork.toml` next to your shell. The
 walkthrough test crate ships the same template at
-[`testing/opencode-walkthrough/fixtures/rmpc-fork.toml.template`](../../testing/opencode-walkthrough/fixtures/rmpc-fork.toml.template)
+[`testing/doctests/fixtures/opencode/rmpc-fork.toml.template`](../../testing/doctests/fixtures/opencode/rmpc-fork.toml.template)
 and asserts it parses with the real `rmpc` config loader.
 
 ```toml
@@ -121,7 +121,7 @@ opencode --plugin "$PWD/plugins/robotmoney-cli"
 If OpenCode is not installed, skip to step 5 and run the commands
 directly. The skill package is just a `SKILL.md` + `references/*.md`
 bundle; the parity test in
-`testing/opencode-walkthrough/tests/walkthrough_parity.rs` proves every
+`testing/doctests/tests/opencode_parity.rs` proves every
 command this walkthrough mentions is one OpenCode would dispatch through
 shell-tool execution.
 
@@ -184,19 +184,19 @@ Leave the release binary cached at
 ## What is asserted automatically
 
 The walkthrough is backed by
-[`testing/opencode-walkthrough/`](../../testing/opencode-walkthrough/),
+[`testing/doctests/`](../../testing/doctests/),
 a Rust test crate that runs in CI on every PR via
-[`.github/workflows/opencode-walkthrough.yml`](../../.github/workflows/opencode-walkthrough.yml).
+[`.github/workflows/suite-11a-opencode-smoke.yml`](../../.github/workflows/suite-11a-opencode-smoke.yml).
 
 | Test | What it proves |
 |---|---|
-| `walkthrough_parity::every_documented_subcommand_exists` | Every `rmpc <sub>` token in this doc resolves against `rmpc --help`. |
-| `walkthrough_parity::every_documented_flag_exists` | Every `--flag` in this doc resolves against some `rmpc` subcommand. |
-| `walkthrough_parity::skill_package_referenced` | This doc points at `plugins/robotmoney-cli/` and the referenced files exist. |
-| `config_template_parses::fixture_parses_with_rmpc_config_loader` | The `rmpc-fork.toml.template` shipped under `fixtures/` deserializes with `rust_payment_client::config::Config`. |
-| `refusal_walkthrough::unknown_subcommand_refuses_with_nonzero_exit` | `rmpc not-a-real-subcommand` exits non-zero with stderr text — the structured refusal contract step 6 documents. |
-| `read_only_walkthrough::get_vault_against_fork` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |
-| `get_gateway_against_fork_is_partial` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the fork URL, runs `rmpc get-gateway`, asserts `partial: true` with at least one named per-field error — the documented degradation shape. |
+| `opencode_parity::every_documented_subcommand_exists_in_rmpc_help` | Every `rmpc <sub>` token in this doc resolves against `rmpc --help`. |
+| `opencode_parity::every_documented_flag_exists_on_some_rmpc_subcommand` | Every `--flag` in this doc resolves against some `rmpc` subcommand. |
+| `opencode_parity::skill_package_referenced_and_files_exist` | This doc points at `plugins/robotmoney-cli/` and the referenced files exist. |
+| `opencode_config::fixture_parses_with_rmpc_config_loader` | The `rmpc-fork.toml.template` shipped under `fixtures/opencode/` deserializes with `rust_payment_client::config::Config`. |
+| `opencode_refusal::unknown_subcommand_refuses_with_nonzero_exit` | `rmpc not-a-real-subcommand` exits non-zero with stderr text — the structured refusal contract step 6 documents. |
+| `opencode_read_only::get_vault_against_fork` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |
+| `opencode_read_only::get_gateway_against_fork_is_partial` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the fork URL, runs `rmpc get-gateway`, asserts `partial: true` with at least one named per-field error — the documented degradation shape. |
 
 The two fork-driven tests skip cleanly when no archive RPC is
 configured, mirroring [`testing/fork-e2e-rust`](../../testing/fork-e2e-rust)

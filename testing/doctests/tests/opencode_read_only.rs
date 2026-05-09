@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use opencode_walkthrough_tests::{config_template_path, rmpc_bin};
+use doctests::opencode::{config_template_path, rmpc_bin};
 use serde_json::Value;
 
 /// Skip-clean macro mirroring `rmpc_fork_e2e::skip_if_no_fork!`.

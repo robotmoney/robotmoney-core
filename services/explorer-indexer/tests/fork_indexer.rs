@@ -11,7 +11,9 @@
 //!   readable, so the snapshot succeeds).
 //! - Re-running the same range produces 0 net inserts (idempotency).
 //!
-//! Skips when `RMPC_FORK_RPC_URL` is unset or Docker is missing.
+//! Uses the checked-in `testing/fixtures/fork-state/CURRENT.anvil-state` snapshot
+//! by default; falls back to `RMPC_FORK_RPC_URL` live fork if set.
+//! Skips only when `anvil` is not on PATH.
 
 mod common;
 
@@ -23,8 +25,8 @@ use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
 async fn populates_nine_tables_and_reindex_is_idempotent() {
     if !rmpc_fork_e2e::can_run() {
         eprintln!(
-            "[explorer-indexer] skipping: RMPC_FORK_RPC_URL not set or anvil missing. \
-             Set RMPC_FORK_RPC_URL to a Base archive endpoint and install Foundry to run."
+            "[explorer-indexer] skipping: anvil not on PATH and no checked-in fixture found. \
+             Install Foundry (https://getfoundry.sh) to run."
         );
         return;
     }

@@ -13,11 +13,16 @@
 //! errors").
 
 use alloy_primitives::U256;
-use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_fork, ForkFixture, IRobotMoneyVault, IERC20};
+use rmpc_fork_e2e::{
+    addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
+};
 
 #[test]
 fn abi_address_sanity() {
-    skip_if_no_fork!();
+    // Requires a live mainnet fork: reads storage from production Base
+    // contracts (asset(), symbol(), exitFeeBps()). The checked-in fixture
+    // has bytecode but not the storage of live mainnet contracts.
+    skip_if_no_mainnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[abi_address_sanity] {}", fx.summary_line());
 

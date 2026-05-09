@@ -180,8 +180,16 @@ fi
 WARM_ADDRESSES=(
   # Base mainnet USDC (Circle).
   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-  # Walkthrough fixture vault (placeholder; cast read returns empty bytecode if absent).
-  "0xCd9BB6428180c89cC0E5b9F1Bf6Bb98155Cf9CFf"
+  # Robot Money production addresses (testing/fork-e2e-rust/src/addresses.rs).
+  # Must stay in sync with BASE_ADDRESSES in that module.
+  "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd"  # RobotMoneyVault (ERC-4626)
+  "0xa6ed7b03bc82d7c6d4ac4feb971a06550a7817e9"  # Morpho strategy adapter
+  "0x218695bdab0fe4f8d0a8ee590bc6f35820fc0bea"  # Aave V3 strategy adapter
+  "0x8247da22a59fce074c102431048d0ce7294c2652"  # Compound V3 strategy adapter
+  "0x88ba7364cc6ce5054981d571b33f8fb3e91475a0"  # Admin/fee-recipient Safe
+  # DEX / infrastructure.
+  "0x2626664c2603336e57b271c5c0b26f421741e481"  # Uniswap V3 SwapRouter02
+  "0x4200000000000000000000000000000000000006"  # WETH9 on Base
 )
 echo "[snapshot] warming well-known addresses (caching code in fork state)"
 for addr in "${WARM_ADDRESSES[@]}"; do

@@ -15,6 +15,7 @@ name = "rmpc_fork_e2e"
 path = "src/lib.rs"
 
 [dependencies]
+test-utils = { path = "../test-utils" }
 # Typed ABI encoding/decoding via alloy's sol! macro and primitives.
 alloy-primitives = { version = "0.8", features = ["k256"] }
 alloy-sol-types = { version = "0.8", features = ["json"] }

@@ -4,8 +4,9 @@ members = [
     "clients/rust-payment-client",
     "clients/explorer-api",
     "services/explorer-indexer",
+    "testing/test-utils",
     "testing/smoke-test",
     "testing/ethereum-testnet/e2e-rust",
     "testing/fork-e2e-rust",
-    "testing/opencode-walkthrough",
+    "testing/doctests",
 ]

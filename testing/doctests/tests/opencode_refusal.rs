@@ -11,7 +11,7 @@
 
 use std::process::Command;
 
-use opencode_walkthrough_tests::rmpc_bin;
+use doctests::opencode::rmpc_bin;
 
 #[test]
 fn unknown_subcommand_refuses_with_nonzero_exit() {

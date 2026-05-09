@@ -1,0 +1,22 @@
+[package]
+name = "doctests"
+version = "0.1.0"
+edition = "2021"
+description = "Doc-parity test suite — asserts that docs, walkthroughs, and config templates match the real CLI."
+license = "MIT"
+publish = false
+
+# Each module in src/ targets one canonical doc. Add new modules here as
+# new docs accumulate. Currently: opencode (opencode-readonly-fork.md).
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+test-utils = { path = "../test-utils" }
+rust-payment-client = { path = "../../clients/rust-payment-client" }
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+which = "6"

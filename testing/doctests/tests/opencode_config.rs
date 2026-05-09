@@ -9,7 +9,7 @@
 
 use std::fs;
 
-use opencode_walkthrough_tests::{config_template_path, walkthrough_md};
+use doctests::opencode::{config_template_path, walkthrough_md};
 use rust_payment_client::config::Config;
 
 #[test]
