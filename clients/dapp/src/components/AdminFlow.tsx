@@ -26,11 +26,15 @@ import { HistoryPane } from "./HistoryPane";
 import { resolveFlags } from "../lib/featureFlags";
 import { resolveExplorerApiUrl } from "../lib/explorerApi";
 import { composeRotationPreview } from "../rotation";
+import type { VerificationState } from "../lib/useGatewayVerifier";
 
 interface AdminFlowProps {
   gatewayAddress: Address;
   vaultAddress: Address;
+  /** Derived boolean — true only when verification succeeded. */
   gatewayCodeHashVerified: boolean;
+  /** Full verification state for rendering the status banner. */
+  gatewayVerificationState: VerificationState;
   envClass: PreviewContext["envClass"];
   flagEnv: Record<string, string | undefined>;
 }
@@ -258,9 +262,30 @@ export function AdminFlow(props: AdminFlowProps) {
     });
   };
 
+  const { gatewayVerificationState } = props;
+
   return (
     <main className="admin-flow">
       <h1>RobotMoney admin dapp</h1>
+
+      <section data-testid="gateway-verification-status">
+        {gatewayVerificationState.status === "pending" && (
+          <p data-testid="gateway-verification-pending">
+            Verifying gateway bytecode hash… Admin writes are disabled until verification completes.
+          </p>
+        )}
+        {gatewayVerificationState.status === "verified" && (
+          <p data-testid="gateway-verification-ok">
+            Gateway bytecode verified: <code>{gatewayVerificationState.computedHash}</code>
+          </p>
+        )}
+        {gatewayVerificationState.status === "refused" && (
+          <p data-testid="gateway-verification-refused" className="unsafe-banner">
+            <strong>Gateway verification refused — admin writes disabled.</strong>{" "}
+            {gatewayVerificationState.reason}
+          </p>
+        )}
+      </section>
 
       <section data-testid="connect-section">
         {!isConnected ? (

@@ -176,5 +176,6 @@ VITE_FORK_RPC_URL="$RPC_URL" \
 VITE_GATEWAY_ADDRESS="$GATEWAY_ADDRESS" \
 VITE_VAULT_ADDRESS="$VAULT_ADDRESS" \
 VITE_ENV_CLASS=fork \
+VITE_GATEWAY_EXPECTED_CODE_HASH="$GATEWAY_RUNTIME_HASH" \
     pnpm exec playwright test tests/e2e/fork-roundtrip.spec.ts "$@"
 popd >/dev/null

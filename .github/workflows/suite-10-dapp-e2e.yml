@@ -88,10 +88,16 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm test:e2e:install
 
-      - name: Run Playwright E2E
+      - name: Run Playwright E2E (UI invariant tests — verification bypassed for test build)
         env:
           VITE_USE_MOCK_WALLET: "true"
-        run: pnpm test:e2e
+          VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST: "true"
+        run: pnpm test:e2e --grep-invert "gateway hash verification"
+
+      - name: Run Playwright E2E — gateway hash refusal (no bypass, tests refused state)
+        env:
+          VITE_USE_MOCK_WALLET: "true"
+        run: pnpm test:e2e tests/e2e/gateway-hash-mismatch.spec.ts
 
       - name: Upload Playwright report
         if: failure()
