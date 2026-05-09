@@ -227,6 +227,26 @@ async fn run_inner(
         }
     }
 
+    // Always persist the cursor block header, even when `target` had no
+    // watched events. Without a stored hash at `target`, the next tick
+    // cannot perform a reorg check (the `get_block_hash` guard short-
+    // circuits) and stale rows below a no-event cursor block would
+    // survive a reorg undetected (issue #177).
+    if !blocks_with_events.contains(&target) {
+        if let Some(header) = rpc.block_header(target).await? {
+            let r = db
+                .insert_block(
+                    cfg.chain_id,
+                    target as i64,
+                    header.hash.0,
+                    header.parent_hash.0,
+                    header.timestamp as i64,
+                )
+                .await?;
+            rows_inserted += r as i64;
+        }
+    }
+
     // Decode + insert events.
     for log in &logs {
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
@@ -270,11 +290,17 @@ async fn run_inner(
     })
 }
 
-/// Walk back from `start` until the stored hash matches the chain hash.
-/// Returns the highest block whose hash agrees on both sides
-/// (i.e. the reorg root). Returns `-1` if even block 0 disagrees,
-/// which is effectively impossible on a real chain but lets the
-/// caller signal "wipe everything".
+/// Walk back from `start` until we find a block whose stored hash
+/// matches the on-chain hash. Returns that block number as the reorg
+/// root. Returns `-1` if we walk past block 0 without finding a match,
+/// which signals the caller to wipe all data (effectively a full
+/// re-index).
+///
+/// A block with **no stored hash** is skipped — a missing hash means the
+/// indexer never persisted this block (it had no watched events and was
+/// not the cursor). Treating a missing-hash block as a "clean root"
+/// would incorrectly stop the walk, leaving stale event rows below the
+/// true reorg point undetected (issue #177 bug fix).
 async fn walk_back_to_match(
     db: &Db,
     rpc: &JsonRpc,
@@ -290,10 +316,10 @@ async fn walk_back_to_match(
                     return Ok(n);
                 }
             }
-        } else {
-            // No stored hash for this height → already a clean root.
-            return Ok(n);
+            // Hash mismatch — keep walking back.
         }
+        // No stored hash for this height — we never persisted this block
+        // so we cannot validate it as a canonical root. Keep walking.
         n -= 1;
     }
     Ok(-1)
