@@ -7,8 +7,12 @@
 //                             this value (docs/technical/explorer-schema-decisions.md §4).
 //
 // Optional environment variables:
-//   EXPLORER_API_BIND  — bind address (default `0.0.0.0:8080`).
-//   RUST_LOG           — tracing filter (default `info`).
+//   EXPLORER_API_BIND           — bind address (default `0.0.0.0:8080`).
+//   RUST_LOG                    — tracing filter (default `info`).
+//   EXPLORER_API_ALLOW_ORIGINS  — comma-separated CORS allowed origins (issue #166).
+//                                 Not yet implemented; tracked in issue #166. Without
+//                                 this header, browsers block all cross-origin requests
+//                                 from the HistoryPane dapp component.
 
 use std::net::SocketAddr;
 

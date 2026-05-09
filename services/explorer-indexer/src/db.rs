@@ -376,6 +376,18 @@ impl Db {
 
     /// Row count for any of the nine tables. Used by integration tests
     /// to assert non-empty / no-op-on-reindex.
+    ///
+    /// # Security note (issue #165)
+    ///
+    /// This method is `pub` but has no production callers — every call site
+    /// is inside `tests/`. The `format!` dynamic SQL is safe *today* because
+    /// all callers pass hard-coded string literals. However, the `pub`
+    /// visibility is a latent footgun: a future caller could pass a
+    /// user-controlled string and create a SQL injection vector with no
+    /// visible warning at the call site.
+    ///
+    /// Fix tracked in issue #165: restrict to `#[cfg(test)]` (preferred) or
+    /// replace `&str` with a typed `Table` enum.
     pub async fn count(&self, table: &str) -> Result<i64, DbError> {
         // table is hard-coded by callers — we never accept user input
         // here, so this is safe. (sqlx does not support placeholders
