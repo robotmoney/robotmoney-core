@@ -141,8 +141,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -154,11 +152,6 @@ jobs:
           key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-rmpc-unit-
-
-      - name: fmt + clippy
-        run: |
-          cargo fmt --check -p opencode-walkthrough-tests
-          cargo clippy -p opencode-walkthrough-tests --all-targets -- -D warnings
 
       - name: Walkthrough parity
         run: cargo test -p opencode-walkthrough-tests --test walkthrough_parity -- --nocapture

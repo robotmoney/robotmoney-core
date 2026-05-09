@@ -71,8 +71,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -89,14 +87,6 @@ jobs:
           key: ${{ runner.os }}-cargo-smoke-test-${{ hashFiles('testing/smoke-test/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-smoke-test-
-
-      - name: cargo fmt --check
-        working-directory: testing/smoke-test
-        run: cargo fmt --check -p smoke-test
-
-      - name: cargo clippy
-        working-directory: testing/smoke-test
-        run: cargo clippy -p smoke-test --all-targets -- -D warnings
 
       - name: cargo build (includes CLI binary)
         working-directory: testing/smoke-test

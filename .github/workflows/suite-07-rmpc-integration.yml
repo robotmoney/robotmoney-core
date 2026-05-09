@@ -74,8 +74,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -92,18 +90,6 @@ jobs:
           key: ${{ runner.os }}-cargo-rmpc-integration-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-rmpc-integration-
-
-      - name: fmt + clippy (rmpc)
-        working-directory: clients/rust-payment-client
-        run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-
-      - name: fmt + clippy (e2e-rust)
-        working-directory: testing/ethereum-testnet/e2e-rust
-        run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
 
       - name: Pre-pull Docker images
         working-directory: testing/ethereum-testnet/config

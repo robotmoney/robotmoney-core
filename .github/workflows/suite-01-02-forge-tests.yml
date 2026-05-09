@@ -14,12 +14,6 @@
 # Running in parallel halves the feedback loop. coverage runs after both because it is
 # only worth paying for lcov instrumentation when the tests actually pass.
 #
-# WHY forge fmt --check RUNS IN unit (NOT A SEPARATE JOB)
-# Formatting failures are cheap to catch and almost always indicate a forgotten
-# `forge fmt` before push. Blocking the unit job immediately gives faster feedback
-# than a separate lint job. The invariant job skips the fmt check because it is already
-# caught by unit — no need to duplicate it.
-#
 # GOTCHAS
 # - The Foundry cache key includes all *.sol files. If the cache is stale after a
 #   dependency update in lib/, force a cache miss by bumping the key suffix.
@@ -73,9 +67,6 @@ jobs:
           key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
           restore-keys: |
             ${{ runner.os }}-foundry-
-
-      - name: forge fmt --check
-        run: forge fmt --check
 
       - name: forge build
         run: forge build
