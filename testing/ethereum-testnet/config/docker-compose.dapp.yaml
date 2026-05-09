@@ -1,0 +1,118 @@
+# Full-stack dapp overlay for the Robot Money devnet.
+#
+# Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
+# Used by: testing/smoke-test (--full-stack flag, issue #228).
+#
+# Brings up Postgres, explorer-indexer, explorer-api, and the dapp
+# against an already-running Geth+Lighthouse chain. The smoke-test
+# binary starts the chain via docker-compose.yaml first, deploys
+# contracts, then starts this stack passing deployed addresses as
+# build args.
+#
+# Standalone usage (without the smoke-test binary):
+#
+#   # Required env vars:
+#   #   VITE_GATEWAY_ADDRESS  — deployed gateway contract address
+#   #   VITE_VAULT_ADDRESS    — deployed vault contract address
+#   #   INDEXER_GATEWAY       — same as VITE_GATEWAY_ADDRESS
+#   #   INDEXER_VAULT         — same as VITE_VAULT_ADDRESS
+#   #
+#   # Optional (defaults shown):
+#   #   VITE_FORK_RPC_URL=http://localhost:8545
+#   #   VITE_EXPLORER_API_URL=http://localhost:8080
+#   #   INDEXER_RPC_URL=http://host.docker.internal:8545
+#   #   INDEXER_CHAIN_ID=32382
+#   #   INDEXER_CHAIN_NAME=devnet
+#   #   EXPLORER_API_CHAIN_ID=32382
+#   #   POSTGRES_USER=robotmoney
+#   #   POSTGRES_PASSWORD=robotmoney
+#   #   POSTGRES_DB=explorer
+#
+#   cd testing/ethereum-testnet/config
+#   docker compose -f docker-compose.dapp.yaml up
+
+name: robotmoney-dapp
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dapp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
+      POSTGRES_DB: ${POSTGRES_DB:-explorer}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney} -d ${POSTGRES_DB:-explorer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  explorer-indexer:
+    build:
+      context: ../../..
+      dockerfile: services/explorer-indexer/Dockerfile
+    container_name: dapp-explorer-indexer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8545}
+      INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-32382}
+      INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
+      INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
+      INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
+      INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
+
+  explorer-api:
+    build:
+      context: ../../..
+      dockerfile: clients/explorer-api/Dockerfile
+    container_name: dapp-explorer-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
+      EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-32382}
+      EXPLORER_API_BIND: 0.0.0.0:8080
+      EXPLORER_API_ALLOW_ORIGINS: ${VITE_DAPP_URL:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dapp:
+    build:
+      context: ../../..
+      dockerfile: clients/dapp/Dockerfile
+      args:
+        VITE_FORK_RPC_URL: ${VITE_FORK_RPC_URL:-http://localhost:8545}
+        VITE_EXPLORER_API_URL: ${VITE_EXPLORER_API_URL:-http://localhost:8080}
+        VITE_GATEWAY_ADDRESS: ${VITE_GATEWAY_ADDRESS:?VITE_GATEWAY_ADDRESS must be set}
+        VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:?VITE_VAULT_ADDRESS must be set}
+        VITE_GATEWAY_CODE_HASH_VERIFIED: "false"
+        VITE_ENV_CLASS: fork
+        VITE_USE_MOCK_WALLET: "false"
+        VITE_BROWSER_KEYGEN: "false"
+        VITE_HISTORY_PANE: "true"
+    container_name: dapp-frontend
+    restart: unless-stopped
+    depends_on:
+      explorer-api:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5173 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

@@ -504,3 +504,125 @@ pub fn locate_repo_root() -> Result<PathBuf, HarnessError> {
     test_utils::find_workspace_root()
         .ok_or_else(|| HarnessError::other("could not locate repo root from CARGO_MANIFEST_DIR"))
 }
+
+// -- DappStack --------------------------------------------------------
+
+/// URLs for the full dapp stack services, printed as the structured
+/// endpoint summary after all services pass their health checks.
+pub struct DappEndpoints {
+    pub rpc_url: String,
+    pub dapp_url: String,
+    pub explorer_api_url: String,
+}
+
+/// Manages the second docker-compose stack (dapp + explorer-api +
+/// explorer-indexer + Postgres) started by `--full-stack`. Drop tears
+/// the stack down unconditionally.
+///
+/// Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
+/// Boot via [`DappStack::boot`] after the chain fixture is ready and
+/// contracts are deployed.
+pub struct DappStack {
+    compose_dir: PathBuf,
+    pub endpoints: DappEndpoints,
+}
+
+impl DappStack {
+    /// Build and start the dapp compose stack, injecting the deployed
+    /// contract addresses as build args. Waits for the dapp and
+    /// explorer-api health checks to pass before returning.
+    ///
+    /// `gateway_hex` and `vault_hex` are the checksummed hex addresses
+    /// returned by [`Fixture::gateway_hex`] and [`Fixture::vault_hex`].
+    pub fn boot(fixture: &Fixture) -> Result<Self, HarnessError> {
+        let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
+        let gateway_hex = fixture.gateway_hex();
+        let vault_hex = fixture.vault_hex();
+
+        let dapp_url = "http://127.0.0.1:5173".to_string();
+        let explorer_api_url = "http://127.0.0.1:8080".to_string();
+        let rpc_url = fixture.rpc_url().to_string();
+
+        eprintln!("smoke-test: building and starting dapp stack (this may take several minutes for first build)...");
+
+        let status = Command::new("docker")
+            .arg("compose")
+            .arg("-f")
+            .arg("docker-compose.dapp.yaml")
+            .arg("up")
+            .arg("-d")
+            .arg("--build")
+            .env("VITE_GATEWAY_ADDRESS", gateway_hex)
+            .env("VITE_VAULT_ADDRESS", vault_hex)
+            .env("INDEXER_GATEWAY", gateway_hex)
+            .env("INDEXER_VAULT", vault_hex)
+            // RPC is on the host; containers reach it via host.docker.internal
+            .env("INDEXER_RPC_URL", "http://host.docker.internal:8545")
+            .env("VITE_FORK_RPC_URL", "http://localhost:8545")
+            .env("VITE_EXPLORER_API_URL", "http://localhost:8080")
+            .env("INDEXER_CHAIN_ID", "32382")
+            .env("INDEXER_CHAIN_NAME", "devnet")
+            .env("EXPLORER_API_CHAIN_ID", "32382")
+            .current_dir(&compose_dir)
+            .status()
+            .map_err(HarnessError::from)?;
+
+        if !status.success() {
+            return Err(HarnessError::Docker(
+                "compose up dapp stack failed".to_string(),
+            ));
+        }
+
+        // Wait for explorer-api /health endpoint
+        wait_for_http_ok(&format!("{explorer_api_url}/health"), Duration::from_secs(300))?;
+        // Wait for dapp frontend
+        wait_for_http_ok(&dapp_url, Duration::from_secs(300))?;
+
+        Ok(DappStack {
+            compose_dir,
+            endpoints: DappEndpoints {
+                rpc_url,
+                dapp_url,
+                explorer_api_url,
+            },
+        })
+    }
+}
+
+impl Drop for DappStack {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args([
+                "compose",
+                "-f",
+                "docker-compose.dapp.yaml",
+                "down",
+                "-v",
+                "--remove-orphans",
+            ])
+            .current_dir(&self.compose_dir)
+            .status();
+    }
+}
+
+/// Poll `url` with HTTP GET until a 2xx response is received or
+/// `timeout` elapses. Used to wait for explorer-api and dapp health.
+fn wait_for_http_ok(url: &str, timeout: Duration) -> Result<(), HarnessError> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        match client.get(url).send() {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => last = format!("HTTP {}", resp.status()),
+            Err(e) => last = format!("{e}"),
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Err(HarnessError::other(format!(
+        "service at {url} not healthy after {timeout:?}: {last}"
+    )))
+}

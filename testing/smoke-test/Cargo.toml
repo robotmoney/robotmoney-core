@@ -29,3 +29,4 @@ which = "6"
 hex = "0.4"
 thiserror = "1"
 ctrlc = "3"
+clap = { version = "4", features = ["derive"] }
