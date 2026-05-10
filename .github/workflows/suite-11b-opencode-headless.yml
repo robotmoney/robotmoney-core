@@ -77,8 +77,7 @@ jobs:
             ${{ runner.os }}-cargo-rmpc-unit-
 
       - name: Refusal transcript assertions
-        working-directory: clients/rust-payment-client
-        run: cargo test --test refusal_walkthrough -- --nocapture
+        run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_refusal -- --nocapture
 
   deposit:
     name: opencode-headless-deposit
@@ -188,8 +187,7 @@ jobs:
         run: forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545
 
       - name: Read-only isolation assertions
-        working-directory: clients/rust-payment-client
-        run: cargo test --test refusal_walkthrough -- --nocapture
+        run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
       - name: Headless read run
         run: opencode run "show me the vault state and my balance" --format json | tee headless-read.json
