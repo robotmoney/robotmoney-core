@@ -35,9 +35,6 @@ name: dapp-lint-typecheck-vitest-build
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "clients/dapp/**"
-      - ".github/workflows/suite-09-dapp-quality.yml"
   pull_request:
     branches: [main, dev]
     paths:

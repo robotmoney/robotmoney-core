@@ -44,11 +44,6 @@ name: openclaw-safety-walkthrough
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "testing/openclaw-config/**"
-      - "plugins/robotmoney-cli/**"
-      - "docs/walkthroughs/openclaw-config.md"
-      - ".github/workflows/suite-12-openclaw.yml"
   pull_request:
     branches: [main, dev]
     paths:

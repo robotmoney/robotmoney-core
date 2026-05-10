@@ -31,10 +31,6 @@ name: forge-unit-invariant-coverage
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "contracts/**"
-      - "foundry.toml"
-      - ".github/workflows/suite-01-02-forge-tests.yml"
   pull_request:
     branches: [main, dev]
     paths:

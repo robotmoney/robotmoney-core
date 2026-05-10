@@ -574,7 +574,10 @@ impl DappStack {
         }
 
         // Wait for explorer-api /health endpoint
-        wait_for_http_ok(&format!("{explorer_api_url}/health"), Duration::from_secs(300))?;
+        wait_for_http_ok(
+            &format!("{explorer_api_url}/health"),
+            Duration::from_secs(300),
+        )?;
         // Wait for dapp frontend
         wait_for_http_ok(&dapp_url, Duration::from_secs(300))?;
 

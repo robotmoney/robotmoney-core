@@ -40,11 +40,6 @@ name: smoke-test-devnet-boot-teardown
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - "contracts/**"
-      - ".github/workflows/suite-14-smoke-test.yml"
   pull_request:
     branches: [main, dev]
     paths:

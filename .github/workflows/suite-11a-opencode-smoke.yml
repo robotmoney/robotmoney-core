@@ -40,11 +40,6 @@ name: opencode-plugin-validate-walkthrough-offline
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "plugins/robotmoney-cli/**"
-      - "clients/rust-payment-client/**"
-      - "docs/walkthroughs/**"
-      - ".github/workflows/suite-11a-opencode-smoke.yml"
   pull_request:
     branches: [main, dev]
     paths:

@@ -45,11 +45,6 @@ name: dapp-playwright-e2e
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "clients/dapp/**"
-      - "contracts/**"
-      - "testing/smoke-test/**"
-      - ".github/workflows/suite-10-dapp-e2e.yml"
   pull_request:
     branches: [main, dev]
     paths:

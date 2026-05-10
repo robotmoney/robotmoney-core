@@ -34,10 +34,6 @@ name: explorer-indexer-migrations-reorg
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "services/explorer-indexer/**"
-      - "testing/explorer-indexer/**"
-      - ".github/workflows/suite-08-explorer-indexer.yml"
   pull_request:
     branches: [main, dev]
     paths:

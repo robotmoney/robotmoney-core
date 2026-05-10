@@ -34,10 +34,6 @@ name: solidity-fmt-natspec-slither
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "contracts/**"
-      - "foundry.toml"
-      - ".github/workflows/suite-03-solidity-quality.yml"
   pull_request:
     branches: [main, dev]
     paths:

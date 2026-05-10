@@ -44,12 +44,6 @@ name: demo-openclaw-e2e
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "testing/demo/**"
-      - "docs/technical/demo-runbook.md"
-      - "plugins/robotmoney-cli/skills/robotmoney-cli/**"
-      - "clients/rust-payment-client/src/**"
-      - ".github/workflows/suite-15-demo.yml"
   pull_request:
     branches: [main, dev]
     paths:

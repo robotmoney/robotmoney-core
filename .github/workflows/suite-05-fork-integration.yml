@@ -37,9 +37,6 @@ name: fork-protocol-adapter-integration
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "testing/fork-e2e-rust/**"
-      - ".github/workflows/suite-05-fork-integration.yml"
   pull_request:
     branches: [main, dev]
     paths:

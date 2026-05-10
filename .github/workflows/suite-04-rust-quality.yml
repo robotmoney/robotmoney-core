@@ -33,11 +33,6 @@ name: rust-fmt-clippy-doc-coverage
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "clients/rust-payment-client/**"
-      - "testing/ethereum-testnet/e2e-rust/**"
-      - "services/explorer-indexer/**"
-      - ".github/workflows/suite-04-rust-quality.yml"
   pull_request:
     branches: [main, dev]
     paths:

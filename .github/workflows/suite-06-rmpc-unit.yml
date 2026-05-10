@@ -28,9 +28,6 @@ name: rust-client-unit-tests
 on:
   push:
     branches: [main, dev]
-    paths:
-      - "clients/rust-payment-client/**"
-      - ".github/workflows/suite-06-rmpc-unit.yml"
   pull_request:
     branches: [main, dev]
     paths:

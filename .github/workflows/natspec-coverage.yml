@@ -30,13 +30,9 @@
 name: natspec-coverage
 
 on:
-  pull_request:
-    paths:
-      - "contracts/**/*.sol"
-      - "scripts/natspec/check.sh"
-      - ".github/workflows/natspec-coverage.yml"
   push:
     branches: [main, dev]
+  pull_request:
     paths:
       - "contracts/**/*.sol"
       - "scripts/natspec/check.sh"
