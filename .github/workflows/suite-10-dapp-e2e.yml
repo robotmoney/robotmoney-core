@@ -107,7 +107,7 @@ jobs:
         run: pnpm test:e2e tests/e2e/gateway-hash-mismatch.spec.ts
 
       - name: Upload Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-e2e
@@ -148,7 +148,7 @@ jobs:
         run: pnpm test:e2e tests/e2e/history-pane.spec.ts
 
       - name: Upload Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-history-pane
@@ -192,11 +192,21 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Fork round-trip
+        env:
+          ROUNDTRIP_WORK_DIR: /tmp/rmpc-fork-roundtrip-ci
         run: bash clients/dapp/scripts/run-fork-roundtrip.sh
 
       - name: Upload Playwright report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-fork-roundtrip
           path: clients/dapp/playwright-report/
+
+      - name: Upload fork-roundtrip rmpc logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-roundtrip-rmpc-logs
+          path: /tmp/rmpc-fork-roundtrip-ci/logs/
+          if-no-files-found: ignore

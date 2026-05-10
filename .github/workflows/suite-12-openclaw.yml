@@ -135,7 +135,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openclaw-walkthrough-outcome
-          path: testing/openclaw-config/artifacts/long-running/outcome.txt
+          path: testing/openclaw-config/artifacts/long-running/
 
       - name: Assert outcome is well-formed
         run: |

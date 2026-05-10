@@ -35,7 +35,8 @@ SHARE_RECEIVER="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"  # account[2] (reuse
 
 ANVIL_PORT="${ROUNDTRIP_ANVIL_PORT:-8545}"
 RPC_URL="http://127.0.0.1:${ANVIL_PORT}"
-WORK_DIR="$(mktemp -d -t rmpc-fork-roundtrip.XXXXXX)"
+WORK_DIR="${ROUNDTRIP_WORK_DIR:-$(mktemp -d -t rmpc-fork-roundtrip.XXXXXX)}"
+mkdir -p "$WORK_DIR"
 DEPLOYMENT_JSON="$WORK_DIR/deployment.json"
 RMPC_CONFIG="$WORK_DIR/rmpc.toml"
 KEYSTORE_PATH="$WORK_DIR/keystore.json"
@@ -47,8 +48,8 @@ cleanup() {
     if [[ -n "$ANVIL_PID" ]] && kill -0 "$ANVIL_PID" 2>/dev/null; then
         kill "$ANVIL_PID" || true
     fi
-    # Keep WORK_DIR around if KEEP_WORK=1 — useful for post-mortem.
-    if [[ "${ROUNDTRIP_KEEP_WORK:-0}" != "1" ]]; then
+    # Keep WORK_DIR around if KEEP_WORK=1 or if an explicit dir was provided — useful for post-mortem.
+    if [[ "${ROUNDTRIP_KEEP_WORK:-0}" != "1" && -z "${ROUNDTRIP_WORK_DIR:-}" ]]; then
         rm -rf "$WORK_DIR"
     else
         echo "fork-roundtrip: WORK_DIR retained at $WORK_DIR"

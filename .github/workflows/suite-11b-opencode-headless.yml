@@ -132,10 +132,17 @@ jobs:
           cast rpc anvil_setBalance "$AGENT" "0xDE0B6B3A7640000" --rpc-url http://127.0.0.1:8545
 
       - name: Headless deposit run
-        run: opencode run "deposit 1 USDC to the vault" --format json > headless-deposit.json
+        run: opencode run "deposit 1 USDC to the vault" --format json | tee headless-deposit.json
 
       - name: Assert deposit transcript
         run: python3 .github/scripts/assert_headless_deposit_transcript.py headless-deposit.json
+
+      - name: Upload deposit transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-deposit-transcript
+          path: headless-deposit.json
 
   read:
     name: opencode-headless-read
@@ -185,7 +192,14 @@ jobs:
         run: cargo test --test refusal_walkthrough -- --nocapture
 
       - name: Headless read run
-        run: opencode run "show me the vault state and my balance" --format json > headless-read.json
+        run: opencode run "show me the vault state and my balance" --format json | tee headless-read.json
 
       - name: Assert read transcript
         run: python3 .github/scripts/assert_headless_read_transcript.py headless-read.json
+
+      - name: Upload read transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-read-transcript
+          path: headless-read.json
