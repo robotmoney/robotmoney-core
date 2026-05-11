@@ -103,11 +103,8 @@ fn main() {
         eprintln!("smoke-test: --public-*-url flags require --full-stack.");
         std::process::exit(2);
     }
-    if cli.rpc_port.is_some() {
-        std::env::set_var(
-            "SMOKE_TEST_GETH_RPC_PORT",
-            cli.rpc_port.unwrap().to_string(),
-        );
+    if let Some(rpc_port) = cli.rpc_port {
+        std::env::set_var("SMOKE_TEST_GETH_RPC_PORT", rpc_port.to_string());
     }
     let interrupted = Arc::new(AtomicBool::new(false));
     {
