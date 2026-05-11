@@ -49,7 +49,6 @@ pub const ONE_GWEI: u128 = 1_000_000_000;
 /// | Ethereum mainnet     | 1      | 100 gwei      |
 /// | Base mainnet         | 8453   | 1 gwei        |
 /// | Base Sepolia         | 84532  | 1 gwei        |
-/// | Anvil / local devnet | 31337  | 1000 gwei     |
 /// | Other (unknown)      | —      | 100 gwei + warn |
 pub fn default_max_fee_per_gas_cap_wei(chain_id: u64) -> Option<u64> {
     match chain_id {
@@ -58,10 +57,10 @@ pub fn default_max_fee_per_gas_cap_wei(chain_id: u64) -> Option<u64> {
         // Base mainnet and Base Sepolia — typical fees are sub-gwei,
         // so 1 gwei is the right "loud" ceiling.
         8453 | 84532 => Some(ONE_GWEI as u64),
-        // Anvil / local devnet — effectively unlimited so local replay
-        // and roundtrip tests never trip the cap on synthetic fees.
-        31337 => Some(1_000 * ONE_GWEI as u64),
-        // Unknown chain id — caller falls back with a warning.
+        // Unknown chain id — caller falls back with a warning. Test
+        // environments that need a different cap must set it explicitly
+        // via `[fees].max_fee_per_gas_cap` in the harness config; the
+        // production client does not branch on chain id for behaviour.
         _ => None,
     }
 }

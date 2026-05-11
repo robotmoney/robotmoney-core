@@ -390,11 +390,15 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
     }
 
     #[test]
-    fn fee_cap_default_for_anvil_is_unlimited_high() {
-        // Anvil — 1000 gwei, well above any sane fee bid so local
-        // tests never trip the cap.
+    fn fee_cap_default_for_anvil_falls_back_to_unknown_chain_default() {
+        // 31337 is not a production chain; the client must not embed an
+        // env-specific bypass for it. Test harnesses that need a different
+        // cap set it explicitly via `[fees].max_fee_per_gas_cap`.
         let cfg = cfg_for_chain(31337, "");
-        assert_eq!(cfg.effective_max_fee_per_gas_cap(None), 1_000_000_000_000);
+        assert_eq!(
+            cfg.effective_max_fee_per_gas_cap(None),
+            crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI
+        );
     }
 
     #[test]

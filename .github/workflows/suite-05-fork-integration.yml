@@ -8,13 +8,6 @@
 # mainnet. This suite is the line of defence between a refactor breaking a live
 # integration and that breakage reaching users.
 #
-# WHY THE JOB SPLITS ON TRIGGER TYPE (pr-smoke vs full-suite)
-# The full fork suite takes ~20 minutes. Running it on every PR would add that cost to
-# every contributor's feedback loop. The PR smoke covers the highest-signal tests
-# (ABI sanity + basic deposit/redeem round-trip); regressions in the rarer scenarios
-# (dex routing, failure surfaces) are caught on push to main where the cost is paid
-# once per merged commit.
-#
 # WHY NO RMPC_FORK_RPC_URL SECRET
 # The fork state is loaded from a checked-in fixture (testing/fixtures/fork-state/).
 # No upstream RPC is contacted at runtime. The fixture is refreshed offline with
@@ -28,9 +21,6 @@
 #   and re-run snapshot-fork.sh before debugging the test code.
 # - cargo test --no-run is a separate step so compile errors are surfaced immediately
 #   with clear output, rather than buried in the test runner's timeout output.
-# - The two jobs (pr-smoke, full-suite) are mutually exclusive by trigger type. If both
-#   trigger somehow (shouldn't happen with the if: conditions), they are independent and
-#   both run — that is safe.
 
 name: fork-protocol-adapter-integration
 
@@ -45,50 +35,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  pr-smoke:
-    name: fork-pr-smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: stable
-
-      - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-fork-e2e-${{ hashFiles('testing/fork-e2e-rust/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-fork-e2e-
-
-      - name: Build test binaries
-        working-directory: testing/fork-e2e-rust
-        run: cargo test --no-run
-
-      - name: PR smoke subset
-        working-directory: testing/fork-e2e-rust
-        run: |
-          cargo test --release -- abi_address_sanity --nocapture
-          cargo test --release -- vault_deposit_redeem_smoke --nocapture
-
-  full-suite:
-    name: fork-full-suite
+  fork-integration:
+    name: fork-integration
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:

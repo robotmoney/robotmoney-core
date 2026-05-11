@@ -109,6 +109,20 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 **Environment:** `fork`
 **Trigger paths:** `testing/fork-e2e-rust/**`
 
+**Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
+This suite forks **Base mainnet** state (real deployed contracts, real DEX pools, real USDC) and runs the Rust client (`rmpc`) against it. The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes — bugs that only show up against actually-deployed mainnet contracts. The smoke-test devnet (Geth+Lighthouse, see suite 14) cannot do this: it deploys fresh contracts on an empty chain, so it cannot tell you "the calldata `rmpc` generates still matches what is deployed at the real gateway address on Base."
+
+Anvil is used specifically because `anvil --fork-url` is the only ergonomic way to mount mainnet state at a pinned block and let tests mutate it locally (cheat codes like `anvil_setBalance` to fund test accounts on forked USDC). One anvil child per test gives cheap fork-restart-per-test isolation (per the ADR), with no snapshot/revert orchestration. Geth+Lighthouse cannot fork mainnet state this way; that stack is purpose-built for the empty-devnet "boot a real chain locally" scenario.
+
+| Concern | Suite 5 (Anvil fork) | Devnet harness (suite 14, smoke-test `--full-stack`) |
+|---|---|---|
+| Chain | Anvil forking Base mainnet | Real Geth+Lighthouse, empty genesis |
+| Contracts | Already-deployed mainnet ones | Freshly deployed by Fixture |
+| Catches | ABI/address/RPC-shape drift vs prod | Full-stack flow (dapp→indexer→explorer), real block times |
+| Speed | Seconds per test (instant mining) | ~12s blocks, minutes |
+
+The two suites are complements, not duplicates. The retired Anvil "OpenClaw demo" suite (#242/#244) used Anvil to demo the whole product — that role was correctly taken over by the Geth+Lighthouse smoke-test. Suite 5's Anvil usage targets a job Geth+Lighthouse cannot do.
+
 **Jobs:**
 - `pr-smoke` — fast subset; runs on every PR trigger
 - `full-suite` — all scenarios; runs on push to `main` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)

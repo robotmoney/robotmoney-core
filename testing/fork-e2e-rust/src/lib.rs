@@ -634,7 +634,7 @@ impl Rpc {
     }
 
     pub fn set_balance(&self, addr: Address, wei: U256) -> Result<(), HarnessError> {
-        let _: bool = self.rpc(
+        let _: serde_json::Value = self.rpc(
             "anvil_setBalance",
             serde_json::json!([fmt_addr(addr), format!("0x{:x}", wei)]),
         )?;

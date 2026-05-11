@@ -12,7 +12,7 @@
 //! a 2x regression, not a 10% drift.
 
 use alloy_primitives::U256;
-use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_fork, ForkFixture};
+use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture};
 
 const DEPOSIT_USDC: u64 = 50_000_000;
 
@@ -29,7 +29,7 @@ const MAX_GAS_REDEEM: u64 = 1_100_000;
 
 #[test]
 fn gas_estimate_reality_check() {
-    skip_if_no_fork!();
+    skip_if_no_mainnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[gas_estimate_reality_check] {}", fx.summary_line());
 

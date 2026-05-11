@@ -46,10 +46,11 @@ pub fn rmpc_path() -> &'static Path {
             .status()
             .expect("spawn cargo build for rmpc");
         assert!(status.success(), "cargo build of rmpc failed");
-        // Sibling crate's per-package target dir.
-        let bin = manifest
-            .parent()
-            .unwrap()
+        // Workspace target dir: binary lands at <workspace-root>/target/debug/rmpc
+        // because rust-payment-client is a workspace member.
+        let bin = manifest_dir()
+            .join("..")
+            .join("..")
             .join("target")
             .join("debug")
             .join("rmpc");

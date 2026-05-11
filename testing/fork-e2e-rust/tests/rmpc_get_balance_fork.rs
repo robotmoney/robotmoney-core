@@ -18,7 +18,9 @@ use tempfile::TempDir;
 
 const FUND_USDC: u64 = 7_777_777; // 7.777777 USDC (6 decimals)
 
+// TODO(#249): fork fixture USDC proxy-admin collision -- see #249.
 #[test]
+#[ignore = "blocked on #249: fork fixture USDC proxy-admin collision"]
 fn rmpc_get_balance_against_fork() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
