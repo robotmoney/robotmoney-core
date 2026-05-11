@@ -5,6 +5,10 @@
  *   wallet, no agent     → OnboardingWizard (bootstrap → address → authorize)
  *   wallet, has agent    → full AdminFlow (all management tabs)
  *
+ * Setting `VITE_FORCE_ONBOARDING=1` makes the wizard the post-connect view
+ * regardless of registration status — for local layout review without infra.
+ * The wallet-connect gate is unaffected.
+ *
  * "Has agent" today reads a localStorage flag set optimistically when the
  * user signs Authorize — see useAgentRegistration.ts for the placeholder
  * rationale and the on-chain follow-up.
@@ -33,6 +37,7 @@ export function AgentsPanel(props: Props) {
   const { connect, connectors } = useConnect();
   const status = useAgentRegistration(props.envClass);
   const [networkSyncError, setNetworkSyncError] = useState<string | undefined>(undefined);
+  const forceOnboarding = props.flagEnv.VITE_FORCE_ONBOARDING === "1";
 
   const handleConnect = (connector: (typeof connectors)[number]) => {
     connect(
@@ -79,7 +84,7 @@ export function AgentsPanel(props: Props) {
     );
   }
 
-  if (status === "unregistered") {
+  if (status === "unregistered" || forceOnboarding) {
     const ctx: PreviewContext = {
       gateway: props.gatewayAddress,
       gatewayCodeHashVerified: props.gatewayVerificationState.status === "verified",

@@ -22,7 +22,7 @@ import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
-import { BOOTSTRAP_PROMPTS, type AgentRuntime } from "../lib/bootstrapPrompts";
+import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { PolicyFields } from "./PolicyFields";
 import { TxPreview } from "./TxPreview";
 
@@ -39,7 +39,6 @@ export function OnboardingWizard(props: Props) {
   const { writeContract, isPending } = useWriteContract();
 
   const [step, setStep] = useState<Step>(1);
-  const [runtime, setRuntime] = useState<AgentRuntime>("opencode");
   const [agent, setAgent] = useState("");
   const [shareReceiver, setShareReceiver] = useState("");
   const [validUntil, setValidUntil] = useState(() =>
@@ -83,9 +82,6 @@ export function OnboardingWizard(props: Props) {
     if (address) markRegistered(address);
   };
 
-  const activePrompt = BOOTSTRAP_PROMPTS.find((p) => p.id === runtime) ?? BOOTSTRAP_PROMPTS[0];
-  if (!activePrompt) throw new Error("BOOTSTRAP_PROMPTS is empty");
-
   return (
     <main className="onboarding-wizard" data-testid="onboarding-wizard">
       <header>
@@ -99,37 +95,24 @@ export function OnboardingWizard(props: Props) {
 
       {step === 1 && (
         <section data-testid="wizard-step-1">
-          <h2>Bootstrap your agent runtime</h2>
+          <h2>Bootstrap your agent</h2>
           <p>
-            Pick the agent runtime you&apos;ll be using. Paste the prompt below into a fresh session
-            of that agent. The agent will download <code>rmpc</code>, write its operator config, and
-            print its public address — copy that address; you&apos;ll paste it on the next step.
+            Paste the prompt below into a fresh session of any supported agent runtime. The agent
+            will follow <a href={BOOTSTRAP_DOC_URL}>BOOTSTRAP.md</a> to install <code>rmpc</code>,
+            write its operator config, and print its public address — copy that address; you&apos;ll
+            paste it on the next step.
           </p>
           <p className="hint">
-            We never generate or hold private keys in the dapp. See <code>BOOTSTRAP.md</code> for
-            the canonical copy of these prompts.
+            We never generate or hold private keys in the dapp. Any vendor-specific nuances are
+            documented inline in <code>BOOTSTRAP.md</code>.
           </p>
-          <label>
-            Agent runtime
-            <select
-              data-testid="runtime-select"
-              value={runtime}
-              onChange={(e) => setRuntime(e.target.value as AgentRuntime)}
-            >
-              {BOOTSTRAP_PROMPTS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <pre data-testid="bootstrap-prompt" className="bootstrap-prompt">
-            {activePrompt.prompt}
+            {BOOTSTRAP_PROMPT}
           </pre>
           <button
             type="button"
             data-testid="copy-prompt"
-            onClick={() => navigator.clipboard?.writeText(activePrompt.prompt)}
+            onClick={() => navigator.clipboard?.writeText(BOOTSTRAP_PROMPT)}
           >
             Copy prompt
           </button>
