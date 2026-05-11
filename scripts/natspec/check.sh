@@ -33,7 +33,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NATSPEC_SCOPE=(
   "contracts/gateway/RobotMoneyGateway.sol"
   "contracts/gateway/AccessRoles.sol"
-  "contracts/gateway/MockUSDC.sol"
   "contracts/gateway/MockVault.sol"
   "contracts/gateway/interfaces/IGateway.sol"
   "contracts/RobotMoneyVault.sol"

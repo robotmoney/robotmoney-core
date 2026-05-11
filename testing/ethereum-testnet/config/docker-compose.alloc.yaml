@@ -1,0 +1,25 @@
+# Optional compose override: bind-mounts the host-rendered genesis alloc
+# JSON (produced by `smoke-test-genesis-ingester`) into the `setup` container
+# so generate.sh can merge it into the EL genesis.json before geth init.
+#
+# Canonical: docs/testing/smoke-test-design.md (Devnet section).
+# Implements: issue #255 — wire the genesis ingester into the setup pipeline.
+#
+# Usage:
+#   docker compose \
+#     -f docker-compose.yaml \
+#     -f docker-compose.alloc.yaml \
+#     up -d
+#
+# Required env var when this override is included:
+#   SMOKE_GENESIS_ALLOC_FILE — absolute path on the host to the alloc JSON.
+#   The Fixture::new fixture writes it to a tempdir and exports the path.
+#
+# When the override is NOT included, generate.sh falls back to the legacy
+# empty-alloc behaviour (see generate.sh's `if [ -f /alloc-overlay.json ]`
+# branch).
+name: ethereum-testnet
+services:
+  setup:
+    volumes:
+      - ${SMOKE_GENESIS_ALLOC_FILE}:/alloc-overlay.json:ro

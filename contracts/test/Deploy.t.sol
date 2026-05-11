@@ -5,7 +5,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {Deploy} from "../script/Deploy.s.sol";
 
-import {MockUSDC} from "../gateway/MockUSDC.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
@@ -13,8 +13,13 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 
 /// @dev Exercises the deploy script in-process and asserts the post-deploy
 ///      invariants the operator and downstream tooling rely on (issue #10).
+///      The script always binds the gateway to an externally-supplied USDC
+///      token; this test deploys a `TestERC20` helper and passes its address
+///      in. The smoke-test devnet does the same with the canonical Base USDC
+///      proxy seeded into genesis alloc (issue #255).
 contract DeployTest is Test {
     Deploy internal script;
+    TestERC20 internal usdc;
 
     address internal admin = makeAddr("admin");
     address internal pauser = makeAddr("pauser");
@@ -23,17 +28,23 @@ contract DeployTest is Test {
 
     function setUp() public {
         script = new Deploy();
+        usdc = new TestERC20();
+    }
+
+    function _run() internal returns (Deploy.Deployed memory) {
+        return script.runInProcessWith(admin, pauser, agent, shareReceiver, address(usdc));
     }
 
     // --- Happy path -----------------------------------------------------
 
     function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public {
-        Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
+        Deploy.Deployed memory d = _run();
 
         // Gateway pins the right token + vault.
-        assertEq(d.gateway.usdc(), address(d.usdc), "usdc mismatch");
+        assertEq(d.gateway.usdc(), d.usdc, "usdc mismatch");
         assertEq(d.gateway.vault(), address(d.vault), "vault mismatch");
-        assertEq(address(d.vault.assetToken()), address(d.usdc), "vault.asset mismatch");
+        assertEq(address(d.vault.assetToken()), d.usdc, "vault.asset mismatch");
+        assertEq(d.usdc, address(usdc), "usdc passthrough");
 
         // Admin + Pauser hold their roles.
         assertTrue(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), admin), "admin role");
@@ -50,7 +61,7 @@ contract DeployTest is Test {
     }
 
     function test_deploy_authorizesAgentWithSanePolicy() public {
-        Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
+        Deploy.Deployed memory d = _run();
         (
             bool active,
             uint64 validUntil,
@@ -65,15 +76,33 @@ contract DeployTest is Test {
         assertEq(recv, shareReceiver);
     }
 
-    function test_deploy_mintsTestUsdcToAgent() public {
-        Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
-        assertEq(d.usdc.balanceOf(agent), script.DEFAULT_AGENT_USDC_MINT(), "agent mint amount");
+    function test_deploy_doesNotMintToAgent() public {
+        // The script no longer mints test USDC to the agent — funding is
+        // the caller's responsibility (smoke-test harness or unit-test
+        // helpers). The agent's USDC balance must be untouched by the
+        // deploy.
+        uint256 before = usdc.balanceOf(agent);
+        _run();
+        assertEq(usdc.balanceOf(agent), before, "deploy must not mint to agent");
+    }
+
+    // --- USDC_ADDRESS preconditions -------------------------------------
+
+    function test_deploy_revertsWhenUsdcAddressZero() public {
+        vm.expectRevert(bytes("USDC_ADDRESS=0"));
+        script.runInProcessWith(admin, pauser, agent, shareReceiver, address(0));
+    }
+
+    function test_deploy_revertsWhenUsdcAddressHasNoCode() public {
+        address eoa = makeAddr("not-a-token");
+        vm.expectRevert(bytes("USDC_ADDRESS has no code"));
+        script.runInProcessWith(admin, pauser, agent, shareReceiver, eoa);
     }
 
     // --- Role-separation invariant (issue #10's headline test) ----------
 
     function test_deploy_grantingAgentRoleToAdminReverts() public {
-        Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
+        Deploy.Deployed memory d = _run();
 
         // Build a policy and try to authorize ADMIN as an AGENT — this
         // must revert because admin already holds ADMIN_ROLE.
@@ -91,7 +120,7 @@ contract DeployTest is Test {
     }
 
     function test_deploy_grantingAgentRoleToPauserReverts() public {
-        Deploy.Deployed memory d = script.runInProcessWith(admin, pauser, agent, shareReceiver);
+        Deploy.Deployed memory d = _run();
 
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
@@ -110,17 +139,17 @@ contract DeployTest is Test {
 
     function test_deploy_revertsWhenAdminEqualsPauser() public {
         vm.expectRevert(bytes("ADMIN==PAUSER"));
-        script.runInProcessWith(admin, admin, agent, shareReceiver);
+        script.runInProcessWith(admin, admin, agent, shareReceiver, address(usdc));
     }
 
     function test_deploy_revertsWhenAdminEqualsAgent() public {
         vm.expectRevert(bytes("ADMIN==AGENT"));
-        script.runInProcessWith(admin, pauser, admin, shareReceiver);
+        script.runInProcessWith(admin, pauser, admin, shareReceiver, address(usdc));
     }
 
     function test_deploy_revertsWhenPauserEqualsAgent() public {
         vm.expectRevert(bytes("PAUSER==AGENT"));
-        script.runInProcessWith(admin, pauser, pauser, shareReceiver);
+        script.runInProcessWith(admin, pauser, pauser, shareReceiver, address(usdc));
     }
 
     // --- Env-driven path also works (single test to keep coverage) ------
@@ -130,9 +159,11 @@ contract DeployTest is Test {
         vm.setEnv("PAUSER_ADDRESS", vm.toString(pauser));
         vm.setEnv("AGENT_ADDRESS", vm.toString(agent));
         vm.setEnv("SHARE_RECEIVER_ADDRESS", vm.toString(shareReceiver));
+        vm.setEnv("USDC_ADDRESS", vm.toString(address(usdc)));
         Deploy.Deployed memory d = script.runInProcess();
         assertEq(d.admin, admin);
         assertEq(d.pauser, pauser);
         assertEq(d.agent, agent);
+        assertEq(d.usdc, address(usdc));
     }
 }

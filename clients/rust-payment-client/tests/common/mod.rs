@@ -11,7 +11,7 @@
 use alloy_primitives::{address, hex as ahex, keccak256, Address, U256};
 use alloy_sol_types::SolCall;
 use mockito::Matcher;
-use rust_payment_client::gateway::{MockUsdc, RobotMoneyGateway};
+use rust_payment_client::gateway::{Erc20, RobotMoneyGateway};
 use rust_payment_client::signer::software::SoftwareSigner;
 use serde_json::json;
 use std::path::PathBuf;
@@ -226,7 +226,7 @@ pub async fn install_happy_path_mocks(
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::allowanceCall,
+            Erc20::allowanceCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(u128::MAX))))
@@ -236,7 +236,7 @@ pub async fn install_happy_path_mocks(
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::balanceOfCall,
+            Erc20::balanceOfCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(u128::MAX))))

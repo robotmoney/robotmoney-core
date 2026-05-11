@@ -3,11 +3,11 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {MockUSDC} from "../gateway/MockUSDC.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 
 contract MockVaultTest is Test {
-    MockUSDC internal usdc;
+    TestERC20 internal usdc;
     MockVault internal vault;
 
     address internal alice = makeAddr("alice");
@@ -15,7 +15,7 @@ contract MockVaultTest is Test {
     address internal receiver = makeAddr("receiver");
 
     function setUp() public {
-        usdc = new MockUSDC();
+        usdc = new TestERC20();
         vault = new MockVault(address(usdc));
     }
 

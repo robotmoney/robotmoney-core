@@ -14,6 +14,11 @@
 //! - Address accessors: [`Fixture::rpc_url`], [`Fixture::gateway`], etc.
 //! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
 //! - [`prerequisites_available`] — check for docker/forge/cast on PATH.
+//! - [`fork_manifest::ForkManifest`] — typed view over
+//!   `testing/ethereum-testnet/config/fork-block.json` (issue #255).
+
+pub mod fork_manifest;
+pub mod genesis_alloc;
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -43,6 +48,24 @@ pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8
 
 /// Genesis-funded EOA registered as the vault share receiver.
 pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
+
+/// Harness USDC holder — the clean-history EOA that receives a genesis-time
+/// USDC balance grant on the smoke-test devnet. See
+/// `docs/testing/smoke-test-design.md` (USDC faucet section) and issue #255.
+///
+/// This key MUST NOT be used on any real chain. It is test-only by
+/// construction. The genesis ingester writes
+/// `usdc.balances[HARNESS_USDC_HOLDER_ADDRESS_HEX] = grant_units` into the
+/// devnet's `genesis.json` alloc, and `Fixture::fund_usdc` signs a plain
+/// `transfer(address,uint256)` from this key against the canonical Base USDC
+/// proxy.
+pub const HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX: &str =
+    "0xd2dffaf3c3c5e3e2f5cb5cef1a3a2e0e0a8b9d4ae2f6c1d3e8a5b7c9e0f1a2b3";
+/// Address derived from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`]. Verified
+/// against `cast wallet address` at definition time. Used by the genesis
+/// ingester (for the USDC balance grant + ETH-for-gas alloc) and by
+/// `Fixture::fund_usdc` (as the transfer sender).
+pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
 
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// never use on a real chain.
@@ -252,24 +275,61 @@ impl Fixture {
         let compose_dir = repo_root.join("testing/ethereum-testnet/config");
         let chain_ports = ChainPorts::allocate()?;
         let rpc_url = chain_ports.rpc_url();
-        let cleanup = || {
-            let _ = Command::new("docker")
-                .args([
-                    "compose",
-                    "-f",
-                    "docker-compose.yaml",
-                    "down",
-                    "-v",
-                    "--remove-orphans",
-                ])
-                .current_dir(&compose_dir)
-                .status();
+
+        // Issue #255: render the genesis alloc overlay before booting compose
+        // so the `setup` container can bind-mount + merge it into the EL
+        // genesis.json. If rendering fails (missing fixture, malformed
+        // manifest), fall back to the legacy clean-room genesis path —
+        // verbose-logging the reason so the operator can fix it offline.
+        let alloc_overlay_path = match render_genesis_alloc_overlay(&repo_root, tmp.path()) {
+            Ok(Some(p)) => Some(p),
+            Ok(None) => {
+                eprintln!(
+                    "smoke-test: skipping genesis alloc overlay (fixture or manifest absent); \
+                     booting with clean-room genesis (legacy behaviour)"
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!(
+                    "smoke-test: genesis alloc overlay rendering failed: {e}; \
+                     falling back to clean-room genesis"
+                );
+                None
+            }
         };
 
-        let status = Command::new("docker")
-            .arg("compose")
-            .arg("-f")
-            .arg("docker-compose.yaml")
+        let compose_files: Vec<&str> = if alloc_overlay_path.is_some() {
+            vec![
+                "-f",
+                "docker-compose.yaml",
+                "-f",
+                "docker-compose.alloc.yaml",
+            ]
+        } else {
+            vec!["-f", "docker-compose.yaml"]
+        };
+        let compose_files_owned: Vec<String> =
+            compose_files.iter().map(|s| s.to_string()).collect();
+        let cleanup_compose_files = compose_files_owned.clone();
+        let cleanup_compose_dir = compose_dir.clone();
+        let cleanup = move || {
+            let mut c = Command::new("docker");
+            c.arg("compose");
+            for f in &cleanup_compose_files {
+                c.arg(f);
+            }
+            c.args(["down", "-v", "--remove-orphans"]);
+            c.current_dir(&cleanup_compose_dir);
+            let _ = c.status();
+        };
+
+        let mut up_cmd = Command::new("docker");
+        up_cmd.arg("compose");
+        for f in &compose_files_owned {
+            up_cmd.arg(f);
+        }
+        up_cmd
             .arg("up")
             .arg("-d")
             .arg("--build")
@@ -277,9 +337,11 @@ impl Fixture {
             .env("GETH_WS_PORT", chain_ports.ws_port.to_string())
             .env("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string())
             .env("BEACON_PORT", chain_ports.beacon_port.to_string())
-            .current_dir(&compose_dir)
-            .status()
-            .map_err(HarnessError::from)?;
+            .current_dir(&compose_dir);
+        if let Some(ref p) = alloc_overlay_path {
+            up_cmd.env("SMOKE_GENESIS_ALLOC_FILE", p);
+        }
+        let status = up_cmd.status().map_err(HarnessError::from)?;
         if !status.success() {
             cleanup();
             return Err(HarnessError::Docker(format!(
@@ -321,7 +383,7 @@ impl Fixture {
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000")?;
         fund_eth_from_deployer(&rpc_url, PAUSER_ADDRESS_HEX, "1000000000000000000")?;
 
-        Ok(Fixture {
+        let fx = Fixture {
             compose_dir,
             tmp,
             chain_ports,
@@ -330,7 +392,25 @@ impl Fixture {
             chain_id,
             deployment,
             repo_root,
-        })
+        };
+
+        // Fund the agent's USDC balance. Deploy.s.sol no longer mints (USDC
+        // is now real Base USDC seeded into genesis alloc, not MockUSDC), so
+        // the harness funds via a real ERC-20 transfer from
+        // HARNESS_USDC_HOLDER. Use a generous amount that comfortably
+        // exceeds every scenario's deposit (largest is
+        // OVER_PAYMENT_CAP_DEPOSIT = 20_000 USDC) but stays well under the
+        // genesis grant (1M USDC by default in fork-block.json).
+        const AGENT_USDC_GRANT: u128 = 500_000 * 1_000_000; // 500k USDC, 6dp
+        fx.fund_usdc(fx.agent(), AGENT_USDC_GRANT)
+            .inspect_err(|_| {
+                let _ = Command::new("docker")
+                    .args(["compose", "down", "-v", "--remove-orphans"])
+                    .current_dir(&fx.compose_dir)
+                    .status();
+            })?;
+
+        Ok(fx)
     }
 
     // ---- accessors --------------------------------------------------
@@ -482,37 +562,23 @@ impl Fixture {
         )
     }
 
-    /// Mint mock USDC to `recipient` via `MockUSDC.mint`.
+    /// Fund `recipient` with `amount` USDC by signing a real
+    /// `transfer(address,uint256)` from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`].
+    ///
+    /// This is the canonical USDC faucet for the smoke-test devnet. The
+    /// holder EOA receives its USDC balance at genesis (the alloc builder
+    /// patches `balances[holder] += grant` and `totalSupply += grant`), so
+    /// `fund_usdc` is a vanilla ERC-20 transfer signed by the holder's key
+    /// — no `cast send` from the deployer, no Anvil cheats, no whale
+    /// impersonation. The signature is recoverable, the Transfer event
+    /// fires, and behaviour matches prod.
     pub fn fund_usdc(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
-        let usdc = format!("{:#x}", self.usdc());
-        let recipient_hex = format!("{recipient:#x}");
-        let amount_str = amount.to_string();
-        let out = Command::new("cast")
-            .args([
-                "send",
-                "--rpc-url",
-                &self.rpc_url,
-                "--private-key",
-                DEPLOYER_PRIVATE_KEY_HEX,
-                &usdc,
-                "mint(address,uint256)",
-                &recipient_hex,
-                &amount_str,
-                "--json",
-            ])
-            .output()?;
-        if !out.status.success() {
-            return Err(HarnessError::other(format!(
-                "cast send mint failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
-        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-            .map_err(|e| HarnessError::other(format!("cast send mint json: {e}")))?;
-        Ok(v.get("transactionHash")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string())
+        self.cast_send(
+            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            self.usdc(),
+            "transfer(address,uint256)",
+            &[&format!("{recipient:#x}"), &amount.to_string()],
+        )
     }
 }
 
@@ -540,6 +606,45 @@ pub fn prerequisites_available() -> bool {
 }
 
 // -- Internal helpers -------------------------------------------------
+
+/// Issue #255: render the genesis alloc overlay JSON into `out_dir` and
+/// return its absolute path. Returns `Ok(None)` (NOT an error) when either
+/// the fork-block manifest or the Anvil fixture snapshot is missing — the
+/// caller falls back to the legacy clean-room genesis path in that case so
+/// developer shells without the snapshot still work.
+///
+/// Errors are reserved for cases where both inputs exist but the build
+/// itself fails (malformed manifest, missing required ingested address, IO
+/// failure writing the output). The caller logs these and falls back.
+fn render_genesis_alloc_overlay(
+    repo_root: &Path,
+    out_dir: &Path,
+) -> Result<Option<PathBuf>, HarnessError> {
+    let manifest_path = repo_root.join("testing/ethereum-testnet/config/fork-block.json");
+    let snapshot_path = repo_root.join("testing/fixtures/fork-state/CURRENT.anvil-state");
+    if !manifest_path.exists() || !snapshot_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest = fork_manifest::ForkManifest::load(&manifest_path)
+        .map_err(|e| HarnessError::other(format!("load fork-block.json: {e}")))?;
+    let alloc = genesis_alloc::build_alloc(&snapshot_path, &manifest)
+        .map_err(|e| HarnessError::other(format!("build alloc: {e}")))?;
+    let json = serde_json::to_string_pretty(&alloc)
+        .map_err(|e| HarnessError::other(format!("serialize alloc: {e}")))?;
+
+    let out_path = out_dir.join("genesis-alloc.json");
+    std::fs::write(&out_path, json)?;
+    // docker requires an absolute path for bind-mount source; the tempdir
+    // path already is absolute, but be defensive.
+    let absolute = std::fs::canonicalize(&out_path)?;
+    eprintln!(
+        "smoke-test: rendered genesis alloc overlay ({} accounts) -> {}",
+        alloc.0.len(),
+        absolute.display()
+    );
+    Ok(Some(absolute))
+}
 
 fn derive_address(privkey: &[u8; 32]) -> Address {
     use k256::ecdsa::SigningKey;
@@ -620,6 +725,12 @@ fn run_forge_deploy_with_env(
         .env("PAUSER_ADDRESS", pauser_address_hex)
         .env("AGENT_ADDRESS", agent_address_hex)
         .env("SHARE_RECEIVER_ADDRESS", SHARE_RECEIVER_ADDRESS_HEX)
+        // Bind the gateway to the canonical Base USDC seeded into genesis
+        // (issue #255). Tells Deploy.s.sol to skip MockUSDC + the
+        // permissioned post-deploy mint. The harness funds the agent via
+        // `Fixture::fund_usdc` (real ERC-20 transfer from
+        // HARNESS_USDC_HOLDER) instead.
+        .env("USDC_ADDRESS", genesis_alloc::BASE_USDC_ADDR)
         .env("DEPLOYMENT_OUT", dep_out)
         .current_dir(repo_root);
     for (k, v) in extra_env {

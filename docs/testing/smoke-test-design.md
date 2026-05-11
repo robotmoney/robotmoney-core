@@ -101,7 +101,7 @@ as test failures with stack traces, not as mysterious CI timing problems.
 
 ---
 
-## Devnet: real Geth+Lighthouse, forked from mainnet
+## Devnet: real Geth+Lighthouse, forked from Base mainnet
 
 The full-stack fixture uses the existing Geth+Lighthouse compose stack
 (`testing/ethereum-testnet/config/docker-compose.yaml`), not Anvil.
@@ -111,11 +111,99 @@ full-stack smoke tests exercise the complete service graph — real mempool
 behaviour, real consensus, real block production — so they require a real
 execution client.
 
-The devnet forks from a pinned mainnet block. This means the chain starts
-with real mainnet state (deployed contracts, account balances, chain
-parameters) at the fork point, giving tests realistic on-chain conditions.
+### Forked genesis
+
+The devnet's genesis is constructed from a snapshot of Base mainnet at a
+pinned block. The chain starts with real Base state — deployed contracts
+(USDC, WETH, aggregators, etc.), account balances, and chain parameters
+— at the fork point, giving tests realistic on-chain conditions.
 The fork block number is pinned in the compose configuration so every
 devnet instance is reproducible.
+
+Concretely, `testing/ethereum-testnet/config/genesis/generate.sh` must
+produce a `genesis.json` whose `alloc` is seeded from Base state at the
+pinned block, not an empty allocation. The pinned block is recorded in
+`testing/ethereum-testnet/config/fork-block.json` (versioned, schema-
+validated by `smoke_test::fork_manifest`) and changing it is a
+deliberate, reviewed action.
+
+**Single fork point across harnesses.** The smoke-test devnet and the
+Anvil fork-e2e fixture (`testing/fixtures/fork-state/CURRENT.json`)
+MUST pin the same Base block. Both harnesses ingest the same captured
+state file (`testing/fixtures/fork-state/CURRENT.anvil-state`), so a
+scenario that reproduces on one harness reproduces on the other. The
+manifest validator unit test
+`smoke_test::fork_manifest::tests::fork_block_aligns_with_anvil_fixture_current`
+enforces this alignment in CI; refreshing the pin is a single
+`scripts/devnet/snapshot-fork.sh` invocation that updates both.
+
+### USDC faucet via genesis-time balance grant
+
+Fresh test EOAs need USDC. Because the chain forks Base, USDC is the
+real `FiatTokenV2` proxy at its canonical Base address — there is no
+`MockUSDC.mint` shortcut available, and there is no `anvil_*` cheat RPC
+on geth.
+
+**Mechanism.** When the forked genesis is built, USDC's own storage is
+patched in the `alloc` entry for the canonical USDC proxy address:
+
+- `balances[HARNESS_USDC_HOLDER]` is set to a large fixed amount.
+- `totalSupply` is incremented by that amount.
+
+`HARNESS_USDC_HOLDER` is an EOA derived from a private key checked into
+the smoke-test crate (test-only, never used on a real chain). It has no
+prior history on Base — its balance, nonce, and code are all zero in
+the Base snapshot; the genesis builder simply allocates ETH for gas and
+writes the USDC storage slots above.
+
+`Fixture::fund_usdc(recipient, amount)` is then a plain `cast send`:
+the harness key signs `usdc.transfer(recipient, amount)` against the
+canonical USDC proxy. A real `Transfer(from=HARNESS_USDC_HOLDER, to=recipient, value=amount)`
+event is emitted from the real USDC address. No mock, no cheat RPC, no
+test-only branch in production code — only genesis state and ordinary
+signed transactions.
+
+The same shape can be added for other tokens by patching their balance
+storage in their own genesis `alloc` entries (WETH, DAI, etc.) when
+tests need them.
+
+#### Why not impersonate a real Base whale
+
+We considered two alternatives that would let the harness sign as an
+existing high-balance USDC holder on Base:
+
+1. **Balance reassignment from a real whale** — at genesis, move
+   `balances[W]` from the whale `W` to the harness EOA. Same end state
+   as the chosen mechanism, but harder to reason about: `W`'s prior
+   USDC history (allowances, blacklist state, in-flight Circle minter
+   relationships) bleeds into the devnet state.
+2. **Code injection at the whale's address** — overwrite `W.code` at
+   genesis with a tiny Executor contract gated to the harness key, so
+   `cast send <W> "execute(usdc, transferCalldata)"` produces a real
+   `Transfer(from=W, …)`. Closest thing to true impersonation on geth.
+
+Both were discounted for the same root reason: **we want an account
+with clean history.** A real Base whale carries:
+
+- A long allowance graph (`approve(spender, …)`) we did not opt into.
+- Potential `FiatToken.blacklisted[W] == true` state at or after the
+  pinned block, which silently reverts every `transfer` from `W`.
+- Inbound transfer history that pollutes our explorer's indexer view
+  and makes test assertions about USDC flow non-hermetic.
+- For the code-injection variant: `extcodesize(W) != 0`, which breaks
+  any `require(isContract(addr) == false)` check downstream and forces
+  us to audit the call path for EOA gates on every PR.
+
+A test-only harness EOA has none of those properties. The minor cost is
+that `Transfer.from` is an unfamiliar address (acceptable — no test or
+indexer in our stack asserts on the from-side) and USDC's `totalSupply`
+is inflated by the grant (acceptable and documented).
+
+The code-injection mechanism remains a reasonable choice if and when
+a test genuinely needs `msg.sender == <some specific Base address>`
+(e.g., to exercise a flow gated to a known multisig). At that point it
+can be added alongside the balance grant; it is deliberately not the
+default.
 
 ---
 

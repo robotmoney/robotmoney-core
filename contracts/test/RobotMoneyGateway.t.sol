@@ -9,13 +9,13 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
-import {MockUSDC} from "../gateway/MockUSDC.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 
 /// @dev Minimal fee-on-transfer token used to assert the gateway's
 ///      balance-delta defense (`FeeOnTransferDetected`). Charges 1% on transfer.
-contract FeeOnTransferUSDC is MockUSDC {
+contract FeeOnTransferUSDC is TestERC20 {
     function transfer(address to, uint256 amount) public override returns (bool) {
         uint256 fee = amount / 100;
         super.transfer(address(0xdead), fee);
@@ -102,7 +102,7 @@ contract ReentrantVault is MockVault {
 }
 
 contract RobotMoneyGatewayTest is Test {
-    MockUSDC internal usdc;
+    TestERC20 internal usdc;
     MockVault internal vault;
     RobotMoneyGateway internal gateway;
 
@@ -122,7 +122,7 @@ contract RobotMoneyGatewayTest is Test {
     uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC; // 5,000 USDC
 
     function setUp() public {
-        usdc = new MockUSDC();
+        usdc = new TestERC20();
         vault = new MockVault(address(usdc));
         gateway =
             new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser);
@@ -189,7 +189,7 @@ contract RobotMoneyGatewayTest is Test {
     }
 
     function test_constructor_revertsOnAssetMismatch() public {
-        MockUSDC otherUsdc = new MockUSDC();
+        TestERC20 otherUsdc = new TestERC20();
         vm.expectRevert(RobotMoneyGateway.AssetMismatch.selector);
         new RobotMoneyGateway(IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser);
     }

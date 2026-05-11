@@ -39,7 +39,7 @@ use alloy_sol_types::SolCall;
 
 use crate::config::Config;
 use crate::errors::{Result, RmpcError};
-use crate::gateway::{MockUsdc, RobotMoneyGateway};
+use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::rpc::{CallRequest, RpcClient};
 
 /// Window length in seconds. Mirrors `RobotMoneyGateway.WINDOW_SECONDS`
@@ -307,7 +307,7 @@ impl<'a> Preflight<'a> {
         owner: Address,
         spender: Address,
     ) -> Result<U256> {
-        let data = MockUsdc::allowanceCall { owner, spender }.abi_encode();
+        let data = Erc20::allowanceCall { owner, spender }.abi_encode();
         let out = self
             .rpc
             .eth_call(
@@ -319,13 +319,13 @@ impl<'a> Preflight<'a> {
                 None,
             )
             .await?;
-        let decoded = MockUsdc::allowanceCall::abi_decode_returns(&out, true)
+        let decoded = Erc20::allowanceCall::abi_decode_returns(&out, true)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("allowance decode: {e}")))?;
         Ok(decoded._0)
     }
 
     async fn call_view_balance_of(&self, token: Address, who: Address) -> Result<U256> {
-        let data = MockUsdc::balanceOfCall { account: who }.abi_encode();
+        let data = Erc20::balanceOfCall { account: who }.abi_encode();
         let out = self
             .rpc
             .eth_call(
@@ -337,7 +337,7 @@ impl<'a> Preflight<'a> {
                 None,
             )
             .await?;
-        let decoded = MockUsdc::balanceOfCall::abi_decode_returns(&out, true)
+        let decoded = Erc20::balanceOfCall::abi_decode_returns(&out, true)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("balanceOf decode: {e}")))?;
         Ok(decoded._0)
     }

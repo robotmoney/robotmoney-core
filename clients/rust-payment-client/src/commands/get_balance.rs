@@ -21,7 +21,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::MockUsdc;
+use crate::gateway::Erc20;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, RpcClient};
@@ -136,7 +136,7 @@ async fn call_balance_of(
     token: Address,
     holder: Address,
 ) -> Result<U256, crate::errors::RmpcError> {
-    let data = MockUsdc::balanceOfCall { account: holder }.abi_encode();
+    let data = Erc20::balanceOfCall { account: holder }.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -147,7 +147,7 @@ async fn call_balance_of(
             None,
         )
         .await?;
-    let decoded = MockUsdc::balanceOfCall::abi_decode_returns(&out, true)
+    let decoded = Erc20::balanceOfCall::abi_decode_returns(&out, true)
         .map_err(|e| crate::errors::RmpcError::ErrRpcDecode(format!("balanceOf decode: {e}")))?;
     Ok(decoded._0)
 }

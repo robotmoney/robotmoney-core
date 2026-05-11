@@ -5,7 +5,8 @@
 //!
 //! Per issue #11 and `docs/implementation-plan.md` §3.5: typed ABI
 //! encode/decode for `RobotMoneyGateway`, plus read-side bindings for the
-//! `MockUSDC` / ERC-20 `allowance`+`balanceOf` views and the `MockVault`
+//! standard ERC-20 `allowance`+`balanceOf` views (used against real USDC in
+//! production and against test ERC-20 deployments in CI) and the `MockVault`
 //! used by tests. The ABIs are extracted from the Foundry build output and
 //! committed under `clients/rust-payment-client/abi/` so the Rust crate is
 //! buildable without re-running `forge build`.
@@ -28,8 +29,8 @@ sol!(
 sol!(
     #[sol(abi)]
     #[allow(missing_docs, clippy::too_many_arguments)]
-    MockUsdc,
-    "abi/MockUSDC.json"
+    Erc20,
+    "abi/Erc20.json"
 );
 
 sol!(
@@ -166,11 +167,11 @@ mod tests {
     #[test]
     fn erc20_view_selectors_match() {
         assert_eq!(
-            &MockUsdc::allowanceCall::SELECTOR,
+            &Erc20::allowanceCall::SELECTOR,
             &keccak256(b"allowance(address,address)")[..4]
         );
         assert_eq!(
-            &MockUsdc::balanceOfCall::SELECTOR,
+            &Erc20::balanceOfCall::SELECTOR,
             &keccak256(b"balanceOf(address)")[..4]
         );
     }

@@ -93,6 +93,15 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
+      # Issue #255 CI gate: validate fork-block.json against every rule in
+      # smoke_test::fork_manifest, and run the genesis-alloc ingester against
+      # the committed Anvil fixture to assert the canonical Base USDC ends up
+      # in the produced alloc with non-empty bytecode and the harness USDC
+      # balance + totalSupply slots. Fast (<5s once binaries are built); a
+      # broken manifest is caught before any container boot is attempted.
+      - name: fork-block manifest + alloc-ingester guard
+        run: bash scripts/devnet/check-fork-manifest.sh
+
       - name: cargo test (boots full-stack CLI, asserts summary + teardown)
         working-directory: testing/smoke-test
         run: cargo test -p smoke-test --release --test cli_meta -- --nocapture

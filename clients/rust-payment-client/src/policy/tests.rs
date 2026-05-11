@@ -197,7 +197,7 @@ async fn install_happy_path_mocks(server: &mut mockito::ServerGuard, cfg: &Confi
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::allowanceCall,
+            Erc20::allowanceCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(u128::MAX))))
@@ -208,7 +208,7 @@ async fn install_happy_path_mocks(server: &mut mockito::ServerGuard, cfg: &Confi
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::balanceOfCall,
+            Erc20::balanceOfCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(u128::MAX))))
@@ -498,7 +498,7 @@ async fn allowance_too_low_refuses() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::allowanceCall,
+            Erc20::allowanceCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(1u64))))
@@ -522,7 +522,7 @@ async fn balance_too_low_refuses() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::balanceOfCall,
+            Erc20::balanceOfCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(1u64))))

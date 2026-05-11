@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {MockUSDC} from "../gateway/MockUSDC.sol";
+import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @dev Minimal ERC-4626 mock vault that supports both deposit and withdraw.
 ///      withdraw() sends `assets` USDC directly to `receiver` (normal behaviour).
@@ -75,7 +75,7 @@ contract ShortfallMorphoVault is MockMorphoVault {
 }
 
 contract MorphoAdapterTest is Test {
-    MockUSDC internal usdc;
+    TestERC20 internal usdc;
     MockMorphoVault internal morphoVault;
     MorphoAdapter internal adapter;
 
@@ -85,7 +85,7 @@ contract MorphoAdapterTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
 
     function setUp() public {
-        usdc = new MockUSDC();
+        usdc = new TestERC20();
         morphoVault = new MockMorphoVault(address(usdc));
         adapter = new MorphoAdapter(address(morphoVault), address(usdc), vault);
     }
@@ -252,14 +252,14 @@ contract MorphoAdapterTest is Test {
     }
 
     function test_rescueTokens_revertsOnZeroAddress() public {
-        MockUSDC other = new MockUSDC();
+        TestERC20 other = new TestERC20();
         vm.prank(vault);
         vm.expectRevert(MorphoAdapter.ZeroAddress.selector);
         adapter.rescueTokens(address(other), address(0));
     }
 
     function test_rescueTokens_transfersUnprotectedToken() public {
-        MockUSDC other = new MockUSDC();
+        TestERC20 other = new TestERC20();
         usdc.mint(address(adapter), 10 * ONE_USDC); // put something different in
         other.mint(address(adapter), 5 * ONE_USDC);
         address recipient = makeAddr("recipient");

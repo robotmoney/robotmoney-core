@@ -10,7 +10,6 @@ import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-import {MockUSDC} from "../gateway/MockUSDC.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
@@ -18,9 +17,10 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 
 /// @title Deploy
 /// @notice Foundry deploy script for the MVP RobotMoney gateway stack.
-///         Deploys MockUSDC + MockVault + RobotMoneyGateway, grants AGENT_ROLE
-///         to a distinct EOA via `authorizeAgent`, asserts role-separation,
-///         mints test USDC to the agent, and writes a deployment JSON.
+///         Binds a `MockVault` + `RobotMoneyGateway` to an externally
+///         supplied USDC token, grants AGENT_ROLE to a distinct EOA via
+///         `authorizeAgent`, asserts role-separation, and writes a
+///         deployment JSON.
 /// @dev Implements `docs/implementation-plan.md` §5 step 1–2 and
 ///      satisfies issue #10. Inputs are env-driven so the same script works
 ///      on Anvil, the docker devnet, and (with care) any throwaway L1.
@@ -30,20 +30,31 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        PAUSER_ADDRESS        — receives PAUSER_ROLE (must differ from ADMIN)
 ///        AGENT_ADDRESS         — receives AGENT_ROLE  (must differ from both)
 ///        SHARE_RECEIVER_ADDRESS — recipient of minted rmUSDC shares
+///        USDC_ADDRESS          — address of the USDC token to bind the
+///                                gateway to. The smoke-test devnet seeds the
+///                                canonical Base USDC into genesis alloc and
+///                                exports this address (see issue #255 and
+///                                `Fixture::fund_usdc` in the smoke-test
+///                                crate). Forge unit tests deploy a
+///                                `TestERC20` helper and pass its address
+///                                via `runInProcessWithUsdc`.
 ///
 ///      Optional env vars (with safe defaults):
 ///        AGENT_VALID_UNTIL      — uint64, default = block.timestamp + 30 days
 ///        AGENT_MAX_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (USDC, 6dp)
 ///        AGENT_MAX_PER_WINDOW   — uint256, default = 100_000 * 1e6
-///        AGENT_USDC_MINT        — uint256, default = 1_000_000 * 1e6
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
 contract Deploy is Script {
     using stdJson for string;
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
+    /// @dev `usdc` is the *address* of the externally-supplied USDC token
+    ///      bound to the gateway. On the smoke-test devnet this is the
+    ///      canonical Base USDC proxy seeded into genesis alloc; in forge
+    ///      unit tests it is a `TestERC20` deployed by the caller.
     struct Deployed {
-        MockUSDC usdc;
+        address usdc;
         MockVault vault;
         RobotMoneyGateway gateway;
         address admin;
@@ -53,12 +64,15 @@ contract Deploy is Script {
         bytes32 gatewayRuntimeHash;
     }
 
+    /// @notice Canonical Base mainnet USDC (FiatTokenProxy). The smoke-test
+    ///         devnet seeds this address with real proxy storage + the
+    ///         FiatTokenV2_2 implementation in genesis alloc.
+    address public constant CANONICAL_BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+
     /// @notice Default per-payment cap if `AGENT_MAX_PER_PAYMENT` is unset.
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
     /// @notice Default per-window cap if `AGENT_MAX_PER_WINDOW` is unset.
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
-    /// @notice Default agent test-USDC mint amount.
-    uint256 public constant DEFAULT_AGENT_USDC_MINT = 1_000_000 * 1e6;
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
@@ -82,17 +96,20 @@ contract Deploy is Script {
 
     /// @notice Direct-parameter variant for forge tests. Skips env-var
     ///         resolution so a noisy host environment (or another test's
-    ///         residual `vm.setEnv`) cannot pollute the inputs.
+    ///         residual `vm.setEnv`) cannot pollute the inputs. The caller
+    ///         must supply a deployed USDC token (typically a `TestERC20`).
     /// @param admin_         Address to receive `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
     /// @param pauser_        Address to receive `PAUSER_ROLE`.
     /// @param agent_         Address to receive `AGENT_ROLE`.
     /// @param shareReceiver_ Address that will receive minted vault shares.
+    /// @param usdc_          Address of the USDC token to bind to the gateway.
     /// @return d Struct containing all deployed contract addresses and key parameters.
     function runInProcessWith(
         address admin_,
         address pauser_,
         address agent_,
-        address shareReceiver_
+        address shareReceiver_,
+        address usdc_
     ) external returns (Deployed memory d) {
         Params memory p;
         p.admin = admin_;
@@ -102,7 +119,7 @@ contract Deploy is Script {
         p.validUntil = uint64(block.timestamp + DEFAULT_VALID_UNTIL_OFFSET);
         p.maxPerPayment = DEFAULT_MAX_PER_PAYMENT;
         p.maxPerWindow = DEFAULT_MAX_PER_WINDOW;
-        p.usdcMint = DEFAULT_AGENT_USDC_MINT;
+        p.usdcAddress = usdc_;
         d = _doDeploy(p);
     }
 
@@ -114,7 +131,11 @@ contract Deploy is Script {
         uint64 validUntil;
         uint256 maxPerPayment;
         uint256 maxPerWindow;
-        uint256 usdcMint;
+        /// @dev Address of the USDC token to bind the gateway to. Must be
+        ///      non-zero and have code deployed. The smoke-test devnet sets
+        ///      this to the canonical Base USDC ([`CANONICAL_BASE_USDC`]);
+        ///      forge unit tests deploy a `TestERC20` helper.
+        address usdcAddress;
     }
 
     function _readEnvParams() internal view returns (Params memory p) {
@@ -127,7 +148,7 @@ contract Deploy is Script {
         );
         p.maxPerPayment = _envOrDefault("AGENT_MAX_PER_PAYMENT", DEFAULT_MAX_PER_PAYMENT);
         p.maxPerWindow = _envOrDefault("AGENT_MAX_PER_WINDOW", DEFAULT_MAX_PER_WINDOW);
-        p.usdcMint = _envOrDefault("AGENT_USDC_MINT", DEFAULT_AGENT_USDC_MINT);
+        p.usdcAddress = vm.envAddress("USDC_ADDRESS");
     }
 
     function _doDeploy(Params memory p) internal returns (Deployed memory d) {
@@ -149,11 +170,16 @@ contract Deploy is Script {
         require(d.pauser != d.agent, "PAUSER==AGENT");
 
         // 1. Token + vault + gateway.
-        d.usdc = new MockUSDC();
-        d.vault = new MockVault(address(d.usdc));
-        d.gateway = new RobotMoneyGateway(
-            IERC20(address(d.usdc)), IERC4626(address(d.vault)), d.admin, d.pauser
-        );
+        //    USDC is always externally supplied: the smoke-test devnet seeds
+        //    the canonical Base USDC proxy into genesis alloc (issue #255),
+        //    and forge unit tests deploy a `TestERC20` helper and pass its
+        //    address via `runInProcessWithUsdc`.
+        require(p.usdcAddress != address(0), "USDC_ADDRESS=0");
+        require(p.usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
+        d.usdc = p.usdcAddress;
+        d.vault = new MockVault(d.usdc);
+        d.gateway =
+            new RobotMoneyGateway(IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser);
 
         // 2. Authorize agent under a sane initial policy. The gateway's
         //    authorizeAgent re-asserts role separation post-grant.
@@ -193,21 +219,22 @@ contract Deploy is Script {
         require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin), "admin missing ADMIN_ROLE");
         require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
 
-        // 4. Mint test USDC to agent so it can deposit on the devnet.
-        d.usdc.mint(d.agent, p.usdcMint);
-
-        // 5. Pin gateway runtime hash.
+        // 4. Pin gateway runtime hash.
+        //    Agent funding is the caller's responsibility — the smoke-test
+        //    harness funds the agent via `Fixture::fund_usdc` (a real
+        //    transfer from the genesis-allocated HARNESS_USDC_HOLDER), and
+        //    forge unit tests mint via the `TestERC20` helper directly.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
 
         console2.log("RobotMoneyGateway deployed");
-        console2.log("  usdc           :", address(d.usdc));
+        console2.log("  usdc           :", d.usdc);
         console2.log("  vault          :", address(d.vault));
         console2.log("  gateway        :", address(d.gateway));
         console2.log("  admin          :", d.admin);
         console2.log("  pauser         :", d.pauser);
         console2.log("  agent          :", d.agent);
         console2.log("  shareReceiver  :", d.shareReceiver);
-        console2.log("  agent USDC bal :", d.usdc.balanceOf(d.agent));
+        console2.log("  agent USDC bal :", IERC20(d.usdc).balanceOf(d.agent));
     }
 
     function _envOrDefault(string memory key, uint256 fallbackValue)
@@ -232,7 +259,7 @@ contract Deploy is Script {
 
         string memory obj = "deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
-        vm.serializeAddress(obj, "usdc", address(d.usdc));
+        vm.serializeAddress(obj, "usdc", d.usdc);
         vm.serializeAddress(obj, "vault", address(d.vault));
         vm.serializeAddress(obj, "gateway", address(d.gateway));
         vm.serializeAddress(obj, "admin", d.admin);

@@ -35,10 +35,18 @@ let fixture = smoke_test::Fixture::new()?;
 The compose file is `testing/ethereum-testnet/config/docker-compose.yaml`.
 It defines:
 
-- `geth` — execution layer (chain-id 918453)
+- `geth` — execution layer (chain-id 918453), genesis seeded from a
+  pinned Base mainnet block (`alloc` populated from a Base state snapshot,
+  not empty). Real Base contracts (USDC, WETH, …) are present at their
+  canonical addresses from block 0 of the devnet.
 - `lighthouse` — consensus layer (12-second blocks)
-- `setup` — one-shot service that funds genesis accounts and deploys
-  contracts via `forge script`
+- `setup` — one-shot service that (a) patches token balance storage
+  in genesis to grant a clean-history harness EOA a large balance of
+  each test-relevant token (USDC at minimum), and (b) deploys Robot
+  Money contracts via `forge script`. See
+  `docs/testing/smoke-test-design.md` for the genesis-time balance
+  grant faucet design and the rationale for not impersonating a real
+  Base whale.
 
 ## Fork-state fixture
 

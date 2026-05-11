@@ -8,7 +8,7 @@
 #   bash test/natspec/fixture.t.sh pass   — assert gate exits 0 when NatSpec is present
 #
 # HOW IT WORKS
-# 1. Creates a temporary copy of an in-scope contract (MockUSDC.sol).
+# 1. Creates a temporary copy of an in-scope contract (MockVault.sol).
 # 2. Injects a bare public function (no NatSpec) or a documented one.
 # 3. Runs scripts/natspec/check.sh against the temp file.
 # 4. Asserts the expected exit code.
@@ -21,7 +21,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHECKER="${REPO_ROOT}/scripts/natspec/check.sh"
-SOURCE_TEMPLATE="${REPO_ROOT}/contracts/gateway/MockUSDC.sol"
+SOURCE_TEMPLATE="${REPO_ROOT}/contracts/gateway/MockVault.sol"
 
 MODE="${1:-}"
 if [[ "$MODE" != "fail" && "$MODE" != "pass" ]]; then
@@ -30,7 +30,7 @@ if [[ "$MODE" != "fail" && "$MODE" != "pass" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Build a temp file that is a copy of MockUSDC with an extra function appended
+# Build a temp file that is a copy of MockVault with an extra function appended
 # ---------------------------------------------------------------------------
 TMPFILE="$(mktemp /tmp/NatSpecFixture_XXXXXX.sol)"
 trap 'rm -f "$TMPFILE"' EXIT

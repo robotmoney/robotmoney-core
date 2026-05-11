@@ -5,6 +5,10 @@ edition = "2021"
 description = "Devnet fixture library and CLI for Robot Money integration tests."
 license = "MIT"
 publish = false
+# CI + integration tests invoke `cargo run -p smoke-test -- --full-stack`.
+# With multiple `[[bin]]` entries Cargo otherwise errors with
+#   "could not determine which binary to run".
+default-run = "smoke-test"
 
 # Canonical: docs/testing/smoke-test-design.md
 # Implements: issue #146
@@ -16,6 +20,20 @@ path = "src/lib.rs"
 [[bin]]
 name = "smoke-test"
 path = "src/bin/smoke-test.rs"
+
+# Genesis alloc ingester for the Geth+Lighthouse devnet (issue #255). Reads
+# the fork-block manifest + Anvil state snapshot, writes a geth-genesis alloc
+# JSON to disk. Used by Fixture::new (and CI guards) before docker-compose up.
+[[bin]]
+name = "smoke-test-genesis-ingester"
+path = "src/bin/genesis-ingester.rs"
+
+# Fork-block manifest validator (issue #255 CI gate). Loads + validates
+# testing/ethereum-testnet/config/fork-block.json and exits with a distinct
+# code per failure class. Run from the CI guard step in `.github/workflows/`.
+[[bin]]
+name = "smoke-test-fork-manifest-validate"
+path = "src/bin/fork-manifest-validate.rs"
 
 [dependencies]
 test-utils = { path = "../test-utils" }

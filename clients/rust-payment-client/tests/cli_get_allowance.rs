@@ -10,7 +10,7 @@ use crate::common::{
 use alloy_primitives::U256;
 use assert_cmd::Command;
 use mockito::Matcher;
-use rust_payment_client::gateway::MockUsdc;
+use rust_payment_client::gateway::Erc20;
 use serde_json::{json, Value};
 
 fn rmpc() -> Command {
@@ -41,7 +41,7 @@ async fn get_allowance_clean_envelope_with_max_u256() {
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            MockUsdc::allowanceCall,
+            Erc20::allowanceCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::MAX)))
