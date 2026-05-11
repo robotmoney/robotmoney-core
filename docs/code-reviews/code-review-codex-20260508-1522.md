@@ -15,7 +15,7 @@
 4. Read the explorer indexer: `indexer.rs`, `db.rs`, `rpc.rs`, `abi.rs`, `main.rs`.
 5. Read the explorer API: `routes.rs`, `model.rs`, `error.rs`, `state.rs`, `main.rs`.
 6. Read the dapp: all components (`AdminFlow`, `PauseFlow`, `TxPreview`, `ConfigExportPanel`, `HistoryPane`) and all lib modules (`abi.ts`, `preview.ts`, `explorerApi.ts`, `featureFlags.ts`, `wagmi.ts`).
-7. Read the test harness: `testing/ethereum-testnet/e2e-rust/src/lib.rs`, `testing/demo/demo.sh`.
+7. Read the test harness: `testing/ethereum-testnet/e2e-rust/src/lib.rs`.
 8. Cross-referenced every finding against the team's own `docs/security-model.md` to distinguish "known gap" from "unknown gap" and to avoid re-annotating what is already triaged.
 
 The review is constructive and focused on correctness, not completion. Findings are ordered by blast radius.
@@ -554,8 +554,6 @@ The ABI bindings are generated at compile time from committed JSON artifacts via
 ### Testing harness
 
 `testing/ethereum-testnet/e2e-rust/src/lib.rs` contains hardcoded test private keys (`DEPLOYER_PRIVATE_KEY_HEX`, `PAUSER_PRIVATE_KEY_HEX`, `AGENT_PRIVATE_KEY`). These are clearly labeled test-only with explicit warnings and the matching addresses appear in comments. The test chain (Geth devnet) has no real funds; these keys should never be used on mainnet or any funded network. This is standard practice for integration harnesses.
-
-`testing/demo/demo.sh` generates the agent private key fresh per run via `openssl rand -hex 32` and derives only the on-chain address from it; the key itself is not written to any artifact or config file. The RPC label sanitization uses `sed` to redact the API key path component before writing to `fork-config.json`.
 
 ---
 

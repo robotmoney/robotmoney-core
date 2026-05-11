@@ -67,11 +67,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 .github/scripts/check_dapp_credential_adr.py
 
-      - name: Demo runbook
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 .github/scripts/check_demo_runbook.py
-
       - name: Explorer schema ADR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

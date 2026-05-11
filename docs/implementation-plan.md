@@ -928,11 +928,8 @@ not be enabled until that ADR's go/no-go conditions are met.
 
 ## 13. Phase 7 — OpenClaw E2E Demo on Recent Public-Chain Fork
 
-> Operational decision record: `docs/technical/demo-runbook.md` (issue
-> #62). It fixes the fork pin capture, the verbatim OpenClaw task
-> prompt, the artifact set's exact file paths and formats, and the
-> per-failure-case toggle commands. The §13 prose below is unchanged;
-> the runbook is the deterministic script the impl issue (#61) runs.
+> Operational decision record: issue #62 (demo runbook ADR, now deleted).
+> The §13 prose below is unchanged.
 
 Goal: demonstrate the full autonomous loop without requiring the phase
 5 API or phase 6 dapp. The demo uses OpenClaw plus `rmpc` against a

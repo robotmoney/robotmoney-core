@@ -95,7 +95,7 @@ The nightly job:
   allowance via `anvil_impersonateAccount`.
 - Creates an encrypted keystore for the agent via `rmpc-keystore-import`.
 - Invokes `opencode run` with the verbatim deposit task prompt from
-  `docs/technical/demo-runbook.md` §3.2 (env vars substituted).
+  the verbatim deposit task prompt (env vars substituted).
 - Captures the NDJSON transcript and runs the assertion script.
 - Asserts `rmpc get-vault`, `rmpc get-agent`, `rmpc get-balance`,
   `rmpc get-allowance`, `rmpc self-check` appear in that order before
@@ -126,7 +126,7 @@ Assertion script: `.github/scripts/assert_headless_deposit_transcript.py`
 (`--expect-refusal` mode)
 
 The five parameterized matrix runs (one per failure case from
-`docs/technical/demo-runbook.md` §3.4):
+the five failure-case toggles):
 
 | Case | Toggle applied | Expected refusal reason |
 |---|---|---|
