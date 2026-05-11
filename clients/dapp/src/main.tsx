@@ -33,7 +33,7 @@ const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet
  * useGatewayVerifier hook has access to the wagmi context.
  */
 function App() {
-  const verificationState = useGatewayVerifier(gateway, expectedCodeHash);
+  const { state: verificationState, refresh } = useGatewayVerifier(gateway, expectedCodeHash);
   const gatewayCodeHashVerified = verificationState.status === "verified";
 
   return (
@@ -42,6 +42,7 @@ function App() {
       vaultAddress={vault}
       gatewayCodeHashVerified={gatewayCodeHashVerified}
       gatewayVerificationState={verificationState}
+      gatewayVerificationRefresh={refresh}
       envClass={envClass}
       flagEnv={env}
     />

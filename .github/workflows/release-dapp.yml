@@ -102,7 +102,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            VITE_FORK_RPC_URL=http://localhost:8545
             VITE_EXPLORER_API_URL=http://localhost:8080
             VITE_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000000
             VITE_VAULT_ADDRESS=0x0000000000000000000000000000000000000000

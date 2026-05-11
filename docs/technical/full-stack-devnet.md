@@ -35,7 +35,7 @@ let fixture = smoke_test::Fixture::new()?;
 The compose file is `testing/ethereum-testnet/config/docker-compose.yaml`.
 It defines:
 
-- `geth` — execution layer (chain-id 32382)
+- `geth` — execution layer (chain-id 918453)
 - `lighthouse` — consensus layer (12-second blocks)
 - `setup` — one-shot service that funds genesis accounts and deploys
   contracts via `forge script`

@@ -31,10 +31,84 @@ struct Cli {
     /// Useful when attaching a reverse proxy to the webapp.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     dapp_port: Option<u16>,
+
+    /// Open ephemeral `trycloudflare.com` tunnels for the dapp, explorer-api,
+    /// and Geth RPC ports, and build the dapp bundle with those public URLs
+    /// in the standard `VITE_*` env vars. Tunnels close when smoke-test exits.
+    /// Requires `--full-stack`.
+    ///
+    /// Demo affordance only — bakes hoster-controlled URLs into the bundle
+    /// and is explicitly out of scope for `docs/security/dapp-topology.md`.
+    /// Not a production hosting pattern.
+    #[arg(long, default_value_t = false)]
+    tunnel: bool,
+
+    /// Pin the host port for Geth's RPC. Required when fronting the
+    /// stack with a stable reverse proxy (named cloudflared tunnel,
+    /// nginx, etc.) so the proxy's upstream target is deterministic.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    rpc_port: Option<u16>,
+
+    /// Pin the host port for explorer-api. Same rationale as --rpc-port.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    explorer_port: Option<u16>,
+
+    /// Public URL the dapp's wallet integration will announce as the
+    /// RPC endpoint for the devnet chain (baked into the bundle as
+    /// `VITE_DEVNET_RPC_URL`). When set together with --public-dapp-url
+    /// and --public-explorer-url, smoke-test skips ephemeral tunnels
+    /// and assumes an external reverse proxy is already routing those
+    /// hostnames to the pinned local ports.
+    #[arg(long)]
+    public_rpc_url: Option<String>,
+
+    /// Public URL the dapp is reachable from in the browser
+    /// (`VITE_DAPP_URL`). See --public-rpc-url.
+    #[arg(long)]
+    public_dapp_url: Option<String>,
+
+    /// Public URL the explorer-api is reachable from in the browser
+    /// (`VITE_EXPLORER_API_URL`). See --public-rpc-url.
+    #[arg(long)]
+    public_explorer_url: Option<String>,
 }
 
 fn main() {
     let cli = Cli::parse();
+    if cli.tunnel && !cli.full_stack {
+        eprintln!("smoke-test: --tunnel requires --full-stack.");
+        std::process::exit(2);
+    }
+    let named_url_count = [
+        cli.public_rpc_url.is_some(),
+        cli.public_dapp_url.is_some(),
+        cli.public_explorer_url.is_some(),
+    ]
+    .iter()
+    .filter(|x| **x)
+    .count();
+    if named_url_count != 0 && named_url_count != 3 {
+        eprintln!(
+            "smoke-test: --public-rpc-url, --public-dapp-url, and --public-explorer-url \
+             must all be set together (or all omitted)."
+        );
+        std::process::exit(2);
+    }
+    let use_named = named_url_count == 3;
+    if use_named && cli.tunnel {
+        eprintln!("smoke-test: --tunnel is incompatible with --public-*-url flags.");
+        std::process::exit(2);
+    }
+    if use_named && !cli.full_stack {
+        eprintln!("smoke-test: --public-*-url flags require --full-stack.");
+        std::process::exit(2);
+    }
+    if cli.rpc_port.is_some() {
+        std::env::set_var(
+            "SMOKE_TEST_GETH_RPC_PORT",
+            cli.rpc_port.unwrap().to_string(),
+        );
+    }
     let interrupted = Arc::new(AtomicBool::new(false));
     {
         let interrupted = Arc::clone(&interrupted);
@@ -71,8 +145,23 @@ fn main() {
     // down the compose stack together with the chain fixture.
     let _dapp_stack: Option<smoke_test::DappStack> = if cli.full_stack {
         eprintln!("smoke-test: starting full-stack (dapp + explorer-api + indexer + postgres)...");
-        let stack =
-            smoke_test::DappStack::boot(&fixture, cli.dapp_port).expect("dapp stack boot failed");
+        let public_endpoints = if use_named {
+            smoke_test::PublicEndpoints::Named {
+                rpc_url: cli.public_rpc_url.clone().unwrap(),
+                dapp_url: cli.public_dapp_url.clone().unwrap(),
+                explorer_api_url: cli.public_explorer_url.clone().unwrap(),
+            }
+        } else if cli.tunnel {
+            smoke_test::PublicEndpoints::EphemeralTunnel
+        } else {
+            smoke_test::PublicEndpoints::Local
+        };
+        let opts = smoke_test::DappStackOptions {
+            dapp_port: cli.dapp_port,
+            explorer_api_port: cli.explorer_port,
+            public_endpoints,
+        };
+        let stack = smoke_test::DappStack::boot(&fixture, opts).expect("dapp stack boot failed");
         if interrupted.load(Ordering::SeqCst) {
             eprintln!("smoke-test: interrupted during full-stack startup.");
             return;

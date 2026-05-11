@@ -18,12 +18,11 @@
 #   #   INDEXER_VAULT         — same as VITE_VAULT_ADDRESS
 #   #
 #   # Optional (defaults shown):
-#   #   VITE_FORK_RPC_URL=http://localhost:8545
 #   #   VITE_EXPLORER_API_URL=http://localhost:8080
 #   #   INDEXER_RPC_URL=http://host.docker.internal:8545
-#   #   INDEXER_CHAIN_ID=32382
+#   #   INDEXER_CHAIN_ID=918453
 #   #   INDEXER_CHAIN_NAME=devnet
-#   #   EXPLORER_API_CHAIN_ID=32382
+#   #   EXPLORER_API_CHAIN_ID=918453
 #   #   POSTGRES_PORT=5432
 #   #   EXPLORER_API_PORT=8080
 #   #   DAPP_PORT=5173
@@ -67,7 +66,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
       INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8545}
-      INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-32382}
+      INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-918453}
       INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
@@ -84,7 +83,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
-      EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-32382}
+      EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-918453}
       EXPLORER_API_BIND: 0.0.0.0:8080
       EXPLORER_API_ALLOW_ORIGINS: ${VITE_DAPP_URL:-http://localhost:5173}
     ports:
@@ -100,8 +99,8 @@ services:
       context: ../../..
       dockerfile: clients/dapp/Dockerfile
       args:
-        VITE_FORK_RPC_URL: ${VITE_FORK_RPC_URL:-http://localhost:8545}
         VITE_EXPLORER_API_URL: ${VITE_EXPLORER_API_URL:-http://localhost:8080}
+        VITE_DEVNET_RPC_URL: ${VITE_DEVNET_RPC_URL:-}
         VITE_GATEWAY_ADDRESS: ${VITE_GATEWAY_ADDRESS:?VITE_GATEWAY_ADDRESS must be set}
         VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:?VITE_VAULT_ADDRESS must be set}
         VITE_GATEWAY_EXPECTED_CODE_HASH: ${VITE_GATEWAY_EXPECTED_CODE_HASH:?VITE_GATEWAY_EXPECTED_CODE_HASH must be set to enable admin writes}

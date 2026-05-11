@@ -16,6 +16,71 @@ import {
   useChainId,
   useReadContract,
 } from "wagmi";
+import { targetChainId, targetRpcUrl } from "../lib/wagmi";
+
+interface Eip1193Provider {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+}
+
+/**
+ * Force the wallet's stored RPC URL for `targetChainId` to match the
+ * one this bundle was built with. Calling `wallet_addEthereumChain`
+ * unconditionally is the only reliable way to do this: when the wallet
+ * already has the chain but with a different (stale) RPC URL, the
+ * standard `wallet_switchEthereumChain` is a no-op for the URL, so the
+ * wallet keeps using whatever it had — typically the previous
+ * smoke-test session's now-dead tunnel URL.
+ *
+ * If the URL is unchanged, most wallets dedupe and the user sees no
+ * prompt; if it differs, the user sees a single confirmation and the
+ * wallet adopts the new URL. Then we switch into the chain.
+ */
+async function syncDevnetChain(provider: Eip1193Provider): Promise<string | undefined> {
+  if (targetChainId === undefined || !targetRpcUrl) {
+    return "VITE_DEVNET_RPC_URL is not set in this build — auto network add is disabled.";
+  }
+  const chainIdHex = `0x${targetChainId.toString(16)}`;
+  let addError: unknown;
+  try {
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId: chainIdHex,
+          chainName: "Robot Money devnet",
+          rpcUrls: [targetRpcUrl],
+          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+          // MetaMask v11+ sometimes refuses the add without a block
+          // explorer entry; the explorer-api URL serves as a sensible
+          // stand-in even though it isn't a block-explorer UI.
+          blockExplorerUrls: [String(import.meta.env.VITE_EXPLORER_API_URL ?? targetRpcUrl)],
+        },
+      ],
+    });
+  } catch (err) {
+    addError = err;
+    // eslint-disable-next-line no-console
+    console.error("wallet_addEthereumChain failed:", err);
+  }
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: chainIdHex }],
+    });
+    return undefined;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("wallet_switchEthereumChain failed:", err);
+    const addMsg = addError ? `add: ${(addError as { message?: string }).message ?? addError}` : "";
+    const switchMsg = `switch: ${(err as { message?: string }).message ?? err}`;
+    return [addMsg, switchMsg].filter(Boolean).join(" — ");
+  }
+}
+
+function getInjectedProvider(): Eip1193Provider | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
+}
 import { isAddress, type Address } from "viem";
 import { gatewayAbi, ROLE_HASH, type RoleName } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
@@ -35,6 +100,8 @@ interface AdminFlowProps {
   gatewayCodeHashVerified: boolean;
   /** Full verification state for rendering the status banner. */
   gatewayVerificationState: VerificationState;
+  /** Re-trigger the verification fetch. Wired to the refusal-state retry button. */
+  gatewayVerificationRefresh: () => void;
   envClass: PreviewContext["envClass"];
   flagEnv: Record<string, string | undefined>;
 }
@@ -45,6 +112,37 @@ export function AdminFlow(props: AdminFlowProps) {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const chainId = useChainId();
+
+  const [networkSyncError, setNetworkSyncError] = useState<string | undefined>(undefined);
+
+  const runSync = async () => {
+    const provider = getInjectedProvider();
+    if (!provider) {
+      setNetworkSyncError("No injected wallet provider (window.ethereum is undefined).");
+      return;
+    }
+    const err = await syncDevnetChain(provider);
+    setNetworkSyncError(err);
+  };
+
+  // Connect Wallet handles the full devnet network bookkeeping: connect
+  // accounts → push the current RPC URL into the wallet via
+  // `wallet_addEthereumChain` → switch into the chain. See
+  // `syncDevnetChain`.
+  const handleConnect = (connector: (typeof connectors)[number]) => {
+    connect(
+      { connector },
+      {
+        onSuccess: () => {
+          void runSync();
+        },
+      },
+    );
+  };
+
+  const handleSwitchChain = () => {
+    void runSync();
+  };
 
   const { data: pausedData } = useReadContract({
     address: props.gatewayAddress,
@@ -292,7 +390,13 @@ export function AdminFlow(props: AdminFlowProps) {
         {gatewayVerificationState.status === "refused" && (
           <p data-testid="gateway-verification-refused" className="unsafe-banner">
             <strong>Gateway verification refused — admin writes disabled.</strong>{" "}
-            {gatewayVerificationState.reason}
+            {gatewayVerificationState.reason}{" "}
+            <button
+              data-testid="gateway-verification-retry"
+              onClick={props.gatewayVerificationRefresh}
+            >
+              Re-verify
+            </button>
           </p>
         )}
       </section>
@@ -302,11 +406,7 @@ export function AdminFlow(props: AdminFlowProps) {
           <>
             <p>Connect a wallet to begin.</p>
             {connectors.map((c) => (
-              <button
-                key={c.uid}
-                data-testid={`connect-${c.id}`}
-                onClick={() => connect({ connector: c })}
-              >
+              <button key={c.uid} data-testid={`connect-${c.id}`} onClick={() => handleConnect(c)}>
                 Connect {c.name}
               </button>
             ))}
@@ -323,6 +423,16 @@ export function AdminFlow(props: AdminFlowProps) {
               <code data-testid="connected-chain">{chainId}</code> · paused{" "}
               <code data-testid="gateway-paused">{String(paused)}</code>
             </p>
+            {targetChainId !== undefined && chainId !== targetChainId && (
+              <button data-testid="switch-chain" onClick={handleSwitchChain}>
+                Switch to Robot Money devnet
+              </button>
+            )}
+            {networkSyncError && (
+              <p data-testid="network-sync-error" className="unsafe-banner">
+                <strong>Network setup error:</strong> {networkSyncError}
+              </p>
+            )}
             <button data-testid="disconnect" onClick={() => disconnect()}>
               Disconnect
             </button>
@@ -635,7 +745,6 @@ export function AdminFlow(props: AdminFlowProps) {
               : ""
           }
           chainId={chainId}
-          rpcUrl={props.flagEnv.VITE_FORK_RPC_URL ?? "http://127.0.0.1:8545"}
           agent={agent as Address}
         />
       )}

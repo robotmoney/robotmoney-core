@@ -119,7 +119,7 @@ const proof = await testnet.getProof(
 | Method | Description |
 |--------|-------------|
 | `getBlockNumber()` | Current block height |
-| `getChainId()` | Chain ID (32382) |
+| `getChainId()` | Chain ID (918453) |
 | `getBlock(number)` | Block by number or tag |
 | `getBalance(address)` | Account balance |
 | `getProof(address, keys, block)` | Merkle-Patricia proof |
@@ -168,7 +168,7 @@ bun test
 
 | Parameter | Value |
 |-----------|-------|
-| Chain ID | 32382 |
+| Chain ID | 918453 |
 | Seconds per slot | 12 |
 | Slots per epoch | 32 |
 | Deposit contract | `0x4242424242424242424242424242424242424242` |

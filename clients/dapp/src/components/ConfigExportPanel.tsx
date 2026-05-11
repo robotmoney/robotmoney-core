@@ -21,7 +21,6 @@ interface Props {
   /** keccak256(eth_getCode(gateway)) — non-zero for production deployments */
   gatewayRuntimeHash: string;
   chainId: number;
-  rpcUrl: string;
   agent: Address;
 }
 
@@ -33,6 +32,9 @@ export function ConfigExportPanel(props: Props) {
   const [keyId, setKeyId] = useState("");
   const [region, setRegion] = useState("us-east-1");
   const [keystorePath, setKeystorePath] = useState("./agent.keystore.json");
+  // rmpc RPC URL is operator-chosen and lives in their TOML, not in the
+  // dapp bundle. Defaults to localhost so the user replaces it knowingly.
+  const [rpcUrl, setRpcUrl] = useState("http://127.0.0.1:8545");
 
   const signer =
     signerKind === "hardware"
@@ -46,7 +48,7 @@ export function ConfigExportPanel(props: Props) {
 
   const toml = exportRmpcConfig({
     chain_id: props.chainId,
-    rpc_url: props.rpcUrl,
+    rpc_url: rpcUrl,
     gateway_address: props.gateway,
     usdc_address: props.usdcAddress,
     vault_address: props.vault,
@@ -57,6 +59,10 @@ export function ConfigExportPanel(props: Props) {
   return (
     <section data-testid="config-export">
       <h2>Export rmpc config</h2>
+      <label>
+        rmpc RPC URL
+        <input data-testid="rpc-url" value={rpcUrl} onChange={(e) => setRpcUrl(e.target.value)} />
+      </label>
       <label>
         Signer kind
         <select
