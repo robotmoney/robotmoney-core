@@ -20,7 +20,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab } from "./helpers/wallet";
 
 let endpoints: DevnetEndpoints;
 let OLD_AGENT: string;
@@ -30,9 +30,13 @@ let SHARE_RECEIVER: string;
 test.beforeAll(() => {
   endpoints = loadEndpoints();
   // OLD_AGENT = smoke-test's pre-authorized agent EOA.
-  // NEW_AGENT = any distinct funded EOA — reuse pauser.
+  // NEW_AGENT must be an address with no existing role on the gateway:
+  // AccessRoles._grantRole is mutex with AGENT_ROLE/PAUSER_ROLE, so an
+  // authorizeAgent simulation against pauser_addr (which has PAUSER_ROLE)
+  // would revert and keep the submit button disabled. Use a fresh hex
+  // address that is guaranteed to have no roles on the deployed gateway.
   OLD_AGENT = endpoints.agent_addr;
-  NEW_AGENT = endpoints.pauser_addr;
+  NEW_AGENT = "0x2222222222222222222222222222222222222222";
   SHARE_RECEIVER = endpoints.share_receiver_addr;
 });
 
@@ -52,6 +56,7 @@ async function fillRotationForm(
 test.describe("agent rotation flow — UI invariants", () => {
   test.beforeEach(async ({ page }) => {
     await openDapp(page, endpoints);
+    await openTab(page, "rotation");
   });
 
   test("rotation section renders step-1 and step-2 sub-sections", async ({ page }) => {

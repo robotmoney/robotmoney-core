@@ -12,7 +12,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab } from "./helpers/wallet";
 
 let endpoints: DevnetEndpoints;
 test.beforeAll(() => {
@@ -49,7 +49,9 @@ test("history pane renders rows from the stubbed explorer API", async ({ page })
   });
 
   await openDapp(page, endpoints);
+  await openTab(page, "authorize");
   await page.getByTestId("agent-input").fill(endpoints.agent_addr);
+  await openTab(page, "history");
 
   await expect(page.getByTestId("history-pane")).toBeVisible();
   await expect(page.getByTestId("history-pane-table")).toBeVisible();

@@ -19,7 +19,7 @@
 
 export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
 
-export interface SignerSpec {
+interface SignerSpec {
   kind: SignerKind;
   /** kind=encrypted_keystore: path to the encrypted keystore file */
   keystore_path?: string;
@@ -32,7 +32,7 @@ export interface SignerSpec {
   region?: string;
 }
 
-export interface RmpcExportInputs {
+interface RmpcExportInputs {
   chain_id: number;
   rpc_url: string;
   gateway_address: string;

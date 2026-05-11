@@ -12,7 +12,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab } from "./helpers/wallet";
 
 // keccak256("pause()")[0..4]
 const PAUSE_SELECTOR = "0x8456cb59";
@@ -27,6 +27,7 @@ test.describe("pause flow — UI invariants", () => {
     page,
   }) => {
     await openDapp(page, endpoints, { role: "pauser" });
+    await openTab(page, "pause");
 
     const pauseFlow = page.getByTestId("pause-flow");
     await expect(pauseFlow).toBeVisible();

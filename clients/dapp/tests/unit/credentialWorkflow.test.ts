@@ -3,8 +3,6 @@
  * and agent rotation preview.
  *
  * Covers:
- * - Feature-flag gating: browserGeneratedCredential stays off by default
- *   and only activates on an explicit opt-in (ADR §3.1).
  * - composeRegisterPreview: produces a valid RegisterPreview for a
  *   well-formed address + policy, rejects malformed addresses.
  * - composeRotationPreview: produces a RotationPreview with both steps,
@@ -21,9 +19,8 @@ import {
   validateEthereumAddress,
   formatUsdc,
   type AgentPolicy,
-} from "../../src/credentialWorkflow";
-import { composeRotationPreview } from "../../src/rotation";
-import { resolveFlags, DEFAULT_FLAGS } from "../../src/lib/featureFlags";
+} from "../../src/lib/credentialWorkflow";
+import { composeRotationPreview } from "../../src/lib/rotation";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -39,30 +36,6 @@ const BASE_POLICY: AgentPolicy = {
   maxPerDeposit: 100_000_000n, // 100 USDC
   maxPerWindow: 1_000_000_000n, // 1 000 USDC
 };
-
-// ---------------------------------------------------------------------------
-// Feature-flag gating
-// ---------------------------------------------------------------------------
-
-describe("featureFlags — browserGeneratedCredential gate", () => {
-  it("is false by default", () => {
-    expect(DEFAULT_FLAGS.browserGeneratedCredential).toBe(false);
-  });
-
-  it("stays false when env is empty", () => {
-    expect(resolveFlags({}).browserGeneratedCredential).toBe(false);
-  });
-
-  it("stays false when VITE_BROWSER_KEYGEN is not 'true'", () => {
-    expect(resolveFlags({ VITE_BROWSER_KEYGEN: "" }).browserGeneratedCredential).toBe(false);
-    expect(resolveFlags({ VITE_BROWSER_KEYGEN: "false" }).browserGeneratedCredential).toBe(false);
-    expect(resolveFlags({ VITE_BROWSER_KEYGEN: "0" }).browserGeneratedCredential).toBe(false);
-  });
-
-  it("is true only when VITE_BROWSER_KEYGEN='true'", () => {
-    expect(resolveFlags({ VITE_BROWSER_KEYGEN: "true" }).browserGeneratedCredential).toBe(true);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // validateEthereumAddress

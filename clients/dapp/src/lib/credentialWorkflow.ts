@@ -4,18 +4,10 @@
  *
  * Register-existing-address credential workflow.
  *
- * This module implements the production-default credential path (Path 1 in the
- * ADR): the operator supplies a public address generated externally (hardware
+ * The operator supplies a public address generated externally (hardware
  * wallet, `cast wallet new`, encrypted keystore). The dapp never sees the
- * private key.
- *
- * The browser-keygen path (Path 2) is a separate, flag-gated module in
- * keygen.ts. It is NOT imported here and is never loaded in a production build
- * unless DAPP_BROWSER_KEYGEN_ENABLED is explicitly set to true.
- *
- * See docs/technical/dapp-credential-decisions.md for the rationale and
- * docs/technical/dapp-browser-keygen-review.md for the browser-keygen
- * security review (GO decision, 2026-05-07).
+ * private key. Browser-side keypair generation is not a supported path —
+ * see docs/technical/dapp-credential-decisions.md §3.1.
  */
 
 /**

@@ -179,14 +179,13 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
 }
 
 /**
- * Click the wagmi `injected` connector button. Use after `injectWallet`
- * and `page.goto()`. The injected connector exposes connector.id =
- * "injected", so AdminFlow renders a button with data-testid =
- * "connect-injected".
+ * Click the unified "Connect wallet" button. Use after `injectWallet`
+ * and `page.goto()`. The button is rendered by StatusHeader (and as a
+ * fallback by AgentsPanel when the gate is active).
  */
 export async function connectInjectedWallet(page: Page): Promise<void> {
   const { expect } = await import("@playwright/test");
-  const button = page.getByTestId("connect-injected");
+  const button = page.getByTestId("connect-wallet").first();
   await expect(button).toBeVisible();
   await button.click();
   await expect(page.getByTestId("connected-address")).toBeVisible({ timeout: 10_000 });
@@ -219,4 +218,27 @@ export async function openDapp(
   if (opts.connect !== false) {
     await connectInjectedWallet(page);
   }
+  // fork/devnet env classes bypass the registration gate
+  // (see useVaultRegistration.ts), so AdminFlow mounts directly.
+}
+
+/**
+ * Activate a named tab in the AdminFlow. Tabs render only the active
+ * panel into the DOM, so specs must call this before interacting with
+ * any form testid that lives inside a tab.
+ */
+export type AdminTabId =
+  | "authorize"
+  | "deposit-withdraw"
+  | "pause"
+  | "revoke"
+  | "rotation"
+  | "admin-role"
+  | "pauser-role"
+  | "history"
+  | "export";
+
+export async function openTab(page: Page, tabId: AdminTabId): Promise<void> {
+  await page.getByTestId(`tab-${tabId}`).click();
+  await page.getByTestId(`tabpanel-${tabId}`).waitFor({ state: "visible" });
 }

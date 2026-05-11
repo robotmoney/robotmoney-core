@@ -5,18 +5,21 @@
  * source: issue #150 AC §1–§4.
  *
  * Invariants verified here:
- *   1. The browser-keygen banner is NOT visible by default.
- *   2. Filling a valid externally-supplied agent address plus a
+ *   1. Filling a valid externally-supplied agent address plus a
  *      share-receiver surfaces a structured authorizeAgent preview.
- *   3. The wallet signing button is only enabled after the structured
+ *   2. The wallet signing button is only enabled after the structured
  *      preview renders.
- *   4. The config-export panel appears (register flow emits a config
+ *   3. The config-export panel appears (register flow emits a config
  *      the real rmpc loader accepts; the TOML round-trip is covered
  *      by `clients/rust-payment-client/tests/dapp_toml_roundtrip.rs`).
+ *
+ * The dapp never generates private keys in the browser — see
+ * docs/technical/dapp-credential-decisions.md §3.1 — so there is no
+ * keygen UI surface to assert against.
  */
 import { test, expect } from "@playwright/test";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab } from "./helpers/wallet";
 
 let endpoints: DevnetEndpoints;
 let AGENT_ADDRESS: string;
@@ -29,15 +32,6 @@ test.beforeAll(() => {
 });
 
 test.describe("register-existing-address flow — UI invariants", () => {
-  test("browser-keygen banner is hidden in default production build", async ({ page }) => {
-    await openDapp(page, endpoints, { connect: false });
-    const keygenBanner = page.getByTestId("browser-keygen");
-    await expect(keygenBanner).not.toBeVisible();
-    const disabledMarker = page.getByTestId("browser-keygen-disabled");
-    await expect(disabledMarker).toBeAttached();
-    await expect(disabledMarker).toBeHidden();
-  });
-
   test("structured authorizeAgent preview renders for a valid externally-supplied address", async ({
     page,
   }) => {
@@ -76,6 +70,7 @@ test.describe("register-existing-address flow — UI invariants", () => {
 
     await page.getByTestId("agent-input").fill(AGENT_ADDRESS);
     await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
+    await openTab(page, "export");
 
     const exportPanel = page.getByTestId("config-export");
     await expect(exportPanel).toBeVisible();

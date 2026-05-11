@@ -747,29 +747,31 @@ impl DappStack {
         let local_explorer_api_url = ports.explorer_api_url();
         let local_rpc_url = fixture.rpc_url().to_string();
 
-        let (tunnels, vite_rpc_url, vite_dapp_url, vite_explorer_api_url) =
-            match opts.public_endpoints {
-                PublicEndpoints::Local => (
-                    None,
-                    local_rpc_url.clone(),
-                    local_dapp_url.clone(),
-                    local_explorer_api_url.clone(),
-                ),
-                PublicEndpoints::EphemeralTunnel => {
-                    let t = Tunnels::start(
-                        fixture.rpc_port(),
-                        ports.dapp_port,
-                        ports.explorer_api_port,
-                    )?;
-                    let urls = (t.rpc_url.clone(), t.dapp_url.clone(), t.explorer_api_url.clone());
-                    (Some(t), urls.0, urls.1, urls.2)
-                }
-                PublicEndpoints::Named {
-                    rpc_url,
-                    dapp_url,
-                    explorer_api_url,
-                } => (None, rpc_url, dapp_url, explorer_api_url),
-            };
+        let (tunnels, vite_rpc_url, vite_dapp_url, vite_explorer_api_url) = match opts
+            .public_endpoints
+        {
+            PublicEndpoints::Local => (
+                None,
+                local_rpc_url.clone(),
+                local_dapp_url.clone(),
+                local_explorer_api_url.clone(),
+            ),
+            PublicEndpoints::EphemeralTunnel => {
+                let t =
+                    Tunnels::start(fixture.rpc_port(), ports.dapp_port, ports.explorer_api_port)?;
+                let urls = (
+                    t.rpc_url.clone(),
+                    t.dapp_url.clone(),
+                    t.explorer_api_url.clone(),
+                );
+                (Some(t), urls.0, urls.1, urls.2)
+            }
+            PublicEndpoints::Named {
+                rpc_url,
+                dapp_url,
+                explorer_api_url,
+            } => (None, rpc_url, dapp_url, explorer_api_url),
+        };
 
         eprintln!("smoke-test: building and starting dapp stack (this may take several minutes for first build)...");
 

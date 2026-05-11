@@ -15,7 +15,13 @@
  * structured preview still renders so the operator sees what *would*
  * be signed.
  */
-import { useAccount, useReadContract, useWriteContract, useChainId } from "wagmi";
+import {
+  useAccount,
+  useReadContract,
+  useSimulateContract,
+  useWriteContract,
+  useChainId,
+} from "wagmi";
 import type { Address } from "viem";
 import { ADMIN_ROLE_HASH, PAUSER_ROLE_HASH, gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
@@ -71,24 +77,27 @@ export function PauseFlow(props: PauseFlowProps) {
   const pausePreview = buildPreview(pauseAction, ctx);
   const unpausePreview = buildPreview(unpauseAction, ctx);
 
+  const { data: pauseSim } = useSimulateContract({
+    address: props.gatewayAddress,
+    abi: gatewayAbi,
+    functionName: "pause",
+    query: { enabled: isConnected && pausePreview.ok && hasPauserRole && !paused },
+  });
+  const { data: unpauseSim } = useSimulateContract({
+    address: props.gatewayAddress,
+    abi: gatewayAbi,
+    functionName: "unpause",
+    query: { enabled: isConnected && unpausePreview.ok && hasAdminRole && paused },
+  });
+
   const onPause = () => {
-    if (!pausePreview.ok) return;
-    writeContract({
-      address: props.gatewayAddress,
-      abi: gatewayAbi,
-      functionName: "pause",
-      args: [],
-    });
+    if (!pauseSim) return;
+    writeContract(pauseSim.request);
   };
 
   const onUnpause = () => {
-    if (!unpausePreview.ok) return;
-    writeContract({
-      address: props.gatewayAddress,
-      abi: gatewayAbi,
-      functionName: "unpause",
-      args: [],
-    });
+    if (!unpauseSim) return;
+    writeContract(unpauseSim.request);
   };
 
   return (
@@ -105,8 +114,9 @@ export function PauseFlow(props: PauseFlowProps) {
         </p>
         <TxPreview preview={pausePreview} />
         <button
+          type="button"
           data-testid="pause-submit"
-          disabled={!isConnected || !pausePreview.ok || !hasPauserRole || paused || isPending}
+          disabled={!isConnected || !pauseSim || isPending}
           onClick={onPause}
         >
           Sign pause with wallet
@@ -120,8 +130,9 @@ export function PauseFlow(props: PauseFlowProps) {
         </p>
         <TxPreview preview={unpausePreview} />
         <button
+          type="button"
           data-testid="unpause-submit"
-          disabled={!isConnected || !unpausePreview.ok || !hasAdminRole || !paused || isPending}
+          disabled={!isConnected || !unpauseSim || isPending}
           onClick={onUnpause}
         >
           Sign unpause with wallet

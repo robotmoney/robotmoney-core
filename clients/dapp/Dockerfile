@@ -33,7 +33,7 @@ ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_HISTORY_PANE=$VITE_HISTORY_PANE \
     VITE_DEVNET_RPC_URL=$VITE_DEVNET_RPC_URL
 
-COPY clients/dapp/package.json clients/dapp/pnpm-lock.yaml ./
+COPY clients/dapp/package.json clients/dapp/bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY clients/dapp ./

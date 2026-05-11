@@ -7,7 +7,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab } from "./helpers/wallet";
 
 // keccak256("unpause()")[0..4]
 const UNPAUSE_SELECTOR = "0x3f4ba83a";
@@ -22,6 +22,7 @@ test.describe("unpause flow — UI invariants", () => {
     page,
   }) => {
     await openDapp(page, endpoints);
+    await openTab(page, "pause");
 
     const unpauseForm = page.getByTestId("unpause-form");
     await expect(unpauseForm).toBeVisible();
@@ -48,6 +49,7 @@ test.describe("unpause flow — UI invariants", () => {
     // Connect as the agent EOA — it holds no roles on the gateway, so
     // unpause (which requires ADMIN_ROLE) must stay disabled.
     await openDapp(page, endpoints, { role: "agent" });
+    await openTab(page, "pause");
     const unpauseBtn = page.getByTestId("unpause-submit");
     await expect(unpauseBtn).toBeDisabled();
   });

@@ -1,3 +1,5 @@
+// Strictness here enforces docs/guides/react-guide.md §Types.
+// Do not loosen strict, noUnusedLocals, noUnusedParameters, or noFallthroughCasesInSwitch.
 {
   "compilerOptions": {
     "target": "ES2022",

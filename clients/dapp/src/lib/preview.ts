@@ -28,13 +28,13 @@ export type AdminAction =
   | { kind: "grantRole"; role: RoleName; account: Address }
   | { kind: "revokeRole"; role: RoleName; account: Address };
 
-export interface PreviewArg {
+interface PreviewArg {
   name: string;
   raw: string;
   gloss: string;
 }
 
-export interface PreviewSuccess {
+interface PreviewSuccess {
   ok: true;
   target: Address;
   targetCodeHashKnown: boolean;
@@ -46,7 +46,7 @@ export interface PreviewSuccess {
   calldata: Hex;
 }
 
-export interface PreviewFailure {
+interface PreviewFailure {
   ok: false;
   reason: string;
   /** Always present even on failure so the operator can paste into a second tool. */

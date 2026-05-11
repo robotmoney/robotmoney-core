@@ -16,12 +16,12 @@ MVP end-to-end:
 - Authorize agent flow with structured tx preview
 - Revoke agent flow with structured tx preview
 - TOML config export for hardware / KMS / encrypted-keystore signers
-- Browser-credential generation **gated off** by feature flag (`VITE_BROWSER_KEYGEN`); ADR §3.1 requires a follow-up `security-review` issue before enable
+- First-run onboarding wizard that hands the operator a paste-ready agent bootstrap prompt before the on-chain `authorizeAgent` step
+- Browser-side keypair generation is **not** supported: the dapp never sees or generates a private key (ADR §3.1)
 
 Deferred to follow-ups:
 - Pause / unpause UI (encoder + preview already in `src/lib/preview.ts`; UI surface to be added)
 - Role grant / revoke for ADMIN/PAUSER roles
-- Browser-keygen UX (gated behind `VITE_BROWSER_KEYGEN=true` after ADR-§3.1 sign-off)
 - Full fork-anvil-driven Playwright authorize/revoke + `rmpc self-check` integration (see test plan)
 - TOML round-trip Rust integration test inside `clients/rust-payment-client/tests/`
 
@@ -46,4 +46,4 @@ bunx playwright install --with-deps chromium && bun run test:e2e
 | `VITE_GATEWAY_EXPECTED_CODE_HASH` | unset | Keccak-256 of the gateway runtime bytecode. Admin writes refused until this matches on-chain. |
 | `VITE_GATEWAY_CODE_HASH_VERIFIED` | `true` | Set `false` to test refusal path |
 | `VITE_ENV_CLASS` | `fork` | One of `fork` / `devnet` / `testnet` / `mainnet` |
-| `VITE_BROWSER_KEYGEN` | unset (false) | Per ADR §3.1 — enable only after security review |
+| `VITE_HISTORY_PANE` | unset (false) | Opt-in to the explorer-API-backed history pane |

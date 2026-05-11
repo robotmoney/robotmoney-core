@@ -19,14 +19,18 @@
 import { test, expect, type Page } from "@playwright/test";
 import { encodeFunctionData, keccak256, toBytes } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { openDapp } from "./helpers/wallet";
+import { openDapp, openTab, type AdminTabId } from "./helpers/wallet";
 
 let endpoints: DevnetEndpoints;
 let ADMIN_ACCOUNT: `0x${string}`;
 let PAUSER_ACCOUNT: `0x${string}`;
 test.beforeAll(() => {
   endpoints = loadEndpoints();
-  ADMIN_ACCOUNT = endpoints.agent_addr as `0x${string}`;
+  // ADMIN_ACCOUNT must be an address with no existing role on the gateway:
+  // AccessRoles._grantRole is mutex with AGENT_ROLE/PAUSER_ROLE, so simulating
+  // grantRole(ADMIN_ROLE, agent_addr) would revert (agent_addr already has
+  // AGENT_ROLE) and keep the submit button disabled. Use a fresh hex address.
+  ADMIN_ACCOUNT = "0x1111111111111111111111111111111111111111";
   PAUSER_ACCOUNT = endpoints.share_receiver_addr as `0x${string}`;
 });
 
@@ -92,6 +96,7 @@ interface RoleCase {
   revokePreviewId: string;
   role: `0x${string}`;
   roleName: "ADMIN_ROLE" | "PAUSER_ROLE";
+  tabId: AdminTabId;
 }
 
 const cases: RoleCase[] = [
@@ -105,6 +110,7 @@ const cases: RoleCase[] = [
     revokePreviewId: "revoke-admin-preview-wrap",
     role: ADMIN_ROLE,
     roleName: "ADMIN_ROLE",
+    tabId: "admin-role",
   },
   {
     label: "PAUSER",
@@ -116,6 +122,7 @@ const cases: RoleCase[] = [
     revokePreviewId: "revoke-pauser-preview-wrap",
     role: PAUSER_ROLE,
     roleName: "PAUSER_ROLE",
+    tabId: "pauser-role",
   },
 ];
 
@@ -125,6 +132,7 @@ for (const c of cases) {
       page,
     }) => {
       await connect(page);
+      await openTab(page, c.tabId);
       await page.getByTestId(c.inputId).fill(c.account());
 
       const previewWrap = page.getByTestId(c.grantPreviewId);
@@ -157,6 +165,7 @@ for (const c of cases) {
       page,
     }) => {
       await connect(page);
+      await openTab(page, c.tabId);
       await page.getByTestId(c.inputId).fill(c.account());
 
       const previewWrap = page.getByTestId(c.revokePreviewId);
@@ -180,6 +189,7 @@ for (const c of cases) {
 
     test(`${c.label}_ROLE submit buttons stay disabled with no address`, async ({ page }) => {
       await connect(page);
+      await openTab(page, c.tabId);
       // Inputs are empty.
       await expect(page.getByTestId(c.grantBtnId)).toBeDisabled();
       await expect(page.getByTestId(c.revokeBtnId)).toBeDisabled();

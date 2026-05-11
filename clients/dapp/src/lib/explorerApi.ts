@@ -23,7 +23,7 @@ export interface DepositRow {
   readonly indexed_at: string;
 }
 
-export interface Freshness {
+interface Freshness {
   readonly block_number: number;
   readonly indexed_at: string;
 }
@@ -38,7 +38,7 @@ export interface DepositsResponse {
  * `clients/explorer-api/src/main.rs`. Production builds set
  * `VITE_EXPLORER_API_URL` per deployment.
  */
-export const DEFAULT_EXPLORER_API_URL = "http://localhost:8080";
+const DEFAULT_EXPLORER_API_URL = "http://localhost:8080";
 
 export function resolveExplorerApiUrl(env: Record<string, string | undefined> = {}): string {
   const raw = env.VITE_EXPLORER_API_URL;

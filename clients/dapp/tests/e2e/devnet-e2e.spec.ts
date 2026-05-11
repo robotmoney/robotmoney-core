@@ -98,12 +98,15 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     await connectInjectedWallet(page);
 
     // Verification must pass — the dapp container was built with the
-    // real runtime hash. ConfigExportPanel then renders the gateway
-    // address inside its TOML output (case-insensitive: smoke-test
-    // emits lowercase, dapp may render EIP-55 checksummed form).
+    // real runtime hash. StatusHeader then renders the gateway address
+    // (always-visible). It is shown in abbreviated form `0xABCD…WXYZ`
+    // (case-insensitive: smoke-test emits lowercase, dapp may render
+    // EIP-55 checksummed form). Either form satisfies the assertion.
     await expect(page.getByTestId("gateway-verification-ok")).toBeVisible({ timeout: 30_000 });
     const escaped = endpoints.gateway_addr.replace(/^0x/, "");
-    const re = new RegExp(`0x${escaped}`, "i");
+    const head = escaped.slice(0, 4);
+    const tail = escaped.slice(-4);
+    const re = new RegExp(`0x${head}…${tail}|0x${escaped}`, "i");
     await expect(page.getByText(re).first()).toBeVisible({ timeout: 30_000 });
   });
 
