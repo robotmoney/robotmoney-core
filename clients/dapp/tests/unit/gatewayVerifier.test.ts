@@ -85,10 +85,4 @@ describe("computeVerificationState", () => {
     const result = computeVerificationState(GATEWAY, undefined, undefined);
     expect(result.status).toBe("refused");
   });
-
-  it("returns verified immediately when bypassForTest is true, ignoring hash and address", () => {
-    // Zero address + no hash would normally refuse; bypass overrides all checks.
-    const result = computeVerificationState(ZERO_ADDRESS, undefined, undefined, true);
-    expect(result.status).toBe("verified");
-  });
 });

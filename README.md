@@ -17,7 +17,10 @@ Agent onboarding instructions for all supported runtimes (OpenCode, OpenClaw, Cl
 
 ```bash
 # Keep a devnet alive for interactive use — prints RPC URL and contract addresses:
-cargo run --bin smoke-test
+cargo run -p smoke-test
+
+# Add the full service graph:
+cargo run -p smoke-test -- --full-stack
 
 # Or boot a devnet inside a single integration test:
 # let fixture = smoke_test::Fixture::new()?;

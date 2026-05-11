@@ -1,22 +1,24 @@
 /**
- * Playwright E2E — revoke flow.
+ * Playwright E2E — revoke flow UI invariants.
  *
- * Mirrors the authorize spec for the revoke action. The full
- * revoke + `rmpc self-check` follow-up that the acceptance criterion
- * names is gated by FORK_E2E=1; see .github/workflows/dapp.yml for the
- * CI sidecar wiring.
+ * Runs against the smoke-test full-stack devnet. Mirrors authorize.spec.ts
+ * for the revoke action. The on-chain follow-up (rmpc self-check after
+ * revoke confirms) lives in fork-roundtrip.spec.ts.
  */
 import { test, expect } from "@playwright/test";
+import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { openDapp } from "./helpers/wallet";
+
+let endpoints: DevnetEndpoints;
+test.beforeAll(() => {
+  endpoints = loadEndpoints();
+});
 
 test("revoke preview renders structured fields", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTestId("connect-mock").click();
-  await page.getByTestId("agent-input").fill("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
-  await page.getByTestId("shareReceiver-input").fill("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC");
+  await openDapp(page, endpoints);
+  await page.getByTestId("agent-input").fill(endpoints.agent_addr);
+  await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
 
-  // After issue #82 the page also renders a PauseFlow (pause + unpause
-  // previews), so scope to the revoke-form to avoid coupling to the
-  // total preview count on the page.
   const revokeForm = page.getByTestId("revoke-form");
   await expect(revokeForm.getByTestId("tx-preview-fn")).toHaveText("revokeAgent");
   await expect(revokeForm.getByTestId("tx-preview-effect")).toContainText("loses AGENT_ROLE");

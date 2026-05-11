@@ -34,24 +34,12 @@ export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
  *                        `undefined` when the fetch is still in flight,
  *                        `null` when the fetch resolved with no code
  *                        (i.e. address is not a contract).
- * @param bypassForTest   When true, immediately return `verified` without
- *                        making any RPC call or hash check. Set only via
- *                        `VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST=true` in
- *                        Playwright E2E test builds; never in production.
  */
 export function computeVerificationState(
   gatewayAddress: string,
   expectedHash: string | undefined,
   code: Hex | undefined | null,
-  bypassForTest = false,
 ): VerificationState {
-  // Test-only bypass: skip all verification and immediately return verified.
-  // This is gated by VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST and must never be
-  // set in production builds.
-  if (bypassForTest) {
-    return { status: "verified", computedHash: ("0x" + "00".repeat(32)) as Hex };
-  }
-
   // Fail closed: missing expected hash → refuse.
   if (!expectedHash || expectedHash.trim() === "") {
     return {

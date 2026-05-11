@@ -51,9 +51,9 @@ services:
     volumes:
       - testnet-data:/data
     ports:
-      - "8545:8545"
-      - "8546:8546"
-      - "8551:8551"
+      - "127.0.0.1:${GETH_RPC_PORT:-8545}:8545"
+      - "127.0.0.1:${GETH_WS_PORT:-8546}:8546"
+      - "127.0.0.1:${GETH_AUTHRPC_PORT:-8551}:8551"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8545"]
       interval: 5s
@@ -93,7 +93,7 @@ services:
     volumes:
       - testnet-data:/data
     ports:
-      - "5052:5052"
+      - "127.0.0.1:${BEACON_PORT:-5052}:5052"
 
   # 6. Main Validator Clients
   validator-1:

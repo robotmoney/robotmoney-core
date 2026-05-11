@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
 # the crate itself, its embedded migrations, and the path dev-dependency.
 COPY services/explorer-indexer ./services/explorer-indexer
 COPY testing/fork-e2e-rust ./testing/fork-e2e-rust
+COPY testing/test-utils ./testing/test-utils
 
 WORKDIR /build/services/explorer-indexer
 RUN cargo build --release --bin indexer

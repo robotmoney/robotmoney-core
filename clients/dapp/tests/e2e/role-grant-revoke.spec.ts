@@ -18,6 +18,17 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { encodeFunctionData, keccak256, toBytes } from "viem";
+import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { openDapp } from "./helpers/wallet";
+
+let endpoints: DevnetEndpoints;
+let ADMIN_ACCOUNT: `0x${string}`;
+let PAUSER_ACCOUNT: `0x${string}`;
+test.beforeAll(() => {
+  endpoints = loadEndpoints();
+  ADMIN_ACCOUNT = endpoints.agent_addr as `0x${string}`;
+  PAUSER_ACCOUNT = endpoints.share_receiver_addr as `0x${string}`;
+});
 
 const ABI = [
   {
@@ -45,15 +56,8 @@ const ABI = [
 const ADMIN_ROLE = keccak256(toBytes("ADMIN_ROLE"));
 const PAUSER_ROLE = keccak256(toBytes("PAUSER_ROLE"));
 
-const ADMIN_ACCOUNT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
-const PAUSER_ACCOUNT = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as const;
-
 async function connect(page: Page) {
-  await page.goto("/");
-  const connect = page.getByTestId("connect-mock");
-  await expect(connect).toBeVisible();
-  await connect.click();
-  await expect(page.getByTestId("connected-address")).toBeVisible();
+  await openDapp(page, endpoints);
 }
 
 /**
@@ -80,7 +84,8 @@ async function expectNoRawCalldataExposed(page: Page, expectedCalldata: string) 
 interface RoleCase {
   label: string;
   inputId: string;
-  account: `0x${string}`;
+  /** Lazy — beforeAll populates the addresses. */
+  account: () => `0x${string}`;
   grantBtnId: string;
   grantPreviewId: string;
   revokeBtnId: string;
@@ -93,7 +98,7 @@ const cases: RoleCase[] = [
   {
     label: "ADMIN",
     inputId: "admin-account-input",
-    account: ADMIN_ACCOUNT,
+    account: () => ADMIN_ACCOUNT,
     grantBtnId: "grant-admin-submit",
     grantPreviewId: "grant-admin-preview-wrap",
     revokeBtnId: "revoke-admin-submit",
@@ -104,7 +109,7 @@ const cases: RoleCase[] = [
   {
     label: "PAUSER",
     inputId: "pauser-account-input",
-    account: PAUSER_ACCOUNT,
+    account: () => PAUSER_ACCOUNT,
     grantBtnId: "grant-pauser-submit",
     grantPreviewId: "grant-pauser-preview-wrap",
     revokeBtnId: "revoke-pauser-submit",
@@ -120,7 +125,7 @@ for (const c of cases) {
       page,
     }) => {
       await connect(page);
-      await page.getByTestId(c.inputId).fill(c.account);
+      await page.getByTestId(c.inputId).fill(c.account());
 
       const previewWrap = page.getByTestId(c.grantPreviewId);
       await expect(previewWrap).toBeVisible();
@@ -133,7 +138,7 @@ for (const c of cases) {
       const expected = encodeFunctionData({
         abi: ABI,
         functionName: "grantRole",
-        args: [c.role, c.account],
+        args: [c.role, c.account()],
       });
       const calldata = await previewWrap.getByTestId("tx-preview-calldata").textContent();
       expect(calldata?.trim()).toBe(expected);
@@ -152,7 +157,7 @@ for (const c of cases) {
       page,
     }) => {
       await connect(page);
-      await page.getByTestId(c.inputId).fill(c.account);
+      await page.getByTestId(c.inputId).fill(c.account());
 
       const previewWrap = page.getByTestId(c.revokePreviewId);
       await expect(previewWrap).toBeVisible();
@@ -163,7 +168,7 @@ for (const c of cases) {
       const expected = encodeFunctionData({
         abi: ABI,
         functionName: "revokeRole",
-        args: [c.role, c.account],
+        args: [c.role, c.account()],
       });
       const calldata = await previewWrap.getByTestId("tx-preview-calldata").textContent();
       expect(calldata?.trim()).toBe(expected);

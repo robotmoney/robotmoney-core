@@ -241,38 +241,37 @@ The two suites are complements, not duplicates. The retired Anvil "OpenClaw demo
 ---
 
 ### 10. dApp E2E tests
-**Suggested file:** `.github/workflows/dapp-e2e.yml`
-**Environment:** `devnet`
-**Trigger paths:** `clients/dapp/**`, `contracts/**`
+**File:** `.github/workflows/suite-10-dapp-e2e.yml`
+**Environment:** `devnet` (smoke-test full stack)
+**Trigger paths:** `clients/dapp/**`, `contracts/**`, `testing/smoke-test/**`, `testing/ethereum-testnet/**`
 
-**Jobs:**
-- `e2e` — **needs suite 9 (`dapp-quality`) to pass** (enforce via `workflow_run` or branch protection); runs first
-- `e2e-history-pane` — **needs suite 9**; runs in parallel with `e2e`
-- `fork-roundtrip` — **needs suite 9**; runs in parallel with `e2e` and `e2e-history-pane`
+Single job runs every Playwright spec against a real Geth+Lighthouse
+devnet booted by Playwright's `globalSetup` (`devnet-global-setup.ts`),
+which spawns `cargo run -p smoke-test -- --full-stack`. The dapp
+container in that stack is built with the gateway's runtime keccak-256
+pinned via `VITE_GATEWAY_EXPECTED_CODE_HASH`, so verification succeeds
+the prod way. There is no local-dev fast path: every spec exercises a
+bundle that is bit-identical to a production deployment.
 
-**Steps — `e2e` job:**
-1. Checkout repository
-2. Setup pnpm + Node 22
-3. Install Foundry toolchain
-4. `pnpm install --frozen-lockfile`
-5. `pnpm test:e2e:install` — Playwright browser binaries
-6. Start devnet sidecar (test suite owns lifecycle)
-7. `pnpm test:e2e` — wallet connect → vault state display, deposit golden path, admin actions (register agent, set cap, pause, revoke), transaction error display, no key-material-in-DOM scan
+**Design principle — no test-only code in production:** the dapp's
+`src/` tree contains no `VITE_USE_MOCK_WALLET`, no
+`VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST`, and no other env-gated test
+branches. Test seams live entirely in Playwright (`tests/e2e/helpers/`):
+a JS-level EIP-1193 provider injected via `page.addInitScript` drives
+the prod `injected()` wagmi connector exactly like a real wallet
+extension. The harness supplies the real expected code hash. See
+`docs/testing/smoke-test-design.md`.
+
+**Steps:**
+1. Checkout repository (recursive submodules)
+2. Setup Bun + Node 22
+3. Verify Docker is available
+4. Install Rust toolchain + Foundry
+5. `bun install --frozen-lockfile`
+6. `bunx playwright install --with-deps chromium`
+7. `bun run test:e2e` — Playwright globalSetup boots smoke-test full
+   stack; runs every spec under `clients/dapp/tests/e2e/` against it
 8. Upload Playwright report artifact on failure
-
-**Steps — `e2e-history-pane` job:**
-1–5. Same as `e2e`
-6. Start devnet sidecar
-7. `pnpm test:e2e tests/e2e/history-pane.spec.ts` with `VITE_HISTORY_PANE=true` — history pane renders deposit rows from stubbed explorer API
-8. Upload Playwright report artifact on failure
-
-**Steps — `fork-roundtrip` job:**
-1. Checkout repository
-2. Setup pnpm + Node 22 + Rust + Foundry
-3. `pnpm install --frozen-lockfile`
-4. `pnpm exec playwright install --with-deps chromium`
-5. `bash clients/dapp/scripts/run-fork-roundtrip.sh` — deploys gateway on local devnet, mints agent keystore, dApp authorizes agent, `rmpc self-check` asserts `ErrAgentNotAuthorized` after revoke and exit 0 after re-authorize
-6. Upload Playwright report artifact on failure
 
 ---
 
@@ -387,10 +386,11 @@ isolation, independent of any client (rmpc, dapp, explorer).
 6. `cargo fmt --check -p smoke-test`
 7. `cargo clippy -p smoke-test --all-targets -- -D warnings`
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
-9. `cargo test -p smoke-test --release -- --test-threads=1` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly
-10. `docker compose down -v --remove-orphans || true` — safety net teardown (always)
+9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, and verifies `--dapp-port` / Ctrl-C teardown
+10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly
+11. `docker compose down -v --remove-orphans || true` — safety net teardown (always)
 
-> **Note:** Step 9 exercises `Fixture::new()` end-to-end — the same code
+> **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A
 > failure here blocks those suites before they pay their own boot costs.
 
@@ -434,8 +434,8 @@ isolation, independent of any client (rmpc, dapp, explorer).
 | 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
 | 8 | `explorer-indexer.yml` | `fast` \| `devnet` | `devnet` |
 | 9 | `dapp-quality.yml` | `lint-build` | `none` |
-| 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `fork-roundtrip` | `devnet` |
+| 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
 | 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `refusal` → `deposit` \| `read` | `none` / `devnet` |
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
-| 14 | `smoke-test.yml` | planned | `devnet` |
+| 14 | `smoke-test.yml` | `smoke-test` | `devnet` |

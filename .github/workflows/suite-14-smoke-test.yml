@@ -20,6 +20,12 @@
 # cleanly. Without this step, a binary-only compile error would be hidden by cargo test
 # (which does not build binaries by default).
 #
+# WHY THE CLI META TEST RUNS SEPARATELY
+# The `cli_meta` integration test boots `cargo run -p smoke-test -- --full-stack`
+# and checks the harness contract around endpoint summary output, `--dapp-port`,
+# and Ctrl-C teardown. Keeping it as its own cargo invocation makes failures easier
+# to interpret than mixing it into the shared fixture suite.
+#
 # WHY THE SAFETY-NET TEARDOWN USES || true
 # The teardown runs with if: always(), including when the job is cancelled by GitHub
 # Actions (e.g. timeout). In that case, docker compose down may fail because the
@@ -87,9 +93,13 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
+      - name: cargo test (boots full-stack CLI, asserts summary + teardown)
+        working-directory: testing/smoke-test
+        run: cargo test -p smoke-test --release --test cli_meta -- --nocapture
+
       - name: cargo test (boots devnet, deploys contracts, asserts RPC + blocks, tears down)
         working-directory: testing/smoke-test
-        run: cargo test -p smoke-test --release -- --test-threads=1 --nocapture
+        run: cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture
 
       - name: Safety-net teardown (always)
         if: always()

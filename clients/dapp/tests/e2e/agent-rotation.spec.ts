@@ -19,11 +19,22 @@
  *      (revoke old) has been submitted.
  */
 import { test, expect } from "@playwright/test";
+import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { openDapp } from "./helpers/wallet";
 
-// Anvil pre-funded accounts — used as safe test addresses.
-const OLD_AGENT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"; // anvil account[1]
-const NEW_AGENT = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"; // anvil account[2]
-const SHARE_RECEIVER = "0x90F79bf6EB2c4f870365E785982E1f101E93b906"; // anvil account[3]
+let endpoints: DevnetEndpoints;
+let OLD_AGENT: string;
+let NEW_AGENT: string;
+let SHARE_RECEIVER: string;
+
+test.beforeAll(() => {
+  endpoints = loadEndpoints();
+  // OLD_AGENT = smoke-test's pre-authorized agent EOA.
+  // NEW_AGENT = any distinct funded EOA — reuse pauser.
+  OLD_AGENT = endpoints.agent_addr;
+  NEW_AGENT = endpoints.pauser_addr;
+  SHARE_RECEIVER = endpoints.share_receiver_addr;
+});
 
 async function fillRotationForm(
   page: import("@playwright/test").Page,
@@ -40,9 +51,7 @@ async function fillRotationForm(
 
 test.describe("agent rotation flow — UI invariants", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await page.getByTestId("connect-mock").click();
-    await expect(page.getByTestId("connected-address")).toBeVisible();
+    await openDapp(page, endpoints);
   });
 
   test("rotation section renders step-1 and step-2 sub-sections", async ({ page }) => {

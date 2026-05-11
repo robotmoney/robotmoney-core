@@ -59,6 +59,7 @@ echo "🔑 Creating JWT Secret..."
 openssl rand -hex 32 | tr -d "\n" > $JWT_SECRET_PATH
 
 echo "🔐 Generating Validator Keys..."
+rm -rf /keys/out
 eth2-val-tools keystores \
   --insecure \
   --out-loc="/keys/out" \

@@ -15,6 +15,7 @@
 //! - On-chain poke helpers: [`Fixture::pause_gateway`], [`Fixture::fund_usdc`], etc.
 //! - [`prerequisites_available`] — check for docker/forge/cast on PATH.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -109,10 +110,100 @@ pub struct Fixture {
     /// Exposed via [`Fixture::tempdir`] so callers can write
     /// additional files (keystores, configs) into the same directory.
     tmp: TempDir,
+    chain_ports: ChainPorts,
+    rpc_port: u16,
     rpc_url: String,
     chain_id: u64,
     deployment: DeploymentJson,
     repo_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChainPorts {
+    rpc_port: u16,
+    ws_port: u16,
+    authrpc_port: u16,
+    beacon_port: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DappPorts {
+    postgres_port: u16,
+    explorer_api_port: u16,
+    dapp_port: u16,
+}
+
+fn allocate_unique_port(used: &mut HashSet<u16>) -> Result<u16, HarnessError> {
+    loop {
+        let port = test_utils::pick_free_port()?;
+        if used.insert(port) {
+            return Ok(port);
+        }
+    }
+}
+
+fn reserve_port(
+    used: &mut HashSet<u16>,
+    port: u16,
+    label: &'static str,
+) -> Result<u16, HarnessError> {
+    if used.insert(port) {
+        Ok(port)
+    } else {
+        Err(HarnessError::other(format!(
+            "{label} port {port} collides with another allocated port"
+        )))
+    }
+}
+
+fn localhost_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+fn browser_url(port: u16) -> String {
+    format!("http://localhost:{port}")
+}
+
+impl ChainPorts {
+    fn allocate() -> Result<Self, HarnessError> {
+        let mut used = HashSet::new();
+        Ok(Self {
+            rpc_port: allocate_unique_port(&mut used)?,
+            ws_port: allocate_unique_port(&mut used)?,
+            authrpc_port: allocate_unique_port(&mut used)?,
+            beacon_port: allocate_unique_port(&mut used)?,
+        })
+    }
+
+    fn rpc_url(&self) -> String {
+        localhost_url(self.rpc_port)
+    }
+}
+
+impl DappPorts {
+    fn allocate(dapp_port: Option<u16>, occupied_ports: &[u16]) -> Result<Self, HarnessError> {
+        let mut used = occupied_ports.iter().copied().collect::<HashSet<_>>();
+        let dapp_port = match dapp_port {
+            Some(port) => reserve_port(&mut used, port, "dapp")?,
+            None => allocate_unique_port(&mut used)?,
+        };
+        let postgres_port = allocate_unique_port(&mut used)?;
+        let explorer_api_port = allocate_unique_port(&mut used)?;
+
+        Ok(Self {
+            postgres_port,
+            explorer_api_port,
+            dapp_port,
+        })
+    }
+
+    fn dapp_url(&self) -> String {
+        browser_url(self.dapp_port)
+    }
+
+    fn explorer_api_url(&self) -> String {
+        browser_url(self.explorer_api_port)
+    }
 }
 
 impl Fixture {
@@ -138,7 +229,21 @@ impl Fixture {
         let repo_root = locate_repo_root()?;
         let tmp = TempDir::new()?;
         let compose_dir = repo_root.join("testing/ethereum-testnet/config");
-        let rpc_url = "http://127.0.0.1:8545".to_string();
+        let chain_ports = ChainPorts::allocate()?;
+        let rpc_url = chain_ports.rpc_url();
+        let cleanup = || {
+            let _ = Command::new("docker")
+                .args([
+                    "compose",
+                    "-f",
+                    "docker-compose.yaml",
+                    "down",
+                    "-v",
+                    "--remove-orphans",
+                ])
+                .current_dir(&compose_dir)
+                .status();
+        };
 
         let status = Command::new("docker")
             .arg("compose")
@@ -146,15 +251,22 @@ impl Fixture {
             .arg("docker-compose.yaml")
             .arg("up")
             .arg("-d")
+            .arg("--build")
+            .env("GETH_RPC_PORT", chain_ports.rpc_port.to_string())
+            .env("GETH_WS_PORT", chain_ports.ws_port.to_string())
+            .env("GETH_AUTHRPC_PORT", chain_ports.authrpc_port.to_string())
+            .env("BEACON_PORT", chain_ports.beacon_port.to_string())
             .current_dir(&compose_dir)
             .status()
             .map_err(HarnessError::from)?;
         if !status.success() {
+            cleanup();
             return Err(HarnessError::Docker(format!(
                 "compose up devnet failed: {status:?}"
             )));
         }
 
+        eprintln!("smoke-test: waiting for chain containers to become ready...");
         wait_for_rpc(&rpc_url, Duration::from_secs(180))?;
 
         // Wait for real block production: RPC up != consensus up.
@@ -191,6 +303,8 @@ impl Fixture {
         Ok(Fixture {
             compose_dir,
             tmp,
+            chain_ports,
+            rpc_port: chain_ports.rpc_port,
             rpc_url,
             chain_id,
             deployment,
@@ -202,6 +316,17 @@ impl Fixture {
 
     pub fn rpc_url(&self) -> &str {
         &self.rpc_url
+    }
+    pub fn rpc_port(&self) -> u16 {
+        self.rpc_port
+    }
+    fn occupied_ports(&self) -> [u16; 4] {
+        [
+            self.chain_ports.rpc_port,
+            self.chain_ports.ws_port,
+            self.chain_ports.authrpc_port,
+            self.chain_ports.beacon_port,
+        ]
     }
     pub fn chain_id(&self) -> u64 {
         self.chain_id
@@ -524,6 +649,9 @@ pub struct DappEndpoints {
 /// contracts are deployed.
 pub struct DappStack {
     compose_dir: PathBuf,
+    gateway_hex: String,
+    vault_hex: String,
+    gateway_runtime_hash: String,
     pub endpoints: DappEndpoints,
 }
 
@@ -534,13 +662,37 @@ impl DappStack {
     ///
     /// `gateway_hex` and `vault_hex` are the checksummed hex addresses
     /// returned by [`Fixture::gateway_hex`] and [`Fixture::vault_hex`].
-    pub fn boot(fixture: &Fixture) -> Result<Self, HarnessError> {
+    pub fn boot(fixture: &Fixture, dapp_port: Option<u16>) -> Result<Self, HarnessError> {
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
         let gateway_hex = fixture.gateway_hex();
         let vault_hex = fixture.vault_hex();
+        let gateway_runtime_hash = fixture.gateway_runtime_hash().to_string();
+        let ports = DappPorts::allocate(dapp_port, &fixture.occupied_ports())?;
+        let cleanup_gateway_hex = gateway_hex.to_string();
+        let cleanup_vault_hex = vault_hex.to_string();
+        let cleanup_runtime_hash = gateway_runtime_hash.clone();
+        let cleanup_compose_dir = compose_dir.clone();
+        let cleanup = move || {
+            let _ = Command::new("docker")
+                .args([
+                    "compose",
+                    "-f",
+                    "docker-compose.dapp.yaml",
+                    "down",
+                    "-v",
+                    "--remove-orphans",
+                ])
+                .env("VITE_GATEWAY_ADDRESS", &cleanup_gateway_hex)
+                .env("VITE_VAULT_ADDRESS", &cleanup_vault_hex)
+                .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &cleanup_runtime_hash)
+                .env("INDEXER_GATEWAY", &cleanup_gateway_hex)
+                .env("INDEXER_VAULT", &cleanup_vault_hex)
+                .current_dir(&cleanup_compose_dir)
+                .status();
+        };
 
-        let dapp_url = "http://127.0.0.1:5173".to_string();
-        let explorer_api_url = "http://127.0.0.1:8080".to_string();
+        let dapp_url = ports.dapp_url();
+        let explorer_api_url = ports.explorer_api_url();
         let rpc_url = fixture.rpc_url().to_string();
 
         eprintln!("smoke-test: building and starting dapp stack (this may take several minutes for first build)...");
@@ -552,14 +704,22 @@ impl DappStack {
             .arg("up")
             .arg("-d")
             .arg("--build")
+            .env("POSTGRES_PORT", ports.postgres_port.to_string())
+            .env("EXPLORER_API_PORT", ports.explorer_api_port.to_string())
+            .env("DAPP_PORT", ports.dapp_port.to_string())
             .env("VITE_GATEWAY_ADDRESS", gateway_hex)
             .env("VITE_VAULT_ADDRESS", vault_hex)
+            .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &gateway_runtime_hash)
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
             // RPC is on the host; containers reach it via host.docker.internal
-            .env("INDEXER_RPC_URL", "http://host.docker.internal:8545")
-            .env("VITE_FORK_RPC_URL", "http://localhost:8545")
-            .env("VITE_EXPLORER_API_URL", "http://localhost:8080")
+            .env(
+                "INDEXER_RPC_URL",
+                format!("http://host.docker.internal:{}", fixture.rpc_port()),
+            )
+            .env("VITE_FORK_RPC_URL", fixture.rpc_url())
+            .env("VITE_EXPLORER_API_URL", &explorer_api_url)
+            .env("VITE_DAPP_URL", &dapp_url)
             .env("INDEXER_CHAIN_ID", "32382")
             .env("INDEXER_CHAIN_NAME", "devnet")
             .env("EXPLORER_API_CHAIN_ID", "32382")
@@ -568,21 +728,27 @@ impl DappStack {
             .map_err(HarnessError::from)?;
 
         if !status.success() {
+            cleanup();
             return Err(HarnessError::Docker(
                 "compose up dapp stack failed".to_string(),
             ));
         }
 
+        eprintln!("smoke-test: waiting for dapp containers to become ready...");
         // Wait for explorer-api /health endpoint
         wait_for_http_ok(
             &format!("{explorer_api_url}/health"),
             Duration::from_secs(300),
-        )?;
+        )
+        .inspect_err(|_| cleanup())?;
         // Wait for dapp frontend
-        wait_for_http_ok(&dapp_url, Duration::from_secs(300))?;
+        wait_for_http_ok(&dapp_url, Duration::from_secs(300)).inspect_err(|_| cleanup())?;
 
         Ok(DappStack {
             compose_dir,
+            gateway_hex: gateway_hex.to_string(),
+            vault_hex: vault_hex.to_string(),
+            gateway_runtime_hash,
             endpoints: DappEndpoints {
                 rpc_url,
                 dapp_url,
@@ -603,6 +769,14 @@ impl Drop for DappStack {
                 "-v",
                 "--remove-orphans",
             ])
+            .env("VITE_GATEWAY_ADDRESS", &self.gateway_hex)
+            .env("VITE_VAULT_ADDRESS", &self.vault_hex)
+            .env(
+                "VITE_GATEWAY_EXPECTED_CODE_HASH",
+                &self.gateway_runtime_hash,
+            )
+            .env("INDEXER_GATEWAY", &self.gateway_hex)
+            .env("INDEXER_VAULT", &self.vault_hex)
             .current_dir(&self.compose_dir)
             .status();
     }

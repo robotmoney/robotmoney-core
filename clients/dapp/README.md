@@ -28,11 +28,12 @@ Deferred to follow-ups:
 ## Running
 
 ```sh
-pnpm install
-pnpm dev                              # http://127.0.0.1:5173
-pnpm test                             # Vitest
-VITE_USE_MOCK_WALLET=true pnpm dev    # mock wallet for E2E
-pnpm test:e2e:install && pnpm test:e2e
+bun install
+bun run dev                           # http://127.0.0.1:5173
+bun run test                          # Vitest unit tests
+# Playwright E2E boots a real Geth+Lighthouse devnet via globalSetup —
+# requires Docker + Foundry on PATH. See docs/testing/smoke-test-design.md.
+bunx playwright install --with-deps chromium && bun run test:e2e
 ```
 
 ## Env
@@ -42,7 +43,7 @@ pnpm test:e2e:install && pnpm test:e2e
 | `VITE_GATEWAY_ADDRESS` | `0x000…0` | Gateway contract address |
 | `VITE_VAULT_ADDRESS` | `0x000…0` | Vault contract address |
 | `VITE_FORK_RPC_URL` | `http://127.0.0.1:8545` | RPC endpoint |
+| `VITE_GATEWAY_EXPECTED_CODE_HASH` | unset | Keccak-256 of the gateway runtime bytecode. Admin writes refused until this matches on-chain. |
 | `VITE_GATEWAY_CODE_HASH_VERIFIED` | `true` | Set `false` to test refusal path |
 | `VITE_ENV_CLASS` | `fork` | One of `fork` / `devnet` / `testnet` / `mainnet` |
-| `VITE_USE_MOCK_WALLET` | unset | `true` to enable wagmi mock connector |
 | `VITE_BROWSER_KEYGEN` | unset (false) | Per ADR §3.1 — enable only after security review |

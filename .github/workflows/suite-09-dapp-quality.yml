@@ -53,30 +53,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - uses: oven-sh/setup-bun@v2
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: pnpm
-          cache-dependency-path: clients/dapp/pnpm-lock.yaml
 
-      - name: pnpm install
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Prettier check
-        run: pnpm fmt
+        run: bun run fmt
 
       - name: ESLint
-        run: pnpm lint
+        run: bun run lint
 
       - name: TypeScript type check
-        run: pnpm exec tsc -b
+        run: bunx tsc -b
 
       - name: Vitest
-        run: pnpm test
+        run: bun run test
 
       - name: Production build
-        run: pnpm build
+        run: bun run build

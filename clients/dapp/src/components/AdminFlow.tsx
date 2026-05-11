@@ -312,8 +312,7 @@ export function AdminFlow(props: AdminFlowProps) {
             ))}
             {connectors.length === 0 && (
               <p data-testid="no-connectors">
-                No wallet connector configured. Set VITE_USE_MOCK_WALLET=true for tests, or install
-                a browser wallet.
+                No browser wallet detected. Install a wallet extension (e.g. MetaMask) to continue.
               </p>
             )}
           </>

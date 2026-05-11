@@ -27,17 +27,13 @@ const gateway = (env.VITE_GATEWAY_ADDRESS ??
 const vault = (env.VITE_VAULT_ADDRESS ?? "0x0000000000000000000000000000000000000000") as Address;
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
-// Test-only bypass: set VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST=true in
-// Playwright E2E builds to skip bytecode fetch and return verified state.
-// Must never be set in production deployments.
-const verifyBypassForTest = env.VITE_GATEWAY_VERIFY_BYPASS_FOR_TEST === "true";
 
 /**
  * Inner bootstrap component that runs inside WagmiProvider so the
  * useGatewayVerifier hook has access to the wagmi context.
  */
 function App() {
-  const verificationState = useGatewayVerifier(gateway, expectedCodeHash, verifyBypassForTest);
+  const verificationState = useGatewayVerifier(gateway, expectedCodeHash);
   const gatewayCodeHashVerified = verificationState.status === "verified";
 
   return (

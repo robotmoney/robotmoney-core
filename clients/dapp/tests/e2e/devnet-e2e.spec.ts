@@ -1,80 +1,44 @@
 /**
- * Playwright E2E — full-stack Geth+Lighthouse devnet.
+ * Playwright E2E — full-stack Geth+Lighthouse devnet smoke.
  *
- * Gated by DEVNET_E2E_ENABLED=1. Without that flag the entire describe
- * block is skipped so `pnpm test:e2e` stays green with no extra deps.
+ * devnet-global-setup.ts has already booted `cargo run -p smoke-test --
+ * --full-stack` and written the endpoint summary (URLs, contract
+ * addresses, test-EOA private keys) to DEVNET_ENDPOINTS_FILE.
  *
- * When enabled, devnet-global-setup.ts has already:
- *   1. Booted `cargo run --bin smoke-test -- --full-stack`.
- *   2. Parsed the endpoint summary and written it to a JSON file whose
- *      path is in DEVNET_ENDPOINTS_FILE.
- *   3. Set baseURL in the Playwright config to the dapp_url from the
- *      summary (done via playwright.config.ts conditional logic).
+ * Asserts:
+ *   (A) The dapp, built with the deployed gateway's runtime hash pinned,
+ *       renders the gateway address in the DOM once the admin wallet
+ *       connects. Verifies that the prod-bit-identical bundle reaches
+ *       the verified state against a real chain.
+ *   (B) Calling authorizeAgent through the dapp's prod injected()
+ *       connector mines on real Geth and sets AGENT_ROLE on-chain.
  *
- * This spec asserts:
- *   (A) The dapp renders the correct gateway address injected at build time.
- *   (B) The mock-wallet connector submits an authorizeAgent transaction that
- *       mines on real Geth (12s block time). We poll eth_call with a 120s
- *       timeout and 3s interval until AGENT_ROLE is confirmed on-chain.
- *
- * Canonical: docs/implementation-plan.md §10.5, issue #230.
+ * Canonical: docs/testing/smoke-test-design.md, issue #245.
  */
 
 import { test, expect } from "@playwright/test";
-import * as fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { DevnetEndpoints } from "./devnet-global-setup";
-
-// ---------------------------------------------------------------------------
-// Gate
-// ---------------------------------------------------------------------------
-
-const ENABLED = process.env.DEVNET_E2E_ENABLED === "1";
+import type { Hex } from "viem";
+import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
+import { injectWallet, connectInjectedWallet } from "./helpers/wallet";
 
 // keccak256("AGENT_ROLE") — matches contracts/gateway/AccessRoles.sol.
-// Hard-coded constant to avoid a round-trip; the fork-roundtrip spec
-// validates this at runtime against the deployed contract.
 const AGENT_ROLE = "0xcab5a0bfe0b79d2c4b1c2e02599fa044d115b7511f9659307cb4276950967709";
 
 // Polling params tuned for real Geth block times (~12s per block).
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 120_000;
 
-// ---------------------------------------------------------------------------
-// Endpoint loading
-// ---------------------------------------------------------------------------
-
-function loadEndpoints(): DevnetEndpoints {
-  const file = process.env.DEVNET_ENDPOINTS_FILE;
-  if (!file) {
-    throw new Error(
-      "devnet-e2e: DEVNET_ENDPOINTS_FILE is not set. " +
-        "Make sure devnet-global-setup ran successfully.",
-    );
-  }
-  try {
-    const raw = fs.readFileSync(file, "utf8");
-    return JSON.parse(raw) as DevnetEndpoints;
-  } catch (err) {
-    throw new Error(`devnet-e2e: failed to read endpoints file ${file}: ${(err as Error).message}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// eth_call helpers (same pattern as fork-roundtrip.spec.ts)
-// ---------------------------------------------------------------------------
-
 async function ethCall(rpc: string, to: string, data: string): Promise<string> {
-  const body = {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "eth_call",
-    params: [{ to, data }, "latest"],
-  };
   const res = await fetch(rpc, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to, data }, "latest"],
+    }),
   });
   if (!res.ok) throw new Error(`eth_call HTTP ${res.status}`);
   const j = (await res.json()) as { result?: string; error?: { message: string } };
@@ -96,10 +60,6 @@ async function hasRole(
   return /1$/.test(result.trim());
 }
 
-/**
- * Poll hasRole until it returns `expectValue` or POLL_TIMEOUT_MS elapses.
- * Uses POLL_INTERVAL_MS between checks to be kind to real Geth (~12s blocks).
- */
 async function waitForRole(
   rpc: string,
   gateway: string,
@@ -121,13 +81,7 @@ async function waitForRole(
   );
 }
 
-// ---------------------------------------------------------------------------
-// Spec
-// ---------------------------------------------------------------------------
-
 test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
-  test.skip(!ENABLED, "DEVNET_E2E_ENABLED=1 not set; full-stack devnet not booted.");
-
   let endpoints: DevnetEndpoints;
 
   test.beforeAll(() => {
@@ -135,63 +89,54 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
   });
 
   test("(A) dapp renders the deployed gateway address in the DOM", async ({ page }) => {
-    // Navigate to the dapp (baseURL is set to dapp_url by playwright.config.ts
-    // when DEVNET_E2E_ENABLED=1).
-    await page.goto("/");
+    await injectWallet(page, {
+      privateKey: endpoints.admin_private_key as Hex,
+      rpcUrl: endpoints.rpc_url,
+      chainId: endpoints.chain_id,
+    });
+    await page.goto(endpoints.dapp_url);
+    await connectInjectedWallet(page);
 
-    // The gateway address is baked into the dapp at build time via
-    // VITE_GATEWAY_ADDRESS and rendered inside the AdminFlow as part of the
-    // verification status section or elsewhere in the DOM.
-    // We assert the checksummed address text appears anywhere on the page.
-    const gatewayAddr = endpoints.gateway_addr;
-    // Normalize to lowercase for comparison because the dapp may render
-    // checksummed (EIP-55) form.
-    const gatewayLower = gatewayAddr.toLowerCase();
-    const locator = page.locator(`text=${gatewayAddr}`).or(page.locator(`text=${gatewayLower}`));
-    await expect(locator.first()).toBeVisible({ timeout: 30_000 });
+    // Verification must pass — the dapp container was built with the
+    // real runtime hash. ConfigExportPanel then renders the gateway
+    // address inside its TOML output (case-insensitive: smoke-test
+    // emits lowercase, dapp may render EIP-55 checksummed form).
+    await expect(page.getByTestId("gateway-verification-ok")).toBeVisible({ timeout: 30_000 });
+    const escaped = endpoints.gateway_addr.replace(/^0x/, "");
+    const re = new RegExp(`0x${escaped}`, "i");
+    await expect(page.getByText(re).first()).toBeVisible({ timeout: 30_000 });
   });
 
   test("(B) authorizeAgent mines on Geth and AGENT_ROLE is confirmed on-chain", async ({
     page,
   }) => {
-    // Use the devnet agent address from smoke-test lib.
-    // The agent EOA derives from AGENT_PRIVATE_KEY in testing/smoke-test/src/lib.rs
-    // (0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241 — printed in fixture stdout as
-    // `agent_addr=0x...`). We read it from the endpoint JSON instead of hard-coding.
-    // The share-receiver address is similarly fixed by the devnet fixture.
-    // We use a known devnet-fixture secondary EOA for share_receiver.
-    const SHARE_RECEIVER = "0x1CBd3b2770909D4e10f157cABC84C7264073C9Ec";
+    await injectWallet(page, {
+      privateKey: endpoints.admin_private_key as Hex,
+      rpcUrl: endpoints.rpc_url,
+      chainId: endpoints.chain_id,
+    });
+    await page.goto(endpoints.dapp_url);
+    await connectInjectedWallet(page);
 
-    // Derive agent address from the endpoint summary (smoke-test prints `agent_addr=`
-    // as a plain kv line before the endpoint summary block).
-    // If not present in the endpoints file, fall back to the known fixture constant.
-    const agentAddr = endpoints.agent_addr ?? "0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241";
+    await page.getByTestId("agent-input").fill(endpoints.agent_addr);
+    await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
 
-    await page.goto("/");
-
-    // Connect via the mock wallet connector.
-    await page.getByTestId("connect-mock").click();
-    await expect(page.getByTestId("connected-address")).toBeVisible({ timeout: 10_000 });
-
-    // Fill the authorize form.
-    await page.getByTestId("agent-input").fill(agentAddr);
-    await page.getByTestId("shareReceiver-input").fill(SHARE_RECEIVER);
-
-    // Wait for a valid (ok) preview to appear.
     const authorizePreview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
-    await expect(authorizePreview).toBeVisible({ timeout: 15_000 });
+    await expect(authorizePreview).toBeVisible({ timeout: 30_000 });
 
-    // Submit the authorizeAgent transaction.
     await page.getByTestId("authorize-submit").click();
 
-    // Poll eth_call until AGENT_ROLE is set on-chain.
-    // Real Geth mines ~12s per block; we allow up to 120s total.
     console.log(
       `devnet-e2e: polling for AGENT_ROLE on ${endpoints.rpc_url}, ` +
-        `gateway=${endpoints.gateway_addr}, agent=${agentAddr}`,
+        `gateway=${endpoints.gateway_addr}, agent=${endpoints.agent_addr}`,
     );
-    await waitForRole(endpoints.rpc_url, endpoints.gateway_addr, AGENT_ROLE, agentAddr, true);
-
+    await waitForRole(
+      endpoints.rpc_url,
+      endpoints.gateway_addr,
+      AGENT_ROLE,
+      endpoints.agent_addr,
+      true,
+    );
     console.log("devnet-e2e: AGENT_ROLE confirmed on-chain.");
   });
 });
