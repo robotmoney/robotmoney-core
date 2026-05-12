@@ -118,6 +118,10 @@ struct DeploymentJson {
     chain_id: u64,
     usdc: String,
     vault: String,
+    /// PassthroughAdapter address registered with the vault at deploy time.
+    /// Absent on legacy deployments (pre-#277); those used MockVault with no adapter.
+    #[serde(default)]
+    adapter: String,
     gateway: String,
     #[serde(default)]
     #[allow(dead_code)]
@@ -445,6 +449,15 @@ impl Fixture {
     }
     pub fn vault(&self) -> Address {
         parse_addr(&self.deployment.vault)
+    }
+    /// PassthroughAdapter address registered with the vault at deploy time.
+    /// Returns `Address::ZERO` for legacy deployments that predate issue #277.
+    pub fn adapter(&self) -> Address {
+        if self.deployment.adapter.is_empty() {
+            Address::ZERO
+        } else {
+            parse_addr(&self.deployment.adapter)
+        }
     }
     pub fn agent(&self) -> Address {
         parse_addr(&self.deployment.agent)

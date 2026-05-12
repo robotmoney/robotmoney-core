@@ -6,13 +6,16 @@ import {Test} from "forge-std/Test.sol";
 import {Deploy} from "../script/Deploy.s.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
-import {MockVault} from "../gateway/MockVault.sol";
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 
 /// @dev Exercises the deploy script in-process and asserts the post-deploy
 ///      invariants the operator and downstream tooling rely on (issue #10).
+///      The script now deploys RobotMoneyVault + PassthroughAdapter (issue #277)
+///      instead of MockVault. MockVault is retained only for gateway unit tests.
 ///      The script always binds the gateway to an externally-supplied USDC
 ///      token; this test deploys a `TestERC20` helper and passes its address
 ///      in. The smoke-test devnet does the same with the canonical Base USDC
@@ -43,8 +46,16 @@ contract DeployTest is Test {
         // Gateway pins the right token + vault.
         assertEq(d.gateway.usdc(), d.usdc, "usdc mismatch");
         assertEq(d.gateway.vault(), address(d.vault), "vault mismatch");
-        assertEq(address(d.vault.assetToken()), d.usdc, "vault.asset mismatch");
+        // RobotMoneyVault exposes asset() (ERC-4626) not assetToken()
+        assertEq(d.vault.asset(), d.usdc, "vault.asset mismatch");
         assertEq(d.usdc, address(usdc), "usdc passthrough");
+
+        // PassthroughAdapter is wired into the vault with the correct USDC and VAULT addresses.
+        assertEq(address(d.adapter.USDC()), d.usdc, "adapter.USDC mismatch");
+        assertEq(d.adapter.VAULT(), address(d.vault), "adapter.VAULT mismatch");
+
+        // Vault has exactly one active adapter registered.
+        assertEq(d.vault.activeAdapterCount(), 1, "vault should have 1 active adapter");
 
         // Admin + Pauser hold their roles.
         assertTrue(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), admin), "admin role");

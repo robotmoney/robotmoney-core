@@ -69,10 +69,11 @@ fn deployed_addresses_are_non_zero() {
     assert_ne!(fx.gateway(), Address::ZERO, "gateway is zero");
     assert_ne!(fx.usdc(), Address::ZERO, "usdc is zero");
     assert_ne!(fx.vault(), Address::ZERO, "vault is zero");
+    assert_ne!(fx.adapter(), Address::ZERO, "adapter is zero");
     assert_ne!(fx.agent(), Address::ZERO, "agent is zero");
 }
 
-/// Gateway, USDC, and vault contracts have bytecode deployed.
+/// Gateway, USDC, vault, and adapter contracts have bytecode deployed.
 #[test]
 fn contracts_have_code() {
     if skip_if_no_prereqs("contracts_have_code") {
@@ -83,6 +84,7 @@ fn contracts_have_code() {
         ("gateway", fx.gateway()),
         ("usdc", fx.usdc()),
         ("vault", fx.vault()),
+        ("adapter", fx.adapter()),
     ] {
         let code = get_code(fx.rpc_url(), addr);
         assert!(
@@ -90,6 +92,40 @@ fn contracts_have_code() {
             "{name} at {addr:#x} has no bytecode (got {code:?})"
         );
     }
+}
+
+/// Vault is a RobotMoneyVault with exitFeeBps=0 and at least one active adapter.
+/// Issue #277: validates RobotMoneyVault on-chain state via RPC reads.
+#[test]
+fn vault_has_zero_exit_fee_and_one_active_adapter() {
+    if skip_if_no_prereqs("vault_has_zero_exit_fee_and_one_active_adapter") {
+        return;
+    }
+    let fx = fixture();
+
+    // exitFeeBps() selector: keccak256("exitFeeBps()")[0..4] = 0x57b17a52
+    let fee_hex: String = rpc_call(
+        fx.rpc_url(),
+        "eth_call",
+        serde_json::json!([
+            {"to": format!("{:#x}", fx.vault()), "data": "0x57b17a52"},
+            "latest"
+        ]),
+    );
+    let fee = u256_from_hex(&fee_hex);
+    assert_eq!(fee, 0u128, "vault exitFeeBps should be 0");
+
+    // activeAdapterCount() selector: keccak256("activeAdapterCount()")[0..4] = 0x47a0aa75
+    let count_hex: String = rpc_call(
+        fx.rpc_url(),
+        "eth_call",
+        serde_json::json!([
+            {"to": format!("{:#x}", fx.vault()), "data": "0x47a0aa75"},
+            "latest"
+        ]),
+    );
+    let count = u256_from_hex(&count_hex);
+    assert!(count >= 1, "vault should have at least one active adapter, got {count}");
 }
 
 // -- EOA funding sanity -----------------------------------------------
@@ -220,6 +256,16 @@ fn get_code(url: &str, addr: Address) -> String {
         "eth_getCode",
         serde_json::json!([format!("{addr:#x}"), "latest"]),
     )
+}
+
+/// Decode a 32-byte ABI-encoded uint256 result from an eth_call hex string
+/// into a u128 (sufficient for any value expected in these tests).
+fn u256_from_hex(hex: &str) -> u128 {
+    let stripped = hex.trim_start_matches("0x");
+    // Take the last 16 bytes (32 hex chars) — enough for u128
+    let len = stripped.len();
+    let slice = if len > 32 { &stripped[len - 32..] } else { stripped };
+    u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
 fn gateway_is_paused(fx: &Fixture) -> bool {
