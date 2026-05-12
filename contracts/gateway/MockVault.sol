@@ -8,11 +8,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 /// @title MockVault
 /// @notice Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC`
-///         shares 1:1 against deposited USDC. Just enough surface for the
-///         gateway's `vault.deposit()` call to succeed and for tests to assert
-///         share routing.
-/// @dev Out of scope: yield, fees, withdraw/redeem, fee-on-transfer support,
-///      proxy upgradeability. This contract is a TEST FIXTURE only.
+///         shares 1:1 against deposited USDC and redeems 1:1 with no exit fee.
+///         Covers the full deposit→redeem round-trip exercised by the dapp e2e
+///         (issue #257). This contract is a TEST FIXTURE only.
 contract MockVault is ERC20 {
     using SafeERC20 for IERC20;
 
@@ -20,17 +18,35 @@ contract MockVault is ERC20 {
     error ZeroAmount();
     /// @notice Share receiver is the zero address.
     error ZeroReceiver();
+    /// @notice Owner has fewer shares than the requested redeem amount.
+    error InsufficientShares();
 
     /// @notice Underlying asset, pinned at construction.
     IERC20 public immutable assetToken;
 
-    /// @notice ERC-4626-shaped Deposit event so off-chain indexers / tests
-    ///         can watch share routing.
+    /// @notice No exit fee — mock fixture only.
+    uint256 public constant exitFeeBps = 0;
+
+    /// @notice ERC-4626-shaped Deposit event.
     /// @param sender   Address that called `deposit` and supplied the assets.
     /// @param receiver Address that received the minted shares.
     /// @param assets   Amount of underlying USDC deposited.
     /// @param shares   Amount of `rmUSDC` shares minted (1:1 with assets).
     event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
+
+    /// @notice ERC-4626-shaped Withdraw event.
+    /// @param sender   Address that called `redeem`.
+    /// @param receiver Address that received the USDC.
+    /// @param owner    Address whose shares were burned.
+    /// @param assets   Amount of USDC transferred to receiver.
+    /// @param shares   Amount of `rmUSDC` shares burned.
+    event Withdraw(
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
+    );
 
     constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC") {
         assetToken = IERC20(asset_);
@@ -65,5 +81,43 @@ contract MockVault is ERC20 {
         _mint(receiver, shares);
 
         emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    /// @notice ERC-4626-style redeem. Burns `shares` from `owner` and
+    ///         transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
+    /// @param  shares   Amount of `rmUSDC` shares to burn.
+    /// @param  receiver Recipient of the redeemed USDC.
+    /// @param  owner    Share owner whose balance is debited.
+    /// @return assets   Amount of USDC transferred (== shares, 1:1).
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        virtual
+        returns (uint256 assets)
+    {
+        if (shares == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroReceiver();
+        if (balanceOf(owner) < shares) revert InsufficientShares();
+
+        if (owner != msg.sender) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+
+        _burn(owner, shares);
+        assets = shares; // 1:1 by construction
+        assetToken.safeTransfer(receiver, assets);
+
+        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+    }
+
+    /// @notice Maximum shares redeemable for `owner` (their full balance).
+    /// @param  owner Address to query.
+    function maxRedeem(address owner) external view returns (uint256) {
+        return balanceOf(owner);
+    }
+
+    /// @notice Preview assets returned for redeeming `shares` (1:1, no exit fee).
+    /// @param  shares Amount of `rmUSDC` shares to preview.
+    function previewRedeem(uint256 shares) external pure returns (uint256) {
+        return shares;
     }
 }

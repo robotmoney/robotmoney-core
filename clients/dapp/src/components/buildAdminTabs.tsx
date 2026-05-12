@@ -63,7 +63,17 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
   ];
 
   tabs.push(
-    { id: "deposit-withdraw", label: "Deposit & Withdraw", content: <DepositWithdrawTab /> },
+    {
+      id: "deposit-withdraw",
+      label: "Deposit & Withdraw",
+      content: (
+        <DepositWithdrawTab
+          vaultAddress={a.vaultAddress}
+          usdcAddress={a.usdcAddress}
+          ctx={{ ...a.ctx, vault: a.vaultAddress }}
+        />
+      ),
+    },
     {
       id: "pause",
       label: "Pause",

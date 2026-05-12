@@ -178,9 +178,8 @@ pub const BASE_CHAIN_ID: u64 = 8453;
 /// [`ForkFixture::apply_usdc_storage_seed`] to verify the
 /// `address(0)` admin / `address(0)` caller collision documented
 /// in issue #249 is resolved after the seed is applied.
-pub const USDC_PROXY_ADMIN_SLOT: B256 = alloy_primitives::b256!(
-    "10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b"
-);
+pub const USDC_PROXY_ADMIN_SLOT: B256 =
+    alloy_primitives::b256!("10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b");
 
 /// Path (relative to workspace root) of the committed USDC storage
 /// seed: proxy storage slots + implementation address and bytecode
@@ -273,9 +272,10 @@ impl UsdcStorageSeed {
         // Sanity: the seed must describe the canonical Base USDC
         // proxy, otherwise we would silently corrupt a different
         // account's storage on the fork.
-        let got: Address = seed.proxy.address.parse().map_err(|e| {
-            HarnessError::Rpc(format!("usdc-storage-seed: bad proxy address: {e}"))
-        })?;
+        let got: Address =
+            seed.proxy.address.parse().map_err(|e| {
+                HarnessError::Rpc(format!("usdc-storage-seed: bad proxy address: {e}"))
+            })?;
         if got != addresses::USDC {
             return Err(HarnessError::Rpc(format!(
                 "usdc-storage-seed: proxy address mismatch: seed {got:#x} vs canonical USDC {:#x}",
@@ -504,8 +504,11 @@ impl ForkFixture {
         //    `totalSupply` increments don't wrap.
         let whale_balance_slot = balances_mapping_slot(addresses::USDC_WHALE, 9);
         let whale_grant = U256::from(u128::MAX);
-        self.rpc
-            .set_storage_at(addresses::USDC, whale_balance_slot, u256_to_b256(whale_grant))?;
+        self.rpc.set_storage_at(
+            addresses::USDC,
+            whale_balance_slot,
+            u256_to_b256(whale_grant),
+        )?;
 
         // 4. Regression guard: after replay the admin slot MUST be
         //    non-zero. If it isn't, the proxy admin collision will

@@ -3404,7 +3404,6 @@ dependencies = [
  "log",
  "time",
  "tracing",
- "tracing-log",
  "tracing-subscriber",
 ]
 

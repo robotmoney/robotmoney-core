@@ -24,7 +24,6 @@
 
 use std::sync::OnceLock;
 
-use tracing_log::LogTracer;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::EnvFilter;
@@ -88,10 +87,11 @@ pub fn init_service(service_name: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    // Capture every `log::` call from dependencies into the tracing
-    // subscriber we're about to install. Idempotent — `LogTracer::init`
-    // returns Err on second call which we ignore.
-    let _ = LogTracer::init();
+    // `tracing-subscriber`'s default `tracing-log` feature installs the
+    // `log` → `tracing` bridge for us when `try_init()` runs below, so we
+    // do not call `LogTracer::init()` here. Calling it manually races
+    // with `try_init()` and produces "attempted to set a logger after the
+    // logging system was already initialized" on service boot.
 
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));

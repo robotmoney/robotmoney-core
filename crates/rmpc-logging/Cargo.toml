@@ -23,6 +23,9 @@ publish = false
 [dependencies]
 log = "0.4"
 tracing = "0.1"
-tracing-log = "0.2"
+# `tracing-log` is installed transitively by `tracing-subscriber`'s
+# default features and wired in by `try_init()`. We do not depend on it
+# directly because manually calling `LogTracer::init()` races the
+# subscriber install and panics service boot (see lib.rs).
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 time = { version = "0.3", default-features = false, features = ["formatting", "macros"] }

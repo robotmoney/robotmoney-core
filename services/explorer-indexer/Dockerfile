@@ -15,8 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libs
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only the crates required to resolve the explorer-indexer build:
-# the crate itself, its embedded migrations, and the path dev-dependency.
+# the crate itself, its embedded migrations, the workspace logging facade
+# (issue #247, referenced via `../../crates/rmpc-logging`), and the path
+# dev-dependencies.
 COPY services/explorer-indexer ./services/explorer-indexer
+COPY crates/rmpc-logging ./crates/rmpc-logging
 COPY testing/fork-e2e-rust ./testing/fork-e2e-rust
 COPY testing/test-utils ./testing/test-utils
 

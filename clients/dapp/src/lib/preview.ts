@@ -8,7 +8,17 @@
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
 import { gatewayAbi, ROLE_HASH } from "./abi";
-import type { AdminActionName, RoleName } from "./abi";
+import type { AdminActionName, RoleName, VaultActionName } from "./abi";
+
+/**
+ * Union of every function name that may appear in a structured Preview.
+ * Gateway admin actions cover the depositor-owned authorize/revoke/policy
+ * surface and the pause/role kill switches; vault actions cover the
+ * ERC-4626 deposit/redeem entrypoints driven by the Deposit/Withdraw tab
+ * (issue #257). Both flow through the same TxPreview component, so the
+ * preview success type accepts either.
+ */
+export type PreviewFunctionName = AdminActionName | VaultActionName;
 
 export type RiskClass = "low" | "medium" | "high" | "unsafe";
 
@@ -38,7 +48,7 @@ interface PreviewSuccess {
   ok: true;
   target: Address;
   targetCodeHashKnown: boolean;
-  functionName: AdminActionName;
+  functionName: PreviewFunctionName;
   selector: Hex;
   args: PreviewArg[];
   effect: string;
