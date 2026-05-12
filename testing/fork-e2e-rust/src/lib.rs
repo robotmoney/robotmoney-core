@@ -172,6 +172,120 @@ const LOCAL_LAG_BLOCKS: u64 = 50;
 /// per §3.1 of the ADR.
 pub const BASE_CHAIN_ID: u64 = 8453;
 
+/// Storage slot used by the Base USDC `FiatTokenProxy` to record
+/// the proxy admin. Equal to `keccak256("org.zeppelinos.proxy.admin")`
+/// (see Centre's `AdminUpgradeabilityProxy` source). Used by
+/// [`ForkFixture::apply_usdc_storage_seed`] to verify the
+/// `address(0)` admin / `address(0)` caller collision documented
+/// in issue #249 is resolved after the seed is applied.
+pub const USDC_PROXY_ADMIN_SLOT: B256 = alloy_primitives::b256!(
+    "10d6a54a4754c8869d6886b5f5d7fbfa5b4522237ea5c60d11bc4e7a1ff9390b"
+);
+
+/// Path (relative to workspace root) of the committed USDC storage
+/// seed: proxy storage slots + implementation address and bytecode
+/// captured from Base mainnet. Applied by
+/// [`ForkFixture::apply_usdc_storage_seed`] on every boot so the
+/// checked-in `--load-state` snapshot — which only carries the
+/// proxy's runtime bytecode, not its admin/impl storage — becomes
+/// a fully-functional USDC at the canonical address.
+///
+/// Authored offline by `scripts/devnet/snapshot-fork.sh` and
+/// consumed both here (fork-e2e harness) and by
+/// `testing/smoke-test/src/genesis_alloc.rs`.
+const USDC_STORAGE_SEED_REL: &str = "testing/fixtures/fork-state/usdc-storage-seed.json";
+
+/// Typed view over the committed USDC storage seed JSON. Kept
+/// minimal — we only consume `proxy.storage` and `implementation.*`;
+/// any other top-level fields (`fork_block`, `chain`, ...) are
+/// metadata for humans and are ignored here.
+#[derive(Debug, Clone, Deserialize)]
+struct UsdcStorageSeed {
+    proxy: UsdcProxySeed,
+    implementation: UsdcImplSeed,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UsdcProxySeed {
+    /// 0x-hex address of the proxy. Sanity-checked against
+    /// [`addresses::USDC`] at load time.
+    address: String,
+    /// `slot_hex -> value_hex`. Preserves insertion order from the
+    /// authored JSON so admin/impl slots are written before the
+    /// implementation bytecode is installed.
+    storage: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct UsdcImplSeed {
+    /// 0x-hex address that the proxy's impl slot points to. We
+    /// `anvil_setCode` the bytecode here so delegatecalls resolve.
+    address: String,
+    /// 0x-prefixed runtime bytecode for the implementation.
+    code: String,
+}
+
+/// Compute the storage slot of `balances[holder]` for a Solidity
+/// `mapping(address => uint256) balances` declared at base slot
+/// `mapping_slot`. Per Solidity layout: `slot =
+/// keccak256(abi.encode(key, base_slot))`, where key (address) is
+/// left-padded to 32 bytes and base_slot is a uint256.
+///
+/// FiatTokenV1 / FiatTokenV2_x declare `balances` at slot 9 on the
+/// Base USDC proxy — kept as the caller's responsibility so this
+/// helper is reusable for any USDC-shaped ERC20 storage layout.
+fn balances_mapping_slot(holder: Address, mapping_slot: u64) -> B256 {
+    let mut buf = [0u8; 64];
+    buf[12..32].copy_from_slice(holder.as_slice());
+    buf[63] = mapping_slot as u8;
+    // u64 mapping_slot fits in the low byte for all in-use slots
+    // (1..32); cover the remaining bytes for safety.
+    let slot_be = mapping_slot.to_be_bytes();
+    buf[56..64].copy_from_slice(&slot_be);
+    B256::from(keccak256(buf))
+}
+
+/// Pack a [`U256`] into a 32-byte storage word (big-endian).
+fn u256_to_b256(v: U256) -> B256 {
+    B256::from(v.to_be_bytes::<32>())
+}
+
+impl UsdcStorageSeed {
+    /// Read + parse the seed at the canonical workspace-relative
+    /// path. Returns a clear `HarnessError::Rpc` (carrying the path)
+    /// if the file is missing or malformed — the fork-e2e suite has
+    /// no other way of working around this so a hard failure here
+    /// is the right outcome.
+    fn load_default() -> Result<Self, HarnessError> {
+        let path = workspace_root()
+            .map(|r| r.join(USDC_STORAGE_SEED_REL))
+            .ok_or_else(|| {
+                HarnessError::Rpc(format!(
+                    "usdc-storage-seed: workspace root not found while resolving {USDC_STORAGE_SEED_REL}"
+                ))
+            })?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| {
+            HarnessError::Rpc(format!("usdc-storage-seed: read {}: {e}", path.display()))
+        })?;
+        let seed: UsdcStorageSeed = serde_json::from_str(&raw).map_err(|e| {
+            HarnessError::Rpc(format!("usdc-storage-seed: parse {}: {e}", path.display()))
+        })?;
+        // Sanity: the seed must describe the canonical Base USDC
+        // proxy, otherwise we would silently corrupt a different
+        // account's storage on the fork.
+        let got: Address = seed.proxy.address.parse().map_err(|e| {
+            HarnessError::Rpc(format!("usdc-storage-seed: bad proxy address: {e}"))
+        })?;
+        if got != addresses::USDC {
+            return Err(HarnessError::Rpc(format!(
+                "usdc-storage-seed: proxy address mismatch: seed {got:#x} vs canonical USDC {:#x}",
+                addresses::USDC
+            )));
+        }
+        Ok(seed)
+    }
+}
+
 /// Effective fork pin resolved from environment.
 #[derive(Debug, Clone)]
 pub struct ForkPin {
@@ -296,14 +410,117 @@ impl ForkFixture {
             )));
         }
 
-        Ok(ForkFixture {
+        let fx = ForkFixture {
             backend,
             rpc_url,
             rpc_label,
             pin,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
-        })
+        };
+        fx.apply_usdc_storage_seed()?;
+        Ok(fx)
+    }
+
+    /// Apply the canonical Base USDC storage seed to the proxy on the
+    /// running anvil backend so the forked USDC behaves like the
+    /// production token.
+    ///
+    /// Background (issue #249): the checked-in `--load-state` fixture
+    /// captures the USDC `FiatTokenProxy` runtime bytecode but NOT its
+    /// admin / implementation / token-config storage (those slots are
+    /// lazy-fetched on demand against the live upstream, and `anvil
+    /// --dump-state` only persists *modified* accounts). On the
+    /// fixture, the admin slot, implementation slot, name/symbol
+    /// slots, and balances are all `address(0)` / empty. Two
+    /// symptoms follow:
+    ///   1. `ifAdmin` collision — `eth_call` with the default
+    ///      `from = address(0)` matches the empty admin slot, and the
+    ///      proxy reverts non-admin selectors with `"Cannot call
+    ///      fallback function from the proxy admin"` before reaching
+    ///      any implementation.
+    ///   2. Empty delegatecall target — even after the admin slot is
+    ///      repaired, the `DELEGATECALL` resolves to `address(0)` and
+    ///      returns `0x` (no revert), which downstream callers decode
+    ///      as a buffer overrun.
+    ///
+    /// rmpc is the production client and must never spoof `from` or
+    /// branch on environment — so the fix is fully inside the fork
+    /// fixture: load `testing/fixtures/fork-state/usdc-storage-seed.json`
+    /// (the same artifact consumed by `testing/smoke-test` for its
+    /// genesis-alloc devnet) and replay each slot with
+    /// `anvil_setStorageAt`, plus `anvil_setCode` for the
+    /// implementation contract pointed to by the proxy's impl slot.
+    ///
+    /// Idempotent / safe on live forks: if the proxy admin slot is
+    /// already non-zero (e.g. a live `RMPC_FORK_RPC_URL` upstream
+    /// where the real admin is set), the seed is skipped entirely.
+    fn apply_usdc_storage_seed(&self) -> Result<(), HarnessError> {
+        // If the upstream has already populated the admin slot, the
+        // forked USDC is real; do nothing.
+        let admin_before = self
+            .rpc
+            .get_storage_at(addresses::USDC, USDC_PROXY_ADMIN_SLOT)?;
+        if admin_before != B256::ZERO {
+            return Ok(());
+        }
+
+        let seed = UsdcStorageSeed::load_default()?;
+
+        // 1. Apply proxy storage slots (admin, impl, owner, name,
+        //    symbol, decimals, totalSupply, ...). The admin and impl
+        //    slots together break both symptoms above.
+        for (slot_hex, value_hex) in &seed.proxy.storage {
+            let slot = parse_b256(slot_hex)?;
+            let value = parse_b256(value_hex)?;
+            self.rpc.set_storage_at(addresses::USDC, slot, value)?;
+        }
+
+        // 2. Install the implementation contract bytecode at the
+        //    address recorded in the proxy's impl slot so the
+        //    `DELEGATECALL` from the proxy resolves to real code.
+        let impl_addr: Address = seed
+            .implementation
+            .address
+            .parse()
+            .map_err(|e| HarnessError::Rpc(format!("seed: bad impl address: {e}")))?;
+        let impl_code = decode_hex_bytes(&seed.implementation.code)?;
+        self.rpc.set_code(impl_addr, impl_code)?;
+
+        // 3. Seed the whale with a large USDC balance so the
+        //    existing `fund_usdc` helper (which impersonates
+        //    [`addresses::USDC_WHALE`] and runs `transfer`) keeps
+        //    working unchanged. The seed's storage replay does NOT
+        //    include any balances (the upstream fixture only holds
+        //    token-config slots), so without this step every
+        //    whale-funded test would observe `balanceOf(whale) == 0`
+        //    and fail with `transfer: insufficient balance`.
+        //
+        //    `balances` lives at FiatTokenV1 storage slot 9; the slot
+        //    holding `balances[holder]` is
+        //    `keccak256(abi.encode(holder, 9))`. We grant the whale
+        //    `u128::MAX` units (≈ 3.4e20 USDC) — far above any
+        //    per-test funding amount, and well below `u256::MAX` so
+        //    `totalSupply` increments don't wrap.
+        let whale_balance_slot = balances_mapping_slot(addresses::USDC_WHALE, 9);
+        let whale_grant = U256::from(u128::MAX);
+        self.rpc
+            .set_storage_at(addresses::USDC, whale_balance_slot, u256_to_b256(whale_grant))?;
+
+        // 4. Regression guard: after replay the admin slot MUST be
+        //    non-zero. If it isn't, the proxy admin collision will
+        //    silently come back — fail loudly here instead of
+        //    surfacing as an opaque ABI-decode error in rmpc.
+        let admin_after = self
+            .rpc
+            .get_storage_at(addresses::USDC, USDC_PROXY_ADMIN_SLOT)?;
+        if admin_after == B256::ZERO {
+            return Err(HarnessError::Rpc(format!(
+                "USDC proxy admin slot at {:?} still resolves to address(0) after applying usdc-storage-seed.json — fork-fixture repair failed (issue #249)",
+                USDC_PROXY_ADMIN_SLOT
+            )));
+        }
+        Ok(())
     }
 
     /// Build a fresh ephemeral account funded with ETH and (optionally)
@@ -639,6 +856,50 @@ impl Rpc {
             serde_json::json!([fmt_addr(addr), format!("0x{:x}", wei)]),
         )?;
         Ok(())
+    }
+
+    /// Write a 32-byte word into `addr`'s storage at `slot`.
+    /// Thin wrapper over `anvil_setStorageAt`. Used by the fixture
+    /// to repair transparent-proxy admin slots that resolve to
+    /// `address(0)` on the forked state (see #249).
+    pub fn set_storage_at(
+        &self,
+        addr: Address,
+        slot: B256,
+        value: B256,
+    ) -> Result<(), HarnessError> {
+        let _: serde_json::Value = self.rpc(
+            "anvil_setStorageAt",
+            serde_json::json!([
+                fmt_addr(addr),
+                format!("{:#x}", slot),
+                format!("{:#x}", value),
+            ]),
+        )?;
+        Ok(())
+    }
+
+    /// Install runtime `code` at `addr`. Thin wrapper over
+    /// `anvil_setCode`. Used by the fixture to materialise the
+    /// USDC implementation contract that the proxy delegates to
+    /// (see [`ForkFixture::apply_usdc_storage_seed`], issue #249).
+    pub fn set_code(&self, addr: Address, code: Bytes) -> Result<(), HarnessError> {
+        let _: serde_json::Value = self.rpc(
+            "anvil_setCode",
+            serde_json::json!([fmt_addr(addr), format!("0x{}", hex::encode(&code))]),
+        )?;
+        Ok(())
+    }
+
+    /// Read a 32-byte word from `addr`'s storage at `slot`.
+    /// Thin wrapper over `eth_getStorageAt`. Used by the fixture
+    /// to verify proxy-admin repair stuck (see #249).
+    pub fn get_storage_at(&self, addr: Address, slot: B256) -> Result<B256, HarnessError> {
+        let s: String = self.rpc(
+            "eth_getStorageAt",
+            serde_json::json!([fmt_addr(addr), format!("{:#x}", slot), "latest"]),
+        )?;
+        parse_b256(&s)
     }
 
     pub fn impersonate(&self, addr: Address) -> Result<(), HarnessError> {
