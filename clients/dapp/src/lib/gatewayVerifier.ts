@@ -16,6 +16,7 @@ import { keccak256 } from "viem";
 import type { Hex } from "viem";
 
 export type VerificationState =
+  | { status: "idle" }
   | { status: "pending" }
   | { status: "verified"; computedHash: Hex }
   | { status: "refused"; reason: string };

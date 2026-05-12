@@ -40,6 +40,7 @@ type Props = Readonly<{
   /** Vite build env. Read here only to look up VITE_FAUCET_HARNESS_PRIVATE_KEY for the testnet seed step. */
   env: Record<string, string | undefined>;
   now: number;
+  onDismiss?: () => void;
 }>;
 
 type Step = 1 | 2 | 3;
@@ -70,8 +71,11 @@ export function OnboardingWizard(props: Props) {
   const [maxPerPayment, setMaxPerPayment] = useState("100000000");
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
 
-  const validAgent = isAddress(agent);
-  const validReceiver = isAddress(shareReceiver);
+  // strict: false — some wallets and rmpc print lowercase addresses without
+  // EIP-55 checksum casing. The default strict check rejected those and left
+  // "Next: review & sign" silently disabled.
+  const validAgent = isAddress(agent, { strict: false });
+  const validReceiver = isAddress(shareReceiver, { strict: false });
 
   const action: AdminAction | null =
     validAgent && validReceiver
@@ -124,7 +128,20 @@ export function OnboardingWizard(props: Props) {
   return (
     <main className="onboarding-wizard" data-testid="onboarding-wizard">
       <header>
-        <h1>Set up your first agent</h1>
+        <div className="wizard-header-row">
+          <h1>Set up your first agent</h1>
+          {props.onDismiss && (
+            <button
+              type="button"
+              data-testid="wizard-dismiss"
+              className="wizard-dismiss"
+              onClick={props.onDismiss}
+              aria-label="Dismiss onboarding and open admin"
+            >
+              Dismiss Onboarding
+            </button>
+          )}
+        </div>
         <ol className="wizard-steps" data-testid="wizard-steps" aria-label="Onboarding progress">
           <li data-active={step === 1}>1. Bootstrap agent</li>
           <li data-active={step === 2}>2. Agent address &amp; policy</li>
@@ -133,34 +150,36 @@ export function OnboardingWizard(props: Props) {
       </header>
 
       {step === 1 && (
-        <section data-testid="wizard-step-1">
-          <h2>Bootstrap your agent</h2>
-          <p>
-            Paste the prompt below into a fresh session of any supported agent runtime. The agent
-            will follow <a href={BOOTSTRAP_DOC_URL}>BOOTSTRAP.md</a> to install <code>rmpc</code>,
-            write its operator config, and print its public address — copy that address; you&apos;ll
-            paste it on the next step.
-          </p>
+        <>
+          <section data-testid="wizard-step-1">
+            <h2>Bootstrap your agent</h2>
+            <p>
+              Paste the prompt below into a fresh session of any supported agent runtime. The agent
+              will follow <a href={BOOTSTRAP_DOC_URL}>BOOTSTRAP.md</a> to install <code>rmpc</code>,
+              write its operator config, and print its public address — copy that address;
+              you&apos;ll paste it on the next step.
+            </p>
+            <pre data-testid="bootstrap-prompt" className="bootstrap-prompt">
+              {BOOTSTRAP_PROMPT}
+            </pre>
+            <button
+              type="button"
+              data-testid="copy-prompt"
+              onClick={() => navigator.clipboard?.writeText(BOOTSTRAP_PROMPT)}
+            >
+              Copy prompt
+            </button>
+            <div className="wizard-nav">
+              <button type="button" data-testid="step-1-next" onClick={() => setStep(2)}>
+                I&apos;ve started the agent — next
+              </button>
+            </div>
+          </section>
           <p className="hint">
             We never generate or hold private keys in the dapp. Any vendor-specific nuances are
             documented inline in <code>BOOTSTRAP.md</code>.
           </p>
-          <pre data-testid="bootstrap-prompt" className="bootstrap-prompt">
-            {BOOTSTRAP_PROMPT}
-          </pre>
-          <button
-            type="button"
-            data-testid="copy-prompt"
-            onClick={() => navigator.clipboard?.writeText(BOOTSTRAP_PROMPT)}
-          >
-            Copy prompt
-          </button>
-          <div className="wizard-nav">
-            <button type="button" data-testid="step-1-next" onClick={() => setStep(2)}>
-              I&apos;ve started the agent — next
-            </button>
-          </div>
-        </section>
+        </>
       )}
 
       {step === 2 && (

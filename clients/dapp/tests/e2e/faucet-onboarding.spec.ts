@@ -25,7 +25,7 @@ import { test, expect } from "@playwright/test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { injectWallet, connectInjectedWallet } from "./helpers/wallet";
+import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 const FAUCET_DRIP_AMOUNT_USDC = 100_000_000n;
 const POLL_INTERVAL_MS = 3_000;
@@ -147,9 +147,9 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     });
     await page.goto(endpoints.dapp_url);
     await connectInjectedWallet(page);
+    await dismissOnboardingIfPresent(page);
 
-    // AdminFlow mounts (envClass=fork bypasses the gate); the Faucet
-    // tab must not be in the rendered tree.
+    // The Faucet tab must not be in the AdminFlow tab tree.
     await expect(page.getByTestId("admin-tabs")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("tab-faucet")).toHaveCount(0);
   });

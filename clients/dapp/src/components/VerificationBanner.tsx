@@ -11,7 +11,7 @@ type Props = Readonly<{
 }>;
 
 export function VerificationBanner({ state, refresh }: Props) {
-  if (state.status === "verified") return null;
+  if (state.status === "verified" || state.status === "idle") return null;
   return (
     <div className="verification-banner-wrap">
       <section data-testid="gateway-verification-status">

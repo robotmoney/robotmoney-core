@@ -35,9 +35,11 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
     setStep("idle");
   };
 
-  const validOld = isAddress(oldAgentRaw);
-  const validNew = isAddress(newAgentRaw);
-  const validReceiver = isAddress(shareReceiver);
+  // strict: false — accept lowercase addresses (rmpc + some wallets omit
+  // EIP-55 checksum casing).
+  const validOld = isAddress(oldAgentRaw, { strict: false });
+  const validNew = isAddress(newAgentRaw, { strict: false });
+  const validReceiver = isAddress(shareReceiver, { strict: false });
 
   let combinedRiskAnnotation: string | null = null;
   let combinedError: string | null = null;

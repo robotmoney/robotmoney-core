@@ -43,9 +43,7 @@ export function useGatewayVerifier(
   gatewayAddress: string,
   expectedCodeHash: string | undefined,
 ): UseGatewayVerifier {
-  const [state, setState] = useState<VerificationState>(() =>
-    computeVerificationState(gatewayAddress, expectedCodeHash, undefined),
-  );
+  const [state, setState] = useState<VerificationState>({ status: "idle" });
   const { isConnected } = useAccount();
   const chainId = useChainId();
   // Bumping this triggers the effect to re-run for a manual retry.
@@ -57,19 +55,19 @@ export function useGatewayVerifier(
   }, []);
 
   useEffect(() => {
+    // Suppress all gateway errors until the user has actually connected a
+    // wallet. Pre-connect refusals (missing config, wrong chain, etc.)
+    // are noise — the user hasn't asked to interact with the gateway yet.
+    if (!isConnected) {
+      setState({ status: "idle" });
+      return;
+    }
     const initial = computeVerificationState(gatewayAddress, expectedCodeHash, undefined);
     if (initial.status === "refused") {
       setState(initial);
       return;
     }
     if (!gatewayAddress || gatewayAddress === ZERO_ADDRESS || !expectedCodeHash) {
-      return;
-    }
-    if (!isConnected) {
-      setState({
-        status: "refused",
-        reason: "Wallet not connected. Click Connect Wallet to verify gateway bytecode.",
-      });
       return;
     }
     if (targetChainId !== undefined && chainId !== targetChainId) {

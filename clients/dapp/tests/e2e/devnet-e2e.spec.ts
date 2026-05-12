@@ -20,7 +20,7 @@ import { test, expect } from "@playwright/test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
-import { injectWallet, connectInjectedWallet } from "./helpers/wallet";
+import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";
 
 // keccak256("AGENT_ROLE") — matches contracts/gateway/AccessRoles.sol.
 const AGENT_ROLE = "0xcab5a0bfe0b79d2c4b1c2e02599fa044d115b7511f9659307cb4276950967709";
@@ -96,6 +96,7 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     });
     await page.goto(endpoints.dapp_url);
     await connectInjectedWallet(page);
+    await dismissOnboardingIfPresent(page);
 
     // Verification must pass — the dapp container was built with the
     // real runtime hash. StatusHeader then renders the gateway address
@@ -120,6 +121,7 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     });
     await page.goto(endpoints.dapp_url);
     await connectInjectedWallet(page);
+    await dismissOnboardingIfPresent(page);
 
     await page.getByTestId("agent-input").fill(endpoints.agent_addr);
     await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);

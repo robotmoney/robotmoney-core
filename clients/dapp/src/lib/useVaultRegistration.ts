@@ -1,19 +1,28 @@
 /**
- * useAgentRegistration — decides whether a connected wallet has
- * authorized at least one agent (the protocol's "registration" step).
+ * useAgentRegistration — decides whether a connected wallet should bypass
+ * the onboarding wizard. A wallet is "registered" when it satisfies
+ * either of the protocol's two onboarding signals:
  *
- * Real check should read AgentAuthorized events from the gateway and
- * filter by parsed `shareReceiver` (or by tx-sender) — neither field
- * is indexed, so this needs either an indexer or a full log scan. For
- * the scaffold we use a localStorage flag set optimistically when the
- * user clicks Authorize. TODO: replace with on-chain check once an
- * indexer-backed `getAgentsByAdmin(user)` API exists.
+ *   1. It has authorized at least one agent on the gateway. Real check
+ *      should read `AgentAuthorized` events from the gateway filtered by
+ *      tx-sender — neither field is indexed, so this needs either an
+ *      indexer or a full log scan. Until we have an indexer-backed
+ *      `getAgentsByAdmin(user)` API, we use a localStorage flag set
+ *      optimistically when the user signs Authorize.
  *
- * fork/devnet env classes auto-bypass the gate so smoke-test fixtures
- * (and Playwright) don't need to seed localStorage.
+ *   2. It already holds vault shares (rmUSDC). A non-zero
+ *      `vault.balanceOf(address)` means the wallet has deposited into the
+ *      vault directly or received shares from someone who did — either
+ *      way it is not a first-time user and the wizard is noise.
+ *
+ * Neither signal depends on env class — the same rules apply on devnet,
+ * testnet, and mainnet. A fresh wallet on smoke-test devnet correctly
+ * sees the wizard until it authorizes an agent or receives shares.
  */
 import { useEffect, useState } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
+import type { Address } from "viem";
+import { erc20Abi } from "./abi";
 
 export type RegistrationStatus = "disconnected" | "unregistered" | "registered";
 
@@ -33,11 +42,8 @@ export function markRegistered(addr: string): void {
   }
 }
 
-export function useAgentRegistration(
-  envClass: "fork" | "devnet" | "testnet" | "mainnet",
-): RegistrationStatus {
+export function useAgentRegistration(vaultAddress: Address): RegistrationStatus {
   const { address, isConnected } = useAccount();
-  const bypass = envClass === "fork" || envClass === "devnet";
 
   const [flag, setFlag] = useState<boolean>(false);
   useEffect(() => {
@@ -61,7 +67,15 @@ export function useAgentRegistration(
     };
   }, [address]);
 
+  const { data: shareBalance } = useReadContract({
+    address: vaultAddress,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: isConnected && Boolean(address) },
+  });
+
   if (!isConnected) return "disconnected";
-  if (bypass) return "registered";
-  return flag ? "registered" : "unregistered";
+  const hasShares = typeof shareBalance === "bigint" && shareBalance > 0n;
+  return flag || hasShares ? "registered" : "unregistered";
 }

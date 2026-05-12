@@ -27,8 +27,10 @@ export function AuthorizeTab(props: Props) {
   const [maxPerPayment, setMaxPerPayment] = useState("100000000");
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
 
-  const validAgent = isAddress(props.agent);
-  const validReceiver = isAddress(props.shareReceiver);
+  // strict: false — accept lowercase addresses (rmpc + some wallets omit
+  // EIP-55 checksum casing).
+  const validAgent = isAddress(props.agent, { strict: false });
+  const validReceiver = isAddress(props.shareReceiver, { strict: false });
 
   const action: AdminAction | null =
     validAgent && validReceiver
