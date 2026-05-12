@@ -9,7 +9,21 @@ This repository hosts the in-development pieces that let agents transact against
 - **`testing/ethereum-testnet/`** — Geth + Lighthouse devnet harness, deploy overlay, and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a live devnet.
 - **`docs/`** — architecture proposal, MVP implementation plan, project roadmap, and on-chain reference docs.
 
-Agent onboarding instructions for all supported runtimes (OpenCode, OpenClaw, Claude Code) are in [BOOTSTRAP.md](BOOTSTRAP.md).
+## Onboarding an agent
+
+1. **Start your agent runtime** — export the keystore passphrase before launching so the agent inherits it:
+
+   ```bash
+   read -s -p "Agent keystore passphrase: " RMPC_KEYSTORE_PASSPHRASE
+   export RMPC_KEYSTORE_PASSPHRASE
+   opencode
+   ```
+
+2. **Paste this prompt** into the agent session:
+
+   > Agent, install Robot Money per the instructions in this file.
+
+   The agent reads [BOOTSTRAP.md](BOOTSTRAP.md), installs `rmpc`, writes the operator config, creates a keystore, runs self-check, and returns its public address for you to authorize in the dapp.
 
 ## Starting a local devnet
 
