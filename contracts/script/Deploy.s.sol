@@ -12,7 +12,6 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {MockVault} from "../gateway/MockVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 
 /// @title Deploy
@@ -181,8 +180,12 @@ contract Deploy is Script {
         d.gateway =
             new RobotMoneyGateway(IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser);
 
-        // 2. Authorize agent under a sane initial policy. The gateway's
-        //    authorizeAgent re-asserts role separation post-grant.
+        // 2. Authorize agent under a sane initial policy. Authorization is
+        //    permissionless (issue #269): the broadcaster becomes the agent's
+        //    recorded owner via `msg.sender`. On the smoke-test devnet that
+        //    is the deployer EOA; the deployer is the depositor proxy for
+        //    happy-path smoke-tests and may later `setPolicy`/`revokeAgent`
+        //    against this agent without holding any privileged role.
         IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
             active: true,
             validUntil: p.validUntil,
@@ -191,23 +194,7 @@ contract Deploy is Script {
             shareReceiver: d.shareReceiver
         });
 
-        // The script's broadcaster is the deployer; the deployer holds
-        // ADMIN_ROLE because the gateway's constructor granted it. We are
-        // already in a startBroadcast() context (or forge-test prank), so
-        // calls go from the broadcaster.
-        // The constructor wired ADMIN_ROLE to ADMIN_ADDRESS, not to the
-        // broadcaster — so we prank/impersonate via the cheatcode for the
-        // single authorizeAgent call when running in-process; for the
-        // broadcast path the operator MUST use ADMIN_ADDRESS as the
-        // broadcaster (private key matches admin).
-        if (msg.sender != d.admin) {
-            // forge-test path: broadcasting key isn't admin. Use prank.
-            vm.startPrank(d.admin);
-            d.gateway.authorizeAgent(d.agent, policy);
-            vm.stopPrank();
-        } else {
-            d.gateway.authorizeAgent(d.agent, policy);
-        }
+        d.gateway.authorizeAgent(d.agent, policy);
 
         // 3. Sanity: post-grant, agent must satisfy role separation.
         //    authorizeAgent already calls _assertRoleSeparation, but we

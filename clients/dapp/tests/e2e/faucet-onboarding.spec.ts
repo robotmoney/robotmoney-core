@@ -101,7 +101,18 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     await page.getByTestId("step-1-next").click();
 
     // Step 2: paste agent + shareReceiver.
-    await page.getByTestId("wizard-agent-input").fill(endpoints.agent_addr);
+    //
+    // Per issue #269, `authorizeAgent` is permissionless and reverts with
+    // `AgentAlreadyOwned` if called twice for the same agent address. The
+    // smoke-test devnet's Deploy.s.sol already authorized `endpoints.agent_addr`
+    // at deploy time (recording the deployer as agentOwner). Re-authorizing it
+    // here would revert in simulation and leave the wizard's submit button
+    // disabled forever. Use a fresh, deterministic-but-unused address instead;
+    // the wizard's invariant under test is "the seed handler drips 100 USDC
+    // into the connected wallet after a successful authorize", which does not
+    // care which agent address is being granted AGENT_ROLE.
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000fa11";
+    await page.getByTestId("wizard-agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("wizard-shareReceiver-input").fill(endpoints.share_receiver_addr);
     await page.getByTestId("step-2-next").click();
 

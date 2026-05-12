@@ -33,8 +33,13 @@ use tempfile::TempDir;
 
 // -- Genesis account constants ----------------------------------------
 
-/// Genesis-funded deployer / admin. Used as `--from` for `forge script`
-/// and for admin-role on-chain pokes (revoke/reauthorize, unpause).
+/// Genesis-funded deployer. Used as `--from` for `forge script` and is
+/// the recorded **agent owner** in the smoke-test fixture (issue #269 —
+/// each depositor is the sole authority over her own agent, so the
+/// deployer EOA stands in as the depositor for `revoke_agent` and
+/// `reauthorize_agent`). Also holds `ADMIN_ROLE`, which is now scoped to
+/// protocol-wide kill switches (`unpause`) and no longer gates any
+/// agent's lifecycle.
 pub const DEPLOYER_PRIVATE_KEY_HEX: &str =
     "0xbcdf20249abf0ed6d944c0288fad489e33f66b3960d9e6229c1cd214ed3bbe31";
 pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa776";

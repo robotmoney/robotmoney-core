@@ -81,8 +81,12 @@ sit idle, with bounded risk per transaction so a misbehaving agent
 cannot drain the treasury.
 
 What we promise: deposits and withdrawals settle synchronously; the
-agent's spending is bounded by per-agent caps the operator sets; the
-operator can pause or revoke an agent at any time.
+agent's spending is bounded by per-agent caps the depositor sets; the
+depositor is the sole authority over her own agent and can pause,
+update policy, or revoke it at any time without third-party
+involvement. The Robot Money team has no runtime authority over any
+depositor's agent — the only on-chain role the team retains is
+contract upgrade.
 
 ### 4.2 Human depositor with delegated monitoring
 
@@ -122,8 +126,10 @@ observable buyback execution.
   - a reversible operational pause, and
   - a permanent shutdown that disables further deposits while
     preserving redemption rights.
-- Deposit caps (total and per-deposit) governed by Robot Money admin
-  within published bounds.
+- Deposit caps (total and per-deposit) are configured per agent by the
+  depositor who authorized that agent. The depositor is the agent owner
+  and the sole authority over its policy; the Robot Money team does not
+  govern any depositor's caps.
 - Synchronous deposit and withdrawal.
 
 ### 5.2 Buckets
@@ -171,10 +177,13 @@ The fee recipient is administered by the protocol's multisig.
 ### 5.5 Autonomous-agent access
 
 Autonomous agents can deposit, withdraw, and observe the treasury
-through a programmatic interface. Agent operators set per-agent
-spending bounds and can pause or revoke any agent at any time. See
-`docs/architecture.md` for the security architecture and
-`docs/implementation-plan.md` for the agent client.
+through a programmatic interface. Each depositor is the sole
+authority over her own agent: she authorizes the agent under her
+wallet, sets per-agent spending bounds, and pauses or revokes the
+agent at any time. No third party — including the Robot Money team
+— signs or gates these calls. See `docs/architecture.md` for the
+security architecture and `docs/implementation-plan.md` for the
+agent client.
 
 ### 5.6 Human-facing web application
 
@@ -211,9 +220,11 @@ spending bounds and can pause or revoke any agent at any time. See
 
 ## 7. Trust
 
-- **Treasury.** A pooled treasury contract administered by a
-  multisig. Emergency switches (pause, permanent shutdown) exist for
-  operator response to incidents.
+- **Treasury.** A pooled treasury contract whose upgrade authority is
+  held by the Robot Money team multisig. The team's only on-chain
+  authority is contract upgrade and protocol-wide kill switches (pause,
+  permanent shutdown) for incident response; the team has no runtime
+  authority over any individual depositor's agent.
 - **Bucket execution.** Slippage and quote-freshness bounds apply to
   every bucket buy and sell. The treasury leg and the bucket leg
   commit independently — a failure in one does not put the other at

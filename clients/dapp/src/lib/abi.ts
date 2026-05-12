@@ -1,5 +1,11 @@
 /**
- * Minimal ABI excerpt for the human-dapp admin/policy actions.
+ * Minimal ABI excerpt for the depositor-owned agent-policy actions
+ * (issue #269 — each depositor is the sole authority over her own
+ * agent). The `authorizeAgent` / `setPolicy` / `revokeAgent` surface is
+ * permissionless on the contract; gating is by recorded `agentOwner`,
+ * not by `ADMIN_ROLE`. `ADMIN_ROLE` survives only as a protocol-wide
+ * kill-switch counterweight to `pause` (`unpause`) held by the
+ * contract-upgrader.
  *
  * Tracks the canonical interface in
  * `contracts/gateway/interfaces/IGateway.sol`. Only the functions the
@@ -29,10 +35,37 @@ export const gatewayAbi = [
   },
   {
     type: "function",
+    name: "setPolicy",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "agent", type: "address" },
+      {
+        name: "p",
+        type: "tuple",
+        components: [
+          { name: "active", type: "bool" },
+          { name: "validUntil", type: "uint64" },
+          { name: "maxPerPayment", type: "uint256" },
+          { name: "maxPerWindow", type: "uint256" },
+          { name: "shareReceiver", type: "address" },
+        ],
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "revokeAgent",
     stateMutability: "nonpayable",
     inputs: [{ name: "agent", type: "address" }],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "agentOwner",
+    stateMutability: "view",
+    inputs: [{ name: "agent", type: "address" }],
+    outputs: [{ name: "", type: "address" }],
   },
   {
     type: "function",
@@ -99,6 +132,7 @@ export const gatewayAbi = [
 
 export type AdminActionName =
   | "authorizeAgent"
+  | "setPolicy"
   | "revokeAgent"
   | "pause"
   | "unpause"
@@ -107,10 +141,12 @@ export type AdminActionName =
 
 /**
  * Role identifiers handled by the dapp's role grant/revoke flow.
- * AGENT_ROLE has its own dedicated authorize/revoke surface (because it
- * carries a policy struct); the role-bytes32 path here is for ADMIN_ROLE
- * and PAUSER_ROLE only — AGENT_ROLE is intentionally excluded so the
- * operator cannot grant it without setting a policy.
+ * AGENT_ROLE has its own dedicated depositor-owned authorize/revoke
+ * surface (because it carries a policy struct and is gated on
+ * `msg.sender == agentOwner[agent]`, not on any privileged role).
+ * The role-bytes32 path here is for ADMIN_ROLE and PAUSER_ROLE only —
+ * AGENT_ROLE is intentionally excluded so it can never be granted
+ * without setting a policy through the depositor-owned surface.
  */
 export type RoleName = "ADMIN_ROLE" | "PAUSER_ROLE";
 

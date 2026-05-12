@@ -5,17 +5,28 @@ pragma solidity ^0.8.24;
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
-/// @dev This is the surface downstream issues (#9 RobotMoneyGateway, #10 deploy
-///      script, #13 forge tests) compile against. Keep it stable. Per the MVP
-///      plan (`docs/implementation-plan.md` §2.2), the gateway exposes a
-///      single state-mutating entrypoint for agents (`deposit`), admin
-///      lifecycle calls, and a pause asymmetry (PAUSER pauses, ADMIN unpauses).
+/// @dev Per the MVP plan (`docs/implementation-plan.md` §2.2), the gateway
+///      exposes a single state-mutating entrypoint for agents (`deposit`),
+///      a permissionless depositor-owned authorize/revoke/policy surface
+///      (`authorizeAgent`, `revokeAgent`, `setPolicy`), and a protocol-wide
+///      pause asymmetry (PAUSER pauses, ADMIN unpauses) retained as a
+///      kill-switch by the contract upgrader.
+///
+/// Authority model (see issue #269). Each depositor is the sole authority
+/// over her own agent. `authorizeAgent` is callable by any EOA;
+/// `msg.sender` is recorded as the agent's owner. Only that recorded
+/// owner can update policy or revoke. The Robot Money team has no
+/// runtime authority over any agent's lifecycle — `ADMIN_ROLE` is
+/// reserved for protocol-wide kill switches (e.g. `unpause`) retained
+/// by the contract upgrader for incident response.
 interface IGateway {
     // -------------------------------------------------------------------
     // Types
     // -------------------------------------------------------------------
 
-    /// @notice Per-agent policy. Set by ADMIN via `authorizeAgent`.
+    /// @notice Per-agent policy. Set by the agent's recorded owner via
+    ///         `authorizeAgent` (first time) or `setPolicy` (subsequent
+    ///         updates).
     /// @param active         Policy is enabled.
     /// @param validUntil     Unix-seconds expiry; deposits revert at/after.
     /// @param maxPerPayment  Maximum gross USDC per single `deposit` call.
@@ -35,12 +46,15 @@ interface IGateway {
 
     /// @notice Emitted when an agent's policy is created or updated.
     /// @param agent          Agent address whose policy was set.
+    /// @param owner          Depositor EOA that authorized the agent
+    ///                       (`msg.sender` at first `authorizeAgent` call).
     /// @param validUntil     Policy expiry timestamp (Unix seconds).
     /// @param maxPerPayment  Maximum USDC per single deposit call.
     /// @param maxPerWindow   Maximum USDC per rolling window.
     /// @param shareReceiver  Address receiving minted vault shares.
     event AgentAuthorized(
         address indexed agent,
+        address indexed owner,
         uint64 validUntil,
         uint256 maxPerPayment,
         uint256 maxPerWindow,
@@ -48,7 +62,8 @@ interface IGateway {
     );
     /// @notice Emitted when an agent's policy and role are revoked.
     /// @param agent Agent address whose policy was removed.
-    event AgentRevoked(address indexed agent);
+    /// @param owner Depositor EOA that revoked (must equal the recorded owner).
+    event AgentRevoked(address indexed agent, address indexed owner);
     /// @notice Emitted when the gateway is paused.
     /// @param by Address that called `pause()`.
     event Paused(address indexed by);
@@ -91,12 +106,23 @@ interface IGateway {
         external
         returns (bytes32 paymentId, uint256 sharesMinted);
 
-    /// @notice Set or replace the policy for `agent`. Restricted to `ADMIN_ROLE`.
-    /// @param agent The agent address to authorize.
-    /// @param p     Policy parameters to assign to the agent.
+    /// @notice First-time authorization for `agent`. Permissionless — any EOA
+    ///         may call to register their own agent. `msg.sender` is recorded
+    ///         as the agent's owner. Reverts if `agent` already has a
+    ///         recorded owner; that owner must call `setPolicy` to update or
+    ///         `revokeAgent` to release.
+    /// @param agent The agent address to authorize (must not already be owned).
+    /// @param p     Initial policy parameters.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;
 
-    /// @notice Disable policy for `agent`. Restricted to `ADMIN_ROLE`.
+    /// @notice Update the policy for an agent the caller already owns.
+    ///         Reverts if `msg.sender` is not the recorded owner of `agent`.
+    /// @param agent The agent address whose policy to update.
+    /// @param p     New policy parameters.
+    function setPolicy(address agent, AgentPolicy calldata p) external;
+
+    /// @notice Revoke an agent. Reverts if `msg.sender` is not the recorded
+    ///         owner. Clears policy, role, and owner record.
     /// @param agent The agent address whose policy and role are revoked.
     function revokeAgent(address agent) external;
 
@@ -104,6 +130,9 @@ interface IGateway {
     function pause() external;
 
     /// @notice Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
+    ///         `ADMIN_ROLE` is retained as a protocol-wide kill-switch
+    ///         counterweight to `pause`; it has no authority over any
+    ///         agent's lifecycle.
     function unpause() external;
 
     // -------------------------------------------------------------------
@@ -121,4 +150,10 @@ interface IGateway {
 
     /// @notice Whether the gateway is currently paused.
     function paused() external view returns (bool);
+
+    /// @notice Recorded owner (depositor EOA) for `agent`, or `address(0)`
+    ///         if no policy is recorded.
+    /// @param agent The agent address whose recorded owner to look up.
+    /// @return The depositor EOA that authorized `agent`, or zero if none.
+    function agentOwner(address agent) external view returns (address);
 }

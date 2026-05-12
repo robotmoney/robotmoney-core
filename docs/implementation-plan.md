@@ -37,8 +37,14 @@ authenticates as an `AGENT_ROLE` key and calls one function —
 `deposit` — on a gateway that enforces per-agent allowlist,
 per-deposit cap, per-window cap, pause, and **forwards the deposit into
 a `RobotMoneyVault`**. Vault shares (`rmUSDC`) route to a configurable
-receiver registered with the gateway. Admin role is real (separate
-key, on-chain checks).
+receiver registered with the gateway. The depositor is the sole
+authority over her own agent: she calls `authorizeAgent` from her own
+wallet (permissionless on the contract surface, gated on
+`msg.sender == agentOwner[agent]` for any subsequent `setPolicy` or
+`revokeAgent`). The contract-upgrader `ADMIN_ROLE` exists only as a
+protocol-wide kill-switch counterweight to `pause` (it authorizes
+`unpause()`); it does not gate authorization or policy of any
+individual depositor's agent.
 
 **Full MVP in scope.** The full MVP is broader than phase 1. It also
 includes fork-based Robot Money contract tests, direct chain-read query
@@ -222,10 +228,13 @@ function deposit(
 // at function head; the gateway uses custom errors throughout instead
 // of OZ's `whenNotPaused` modifier.
 
-function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE);
-function revokeAgent(address agent) external onlyRole(ADMIN_ROLE);
+// Permissionless agent lifecycle: each depositor is the sole authority
+// over her own agent (msg.sender becomes the recorded `agentOwner`).
+function authorizeAgent(address agent, AgentPolicy calldata p) external;
+function setPolicy(address agent, AgentPolicy calldata p) external;   // gated: msg.sender == agentOwner[agent]
+function revokeAgent(address agent) external;                         // gated: msg.sender == agentOwner[agent]
 function pause()    external onlyRole(PAUSER_ROLE);
-function unpause()  external onlyRole(ADMIN_ROLE);
+function unpause()  external onlyRole(ADMIN_ROLE);   // protocol-wide kill switch
 ```
 
 Events:
@@ -895,7 +904,10 @@ the consequences before execution.
 
 **Execution model.**
 
-- Human wallet signs admin/policy transactions.
+- The depositor's wallet signs the `authorizeAgent`, `setPolicy`, and
+  `revokeAgent` transactions for her own agent. Each depositor is the
+  sole authority over her own agent; no admin or operator key signs on
+  her behalf.
 - Dapp reads live chain state directly through RPC and may use phase 5
   API for historical display.
 - Every transaction preview decodes target, calldata, role/policy

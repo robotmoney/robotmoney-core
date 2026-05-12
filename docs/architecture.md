@@ -66,12 +66,17 @@ The system must remain bounded if:
   software key. Production preference is non-exportable hardware or KMS
   material; software is an explicit fallback for development and
   low-value deployments.
-- **Human/admin wallet** — multisig or hardware wallet that configures
-  gateway policy, registers agents, revokes agents, and pauses when
-  needed.
+- **Depositor (agent owner) wallet** — the EOA, multisig, or hardware
+  wallet that authorizes an agent under its own signature, sets per-agent
+  spending bounds and share receiver, and revokes or repolicies that
+  agent at any time. Each depositor is the sole authority over her own
+  agent; no third party — including the Robot Money team — gates these
+  calls. The Robot Money team's only on-chain authority is contract
+  upgrade plus protocol-wide kill switches (pause counterweight,
+  `unpause`).
 - **Share receiver** — address that receives vault shares from the
-  gateway deposit. It is set by admin policy, not chosen by the agent
-  at call time.
+  gateway deposit. It is part of the per-agent policy the depositor
+  registers under her own wallet, not chosen by the agent at call time.
 
 ## 4. High-Level Flow
 
@@ -183,16 +188,27 @@ Deposit behavior:
 
 ## 6. Roles
 
-Roles are pairwise disjoint:
+Roles are pairwise disjoint and serve distinct, narrow purposes:
 
-- `ADMIN_ROLE` — grants and revokes roles, configures agent policy,
-  unpauses, and owns deliberate policy changes.
-- `PAUSER_ROLE` — can pause quickly during an incident.
-- `AGENT_ROLE` — can call only the gateway deposit function.
+- `ADMIN_ROLE` — protocol-wide kill-switch counterweight to `pause`
+  held by the Robot Money team (contract upgrader). Authorizes
+  `unpause()` only. Does not gate authorization or policy of any
+  individual depositor's agent.
+- `PAUSER_ROLE` — can pause the gateway quickly during an incident.
+- `AGENT_ROLE` — can call only the gateway deposit function. Granted
+  to an agent address when its depositor (the agent owner) calls
+  `authorizeAgent` under her own wallet, and revoked when she calls
+  `revokeAgent`.
 
-No account may hold more than one of these roles. This prevents a
-compromised agent from changing policy, and prevents a pause/admin key
-from also acting as an agent.
+Each depositor is the sole authority over her own agent. The
+`authorizeAgent`, `setPolicy`, and `revokeAgent` surfaces are
+permissionless and gated solely on `msg.sender == agentOwner[agent]`
+(or, for first-time authorize, on the agent not yet being owned).
+`ADMIN_ROLE` plays no part in any agent's lifecycle.
+
+No account may hold more than one of `{ADMIN_ROLE, PAUSER_ROLE,
+AGENT_ROLE}`. This prevents a compromised agent from also unpausing,
+and prevents a pauser/admin key from also acting as an agent.
 
 ## 7. Rust Client
 

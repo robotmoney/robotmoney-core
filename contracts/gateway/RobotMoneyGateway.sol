@@ -58,6 +58,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     error InvalidShareReceiver();
     /// @notice `authorizeAgent` policy is inactive or `validUntil` is already in the past.
     error InvalidValidUntil();
+    /// @notice Caller is not the recorded owner of the target agent. Raised by
+    ///         `setPolicy` and `revokeAgent` when `msg.sender != agentOwner[agent]`.
+    error NotAgentOwner();
+    /// @notice `authorizeAgent` called on an agent that already has a recorded
+    ///         owner. The existing owner must call `setPolicy` to update or
+    ///         `revokeAgent` to release the address before a new authorization.
+    error AgentAlreadyOwned();
 
     // -------------------------------------------------------------------
     // Constants
@@ -86,6 +93,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Per-agent policy. Keyed on the agent's signing address.
     mapping(address => AgentPolicy) public agents;
+
+    /// @notice Recorded owner (depositor EOA) for each agent. Set on the
+    ///         first `authorizeAgent` call; cleared on `revokeAgent`. Used to
+    ///         gate `setPolicy` and `revokeAgent` so each depositor is the
+    ///         sole authority over her own agent (issue #269).
+    mapping(address => address) public agentOwner;
 
     /// @notice Per-agent windowed gross. NOT shared across agents — each
     ///         agent has an independent allowance per window.
@@ -140,39 +153,71 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     // -------------------------------------------------------------------
-    // Admin / lifecycle
+    // Agent lifecycle — permissionless, depositor-owned
+    //
+    // Each depositor is the sole authority over her own agent. The
+    // authorize/setPolicy/revoke trio is gated on `msg.sender ==
+    // agentOwner[agent]` (or, for first-time authorize, on the agent
+    // having no recorded owner yet). `ADMIN_ROLE` plays no part in
+    // these calls — see issue #269 and docs/architecture.md §6.
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
-    function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE) {
+    function authorizeAgent(address agent, AgentPolicy calldata p) external {
         if (agent == address(0)) revert ZeroAddress();
+        if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
+        _validatePolicy(p);
+
+        agentOwner[agent] = msg.sender;
+        agents[agent] = p;
+
+        // First-time grant. The role-separation override in AccessRoles
+        // will revert if the candidate already holds ADMIN/PAUSER.
+        _grantRole(AGENT_ROLE, agent);
+        _assertRoleSeparation(agent);
+
+        emit AgentAuthorized(
+            agent, msg.sender, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver
+        );
+    }
+
+    /// @inheritdoc IGateway
+    function setPolicy(address agent, AgentPolicy calldata p) external {
+        if (agent == address(0)) revert ZeroAddress();
+        if (agentOwner[agent] != msg.sender) revert NotAgentOwner();
+        _validatePolicy(p);
+
+        agents[agent] = p;
+
+        emit AgentAuthorized(
+            agent, msg.sender, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver
+        );
+    }
+
+    /// @inheritdoc IGateway
+    function revokeAgent(address agent) external {
+        if (agent == address(0)) revert ZeroAddress();
+        address owner = agentOwner[agent];
+        if (owner != msg.sender) revert NotAgentOwner();
+
+        delete agents[agent];
+        delete agentOwner[agent];
+        if (hasRole(AGENT_ROLE, agent)) {
+            _revokeRole(AGENT_ROLE, agent);
+        }
+        emit AgentRevoked(agent, owner);
+    }
+
+    /// @dev Internal policy-shape validator shared by `authorizeAgent` and
+    ///      `setPolicy`. Custom errors match the previous public surface
+    ///      so downstream clients (rmpc, dapp) keep the same revert
+    ///      vocabulary across the depositor-owned redesign.
+    function _validatePolicy(AgentPolicy calldata p) internal view {
         if (p.shareReceiver == address(0)) revert InvalidShareReceiver();
         if (!p.active) revert InvalidValidUntil();
         if (p.validUntil < block.timestamp) revert InvalidValidUntil();
         if (p.maxPerPayment == 0 || p.maxPerWindow == 0) revert InvalidAmount();
         if (p.maxPerPayment > p.maxPerWindow) revert InvalidAmount();
-
-        agents[agent] = p;
-
-        // Idempotent grant: only call _grantRole if not already an agent.
-        // The role-separation override in AccessRoles will revert if the
-        // candidate already holds ADMIN/PAUSER.
-        if (!hasRole(AGENT_ROLE, agent)) {
-            _grantRole(AGENT_ROLE, agent);
-        }
-        _assertRoleSeparation(agent);
-
-        emit AgentAuthorized(agent, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver);
-    }
-
-    /// @inheritdoc IGateway
-    function revokeAgent(address agent) external onlyRole(ADMIN_ROLE) {
-        if (agent == address(0)) revert ZeroAddress();
-        delete agents[agent];
-        if (hasRole(AGENT_ROLE, agent)) {
-            _revokeRole(AGENT_ROLE, agent);
-        }
-        emit AgentRevoked(agent);
     }
 
     /// @inheritdoc IGateway

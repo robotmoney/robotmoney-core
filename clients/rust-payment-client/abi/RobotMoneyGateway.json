@@ -105,6 +105,25 @@
   },
   {
     "type": "function",
+    "name": "agentOwner",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "agentWindowGross",
     "inputs": [
       {
@@ -382,6 +401,51 @@
   },
   {
     "type": "function",
+    "name": "setPolicy",
+    "inputs": [
+      {
+        "name": "agent",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "p",
+        "type": "tuple",
+        "internalType": "struct IGateway.AgentPolicy",
+        "components": [
+          {
+            "name": "active",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "validUntil",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "maxPerPayment",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "maxPerWindow",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "shareReceiver",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "supportsInterface",
     "inputs": [
       {
@@ -488,6 +552,12 @@
         "internalType": "address"
       },
       {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
         "name": "validUntil",
         "type": "uint64",
         "indexed": false,
@@ -569,6 +639,12 @@
     "inputs": [
       {
         "name": "agent",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "owner",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -722,6 +798,11 @@
   },
   {
     "type": "error",
+    "name": "AgentAlreadyOwned",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "AgentNotAuthorized",
     "inputs": []
   },
@@ -777,6 +858,11 @@
   },
   {
     "type": "error",
+    "name": "NotAgentOwner",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotPaused",
     "inputs": []
   },
@@ -788,6 +874,11 @@
   {
     "type": "error",
     "name": "PaymentIdAlreadyUsed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
   {
