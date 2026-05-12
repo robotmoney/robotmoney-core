@@ -6,25 +6,32 @@
 # macos/arm64) and attaching the resulting tar.gz archives as GitHub Release assets
 # makes distribution frictionless — no Rust toolchain required.
 #
+# WHY BUILD BEFORE TAGGING
+# The publish step only runs after every matrix build succeeds. If any target fails
+# we never push a tag and never create a Release, so we never end up with an orphan
+# tag pointing at a commit whose binaries can't be produced.
+#
 # WHY CROSS FOR ARM TARGETS
 # GitHub-hosted runners are x86_64 only. arm64 cross-compilation is handled by the
 # cross-rs/cross action which wraps cargo in a Docker container with the appropriate
-# sysroot. Native runners are used for aarch64-apple-darwin (cross cannot produce
-# Apple silicon binaries; instead we build on macos-latest which is arm64 on GitHub).
+# sysroot. aarch64-apple-darwin builds natively on macos-latest (M1 runners).
 #
 # WHY WE STRIP BINARIES
-# Rust debug symbols roughly double binary size. strip removes them for release builds,
-# keeping the download payload small. strip on Linux is provided by the system; on macOS
-# it is bundled with Xcode.
+# Rust debug symbols roughly double binary size. strip removes them. Native targets
+# use the host strip; the aarch64 Linux cross build needs aarch64-linux-gnu-strip
+# from binutils-aarch64-linux-gnu because host x86_64 strip can't read ARM64 ELF.
+#
+# DISPATCH MODES
+# - workflow_dispatch + tag=vX.Y.Z  -> build all targets, then tag + publish Release
+# - workflow_dispatch + dry_run=true -> build all targets, upload as workflow
+#                                       artifacts only (no tag, no Release). Use to
+#                                       validate the workflow from any branch.
+# - push: tags v*.*.*               -> build all targets, attach to the existing tag
 #
 # GOTCHAS
-# - The workflow only fires on v*.*.* tags, never on branch pushes or pull requests.
 # - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
-#   No new toolchain actions are introduced.
 # - cross-rs/cross requires Docker; ubuntu-latest runners include Docker by default.
-# - The macos-latest runner on GitHub Actions is currently arm64 (M1), so
-#   aarch64-apple-darwin is built natively and x86_64-apple-darwin is cross-compiled
-#   via the Rust cross-compilation target (no extra tooling needed — just the target).
+# - commit_hash may be a short or full SHA; the resolve job expands it.
 
 name: release-rmpc
 
@@ -35,39 +42,64 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Git tag to create and publish (e.g. v0.3.1)"
-        required: true
+        description: "Git tag to create on success (e.g. v0.3.1). Required unless dry_run=true."
+        required: false
         type: string
       commit_hash:
-        description: "Commit SHA to tag and release from"
-        required: true
+        description: "Commit SHA (short or full) to build from. Defaults to the dispatched ref's HEAD."
+        required: false
         type: string
+      dry_run:
+        description: "Build all targets and upload as workflow artifacts only — no tag, no GitHub Release."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  create-tag:
-    name: create-and-push-tag
-    if: github.event_name == 'workflow_dispatch'
+  resolve:
+    name: resolve-inputs
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      version: ${{ steps.r.outputs.version }}
     steps:
-      - name: Checkout
+      - name: Validate inputs
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" != "true" ] && [ -z "${{ inputs.tag }}" ]; then
+            echo "::error::tag input is required when dry_run is false"
+            exit 1
+          fi
+
+      - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit_hash }}
+          fetch-depth: 0
 
-      - name: Create and push git tag
+      - name: Resolve sha + version
+        id: r
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          if [ -n "${{ inputs.commit_hash }}" ]; then
+            SHA=$(git rev-parse "${{ inputs.commit_hash }}^{commit}")
+          else
+            SHA="${{ github.sha }}"
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${{ inputs.tag }}" ]; then
+            VERSION="${{ inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="dryrun-$(echo "${SHA}" | cut -c1-7)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
   build:
     name: build-${{ matrix.target }}
-    needs: [create-tag]
-    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    needs: [resolve]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -97,7 +129,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit_hash || github.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
           submodules: recursive
 
       - name: Install Rust toolchain
@@ -139,8 +171,7 @@ jobs:
 
       - name: Strip binary (Linux native)
         if: runner.os == 'Linux' && !matrix.cross
-        run: |
-          strip target/${{ matrix.target }}/release/rmpc
+        run: strip target/${{ matrix.target }}/release/rmpc
 
       - name: Strip binary (Linux aarch64 cross)
         if: runner.os == 'Linux' && matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
@@ -151,27 +182,58 @@ jobs:
 
       - name: Strip binary (macOS)
         if: runner.os == 'macOS'
-        run: |
-          strip target/${{ matrix.target }}/release/rmpc
-
-      - name: Package tar.gz
-        run: |
-          VERSION="${{ inputs.tag || github.ref_name }}"
-          ARCHIVE="rmpc-${VERSION}-${{ matrix.os_label }}.tar.gz"
-          tar -czf "${ARCHIVE}" \
-            -C target/${{ matrix.target }}/release \
-            rmpc
-          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+        run: strip target/${{ matrix.target }}/release/rmpc
 
       - name: Smoke-test binary (linux/amd64 only)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          ./target/${{ matrix.target }}/release/rmpc --version
+        run: ./target/${{ matrix.target }}/release/rmpc --version
 
-      - name: Upload release asset
+      - name: Package tar.gz
+        run: |
+          ARCHIVE="rmpc-${{ needs.resolve.outputs.version }}-${{ matrix.os_label }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C target/${{ matrix.target }}/release rmpc
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload archive as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: tag-and-publish
+    needs: [resolve, build]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded archives
+        run: ls -la artifacts/
+
+      - name: Create and push git tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ inputs.tag }}"
+          git push origin "${{ inputs.tag }}"
+
+      - name: Create GitHub Release with all assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: ${{ env.ARCHIVE }}
+          files: artifacts/*.tar.gz
           draft: false
           fail_on_unmatched_files: true
