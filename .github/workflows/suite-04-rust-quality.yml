@@ -37,8 +37,12 @@ on:
     branches: [main, dev]
     paths:
       - "clients/rust-payment-client/**"
+      - "clients/explorer-api/**"
       - "testing/ethereum-testnet/e2e-rust/**"
       - "services/explorer-indexer/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/suite-04-rust-quality.yml"
   workflow_dispatch:
 

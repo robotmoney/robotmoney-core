@@ -1528,6 +1528,7 @@ dependencies = [
  "hex",
  "insta",
  "reqwest",
+ "rmpc-logging",
  "serde",
  "serde_json",
  "sqlx",
@@ -1538,7 +1539,6 @@ dependencies = [
  "tower",
  "tower-http 0.5.2",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1553,6 +1553,7 @@ dependencies = [
  "hex",
  "reqwest",
  "rmpc-fork-e2e",
+ "rmpc-logging",
  "serde",
  "serde_json",
  "sqlx",
@@ -1562,7 +1563,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "which",
 ]
 
@@ -3398,6 +3398,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmpc-logging"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "time",
+ "tracing",
+ "tracing-log",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3474,6 +3485,7 @@ dependencies = [
  "predicates",
  "rand_core 0.6.4",
  "reqwest",
+ "rmpc-logging",
  "serde",
  "serde_json",
  "tempfile",

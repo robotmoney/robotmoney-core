@@ -20,17 +20,21 @@ use anyhow::Context;
 use axum::http::HeaderValue;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing_subscriber::EnvFilter;
 
 use explorer_api::{router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // Canonical: docs/architecture.md §14 — Audit Logging. All Rust
+    // binaries route through the workspace-shared logging facade so
+    // operator output is byte-for-byte consistent with `rmpc` and
+    // `explorer-indexer` (issue #247).
+    if let Err(e) = rmpc_logging::init_service("explorer-api") {
+        // Bootstrap failure: facade is not installed. Print one stderr
+        // line and exit so the operator can diagnose.
+        eprintln!("explorer-api: logging init failed: {e}");
+        return Err(anyhow::anyhow!(e));
+    }
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL not set")?;
     let chain_id: i64 = std::env::var("EXPLORER_API_CHAIN_ID")

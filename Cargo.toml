@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/rmpc-logging",
     "clients/rust-payment-client",
     "clients/explorer-api",
     "services/explorer-indexer",

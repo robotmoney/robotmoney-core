@@ -44,6 +44,9 @@ thiserror = "1"
 clap = { version = "4", features = ["derive"] }
 log = "0.4"
 flexi_logger = { version = "0.31", default-features = false, features = ["textfilter"] }
+# Workspace-shared logging facade: rmpc and the services share the same
+# diagnostic line shape via this crate (issue #247).
+rmpc-logging = { path = "../../crates/rmpc-logging" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]

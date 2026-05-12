@@ -277,16 +277,20 @@ pub fn init(cfg: &LogConfig) -> Result<PathBuf, String> {
 
 /// Diagnostic log line format:
 /// `2026-01-02T15:04:05.123Z LEVEL [target] msg`.
+///
+/// The byte shape is delegated to the workspace-shared
+/// `rmpc_logging::write_canonical_line` so the rotating CLI file output
+/// stays byte-for-byte identical to the services' stderr output
+/// (issue #247).
 fn diagnostic_format(
     w: &mut dyn std::io::Write,
     now: &mut DeferredNow,
     record: &Record,
 ) -> std::io::Result<()> {
-    write!(
+    rmpc_logging::write_canonical_line(
         w,
-        "{} {:<5} [{}] {}",
-        now.format_rfc3339(),
-        record.level(),
+        &now.format_rfc3339().to_string(),
+        record.level().as_str(),
         record.target(),
         record.args(),
     )

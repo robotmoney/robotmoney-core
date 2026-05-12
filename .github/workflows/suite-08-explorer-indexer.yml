@@ -39,6 +39,9 @@ on:
     paths:
       - "services/explorer-indexer/**"
       - "testing/explorer-indexer/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/suite-08-explorer-indexer.yml"
   workflow_dispatch:
 

@@ -1,0 +1,28 @@
+[package]
+name = "rmpc-logging"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Canonical: docs/architecture.md §14 — Audit Logging
+#
+# Shared logging facade used by every Rust binary and long-running service in
+# the workspace. Issue #247 unified the formatter and filter configuration
+# behind this crate so operator output is consistent across `rmpc`, the
+# explorer indexer, and the explorer API.
+#
+# Two entry points:
+# - `init_service(name)` — stderr-only `tracing` subscriber for long-running
+#   services (explorer-indexer, explorer-api, …). Bridges `log::` calls into
+#   the same subscriber via `tracing-log` so mixed-crate dependencies still
+#   appear in the unified stream.
+# - `canonical_diagnostic_format` — the single formatter both the CLI's
+#   rotating file backend and the service stderr backend use, so an operator
+#   reading either output sees the same line shape.
+
+[dependencies]
+log = "0.4"
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+time = { version = "0.3", default-features = false, features = ["formatting", "macros"] }

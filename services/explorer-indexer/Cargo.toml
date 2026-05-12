@@ -38,7 +38,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4", features = ["derive", "env"] }
 thiserror = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Logging is initialised via the workspace-shared facade (issue #247) so
+# operator output matches `rmpc` and `explorer-api` byte-for-byte.
+rmpc-logging = { path = "../../crates/rmpc-logging" }
 hex = "0.4"
 
 [dev-dependencies]

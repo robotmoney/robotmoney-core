@@ -35,7 +35,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 bigdecimal = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Logging is initialised via the workspace-shared facade (issue #247) so
+# operator output matches `rmpc` and `explorer-indexer` byte-for-byte.
+rmpc-logging = { path = "../../crates/rmpc-logging" }
 hex = "0.4"
 anyhow = "1"
 

@@ -63,12 +63,16 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // Canonical: docs/architecture.md §14 — Audit Logging. All Rust
+    // binaries route through the workspace-shared logging facade so
+    // operator output is byte-for-byte consistent with `rmpc` and
+    // `explorer-api` (issue #247).
+    if let Err(e) = rmpc_logging::init_service("explorer-indexer") {
+        // Bootstrap failure path — facade is not installed; emit one
+        // stderr line so the operator can diagnose the boot crash.
+        eprintln!("explorer-indexer: logging init failed: {e}");
+        return Err(e.into());
+    }
 
     let cli = Cli::parse();
 
