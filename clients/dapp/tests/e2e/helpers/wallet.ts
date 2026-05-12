@@ -235,6 +235,7 @@ export type AdminTabId =
   | "rotation"
   | "admin-role"
   | "pauser-role"
+  | "faucet"
   | "history"
   | "export";
 

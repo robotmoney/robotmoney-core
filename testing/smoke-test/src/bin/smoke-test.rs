@@ -191,6 +191,17 @@ fn main() {
             hex::encode(smoke_test::AGENT_PRIVATE_KEY)
         );
         println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
+        // Issue #261: surface the harness USDC holder so dapp e2e tests
+        // can verify the testnet faucet path drips from the same EOA the
+        // Rust `Fixture::fund_usdc` helper uses.
+        println!(
+            "harness_usdc_holder_addr={}",
+            smoke_test::HARNESS_USDC_HOLDER_ADDRESS_HEX
+        );
+        println!(
+            "harness_usdc_holder_private_key={}",
+            smoke_test::HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX
+        );
         println!("--- end endpoint summary ---");
 
         Some(stack)

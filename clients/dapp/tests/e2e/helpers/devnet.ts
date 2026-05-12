@@ -24,6 +24,8 @@ export interface DevnetEndpoints {
   pauser_private_key: string;
   agent_private_key: string;
   gateway_runtime_hash: string;
+  harness_usdc_holder_addr: string;
+  harness_usdc_holder_private_key: string;
 }
 
 export function loadEndpoints(): DevnetEndpoints {

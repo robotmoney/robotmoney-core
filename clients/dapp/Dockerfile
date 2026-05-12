@@ -22,6 +22,12 @@ ARG VITE_HISTORY_PANE=false
 # `wallet_addEthereumChain`; never used as a read transport. Empty for
 # prod operator builds (mainnet / Base — wallet already has the chain).
 ARG VITE_DEVNET_RPC_URL=
+# Optional: 32-byte hex private key of the smoke-test USDC holder EOA
+# (see testing/smoke-test/src/lib.rs `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`).
+# Inlined ONLY for testnet/devnet builds; mainnet operator builds leave
+# this unset and the dapp's Faucet tab / onboarding seed step fail closed
+# (see clients/dapp/src/lib/faucetClient.ts).
+ARG VITE_FAUCET_HARNESS_PRIVATE_KEY=
 
 ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_GATEWAY_ADDRESS=$VITE_GATEWAY_ADDRESS \
@@ -31,7 +37,8 @@ ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_ENV_CLASS=$VITE_ENV_CLASS \
     VITE_BROWSER_KEYGEN=$VITE_BROWSER_KEYGEN \
     VITE_HISTORY_PANE=$VITE_HISTORY_PANE \
-    VITE_DEVNET_RPC_URL=$VITE_DEVNET_RPC_URL
+    VITE_DEVNET_RPC_URL=$VITE_DEVNET_RPC_URL \
+    VITE_FAUCET_HARNESS_PRIVATE_KEY=$VITE_FAUCET_HARNESS_PRIVATE_KEY
 
 COPY clients/dapp/package.json clients/dapp/bun.lock ./
 RUN bun install --frozen-lockfile

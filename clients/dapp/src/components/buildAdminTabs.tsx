@@ -14,6 +14,9 @@ import { RevokeTab } from "./RevokeTab";
 import { RotationTab } from "./RotationTab";
 import { RoleTab } from "./RoleTab";
 import { DepositWithdrawTab } from "./DepositWithdrawTab";
+import { FaucetTab } from "./FaucetTab";
+import { classifyChain } from "../lib/chainClassifier";
+import { readHarnessPrivateKey } from "../lib/faucetClient";
 
 export type BuildAdminTabsArgs = Readonly<{
   gatewayAddress: Address;
@@ -28,6 +31,12 @@ export type BuildAdminTabsArgs = Readonly<{
   setAgent: Dispatch<SetStateAction<string>>;
   shareReceiver: string;
   setShareReceiver: Dispatch<SetStateAction<string>>;
+  /**
+   * Wallets shown in the testnet/devnet Faucet tab dropdown. Caller
+   * passes the connected EOA list; empty on mainnet builds, which is
+   * fine because the FaucetTab is never inserted there.
+   */
+  faucetWalletAddresses: ReadonlyArray<Address>;
   now: number;
 }>;
 
@@ -111,6 +120,26 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
       ),
     },
   );
+
+  // Faucet tab — testnet/devnet only. Hard gate at insertion time so the
+  // tab is absent from the DOM entirely on mainnet (issue #261 AC: "no
+  // faucet UI component … reachable when the chain-ID classifier returns
+  // `mainnet`"). Defence in depth: FaucetTab itself also fails closed when
+  // the build-time harness key is missing.
+  if (classifyChain(a.chainId) === "testnet") {
+    tabs.push({
+      id: "faucet",
+      label: "Faucet",
+      content: (
+        <FaucetTab
+          usdcAddress={a.usdcAddress}
+          chainId={a.chainId}
+          walletAddresses={a.faucetWalletAddresses}
+          harnessPrivateKey={readHarnessPrivateKey(a.flagEnv)}
+        />
+      ),
+    });
+  }
 
   if (a.historyPaneEnabled && validAgent) {
     tabs.push({

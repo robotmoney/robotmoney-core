@@ -127,3 +127,34 @@ export const ROLE_HASH: Record<RoleName, `0x${string}`> = {
 
 export const ADMIN_ROLE_HASH = ROLE_HASH.ADMIN_ROLE;
 export const PAUSER_ROLE_HASH = ROLE_HASH.PAUSER_ROLE;
+
+/**
+ * Minimal ERC-20 ABI fragment used by the testnet/devnet faucet (issue
+ * #261) for `transfer(address,uint256)` writes and `balanceOf(address)`
+ * read-backs. The faucet drips canonical USDC by signing a plain ERC-20
+ * `transfer` from the harness holder EOA — the same path the smoke-test
+ * fixture's `Fixture::fund_usdc` uses on the Rust side (issue #255).
+ *
+ * Kept minimal on purpose: the dapp only needs `transfer` (write) and
+ * `balanceOf` (read-back). All other ERC-20 surface lives with the Rust
+ * client.
+ */
+export const erc20Abi = [
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;

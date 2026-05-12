@@ -108,6 +108,12 @@ services:
         VITE_ENV_CLASS: fork
         VITE_BROWSER_KEYGEN: "false"
         VITE_HISTORY_PANE: "true"
+        # Issue #261: bake the smoke-test USDC holder key into the dapp
+        # bundle so the Faucet tab and onboarding seed can drip canonical
+        # USDC. Defaults to empty if the parent process did not set it
+        # (e.g. ad-hoc local builds without the harness running); the
+        # FaucetTab and seed handler fail closed in that case.
+        VITE_FAUCET_HARNESS_PRIVATE_KEY: ${VITE_FAUCET_HARNESS_PRIVATE_KEY:-}
     container_name: dapp-frontend
     restart: unless-stopped
     depends_on:

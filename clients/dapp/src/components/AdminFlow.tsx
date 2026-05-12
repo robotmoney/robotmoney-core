@@ -26,7 +26,7 @@ type Props = Readonly<{
 
 export function AdminFlow(props: Props) {
   const flags = resolveFlags(props.flagEnv);
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const chainId = useChainId();
 
   const { data: usdcAddressData } = useReadContract({
@@ -62,6 +62,10 @@ export function AdminFlow(props: Props) {
     setAgent,
     shareReceiver,
     setShareReceiver,
+    // Today the dapp only knows the single connected EOA; once
+    // multi-wallet onboarding lands we widen this list. The Faucet tab
+    // gracefully renders "(no wallets connected)" when empty.
+    faucetWalletAddresses: address ? [address] : [],
     now: props.now,
   });
 

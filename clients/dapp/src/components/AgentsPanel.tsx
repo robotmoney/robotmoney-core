@@ -37,7 +37,18 @@ export function AgentsPanel(props: Props) {
   const { connect, connectors } = useConnect();
   const status = useAgentRegistration(props.envClass);
   const [networkSyncError, setNetworkSyncError] = useState<string | undefined>(undefined);
-  const forceOnboarding = props.flagEnv.VITE_FORCE_ONBOARDING === "1";
+  // `VITE_FORCE_ONBOARDING=1` (build-time) is the documented operator
+  // override; `?force-onboarding=1` (URL query) is the dapp-side hook
+  // the issue-#261 Playwright e2e suite uses to drive the onboarding
+  // wizard against the smoke-test devnet without rebuilding the
+  // container with a different env class. Both forms are dev-only —
+  // mainnet operator builds never set the env var, and the URL flag
+  // only activates onboarding mounting (it never reaches the faucet
+  // seed path, which still requires `classifyChain === "testnet"`).
+  const urlForceOnboarding =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("force-onboarding") === "1";
+  const forceOnboarding = props.flagEnv.VITE_FORCE_ONBOARDING === "1" || urlForceOnboarding;
 
   const handleConnect = (connector: (typeof connectors)[number]) => {
     connect(
@@ -90,7 +101,14 @@ export function AgentsPanel(props: Props) {
       gatewayCodeHashVerified: props.gatewayVerificationState.status === "verified",
       envClass: props.envClass,
     };
-    return <OnboardingWizard gatewayAddress={props.gatewayAddress} ctx={ctx} now={props.now} />;
+    return (
+      <OnboardingWizard
+        gatewayAddress={props.gatewayAddress}
+        ctx={ctx}
+        env={props.flagEnv}
+        now={props.now}
+      />
+    );
   }
 
   return (

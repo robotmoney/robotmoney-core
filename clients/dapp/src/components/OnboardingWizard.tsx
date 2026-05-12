@@ -17,18 +17,28 @@
  * see docs/technical/dapp-credential-decisions.md §3.1.
  */
 import { useState, type FormEvent } from "react";
-import { useAccount, useSimulateContract, useWriteContract } from "wagmi";
+import {
+  useAccount,
+  useChainId,
+  useReadContract,
+  useSimulateContract,
+  useWriteContract,
+} from "wagmi";
 import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
+import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
+import { getInjectedProvider } from "../lib/syncDevnetChain";
 import { PolicyFields } from "./PolicyFields";
 import { TxPreview } from "./TxPreview";
 
 type Props = Readonly<{
   gatewayAddress: Address;
   ctx: PreviewContext;
+  /** Vite build env. Read here only to look up VITE_FAUCET_HARNESS_PRIVATE_KEY for the testnet seed step. */
+  env: Record<string, string | undefined>;
   now: number;
 }>;
 
@@ -36,7 +46,20 @@ type Step = 1 | 2 | 3;
 
 export function OnboardingWizard(props: Props) {
   const { address, isConnected } = useAccount();
+  const chainId = useChainId();
   const { writeContract, isPending } = useWriteContract();
+  const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
+
+  // Read the USDC contract address from the gateway so the seed drip
+  // targets the same canonical token AdminFlow does. Enabled only once
+  // the wallet is connected — otherwise wagmi noises about a missing
+  // chain context.
+  const { data: usdcData } = useReadContract({
+    address: props.gatewayAddress,
+    abi: gatewayAbi,
+    functionName: "usdc",
+    query: { enabled: isConnected },
+  });
 
   const [step, setStep] = useState<Step>(1);
   const [agent, setAgent] = useState("");
@@ -78,8 +101,24 @@ export function OnboardingWizard(props: Props) {
   const onAuthorize = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!sim) return;
-    writeContract(sim.request);
-    if (address) markRegistered(address);
+    writeContract(sim.request, {
+      onSuccess: () => {
+        if (!address) return;
+        markRegistered(address);
+        // Testnet/devnet only — seedOnboardingUsdc itself classifies the
+        // active chain and returns `skipped-mainnet` on canonical mainnet
+        // IDs, so this call is safe to issue unconditionally here.
+        const usdcAddress = (usdcData as Address | undefined) ?? null;
+        if (!usdcAddress || !isAddress(usdcAddress)) return;
+        void seedOnboardingUsdc({
+          chainId,
+          recipient: address,
+          usdcAddress,
+          env: props.env,
+          provider: getInjectedProvider(),
+        }).then(setSeedResult);
+      },
+    });
   };
 
   return (
@@ -190,6 +229,23 @@ export function OnboardingWizard(props: Props) {
               </button>
             </div>
           </form>
+          {seedResult && (
+            <p
+              data-testid="wizard-seed-result"
+              data-seed-status={seedResult.status}
+              className="hint"
+            >
+              {seedResult.status === "seeded" &&
+                `Funded account with 100 USDC (tx ${seedResult.hash}).`}
+              {seedResult.status === "skipped-mainnet" &&
+                "Skipped USDC seed: connected wallet is on a mainnet chain."}
+              {seedResult.status === "skipped-no-harness" &&
+                "Skipped USDC seed: this build has no harness funding key."}
+              {seedResult.status === "skipped-no-provider" &&
+                "Skipped USDC seed: no injected wallet provider."}
+              {seedResult.status === "failed" && `USDC seed failed: ${seedResult.message}`}
+            </p>
+          )}
         </section>
       )}
     </main>

@@ -916,6 +916,16 @@ impl DappStack {
             .env("VITE_DEVNET_RPC_URL", &vite_rpc_url)
             .env("VITE_EXPLORER_API_URL", &vite_explorer_api_url)
             .env("VITE_DAPP_URL", &vite_dapp_url)
+            // Issue #261: thread the harness USDC holder key through to
+            // the dapp build so the testnet Faucet tab + onboarding seed
+            // can drip canonical USDC via a real ERC-20 `transfer` from
+            // the holder EOA — same path as `Fixture::fund_usdc` on the
+            // Rust side. Trimmed to remove the historical "0x" prefix
+            // because the JS side normalizes both forms.
+            .env(
+                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            )
             .env("INDEXER_CHAIN_ID", "918453")
             .env("INDEXER_CHAIN_NAME", "devnet")
             .env("EXPLORER_API_CHAIN_ID", "918453")

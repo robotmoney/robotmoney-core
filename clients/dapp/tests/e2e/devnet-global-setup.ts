@@ -43,6 +43,8 @@ const REQUIRED_KEYS = [
   "pauser_private_key",
   "agent_private_key",
   "gateway_runtime_hash",
+  "harness_usdc_holder_addr",
+  "harness_usdc_holder_private_key",
 ] as const;
 type RequiredKey = (typeof REQUIRED_KEYS)[number];
 
@@ -168,6 +170,8 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     pauser_private_key: raw.pauser_private_key,
     agent_private_key: raw.agent_private_key,
     gateway_runtime_hash: raw.gateway_runtime_hash,
+    harness_usdc_holder_addr: raw.harness_usdc_holder_addr,
+    harness_usdc_holder_private_key: raw.harness_usdc_holder_private_key,
   };
 
   console.log("devnet-global-setup: endpoint summary received");
