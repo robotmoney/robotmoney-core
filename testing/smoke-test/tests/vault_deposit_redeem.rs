@@ -26,7 +26,11 @@ fn fixture() -> &'static Fixture {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn rpc_call<T: for<'de> serde::Deserialize<'de>>(url: &str, method: &str, params: serde_json::Value) -> T {
+fn rpc_call<T: for<'de> serde::Deserialize<'de>>(
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> T {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -34,13 +38,15 @@ fn rpc_call<T: for<'de> serde::Deserialize<'de>>(url: &str, method: &str, params
     let body = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": method, "params": params
     });
-    let resp: serde_json::Value = client.post(url).json(&body).send()
+    let resp: serde_json::Value = client
+        .post(url)
+        .json(&body)
+        .send()
         .expect("RPC request failed")
         .json()
         .expect("RPC response is not JSON");
-    serde_json::from_value(
-        resp.get("result").expect("no result field").clone()
-    ).expect("RPC result decode failed")
+    serde_json::from_value(resp.get("result").expect("no result field").clone())
+        .expect("RPC result decode failed")
 }
 
 /// Read a uint256 storage return value from an eth_call hex response.
@@ -53,7 +59,10 @@ fn u256_from_hex_result(hex: &str) -> u128 {
 
 /// ABI-encode a call to `balanceOf(address)` (selector 0x70a08231).
 fn balance_of_calldata(addr: Address) -> String {
-    format!("0x70a08231000000000000000000000000{}", format!("{addr:#x}").trim_start_matches("0x"))
+    format!(
+        "0x70a08231000000000000000000000000{}",
+        format!("{addr:#x}").trim_start_matches("0x")
+    )
 }
 
 /// Read ERC-20 balanceOf via eth_call.
@@ -97,7 +106,8 @@ fn vault_deposit_redeem_round_trip() {
         usdc,
         "approve(address,uint256)",
         &[&format!("{vault:#x}"), &ONE_USDC.to_string()],
-    ).expect("approve vault");
+    )
+    .expect("approve vault");
 
     let usdc_before = erc20_balance(fx.rpc_url(), usdc, agent);
     let shares_before: u128 = {
@@ -119,7 +129,8 @@ fn vault_deposit_redeem_round_trip() {
         vault,
         "deposit(uint256,address)",
         &[&ONE_USDC.to_string(), &format!("{agent:#x}")],
-    ).expect("vault deposit");
+    )
+    .expect("vault deposit");
 
     // --- Step 3: verify shares minted (>= 1e24 raw shares for decimalsOffset=18) ---
     let shares_after: String = rpc_call(
@@ -137,7 +148,11 @@ fn vault_deposit_redeem_round_trip() {
     // For a fresh vault with decimalsOffset=18: 1e6 USDC → ~1e24 raw shares.
     // We check via hex string length: 1e24 hex = 0x0d3c21bcecceda1000000 (22 hex chars, 11 bytes).
     // The full 64-char hex value should be non-zero past the lower 16 bytes.
-    let high_bytes = if shares_raw_hex.len() > 32 { &shares_raw_hex[..shares_raw_hex.len()-32] } else { "" };
+    let high_bytes = if shares_raw_hex.len() > 32 {
+        &shares_raw_hex[..shares_raw_hex.len() - 32]
+    } else {
+        ""
+    };
     let high_nonzero = high_bytes.chars().any(|c| c != '0');
     assert!(
         shares_minted_low > shares_before || high_nonzero,
@@ -159,7 +174,8 @@ fn vault_deposit_redeem_round_trip() {
             &format!("{agent:#x}"),
             &format!("{agent:#x}"),
         ],
-    ).expect("vault redeem");
+    )
+    .expect("vault redeem");
 
     // --- Step 5: assert USDC returned within rounding tolerance ---
     let usdc_after = erc20_balance(fx.rpc_url(), usdc, agent);
@@ -204,6 +220,9 @@ fn vault_on_chain_state() {
         ]),
     );
     let count = u256_from_hex_result(&count_hex);
-    assert!(count >= 1, "vault should have at least one active adapter, got {count}");
+    assert!(
+        count >= 1,
+        "vault should have at least one active adapter, got {count}"
+    );
     eprintln!("vault_on_chain_state: exitFeeBps=0 activeAdapterCount={count}");
 }

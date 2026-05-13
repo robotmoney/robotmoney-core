@@ -3962,6 +3962,7 @@ name = "smoke-test"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "chrono",
  "clap",
  "ctrlc",
  "hex",

@@ -125,7 +125,10 @@ fn vault_has_zero_exit_fee_and_one_active_adapter() {
         ]),
     );
     let count = u256_from_hex(&count_hex);
-    assert!(count >= 1, "vault should have at least one active adapter, got {count}");
+    assert!(
+        count >= 1,
+        "vault should have at least one active adapter, got {count}"
+    );
 }
 
 // -- EOA funding sanity -----------------------------------------------
@@ -264,7 +267,11 @@ fn u256_from_hex(hex: &str) -> u128 {
     let stripped = hex.trim_start_matches("0x");
     // Take the last 16 bytes (32 hex chars) — enough for u128
     let len = stripped.len();
-    let slice = if len > 32 { &stripped[len - 32..] } else { stripped };
+    let slice = if len > 32 {
+        &stripped[len - 32..]
+    } else {
+        stripped
+    };
     u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 

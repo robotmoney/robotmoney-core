@@ -11,6 +11,7 @@
 //! file covers the CLI entrypoint around it.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -31,6 +32,8 @@ fn full_stack_cli_boots_and_tears_down() {
     }
 
     let repo_root = locate_repo_root().expect("locate repo root");
+    let log_dir = tempfile::tempdir().expect("create log dir");
+    let log_path = log_dir.path().join("smoke-test-cli_meta.log");
     let dapp_port = pick_free_port().expect("pick a free dapp port");
     let dapp_port = dapp_port.to_string();
 
@@ -44,8 +47,11 @@ fn full_stack_cli_boots_and_tears_down() {
             "--full-stack",
             "--dapp-port",
             &dapp_port,
+            "--log-file",
+            log_path.to_str().expect("utf8 log path"),
         ])
         .current_dir(&repo_root)
+        .env("SMOKE_TEST_LOG_FILE", &log_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -71,6 +77,19 @@ fn full_stack_cli_boots_and_tears_down() {
     stdout_handle.join().expect("stdout reader thread");
     stderr_handle.join().expect("stderr reader thread");
 
+    assert_log_file_present(&log_path);
+    assert_log_contains(
+        &log_path,
+        &[
+            "CLI starting",
+            "chain startup config:",
+            "chain RPC ready; waiting for EL/CL block production",
+            "chain EL/CL stack ready",
+            "dapp startup config:",
+            "full stack ready",
+            "shutdown reason=ctrl-c tearing down stacks",
+        ],
+    );
     assert_no_containers_with_prefix("eth-");
     assert_no_containers_with_prefix("dapp-");
 }
@@ -169,6 +188,62 @@ fn assert_required_fields(fields: &BTreeMap<String, String>) {
         assert!(
             fields.contains_key(key),
             "missing {key} in smoke-test output"
+        );
+    }
+}
+
+fn assert_log_file_present(log_path: &std::path::Path) {
+    let raw = fs::read_to_string(log_path).unwrap_or_else(|err| {
+        panic!(
+            "smoke-test log file missing at {}: {err}",
+            log_path.display()
+        )
+    });
+    let mut services = std::collections::BTreeSet::new();
+    let mut line_count = 0;
+
+    for line in raw.lines() {
+        line_count += 1;
+        let (timestamp, rest) = line
+            .split_once(" [")
+            .unwrap_or_else(|| panic!("missing timestamp/service prefix: {line}"));
+        chrono::DateTime::parse_from_rfc3339(timestamp)
+            .unwrap_or_else(|err| panic!("invalid RFC3339 timestamp `{timestamp}`: {err}"));
+        let (service, remainder) = rest
+            .split_once("] [")
+            .unwrap_or_else(|| panic!("missing service/level tag: {line}"));
+        assert!(
+            !service.is_empty(),
+            "empty service tag in smoke-test log line: {line}"
+        );
+        let (level, message) = remainder
+            .split_once("] ")
+            .unwrap_or_else(|| panic!("missing level/message separator: {line}"));
+        assert!(
+            !level.is_empty() && !message.is_empty(),
+            "incomplete smoke-test log line: {line}"
+        );
+        services.insert(service.to_string());
+    }
+
+    assert!(line_count > 0, "smoke-test log file was empty");
+    assert!(
+        services.len() >= 2,
+        "expected logs from at least two services, got {services:?}"
+    );
+}
+
+fn assert_log_contains(log_path: &std::path::Path, needles: &[&str]) {
+    let raw = fs::read_to_string(log_path).unwrap_or_else(|err| {
+        panic!(
+            "smoke-test log file missing at {}: {err}",
+            log_path.display()
+        )
+    });
+    for needle in needles {
+        assert!(
+            raw.contains(needle),
+            "expected smoke-test log to contain `{needle}`, but it did not"
         );
     }
 }

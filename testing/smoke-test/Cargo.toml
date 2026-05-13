@@ -48,3 +48,4 @@ hex = "0.4"
 thiserror = "1"
 ctrlc = "3"
 clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

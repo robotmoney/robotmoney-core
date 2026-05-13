@@ -13,10 +13,12 @@
 //! Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
 
 use clap::Parser;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
 #[command(name = "smoke-test", about = "Robot Money devnet smoke test harness")]
@@ -71,13 +73,30 @@ struct Cli {
     /// (`VITE_EXPLORER_API_URL`). See --public-rpc-url.
     #[arg(long)]
     public_explorer_url: Option<String>,
+
+    /// Write harness logs to this file instead of the default
+    /// `smoke-test.log` in the current directory.
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+
+    /// Rotate the unified log file after it grows beyond this many bytes.
+    /// Defaults to 10 MiB.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    log_max_bytes: Option<u64>,
 }
 
 fn main() {
+    let exit_code = run();
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn run() -> i32 {
     let cli = Cli::parse();
     if cli.tunnel && !cli.full_stack {
         eprintln!("smoke-test: --tunnel requires --full-stack.");
-        std::process::exit(2);
+        return 2;
     }
     let named_url_count = [
         cli.public_rpc_url.is_some(),
@@ -92,20 +111,39 @@ fn main() {
             "smoke-test: --public-rpc-url, --public-dapp-url, and --public-explorer-url \
              must all be set together (or all omitted)."
         );
-        std::process::exit(2);
+        return 2;
     }
     let use_named = named_url_count == 3;
     if use_named && cli.tunnel {
         eprintln!("smoke-test: --tunnel is incompatible with --public-*-url flags.");
-        std::process::exit(2);
+        return 2;
     }
     if use_named && !cli.full_stack {
         eprintln!("smoke-test: --public-*-url flags require --full-stack.");
-        std::process::exit(2);
+        return 2;
     }
     if let Some(rpc_port) = cli.rpc_port {
         std::env::set_var("SMOKE_TEST_GETH_RPC_PORT", rpc_port.to_string());
     }
+    if let Some(path) = cli.log_file {
+        std::env::set_var("SMOKE_TEST_LOG_FILE", path);
+    }
+    if let Some(limit) = cli.log_max_bytes {
+        std::env::set_var("SMOKE_TEST_LOG_MAX_BYTES", limit.to_string());
+    }
+    let _ = smoke_test::logging::init();
+    let genesis_timestamp = ensure_genesis_timestamp();
+    smoke_test::logging::info(
+        "smoke-test",
+        format!(
+            "CLI starting: full_stack={} tunnel={} log_file={} log_max_bytes={} genesis_timestamp={}",
+            cli.full_stack,
+            cli.tunnel,
+            smoke_test::logging::log_path().display(),
+            smoke_test::logging::max_bytes(),
+            genesis_timestamp
+        ),
+    );
     let interrupted = Arc::new(AtomicBool::new(false));
     {
         let interrupted = Arc::clone(&interrupted);
@@ -120,14 +158,24 @@ fn main() {
             "smoke-test: docker / forge / cast not on PATH. \
              Install Docker + Foundry to run the devnet."
         );
-        std::process::exit(1);
+        smoke_test::logging::error("smoke-test", "missing prerequisites: docker / forge / cast");
+        return 1;
     }
 
     eprintln!("smoke-test: booting devnet (this takes 60-120 seconds)...");
-    let fixture = smoke_test::Fixture::new().expect("devnet boot failed");
+    smoke_test::logging::info("smoke-test", "booting devnet");
+    let fixture = match smoke_test::Fixture::new() {
+        Ok(fixture) => fixture,
+        Err(err) => {
+            smoke_test::logging::error("smoke-test", format!("devnet boot failed: {err}"));
+            eprintln!("smoke-test: devnet boot failed: {err}");
+            return 1;
+        }
+    };
     if interrupted.load(Ordering::SeqCst) {
         eprintln!("smoke-test: interrupted during devnet startup.");
-        return;
+        smoke_test::logging::warn("smoke-test", "shutdown reason=ctrl-c during startup");
+        return 0;
     }
 
     println!("rpc_url={}", fixture.rpc_url());
@@ -142,6 +190,7 @@ fn main() {
     // down the compose stack together with the chain fixture.
     let _dapp_stack: Option<smoke_test::DappStack> = if cli.full_stack {
         eprintln!("smoke-test: starting full-stack (dapp + explorer-api + indexer + postgres)...");
+        smoke_test::logging::info("smoke-test", "starting full-stack compose stack");
         let public_endpoints = if use_named {
             smoke_test::PublicEndpoints::Named {
                 rpc_url: cli.public_rpc_url.clone().unwrap(),
@@ -158,10 +207,21 @@ fn main() {
             explorer_api_port: cli.explorer_port,
             public_endpoints,
         };
-        let stack = smoke_test::DappStack::boot(&fixture, opts).expect("dapp stack boot failed");
+        let stack = match smoke_test::DappStack::boot(&fixture, opts) {
+            Ok(stack) => stack,
+            Err(err) => {
+                smoke_test::logging::error("smoke-test", format!("dapp stack boot failed: {err}"));
+                eprintln!("smoke-test: dapp stack boot failed: {err}");
+                return 1;
+            }
+        };
         if interrupted.load(Ordering::SeqCst) {
             eprintln!("smoke-test: interrupted during full-stack startup.");
-            return;
+            smoke_test::logging::warn(
+                "smoke-test",
+                "shutdown reason=ctrl-c during full-stack startup",
+            );
+            return 0;
         }
 
         // Structured endpoint summary — printed after all health checks pass.
@@ -211,13 +271,34 @@ fn main() {
 
     if cli.full_stack {
         eprintln!("smoke-test: full stack ready. Stop with Ctrl-C.");
+        smoke_test::logging::info("smoke-test", "full stack ready");
     } else {
         eprintln!("smoke-test: network ready. Stop with Ctrl-C.");
+        smoke_test::logging::info("smoke-test", "network ready");
     }
     while !interrupted.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     eprintln!("smoke-test: stopping...");
+    smoke_test::logging::info("smoke-test", "shutdown reason=ctrl-c tearing down stacks");
     // _dapp_stack drops here first → docker compose down dapp stack
     // fixture drops next → docker compose down chain stack
+    0
+}
+
+fn ensure_genesis_timestamp() -> String {
+    match std::env::var("GENESIS_TIMESTAMP") {
+        Ok(value) => value,
+        Err(_) => {
+            const GENESIS_LEAD_SECS: u64 = 15;
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before UNIX_EPOCH")
+                .saturating_add(std::time::Duration::from_secs(GENESIS_LEAD_SECS))
+                .as_secs()
+                .to_string();
+            std::env::set_var("GENESIS_TIMESTAMP", &ts);
+            ts
+        }
+    }
 }

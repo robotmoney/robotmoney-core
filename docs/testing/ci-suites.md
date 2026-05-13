@@ -388,9 +388,9 @@ isolation, independent of any client (rmpc, dapp, explorer).
 6. `cargo fmt --check -p smoke-test`
 7. `cargo clippy -p smoke-test --all-targets -- -D warnings`
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
-9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, and verifies `--dapp-port` / Ctrl-C teardown
-10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly
-11. `docker compose down -v --remove-orphans || true` — safety net teardown (always)
+9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
+10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
+11. Upload `testing/smoke-test/smoke-test*.log` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A
