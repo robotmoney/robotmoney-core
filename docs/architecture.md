@@ -11,7 +11,10 @@
 > parity: it covers guarded deposits, direct chain reads, and the agent
 > safety boundary. Reads, withdraw/redeem, basket routing, simulation,
 > wallet UX, and mainnet configuration are phased in
-> `docs/implementation-plan.md`.
+> `docs/implementation-plan.md`. The current repo state already includes
+> the foundational infrastructure and most of the MVP e2e / application
+> surfaces; the remaining work is concentrated in hardening and future
+> feature phases.
 
 ## 1. Product Boundary
 

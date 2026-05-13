@@ -1,11 +1,10 @@
 # MVP Implementation Plan — Rust Client, Gateway, Testing, Agent Surfaces
 
 > Companion to `docs/architecture.md`. This plan covers the
-> full MVP sequence. Phase 1 was the buildable slice of v0: one
-> chain, one token, one gateway, one Rust client. Later phases add
-> fork-based smart-contract testing, direct chain-read tooling,
-> agent-harness installation, a simple explorer API/database,
-> human-facing controls, and a final OpenClaw demo.
+> full MVP sequence. It is organized into five maturity phases:
+> foundational infrastructure and tests; MVP e2e plus agent install
+> to wallet config; application features; security hardening and tree
+> shaking; and potential future features.
 >
 > **Relationship to the product.** Robot Money is the ERC-4626 yield
 > vault in `contracts/RobotMoneyVault.sol` plus its
@@ -31,7 +30,7 @@
 
 ## 0. Scope
 
-**Phase 1 in scope.** A single-chain (local Geth devnet),
+**Phase 1 complete.** A single-chain (local Geth devnet),
 single-token (mock USDC), single-gateway system where a Rust daemon
 authenticates as an `AGENT_ROLE` key and calls one function —
 `deposit` — on a gateway that enforces per-agent allowlist,
@@ -46,12 +45,9 @@ protocol-wide kill-switch counterweight to `pause` (it authorizes
 `unpause()`); it does not gate authorization or policy of any
 individual depositor's agent.
 
-**Full MVP in scope.** The full MVP is broader than phase 1. It also
-includes fork-based Robot Money contract tests, direct chain-read query
-commands in `rmpc`, agent-harness packaging for OpenCode and OpenClaw,
-a small explorer API/database for transaction and vault history, a
-human dapp for sensitive credential/policy actions, and a final
-OpenClaw-driven demo on a recent public-chain fork.
+**Full MVP in scope.** The full MVP is broader than phase 1. The
+remaining work is concentrated in phases 2–4: e2e install/config
+polish, application features, and security hardening/tree shaking.
 
 **Mock USDC + mock vault are the phase 1 test target.** The phase 1 test suite
 runs against a 6-decimal `MockUSDC.sol` and a minimal `MockVault.sol`
@@ -75,26 +71,17 @@ mainnet configuration management.
 
 ## 1. Phase map
 
-| Phase | Theme | Primary outcome |
-|---|---|---|
-| 1 | Secure agent deposit infrastructure | Agents can safely call a policy gateway that deposits USDC into the vault. |
-| 2 | Forked smart-contract e2e | Robot Money contracts are tested against a recent public-chain fork with real DEX/router interactions. |
-| 3 | Rust query tooling | `rmpc` exposes direct on-chain reads for vault status and related state without explorer APIs. |
-| 4 | Agent-harness installation | `rmpc` and the Robot Money skill install into OpenCode and OpenClaw; MCP is evaluated and scoped. |
-| 4.5 | Full-stack hosted devnet | Anvil fork, explorer indexer + API, dapp, and `rmpc` run together as one orchestrated stack (docker-compose) suitable for hosting and demos. |
-| 5 | Explorer API + database | A small service indexes relevant on-chain and `rmpc` activity for web/API consumers. |
-| 6 | Human dapp controls | Humans can execute sensitive commands such as granting permissions or creating credentials. |
-| 7 | E2E agent demo | OpenClaw completes a long-running Robot Money task on a recent public-chain fork. |
+| Phase | Theme | Status | Primary outcome |
+|---|---|---|---|
+| 1 | Foundational infrastructure and tests | Done | The gateway, vault wiring, Rust client base, smoke tests, and contract/unit coverage exist and are exercised in CI. |
+| 2 | Tooling and e2e system completeness | Done | Agents can be installed, configured, and driven through the end-to-end deposit path against the devnet stack. |
+| 3 | Vault feature completeness | In progress | The human dapp and operator surfaces cover deposit/withdraw, role management, pause controls, history, and config export. |
+| 4 | Security hardening and tree shaking | Planned | Tighten preflight checks, remove dead paths, simplify the surface area, and harden cross-language integration. |
+| 5 | Potential future features | Future | Advanced signer backends, broader routing, multi-RPC consensus, proxying, governance expansion, and other later capabilities. |
 
-Phase 1 is specified in detail below; it was the first buildable slice
-and its spec is the most complete. Phases 2–7 define the target shape
-and acceptance criteria; they are intentionally less prescriptive where
-the architecture is still open.
-
-These are internal MVP delivery phases for the Rust/agent-access work.
-They are not the same numbering scheme as the public Robot Money
-product roadmap (`docs/project-roadmap.md` is deprecated; the public
-roadmap lives at robotmoney.net/changelog).
+The detailed sections below preserve the build slices used while the
+project was being delivered. Read them as subplans under the five-phase
+roll-up above, not as the current planning taxonomy.
 
 **Intentional tradeoffs.**
 
@@ -519,7 +506,7 @@ test.
    intentionally loud if it ever fires on a real chain. Operators on
    L2s should lower this an order of magnitude.
 
-## 8. Phase 2 — Forked Smart-Contract E2E
+## 8. Phase 2 — Tooling and E2E System Completeness
 
 Goal: test the actual Robot Money smart-contract stack against a
 recent fork of a public Ethereum-compatible chain, with real router,
@@ -583,7 +570,7 @@ record (issue #47): chain target, block-pin mechanism, harness driver
 (Rust crate), CI vs manual-trigger split, per-test isolation, and the
 recommendation on issue #37 (drop Anvil flavor).
 
-## 9. Phase 3 — Direct Chain-Read Query Tooling
+## 9. Phase 3 — Vault Feature Completeness
 
 Goal: make `rmpc` useful for observing Robot Money state without
 depending on Etherscan/Basescan, website APIs, or other explorer
@@ -649,7 +636,7 @@ level, and the surfaces every read-command batch must consume. Stub
 module lives at `clients/rust-payment-client/src/read_output.rs`. No
 read-command behavior changes from this scout.
 
-`rmpc status` predates the Phase 3 envelope (it ships in the Phase 1
+`rmpc status` predates the Vault Feature Completeness envelope (it ships in the Phase 1
 CLI surface, §4.8) and currently emits a flat response. Issue #149
 normalizes its success and not-found outputs into the same
 `Envelope<T>` shape as the get-* commands, so agents do not have to
