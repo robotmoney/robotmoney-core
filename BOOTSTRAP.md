@@ -43,21 +43,68 @@ The plugin lives at `plugins/robotmoney-cli/` in the repo. Register it the way y
 
 ## 3. Write the operator config
 
-Write a fork-default operator config at `./rmpc-fork.toml` using the template in `docs/walkthroughs/opencode-readonly-fork.md` §Step 3, substituting the real gateway and vault addresses if you have them.
+The config format depends on which chain you are targeting. Two profiles are
+provided below. Use the one that matches your RPC endpoint.
 
-The template omits `state_dir` — add it to the config or set `RMPC_STATE_DIR` in the environment, otherwise `rmpc` exits silently with code 3.
+### Profile A — Robot Money devnet (chain ID 918453)
 
-The template also hardcodes `chain_id = 8453` (Base mainnet). If your RPC endpoint uses a different chain, discover the real id before running self-check:
+The Robot Money devnet is a Geth+Lighthouse chain seeded from Base mainnet
+state (chain ID **918453**). It uses the canonical Base USDC address (the
+devnet genesis copies real Base contracts at their original addresses).
+The default RPC for the hosted devnet is `https://robotmoney-dev-rpc.superfield.co`.
+
+The gateway and vault are deployed fresh each time the devnet boots. After
+running `cargo run -p smoke-test` (or your operator's deploy script), the
+deployed addresses are written to `deployments/918453.json`. Read them out:
 
 ```bash
-curl -s <YOUR_RPC_URL> -X POST -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' | \
-  python3 -c "import json,sys; print(int(json.load(sys.stdin)['result'], 16))"
+DEPLOY_JSON="deployments/918453.json"
+GATEWAY=$(python3 -c "import json; d=json.load(open('$DEPLOY_JSON')); print(d['gateway'])")
+VAULT=$(python3   -c "import json; d=json.load(open('$DEPLOY_JSON')); print(d['vault'])")
+HASH=$(python3    -c "import json; d=json.load(open('$DEPLOY_JSON')); print(d['gateway_runtime_hash'])")
 ```
 
-Update `chain_id` in `rmpc-fork.toml` with the result.
+Then write `./rmpc-devnet.toml`:
 
-OpenClaw-only: place the config at `/etc/openclaw/rmpc.toml` instead, then export `RMPC_CONFIG=/etc/openclaw/rmpc.toml` and `RMPC_NETWORK=fork`. Start the bounded monitor with `bash testing/openclaw-config/openclaw_harness.sh` and confirm it exits 0.
+```toml
+# Robot Money devnet operator config.
+# Chain: Geth+Lighthouse devnet forked from Base mainnet (chain ID 918453).
+# Gateway and vault addresses are set after deployment — see BOOTSTRAP.md §3.
+
+chain_id             = 918453
+rpc_url              = "https://robotmoney-dev-rpc.superfield.co"  # hosted devnet RPC; replace with your operator's endpoint if needed
+gateway_address      = "<GATEWAY from deployments/918453.json>"
+usdc_address         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"   # canonical Base USDC (same address on devnet)
+vault_address        = "<VAULT from deployments/918453.json>"
+gateway_runtime_hash = "<gateway_runtime_hash from deployments/918453.json>"
+max_fee_per_gas_cap  = 100000000000
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "./keystore.json"
+```
+
+If your operator provides a different hosted devnet endpoint, replace
+`rpc_url` with that URL and update `gateway_address`, `vault_address`, and
+`gateway_runtime_hash` from the deployment manifest your operator supplies.
+
+### Profile B — Base mainnet anvil fork (chain ID 8453)
+
+For the read-only OpenCode walkthrough against a local anvil fork of Base
+mainnet, use the template in `docs/walkthroughs/opencode-readonly-fork.md`
+§Step 3 instead. That profile hardcodes `chain_id = 8453` and uses placeholder
+addresses intentionally — the walkthrough is read-only and expects degraded
+(`partial: true`) responses.
+
+### Common config notes
+
+The config omits `state_dir` — add it to the config or set `RMPC_STATE_DIR`
+in the environment, otherwise `rmpc` exits silently with code 3.
+
+OpenClaw-only: place the config at `/etc/openclaw/rmpc.toml` instead, then
+export `RMPC_CONFIG=/etc/openclaw/rmpc.toml` and `RMPC_NETWORK=fork`. Start
+the bounded monitor with `bash testing/openclaw-config/openclaw_harness.sh`
+and confirm it exits 0.
 
 ## 4. Create a keystore and run self-check
 
@@ -73,13 +120,14 @@ RMPC_KEYSTORE_PASSPHRASE="your-passphrase" \
   rmpc-keystore-import /path/to/keystore.json
 ```
 
-Update `keystore_path` in `rmpc-fork.toml` to point at the generated file.
+Update `keystore_path` in your config file (`rmpc-devnet.toml` for Profile A,
+`rmpc-fork.toml` for Profile B) to point at the generated file.
 
-Then run the self-check:
+Then run the self-check (substitute the correct config filename):
 
 ```bash
 RMPC_KEYSTORE_PASSPHRASE="your-passphrase" \
-  rmpc self-check --config ./rmpc-fork.toml --pretty
+  rmpc self-check --config ./rmpc-devnet.toml --pretty
 ```
 
 If the startup succeeds you'll see a JSON envelope with an `agent_address` field — **copy it**, that is the agent's public address.
