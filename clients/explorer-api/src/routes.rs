@@ -1,6 +1,6 @@
 // HTTP route table.
 //
-// Endpoints are exactly the §11 list:
+// Endpoints are exactly the §11 list plus the vault registry additions (issue #296):
 //   GET /health
 //   GET /v1/chains/:chain_id/contracts
 //   GET /v1/vault/snapshot/latest
@@ -9,6 +9,8 @@
 //   GET /v1/agents/:address/deposits
 //   GET /v1/transactions/:tx_hash
 //   GET /v1/deposits/:deposit_id
+//   GET /v1/vaults
+//   GET /v1/vaults/:address
 //
 // Boundary (§11): only GET methods. Any other method on any path returns
 // 405. Any /v1/sign* or /v1/authorize* path falls through to a global 404
@@ -39,8 +41,9 @@ use serde::Deserialize;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
     dec_to_string, AgentPolicy, AgentResponse, Contract, ContractsResponse, Deposit,
-    DepositResponse, DepositsResponse, Freshness, Health, Transaction, TransactionResponse,
-    VaultSnapshot, VaultSnapshotsResponse,
+    DepositResponse, DepositsResponse, Freshness, Health, Transaction, TransactionResponse, Vault,
+    VaultDetail, VaultDetailResponse, VaultSnapshot, VaultSnapshotsResponse, VaultTvlPoint,
+    VaultsResponse,
 };
 use crate::state::AppState;
 
@@ -62,6 +65,25 @@ type DepositRow = (
 type SnapshotRow = (i64, Vec<u8>, i64, BigDecimal, BigDecimal, DateTime<Utc>);
 type TxRow = (i64, i64, Vec<u8>, Option<Vec<u8>>, i16, DateTime<Utc>);
 
+// (chain_id, vault_address, name, risk_label, status, deposit_cap, total_assets, exit_fee_bps, indexed_at)
+type VaultRow = (
+    i64,
+    Vec<u8>,
+    String,
+    String,
+    i16,
+    BigDecimal,
+    Option<BigDecimal>,
+    Option<i64>,
+    DateTime<Utc>,
+);
+
+// (vault_address, name, risk_label, status, deposit_cap, indexed_at) — used by get_vault
+type VaultDetailRow = (Vec<u8>, String, String, i16, BigDecimal, DateTime<Utc>);
+
+// (block_number, total_assets, total_supply, indexed_at)
+type TvlPointRow = (i64, BigDecimal, BigDecimal, DateTime<Utc>);
+
 /// Build the application router. All routes are GET-only.
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -73,6 +95,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/agents/:address/deposits", get(list_agent_deposits))
         .route("/v1/transactions/:tx_hash", get(get_transaction))
         .route("/v1/deposits/:deposit_id", get(get_deposit))
+        .route("/v1/vaults", get(list_vaults))
+        .route("/v1/vaults/:address", get(get_vault))
         .fallback(not_found)
         .with_state(state)
 }
@@ -347,6 +371,143 @@ async fn get_deposit(
         },
         deposit,
     }))
+}
+
+/// GET /v1/vaults — list all registered vaults including paused and retired ones.
+///
+/// Joins the latest vault_snapshot per vault to surface `total_assets` and
+/// `exit_fee_bps`.  Vaults with no snapshot yet return null for those fields.
+/// Chain-scoped to `state.chain_id` (issue #178).
+async fn list_vaults(State(state): State<AppState>) -> ApiResult<Json<VaultsResponse>> {
+    // LEFT JOIN the most recent snapshot per vault. DISTINCT ON is
+    // Postgres-specific and matches the single-chain service constraint
+    // (docs/technical/explorer-schema-decisions.md §3.1).
+    let rows: Vec<VaultRow> = sqlx::query_as(
+        "SELECT v.chain_id, v.vault_address, v.name, v.risk_label, v.status, \
+                v.deposit_cap, \
+                s.total_assets, \
+                s.exit_fee_bps, \
+                v.indexed_at \
+         FROM vaults v \
+         LEFT JOIN LATERAL ( \
+             SELECT total_assets, exit_fee_bps \
+             FROM vault_snapshots \
+             WHERE chain_id = v.chain_id AND contract = v.vault_address \
+             ORDER BY block_number DESC \
+             LIMIT 1 \
+         ) s ON true \
+         WHERE v.chain_id = $1 \
+         ORDER BY v.vault_address ASC",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let vaults: Vec<Vault> = rows
+        .into_iter()
+        .map(
+            |(
+                chain_id,
+                vault_address,
+                name,
+                risk_label,
+                status,
+                deposit_cap,
+                total_assets,
+                exit_fee_bps,
+                indexed_at,
+            )| {
+                Vault {
+                    chain_id,
+                    address: addr_to_hex(&vault_address),
+                    name,
+                    risk_label,
+                    status,
+                    deposit_cap: dec_to_string(&deposit_cap),
+                    total_assets: total_assets.as_ref().map(dec_to_string),
+                    exit_fee_bps,
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(VaultsResponse { vaults, freshness }))
+}
+
+/// GET /v1/vaults/:address — detail view for a single vault.
+///
+/// Returns 404 with a stable error body for an unregistered address.
+/// Includes TVL timeseries (up to 500 rows) from vault_snapshots.
+/// Chain-scoped to `state.chain_id` (issue #178).
+async fn get_vault(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<VaultDetailResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    let row: Option<VaultDetailRow> = sqlx::query_as(
+        "SELECT vault_address, name, risk_label, status, deposit_cap, indexed_at \
+         FROM vaults \
+         WHERE chain_id = $1 AND vault_address = $2 \
+         LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (vault_address, name, risk_label, status, deposit_cap, indexed_at) =
+        row.ok_or(ApiError::NotFound)?;
+
+    // Fetch TVL timeseries — up to 500 rows ascending by block.
+    let tvl_rows: Vec<TvlPointRow> = sqlx::query_as(
+        "SELECT block_number, total_assets, total_supply, indexed_at \
+         FROM vault_snapshots \
+         WHERE chain_id = $1 AND contract = $2 \
+         ORDER BY block_number ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let tvl_history: Vec<VaultTvlPoint> = tvl_rows
+        .into_iter()
+        .map(
+            |(block_number, total_assets, total_supply, ia)| VaultTvlPoint {
+                block_number,
+                total_assets: dec_to_string(&total_assets),
+                total_supply: dec_to_string(&total_supply),
+                indexed_at: ia,
+            },
+        )
+        .collect();
+
+    // Freshness is taken from the most recent TVL point if available,
+    // otherwise falls back to the indexer cursor.
+    let freshness = match tvl_history.last() {
+        Some(p) => Freshness {
+            block_number: p.block_number,
+            indexed_at: p.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    let vault = VaultDetail {
+        chain_id: state.chain_id,
+        address: addr_to_hex(&vault_address),
+        name,
+        risk_label,
+        status,
+        deposit_cap: dec_to_string(&deposit_cap),
+        tvl_history,
+        indexed_at,
+    };
+
+    Ok(Json(VaultDetailResponse { vault, freshness }))
 }
 
 fn deposit_from_row(row: DepositRow) -> Deposit {

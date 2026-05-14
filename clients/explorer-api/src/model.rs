@@ -127,3 +127,61 @@ pub fn dec_to_string(v: &BigDecimal) -> String {
     // scale 0, but be defensive.
     v.with_scale(0).to_string()
 }
+
+/// A registered vault from the `vaults` table, optionally enriched with
+/// the latest TVL data from `vault_snapshots`.
+#[derive(Debug, Serialize)]
+pub struct Vault {
+    pub chain_id: i64,
+    pub address: String,
+    pub name: String,
+    pub risk_label: String,
+    /// 0 = Active, 1 = Paused, 2 = Retired (matches on-chain VaultStatus enum).
+    pub status: i16,
+    pub deposit_cap: String,
+    /// Most recent `total_assets` from vault_snapshots; null when no snapshot exists.
+    pub total_assets: Option<String>,
+    /// Most recent `exit_fee_bps` from vault_snapshots; null when no snapshot exists.
+    pub exit_fee_bps: Option<i64>,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/vaults (list).
+#[derive(Debug, Serialize)]
+pub struct VaultsResponse {
+    pub vaults: Vec<Vault>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Historical TVL data point from `vault_snapshots`.
+#[derive(Debug, Serialize)]
+pub struct VaultTvlPoint {
+    pub block_number: i64,
+    pub total_assets: String,
+    pub total_supply: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Detailed single-vault response for GET /v1/vaults/:address.
+#[derive(Debug, Serialize)]
+pub struct VaultDetail {
+    pub chain_id: i64,
+    pub address: String,
+    pub name: String,
+    pub risk_label: String,
+    /// 0 = Active, 1 = Paused, 2 = Retired.
+    pub status: i16,
+    pub deposit_cap: String,
+    /// TVL history from vault_snapshots (up to 500 rows, ascending by block).
+    pub tvl_history: Vec<VaultTvlPoint>,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/vaults/:address.
+#[derive(Debug, Serialize)]
+pub struct VaultDetailResponse {
+    pub vault: VaultDetail,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}

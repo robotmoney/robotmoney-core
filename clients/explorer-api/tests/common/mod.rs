@@ -41,6 +41,10 @@ use explorer_api::{router, AppState};
 pub const CANONICAL_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0001_minimum_tables.sql");
 
+/// Migration 0002: adds the `vaults` table (issue #295 / #296).
+pub const VAULTS_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql");
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).
@@ -108,7 +112,11 @@ pub async fn apply_migrations(pool: &PgPool) {
     sqlx::raw_sql(CANONICAL_MIGRATION)
         .execute(pool)
         .await
-        .expect("apply canonical indexer migrations");
+        .expect("apply canonical indexer migrations (0001)");
+    sqlx::raw_sql(VAULTS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vaults migration (0002)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -275,6 +283,83 @@ async fn seed_fixture(pool: &PgPool) {
     .bind("11111111")
     .bind(50_i64)
     .bind("100000000000")
+    .bind(false)
+    .bind(indexed_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- vaults (issue #296 suite-08 fixture) ---
+    // Vault A: Active (status=0).  Uses the gateway address so we can later
+    // query the snapshot we seeded above.
+    let vault_a_addr = hex_bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let vault_b_addr = hex_bytes("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let reg_tx = hex_bytes("1010101010101010101010101010101010101010101010101010101010101010");
+
+    for (addr, name, risk_label, status, deposit_cap) in [
+        (
+            &vault_a_addr[..],
+            "Alpha Vault",
+            "stable-yield",
+            0_i16,
+            "1000000000",
+        ),
+        (
+            &vault_b_addr[..],
+            "Beta Vault",
+            "growth",
+            1_i16,
+            "500000000",
+        ),
+    ] {
+        // vaults has a FK on chains(chain_id) only — no FK on contracts.
+        sqlx::query(
+            "INSERT INTO vaults (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+                                  registered_at, registered_block, registered_tx) \
+             VALUES ($1, $2, $3, $4, $5::NUMERIC, $6, $7, $8, $9)",
+        )
+        .bind(PRIMARY_CHAIN_ID)
+        .bind(addr)
+        .bind(name)
+        .bind(risk_label)
+        .bind(deposit_cap)
+        .bind(status)
+        .bind(1_748_000_000_i64)
+        .bind(900_i64)
+        .bind(&reg_tx[..])
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // Seed a vault_snapshot for vault_a so the TVL join returns data.
+    // vault_a_addr must exist in contracts for the FK on vault_snapshots.
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&vault_a_addr[..])
+    .bind("vault")
+    .bind(Some(900_i64))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Use block 500 so this snapshot does not interfere with the existing
+    // test `list_vault_snapshots_filters_by_block_range` which expects
+    // exactly 1 snapshot in the 999-1001 range (the gateway snapshot at 1000).
+    sqlx::query(
+        "INSERT INTO vault_snapshots (chain_id, contract, block_number, total_assets, total_supply, \
+                                       exit_fee_bps, tvl_cap, paused, indexed_at) \
+         VALUES ($1, $2, $3, $4::NUMERIC, $5::NUMERIC, $6, $7::NUMERIC, $8, $9)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&vault_a_addr[..])
+    .bind(500_i64)
+    .bind("99999999")
+    .bind("99999999")
+    .bind(25_i64)
+    .bind("1000000000")
     .bind(false)
     .bind(indexed_at)
     .execute(pool)
