@@ -1,29 +1,30 @@
 //! Canonical: docs/implementation-plan.md §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
-//! `rmpc get-vault` — direct on-chain read of the vault the gateway
-//! routes deposits to.
+//! `rmpc get-vault` — direct on-chain read of a vault.
 //!
-//! Sub-reads (all `eth_call`, pinned to one block):
+//! Two modes:
 //!
-//! - `gateway.vault()` → vault address (so we cross-check against the
-//!   operator-pinned `vault_address` and surface the on-chain truth).
-//! - `vault.asset()` / `assetToken()` — underlying ERC-20.
-//! - `vault.name()` / `vault.symbol()` / `vault.decimals()` — share-token
-//!   metadata.
-//! - `vault.totalAssets()` / `vault.totalSupply()` — accounting state.
+//! 1. **Config-vault mode** (no `--address` flag): reads the single vault
+//!    pinned in the operator config via the gateway's `vault()` view.
+//!    Sub-reads: `gateway.vault()`, `vault.asset()`, `vault.name()`,
+//!    `vault.symbol()`, `vault.decimals()`, `vault.totalAssets()`,
+//!    `vault.totalSupply()`. Legacy mode — kept for backwards compatibility.
 //!
-//! `share_price` is computed in the client as
-//! `totalAssets * 10^decimals / totalSupply`, in the underlying-asset's
-//! smallest unit, on the §9 "decimal string" wire. When `totalSupply == 0`
-//! the price is undefined and the field is reported as `null`.
+//! 2. **Registry mode** (`--address <addr>`): looks up the vault in the
+//!    `VaultRegistry` contract at `config.registry_address`, then augments
+//!    with live ERC-4626 state (`totalAssets`, `totalSupply`, `share_price`).
+//!    Returns registry metadata (name, risk_label, status, deposit_cap,
+//!    exit_fee_bps, receipt_token_address) plus live accounting state.
+//!    Exits non-zero when the address is not registered.
 //!
-//! Per §9 acceptance criteria, fields the deployed `MockVault` ABI
-//! does not expose (deposit caps, pause/shutdown, adapter info, fees)
-//! are reported as the literal string `"not_onchain"` in a separate
-//! `notes` map. Future vault ABIs that add those views will swap the
-//! note for a real read in a follow-up batch — the contract surface
-//! drives the schema, not the docs.
+//! `share_price` is computed as `totalAssets * 10^decimals / totalSupply`,
+//! in the underlying-asset's smallest unit. When `totalSupply == 0` the
+//! price is reported as `null`.
+//!
+//! Per §9 acceptance criteria, fields not exposed by the deployed contract
+//! surface are reported as `"not_onchain"` in the `notes` map (config-vault
+//! mode only). Registry mode reports those fields from the registry record.
 //!
 //! Exit codes: 0 (envelope, possibly partial), 3 (pre-read setup fail).
 
@@ -35,7 +36,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::{MockVault, RobotMoneyGateway};
+use crate::gateway::{MockVault, RobotMoneyGateway, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
 use crate::rpc::{CallRequest, RpcClient};
@@ -101,7 +102,52 @@ impl Default for VaultNotes {
     }
 }
 
-pub fn run(config_path: &Path, pretty: bool) -> i32 {
+/// `data` payload for `rmpc get-vault <address>` (registry mode).
+/// Includes all `VaultRecord` fields from the registry plus live ERC-4626
+/// accounting state. Field order is the wire order; snapshot tests assert on it.
+#[derive(Debug, Default, Serialize)]
+pub struct RegistryVaultData {
+    /// Vault address (from registry record).
+    pub address: String,
+    /// Human-readable vault name from the registry.
+    pub name: String,
+    /// Risk category label (e.g. `"stable-yield"`).
+    pub risk_label: String,
+    /// Short mandate text.
+    pub mandate: String,
+    /// Operational status: `"active"`, `"paused"`, or `"retired"`.
+    pub status: String,
+    /// Receipt token address (== vault address for ERC-4626).
+    pub receipt_token_address: String,
+    /// Maximum total-assets cap; `"0"` means no cap.
+    pub deposit_cap: DecimalU256,
+    /// Exit fee in basis points.
+    pub exit_fee_bps: u16,
+    /// Unix timestamp when the vault was registered.
+    pub registered_at: u64,
+    /// `vault.totalAssets()` — live from chain.
+    pub total_assets: DecimalU256,
+    /// `vault.totalSupply()` — live from chain.
+    pub total_supply: DecimalU256,
+    /// Computed share price. `null` when `totalSupply == 0`.
+    pub share_price: Option<String>,
+    /// `vault.asset()` — underlying ERC-20 address.
+    pub asset: String,
+    /// `vault.decimals()`.
+    pub decimals: u8,
+}
+
+/// Decode a `VaultStatus` enum value (uint8) to a stable string.
+fn status_to_str(s: u8) -> &'static str {
+    match s {
+        0 => "active",
+        1 => "paused",
+        2 => "retired",
+        _ => "unknown",
+    }
+}
+
+pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
     let cfg = match Config::from_path(config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -109,20 +155,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let gateway_addr = match Address::from_str(&cfg.gateway_address) {
-        Ok(a) => a,
-        Err(e) => {
-            log::error!("rmpc get-vault: gateway_address parse error: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let vault_addr = match Address::from_str(&cfg.vault_address) {
-        Ok(a) => a,
-        Err(e) => {
-            log::error!("rmpc get-vault: vault_address parse error: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
+
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -147,15 +180,69 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         network_env.human_label(),
         cfg.chain_id
     );
-    let env = match rt.block_on(read_vault(&rpc, gateway_addr, vault_addr)) {
-        Ok(e) => e,
-        Err(e) => {
-            log::error!("rmpc get-vault: pre-read setup failed: {e}");
-            return EXIT_STARTUP_FAIL;
+
+    if let Some(addr_str) = address {
+        // Registry mode: look up vault by address in the VaultRegistry.
+        let vault_addr = match Address::from_str(addr_str) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("rmpc get-vault: vault address parse error: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        let registry_addr = match cfg.registry_address.as_deref() {
+            Some(s) => match Address::from_str(s) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::error!("rmpc get-vault: registry_address parse error: {e}");
+                    return EXIT_STARTUP_FAIL;
+                }
+            },
+            None => {
+                log::error!(
+                    "rmpc get-vault: registry_address not set in config; \
+                     required for get-vault <address> mode"
+                );
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        let result = rt.block_on(read_vault_from_registry(&rpc, registry_addr, vault_addr));
+        match result {
+            Ok(env) => {
+                emit(&env, pretty);
+                EXIT_OK
+            }
+            Err(e) => {
+                log::error!("rmpc get-vault: registry read failed: {e}");
+                EXIT_STARTUP_FAIL
+            }
         }
-    };
-    emit(&env, pretty);
-    EXIT_OK
+    } else {
+        // Config-vault mode (legacy): read the single vault pinned in operator config.
+        let gateway_addr = match Address::from_str(&cfg.gateway_address) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("rmpc get-vault: gateway_address parse error: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        let vault_addr = match Address::from_str(&cfg.vault_address) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("rmpc get-vault: vault_address parse error: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        let env = match rt.block_on(read_vault(&rpc, gateway_addr, vault_addr)) {
+            Ok(e) => e,
+            Err(e) => {
+                log::error!("rmpc get-vault: pre-read setup failed: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        emit(&env, pretty);
+        EXIT_OK
+    }
 }
 
 async fn read_vault(
@@ -231,6 +318,102 @@ async fn read_vault(
     }
 
     Ok(b.finish())
+}
+
+/// Registry-mode read: look up `vault` in the `VaultRegistry` at `registry`,
+/// then augment with live ERC-4626 state. Returns `Err` when the registry
+/// call fails (e.g. vault not registered) — callers map this to exit 3
+/// per the §9 "unregistered address exits non-zero" AC.
+async fn read_vault_from_registry(
+    rpc: &RpcClient,
+    registry: Address,
+    vault: Address,
+) -> crate::errors::Result<Envelope<RegistryVaultData>> {
+    let chain_id = rpc.chain_id().await?;
+    let block_number = rpc.block_number().await?;
+    let block_tag = format!("0x{block_number:x}");
+
+    // Fetch the VaultRecord from the registry. This is a hard-fail: if the
+    // vault is not registered the call reverts with VaultNotRegistered and
+    // we propagate the error so the caller exits non-zero.
+    let record = call_get_vault(rpc, registry, vault, &block_tag).await?;
+
+    let data = RegistryVaultData {
+        address: format!("{vault:#x}"),
+        name: record.name.clone(),
+        risk_label: record.riskLabel.clone(),
+        mandate: record.mandate.clone(),
+        status: status_to_str(record.status).to_string(),
+        receipt_token_address: format!("{:#x}", record.receiptToken),
+        deposit_cap: DecimalU256(record.depositCap),
+        exit_fee_bps: record.exitFeeBps,
+        registered_at: record.registeredAt,
+        ..Default::default()
+    };
+    let mut b = PartialBuilder::new(chain_id, block_number, data);
+
+    // Live ERC-4626 state.
+    match call_asset(rpc, vault, &block_tag).await {
+        Ok(addr) => b.data_mut().asset = format!("{addr:#x}"),
+        Err(e) => b.record_err("asset", e),
+    }
+    match call_decimals(rpc, vault, &block_tag).await {
+        Ok(d) => b.data_mut().decimals = d,
+        Err(e) => b.record_err("decimals", e),
+    }
+    let total_assets =
+        match call_u256_view(rpc, vault, &block_tag, MockVault::totalAssetsCall {}).await {
+            Ok(v) => {
+                b.data_mut().total_assets = DecimalU256(v);
+                Some(v)
+            }
+            Err(e) => {
+                b.record_err("total_assets", e);
+                None
+            }
+        };
+    let total_supply =
+        match call_u256_view(rpc, vault, &block_tag, MockVault::totalSupplyCall {}).await {
+            Ok(v) => {
+                b.data_mut().total_supply = DecimalU256(v);
+                Some(v)
+            }
+            Err(e) => {
+                b.record_err("total_supply", e);
+                None
+            }
+        };
+    if let (Some(ta), Some(ts)) = (total_assets, total_supply) {
+        let decimals = b.data_mut().decimals;
+        let price = compute_share_price(ta, ts, decimals);
+        b.data_mut().share_price = price;
+    }
+
+    Ok(b.finish())
+}
+
+/// Call `VaultRegistry.getVault(address)` and return the decoded `VaultRecord`.
+/// Returns `Err` if the call fails (including revert for unregistered vault).
+async fn call_get_vault(
+    rpc: &RpcClient,
+    registry: Address,
+    vault: Address,
+    block_tag: &str,
+) -> crate::errors::Result<VaultRegistry::VaultRecord> {
+    let data = VaultRegistry::getVaultCall { vault }.abi_encode();
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to: registry,
+                from: None,
+                data: data.into(),
+            },
+            Some(block_tag),
+        )
+        .await?;
+    let r = VaultRegistry::getVaultCall::abi_decode_returns(&out, true)
+        .map_err(|e| crate::errors::RmpcError::ErrRpcDecode(format!("getVault abi decode: {e}")))?;
+    Ok(r._0)
 }
 
 /// Compute `totalAssets * 10^decimals / totalSupply` as a decimal
@@ -466,7 +649,7 @@ keystore_path           = "{ks}"
 
         // EXIT_STARTUP_FAIL = 3: the vault_address parse must fail before any
         // RPC attempt is made, so this test never touches the network.
-        let code = run(&cfg_path, false);
+        let code = run(&cfg_path, None, false);
         assert_eq!(
             code, EXIT_STARTUP_FAIL,
             "expected EXIT_STARTUP_FAIL ({EXIT_STARTUP_FAIL}) on malformed vault_address; got {code}"

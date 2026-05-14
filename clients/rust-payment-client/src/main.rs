@@ -26,6 +26,7 @@ fn main() {
         Command::Status { config, .. } => Some(config.as_path()),
         Command::SelfCheck { config, .. } => Some(config.as_path()),
         Command::GetVault { config, .. } => Some(config.as_path()),
+        Command::GetVaults { config, .. } => Some(config.as_path()),
         Command::GetGateway { config, .. } => Some(config.as_path()),
         Command::GetAgent { config, .. } => Some(config.as_path()),
         Command::GetRoles { config, .. } => Some(config.as_path()),
@@ -64,7 +65,12 @@ fn main() {
             payment_id,
             pretty,
         } => commands::status::run(&config, &payment_id, pretty),
-        Command::GetVault { config, pretty } => commands::get_vault::run(&config, pretty),
+        Command::GetVault {
+            config,
+            address,
+            pretty,
+        } => commands::get_vault::run(&config, address.as_deref(), pretty),
+        Command::GetVaults { config, pretty } => commands::get_vaults::run(&config, pretty),
         Command::GetGateway { config, pretty } => commands::get_gateway::run(&config, pretty),
         Command::GetAgent {
             config,

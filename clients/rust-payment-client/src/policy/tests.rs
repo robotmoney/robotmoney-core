@@ -35,6 +35,7 @@ fn config() -> Config {
         max_fee_per_gas_cap: Some(100_000_000_000),
         max_priority_fee_per_gas_cap: None,
         state_dir: None,
+        registry_address: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: PathBuf::from("/tmp/ks.enc"),

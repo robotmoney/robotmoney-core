@@ -40,6 +40,13 @@ sol!(
     "abi/MockVault.json"
 );
 
+sol!(
+    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    VaultRegistry,
+    "abi/VaultRegistry.json"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

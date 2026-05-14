@@ -39,16 +39,39 @@ performed by the signer module on startup.
 ## `get-vault`
 
 ```bash
+# Config-vault mode (legacy): read the single vault pinned in the operator config.
 rmpc get-vault --config ./config.toml [--pretty]
+
+# Registry mode: look up a specific vault by address in the VaultRegistry.
+rmpc get-vault --config ./config.toml --address <0x...> [--pretty]
 ```
 
-Reads the configured `RobotMoneyVault` (ERC-4626) directly. Returns vault
-address, asset and share metadata, total assets and supply, share price,
-deposit caps, pause/shutdown flags, adapter addresses and balances where the
-ABI exposes them. Fields not exposed on-chain are returned as `unknown` or
-`not_onchain` rather than guessed.
+Reads a `RobotMoneyVault` (ERC-4626) directly from chain.
 
-Use it to answer "is the vault healthy?" before any deposit.
+- **Config-vault mode** (no `--address`): reads the vault address pinned in
+  the operator TOML config. Returns vault address, asset and share metadata,
+  total assets and supply, share price. Fields not exposed on-chain are returned
+  as `not_onchain`.
+- **Registry mode** (`--address <0x...>`): looks up the vault in the
+  `VaultRegistry` contract (requires `registry_address` in the operator config),
+  then augments with live ERC-4626 state. Returns registry metadata (name,
+  risk_label, status, deposit_cap, exit_fee_bps, receipt_token_address) plus
+  live accounting. Exits non-zero when the address is not registered.
+
+---
+
+## `get-vaults`
+
+```bash
+rmpc get-vaults --config ./config.toml [--pretty]
+```
+
+Lists all vaults registered in the `VaultRegistry` contract (requires
+`registry_address` in the operator config). Returns a `vaults` array with
+registry metadata and live `total_assets` for each registered vault (active,
+paused, and retired). An empty registry returns `vaults: []` with exit code 0.
+
+Use it to discover all available deposit destinations programmatically.
 
 ---
 

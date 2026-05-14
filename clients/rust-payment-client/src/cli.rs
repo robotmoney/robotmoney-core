@@ -79,6 +79,20 @@ pub enum Command {
     GetVault {
         #[arg(long, short = 'c')]
         config: PathBuf,
+        /// Vault address to look up in the registry (0x-prefixed hex).
+        /// When provided, reads from the VaultRegistry contract and returns
+        /// registry metadata plus live ERC-4626 state. When omitted, reads
+        /// the single vault pinned in the operator config (legacy behaviour).
+        #[arg(long)]
+        address: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// List all vaults registered in the VaultRegistry (issue #297 / §5.1).
+    GetVaults {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Pretty-print the JSON output.
         #[arg(long)]
         pretty: bool,
     },

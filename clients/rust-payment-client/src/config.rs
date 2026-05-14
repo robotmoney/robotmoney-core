@@ -25,6 +25,11 @@ pub struct Config {
     pub usdc_address: String,
     /// Vault address that receives deposits.
     pub vault_address: String,
+    /// `VaultRegistry` contract address (0x-prefixed hex). Optional — only
+    /// required for the `get-vaults` and `get-vault <address>` protocol-scope
+    /// registry reads. When absent those commands exit with `EXIT_STARTUP_FAIL`.
+    #[serde(default)]
+    pub registry_address: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
     pub gateway_runtime_hash: String,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.
