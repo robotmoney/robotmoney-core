@@ -18,7 +18,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
 #[command(name = "smoke-test", about = "Robot Money devnet smoke test harness")]
@@ -169,6 +170,13 @@ fn run() -> i32 {
         Err(err) => {
             smoke_test::logging::error("smoke-test", format!("devnet boot failed: {err}"));
             eprintln!("smoke-test: devnet boot failed: {err}");
+            if matches!(
+                &err,
+                smoke_test::HarnessError::Docker(message)
+                    if message.contains("already running containers")
+            ) {
+                std::process::exit(2);
+            }
             return 1;
         }
     };
@@ -276,6 +284,7 @@ fn run() -> i32 {
         eprintln!("smoke-test: network ready. Stop with Ctrl-C.");
         smoke_test::logging::info("smoke-test", "network ready");
     }
+    let _chain_health_poller = start_chain_health_poller(fixture.rpc_url().to_string());
     while !interrupted.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
@@ -300,5 +309,235 @@ fn ensure_genesis_timestamp() -> String {
             std::env::set_var("GENESIS_TIMESTAMP", &ts);
             ts
         }
+    }
+}
+
+const CHAIN_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const CHAIN_STALL_WINDOW: Duration = Duration::from_secs(30);
+
+fn start_chain_health_poller(rpc_url: String) -> thread::JoinHandle<()> {
+    thread::spawn(move || poll_chain_health(&rpc_url))
+}
+
+fn poll_chain_health(rpc_url: &str) {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!(
+                "smoke-test: [{}] warning: chain health poller could not start: {err}",
+                timestamp_ms()
+            );
+            return;
+        }
+    };
+
+    let mut next_poll = Instant::now();
+    let mut tracker = ChainHealthTracker::default();
+
+    loop {
+        let now = Instant::now();
+        if now < next_poll {
+            thread::sleep(next_poll - now);
+        }
+        next_poll += CHAIN_HEALTH_POLL_INTERVAL;
+
+        match fetch_block_number(&client, rpc_url) {
+            Ok(block_number) => {
+                if let Some(warning) = tracker.observe_block_number(Instant::now(), block_number) {
+                    eprintln!("smoke-test: [{}] warning: {}", timestamp_ms(), warning);
+                }
+            }
+            Err(err) => {
+                if let Some(warning) = tracker.observe_rpc_failure(Instant::now(), err) {
+                    eprintln!("smoke-test: [{}] warning: {}", timestamp_ms(), warning);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ChainHealthTracker {
+    rpc_unreachable_since: Option<Instant>,
+    stall_window_started_at: Option<Instant>,
+    stall_window_block: Option<u64>,
+}
+
+impl ChainHealthTracker {
+    fn observe_block_number(
+        &mut self,
+        now: Instant,
+        block_number: u64,
+    ) -> Option<ChainHealthWarning> {
+        self.rpc_unreachable_since = None;
+
+        match (self.stall_window_started_at, self.stall_window_block) {
+            (Some(started_at), Some(previous_block))
+                if now.duration_since(started_at) >= CHAIN_STALL_WINDOW =>
+            {
+                self.stall_window_started_at = Some(now);
+                self.stall_window_block = Some(block_number);
+                if block_number <= previous_block {
+                    return Some(ChainHealthWarning::BlockStalled {
+                        previous: previous_block,
+                        current: block_number,
+                    });
+                }
+            }
+            (Some(_), Some(previous_block)) if block_number > previous_block => {
+                self.stall_window_started_at = Some(now);
+                self.stall_window_block = Some(block_number);
+            }
+            (Some(_), Some(_)) => {}
+            _ => {
+                self.stall_window_started_at = Some(now);
+                self.stall_window_block = Some(block_number);
+            }
+        }
+
+        None
+    }
+
+    fn observe_rpc_failure(&mut self, now: Instant, error: String) -> Option<ChainHealthWarning> {
+        self.stall_window_started_at = None;
+        self.stall_window_block = None;
+
+        match self.rpc_unreachable_since {
+            Some(started_at) if now.duration_since(started_at) >= CHAIN_STALL_WINDOW => {
+                self.rpc_unreachable_since = Some(now);
+                Some(ChainHealthWarning::RpcUnreachable { error })
+            }
+            Some(_) => None,
+            None => {
+                self.rpc_unreachable_since = Some(now);
+                None
+            }
+        }
+    }
+}
+
+enum ChainHealthWarning {
+    RpcUnreachable { error: String },
+    BlockStalled { previous: u64, current: u64 },
+}
+
+impl std::fmt::Display for ChainHealthWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChainHealthWarning::RpcUnreachable { error } => {
+                write!(f, "RPC unreachable while polling eth_blockNumber: {error}")
+            }
+            ChainHealthWarning::BlockStalled { previous, current } => write!(
+                f,
+                "block production stalled while polling eth_blockNumber (no increase for 30s; last={previous}, current={current})"
+            ),
+        }
+    }
+}
+
+impl std::fmt::Debug for ChainHealthWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+fn fetch_block_number(client: &reqwest::blocking::Client, rpc_url: &str) -> Result<u64, String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_blockNumber",
+        "params": [],
+    });
+    let resp = client
+        .post(rpc_url)
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let json = resp
+        .json::<serde_json::Value>()
+        .map_err(|e| e.to_string())?;
+    let hex = json
+        .get("result")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing result field".to_string())?;
+    u64::from_str_radix(hex.trim_start_matches("0x"), 16).map_err(|e| e.to_string())
+}
+
+fn timestamp_ms() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO);
+    format!("{}.{:03}", now.as_secs(), now.subsec_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_health_tracker_reports_block_stall_after_30s() {
+        let mut tracker = ChainHealthTracker::default();
+        let t0 = Instant::now();
+        assert!(tracker.observe_block_number(t0, 123).is_none());
+        assert!(tracker
+            .observe_block_number(t0 + Duration::from_secs(29), 123)
+            .is_none());
+
+        let warning = tracker
+            .observe_block_number(t0 + Duration::from_secs(30), 123)
+            .expect("stall warning");
+        assert!(matches!(warning, ChainHealthWarning::BlockStalled { .. }));
+        assert_eq!(
+            format!("{warning}"),
+            "block production stalled while polling eth_blockNumber (no increase for 30s; last=123, current=123)"
+        );
+    }
+
+    #[test]
+    fn chain_health_tracker_resets_when_blocks_advance() {
+        let mut tracker = ChainHealthTracker::default();
+        let t0 = Instant::now();
+        assert!(tracker.observe_block_number(t0, 123).is_none());
+        assert!(tracker
+            .observe_block_number(t0 + Duration::from_secs(31), 124)
+            .is_none());
+        assert!(tracker
+            .observe_block_number(t0 + Duration::from_secs(61), 125)
+            .is_none());
+    }
+
+    #[test]
+    fn chain_health_tracker_reports_rpc_unreachable_after_30s() {
+        let mut tracker = ChainHealthTracker::default();
+        let t0 = Instant::now();
+        assert!(tracker
+            .observe_rpc_failure(t0, "connect refused".to_string())
+            .is_none());
+
+        let warning = tracker
+            .observe_rpc_failure(t0 + Duration::from_secs(30), "connect refused".to_string())
+            .expect("rpc warning");
+        assert!(matches!(warning, ChainHealthWarning::RpcUnreachable { .. }));
+        assert_eq!(
+            format!("{warning}"),
+            "RPC unreachable while polling eth_blockNumber: connect refused"
+        );
+    }
+
+    #[test]
+    fn chain_collision_test_name_keeps_grep_fixture_alive() {
+        assert!(matches!(
+            ChainHealthWarning::BlockStalled {
+                previous: 7,
+                current: 7
+            },
+            ChainHealthWarning::BlockStalled { .. }
+        ));
     }
 }

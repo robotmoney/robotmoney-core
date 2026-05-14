@@ -137,6 +137,14 @@ struct DeploymentJson {
     gateway_runtime_hash: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ComposePsEntry {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "State")]
+    state: String,
+}
+
 // -- Fixture ----------------------------------------------------------
 
 /// A fully-wired devnet fixture. Boot by calling [`Fixture::new`];
@@ -469,6 +477,7 @@ impl Fixture {
                 compose_files_owned.join(" "),
             ),
         );
+        ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
         let cleanup_compose_files = compose_files_owned.clone();
         let cleanup_compose_dir = compose_dir.clone();
         let cleanup_alloc_overlay_path = alloc_overlay_path
@@ -1224,6 +1233,67 @@ fn wait_for_block_height_with_probe(
         url: url.to_string(),
         timeout,
     })
+}
+
+fn ensure_compose_project_idle(
+    compose_dir: &Path,
+    compose_files: &[String],
+) -> Result<(), HarnessError> {
+    let running = compose_running_container_names(compose_dir, compose_files)?;
+    if running.is_empty() {
+        return Ok(());
+    }
+
+    Err(HarnessError::Docker(format!(
+        "ethereum-testnet compose project already running containers: {}; \
+         stop the existing smoke-test instance before starting another",
+        running.join(", ")
+    )))
+}
+
+fn compose_running_container_names(
+    compose_dir: &Path,
+    compose_files: &[String],
+) -> Result<Vec<String>, HarnessError> {
+    let mut cmd = Command::new("docker");
+    cmd.arg("compose");
+    for file in compose_files {
+        cmd.arg(file);
+    }
+    let output = cmd
+        .arg("ps")
+        .arg("--format")
+        .arg("json")
+        .current_dir(compose_dir)
+        .output()
+        .map_err(HarnessError::from)?;
+
+    if !output.status.success() {
+        return Err(HarnessError::Docker(format!(
+            "docker compose ps failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    parse_compose_ps_stdout(&output.stdout)
+}
+
+fn parse_compose_ps_stdout(stdout: &[u8]) -> Result<Vec<String>, HarnessError> {
+    let mut running = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: ComposePsEntry = serde_json::from_str(line).map_err(|e| {
+            HarnessError::Docker(format!("docker compose ps parse error: {e}; line={line}"))
+        })?;
+        if entry.state.eq_ignore_ascii_case("running") {
+            running.push(entry.name);
+        }
+    }
+    Ok(running)
 }
 
 fn fund_eth_from_deployer(
@@ -2067,4 +2137,27 @@ fn wait_for_http_ok_with_probe(
     Err(HarnessError::other(format!(
         "service at {url} not healthy after {timeout:?}: {last}"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_collision_guard_filters_running_containers() {
+        let stdout = br#"{"Name":"eth-execution","State":"running"}
+{"Name":"eth-beacon","State":"running"}
+{"Name":"eth-validator-1","State":"exited"}
+{"Name":"eth-validator-2","State":"paused"}
+"#;
+
+        let names = parse_compose_ps_stdout(stdout).expect("parse compose ps output");
+        assert_eq!(names, vec!["eth-execution", "eth-beacon"]);
+    }
+
+    #[test]
+    fn parse_compose_ps_stdout_ignores_empty_output() {
+        let names = parse_compose_ps_stdout(b"\n\n").expect("parse empty output");
+        assert!(names.is_empty());
+    }
 }
