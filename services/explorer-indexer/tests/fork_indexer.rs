@@ -53,6 +53,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         rpc_label: fork.rpc_label.clone(),
         gateway: Address::ZERO,
         vault: rmpc_fork_e2e::addresses::VAULT,
+        registry: None,
         max_blocks_per_tick: 200,
         // Anvil's `eth_blockNumber` returns the fork pin; we cap the
         // run at the pin so the heartbeat snapshot lands at a known

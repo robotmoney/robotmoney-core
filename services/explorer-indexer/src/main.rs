@@ -42,6 +42,12 @@ struct Cli {
     #[arg(long, env = "INDEXER_VAULT")]
     vault: String,
 
+    /// Optional VaultRegistry contract address.  When set, the indexer
+    /// ingests VaultRegistered and VaultStatusChanged events from this
+    /// contract on every tick.
+    #[arg(long, env = "INDEXER_REGISTRY")]
+    registry: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -80,12 +86,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.migrate().await?;
     let rpc = JsonRpc::new(&cli.rpc_url);
 
+    let registry = cli
+        .registry
+        .as_deref()
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
         rpc_label: cli.rpc_label,
         gateway: Address::from_str(cli.gateway.trim_start_matches("0x"))?,
         vault: Address::from_str(cli.vault.trim_start_matches("0x"))?,
+        registry,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
     };

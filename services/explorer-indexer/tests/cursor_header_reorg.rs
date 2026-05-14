@@ -100,6 +100,7 @@ async fn cursor_header_persisted_for_no_event_target() {
         rpc_label: "stub".into(),
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
+        registry: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
     };
@@ -183,6 +184,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         rpc_label: "stub".into(),
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
+        registry: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
     };
@@ -262,6 +264,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         rpc_label: "stub".into(),
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
+        registry: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
     };
@@ -332,6 +335,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         rpc_label: "stub".into(),
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
+        registry: None,
         max_blocks_per_tick: 50,
         end_block: Some(10),
     };
@@ -406,6 +410,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         rpc_label: "stub".into(),
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
+        registry: None,
         max_blocks_per_tick: 50,
         end_block: Some(10),
     };

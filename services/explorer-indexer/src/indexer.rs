@@ -21,7 +21,7 @@
 //! `last_indexed_block` is left at the last block we successfully
 //! committed, so the next run resumes there.
 
-use crate::abi::{IGatewayEvents, IVaultReads, Topics};
+use crate::abi::{IGatewayEvents, IVaultReads, IVaultRegistryEvents, Topics};
 use crate::db::{Db, DbError};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
@@ -46,8 +46,12 @@ pub struct IndexerConfig {
     pub rpc_label: String,
     /// Watched gateway address (one per chain).
     pub gateway: Address,
-    /// Watched vault address (one per chain).
+    /// Watched vault address (one per chain, legacy single-vault config).
     pub vault: Address,
+    /// Optional on-chain VaultRegistry contract address.  When set, the
+    /// indexer calls `listVaults()` on each tick and ingests
+    /// `VaultRegistered` / `VaultStatusChanged` events from the registry.
+    pub registry: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -58,7 +62,11 @@ pub struct IndexerConfig {
 
 impl IndexerConfig {
     pub fn watched_addresses(&self) -> Vec<Address> {
-        vec![self.gateway, self.vault]
+        let mut addrs = vec![self.gateway, self.vault];
+        if let Some(reg) = self.registry {
+            addrs.push(reg);
+        }
+        addrs
     }
 }
 
@@ -86,6 +94,10 @@ pub async fn run_once(
         .await?;
     db.upsert_contract(cfg.chain_id, cfg.vault.into_array(), "vault", None)
         .await?;
+    if let Some(reg) = cfg.registry {
+        db.upsert_contract(cfg.chain_id, reg.into_array(), "vault_registry", None)
+            .await?;
+    }
 
     let last_indexed = db.last_indexed_block(cfg.chain_id).await?;
     let from_block = last_indexed.map(|x| x + 1).unwrap_or(0);
@@ -409,6 +421,42 @@ async fn handle_log(
         || topic0 == topics.unpaused
     {
         return Ok(0);
+    }
+
+    // VaultRegistered — upsert a row into `vaults`.
+    if topic0 == topics.vault_registered {
+        let decoded = IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("VaultRegistered: {e}")))?;
+        let r = db
+            .upsert_vault(
+                cfg.chain_id,
+                decoded.vault.into_array(),
+                &decoded.name,
+                &decoded.riskLabel,
+                decoded.depositCap,
+                0i16, // VaultStatus::Active at registration
+                decoded.registeredAt as i64,
+                log.block_number as i64,
+                log.tx_hash.0,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // VaultStatusChanged — update `status` and `status_changed_at`.
+    if topic0 == topics.vault_status_changed {
+        let decoded =
+            IVaultRegistryEvents::VaultStatusChanged::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("VaultStatusChanged: {e}")))?;
+        let r = db
+            .update_vault_status(
+                cfg.chain_id,
+                decoded.vault.into_array(),
+                decoded.newStatus as i16,
+                decoded.changedAt as i64,
+            )
+            .await?;
+        return Ok(r);
     }
 
     Ok(0)

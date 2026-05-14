@@ -29,7 +29,8 @@ pub struct Db {
 /// (which does not call sqlx-cli) can still apply schema.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// All nine §11 tables that can be counted.
+/// All countable tables (nine §11 tables plus the vault registry table
+/// added in migration 0002).
 ///
 /// Using a typed enum instead of a raw `&str` ensures no caller can
 /// pass a user-controlled string to the dynamic `FORMAT` in
@@ -47,6 +48,8 @@ pub enum CountTable {
     VaultSnapshots,
     WalletPositions,
     IndexerRuns,
+    /// Added in migration 0002 — vault registry table.
+    Vaults,
 }
 
 impl CountTable {
@@ -62,6 +65,7 @@ impl CountTable {
             CountTable::VaultSnapshots => "vault_snapshots",
             CountTable::WalletPositions => "wallet_positions",
             CountTable::IndexerRuns => "indexer_runs",
+            CountTable::Vaults => "vaults",
         }
     }
 }
@@ -345,6 +349,72 @@ impl Db {
         .bind(&owner[..])
         .bind(block_number)
         .bind(u256_to_decimal(shares))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Idempotent insert of a vault registration row sourced from a
+    /// `VaultRegistered` event.  Uses `ON CONFLICT DO NOTHING` so
+    /// re-indexing the same registration block is a no-op.
+    ///
+    /// `status` is the small integer encoding of `VaultStatus`:
+    /// 0 = Active, 1 = Paused, 2 = Retired.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_vault(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        name: &str,
+        risk_label: &str,
+        deposit_cap: U256,
+        status: i16,
+        registered_at: i64,
+        registered_block: i64,
+        registered_tx: [u8; 32],
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO vaults \
+             (chain_id, vault_address, name, risk_label, deposit_cap, status, \
+              registered_at, registered_block, registered_tx) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, vault_address) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(name)
+        .bind(risk_label)
+        .bind(u256_to_decimal(deposit_cap))
+        .bind(status)
+        .bind(registered_at)
+        .bind(registered_block)
+        .bind(&registered_tx[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Atomically update the `status` and `status_changed_at` columns of
+    /// a previously-registered vault from a `VaultStatusChanged` event.
+    ///
+    /// A no-op if the vault address is unknown (forward-safety: the
+    /// indexer may not have seen the `VaultRegistered` event yet).
+    pub async fn update_vault_status(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        new_status: i16,
+        changed_at: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE vaults \
+             SET status = $3, status_changed_at = $4, indexed_at = now() \
+             WHERE chain_id = $1 AND vault_address = $2",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(new_status)
+        .bind(changed_at)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())

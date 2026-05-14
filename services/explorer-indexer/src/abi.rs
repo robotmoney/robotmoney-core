@@ -1,7 +1,8 @@
-//! ABI surfaces the indexer decodes — IGateway and RobotMoneyVault
-//! events plus the ERC-4626 / vault state reads. Mirrors the contract
-//! sources in `contracts/gateway/interfaces/IGateway.sol` and
-//! `contracts/RobotMoneyVault.sol`.
+//! ABI surfaces the indexer decodes — IGateway, RobotMoneyVault, and
+//! VaultRegistry events plus the ERC-4626 / vault state reads.  Mirrors
+//! the contract sources in `contracts/gateway/interfaces/IGateway.sol`,
+//! `contracts/RobotMoneyVault.sol`, and the canonical event signatures
+//! in `docs/technical/vault-registry-decisions.md` §3.5.
 
 use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
@@ -57,6 +58,39 @@ sol! {
         function tvlCap() external view returns (uint256);
         function paused() external view returns (bool);
     }
+
+    /// Event surface from `VaultRegistry`.  Canonical signatures are
+    /// defined in `docs/technical/vault-registry-decisions.md` §3.5 and
+    /// must appear verbatim in `VaultRegistry.sol`.
+    #[allow(missing_docs)]
+    interface IVaultRegistryEvents {
+        /// Emitted once when a vault is added to the registry.
+        event VaultRegistered(
+            address indexed vault,
+            string  name,
+            string  riskLabel,
+            uint256 depositCap,
+            uint64  registeredAt
+        );
+
+        /// Emitted each time an admin changes a vault's operational status.
+        event VaultStatusChanged(
+            address indexed vault,
+            uint8           oldStatus,
+            uint8           newStatus,
+            uint64          changedAt
+        );
+    }
+
+    /// Minimum stable read surface for `VaultRegistry`.  Defined in
+    /// `docs/technical/vault-registry-decisions.md` §3.4.
+    #[allow(missing_docs)]
+    interface IVaultRegistryReads {
+        /// Returns all registered vault addresses regardless of status.
+        function listVaults() external view returns (address[] memory);
+        /// Returns the number of registered vaults (all statuses).
+        function vaultCount() external view returns (uint256);
+    }
 }
 
 /// Topic-0 hashes the indexer matches on `eth_getLogs`. Computed once
@@ -71,6 +105,9 @@ pub struct Topics {
     pub vault_pulled: B256,
     pub vault_rebalanced: B256,
     pub vault_exit_fee_charged: B256,
+    // VaultRegistry events — docs/technical/vault-registry-decisions.md §3.5.
+    pub vault_registered: B256,
+    pub vault_status_changed: B256,
 }
 
 impl Topics {
@@ -89,6 +126,9 @@ impl Topics {
             vault_exit_fee_charged: keccak256(
                 b"ExitFeeCharged(address,address,uint256,uint256,uint256)",
             ),
+            // VaultRegistry — docs/technical/vault-registry-decisions.md §3.5.
+            vault_registered: keccak256(b"VaultRegistered(address,string,string,uint256,uint64)"),
+            vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint8,uint64)"),
         }
     }
 
@@ -105,6 +145,8 @@ impl Topics {
             self.vault_pulled,
             self.vault_rebalanced,
             self.vault_exit_fee_charged,
+            self.vault_registered,
+            self.vault_status_changed,
         ]
     }
 }
@@ -145,6 +187,15 @@ mod tests {
         assert_eq!(
             t.vault_exit_fee_charged,
             IVaultEvents::ExitFeeCharged::SIGNATURE_HASH
+        );
+        // VaultRegistry events — docs/technical/vault-registry-decisions.md §3.5.
+        assert_eq!(
+            t.vault_registered,
+            IVaultRegistryEvents::VaultRegistered::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.vault_status_changed,
+            IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH
         );
     }
 }
