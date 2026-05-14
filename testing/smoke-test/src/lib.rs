@@ -137,6 +137,18 @@ struct DeploymentJson {
     gateway_runtime_hash: String,
 }
 
+/// Typed view over the registry deployment JSON produced by DeployVaultRegistry.s.sol.
+#[derive(Debug, Deserialize)]
+struct RegistryDeploymentJson {
+    registry: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    vault_registered: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct ComposePsEntry {
     #[serde(rename = "Name")]
@@ -161,6 +173,7 @@ pub struct Fixture {
     rpc_url: String,
     chain_id: u64,
     deployment: DeploymentJson,
+    registry_deployment: RegistryDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -662,6 +675,33 @@ impl Fixture {
         let deployment = read_deployment(&dep_out)?;
         let chain_id = deployment.chain_id;
 
+        // Deploy VaultRegistry and register RobotMoneyVault as the first active vault
+        // (issue #294). The registry deployment JSON is written to a separate path in
+        // the same tempdir so rmpc and downstream tooling can discover the registry
+        // address without manual editing.
+        let reg_out = tmp.path().join("registry.json");
+        run_forge_deploy_registry(
+            &repo_root,
+            &rpc_url,
+            &reg_out,
+            &deployment.vault,
+            &deployment.usdc,
+        )
+        .inspect_err(|err| {
+            logging::error("smoke-test", format!("forge deploy registry failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "registry deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        let registry_deployment = read_registry_deployment(&reg_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -698,6 +738,7 @@ impl Fixture {
             rpc_url,
             chain_id,
             deployment,
+            registry_deployment,
             repo_root,
         };
 
@@ -783,6 +824,15 @@ impl Fixture {
     /// Raw string form of the vault address.
     pub fn vault_hex(&self) -> &str {
         &self.deployment.vault
+    }
+    /// VaultRegistry address deployed by DeployVaultRegistry.s.sol (issue #294).
+    /// RobotMoneyVault is registered as the first active vault in this registry.
+    pub fn registry(&self) -> Address {
+        parse_addr(&self.registry_deployment.registry)
+    }
+    /// Raw string form of the VaultRegistry address.
+    pub fn registry_hex(&self) -> &str {
+        &self.registry_deployment.registry
     }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
@@ -1378,6 +1428,54 @@ fn run_forge_deploy_with_env(
 }
 
 fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
+/// Run the DeployVaultRegistry forge script (issue #294) and write the
+/// registry deployment JSON to `reg_out`. The deployer EOA (which holds
+/// `ADMIN_ROLE` on the newly-deployed registry) broadcasts via its private
+/// key, so `msg.sender` on `registerVault` is the admin — no `vm.prank` is
+/// needed inside the script's `run()` entrypoint.
+fn run_forge_deploy_registry(
+    repo_root: &Path,
+    rpc_url: &str,
+    reg_out: &Path,
+    vault_address: &str,
+    usdc_address: &str,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    .env("VAULT_ADDRESS", vault_address)
+    .env("USDC_ADDRESS", usdc_address)
+    .env("VAULT_NAME", "Robot Money USDC")
+    .env("DEPLOYMENT_OUT", reg_out)
+    .current_dir(repo_root);
+    let out = cmd.output()?;
+    logging::log_command_output("forge-registry", &out);
+    if !out.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployVaultRegistry exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_registry_deployment(path: &Path) -> Result<RegistryDeploymentJson, HarnessError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
     serde_json::from_str(&raw)
