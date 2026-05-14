@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
+use alloy_primitives::{keccak256, Address, Bytes, TxKind, B256, U256};
 use alloy_sol_types::{sol, SolCall};
 use k256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
@@ -675,6 +675,47 @@ impl<'a> Account<'a> {
         Ok(r)
     }
 
+    /// Deploy a contract. `initcode` = constructor bytecode + ABI-encoded
+    /// constructor arguments concatenated. Returns the deployed contract address
+    /// from the receipt's `contractAddress` field.
+    pub fn deploy(&self, initcode: Bytes, gas_limit: u64) -> Result<Address, HarnessError> {
+        let nonce = self.rpc.tx_count(self.address)?;
+        let (max_fee, max_prio) = self.rpc.fees()?;
+
+        let tx = TxEip1559 {
+            chain_id: self.chain_id,
+            nonce,
+            gas_limit,
+            max_fee_per_gas: max_fee,
+            max_priority_fee_per_gas: max_prio,
+            to: TxKind::Create,
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: initcode,
+        };
+
+        let sig = sign_eip1559(&tx, &self.signer);
+        let envelope = TxEnvelope::Eip1559(tx.into_signed(sig));
+        let mut buf = Vec::with_capacity(4096);
+        envelope.encode_2718(&mut buf);
+        let raw_hex = format!("0x{}", hex::encode(&buf));
+
+        let hash = self.rpc.send_raw(&raw_hex)?;
+        self.tx_hashes.lock().unwrap().push(hash);
+        let r = self.rpc.wait_for_receipt(hash, Duration::from_secs(20))?;
+        if r.status != 1 {
+            return Err(HarnessError::Reverted(format!(
+                "deploy tx {hash:?} reverted (gasUsed={})",
+                r.gas_used
+            )));
+        }
+        r.contract_address.ok_or_else(|| {
+            HarnessError::Rpc(format!(
+                "deploy tx {hash:?} succeeded but contractAddress is missing in receipt"
+            ))
+        })
+    }
+
     /// Eth-call (read-only) with encoded calldata.
     pub fn call<C: SolCall>(&self, to: Address, call: &C) -> Result<Bytes, HarnessError> {
         let calldata = call.abi_encode();
@@ -694,6 +735,38 @@ sol! {
         function allowance(address owner, address spender) external view returns (uint256);
         function decimals() external view returns (uint8);
         function symbol() external view returns (string memory);
+    }
+
+    /// On-chain `VaultRegistry` interface (contracts/VaultRegistry.sol).
+    /// Used by the registry fork-e2e scenarios to call registerVault,
+    /// setVaultStatus, listVaults, and getVault directly via JSON-RPC
+    /// without going through the rmpc binary's separate ABI binding.
+    #[allow(missing_docs)]
+    interface IOnchainVaultRegistry {
+        enum VaultStatus { Active, Paused, Retired }
+
+        struct VaultMetadata {
+            string name;
+            address asset;
+            uint256 registeredAt;
+        }
+
+        /// Register a new vault. Caller must hold ADMIN_ROLE.
+        function registerVault(address vault, VaultMetadata calldata metadata) external;
+
+        /// Update a vault's lifecycle status. Caller must hold ADMIN_ROLE.
+        function setVaultStatus(address vault, VaultStatus newStatus) external;
+
+        /// Return all registered vault addresses in registration order.
+        function listVaults() external view returns (address[] memory);
+
+        /// Return full metadata and current status for a registered vault.
+        function getVault(address vault)
+            external view
+            returns (VaultMetadata memory metadata, VaultStatus status);
+
+        /// Number of registered vaults.
+        function vaultCount() external view returns (uint256);
     }
 
     /// Subset of `RobotMoneyVault` (ERC-4626 + the vault-specific
@@ -730,11 +803,26 @@ pub struct Rpc {
     http: reqwest::blocking::Client,
 }
 
+/// One entry in a transaction's event log.
+#[derive(Debug, Clone)]
+pub struct Log {
+    /// The emitting contract address.
+    pub address: Address,
+    /// Indexed topics (topic0 = event signature hash).
+    pub topics: Vec<B256>,
+    /// Non-indexed ABI-encoded data.
+    pub data: Bytes,
+}
+
 #[derive(Debug, Clone)]
 pub struct Receipt {
     pub status: u64,
     pub gas_used: u64,
     pub tx_hash: B256,
+    /// Address of the newly deployed contract (only set for CREATE transactions).
+    pub contract_address: Option<Address>,
+    /// Event logs emitted by this transaction.
+    pub logs: Vec<Log>,
 }
 
 impl Rpc {
@@ -934,11 +1022,58 @@ impl Rpc {
                     .get("gasUsed")
                     .and_then(|s| s.as_str())
                     .unwrap_or("0x0");
+
+                // Parse optional contractAddress (only present for CREATE txs).
+                let contract_address = resp
+                    .get("contractAddress")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| *s != "null" && !s.is_empty())
+                    .and_then(|s| s.parse::<Address>().ok());
+
+                // Parse logs array.
+                let logs = resp
+                    .get("logs")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|entry| {
+                                let address = entry
+                                    .get("address")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| s.parse::<Address>().ok())?;
+                                let topics = entry
+                                    .get("topics")
+                                    .and_then(|v| v.as_array())
+                                    .map(|ts| {
+                                        ts.iter()
+                                            .filter_map(|t| {
+                                                t.as_str().and_then(|s| parse_b256(s).ok())
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default();
+                                let data = entry
+                                    .get("data")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|s| decode_hex_bytes(s).ok())
+                                    .unwrap_or_default();
+                                Some(Log {
+                                    address,
+                                    topics,
+                                    data,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
                 return Ok(Receipt {
                     status: u64::from_str_radix(status.trim_start_matches("0x"), 16).unwrap_or(0),
                     gas_used: u64::from_str_radix(gas_used.trim_start_matches("0x"), 16)
                         .unwrap_or(0),
                     tx_hash: hash,
+                    contract_address,
+                    logs,
                 });
             }
             if start.elapsed() > timeout {
@@ -948,6 +1083,21 @@ impl Rpc {
             }
             std::thread::sleep(Duration::from_millis(150));
         }
+    }
+
+    /// Take an EVM state snapshot. Returns the snapshot ID.
+    pub fn evm_snapshot(&self) -> Result<B256, HarnessError> {
+        let s: String = self.rpc("evm_snapshot", serde_json::json!([]))?;
+        parse_b256(&format!("0x{:0>64}", s.trim_start_matches("0x")))
+    }
+
+    /// Revert the EVM to the snapshot identified by `snapshot_id`.
+    pub fn evm_revert(&self, snapshot_id: B256) -> Result<bool, HarnessError> {
+        let r: bool = self.rpc(
+            "evm_revert",
+            serde_json::json!([format!("{:#x}", snapshot_id)]),
+        )?;
+        Ok(r)
     }
 }
 

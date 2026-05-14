@@ -21,6 +21,9 @@
 #   and re-run snapshot-fork.sh before debugging the test code.
 # - cargo test --no-run is a separate step so compile errors are surfaced immediately
 #   with clear output, rather than buried in the test runner's timeout output.
+# - The registry fork-e2e scenarios (tests/registry.rs) deploy VaultRegistry from the
+#   Foundry build artefact (out/VaultRegistry.sol/VaultRegistry.json). The "forge build"
+#   step below must run before cargo test so that artefact is present.
 
 name: fork-protocol-adapter-integration
 
@@ -31,6 +34,7 @@ on:
     branches: [main, dev]
     paths:
       - "testing/fork-e2e-rust/**"
+      - "contracts/VaultRegistry.sol"
       - ".github/workflows/suite-05-fork-integration.yml"
   workflow_dispatch:
 
@@ -62,6 +66,9 @@ jobs:
           key: ${{ runner.os }}-cargo-fork-e2e-${{ hashFiles('testing/fork-e2e-rust/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-fork-e2e-
+
+      - name: Build Solidity contracts (required by registry fork-e2e)
+        run: forge build
 
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
