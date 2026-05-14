@@ -79,7 +79,8 @@ Goal: Lightweight HTTP API + background indexer over a Postgres database for
 browsing Robot Money deposit/vault history.
 
 Status: **Complete.** Explorer API (`clients/explorer-api/`) and indexer
-(`services/explorer-indexer/`) are implemented with CI coverage (suite-08).
+(`services/explorer-indexer/`) are implemented with CI coverage (suite-08). See
+`docs/technical/explorer-schema-decisions.md` for the schema ADR.
 
 ### Phase 6 — Human Dapp
 Goal: Human-facing interface for deposits, withdrawals, agent authorization,
@@ -126,6 +127,8 @@ safe edit order before any implementation begins.
 Goal: Fix indexer SQL injection surface, explorer-API CORS gap, and two dapp
 security gaps. Contract security findings and backend fixes are independent and
 can run concurrently after their respective scout gates.
+
+See also: `docs/technical/dapp-browser-keygen-review.md` (browser-keygen security ADR — in-browser keygen path withdrawn; see §3.1 of `docs/technical/dapp-credential-decisions.md`).
 
 - [ ] dev-scout: map backend hardening seams
 - [ ] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion

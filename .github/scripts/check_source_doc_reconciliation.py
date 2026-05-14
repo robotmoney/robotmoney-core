@@ -129,12 +129,24 @@ def main() -> int:
     root = repo_root()
 
     adr_path = root / ADR_PATH
+    oq_path = root / OPEN_QUESTIONS_PATH
+
+    # Both files were intentionally removed in the multi-vault product-direction
+    # commit (f3a3268): open-questions.md was folded into prd.md and the ADR was
+    # superseded. When neither source file exists the contradiction-ADR workflow
+    # no longer applies; treat as a no-op rather than a hard failure.
+    if not oq_path.is_file() and not adr_path.is_file():
+        print(
+            "OK: open-questions.md and source-doc-reconciliation.md both absent "
+            "— contradiction-ADR workflow superseded; check skipped."
+        )
+        return 0
+
     if not adr_path.is_file():
         print(f"FAIL: ADR missing at {adr_path}", file=sys.stderr)
         return 1
     adr_text = adr_path.read_text(encoding="utf-8")
 
-    oq_path = root / OPEN_QUESTIONS_PATH
     if not oq_path.is_file():
         print(f"FAIL: open-questions missing at {oq_path}", file=sys.stderr)
         return 1

@@ -32,16 +32,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Immutable constants ──────────────────────────────────────────
 
-    uint256 public constant MAX_EXIT_FEE_BPS = 100;   // 1%
-    uint256 public constant MAX_SLIPPAGE_BPS = 500;   // 5% hard ceiling
+    uint256 public constant MAX_EXIT_FEE_BPS = 100; // 1%
+    uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% hard ceiling
     uint256 public constant MAX_BPS = 10_000;
 
     // ─── Asset registry ───────────────────────────────────────────────
 
     struct AssetInfo {
         address token;
-        address pool;     // Uniswap V3 pool pairing token with USDC
-        uint24 swapFee;   // Uniswap V3 fee tier for exactInputSingle swaps
+        address pool; // Uniswap V3 pool pairing token with USDC
+        uint24 swapFee; // Uniswap V3 fee tier for exactInputSingle swaps
         bool active;
     }
 
@@ -65,7 +65,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     event AssetAdded(uint256 indexed index, address indexed token, address pool, uint24 swapFee);
     event AssetRemoved(uint256 indexed index, address indexed token);
-    event Swapped(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event Swapped(
+        address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut
+    );
     event ExitFeeCharged(
         address indexed owner, address indexed receiver, uint256 gross, uint256 fee, uint256 net
     );
@@ -234,7 +236,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         address owner,
         uint256, /* assets — unused; actual determined by swaps */
         uint256 shares
-    ) internal override whenNotPaused nonReentrant {
+    )
+        internal
+        override
+        whenNotPaused
+        nonReentrant
+    {
         if (caller != owner) _spendAllowance(owner, caller, shares);
 
         uint256 supplyBefore = totalSupply();
@@ -324,7 +331,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         returns (uint256 amountOut)
     {
         if (amountIn == 0) return 0;
-        (uint160 sqrtPriceX96,,,,,, ) = IUniswapV3Pool(pool).slot0();
+        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
         bool zeroForOne = tokenIn < tokenOut;
         uint256 sqrtP = uint256(sqrtPriceX96);
 
@@ -403,7 +410,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
                     amountOutMinimum: 0, // emergency: accept any amount
                     sqrtPriceLimitX96: 0
                 })
-            ) returns (uint256 received) {
+            ) returns (
+                uint256 received
+            ) {
                 emit Swapped(assets[i].token, address(_USDC), bal, received);
             } catch {}
         }
