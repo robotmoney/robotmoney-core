@@ -10,6 +10,7 @@ evm_version = "cancun"
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
+    "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
 ]
 
 # Allow Deploy.s.sol to write the deployment JSON. Scoped read-write so

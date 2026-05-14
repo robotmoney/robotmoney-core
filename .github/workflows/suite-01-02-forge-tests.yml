@@ -68,7 +68,12 @@ jobs:
         run: forge build
 
       - name: forge test (unit)
-        run: forge test -vvv
+        # `--no-match-test "^testFail_"` skips the two deprecated `testFail_*`
+        # functions that the vendored a16z `erc4626-tests` suite still ships.
+        # Modern forge rejects them by name (gas:0 failure) before execution,
+        # so excluding them at the runner is the cleanest seam. The 24 vanilla
+        # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
+        run: forge test -vvv --no-match-test "^testFail_"
 
   invariant:
     name: forge-invariant-fuzz-tests
@@ -171,7 +176,8 @@ jobs:
             ${{ runner.os }}-foundry-
 
       - name: forge coverage
-        run: forge coverage --report lcov --ir-minimum
+        # See the unit job for why `--no-match-test "^testFail_"` is required.
+        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info
