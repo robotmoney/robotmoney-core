@@ -433,4 +433,43 @@ mod tests {
         let p = compute_share_price(U256::from(2_000_000u64), U256::from(1_000_000u64), 6).unwrap();
         assert_eq!(p, "2000000");
     }
+
+    /// Migrated from suite-05 (`testing/fork-e2e-rust/tests/rmpc_get_vault_fork.rs`).
+    ///
+    /// A malformed `vault_address` in the operator config must cause `run()` to
+    /// return `EXIT_STARTUP_FAIL` (3) immediately, without touching the network.
+    /// This exercises the `Address::from_str` guard in `get_vault::run()` and
+    /// requires no chain or fork fixture.
+    #[test]
+    fn rmpc_get_vault_rejects_malformed_address() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let keystore = tmp.path().join("keystore.json");
+        let cfg_path = tmp.path().join("rmpc.toml");
+        let toml = format!(
+            r#"chain_id              = 8453
+rpc_url               = "http://127.0.0.1:1"
+gateway_address       = "0x000000000000000000000000000000000000dEaD"
+usdc_address          = "0x{usdc}"
+vault_address         = "not-a-hex-address"
+gateway_runtime_hash  = "0x{zeros}"
+max_fee_per_gas_cap   = 100000000000
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "{ks}"
+"#,
+            usdc = "00".repeat(20),
+            zeros = "0".repeat(64),
+            ks = keystore.display(),
+        );
+        std::fs::write(&cfg_path, &toml).expect("write rmpc.toml");
+
+        // EXIT_STARTUP_FAIL = 3: the vault_address parse must fail before any
+        // RPC attempt is made, so this test never touches the network.
+        let code = run(&cfg_path, false);
+        assert_eq!(
+            code, EXIT_STARTUP_FAIL,
+            "expected EXIT_STARTUP_FAIL ({EXIT_STARTUP_FAIL}) on malformed vault_address; got {code}"
+        );
+    }
 }

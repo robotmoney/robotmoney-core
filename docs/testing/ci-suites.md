@@ -137,7 +137,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 5. `cargo fmt --check` + `cargo clippy`
 6. `cargo test --no-run` — build test binaries
 7. _(pr-smoke only)_ `abi_address_sanity` + `vault_deposit_redeem_smoke` — fast subset
-8. _(full-suite only)_ All scenarios: `abi_address_sanity`, `vault_deposit_redeem_smoke`, `dex_route_smoke`, `failure_surface_smoke`, `gas_estimate_reality_check`, plus all `rmpc_get_*` fork tests
+8. _(full-suite only)_ All scenarios: `abi_address_sanity`, `vault_deposit_redeem_smoke`, `dex_route_smoke`, `failure_surface_smoke`, `gas_estimate_reality_check`, plus the remaining `rmpc_get_*` fork tests: `rmpc_get_vault_fork_base_mainnet`, `rmpc_get_balance_fork`, `rmpc_get_allowance_fork`, `rmpc_get_tx_fork`
 
 ---
 
