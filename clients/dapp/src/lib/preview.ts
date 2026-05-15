@@ -28,6 +28,8 @@ export interface AgentPolicy {
   maxPerPayment: bigint;
   maxPerWindow: bigint;
   shareReceiver: Address;
+  /** Whitelist of deposit destinations (vault or router). Empty array = open policy. */
+  allowedDestinations: Address[];
 }
 
 export type AdminAction =
@@ -140,6 +142,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
               maxPerPayment: action.policy.maxPerPayment,
               maxPerWindow: action.policy.maxPerWindow,
               shareReceiver: getAddress(action.policy.shareReceiver),
+              allowedDestinations: action.policy.allowedDestinations,
             },
           ],
         });

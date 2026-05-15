@@ -24,6 +24,7 @@ const policy = {
   maxPerPayment: 100_000_000n,
   maxPerWindow: 500_000_000n,
   shareReceiver: receiver,
+  allowedDestinations: [] as `0x${string}`[],
 };
 
 describe("buildPreview", () => {

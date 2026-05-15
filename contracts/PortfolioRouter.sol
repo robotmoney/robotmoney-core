@@ -256,6 +256,35 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         nonReentrant
         returns (uint256[] memory sharesPerLeg)
     {
+        return _depositTo(msg.sender, amount, minSharesPerLeg);
+    }
+
+    /// @notice Split `amount` USDC across active vaults by the current weight
+    ///         vector. All legs must succeed (all-or-revert). Shares are minted
+    ///         to `receiver` instead of `msg.sender`. Intended for gateway
+    ///         integration where the gateway is the caller but shares belong to
+    ///         the depositor's configured share receiver.
+    ///
+    /// @param receiver          Address that receives minted vault shares.
+    /// @param amount            Total USDC to deposit. Must be pre-approved.
+    /// @param minSharesPerLeg   Minimum shares the caller accepts per leg.
+    ///                          Length must equal the number of active legs (non-
+    ///                          paused, non-retired). Pass an empty array to skip
+    ///                          slippage protection.
+    function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
+        external
+        nonReentrant
+        returns (uint256[] memory sharesPerLeg)
+    {
+        if (receiver == address(0)) revert ZeroAddress();
+        return _depositTo(receiver, amount, minSharesPerLeg);
+    }
+
+    /// @dev Internal allocation logic shared by `deposit` and `depositFor`.
+    function _depositTo(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
+        internal
+        returns (uint256[] memory sharesPerLeg)
+    {
         if (_weightVaultList.length == 0) revert NoWeightsSet();
 
         // Global router cap check.
@@ -282,8 +311,8 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             // Approve vault to pull legAmount USDC.
             usdc.forceApprove(vault, legAmount);
 
-            // deposit() returns shares minted to receiver (msg.sender).
-            uint256 sharesReceived = IERC4626(vault).deposit(legAmount, msg.sender);
+            // deposit() returns shares minted to receiver.
+            uint256 sharesReceived = IERC4626(vault).deposit(legAmount, receiver);
             sharesPerLeg[i] = sharesReceived;
 
             // Slippage guard.
@@ -291,7 +320,7 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
                 revert SlippageExceeded();
             }
 
-            emit RouterDeposit(msg.sender, vault, legAmount, sharesReceived, _weightBps[i]);
+            emit RouterDeposit(receiver, vault, legAmount, sharesReceived, _weightBps[i]);
         }
     }
 

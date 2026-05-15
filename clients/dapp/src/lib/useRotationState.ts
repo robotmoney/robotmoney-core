@@ -73,6 +73,7 @@ export function useRotationState(gatewayAddress: Address, ctx: PreviewContext, n
             maxPerPayment: BigInt(maxPerPayment),
             maxPerWindow: BigInt(maxPerWindow),
             shareReceiver: shareReceiver as Address,
+            allowedDestinations: [],
           },
         }
       : null;

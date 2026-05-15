@@ -10,6 +10,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
+import {IPortfolioRouter} from "./interfaces/IPortfolioRouter.sol";
 
 /// @title RobotMoneyGateway
 /// @notice Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC from
@@ -65,6 +66,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         owner. The existing owner must call `setPolicy` to update or
     ///         `revokeAgent` to release the address before a new authorization.
     error AgentAlreadyOwned();
+    /// @notice `depositTo` was called with a destination not in the agent's
+    ///         `allowedDestinations` list (when the list is non-empty), or the
+    ///         destination is neither the pinned vault nor the router.
+    error InvalidDestination();
 
     // -------------------------------------------------------------------
     // Constants
@@ -86,6 +91,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Pinned ERC-4626 vault.
     IERC4626 public immutable vaultContract;
+
+    /// @notice Portfolio Router for multi-vault agent deposits. May be `address(0)`
+    ///         if the gateway was deployed without router support.
+    IPortfolioRouter public immutable routerContract;
 
     // -------------------------------------------------------------------
     // Storage
@@ -114,11 +123,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // Constructor
     // -------------------------------------------------------------------
 
-    /// @param usdc_   USDC (or 6-decimal stand-in) token address.
-    /// @param vault_  ERC-4626 vault whose `asset()` MUST equal `usdc_`.
-    /// @param admin_  Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
-    /// @param pauser_ Holder of `PAUSER_ROLE`. Must be distinct from agents.
-    constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_) {
+    /// @param usdc_    USDC (or 6-decimal stand-in) token address.
+    /// @param vault_   ERC-4626 vault whose `asset()` MUST equal `usdc_`.
+    /// @param admin_   Holder of `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    /// @param pauser_  Holder of `PAUSER_ROLE`. Must be distinct from agents.
+    /// @param router_  Portfolio Router address, or `address(0)` to deploy without
+    ///                 router support (single-vault mode).
+    constructor(IERC20 usdc_, IERC4626 vault_, address admin_, address pauser_, address router_) {
         if (address(usdc_) == address(0)) revert ZeroAddress();
         if (address(vault_) == address(0)) revert ZeroAddress();
         if (admin_ == address(0)) revert ZeroAddress();
@@ -127,6 +138,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         usdcToken = usdc_;
         vaultContract = vault_;
+        routerContract = IPortfolioRouter(router_);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
@@ -145,6 +157,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @inheritdoc IGateway
     function vault() external view returns (address) {
         return address(vaultContract);
+    }
+
+    /// @inheritdoc IGateway
+    function router() external view returns (address) {
+        return address(routerContract);
     }
 
     /// @inheritdoc IGateway
@@ -329,6 +346,187 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // 12. event.
         emit AgentDeposit(
             paymentId, orderId, msg.sender, p.shareReceiver, amount, sharesMinted, windowId
+        );
+    }
+
+    /// @inheritdoc IGateway
+    /// @dev Routes to a specific `destination` (vault or Portfolio Router). All the
+    ///      same caps, deadline, idempotency, and policy checks as `deposit` apply.
+    ///      When `destination` is the router, `minSharesPerLeg` is forwarded to
+    ///      `router.depositFor(shareReceiver, amount, minSharesPerLeg)` and shares
+    ///      are minted directly to `shareReceiver`. When `destination` is a vault,
+    ///      it behaves identically to `deposit` except the vault is user-specified
+    ///      and must pass the allowedDestinations check.
+    function depositTo(
+        bytes32 orderId,
+        uint256 amount,
+        uint64 deadline,
+        bytes32 idempotencyKey,
+        address destination,
+        uint256[] calldata minSharesPerLeg
+    ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId) {
+        if (_paused) revert PausedError();
+
+        // Build a DepositArgs struct early to collapse locals onto the heap.
+        // This avoids the "stack too deep" limit imposed by the EVM legacy codegen.
+        DepositArgs memory args;
+        args.orderId = orderId;
+        args.amount = amount;
+        args.destination = destination;
+
+        {
+            AgentPolicy memory p = agents[msg.sender];
+
+            // 1. amount > 0 && amount <= maxPerPayment
+            if (amount == 0) revert InvalidAmount();
+            if (amount > p.maxPerPayment) revert AmountExceedsPerPaymentCap();
+
+            // 2. deadline window
+            if (block.timestamp > deadline) revert DeadlineExpired();
+            if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
+
+            // 3. policy active and not expired.
+            // coverage:unreachable
+            if (!p.active) revert AgentNotAuthorized();
+            if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+
+            // 4. destination validation + allowedDestinations whitelist.
+            args.isRouter = _validateDestination(destination, p.allowedDestinations);
+            args.shareReceiver = p.shareReceiver;
+        }
+
+        // 5. windowId
+        args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
+
+        // 6. window cap
+        {
+            uint256 windowSoFar = agentWindowGross[msg.sender][args.windowId];
+            if (windowSoFar + amount > agents[msg.sender].maxPerWindow) revert WindowCapExceeded();
+
+            // 7. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+            paymentId = keccak256(
+                abi.encode(
+                    block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey
+                )
+            );
+            if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
+
+            // 8. EFFECTS: write state before any external call (CEI pattern).
+            agentWindowGross[msg.sender][args.windowId] = windowSoFar + amount;
+        }
+        usedPaymentIds[paymentId] = true;
+        args.paymentId = paymentId;
+
+        // slither-disable-start reentrancy-balance
+        // 9. safeTransferFrom with balance-delta verification.
+        args.balBefore = usdcToken.balanceOf(address(this));
+        usdcToken.safeTransferFrom(msg.sender, address(this), amount);
+        if (usdcToken.balanceOf(address(this)) - args.balBefore != amount) {
+            revert FeeOnTransferDetected();
+        }
+
+        _executeDeposit(args, minSharesPerLeg);
+        // slither-disable-end reentrancy-balance
+    }
+
+    /// @dev Internal args struct to avoid stack-too-deep in `depositTo`.
+    struct DepositArgs {
+        bytes32 paymentId;
+        bytes32 orderId;
+        address shareReceiver;
+        uint256 amount;
+        address destination;
+        uint64 windowId;
+        uint256 balBefore;
+        bool isRouter;
+    }
+
+    /// @dev Validates `destination` against the pinned vault and router, and
+    ///      enforces the policy allowedDestinations whitelist when non-empty.
+    ///      Returns `true` when destination is the router, `false` for a vault.
+    function _validateDestination(address destination, address[] memory allowedDestinations)
+        internal
+        view
+        returns (bool isRouter)
+    {
+        bool isVault = (destination == address(vaultContract));
+        isRouter = (address(routerContract) != address(0) && destination == address(routerContract));
+        if (!isVault && !isRouter) revert InvalidDestination();
+
+        // Enforce allowedDestinations whitelist when non-empty. Early return
+        // avoids a `break` statement that viaIR source-maps unreliably.
+        uint256 len = allowedDestinations.length;
+        if (len > 0) {
+            for (uint256 i = 0; i < len; i++) {
+                if (allowedDestinations[i] == destination) return isRouter; // allowed
+            }
+            revert InvalidDestination();
+        }
+    }
+
+    /// @dev Dispatches to router or vault deposit execution based on `args.isRouter`.
+    ///      Separated into two internal calls to give viaIR coverage instrumentation
+    ///      a reliable source-map anchor for each path.
+    function _executeDeposit(DepositArgs memory args, uint256[] calldata minSharesPerLeg) internal {
+        if (args.isRouter) {
+            _executeRouterDeposit(args, minSharesPerLeg);
+        } else {
+            _executeVaultDeposit(args);
+        }
+    }
+
+    /// @dev Router-path deposit: approve router, call `depositFor`, clear allowance,
+    ///      check USDC custody invariant, emit event.
+    function _executeRouterDeposit(DepositArgs memory args, uint256[] calldata minSharesPerLeg)
+        internal
+    {
+        usdcToken.forceApprove(address(routerContract), args.amount);
+        uint256[] memory sharesPerLeg =
+            routerContract.depositFor(args.shareReceiver, args.amount, minSharesPerLeg);
+        usdcToken.forceApprove(address(routerContract), 0);
+
+        if (usdcToken.balanceOf(address(this)) != args.balBefore) {
+            revert ShareCustodyInvariantViolated();
+        }
+
+        emit AgentDepositRouted(
+            args.paymentId,
+            args.orderId,
+            msg.sender,
+            args.shareReceiver,
+            address(routerContract),
+            args.amount,
+            sharesPerLeg,
+            args.windowId
+        );
+    }
+
+    /// @dev Vault-path deposit: pre-call share custody check, approve vault, deposit,
+    ///      clear allowance, post-call custody invariants, emit event.
+    function _executeVaultDeposit(DepositArgs memory args) internal {
+        if (IERC20(args.destination).balanceOf(address(this)) != 0) {
+            revert ShareCustodyInvariantViolated();
+        }
+
+        usdcToken.forceApprove(args.destination, args.amount);
+        uint256 sharesMinted = IERC4626(args.destination).deposit(args.amount, args.shareReceiver);
+        usdcToken.forceApprove(args.destination, 0);
+
+        if (IERC20(args.destination).balanceOf(address(this)) != 0) {
+            revert ShareCustodyInvariantViolated();
+        }
+        if (usdcToken.balanceOf(address(this)) != args.balBefore) {
+            revert ShareCustodyInvariantViolated();
+        }
+
+        emit AgentDeposit(
+            args.paymentId,
+            args.orderId,
+            msg.sender,
+            args.shareReceiver,
+            args.amount,
+            sharesMinted,
+            args.windowId
         );
     }
 }

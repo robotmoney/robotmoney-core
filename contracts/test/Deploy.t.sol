@@ -117,12 +117,14 @@ contract DeployTest is Test {
 
         // Build a policy and try to authorize ADMIN as an AGENT — this
         // must revert because admin already holds ADMIN_ROLE.
+        address[] memory noDestinations = new address[](0);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 1 days),
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
-            shareReceiver: shareReceiver
+            shareReceiver: shareReceiver,
+            allowedDestinations: noDestinations
         });
 
         vm.prank(admin);
@@ -133,12 +135,14 @@ contract DeployTest is Test {
     function test_deploy_grantingAgentRoleToPauserReverts() public {
         Deploy.Deployed memory d = _run();
 
+        address[] memory noDestinations2 = new address[](0);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 1 days),
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
-            shareReceiver: shareReceiver
+            shareReceiver: shareReceiver,
+            allowedDestinations: noDestinations2
         });
 
         vm.prank(admin);

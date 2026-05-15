@@ -928,13 +928,15 @@ impl Fixture {
     ) -> Result<String, HarnessError> {
         let agent = format!("{:#x}", self.agent());
         let share_receiver = format!("{:#x}", self.share_receiver());
+        // allowedDestinations left empty ([]) for smoke-test: open policy
+        // allows any registered destination (vault or router).
         let policy = format!(
-            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver})"
+            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver},[])"
         );
         self.cast_send(
             DEPLOYER_PRIVATE_KEY_HEX,
             self.gateway(),
-            "authorizeAgent(address,(bool,uint64,uint256,uint256,address))",
+            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))",
             &[&agent, &policy],
         )
     }

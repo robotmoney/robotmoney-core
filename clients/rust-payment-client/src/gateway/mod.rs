@@ -64,11 +64,11 @@ mod tests {
         assert_eq!(&actual, expected, "deposit selector drift");
     }
 
-    /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address))` —
-    /// ensure the tuple layout matches the on-chain ABI.
+    /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))` —
+    /// ensure the tuple layout matches the on-chain ABI (allowedDestinations added in #302).
     #[test]
     fn authorize_agent_selector_matches() {
-        let canonical = "authorizeAgent(address,(bool,uint64,uint256,uint256,address))";
+        let canonical = "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))";
         let expected = &keccak256(canonical.as_bytes())[..4];
         let actual = RobotMoneyGateway::authorizeAgentCall::SELECTOR;
         assert_eq!(&actual, expected);

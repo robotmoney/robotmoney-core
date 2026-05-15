@@ -124,8 +124,9 @@ contract RobotMoneyGatewayTest is Test {
     function setUp() public {
         usdc = new TestERC20();
         vault = new MockVault(address(usdc));
-        gateway =
-            new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser);
+        gateway = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
 
         adminRole = gateway.ADMIN_ROLE();
         pauserRole = gateway.PAUSER_ROLE();
@@ -140,12 +141,14 @@ contract RobotMoneyGatewayTest is Test {
     // -------------------------------------------------------------------
 
     function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory) {
+        address[] memory noDestinations = new address[](0);
         return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
-            shareReceiver: shareReceiver
+            shareReceiver: shareReceiver,
+            allowedDestinations: noDestinations
         });
     }
 
@@ -186,22 +189,32 @@ contract RobotMoneyGatewayTest is Test {
 
     function test_constructor_revertsOnZeroAddresses() public {
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(IERC20(address(0)), IERC4626(address(vault)), admin, pauser);
+        new RobotMoneyGateway(
+            IERC20(address(0)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(0)), admin, pauser);
+        new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(0)), admin, pauser, address(0)
+        );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), address(0), pauser);
+        new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), address(0), pauser, address(0)
+        );
 
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
-        new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(vault)), admin, address(0));
+        new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, address(0), address(0)
+        );
     }
 
     function test_constructor_revertsOnAssetMismatch() public {
         TestERC20 otherUsdc = new TestERC20();
         vm.expectRevert(RobotMoneyGateway.AssetMismatch.selector);
-        new RobotMoneyGateway(IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser);
+        new RobotMoneyGateway(
+            IERC20(address(otherUsdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
     }
 
     // -------------------------------------------------------------------
@@ -696,7 +709,7 @@ contract RobotMoneyGatewayTest is Test {
         FeeOnTransferUSDC fotUsdc = new FeeOnTransferUSDC();
         MockVault fotVault = new MockVault(address(fotUsdc));
         RobotMoneyGateway fotGateway = new RobotMoneyGateway(
-            IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser
+            IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser, address(0)
         );
 
         IGateway.AgentPolicy memory p = _defaultPolicy();
@@ -815,8 +828,9 @@ contract RobotMoneyGatewayTest is Test {
         // Vault that mints an extra share to the gateway during deposit. Trips
         // the post-call rmUSDC custody invariant (line 243-244).
         ShareLeakVault leaky = new ShareLeakVault(address(usdc));
-        RobotMoneyGateway gw =
-            new RobotMoneyGateway(IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser);
+        RobotMoneyGateway gw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser, address(0)
+        );
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(depositor);
         gw.authorizeAgent(agent, p);
@@ -835,7 +849,7 @@ contract RobotMoneyGatewayTest is Test {
         // leftover USDC. Trips the post-call USDC custody invariant (line 247-248).
         UnderPullVault underPull = new UnderPullVault(address(usdc));
         RobotMoneyGateway gw = new RobotMoneyGateway(
-            IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser
+            IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(depositor);
@@ -860,7 +874,7 @@ contract RobotMoneyGatewayTest is Test {
         // must prevent the second entry.
         ReentrantVault reentrantVault = new ReentrantVault(address(usdc));
         RobotMoneyGateway gw = new RobotMoneyGateway(
-            IERC20(address(usdc)), IERC4626(address(reentrantVault)), admin, pauser
+            IERC20(address(usdc)), IERC4626(address(reentrantVault)), admin, pauser, address(0)
         );
         reentrantVault.setGateway(gw);
 

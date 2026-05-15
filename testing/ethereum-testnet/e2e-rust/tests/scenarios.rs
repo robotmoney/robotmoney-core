@@ -564,7 +564,9 @@ fn role_separation_invariant() {
     }
     with_fixture(|fx| {
         let admin = rmpc_e2e::DEPLOYER_ADDRESS_HEX;
-        let policy_tuple = format!("(true,18446744073709551615,1,1,{admin})");
+        // allowedDestinations is empty ([]) — open policy used only to
+        // trigger the RoleSeparationViolated revert path before deposit.
+        let policy_tuple = format!("(true,18446744073709551615,1,1,{admin},[])");
 
         let out = Command::new("cast")
             .args([
@@ -574,7 +576,7 @@ fn role_separation_invariant() {
                 "--private-key",
                 DEPLOYER_PRIVATE_KEY_HEX,
                 &format!("{:#x}", fx.gateway()),
-                "authorizeAgent(address,(bool,uint64,uint256,uint256,address))",
+                "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))",
                 admin,
                 &policy_tuple,
             ])

@@ -235,8 +235,9 @@ contract Deploy is Script {
         // runInProcessWith() — because the caller context differs between
         // broadcast and in-process test modes.
         d.adapter = new PassthroughAdapter(d.usdc, address(d.vault));
-        d.gateway =
-            new RobotMoneyGateway(IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser);
+        d.gateway = new RobotMoneyGateway(
+            IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser, address(0)
+        );
 
         // 2. Authorize agent under a sane initial policy. Authorization is
         //    permissionless (issue #269): the broadcaster becomes the agent's
@@ -244,12 +245,14 @@ contract Deploy is Script {
         //    is the deployer EOA; the deployer is the depositor proxy for
         //    happy-path smoke-tests and may later `setPolicy`/`revokeAgent`
         //    against this agent without holding any privileged role.
+        address[] memory noDestinations = new address[](0);
         IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
             active: true,
             validUntil: p.validUntil,
             maxPerPayment: p.maxPerPayment,
             maxPerWindow: p.maxPerWindow,
-            shareReceiver: d.shareReceiver
+            shareReceiver: d.shareReceiver,
+            allowedDestinations: noDestinations
         });
 
         d.gateway.authorizeAgent(d.agent, policy);

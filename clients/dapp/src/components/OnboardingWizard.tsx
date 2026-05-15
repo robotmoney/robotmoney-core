@@ -88,6 +88,7 @@ export function OnboardingWizard(props: Props) {
             maxPerPayment: BigInt(maxPerPayment),
             maxPerWindow: BigInt(maxPerWindow),
             shareReceiver: shareReceiver as Address,
+            allowedDestinations: [],
           },
         }
       : null;

@@ -27,17 +27,23 @@ interface IGateway {
     /// @notice Per-agent policy. Set by the agent's recorded owner via
     ///         `authorizeAgent` (first time) or `setPolicy` (subsequent
     ///         updates).
-    /// @param active         Policy is enabled.
-    /// @param validUntil     Unix-seconds expiry; deposits revert at/after.
-    /// @param maxPerPayment  Maximum gross USDC per single `deposit` call.
-    /// @param maxPerWindow   Maximum gross USDC per `WINDOW_SECONDS` window.
-    /// @param shareReceiver  Address that receives minted vault shares.
+    /// @param active               Policy is enabled.
+    /// @param validUntil           Unix-seconds expiry; deposits revert at/after.
+    /// @param maxPerPayment        Maximum gross USDC per single `deposit` call.
+    /// @param maxPerWindow         Maximum gross USDC per `WINDOW_SECONDS` window.
+    /// @param shareReceiver        Address that receives minted vault shares.
+    /// @param allowedDestinations  Whitelist of deposit destinations (vault or router
+    ///                             addresses). When non-empty, `depositTo` requires the
+    ///                             supplied destination to appear in this list. An empty
+    ///                             array disables the allowlist — any registered vault or
+    ///                             the router is permitted.
     struct AgentPolicy {
         bool active;
         uint64 validUntil;
         uint256 maxPerPayment;
         uint256 maxPerWindow;
         address shareReceiver;
+        address[] allowedDestinations;
     }
 
     // -------------------------------------------------------------------
@@ -70,7 +76,7 @@ interface IGateway {
     /// @notice Emitted when the gateway is unpaused.
     /// @param by Address that called `unpause()`.
     event Unpaused(address indexed by);
-    /// @notice Emitted on every successful agent deposit.
+    /// @notice Emitted on every successful agent deposit to a single vault.
     /// @param paymentId     Replay-protection hash for this payment.
     /// @param orderId       Caller-supplied order identifier.
     /// @param agent         Agent address that made the deposit.
@@ -85,6 +91,26 @@ interface IGateway {
         address shareReceiver,
         uint256 amount,
         uint256 sharesMinted,
+        uint64 windowId
+    );
+
+    /// @notice Emitted on every successful agent deposit routed through the Portfolio Router.
+    /// @param paymentId       Replay-protection hash for this payment.
+    /// @param orderId         Caller-supplied order identifier.
+    /// @param agent           Agent address that made the deposit.
+    /// @param shareReceiver   Address that received the minted vault shares per leg.
+    /// @param router          Portfolio Router address used for this deposit.
+    /// @param amount          Gross USDC deposited (6-decimal units).
+    /// @param sharesPerLeg    Vault shares minted per leg (parallel to router weight list).
+    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
+    event AgentDepositRouted(
+        bytes32 indexed paymentId,
+        bytes32 indexed orderId,
+        address indexed agent,
+        address shareReceiver,
+        address router,
+        uint256 amount,
+        uint256[] sharesPerLeg,
         uint64 windowId
     );
 
@@ -105,6 +131,31 @@ interface IGateway {
     function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
         external
         returns (bytes32 paymentId, uint256 sharesMinted);
+
+    /// @notice Pull `amount` USDC from caller, route to `destination` (vault or
+    ///         Portfolio Router), and deliver resulting shares to the agent's
+    ///         configured `shareReceiver`. When `destination` is the router,
+    ///         `minSharesPerLeg` provides per-leg slippage protection.
+    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
+    ///      same caps, deadline, idempotency, and policy checks as `deposit`.
+    ///      `destination` must appear in the agent's `allowedDestinations` list
+    ///      (or the list must be empty to allow any registered destination).
+    /// @param orderId          Caller-supplied order identifier (echoed in event).
+    /// @param amount           Gross USDC amount, in 6-decimal base units.
+    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
+    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
+    /// @param destination      Vault address or Portfolio Router address.
+    /// @param minSharesPerLeg  Per-leg slippage floor (router path only). Pass
+    ///                         empty array when routing to a single vault.
+    /// @return paymentId       Hash committing chain/contract/agent/order/amount/key.
+    function depositTo(
+        bytes32 orderId,
+        uint256 amount,
+        uint64 deadline,
+        bytes32 idempotencyKey,
+        address destination,
+        uint256[] calldata minSharesPerLeg
+    ) external returns (bytes32 paymentId);
 
     /// @notice First-time authorization for `agent`. Permissionless — any EOA
     ///         may call to register their own agent. `msg.sender` is recorded
@@ -147,6 +198,9 @@ interface IGateway {
 
     /// @notice Pinned ERC-4626 vault address.
     function vault() external view returns (address);
+
+    /// @notice Portfolio Router address, or `address(0)` if not configured.
+    function router() external view returns (address);
 
     /// @notice Whether the gateway is currently paused.
     function paused() external view returns (bool);
