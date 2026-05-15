@@ -40,10 +40,12 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, AgentPolicy, AgentResponse, Contract, ContractsResponse, Deposit,
-    DepositResponse, DepositsResponse, Freshness, Health, Transaction, TransactionResponse, Vault,
-    VaultDetail, VaultDetailResponse, VaultSnapshot, VaultSnapshotsResponse, VaultTvlPoint,
-    VaultsResponse,
+    dec_to_string, proposal_status_label, AgentPolicy, AgentResponse, Contract, ContractsResponse,
+    Deposit, DepositResponse, DepositsResponse, Freshness, Health, ProposalDetail,
+    ProposalDetailResponse, ProposalSummary, ProposalsResponse, RouterWeightsResponse, Transaction,
+    TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultSnapshot,
+    VaultSnapshotsResponse, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry,
+    WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -97,6 +99,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/deposits/:deposit_id", get(get_deposit))
         .route("/v1/vaults", get(list_vaults))
         .route("/v1/vaults/:address", get(get_vault))
+        // Governance endpoints (issue #307).
+        .route("/v1/router/weights", get(get_router_weights))
+        .route("/v1/governance/proposals", get(list_proposals))
+        .route("/v1/governance/proposals/:id", get(get_proposal))
         .fallback(not_found)
         .with_state(state)
 }
@@ -508,6 +514,240 @@ async fn get_vault(
     };
 
     Ok(Json(VaultDetailResponse { vault, freshness }))
+}
+
+// ─── Governance handlers (issue #307) ──────────────────────────────────────
+
+// Row types for governance queries.
+// (router_address BYTEA, block_number, log_index, tx_hash BYTEA, vault_addresses BYTEA[], bps_values BIGINT[], indexed_at)
+type WeightSnapshotRow = (
+    Vec<u8>,
+    i64,
+    i32,
+    Vec<u8>,
+    Vec<Vec<u8>>,
+    Vec<i64>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+// (chain_id, proposal_id, proposer BYTEA, description, created_at, deadline_block, status, votes_for, votes_against, block_number, executed_block, indexed_at)
+type ProposalRow = (
+    i64,
+    i64,
+    Vec<u8>,
+    String,
+    i64,
+    i64,
+    i16,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+// (voter BYTEA, support, weight NUMERIC, block_number, tx_hash BYTEA)
+type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
+
+/// GET /v1/router/weights — current weight vector and history of WeightsSet
+/// events for the PortfolioRouter.
+async fn get_router_weights(
+    State(state): State<AppState>,
+) -> ApiResult<Json<RouterWeightsResponse>> {
+    // Fetch all weight snapshots for this chain, ascending.
+    let rows: Vec<WeightSnapshotRow> = sqlx::query_as(
+        "SELECT router_address, block_number, log_index, tx_hash, vault_addresses, bps_values, indexed_at \
+         FROM router_weight_snapshots \
+         WHERE chain_id = $1 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut history: Vec<WeightHistoryEntry> = rows
+        .iter()
+        .map(|(_, bn, _, tx, vaults, bps, ia)| {
+            let weights = vaults
+                .iter()
+                .zip(bps.iter())
+                .map(|(v, b)| VaultWeight {
+                    vault: addr_to_hex(v),
+                    bps: *b,
+                })
+                .collect();
+            WeightHistoryEntry {
+                block_number: *bn,
+                tx_hash: hash_to_hex(tx),
+                weights,
+                indexed_at: *ia,
+            }
+        })
+        .collect();
+
+    // Current weights = last snapshot.
+    let current_weights = history
+        .last()
+        .map(|e| e.weights.clone())
+        .unwrap_or_default();
+
+    // Sort history ascending (already sorted by query, but make explicit).
+    history.sort_by_key(|e| e.block_number);
+
+    let freshness = match history.last() {
+        Some(e) => Freshness {
+            block_number: e.block_number,
+            indexed_at: e.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    Ok(Json(RouterWeightsResponse {
+        current_weights,
+        history,
+        freshness,
+    }))
+}
+
+/// GET /v1/governance/proposals — list all proposals with status and tally.
+async fn list_proposals(State(state): State<AppState>) -> ApiResult<Json<ProposalsResponse>> {
+    let rows: Vec<ProposalRow> = sqlx::query_as(
+        "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
+                status, votes_for, votes_against, block_number, executed_block, indexed_at \
+         FROM governance_proposals \
+         WHERE chain_id = $1 \
+         ORDER BY block_number DESC, proposal_id DESC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let proposals: Vec<ProposalSummary> = rows
+        .into_iter()
+        .map(
+            |(
+                chain_id,
+                proposal_id,
+                proposer,
+                description,
+                created_at,
+                deadline_block,
+                status,
+                votes_for,
+                votes_against,
+                block_number,
+                _executed_block,
+                indexed_at,
+            )| ProposalSummary {
+                chain_id,
+                proposal_id,
+                proposer: addr_to_hex(&proposer),
+                description,
+                created_at,
+                deadline_block,
+                status: proposal_status_label(status),
+                votes_for,
+                votes_against,
+                block_number,
+                indexed_at,
+            },
+        )
+        .collect();
+
+    let freshness = match proposals.first() {
+        Some(p) => Freshness {
+            block_number: p.block_number,
+            indexed_at: p.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    Ok(Json(ProposalsResponse {
+        proposals,
+        freshness,
+    }))
+}
+
+/// GET /v1/governance/proposals/:id — single proposal with per-voter tally.
+async fn get_proposal(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<ProposalDetailResponse>> {
+    let row: Option<ProposalRow> = sqlx::query_as(
+        "SELECT chain_id, proposal_id, proposer, description, created_at, deadline_block, \
+                status, votes_for, votes_against, block_number, executed_block, indexed_at \
+         FROM governance_proposals \
+         WHERE chain_id = $1 AND proposal_id = $2 \
+         LIMIT 1",
+    )
+    .bind(state.chain_id)
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (
+        chain_id,
+        proposal_id,
+        proposer,
+        description,
+        created_at,
+        deadline_block,
+        status,
+        votes_for,
+        votes_against,
+        block_number,
+        executed_block,
+        indexed_at,
+    ) = row.ok_or(ApiError::NotFound)?;
+
+    // Fetch per-voter votes.
+    let vote_rows: Vec<VoteRow> = sqlx::query_as(
+        "SELECT voter, support, weight, block_number, tx_hash \
+         FROM governance_votes \
+         WHERE chain_id = $1 AND proposal_id = $2 \
+         ORDER BY block_number ASC, voter ASC",
+    )
+    .bind(state.chain_id)
+    .bind(proposal_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let votes: Vec<VoteEntry> = vote_rows
+        .into_iter()
+        .map(|(voter, support, weight, bn, tx)| VoteEntry {
+            voter: addr_to_hex(&voter),
+            support,
+            weight: dec_to_string(&weight),
+            block_number: bn,
+            tx_hash: hash_to_hex(&tx),
+        })
+        .collect();
+
+    let proposal = ProposalDetail {
+        chain_id,
+        proposal_id,
+        proposer: addr_to_hex(&proposer),
+        description,
+        created_at,
+        deadline_block,
+        status: proposal_status_label(status),
+        votes_for,
+        votes_against,
+        executed_block,
+        block_number,
+        indexed_at,
+        votes,
+    };
+
+    Ok(Json(ProposalDetailResponse {
+        freshness: Freshness {
+            block_number: proposal.block_number,
+            indexed_at: proposal.indexed_at,
+        },
+        proposal,
+    }))
 }
 
 fn deposit_from_row(row: DepositRow) -> Deposit {

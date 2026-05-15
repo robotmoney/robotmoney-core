@@ -1,6 +1,6 @@
 //! Schema sanity: bring up Postgres in a container, apply migrations,
-//! confirm all nine §11 tables exist with `chain_id` and (where
-//! applicable) `block_number` columns.
+//! confirm all nine §11 tables plus vaults and governance tables exist
+//! with `chain_id` and (where applicable) `block_number` columns.
 //!
 //! Skips cleanly when Docker is not available so contributor laptops
 //! without docker still run `cargo test` green.
@@ -11,7 +11,7 @@ use common::try_pg_fixture;
 use explorer_indexer::db::CountTable;
 
 #[tokio::test]
-async fn migrations_create_all_nine_tables() {
+async fn migrations_create_all_tables() {
     let Some(fx) = try_pg_fixture().await else {
         return;
     };
@@ -25,6 +25,12 @@ async fn migrations_create_all_nine_tables() {
         CountTable::VaultSnapshots,
         CountTable::WalletPositions,
         CountTable::IndexerRuns,
+        // migration 0002
+        CountTable::Vaults,
+        // migration 0003 — governance tables (issue #307)
+        CountTable::GovernanceProposals,
+        CountTable::GovernanceVotes,
+        CountTable::RouterWeightSnapshots,
     ] {
         let n = fx.db.count(t).await.unwrap_or_else(|e| panic!("{e}"));
         // Nothing inserted yet — just confirms the table exists and
@@ -49,6 +55,10 @@ async fn every_row_has_chain_id_and_block_number() {
         "agent_policies",
         "vault_snapshots",
         "wallet_positions",
+        // migration 0003
+        "governance_proposals",
+        "governance_votes",
+        "router_weight_snapshots",
     ];
     let needs_chain_id = [
         "chains",
@@ -60,6 +70,12 @@ async fn every_row_has_chain_id_and_block_number() {
         "vault_snapshots",
         "wallet_positions",
         "indexer_runs",
+        // migration 0002
+        "vaults",
+        // migration 0003
+        "governance_proposals",
+        "governance_votes",
+        "router_weight_snapshots",
     ];
     for t in needs_chain_id {
         let row: (i64,) = sqlx::query_as(

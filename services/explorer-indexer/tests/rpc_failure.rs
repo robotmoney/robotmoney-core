@@ -40,6 +40,7 @@ async fn rpc_failure_recorded_in_indexer_runs() {
         gateway: Address::from([0xaau8; 20]),
         vault: Address::from([0xbbu8; 20]),
         registry: None,
+        router_governance: None,
         max_blocks_per_tick: 100,
         end_block: None,
     };

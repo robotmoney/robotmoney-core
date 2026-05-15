@@ -30,7 +30,7 @@ pub struct Db {
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// All countable tables (nine §11 tables plus the vault registry table
-/// added in migration 0002).
+/// added in migration 0002, and the governance tables added in migration 0003).
 ///
 /// Using a typed enum instead of a raw `&str` ensures no caller can
 /// pass a user-controlled string to the dynamic `FORMAT` in
@@ -50,6 +50,12 @@ pub enum CountTable {
     IndexerRuns,
     /// Added in migration 0002 — vault registry table.
     Vaults,
+    /// Added in migration 0003 — governance proposal events.
+    GovernanceProposals,
+    /// Added in migration 0003 — per-voter vote events.
+    GovernanceVotes,
+    /// Added in migration 0003 — weight-change history from WeightsSet events.
+    RouterWeightSnapshots,
 }
 
 impl CountTable {
@@ -66,6 +72,9 @@ impl CountTable {
             CountTable::WalletPositions => "wallet_positions",
             CountTable::IndexerRuns => "indexer_runs",
             CountTable::Vaults => "vaults",
+            CountTable::GovernanceProposals => "governance_proposals",
+            CountTable::GovernanceVotes => "governance_votes",
+            CountTable::RouterWeightSnapshots => "router_weight_snapshots",
         }
     }
 }
@@ -184,6 +193,9 @@ impl Db {
             "vault_snapshots",
             "agent_deposits",
             "agent_policies",
+            "governance_votes",
+            "governance_proposals",
+            "router_weight_snapshots",
             "transactions",
             "blocks",
         ] {
@@ -415,6 +427,158 @@ impl Db {
         .bind(&vault_address[..])
         .bind(new_status)
         .bind(changed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Idempotent insert of a governance proposal row from a `ProposalCreated`
+    /// event.  Uses `ON CONFLICT DO NOTHING` so re-indexing is a no-op.
+    ///
+    /// `status` is initialised to 0 (open); it is updated by subsequent
+    /// `ProposalExecuted` events via [`Db::execute_proposal`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_proposal(
+        &self,
+        chain_id: i64,
+        proposal_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        proposer: [u8; 20],
+        description: &str,
+        created_at: i64,
+        deadline_block: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO governance_proposals \
+             (chain_id, proposal_id, block_number, log_index, tx_hash, proposer, description, created_at, deadline_block) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, proposal_id) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(proposal_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&proposer[..])
+        .bind(description)
+        .bind(created_at)
+        .bind(deadline_block)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Idempotent insert of a per-voter vote row from a `VoteCast` event.
+    /// Uses `ON CONFLICT DO NOTHING` (one vote per voter per proposal).
+    ///
+    /// Also increments the running `votes_for` or `votes_against` counter
+    /// on the parent `governance_proposals` row — but only when the vote row
+    /// is new (rows_affected == 1).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_vote(
+        &self,
+        chain_id: i64,
+        proposal_id: i64,
+        voter: [u8; 20],
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        support: bool,
+        weight: U256,
+    ) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let r = sqlx::query(
+            "INSERT INTO governance_votes \
+             (chain_id, proposal_id, voter, block_number, log_index, tx_hash, support, weight) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (chain_id, proposal_id, voter) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(proposal_id)
+        .bind(&voter[..])
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(support)
+        .bind(u256_to_decimal(weight))
+        .execute(&mut *tx)
+        .await?;
+
+        if r.rows_affected() == 1 {
+            // Update running tally on the proposal.
+            let col = if support {
+                "votes_for"
+            } else {
+                "votes_against"
+            };
+            let q = format!(
+                "UPDATE governance_proposals SET {} = {} + 1 \
+                 WHERE chain_id = $1 AND proposal_id = $2",
+                col, col
+            );
+            sqlx::query(&q)
+                .bind(chain_id)
+                .bind(proposal_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Mark a proposal as executed (status = 2) from a `ProposalExecuted`
+    /// event.  A no-op if the proposal is unknown or already executed.
+    pub async fn execute_proposal(
+        &self,
+        chain_id: i64,
+        proposal_id: i64,
+        executed_block: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE governance_proposals \
+             SET status = 2, executed_block = $3, indexed_at = now() \
+             WHERE chain_id = $1 AND proposal_id = $2 AND status < 2",
+        )
+        .bind(chain_id)
+        .bind(proposal_id)
+        .bind(executed_block)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Idempotent insert of a `WeightsSet` / `WeightsApplied` snapshot row.
+    /// `vault_addresses` and `bps_values` are parallel arrays.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_router_weight_snapshot(
+        &self,
+        chain_id: i64,
+        router_address: [u8; 20],
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault_addresses: Vec<[u8; 20]>,
+        bps_values: Vec<i64>,
+    ) -> Result<u64, DbError> {
+        // Encode each vault address as a Postgres BYTEA literal so we can
+        // pass the whole array via a single placeholder.
+        let vault_bytes: Vec<Vec<u8>> = vault_addresses.into_iter().map(|a| a.to_vec()).collect();
+        let r = sqlx::query(
+            "INSERT INTO router_weight_snapshots \
+             (chain_id, router_address, block_number, log_index, tx_hash, vault_addresses, bps_values) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (chain_id, router_address, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&router_address[..])
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&vault_bytes)
+        .bind(&bps_values)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())

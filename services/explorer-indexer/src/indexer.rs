@@ -21,7 +21,9 @@
 //! `last_indexed_block` is left at the last block we successfully
 //! committed, so the next run resumes there.
 
-use crate::abi::{IGatewayEvents, IVaultReads, IVaultRegistryEvents, Topics};
+use crate::abi::{
+    IGatewayEvents, IRouterGovernanceEvents, IVaultReads, IVaultRegistryEvents, Topics,
+};
 use crate::db::{Db, DbError};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
 use crate::{CONFIRMATIONS, SNAPSHOT_HEARTBEAT_BLOCKS};
@@ -52,6 +54,10 @@ pub struct IndexerConfig {
     /// indexer calls `listVaults()` on each tick and ingests
     /// `VaultRegistered` / `VaultStatusChanged` events from the registry.
     pub registry: Option<Address>,
+    /// Optional PortfolioRouter / RouterGovernance contract address.
+    /// When set, the indexer ingests `ProposalCreated`, `VoteCast`,
+    /// `ProposalExecuted`, and `WeightsSet` events.
+    pub router_governance: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -65,6 +71,9 @@ impl IndexerConfig {
         let mut addrs = vec![self.gateway, self.vault];
         if let Some(reg) = self.registry {
             addrs.push(reg);
+        }
+        if let Some(gov) = self.router_governance {
+            addrs.push(gov);
         }
         addrs
     }
@@ -96,6 +105,10 @@ pub async fn run_once(
         .await?;
     if let Some(reg) = cfg.registry {
         db.upsert_contract(cfg.chain_id, reg.into_array(), "vault_registry", None)
+            .await?;
+    }
+    if let Some(gov) = cfg.router_governance {
+        db.upsert_contract(cfg.chain_id, gov.into_array(), "router_governance", None)
             .await?;
     }
 
@@ -454,6 +467,86 @@ async fn handle_log(
                 decoded.vault.into_array(),
                 decoded.newStatus as i16,
                 decoded.changedAt as i64,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ProposalCreated — insert a new governance proposal row.
+    if topic0 == topics.proposal_created {
+        let decoded =
+            IRouterGovernanceEvents::ProposalCreated::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("ProposalCreated: {e}")))?;
+        let r = db
+            .insert_proposal(
+                cfg.chain_id,
+                decoded.proposalId.try_into().unwrap_or(i64::MAX),
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.proposer.into_array(),
+                &decoded.description,
+                decoded.createdAt as i64,
+                decoded.deadlineBlock.try_into().unwrap_or(i64::MAX),
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // VoteCast — insert a per-voter vote row and update running tally.
+    if topic0 == topics.vote_cast {
+        let decoded = IRouterGovernanceEvents::VoteCast::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("VoteCast: {e}")))?;
+        let r = db
+            .insert_vote(
+                cfg.chain_id,
+                decoded.proposalId.try_into().unwrap_or(i64::MAX),
+                decoded.voter.into_array(),
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.support,
+                decoded.weight,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ProposalExecuted — mark proposal status = 2 (executed).
+    if topic0 == topics.proposal_executed {
+        let decoded =
+            IRouterGovernanceEvents::ProposalExecuted::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("ProposalExecuted: {e}")))?;
+        let r = db
+            .execute_proposal(
+                cfg.chain_id,
+                decoded.proposalId.try_into().unwrap_or(i64::MAX),
+                log.block_number as i64,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // WeightsSet — record a router weight snapshot.
+    if topic0 == topics.weights_set {
+        let decoded = IRouterGovernanceEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;
+        let vault_addresses: Vec<[u8; 20]> =
+            decoded.vaults.iter().map(|a| a.into_array()).collect();
+        let bps_values: Vec<i64> = decoded
+            .bps
+            .iter()
+            .map(|b| b.try_into().unwrap_or(i64::MAX))
+            .collect();
+        let r = db
+            .insert_router_weight_snapshot(
+                cfg.chain_id,
+                log.address.into_array(),
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                vault_addresses,
+                bps_values,
             )
             .await?;
         return Ok(r);

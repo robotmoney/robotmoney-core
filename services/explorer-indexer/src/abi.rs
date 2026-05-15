@@ -8,6 +8,40 @@ use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
 
 sol! {
+    /// Event surface from `RouterGovernance` and `PortfolioRouter`.
+    ///
+    /// ProposalCreated / VoteCast / ProposalExecuted are emitted by the
+    /// RouterGovernance contract (docs/architecture.md §5.4).  WeightsSet is
+    /// emitted by PortfolioRouter each time the weight vector is updated
+    /// (also called WeightsApplied in the issue — same on-chain event).
+    #[allow(missing_docs)]
+    interface IRouterGovernanceEvents {
+        /// Emitted when a new governance proposal is created.
+        event ProposalCreated(
+            uint256 indexed proposalId,
+            address indexed proposer,
+            string  description,
+            uint256 deadlineBlock,
+            uint64  createdAt
+        );
+
+        /// Emitted when a voter casts a vote.
+        event VoteCast(
+            uint256 indexed proposalId,
+            address indexed voter,
+            bool    support,
+            uint256 weight
+        );
+
+        /// Emitted when a passed proposal is executed and weights applied.
+        event ProposalExecuted(uint256 indexed proposalId);
+
+        /// Emitted by PortfolioRouter when the weight vector is set.
+        /// This is the on-chain `WeightsSet` event; the issue calls it
+        /// `WeightsApplied` — same signature.
+        event WeightsSet(address[] vaults, uint256[] bps);
+    }
+
     /// Event surface from `IGateway`. Names match the Solidity source so
     /// `SolEvent::SIGNATURE_HASH` lines up with the on-chain topic.
     #[allow(missing_docs)]
@@ -108,6 +142,11 @@ pub struct Topics {
     // VaultRegistry events — docs/technical/vault-registry-decisions.md §3.5.
     pub vault_registered: B256,
     pub vault_status_changed: B256,
+    // RouterGovernance + PortfolioRouter events — docs/architecture.md §5.4.
+    pub proposal_created: B256,
+    pub vote_cast: B256,
+    pub proposal_executed: B256,
+    pub weights_set: B256,
 }
 
 impl Topics {
@@ -129,6 +168,11 @@ impl Topics {
             // VaultRegistry — docs/technical/vault-registry-decisions.md §3.5.
             vault_registered: keccak256(b"VaultRegistered(address,string,string,uint256,uint64)"),
             vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint8,uint64)"),
+            // RouterGovernance + PortfolioRouter — docs/architecture.md §5.4.
+            proposal_created: keccak256(b"ProposalCreated(uint256,address,string,uint256,uint64)"),
+            vote_cast: keccak256(b"VoteCast(uint256,address,bool,uint256)"),
+            proposal_executed: keccak256(b"ProposalExecuted(uint256)"),
+            weights_set: keccak256(b"WeightsSet(address[],uint256[])"),
         }
     }
 
@@ -147,6 +191,10 @@ impl Topics {
             self.vault_exit_fee_charged,
             self.vault_registered,
             self.vault_status_changed,
+            self.proposal_created,
+            self.vote_cast,
+            self.proposal_executed,
+            self.weights_set,
         ]
     }
 }
@@ -196,6 +244,23 @@ mod tests {
         assert_eq!(
             t.vault_status_changed,
             IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH
+        );
+        // RouterGovernance + PortfolioRouter — docs/architecture.md §5.4.
+        assert_eq!(
+            t.proposal_created,
+            IRouterGovernanceEvents::ProposalCreated::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.vote_cast,
+            IRouterGovernanceEvents::VoteCast::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.proposal_executed,
+            IRouterGovernanceEvents::ProposalExecuted::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.weights_set,
+            IRouterGovernanceEvents::WeightsSet::SIGNATURE_HASH
         );
     }
 }

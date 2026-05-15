@@ -48,6 +48,12 @@ struct Cli {
     #[arg(long, env = "INDEXER_REGISTRY")]
     registry: Option<String>,
 
+    /// Optional PortfolioRouter / RouterGovernance contract address.
+    /// When set, the indexer ingests ProposalCreated, VoteCast,
+    /// ProposalExecuted, and WeightsSet events.
+    #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
+    router_governance: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -92,6 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let router_governance = cli
+        .router_governance
+        .as_deref()
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -99,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gateway: Address::from_str(cli.gateway.trim_start_matches("0x"))?,
         vault: Address::from_str(cli.vault.trim_start_matches("0x"))?,
         registry,
+        router_governance,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
     };

@@ -185,3 +185,106 @@ pub struct VaultDetailResponse {
     #[serde(flatten)]
     pub freshness: Freshness,
 }
+
+// ─── Governance types (issue #307) ─────────────────────────────────────────
+
+/// Single vault weight entry in a weight snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct VaultWeight {
+    /// Vault address in 0x-prefixed lower-case hex.
+    pub vault: String,
+    /// Weight in basis points (sum across all vaults = 10 000).
+    pub bps: i64,
+}
+
+/// One entry in the weight change history.
+#[derive(Debug, Serialize)]
+pub struct WeightHistoryEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub weights: Vec<VaultWeight>,
+    pub indexed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for GET /v1/router/weights.
+#[derive(Debug, Serialize)]
+pub struct RouterWeightsResponse {
+    /// Current weight vector (most recent WeightsSet snapshot).
+    pub current_weights: Vec<VaultWeight>,
+    /// Historical weight changes, ascending by block.
+    pub history: Vec<WeightHistoryEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Summary of a governance proposal for the list endpoint.
+#[derive(Debug, Serialize)]
+pub struct ProposalSummary {
+    pub chain_id: i64,
+    pub proposal_id: i64,
+    pub proposer: String,
+    pub description: String,
+    pub created_at: i64,
+    pub deadline_block: i64,
+    /// "open" | "passed" | "executed" | "expired"
+    pub status: &'static str,
+    pub votes_for: i64,
+    pub votes_against: i64,
+    pub block_number: i64,
+    pub indexed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Response for GET /v1/governance/proposals.
+#[derive(Debug, Serialize)]
+pub struct ProposalsResponse {
+    pub proposals: Vec<ProposalSummary>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Per-voter vote entry for the detail endpoint.
+#[derive(Debug, Serialize)]
+pub struct VoteEntry {
+    pub voter: String,
+    /// true = For, false = Against.
+    pub support: bool,
+    pub weight: String,
+    pub block_number: i64,
+    pub tx_hash: String,
+}
+
+/// Detailed proposal for GET /v1/governance/proposals/:id.
+#[derive(Debug, Serialize)]
+pub struct ProposalDetail {
+    pub chain_id: i64,
+    pub proposal_id: i64,
+    pub proposer: String,
+    pub description: String,
+    pub created_at: i64,
+    pub deadline_block: i64,
+    pub status: &'static str,
+    pub votes_for: i64,
+    pub votes_against: i64,
+    pub executed_block: Option<i64>,
+    pub block_number: i64,
+    pub indexed_at: chrono::DateTime<chrono::Utc>,
+    pub votes: Vec<VoteEntry>,
+}
+
+/// Response for GET /v1/governance/proposals/:id.
+#[derive(Debug, Serialize)]
+pub struct ProposalDetailResponse {
+    pub proposal: ProposalDetail,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Decode a governance proposal `status` smallint into a string label.
+pub fn proposal_status_label(status: i16) -> &'static str {
+    match status {
+        0 => "open",
+        1 => "passed",
+        2 => "executed",
+        _ => "expired",
+    }
+}

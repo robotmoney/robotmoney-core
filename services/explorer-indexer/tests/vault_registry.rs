@@ -181,6 +181,7 @@ async fn vault_registered_event_inserts_vaults_row() {
         gateway: Address::from([0xBBu8; 20]),
         vault: Address::from([0xCCu8; 20]),
         registry: Some(registry_addr),
+        router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
     };
@@ -269,6 +270,7 @@ async fn vault_status_changed_updates_status() {
         gateway: Address::from([0xBBu8; 20]),
         vault: Address::from([0xCCu8; 20]),
         registry: Some(registry_addr),
+        router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
     };
@@ -324,6 +326,7 @@ async fn vault_status_changed_updates_status() {
         gateway: Address::from([0xBBu8; 20]),
         vault: Address::from([0xCCu8; 20]),
         registry: Some(registry_addr),
+        router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(89),
     };
@@ -452,6 +455,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         gateway: Address::from([0xBBu8; 20]),
         vault: Address::from([0xCCu8; 20]),
         registry: Some(registry_addr),
+        router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
     };
@@ -509,6 +513,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         gateway: Address::from([0xBBu8; 20]),
         vault: Address::from([0xCCu8; 20]),
         registry: Some(registry_addr),
+        router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
     };
