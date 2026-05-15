@@ -121,6 +121,28 @@ export interface VaultDetailResponse {
   readonly indexed_at: string;
 }
 
+// ─── Account layer types (issue #319) ───────────────────────────────────────
+
+/**
+ * Per-vault receipt-token balance entry from
+ * `GET /v1/accounts/:address/positions`.
+ */
+export interface AccountPosition {
+  readonly vault_address: string;
+  readonly vault_name: string;
+  readonly risk_label: string;
+  /** Raw share balance as a decimal string (NUMERIC(78,0)). */
+  readonly shares: string;
+  readonly block_number: number;
+}
+
+export interface AccountPositionsResponse {
+  readonly address: string;
+  readonly positions: readonly AccountPosition[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
 // ─── Router / governance types (issue #318) ─────────────────────────────────
 
 export interface VaultWeight {
@@ -138,6 +160,27 @@ export interface WeightHistoryEntry {
 export interface RouterWeightsResponse {
   readonly current_weights: readonly VaultWeight[];
   readonly history: readonly WeightHistoryEntry[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+/**
+ * A single event in a watched address's history from
+ * `GET /v1/accounts/:address/history`.
+ */
+export interface AccountEvent {
+  /** "deposit" | "withdrawal" | "governance_vote" */
+  readonly event_type: string;
+  readonly block_number: number;
+  readonly tx_hash: string;
+  readonly vault_address: string | null;
+  readonly amount: string | null;
+  readonly indexed_at: string;
+}
+
+export interface AccountHistoryResponse {
+  readonly address: string;
+  readonly events: readonly AccountEvent[];
   readonly block_number: number;
   readonly indexed_at: string;
 }
@@ -246,4 +289,43 @@ export async function fetchStats(
   const res = await fetchImpl(url, { signal: options.signal });
   if (!res.ok) throw new Error(`explorer API ${res.status}`);
   return (await res.json()) as StatsResponse;
+}
+
+// ─── Fetch helpers (issue #319) ─────────────────────────────────────────────
+
+/**
+ * GET `/v1/accounts/:address/positions` — receipt-token balances per vault
+ * for a watched address. Returns an empty `positions` array when the address
+ * has no indexed positions.
+ */
+export async function fetchAccountPositions(
+  baseUrl: string,
+  address: Address,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<AccountPositionsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/accounts/${address}/positions`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) {
+    throw new Error(`explorer API ${res.status}`);
+  }
+  return (await res.json()) as AccountPositionsResponse;
+}
+
+/**
+ * GET `/v1/accounts/:address/history` — paginated chronological event log
+ * across all vaults for a watched address.
+ */
+export async function fetchAccountHistory(
+  baseUrl: string,
+  address: Address,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<AccountHistoryResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/accounts/${address}/history`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) {
+    throw new Error(`explorer API ${res.status}`);
+  }
+  return (await res.json()) as AccountHistoryResponse;
 }

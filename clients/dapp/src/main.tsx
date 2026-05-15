@@ -1,15 +1,17 @@
 /**
  * Entry point. Reads runtime config from `import.meta.env` and bootstraps
  * the wagmi provider. Renders the brand nav, a always-on status header,
- * the protocol-layer (no wallet required), and the per-user Agents panel.
+ * the protocol-layer (no wallet required), the per-user Agents panel,
+ * and the account-layer inspector (issue #319).
  */
 import "./styles.css";
 import React, { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
+import { WagmiProvider, useAccount } from "wagmi";
 import type { Address } from "viem";
 import { AgentsPanel } from "./components/AgentsPanel";
+import { AccountLayerView } from "./components/AccountLayerView";
 import { NavBar } from "./components/NavBar";
 import { StatusHeader } from "./components/StatusHeader";
 import { TestnetBanner } from "./components/TestnetBanner";
@@ -39,6 +41,7 @@ function App() {
     expectedCodeHash,
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
+  const { address: connectedAddress } = useAccount();
 
   return (
     <>
@@ -71,6 +74,11 @@ function App() {
         flagEnv={env}
         // eslint-disable-next-line no-restricted-syntax -- boundary: real clock injected here.
         now={Date.now()}
+      />
+      {/* Account layer — portfolio position view (issue #319) */}
+      <AccountLayerView
+        apiUrl={explorerApiUrl}
+        connectedAddress={connectedAddress as Address | undefined}
       />
     </>
   );
