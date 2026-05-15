@@ -1,9 +1,16 @@
 /**
  * DepositWithdrawTab — wires the ERC-4626 vault entrypoints into the
- * dapp (issue #257). Two symmetric sub-flows:
+ * dapp (issue #257, extended in issue #321 for multi-vault withdrawal).
+ * Two symmetric sub-flows:
  *
  *   Deposit:  USDC.approve(vault, assets) → vault.deposit(assets, receiver)
- *   Withdraw: vault.redeem(shares, receiver, owner)
+ *   Withdraw: select position via PositionSelector → vault.redeem(shares, receiver, owner)
+ *
+ * The Withdraw sub-flow lists the user's non-zero receipt balances via the
+ * explorer-API PositionSelector (issue #321). Selecting a position prefills
+ * the vault address and share balance; live `vault.previewRedeem(shares)`
+ * surfaces estimated net USDC and the exit fee before the user signs.
+ * Signing is refused when the shares input exceeds the on-chain balance.
  *
  * Extended in issue #320 to support a vault-selector:
  *   - When `registryAddress` and `routerAddress` are non-zero, a
@@ -41,6 +48,7 @@ import { TxPreview } from "./TxPreview";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
 import { RouterDepositSection } from "./RouterDepositSection";
 import type { RouterPreviewContext } from "../lib/routerPreview";
+import { PositionSelector } from "./PositionSelector";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -50,6 +58,12 @@ type Props = Readonly<{
   registryAddress?: Address;
   /** Optional: Portfolio Router address for multi-vault deposits (issue #320). */
   routerAddress?: Address;
+  /**
+   * Explorer API base URL used by PositionSelector to list the user's
+   * non-zero vault positions (issue #321). When omitted, PositionSelector
+   * is not rendered and the single-vault withdraw input is shown directly.
+   */
+  explorerApiUrl?: string;
 }>;
 
 /**
@@ -70,6 +84,16 @@ export function parseUsdcAmount(input: string): bigint | null {
   const value = BigInt(whole) * 1_000_000n + BigInt(padded || "0");
   if (value === 0n) return null;
   return value;
+}
+
+/**
+ * Format a raw 6-decimal USDC amount (bigint) for display in the
+ * previewRedeem hint. Two decimal places is sufficient for a UI hint.
+ */
+function formatUsdcPreview(raw: bigint): string {
+  const whole = raw / 1_000_000n;
+  const frac = raw % 1_000_000n;
+  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
 }
 
 export function DepositWithdrawTab(props: Props) {
@@ -118,6 +142,13 @@ export function DepositWithdrawTab(props: Props) {
   const [depositInput, setDepositInput] = useState("");
   const [withdrawInput, setWithdrawInput] = useState("");
 
+  // Multi-vault: selected vault drives the redeem simulation.
+  // Defaults to props.vaultAddress so direct amount entry works without clicking
+  // PositionSelector. The PositionSelector is always rendered with selectedVault=undefined
+  // so its radios are never pre-checked — a pre-checked radio never fires onChange,
+  // which would leave the withdrawInput empty when clicked.
+  const [selectedVault, setSelectedVault] = useState<Address | undefined>(props.vaultAddress);
+
   const depositAssets = parseUsdcAmount(depositInput);
   const withdrawShares = parseUsdcAmount(withdrawInput);
 
@@ -130,14 +161,31 @@ export function DepositWithdrawTab(props: Props) {
     query: { enabled: isConnected && Boolean(address) },
   });
 
-  // -------- share balance read-back --------
+  // -------- share balance read-back (per selected vault) --------
   const { data: shareBalance, refetch: refetchShareBalance } = useReadContract({
-    address: props.vaultAddress,
+    address: selectedVault,
     abi: vaultAbi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    query: { enabled: isConnected && Boolean(address) },
+    query: { enabled: isConnected && Boolean(address) && selectedVault !== undefined },
   });
+
+  // -------- previewRedeem — live chain call for net USDC and exit fee --------
+  // Gives the user an estimated output before signing. Runs whenever
+  // withdrawShares is a valid amount and the vault is selected.
+  const { data: previewRedeemAssets } = useReadContract({
+    address: selectedVault,
+    abi: vaultAbi,
+    functionName: "previewRedeem",
+    args: withdrawShares !== null ? [withdrawShares] : undefined,
+    query: { enabled: isConnected && withdrawShares !== null && selectedVault !== undefined },
+  });
+
+  // -------- insufficient balance check --------
+  // Guard: shares entered must not exceed the on-chain balance. This is a
+  // hard refusal — the signing prompt is never shown when balance < shares.
+  const hasInsufficientBalance =
+    withdrawShares !== null && typeof shareBalance === "bigint" && shareBalance < withdrawShares;
 
   // -------- deposit preview + simulation --------
   const depositAction =
@@ -175,8 +223,15 @@ export function DepositWithdrawTab(props: Props) {
   });
 
   // -------- redeem preview + simulation --------
+  // Use the selectedVault (which may differ from props.vaultAddress when
+  // PositionSelector is active) to build the preview context and simulation.
+  // Fall back to props.vaultAddress when no position has been selected yet.
+  const redeemCtx: VaultPreviewContext = {
+    ...props.ctx,
+    vault: selectedVault ?? props.vaultAddress,
+  };
   const redeemAction =
-    withdrawShares !== null && address
+    withdrawShares !== null && address && !hasInsufficientBalance && selectedVault !== undefined
       ? ({
           kind: "vaultRedeem",
           shares: withdrawShares,
@@ -184,11 +239,11 @@ export function DepositWithdrawTab(props: Props) {
           owner: address,
         } as const)
       : null;
-  const redeemPreview = redeemAction ? buildVaultPreview(redeemAction, props.ctx) : null;
+  const redeemPreview = redeemAction ? buildVaultPreview(redeemAction, redeemCtx) : null;
 
   const { data: redeemSim, error: redeemSimError } = useSimulateContract({
     account: address,
-    address: props.vaultAddress,
+    address: selectedVault,
     abi: vaultAbi,
     functionName: "redeem",
     args: redeemAction
@@ -334,7 +389,20 @@ export function DepositWithdrawTab(props: Props) {
 
       <section data-testid="withdraw-form">
         <h2>Withdraw</h2>
-        <p>Burn rmUSDC shares to redeem USDC (net of exitFeeBps).</p>
+        <p>Select a vault position, then burn rmUSDC shares to redeem USDC (net of exitFeeBps).</p>
+        {props.explorerApiUrl && isConnected && address && (
+          <PositionSelector
+            account={address}
+            explorerApiUrl={props.explorerApiUrl}
+            selectedVault={undefined}
+            onSelect={(vault, sharesStr) => {
+              setSelectedVault(vault);
+              // Pre-fill the input with the full position balance so the
+              // user can adjust if desired. The input accepts decimal strings.
+              setWithdrawInput(sharesStr);
+            }}
+          />
+        )}
         <label>
           Shares (rmUSDC)
           <input
@@ -345,12 +413,32 @@ export function DepositWithdrawTab(props: Props) {
             inputMode="decimal"
           />
         </label>
+        <p className="hint" data-testid="withdraw-share-balance">
+          rmUSDC balance: {typeof shareBalance === "bigint" ? shareBalance.toString() : "—"}
+        </p>
+        {hasInsufficientBalance && (
+          <p className="hint" data-testid="withdraw-insufficient-balance">
+            Insufficient balance: you hold {shareBalance?.toString() ?? "0"} shares but entered{" "}
+            {withdrawShares?.toString() ?? "0"}. Reduce the amount before signing.
+          </p>
+        )}
+        {typeof previewRedeemAssets === "bigint" && withdrawShares !== null && (
+          <p className="hint" data-testid="withdraw-preview-redeem">
+            Estimated USDC out: {formatUsdcPreview(previewRedeemAssets)} (net of exit fee)
+          </p>
+        )}
         {redeemPreview && <TxPreview preview={redeemPreview} />}
         <button
           type="button"
           data-testid="withdraw-submit"
           onClick={onWithdraw}
-          disabled={!isConnected || !redeemSim || isPending || redeemPreview?.ok !== true}
+          disabled={
+            !isConnected ||
+            !redeemSim ||
+            isPending ||
+            redeemPreview?.ok !== true ||
+            hasInsufficientBalance === true
+          }
         >
           Sign withdraw with wallet
         </button>

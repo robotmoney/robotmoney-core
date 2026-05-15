@@ -13,6 +13,7 @@ import { Tabs } from "./Tabs";
 import { resolveFlags } from "../lib/featureFlags";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import { buildAdminTabs } from "./buildAdminTabs";
+import { resolveExplorerApiUrl } from "../lib/explorerApi";
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -73,6 +74,9 @@ export function AdminFlow(props: Props) {
     now: props.now,
     registryAddress: props.registryAddress,
     routerAddress: props.routerAddress,
+    // PositionSelector in the Deposit & Withdraw tab fetches positions
+    // from the explorer API (issue #321).
+    explorerApiUrl: resolveExplorerApiUrl(props.flagEnv),
   });
 
   return (

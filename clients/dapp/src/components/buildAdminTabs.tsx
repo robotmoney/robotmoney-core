@@ -42,6 +42,12 @@ export type BuildAdminTabsArgs = Readonly<{
   registryAddress?: Address;
   /** PortfolioRouter address for multi-vault deposits (issue #320). Optional. */
   routerAddress?: Address;
+  /**
+   * Explorer API base URL for the PositionSelector in the Deposit &
+   * Withdraw tab (issue #321). When provided, the withdraw section lists
+   * the user's non-zero vault positions via GET /v1/accounts/:addr/positions.
+   */
+  explorerApiUrl?: string;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -77,6 +83,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           ctx={{ ...a.ctx, vault: a.vaultAddress }}
           registryAddress={a.registryAddress}
           routerAddress={a.routerAddress}
+          explorerApiUrl={a.explorerApiUrl}
         />
       ),
     },
