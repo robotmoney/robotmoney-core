@@ -125,6 +125,10 @@ services:
         # Default to zero address so the governance panel shows the
         # config-missing placeholder in standalone builds.
         VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Issue #365: RM token address for the Faucet tab 'Get RM tokens' button.
+        # Default to zero address so the RM drip button is hidden in standalone
+        # builds without the smoke-test harness deploying the governance+RM stack.
+        VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x0000000000000000000000000000000000000000}
     container_name: dapp-frontend
     restart: unless-stopped
     depends_on:

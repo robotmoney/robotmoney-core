@@ -53,6 +53,9 @@ const router = env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : 
 const governance = env.VITE_GOVERNANCE_ADDRESS
   ? (env.VITE_GOVERNANCE_ADDRESS as Address)
   : undefined;
+// Issue #365: RM token address for the Faucet tab drip button. Zero address
+// default means the button is hidden in standalone builds without the smoke-test harness.
+const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined;
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
@@ -139,6 +142,7 @@ function App() {
                   now={Date.now()}
                   registryAddress={registry}
                   routerAddress={router}
+                  rmTokenAddress={rmToken}
                 />
               ),
             },

@@ -1,20 +1,28 @@
 /**
  * FaucetTabView — pure render layer of the testnet/devnet faucet (issue
- * #261). All data flows in via props; the only external effects are
- * (a) calling the injected `drip` function and (b) reading from
- * `window.ethereum` via `getInjectedProvider` for the broadcast
- * transport. RTL tests render this component directly with stub data
- * and a fake drip handler, so no wagmi/QueryClient fixture is needed.
+ * #261, extended in #365 for RM token drip). All data flows in via props;
+ * the only external effects are (a) calling the injected drip functions and
+ * (b) reading from `window.ethereum` via `getInjectedProvider` for the
+ * broadcast transport. RTL tests render this component directly with stub
+ * data and fake drip handlers, so no wagmi/QueryClient fixture is needed.
  *
- * The button-disabled logic encodes the "simulate before write" gate:
+ * The USDC button-disabled logic encodes the "simulate before write" gate:
  * the user can only submit once `harnessBalance >= FAUCET_DRIP_AMOUNT_USDC`,
  * which is the strict equivalent of a simulateContract preflight given
  * the dapp's no-RPC topology (see docs/security/dapp-topology.md §2).
+ *
+ * The RM button is additionally gated on `rmTokenAddress` being provided and
+ * `harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM` (issue #365 AC).
  */
 import { useState, type FormEvent } from "react";
 import { type Address, type Hex, getAddress, isAddress } from "viem";
-import { FAUCET_DRIP_AMOUNT_LABEL, FAUCET_DRIP_AMOUNT_USDC } from "../lib/chainClassifier";
-import type { DripUsdcArgs } from "../lib/faucetClient";
+import {
+  FAUCET_DRIP_AMOUNT_LABEL,
+  FAUCET_DRIP_AMOUNT_RM,
+  FAUCET_DRIP_AMOUNT_RM_LABEL,
+  FAUCET_DRIP_AMOUNT_USDC,
+} from "../lib/chainClassifier";
+import type { DripRmTokenArgs, DripUsdcArgs } from "../lib/faucetClient";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
 
 type DripStatus =
@@ -34,11 +42,18 @@ export type Props = Readonly<{
   recipientBalance: bigint | undefined;
   refetchRecipientBalance: () => Promise<unknown>;
   drip: (args: DripUsdcArgs) => Promise<Hex>;
+  /** RM token contract address. When provided and env is not mainnet, renders the RM drip button. */
+  rmTokenAddress?: Address;
+  /** Harness RM token balance for the preflight gate. */
+  harnessRmBalance?: bigint;
+  /** Injected RM drip handler. */
+  dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
 }>;
 
 export function FaucetTabView(props: Props) {
   const [selected, setSelected] = useState<string>(props.walletAddresses[0] ?? "");
   const [status, setStatus] = useState<DripStatus>({ kind: "idle" });
+  const [rmStatus, setRmStatus] = useState<DripStatus>({ kind: "idle" });
 
   if (props.harnessPrivateKey === null) {
     return (
@@ -56,6 +71,11 @@ export function FaucetTabView(props: Props) {
     props.harnessBalance !== undefined && props.harnessBalance >= FAUCET_DRIP_AMOUNT_USDC;
   const validRecipient = isAddress(selected);
   const canDrip = validRecipient && harnessFunded && status.kind !== "pending";
+
+  const harnessRmFunded =
+    props.harnessRmBalance !== undefined && props.harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM;
+  const canDripRm =
+    validRecipient && harnessRmFunded && rmStatus.kind !== "pending" && !!props.rmTokenAddress;
 
   const onDrip = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -89,6 +109,40 @@ export function FaucetTabView(props: Props) {
               ? err.message
               : String(err);
         setStatus({ kind: "error", message });
+      });
+  };
+
+  const onDripRm = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!canDripRm || !props.rmTokenAddress || !props.dripRm) return;
+    const provider = getInjectedProvider();
+    if (!provider) {
+      setRmStatus({
+        kind: "error",
+        message: "No injected wallet provider (window.ethereum is undefined).",
+      });
+      return;
+    }
+    setRmStatus({ kind: "pending" });
+    void props
+      .dripRm({
+        rmTokenAddress: props.rmTokenAddress,
+        recipient: getAddress(selected),
+        provider,
+        harnessPrivateKey: props.harnessPrivateKey as Hex,
+        chainId: props.chainId,
+      })
+      .then((hash) => {
+        setRmStatus({ kind: "success", hash });
+      })
+      .catch((err: unknown) => {
+        const message =
+          typeof err === "object" && err !== null && "shortMessage" in err
+            ? String((err as { shortMessage: unknown }).shortMessage)
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        setRmStatus({ kind: "error", message });
       });
   };
 
@@ -154,6 +208,33 @@ export function FaucetTabView(props: Props) {
           Recipient balance now: {props.recipientBalance.toString()} (base units)
         </p>
       )}
+
+      {props.rmTokenAddress ? (
+        <form onSubmit={onDripRm} style={{ marginTop: "1rem" }}>
+          <p>
+            Get <strong>{FAUCET_DRIP_AMOUNT_RM_LABEL}</strong> voting tokens to participate in
+            Router Governance.
+          </p>
+          <button type="submit" data-testid="faucet-rm-drip-button" disabled={!canDripRm}>
+            Get RM tokens
+          </button>
+          {rmStatus.kind === "pending" && (
+            <p data-testid="faucet-rm-drip-pending" className="hint">
+              Signing and broadcasting RM drip…
+            </p>
+          )}
+          {rmStatus.kind === "success" && (
+            <p data-testid="faucet-rm-drip-success" className="hint">
+              RM drip sent — tx <code>{rmStatus.hash}</code>
+            </p>
+          )}
+          {rmStatus.kind === "error" && (
+            <p data-testid="faucet-rm-drip-error" className="unsafe-banner">
+              <strong>RM drip failed:</strong> {rmStatus.message}
+            </p>
+          )}
+        </form>
+      ) : null}
     </section>
   );
 }

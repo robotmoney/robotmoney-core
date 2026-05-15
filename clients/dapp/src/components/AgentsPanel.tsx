@@ -33,6 +33,8 @@ type Props = Readonly<{
   registryAddress?: Address;
   /** PortfolioRouter address (issue #320). Optional. */
   routerAddress?: Address;
+  /** RM token address for the Faucet tab drip button (issue #365). Optional. */
+  rmTokenAddress?: Address;
 }>;
 
 export function AgentsPanel(props: Props) {
@@ -126,6 +128,7 @@ export function AgentsPanel(props: Props) {
       now={props.now}
       registryAddress={props.registryAddress}
       routerAddress={props.routerAddress}
+      rmTokenAddress={props.rmTokenAddress}
     />
   );
 }

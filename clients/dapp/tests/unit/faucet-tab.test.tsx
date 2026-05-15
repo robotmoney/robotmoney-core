@@ -9,6 +9,12 @@
  *   - When `harnessPrivateKey === null` (mainnet build) the tab renders
  *     a "faucet-unavailable" state instead of the form.
  *
+ * Issue #365 extends coverage to RM token drip:
+ *   - 'Get RM tokens' button renders when rmTokenAddress is provided.
+ *   - Button is absent when rmTokenAddress is undefined.
+ *   - Button is disabled until harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM.
+ *   - Clicking calls the injected dripRm handler with the right rmTokenAddress.
+ *
  * Render the pure FaucetTabView directly — no wagmi/QueryClient fixture
  * needed, per docs/guides/react-guide.md §Layout.
  */
@@ -16,10 +22,11 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { Hex } from "viem";
 import { FaucetTabView } from "../../src/components/FaucetTabView";
-import { FAUCET_DRIP_AMOUNT_USDC } from "../../src/lib/chainClassifier";
-import type { DripUsdcArgs } from "../../src/lib/faucetClient";
+import { FAUCET_DRIP_AMOUNT_RM, FAUCET_DRIP_AMOUNT_USDC } from "../../src/lib/chainClassifier";
+import type { DripRmTokenArgs, DripUsdcArgs } from "../../src/lib/faucetClient";
 
 const USDC = "0x4444444444444444444444444444444444444444" as const;
+const RM_TOKEN = "0x5555555555555555555555555555555555555555" as const;
 const WALLET_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
 const WALLET_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
 const KEY = ("0x" + "11".repeat(32)) as Hex;
@@ -32,6 +39,9 @@ interface RenderOpts {
   harnessPrivateKey?: Hex | null;
   walletAddresses?: ReadonlyArray<typeof WALLET_A | typeof WALLET_B>;
   drip?: (args: DripUsdcArgs) => Promise<Hex>;
+  rmTokenAddress?: typeof RM_TOKEN;
+  harnessRmBalance?: bigint;
+  dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
 }
 
 function renderView(opts: RenderOpts = {}) {
@@ -49,6 +59,9 @@ function renderView(opts: RenderOpts = {}) {
       recipientBalance={opts.recipientBalance}
       refetchRecipientBalance={refetch}
       drip={drip}
+      rmTokenAddress={opts.rmTokenAddress}
+      harnessRmBalance={opts.harnessRmBalance}
+      dripRm={opts.dripRm}
     />,
   );
   return { ...utils, drip, refetch };
@@ -112,5 +125,64 @@ describe("FaucetTabView", () => {
     renderView({ walletAddresses: [], harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n });
     expect(screen.getByText(/no wallets connected/i)).toBeInTheDocument();
     expect(screen.getByTestId("faucet-drip-submit")).toBeDisabled();
+  });
+
+  // -- RM token drip (issue #365) -------------------------------------------
+
+  it("does NOT render the RM drip button when rmTokenAddress is undefined", () => {
+    renderView({ harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n });
+    expect(screen.queryByTestId("faucet-rm-drip-button")).toBeNull();
+  });
+
+  it("renders the RM drip button when rmTokenAddress is provided", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM * 100n,
+      dripRm: vi.fn(async (): Promise<Hex> => "0xabcd" as Hex),
+    });
+    expect(screen.getByTestId("faucet-rm-drip-button")).toBeInTheDocument();
+  });
+
+  it("disables the RM drip button when harnessRmBalance is below amount", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM - 1n,
+      dripRm: vi.fn(async (): Promise<Hex> => "0xabcd" as Hex),
+    });
+    expect(screen.getByTestId("faucet-rm-drip-button")).toBeDisabled();
+  });
+
+  it("enables the RM drip button when harnessRmBalance covers the drip", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM * 100n,
+      dripRm: vi.fn(async (): Promise<Hex> => "0xabcd" as Hex),
+    });
+    expect(screen.getByTestId("faucet-rm-drip-button")).not.toBeDisabled();
+  });
+
+  it("calls dripRm with the correct rmTokenAddress and recipient on button click", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = {
+      request: vi.fn(),
+    };
+    const dripRm = vi.fn(async (): Promise<Hex> => "0xabcd" as Hex);
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM * 100n,
+      dripRm,
+    });
+    fireEvent.change(screen.getByTestId("faucet-wallet-select"), { target: { value: WALLET_B } });
+    fireEvent.click(screen.getByTestId("faucet-rm-drip-button"));
+    await screen.findByTestId("faucet-rm-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dripRm).toHaveBeenCalledTimes(1);
+    const callArg = (dripRm as ReturnType<typeof vi.fn>).mock.calls[0][0] as DripRmTokenArgs;
+    expect(callArg.rmTokenAddress).toBe(RM_TOKEN);
+    expect(callArg.recipient.toLowerCase()).toBe(WALLET_B);
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
   });
 });

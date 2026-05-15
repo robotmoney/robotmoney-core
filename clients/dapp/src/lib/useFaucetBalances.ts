@@ -1,9 +1,9 @@
 /**
  * useFaucetBalances — wagmi hook layer for the FaucetTab. Encapsulates
- * the two USDC `balanceOf` reads (harness preflight + recipient
- * read-back) so the FaucetTab component itself stays render-only per
- * docs/guides/react-guide.md §Layout ("components/*.tsx render only,
- * no fetching primitives").
+ * the USDC `balanceOf` reads (harness preflight + recipient read-back)
+ * and optionally the RM token harness balance (issue #365) so the FaucetTab
+ * component itself stays render-only per docs/guides/react-guide.md §Layout
+ * ("components/*.tsx render only, no fetching primitives").
  *
  * Issue #261 ties the drip button's enabled state to a "simulate before
  * write" preflight. A real `simulateContract` would require the dapp to
@@ -22,6 +22,8 @@ export interface UseFaucetBalancesArgs {
   readonly chainId: number;
   readonly harnessAddress: Address | null;
   readonly recipient: Address | null;
+  /** Optional RM token address. When provided, the hook also reads the harness RM balance. */
+  readonly rmTokenAddress?: Address;
 }
 
 export interface FaucetBalanceQuery {
@@ -34,10 +36,13 @@ export interface FaucetBalanceQuery {
 export interface UseFaucetBalancesResult {
   readonly harness: FaucetBalanceQuery;
   readonly recipient: FaucetBalanceQuery;
+  /** Harness RM token balance. Only populated when `rmTokenAddress` is provided. */
+  readonly harnessRm: FaucetBalanceQuery;
 }
 
 export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalancesResult {
   const usdcReady = isAddress(args.usdcAddress);
+  const rmReady = args.rmTokenAddress ? isAddress(args.rmTokenAddress) : false;
 
   const harnessQuery = useReadContract({
     address: args.usdcAddress,
@@ -63,6 +68,18 @@ export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalance
     },
   });
 
+  const harnessRmQuery = useReadContract({
+    address: args.rmTokenAddress,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: args.harnessAddress ? [args.harnessAddress] : undefined,
+    chainId: args.chainId,
+    query: {
+      enabled: rmReady && args.harnessAddress !== null,
+      retry: 0,
+    },
+  });
+
   return {
     harness: {
       data: harnessQuery.data as bigint | undefined,
@@ -75,6 +92,12 @@ export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalance
       isPending: recipientQuery.isPending,
       error: recipientQuery.error,
       refetch: recipientQuery.refetch,
+    },
+    harnessRm: {
+      data: harnessRmQuery.data as bigint | undefined,
+      isPending: harnessRmQuery.isPending,
+      error: harnessRmQuery.error,
+      refetch: harnessRmQuery.refetch,
     },
   };
 }

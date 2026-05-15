@@ -23,6 +23,8 @@ type Props = Readonly<{
   registryAddress?: Address;
   /** PortfolioRouter address — forwarded to the Deposit & Withdraw tab (issue #320). */
   routerAddress?: Address;
+  /** RM token address — forwarded to the Faucet tab (issue #365). */
+  rmTokenAddress?: Address;
 }>;
 
 export function AdminFlow(props: Props) {
@@ -71,6 +73,7 @@ export function AdminFlow(props: Props) {
     // PositionSelector in the Deposit & Withdraw tab fetches positions
     // from the explorer API (issue #321).
     explorerApiUrl: resolveExplorerApiUrl(props.flagEnv),
+    rmTokenAddress: props.rmTokenAddress,
   });
 
   return (

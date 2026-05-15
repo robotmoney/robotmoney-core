@@ -35,7 +35,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { erc20Abi } from "./abi";
-import { FAUCET_DRIP_AMOUNT_USDC } from "./chainClassifier";
+import { FAUCET_DRIP_AMOUNT_RM, FAUCET_DRIP_AMOUNT_USDC } from "./chainClassifier";
 
 /**
  * Minimal EIP-1193 surface viem's `custom()` actually consumes. We avoid
@@ -98,7 +98,7 @@ export async function dripUsdc(args: DripUsdcArgs): Promise<Hex> {
 }
 
 /**
- * Pure encoder for the drip calldata — used by the simulate-before-write
+ * Pure encoder for the USDC drip calldata — used by the simulate-before-write
  * step in the FaucetTab and by Vitest assertions covering the calldata
  * shape. Keeping this pure means tests don't need a viem wallet client
  * or a chain at all.
@@ -108,5 +108,54 @@ export function encodeDripCalldata(recipient: Address): Hex {
     abi: erc20Abi,
     functionName: "transfer",
     args: [recipient, FAUCET_DRIP_AMOUNT_USDC],
+  });
+}
+
+export interface DripRmTokenArgs {
+  /** Address of the deployed RM token contract on this chain. */
+  readonly rmTokenAddress: Address;
+  /** Recipient EOA. */
+  readonly recipient: Address;
+  /** The user's injected EIP-1193 provider — used only as a broadcast transport. */
+  readonly provider: Eip1193Like;
+  /** Build-time-inlined harness private key. Must come from `readHarnessPrivateKey`. */
+  readonly harnessPrivateKey: Hex;
+  /** Smoke-test devnet chain ID, e.g. 918453. */
+  readonly chainId: number;
+}
+
+/**
+ * Sign and broadcast an RM token `transfer(recipient, FAUCET_DRIP_AMOUNT_RM)`
+ * from the harness holder EOA. Mirrors `dripUsdc` but targets the RM token
+ * contract (issue #365). Returns the transaction hash. Throws viem's native
+ * error verbatim on failure.
+ */
+export async function dripRmToken(args: DripRmTokenArgs): Promise<Hex> {
+  const account = privateKeyToAccount(args.harnessPrivateKey);
+  const client = createWalletClient({
+    account,
+    transport: custom(args.provider),
+  });
+  return client.sendTransaction({
+    chain: null,
+    to: args.rmTokenAddress,
+    data: encodeFunctionData({
+      abi: erc20Abi,
+      functionName: "transfer",
+      args: [args.recipient, FAUCET_DRIP_AMOUNT_RM],
+    }),
+  });
+}
+
+/**
+ * Pure encoder for the RM drip calldata — used by Vitest assertions covering
+ * the calldata shape. Keeping this pure means tests don't need a viem wallet
+ * client or a chain at all.
+ */
+export function encodeDripRmCalldata(recipient: Address): Hex {
+  return encodeFunctionData({
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [recipient, FAUCET_DRIP_AMOUNT_RM],
   });
 }

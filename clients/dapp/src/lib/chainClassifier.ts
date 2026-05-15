@@ -52,7 +52,19 @@ export function classifyChain(chainId: number): ChainClass {
 export const FAUCET_DRIP_AMOUNT_USDC: bigint = 100_000_000n;
 
 /**
- * Human-readable form of the drip amount for UI rendering only. Pure
+ * Human-readable form of the USDC drip amount for UI rendering only. Pure
  * derivation from `FAUCET_DRIP_AMOUNT_USDC` so the two never drift.
  */
 export const FAUCET_DRIP_AMOUNT_LABEL = "100 USDC";
+
+/**
+ * RM token drip amount for the Faucet tab (issue #365). RM uses 18 decimals;
+ * 100 RM = 100 * 10^18 base units. Single source of truth for the RM drip
+ * button — FaucetTab and FaucetTabView both read this constant.
+ */
+export const FAUCET_DRIP_AMOUNT_RM: bigint = 100_000_000_000_000_000_000n;
+
+/**
+ * Human-readable form of the RM drip amount for UI rendering only.
+ */
+export const FAUCET_DRIP_AMOUNT_RM_LABEL = "100 RM";

@@ -167,6 +167,15 @@ struct GovernanceDeploymentJson {
     chain_id: u64,
 }
 
+/// Typed view over the RM token deployment JSON produced by DeployRmToken.s.sol (issue #365).
+#[derive(Debug, Deserialize)]
+struct RmTokenDeploymentJson {
+    rm_token: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ComposePsEntry {
     #[serde(rename = "Name")]
@@ -194,6 +203,7 @@ pub struct Fixture {
     registry_deployment: RegistryDeploymentJson,
     router_deployment: RouterDeploymentJson,
     governance_deployment: GovernanceDeploymentJson,
+    rm_token_deployment: RmTokenDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -793,6 +803,36 @@ impl Fixture {
 
         let governance_deployment = read_governance_deployment(&governance_out)?;
 
+        // Deploy RmToken — the ERC-20 governance voting token (issue #365).
+        // The entire initial supply is minted to HARNESS_USDC_HOLDER so that
+        // `Fixture::fund_rm_token` can drip RM to test accounts using the same
+        // signed-transfer pattern as `fund_usdc`. The deployer EOA signs the
+        // broadcast; the initial holder receives the supply.
+        let rm_token_out = tmp.path().join("rm-token.json");
+        run_forge_deploy_rm_token(
+            &repo_root,
+            &rpc_url,
+            &rm_token_out,
+            HARNESS_USDC_HOLDER_ADDRESS_HEX,
+        )
+        .inspect_err(|err| {
+            logging::error(
+                "smoke-test",
+                format!("forge deploy rm-token failed: {err}"),
+            );
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "rm-token deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        let rm_token_deployment = read_rm_token_deployment(&rm_token_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -832,6 +872,7 @@ impl Fixture {
             registry_deployment,
             router_deployment,
             governance_deployment,
+            rm_token_deployment,
             repo_root,
         };
 
@@ -944,6 +985,16 @@ impl Fixture {
     /// Raw string form of the RouterGovernance address.
     pub fn governance_hex(&self) -> &str {
         &self.governance_deployment.governance
+    }
+    /// RmToken ERC-20 address deployed by DeployRmToken.s.sol (issue #365).
+    /// The entire initial supply is held by HARNESS_USDC_HOLDER; tests drip
+    /// RM to recipients via `Fixture::fund_rm_token`.
+    pub fn rm_token(&self) -> Address {
+        parse_addr(&self.rm_token_deployment.rm_token)
+    }
+    /// Raw string form of the RmToken address.
+    pub fn rm_token_hex(&self) -> &str {
+        &self.rm_token_deployment.rm_token
     }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
@@ -1077,6 +1128,26 @@ impl Fixture {
         self.cast_send(
             HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
             self.usdc(),
+            "transfer(address,uint256)",
+            &[&format!("{recipient:#x}"), &amount.to_string()],
+        )
+    }
+
+    /// Fund `recipient` with `amount` RM tokens by signing a real
+    /// `transfer(address,uint256)` from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`].
+    ///
+    /// The harness EOA holds the entire RmToken initial supply (minted at
+    /// deploy time by DeployRmToken.s.sol). The transfer is a vanilla ERC-20
+    /// call — no Anvil cheats, no impersonation. The signature is recoverable
+    /// and the `Transfer` event fires, matching production semantics (issue #365).
+    pub fn fund_rm_token(
+        &self,
+        recipient: Address,
+        amount: u128,
+    ) -> Result<String, HarnessError> {
+        self.cast_send(
+            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            self.rm_token(),
             "transfer(address,uint256)",
             &[&format!("{recipient:#x}"), &amount.to_string()],
         )
@@ -1715,6 +1786,45 @@ fn run_forge_deploy_governance(
 }
 
 fn read_governance_deployment(path: &Path) -> Result<GovernanceDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
+/// Deploy the RmToken ERC-20 contract and write its address to `rm_token_out`
+/// (issue #365). The entire initial supply goes to `initial_holder` so that
+/// `Fixture::fund_rm_token` can drip RM without forge/Anvil cheats.
+fn run_forge_deploy_rm_token(
+    repo_root: &Path,
+    rpc_url: &str,
+    rm_token_out: &Path,
+    initial_holder: &str,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args(["script", "contracts/script/DeployRmToken.s.sol:DeployRmToken"])
+        .args(["--rpc-url", rpc_url])
+        .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+        .arg("--broadcast")
+        .arg("--slow")
+        .arg("-vvv")
+        .env("INITIAL_HOLDER", initial_holder)
+        .env("DEPLOYMENT_OUT", rm_token_out)
+        .current_dir(repo_root);
+    let out = cmd.output()?;
+    logging::log_command_output("forge-rm-token", &out);
+    if !out.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployRmToken exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_rm_token_deployment(path: &Path) -> Result<RmTokenDeploymentJson, HarnessError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
     serde_json::from_str(&raw)

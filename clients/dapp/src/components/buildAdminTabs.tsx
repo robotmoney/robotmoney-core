@@ -41,6 +41,12 @@ export type BuildAdminTabsArgs = Readonly<{
    * the user's non-zero vault positions via GET /v1/accounts/:addr/positions.
    */
   explorerApiUrl?: string;
+  /**
+   * RM token contract address (issue #365). When provided, the Faucet tab
+   * renders a 'Get RM tokens' button so testnet users can self-serve
+   * governance voting power.
+   */
+  rmTokenAddress?: Address;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -149,6 +155,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           chainId={a.chainId}
           walletAddresses={a.faucetWalletAddresses}
           harnessPrivateKey={readHarnessPrivateKey(a.flagEnv)}
+          rmTokenAddress={a.rmTokenAddress}
         />
       ),
     });
