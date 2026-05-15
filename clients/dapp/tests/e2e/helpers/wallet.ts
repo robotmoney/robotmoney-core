@@ -182,15 +182,21 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
  * Click the unified "Connect wallet" button. Use after `injectWallet`
  * and `page.goto()`. The button is rendered by AgentsPanel when the
  * wallet-gated action surface is active.
+ *
+ * Verifies the connected address via the /debug page (which replaced
+ * the old slide-out debug panel toggle).
  */
 export async function connectInjectedWallet(page: Page): Promise<void> {
   const { expect } = await import("@playwright/test");
   const button = page.getByTestId("connect-wallet").first();
   await expect(button).toBeVisible();
   await button.click();
-  await page.getByTestId("debug-panel-toggle").click();
+  // Navigate to /debug to confirm the wallet address appears, then return.
+  const currentUrl = page.url();
+  const debugUrl = new URL("/debug", currentUrl).toString();
+  await page.goto(debugUrl);
   await expect(page.getByTestId("connected-address")).toBeVisible({ timeout: 10_000 });
-  await page.getByTestId("debug-panel-close").click();
+  await page.goto(currentUrl);
 }
 
 /**
