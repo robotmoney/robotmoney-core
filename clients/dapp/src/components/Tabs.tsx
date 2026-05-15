@@ -9,15 +9,16 @@ export interface TabDef {
 interface TabsProps {
   tabs: TabDef[];
   defaultTabId?: string;
+  testId?: string;
 }
 
-export function Tabs({ tabs, defaultTabId }: TabsProps) {
+export function Tabs({ tabs, defaultTabId, testId = "admin-tabs" }: TabsProps) {
   const initial = tabs.find((t) => t.id === defaultTabId)?.id ?? tabs[0]?.id ?? "";
   const [active, setActive] = useState(initial);
   const current = tabs.find((t) => t.id === active) ?? tabs[0];
 
   return (
-    <div className="tabs" data-testid="admin-tabs">
+    <div className="tabs" data-testid={testId}>
       <div role="tablist" className="tabs-list">
         {tabs.map((t) => {
           const selected = t.id === current?.id;

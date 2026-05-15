@@ -83,12 +83,13 @@ pre,
 
 /* Layout */
 main.admin-flow {
-  max-width: 64rem;
-  margin: 0 auto;
-  padding: 2.5rem 1.5rem 4rem;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 main.onboarding-wizard {
@@ -363,6 +364,142 @@ button:disabled {
 .nav-brand span {
   color: var(--color-accent);
 }
+.nav-debug-button {
+  background: transparent;
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  margin: 0;
+}
+.nav-debug-button[aria-expanded="true"] {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 18px var(--color-accent-glow);
+}
+.debug-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 50;
+  width: min(34rem, calc(100vw - 1rem));
+  height: 100dvh;
+  overflow-y: auto;
+  background: color-mix(in oklab, var(--color-deep) 96%, black);
+  border-left: 1px solid var(--color-border-light);
+  box-shadow: -20px 0 60px rgb(0 0 0 / 0.35);
+  padding: 1rem;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform 180ms ease,
+    visibility 0s linear 180ms;
+}
+.debug-panel[data-open="true"] {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 180ms ease;
+}
+.debug-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+}
+.debug-panel-header h2 {
+  margin: 0;
+}
+.debug-eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--color-text-dim);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+.debug-section {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 1rem 0;
+}
+.debug-section h3 {
+  margin-top: 0;
+  color: var(--color-accent);
+}
+.debug-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.42fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.375rem 0;
+}
+.debug-row dt {
+  color: var(--color-text-dim);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+}
+.debug-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.debug-empty {
+  color: var(--color-text-dim);
+  font-size: 0.8125rem;
+  margin: 0;
+}
+.debug-log-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0;
+}
+.debug-log-list li {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 3.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.debug-log-list li[data-level="warn"] {
+  border-color: var(--color-warm);
+}
+.debug-log-list li[data-level="error"] {
+  border-color: var(--color-warn);
+}
+.debug-log-list time,
+.debug-log-list span {
+  color: var(--color-text-dim);
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+.debug-log-list code {
+  min-width: 0;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 /* Public view */
 main.public-view {
   max-width: 64rem;
@@ -442,9 +579,7 @@ main.public-view {
   color: var(--color-text-dim);
 }
 main.agents-gate {
-  max-width: 64rem;
-  margin: 0 auto;
-  padding: 1rem 1.5rem 4rem;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
@@ -477,6 +612,108 @@ main.agents-gate {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: 0.5rem 0.75rem;
+}
+.account-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+}
+.account-panel-header h2,
+.account-panel-header p {
+  margin: 0;
+}
+.account-wallet-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.dapp-shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.landing-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.landing-vaults {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.section-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.section-heading-row h2,
+.section-heading-row p {
+  margin: 0;
+}
+.vault-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+.vault-card {
+  min-width: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.vault-card-kicker {
+  color: var(--color-accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+  margin: 0 0 0.375rem;
+}
+.vault-card h3 {
+  color: var(--color-text);
+  font-size: 1.125rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+  margin: 0;
+}
+.vault-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.vault-card dt {
+  color: var(--color-text-dim);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+}
+.vault-card dd {
+  margin: 0.25rem 0 0;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.tab-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 /* Tabs */
@@ -528,4 +765,12 @@ main.agents-gate {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+}
+@media (max-width: 760px) {
+  .vault-card-grid {
+    grid-template-columns: 1fr;
+  }
+  .vault-card dl {
+    grid-template-columns: 1fr;
+  }
 }

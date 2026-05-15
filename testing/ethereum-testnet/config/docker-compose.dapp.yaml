@@ -71,6 +71,7 @@ services:
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
+      INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
 
   explorer-api:
     build:

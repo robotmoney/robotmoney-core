@@ -13,10 +13,11 @@
 //! Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
 
 use clap::Parser;
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    mpsc, Arc,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -281,15 +282,50 @@ fn run() -> i32 {
         None
     };
 
+    let (rebuild_tx, rebuild_rx) = mpsc::channel::<()>();
     if cli.full_stack {
-        eprintln!("smoke-test: full stack ready. Stop with Ctrl-C.");
+        eprintln!("smoke-test: full stack ready. Press 'r' + Enter to rebuild the dapp. Stop with Ctrl-C.");
         smoke_test::logging::info("smoke-test", "full stack ready");
+        thread::spawn(move || {
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(l) if l.trim() == "r" => {
+                        let _ = rebuild_tx.send(());
+                    }
+                    Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
     } else {
         eprintln!("smoke-test: network ready. Stop with Ctrl-C.");
         smoke_test::logging::info("smoke-test", "network ready");
     }
     let _chain_health_poller = start_chain_health_poller(fixture.rpc_url().to_string());
     while !interrupted.load(Ordering::SeqCst) {
+        if rebuild_rx.try_recv().is_ok() {
+            if let Some(ref stack) = _dapp_stack {
+                eprintln!("smoke-test: rebuilding dapp...");
+                smoke_test::logging::info("smoke-test", "dapp rebuild triggered via keybinding");
+                match stack.rebuild_dapp() {
+                    Ok(()) => {
+                        eprintln!(
+                            "smoke-test: dapp rebuild complete — {}",
+                            stack.endpoints.dapp_url
+                        );
+                        smoke_test::logging::info("smoke-test", "dapp rebuild complete");
+                    }
+                    Err(err) => {
+                        eprintln!("smoke-test: dapp rebuild failed: {err}");
+                        smoke_test::logging::error(
+                            "smoke-test",
+                            format!("dapp rebuild failed: {err}"),
+                        );
+                    }
+                }
+            }
+        }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     eprintln!("smoke-test: stopping...");

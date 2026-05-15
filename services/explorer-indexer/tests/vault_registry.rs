@@ -41,9 +41,7 @@ fn encode_vault_registered_log(
     registry_addr: Address,
     vault_addr: Address,
     name: &str,
-    risk_label: &str,
-    deposit_cap: U256,
-    registered_at: u64,
+    asset_addr: Address,
     block_number: u64,
     tx_hash: [u8; 32],
     log_index: u32,
@@ -55,9 +53,7 @@ fn encode_vault_registered_log(
     let event = IVaultRegistryEvents::VaultRegistered {
         vault: vault_addr,
         name: name.to_string(),
-        riskLabel: risk_label.to_string(),
-        depositCap: deposit_cap,
-        registeredAt: registered_at,
+        asset: asset_addr,
     };
     let log_data: LogData = event.encode_log_data();
 
@@ -87,7 +83,6 @@ fn encode_vault_registered_log(
 fn encode_vault_status_changed_log(
     registry_addr: Address,
     vault_addr: Address,
-    old_status: u8,
     new_status: u8,
     changed_at: u64,
     block_number: u64,
@@ -99,9 +94,8 @@ fn encode_vault_status_changed_log(
 
     let event = IVaultRegistryEvents::VaultStatusChanged {
         vault: vault_addr,
-        oldStatus: old_status,
         newStatus: new_status,
-        changedAt: changed_at,
+        timestamp: U256::from(changed_at),
     };
     let log_data: LogData = event.encode_log_data();
 
@@ -144,14 +138,13 @@ async fn vault_registered_event_inserts_vaults_row() {
 
     let registry_addr = Address::from([0xEEu8; 20]);
     let vault_addr = Address::from([0xAAu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
 
     let reg_log = encode_vault_registered_log(
         registry_addr,
         vault_addr,
         "RobotMoney USDC Vault",
-        "stable-yield",
-        U256::from(1_000_000_000u64),
-        1_748_000_000u64,
+        asset_addr,
         50u64,
         [0x11u8; 32],
         0,
@@ -232,15 +225,14 @@ async fn vault_status_changed_updates_status() {
 
     let registry_addr = Address::from([0xEEu8; 20]);
     let vault_addr = Address::from([0xAAu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
 
     // First tick: register the vault.
     let reg_log = encode_vault_registered_log(
         registry_addr,
         vault_addr,
         "RobotMoney USDC Vault",
-        "stable-yield",
-        U256::ZERO,
-        1_748_000_000u64,
+        asset_addr,
         50u64,
         [0x11u8; 32],
         0,
@@ -294,7 +286,6 @@ async fn vault_status_changed_updates_status() {
     let sc_log = encode_vault_status_changed_log(
         registry_addr,
         vault_addr,
-        0u8, // Active
         1u8, // Paused
         1_748_000_100u64,
         80u64,
@@ -416,15 +407,14 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
 
     let registry_addr = Address::from([0xEEu8; 20]);
     let vault_addr = Address::from([0xAAu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
 
     // Tick 1: register vault + cursor block 65.
     let reg_log = encode_vault_registered_log(
         registry_addr,
         vault_addr,
         "Test Vault",
-        "test",
-        U256::ZERO,
-        1_748_000_000u64,
+        asset_addr,
         50u64,
         [0x11u8; 32],
         0,

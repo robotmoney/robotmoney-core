@@ -5,6 +5,10 @@ import react from "@vitejs/plugin-react";
 // so the unit suite never picks up an E2E file by accident.
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __DAPP_VERSION__: JSON.stringify("0.1.0"),
+    __GIT_COMMIT__: JSON.stringify("test-commit"),
+  },
   test: {
     globals: true,
     environment: "jsdom",

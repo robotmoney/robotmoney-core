@@ -1,7 +1,7 @@
 //! ABI surfaces the indexer decodes — IGateway, RobotMoneyVault, and
 //! VaultRegistry events plus the ERC-4626 / vault state reads.  Mirrors
 //! the contract sources in `contracts/gateway/interfaces/IGateway.sol`,
-//! `contracts/RobotMoneyVault.sol`, and the canonical event signatures
+//! `contracts/RobotMoneyVault.sol`, `contracts/VaultRegistry.sol`, and the canonical event signatures
 //! in `docs/technical/vault-registry-decisions.md` §3.5.
 //!
 //! # ABI Drift Map (dev-scout #383 findings — 2026-05-15)
@@ -227,26 +227,22 @@ sol! {
         function paused() external view returns (bool);
     }
 
-    /// Event surface from `VaultRegistry`.  Canonical signatures are
-    /// defined in `docs/technical/vault-registry-decisions.md` §3.5 and
-    /// must appear verbatim in `VaultRegistry.sol`.
+    /// Event surface from `VaultRegistry`. Must match
+    /// `contracts/VaultRegistry.sol` exactly.
     #[allow(missing_docs)]
     interface IVaultRegistryEvents {
         /// Emitted once when a vault is added to the registry.
         event VaultRegistered(
             address indexed vault,
             string  name,
-            string  riskLabel,
-            uint256 depositCap,
-            uint64  registeredAt
+            address indexed asset
         );
 
         /// Emitted each time an admin changes a vault's operational status.
         event VaultStatusChanged(
             address indexed vault,
-            uint8           oldStatus,
-            uint8           newStatus,
-            uint64          changedAt
+            uint8   indexed newStatus,
+            uint256         timestamp
         );
     }
 
@@ -273,7 +269,7 @@ pub struct Topics {
     pub vault_pulled: B256,
     pub vault_rebalanced: B256,
     pub vault_exit_fee_charged: B256,
-    // VaultRegistry events — docs/technical/vault-registry-decisions.md §3.5.
+    // VaultRegistry events.
     pub vault_registered: B256,
     pub vault_status_changed: B256,
     // RouterGovernance + PortfolioRouter events — docs/architecture.md §5.4.
@@ -299,9 +295,9 @@ impl Topics {
             vault_exit_fee_charged: keccak256(
                 b"ExitFeeCharged(address,address,uint256,uint256,uint256)",
             ),
-            // VaultRegistry — docs/technical/vault-registry-decisions.md §3.5.
-            vault_registered: keccak256(b"VaultRegistered(address,string,string,uint256,uint64)"),
-            vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint8,uint64)"),
+            // VaultRegistry — contracts/VaultRegistry.sol.
+            vault_registered: keccak256(b"VaultRegistered(address,string,address)"),
+            vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint256)"),
             // RouterGovernance + PortfolioRouter — docs/architecture.md §5.4.
             proposal_created: keccak256(b"ProposalCreated(uint256,address,string,uint256,uint64)"),
             vote_cast: keccak256(b"VoteCast(uint256,address,bool,uint256)"),
@@ -370,7 +366,7 @@ mod tests {
             t.vault_exit_fee_charged,
             IVaultEvents::ExitFeeCharged::SIGNATURE_HASH
         );
-        // VaultRegistry events — docs/technical/vault-registry-decisions.md §3.5.
+        // VaultRegistry events.
         assert_eq!(
             t.vault_registered,
             IVaultRegistryEvents::VaultRegistered::SIGNATURE_HASH

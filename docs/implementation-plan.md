@@ -290,6 +290,23 @@ multi-vault withdrawals, and governance voting.
 - [ ] Action layer — governance voting: review active weight proposal, cast vote, view execution state
 - [ ] Dapp Playwright E2E: multi-vault deposit and withdrawal flows against full-stack devnet with router and governance contracts deployed
 
+### Phase: Multi-vault devnet
+Goal: Boot the smoke-test devnet with all production-ready vaults deployed,
+real adapters wired into the stable-yield vault, and the VaultRegistry and
+PortfolioRouter configured across all active vaults. The fork already
+provides live Aave V3, Compound V3, and Morpho Gauntlet addresses; the
+PassthroughAdapter stand-in is a devnet artifact with no further justification.
+ProtocolAssetVault and AgentTokenVault enter the devnet only after their basket
+vault ADRs are resolved (see phase below).
+
+- [ ] `Deploy.s.sol`: replace `PassthroughAdapter` with real AaveV3, Compound V3, and Morpho adapters wired to their live Base mainnet addresses; remove PassthroughAdapter from the smoke-test deploy path
+- [ ] Smoke-test `Fixture`: surface all adapter addresses in the endpoint summary alongside vault, gateway, and registry addresses
+- [ ] Deploy scripts: register `RobotMoneyVault` (with real adapters) in `VaultRegistry` and set initial router weights in `PortfolioRouter` pointing at the live vault
+- [ ] Fork e2e: smoke-test deposit and withdrawal round-trip against the real adapter stack (Aave, Compound, Morpho) in the Geth+Lighthouse devnet
+- [ ] Deploy scripts: add `ProtocolAssetVault` and `AgentTokenVault` to the devnet deploy sequence once basket vault ADRs are resolved; register each with `VaultRegistry`; set router weights across all three vaults
+- [ ] Smoke-test `Fixture`: surface all basket vault addresses and per-vault adapter breakdown in the endpoint summary once basket vaults are devnet-deployed
+- [ ] Fork e2e: multi-vault deposit, per-vault withdrawal, and VaultRegistry list round-trip in the Geth+Lighthouse devnet
+
 ### Phase: Basket vault production path
 Goal: Scout the production requirements for the protocol-asset vault
 (wETH/cbBTC/wSOL) and agent-token vault so they can eventually be onboarded

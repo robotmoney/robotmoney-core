@@ -277,33 +277,53 @@ async fn run_inner(
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
     }
 
-    // State snapshots — event-driven (one per touched contract per
+    // State snapshots — event-driven (one per touched vault contract per
     // touched block). Heartbeat handled below.
     for (bn, contract) in &event_blocks_per_contract {
         if *contract == cfg.vault {
-            rows_inserted += snapshot_vault(db, rpc, cfg, *bn).await? as i64;
+            rows_inserted +=
+                snapshot_vault_address(db, rpc, cfg.chain_id, cfg.vault, *bn).await? as i64;
         }
     }
 
-    // Heartbeat snapshot — if no event touched the vault in this range
-    // and the previous snapshot is more than SNAPSHOT_HEARTBEAT_BLOCKS
-    // behind `target`, take one at `target`. (The PK on
-    // (chain_id, contract, block_number) makes this naturally
-    // deduplicate against any event-driven snapshot.)
-    let last_vault_snap: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(block_number) FROM vault_snapshots WHERE chain_id = $1 AND contract = $2",
+    // Heartbeat snapshots — cover the legacy configured vault and every
+    // active vault learned from VaultRegistry events. The PK on
+    // (chain_id, contract, block_number) deduplicates against event-driven
+    // snapshots.
+    let mut heartbeat_vaults = vec![cfg.vault];
+    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
     )
     .bind(cfg.chain_id)
-    .bind(&cfg.vault.into_array()[..])
-    .fetch_one(db.pool())
+    .fetch_all(db.pool())
     .await
     .map_err(DbError::from)?;
-    let needs_heartbeat = match last_vault_snap {
-        Some(prev) => (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64,
-        None => true,
-    };
-    if needs_heartbeat {
-        rows_inserted += snapshot_vault(db, rpc, cfg, target).await? as i64;
+    for vault in registered_vaults {
+        if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
+            let address = Address::from(bytes);
+            if !heartbeat_vaults.contains(&address) {
+                heartbeat_vaults.push(address);
+            }
+        }
+    }
+
+    for vault in heartbeat_vaults {
+        let last_vault_snap: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(block_number) FROM vault_snapshots WHERE chain_id = $1 AND contract = $2",
+        )
+        .bind(cfg.chain_id)
+        .bind(&vault.into_array()[..])
+        .fetch_one(db.pool())
+        .await
+        .map_err(DbError::from)?;
+        let needs_heartbeat = match last_vault_snap {
+            Some(prev) => (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64,
+            None => true,
+        };
+        if needs_heartbeat {
+            rows_inserted +=
+                snapshot_vault_address(db, rpc, cfg.chain_id, vault, target).await? as i64;
+        }
     }
 
     Ok(IndexerOutcome {
@@ -440,15 +460,17 @@ async fn handle_log(
     if topic0 == topics.vault_registered {
         let decoded = IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("VaultRegistered: {e}")))?;
+        db.upsert_contract(cfg.chain_id, decoded.vault.into_array(), "vault", None)
+            .await?;
         let r = db
             .upsert_vault(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 &decoded.name,
-                &decoded.riskLabel,
-                decoded.depositCap,
+                "stable-yield",
+                U256::ZERO,
                 0i16, // VaultStatus::Active at registration
-                decoded.registeredAt as i64,
+                log.block_number as i64,
                 log.block_number as i64,
                 log.tx_hash.0,
             )
@@ -466,7 +488,7 @@ async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 decoded.newStatus as i16,
-                decoded.changedAt as i64,
+                decoded.timestamp.to::<u64>() as i64,
             )
             .await?;
         return Ok(r);
@@ -564,56 +586,47 @@ fn into_alloy_log(log: &LogEntry) -> alloy_primitives::Log {
     }
 }
 
-/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / paused from
-/// the vault at `block` and write a `vault_snapshots` row.
-async fn snapshot_vault(
+/// Read totalAssets / totalSupply / exitFeeBps / tvlCap / paused from a
+/// vault at `block` and write a `vault_snapshots` row.
+async fn snapshot_vault_address(
     db: &Db,
     rpc: &JsonRpc,
-    cfg: &IndexerConfig,
+    chain_id: i64,
+    vault: Address,
     block: u64,
 ) -> Result<u64, IndexerError> {
     let total_assets = call_u256(
         rpc,
-        cfg.vault,
+        vault,
         IVaultReads::totalAssetsCall {}.abi_encode(),
         block,
     )
     .await?;
     let total_supply = call_u256(
         rpc,
-        cfg.vault,
+        vault,
         IVaultReads::totalSupplyCall {}.abi_encode(),
         block,
     )
     .await?;
     let exit_fee_bps = call_u256(
         rpc,
-        cfg.vault,
+        vault,
         IVaultReads::exitFeeBpsCall {}.abi_encode(),
         block,
     )
     .await
     .unwrap_or(U256::ZERO);
-    let tvl_cap = call_u256(
-        rpc,
-        cfg.vault,
-        IVaultReads::tvlCapCall {}.abi_encode(),
-        block,
-    )
-    .await
-    .unwrap_or(U256::ZERO);
-    let paused = call_bool(
-        rpc,
-        cfg.vault,
-        IVaultReads::pausedCall {}.abi_encode(),
-        block,
-    )
-    .await
-    .unwrap_or(false);
+    let tvl_cap = call_u256(rpc, vault, IVaultReads::tvlCapCall {}.abi_encode(), block)
+        .await
+        .unwrap_or(U256::ZERO);
+    let paused = call_bool(rpc, vault, IVaultReads::pausedCall {}.abi_encode(), block)
+        .await
+        .unwrap_or(false);
 
     db.insert_vault_snapshot(
-        cfg.chain_id,
-        cfg.vault.into_array(),
+        chain_id,
+        vault.into_array(),
         block as i64,
         total_assets,
         total_supply,

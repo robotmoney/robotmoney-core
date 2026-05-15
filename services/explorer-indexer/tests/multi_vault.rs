@@ -5,7 +5,7 @@
 //! AC-2: vault_snapshots rows for the second registered vault are indexed
 //!       independently (two registered vaults, each gets its own snapshot).
 //!
-//! AC-3: router_weight_snapshots populated on WeightsSet events.
+//! AC-3: router_weight_snapshots stores the full WeightsSet vector.
 //!
 //! AC-4: governance_proposals and governance_votes populated on
 //!       ProposalCreated and VoteCast events.
@@ -44,6 +44,7 @@ fn encode_vault_registered_log(
     registry_addr: Address,
     vault_addr: Address,
     name: &str,
+    asset_addr: Address,
     block_number: u64,
     tx_hash: [u8; 32],
     log_index: u32,
@@ -54,9 +55,7 @@ fn encode_vault_registered_log(
     let event = IVaultRegistryEvents::VaultRegistered {
         vault: vault_addr,
         name: name.to_string(),
-        riskLabel: "stable".to_string(),
-        depositCap: U256::from(1_000_000_000u64),
-        registeredAt: 1_748_000_000u64,
+        asset: asset_addr,
     };
     let log_data: LogData = event.encode_log_data();
     let topics: Vec<String> = log_data
@@ -219,12 +218,27 @@ async fn two_registered_vaults_indexed_independently() {
     let registry_addr = Address::from([0xEEu8; 20]);
     let vault_a = Address::from([0xAAu8; 20]);
     let vault_b = Address::from([0xBBu8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
 
     // Tick 1: register both vaults.
-    let reg_a =
-        encode_vault_registered_log(registry_addr, vault_a, "Vault A", 50u64, [0x11u8; 32], 0);
-    let reg_b =
-        encode_vault_registered_log(registry_addr, vault_b, "Vault B", 50u64, [0x11u8; 32], 1);
+    let reg_a = encode_vault_registered_log(
+        registry_addr,
+        vault_a,
+        "Vault A",
+        asset_addr,
+        50u64,
+        [0x11u8; 32],
+        0,
+    );
+    let reg_b = encode_vault_registered_log(
+        registry_addr,
+        vault_b,
+        "Vault B",
+        asset_addr,
+        50u64,
+        [0x11u8; 32],
+        1,
+    );
 
     let stub1 = StubRpcServer::start().await;
     stub1.set(
@@ -314,7 +328,7 @@ async fn two_registered_vaults_indexed_independently() {
 }
 
 /// AC-3: WeightsSet event from PortfolioRouter populates
-/// router_weight_snapshots with one row per vault leg.
+/// router_weight_snapshots with the full vault/weight vector.
 #[tokio::test]
 async fn weights_set_event_populates_router_weight_snapshots() {
     let Some(fx) = try_pg_fixture().await else {
@@ -364,48 +378,31 @@ async fn weights_set_event_populates_router_weight_snapshots() {
     assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
     stub.shutdown();
 
-    // Two rows — one per vault leg.
+    // One row per WeightsSet event, containing one vault/weight entry per leg.
     let count = fx
         .db
         .count(CountTable::RouterWeightSnapshots)
         .await
         .unwrap();
     assert_eq!(
-        count, 2,
-        "router_weight_snapshots must have one row per vault leg"
+        count, 1,
+        "router_weight_snapshots must have one row per WeightsSet event"
     );
 
-    // Verify vault A weight.
-    let row_a: (Vec<u8>, bigdecimal::BigDecimal) = sqlx::query_as(
-        "SELECT vault_address, weight_bps FROM router_weight_snapshots \
-         WHERE chain_id = $1 AND vault_address = $2",
+    let row: (Vec<Vec<u8>>, Vec<i64>) = sqlx::query_as(
+        "SELECT vault_addresses, bps_values FROM router_weight_snapshots \
+         WHERE chain_id = $1 AND router_address = $2",
     )
     .bind(8453i64)
-    .bind(&vault_a.into_array()[..])
+    .bind(&router_addr.into_array()[..])
     .fetch_one(fx.db.pool())
     .await
     .unwrap();
     assert_eq!(
-        row_a.1,
-        bigdecimal::BigDecimal::from(6000u64),
-        "vault A weight must be 6000 bps"
+        row.0,
+        vec![vault_a.as_slice().to_vec(), vault_b.as_slice().to_vec()]
     );
-
-    // Verify vault B weight.
-    let row_b: (Vec<u8>, bigdecimal::BigDecimal) = sqlx::query_as(
-        "SELECT vault_address, weight_bps FROM router_weight_snapshots \
-         WHERE chain_id = $1 AND vault_address = $2",
-    )
-    .bind(8453i64)
-    .bind(&vault_b.into_array()[..])
-    .fetch_one(fx.db.pool())
-    .await
-    .unwrap();
-    assert_eq!(
-        row_b.1,
-        bigdecimal::BigDecimal::from(4000u64),
-        "vault B weight must be 4000 bps"
-    );
+    assert_eq!(row.1, vec![6000i64, 4000i64]);
 }
 
 /// AC-4a: ProposalCreated event populates governance_proposals.

@@ -1644,6 +1644,7 @@ fn start_compose_log_follower(
     }
     cmd.args(["logs", "--follow", "--no-color", "--timestamps"])
         .current_dir(compose_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd
@@ -1911,6 +1912,8 @@ pub struct DappStack {
     compose_log_followers: Vec<MonitoredChild>,
     pub endpoints: DappEndpoints,
     _tunnels: Option<Tunnels>,
+    /// Env vars captured at boot time for `rebuild_dapp`.
+    rebuild_env: Vec<(String, String)>,
 }
 
 /// Where the dapp, RPC, and explorer-api are publicly reachable from a
@@ -1975,6 +1978,7 @@ impl DappStack {
                 .env("VITE_GATEWAY_EXPECTED_CODE_HASH", &cleanup_runtime_hash)
                 .env("INDEXER_GATEWAY", &cleanup_gateway_hex)
                 .env("INDEXER_VAULT", &cleanup_vault_hex)
+                .env("INDEXER_REGISTRY", "")
                 .current_dir(&cleanup_compose_dir)
                 .status();
         };
@@ -2000,6 +2004,7 @@ impl DappStack {
             ("VITE_ROUTER_ADDRESS", fixture.router_hex().to_string()),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
+            ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
             (
                 "INDEXER_RPC_URL",
                 format!("http://host.docker.internal:{}", fixture.rpc_port()),
@@ -2052,6 +2057,52 @@ impl DappStack {
             } => (None, rpc_url, dapp_url, explorer_api_url),
         };
 
+        let rebuild_env: Vec<(String, String)> = vec![
+            ("POSTGRES_PORT".into(), ports.postgres_port.to_string()),
+            (
+                "EXPLORER_API_PORT".into(),
+                ports.explorer_api_port.to_string(),
+            ),
+            ("DAPP_PORT".into(), ports.dapp_port.to_string()),
+            ("VITE_GATEWAY_ADDRESS".into(), gateway_hex.to_string()),
+            ("VITE_VAULT_ADDRESS".into(), vault_hex.to_string()),
+            (
+                "VITE_GATEWAY_EXPECTED_CODE_HASH".into(),
+                gateway_runtime_hash.clone(),
+            ),
+            (
+                "VITE_REGISTRY_ADDRESS".into(),
+                fixture.registry_hex().to_string(),
+            ),
+            (
+                "VITE_ROUTER_ADDRESS".into(),
+                fixture.router_hex().to_string(),
+            ),
+            ("INDEXER_GATEWAY".into(), gateway_hex.to_string()),
+            ("INDEXER_VAULT".into(), vault_hex.to_string()),
+            (
+                "INDEXER_REGISTRY".into(),
+                fixture.registry_hex().to_string(),
+            ),
+            (
+                "INDEXER_RPC_URL".into(),
+                format!("http://host.docker.internal:{}", fixture.rpc_port()),
+            ),
+            ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
+            (
+                "VITE_EXPLORER_API_URL".into(),
+                vite_explorer_api_url.clone(),
+            ),
+            ("VITE_DAPP_URL".into(), vite_dapp_url.clone()),
+            (
+                "VITE_FAUCET_HARNESS_PRIVATE_KEY".into(),
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.into(),
+            ),
+            ("INDEXER_CHAIN_ID".into(), "918453".into()),
+            ("INDEXER_CHAIN_NAME".into(), "devnet".into()),
+            ("EXPLORER_API_CHAIN_ID".into(), "918453".into()),
+        ];
+
         eprintln!("smoke-test: building and starting dapp stack (this may take several minutes for first build)...");
 
         logging::info("smoke-test", "bringing up full-stack compose services");
@@ -2074,6 +2125,7 @@ impl DappStack {
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
+            .env("INDEXER_REGISTRY", fixture.registry_hex())
             // RPC is on the host; containers reach it via host.docker.internal
             .env(
                 "INDEXER_RPC_URL",
@@ -2124,14 +2176,15 @@ impl DappStack {
 
         let mut compose_log_followers = Vec::new();
         let dapp_log_env = {
-            let mut env = dapp_log_env;
-            // Indices shifted by 2 vs issue #318 baseline (9/10/11) because
-            // issue #320 inserts VITE_REGISTRY_ADDRESS (6) and
-            // VITE_ROUTER_ADDRESS (7) before these entries.
-            env[11] = ("VITE_DEVNET_RPC_URL", vite_rpc_url.clone());
-            env[12] = ("VITE_EXPLORER_API_URL", vite_explorer_api_url.clone());
-            env[13] = ("VITE_DAPP_URL", vite_dapp_url.clone());
-            env
+            dapp_log_env
+                .into_iter()
+                .map(|(key, value)| match key {
+                    "VITE_DEVNET_RPC_URL" => (key, vite_rpc_url.clone()),
+                    "VITE_EXPLORER_API_URL" => (key, vite_explorer_api_url.clone()),
+                    "VITE_DAPP_URL" => (key, vite_dapp_url.clone()),
+                    _ => (key, value),
+                })
+                .collect::<Vec<_>>()
         };
         let dapp_log_follower = start_compose_log_follower(
             &compose_dir,
@@ -2217,7 +2270,44 @@ impl DappStack {
                 explorer_api_url: vite_explorer_api_url,
             },
             _tunnels: tunnels,
+            rebuild_env,
         })
+    }
+
+    /// Rebuild and restart only the `dapp` container in-place, leaving
+    /// postgres, explorer-indexer, and explorer-api untouched. All VITE_*
+    /// build args are re-injected from the values captured at boot time so
+    /// the new bundle points at the same devnet addresses and ports.
+    ///
+    /// Docker's build output is streamed to the caller's stderr so the
+    /// developer can see progress during the (potentially long) bun build.
+    pub fn rebuild_dapp(&self) -> Result<(), HarnessError> {
+        logging::info("smoke-test", "rebuilding dapp container (--no-deps)");
+        let mut cmd = Command::new("docker");
+        cmd.args([
+            "compose",
+            "-f",
+            "docker-compose.dapp.yaml",
+            "up",
+            "--build",
+            "--no-deps",
+            "-d",
+            "dapp",
+        ]);
+        for (k, v) in &self.rebuild_env {
+            cmd.env(k, v);
+        }
+        let status = cmd
+            .current_dir(&self.compose_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(HarnessError::from)?;
+        if !status.success() {
+            return Err(HarnessError::Docker("dapp rebuild failed".to_string()));
+        }
+        Ok(())
     }
 }
 

@@ -95,12 +95,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry = cli
         .registry
         .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
     let router_governance = cli
         .router_governance
         .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
