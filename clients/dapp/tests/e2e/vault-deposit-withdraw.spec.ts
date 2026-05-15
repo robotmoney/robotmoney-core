@@ -152,6 +152,11 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
 
+    // Shared VaultPositionCard is visible in the withdraw section (issue #381).
+    // selectedVault defaults to props.vaultAddress so the card renders immediately.
+    await expect(page.getByTestId("vault-position-card")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("vault-position-card-shares")).toBeVisible();
+
     const admin = endpoints.admin_addr;
     const usdcStart = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, admin);
     const sharesStart = await vaultBalanceOf(endpoints.rpc_url, endpoints.vault_addr, admin);

@@ -49,6 +49,7 @@ import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./Des
 import { RouterDepositSection } from "./RouterDepositSection";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
+import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -371,9 +372,10 @@ export function DepositWithdrawTab(props: Props) {
           >
             Sign deposit with wallet
           </button>
-          <p className="hint" data-testid="deposit-share-balance">
-            rmUSDC balance: {typeof shareBalance === "bigint" ? shareBalance.toString() : "—"}
-          </p>
+          <ReceiptValueDisplay
+            shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+            label="rmUSDC balance"
+          />
           {approveSimError && (
             <p className="hint" data-testid="approve-sim-error">
               approve simulate failed: {approveSimError.message}
@@ -413,9 +415,17 @@ export function DepositWithdrawTab(props: Props) {
             inputMode="decimal"
           />
         </label>
-        <p className="hint" data-testid="withdraw-share-balance">
-          rmUSDC balance: {typeof shareBalance === "bigint" ? shareBalance.toString() : "—"}
-        </p>
+        {selectedVault !== undefined && (
+          <VaultPositionCard
+            vaultAddress={selectedVault}
+            vaultName={selectedVault}
+            shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+          />
+        )}
+        <ReceiptValueDisplay
+          shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+          label="rmUSDC balance"
+        />
         {hasInsufficientBalance && (
           <p className="hint" data-testid="withdraw-insufficient-balance">
             Insufficient balance: you hold {shareBalance?.toString() ?? "0"} shares but entered{" "}

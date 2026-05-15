@@ -92,6 +92,13 @@ test("watched address — portfolio position and transaction history render from
   await expect(page.getByTestId("portfolio-position-row-vault")).toHaveText("Smoke Test Vault");
   await expect(page.getByTestId("portfolio-position-row-shares")).toHaveText("1000000");
 
+  // Shared VaultPositionCard renders in the card grid below the table (issue #381).
+  await expect(page.getByTestId("portfolio-position-cards")).toBeVisible();
+  const vaultCards = page.getByTestId("vault-position-card");
+  await expect(vaultCards).toHaveCount(1);
+  await expect(page.getByTestId("vault-position-card-name")).toHaveText("Smoke Test Vault");
+  await expect(page.getByTestId("vault-position-card-shares")).toHaveText("1000000");
+
   // TransactionHistory renders with the stubbed deposit event.
   await expect(page.getByTestId("transaction-history")).toBeVisible();
   await expect(page.getByTestId("transaction-history-table")).toBeVisible();

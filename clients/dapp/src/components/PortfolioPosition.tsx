@@ -26,6 +26,7 @@ import {
   type AccountPositionsResponse,
   type FetchLike,
 } from "../lib/explorerApi";
+import { VaultPositionCard } from "./shared";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -156,6 +157,25 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                   {compositeTotal(state.positions) !== null ? compositeTotal(state.positions) : "—"}
                 </strong>
               </p>
+
+              {/* Shared VaultPositionCard view — satisfies the shared-component
+                  wiring requirement (issue #381). Each card is independently
+                  visible and testable without the table. */}
+              <div className="vault-card-grid" data-testid="portfolio-position-cards">
+                {state.positions.map((pos) => {
+                  const usdc = usdcValues[pos.vault_address.toLowerCase()];
+                  return (
+                    <VaultPositionCard
+                      key={pos.vault_address}
+                      vaultAddress={pos.vault_address}
+                      vaultName={pos.vault_name}
+                      shares={pos.shares}
+                      riskLabel={pos.risk_label}
+                      usdcValue={usdc}
+                    />
+                  );
+                })}
+              </div>
             </>
           )}
         </>

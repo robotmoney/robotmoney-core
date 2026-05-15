@@ -31,61 +31,13 @@ import {
 } from "../lib/routerPreview";
 import { TxPreview } from "./TxPreview";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { ProportionPreview } from "./shared";
 
 type Props = Readonly<{
   routerAddress: Address;
   usdcAddress: Address;
   ctx: RouterPreviewContext;
 }>;
-
-function LegTable({ legs }: { legs: LegPreview[] }) {
-  return (
-    <table data-testid="router-leg-table">
-      <thead>
-        <tr>
-          <th>Vault</th>
-          <th>Weight</th>
-          <th>USDC leg</th>
-          <th>Est. shares</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {legs.map((leg, i) => (
-          <tr
-            key={leg.vault}
-            data-testid={`router-leg-row-${i}`}
-            style={leg.unavailable ? { color: "red" } : undefined}
-          >
-            <td>
-              <code>
-                {leg.vault.slice(0, 8)}…{leg.vault.slice(-4)}
-              </code>
-            </td>
-            <td>{((Number(leg.weightBps) / 10_000) * 100).toFixed(2)}%</td>
-            <td>{formatUsdc(leg.legAmount)}</td>
-            <td>{leg.unavailable ? "—" : formatShares(leg.estShares)}</td>
-            <td data-testid={`router-leg-status-${i}`}>
-              {leg.unavailable ? "⚠ UNAVAILABLE" : "Active"}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")}`;
-}
-
-function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")}`;
-}
 
 export function RouterDepositSection(props: Props) {
   const { address, isConnected } = useAccount();
@@ -236,8 +188,8 @@ export function RouterDepositSection(props: Props) {
         />
       </label>
 
-      {/* Per-leg breakdown table */}
-      {legs.length > 0 && <LegTable legs={legs} />}
+      {/* Per-leg breakdown table — shared ProportionPreview component */}
+      {legs.length > 0 && <ProportionPreview legs={legs} />}
 
       {/* All-or-revert warning when any leg is unavailable */}
       {hasUnavailable && (
