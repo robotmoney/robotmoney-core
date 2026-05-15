@@ -1,9 +1,9 @@
 interface NavBarProps {
-  readonly debugOpen: boolean;
-  readonly onToggleDebug: () => void;
+  readonly aboutOpen: boolean;
+  readonly onToggleAbout: () => void;
 }
 
-export function NavBar({ debugOpen, onToggleDebug }: NavBarProps) {
+export function NavBar({ aboutOpen, onToggleAbout }: NavBarProps) {
   return (
     <header className="nav" data-testid="nav">
       <a className="nav-brand" href="/">
@@ -11,13 +11,13 @@ export function NavBar({ debugOpen, onToggleDebug }: NavBarProps) {
       </a>
       <button
         type="button"
-        className="nav-debug-button"
-        data-testid="debug-panel-toggle"
-        aria-controls="debug-panel"
-        aria-expanded={debugOpen}
-        onClick={onToggleDebug}
+        className="nav-about-button"
+        data-testid="about-button"
+        aria-controls="about-modal"
+        aria-expanded={aboutOpen}
+        onClick={onToggleAbout}
       >
-        Debug
+        About
       </button>
     </header>
   );

@@ -2,11 +2,17 @@
  * Entry point. Reads runtime config from `import.meta.env` and bootstraps
  * the wagmi provider. Renders the brand nav, the public landing header,
  * the protocol-layer (no wallet required), the per-user Agents panel,
- * the account-layer inspector (issue #319), and the debug observability
- * drawer for engineering diagnostics.
+ * the account-layer inspector, and either the main app or the /debug
+ * full-page developer view depending on the current URL path.
+ *
+ * An About modal is accessible from the NavBar About button and provides
+ * version, commit SHA, environment, and a link to /debug.
+ *
+ * The global error capture module is installed before React renders so that
+ * all errors and warnings are captured from startup.
  */
 import "./styles.css";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider, useAccount } from "wagmi";
@@ -21,13 +27,19 @@ import { VaultList } from "./components/VaultList";
 import { VaultDetail } from "./components/VaultDetail";
 import { RouterView } from "./components/RouterView";
 import { ProtocolStats } from "./components/ProtocolStats";
-import { DebugPanel } from "./components/DebugPanel";
+import { AboutModal } from "./components/AboutModal";
+import { DebugPage } from "./components/DebugPage";
 import { VaultCards } from "./components/VaultCards";
 import { Tabs } from "./components/Tabs";
 import { GovernancePanel } from "./components/GovernancePanel";
 import { makeConfig } from "./lib/wagmi";
 import { useGatewayVerifier } from "./lib/useGatewayVerifier";
 import { resolveExplorerApiUrl } from "./lib/explorerApi";
+import { initErrorCapture } from "./lib/error-capture";
+
+// Install global error capture before React renders so startup errors are
+// included in the /debug feed.
+initErrorCapture();
 
 const env = import.meta.env as Record<string, string | undefined>;
 const wagmiConfig = makeConfig(env);
@@ -51,8 +63,46 @@ function App() {
     expectedCodeHash,
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
-  const [debugOpen, setDebugOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const { address: connectedAddress } = useAccount();
+
+  // Listen for navigation so the /debug route works with browser back/forward.
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const isDebugRoute = currentPath === "/debug";
+
+  if (isDebugRoute) {
+    return (
+      <>
+        <TestnetBanner
+          envClass={envClass}
+          forkTimestamp={env.VITE_FORK_BLOCK_TIMESTAMP}
+          forkBlock={env.VITE_FORK_BLOCK_NUMBER}
+        />
+        <NavBar aboutOpen={aboutOpen} onToggleAbout={() => setAboutOpen((open) => !open)} />
+        <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} envClass={envClass} />
+        <DebugPage
+          gatewayAddress={gateway}
+          vaultAddress={vault}
+          registryAddress={registry}
+          routerAddress={router}
+          envClass={envClass}
+          explorerApiUrl={explorerApiUrl}
+          expectedCodeHash={expectedCodeHash}
+          forkTimestamp={env.VITE_FORK_BLOCK_TIMESTAMP}
+          forkBlock={env.VITE_FORK_BLOCK_NUMBER}
+          verificationState={verificationState}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -61,21 +111,8 @@ function App() {
         forkTimestamp={env.VITE_FORK_BLOCK_TIMESTAMP}
         forkBlock={env.VITE_FORK_BLOCK_NUMBER}
       />
-      <NavBar debugOpen={debugOpen} onToggleDebug={() => setDebugOpen((open) => !open)} />
-      <DebugPanel
-        open={debugOpen}
-        onClose={() => setDebugOpen(false)}
-        gatewayAddress={gateway}
-        vaultAddress={vault}
-        registryAddress={registry}
-        routerAddress={router}
-        envClass={envClass}
-        explorerApiUrl={explorerApiUrl}
-        expectedCodeHash={expectedCodeHash}
-        forkTimestamp={env.VITE_FORK_BLOCK_TIMESTAMP}
-        forkBlock={env.VITE_FORK_BLOCK_NUMBER}
-        verificationState={verificationState}
-      />
+      <NavBar aboutOpen={aboutOpen} onToggleAbout={() => setAboutOpen((open) => !open)} />
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} envClass={envClass} />
       <StatusHeader />
       <VerificationBanner state={verificationState} refresh={verificationRefresh} />
       <main className="dapp-shell">

@@ -375,6 +375,101 @@ button:disabled {
   border-color: var(--color-accent);
   box-shadow: 0 0 18px var(--color-accent-glow);
 }
+.nav-about-button {
+  background: transparent;
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  margin: 0;
+}
+.nav-about-button[aria-expanded="true"] {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 18px var(--color-accent-glow);
+}
+/* About modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.modal-panel {
+  background: var(--color-deep);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+  width: min(28rem, 100%);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+.about-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+}
+.about-footer {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+.about-footer a {
+  font-size: 0.8125rem;
+  color: var(--color-accent);
+  text-decoration: none;
+}
+.about-footer a:hover {
+  text-decoration: underline;
+}
+/* /debug full-page route */
+.debug-page {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.debug-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+}
+.debug-page-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+.debug-page-back {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-md);
+}
+.debug-page-back:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-light);
+}
 .debug-panel {
   position: fixed;
   top: 0;
