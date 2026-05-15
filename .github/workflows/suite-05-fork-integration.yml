@@ -35,6 +35,9 @@ on:
     paths:
       - "testing/fork-e2e-rust/**"
       - "contracts/VaultRegistry.sol"
+      - "contracts/PortfolioRouter.sol"
+      - "contracts/gateway/RobotMoneyGateway.sol"
+      - "contracts/gateway/MockVault.sol"
       - ".github/workflows/suite-05-fork-integration.yml"
   workflow_dispatch:
 
