@@ -40,6 +40,7 @@ on:
       - "services/explorer-indexer/**"
       - "testing/explorer-indexer/**"
       - "crates/**"
+      - "contracts/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/suite-08-explorer-indexer.yml"
@@ -72,6 +73,10 @@ jobs:
       - name: Build test binaries
         working-directory: services/explorer-indexer
         run: cargo test --no-run
+
+      - name: ABI drift gate
+        working-directory: services/explorer-indexer
+        run: cargo test --lib -- abi::tests::abi_drift_gate --nocapture
 
       - name: Migration idempotency
         working-directory: services/explorer-indexer

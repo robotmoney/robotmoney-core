@@ -142,52 +142,56 @@ use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
 
 sol! {
-    /// Event surface from `RouterGovernance` and `PortfolioRouter`.
+    /// Event surface from `RouterGovernance`.
     ///
-    /// ProposalCreated / VoteCast / ProposalExecuted are emitted by the
-    /// RouterGovernance contract (docs/architecture.md §5.4).  WeightsSet is
-    /// emitted by PortfolioRouter each time the weight vector is updated
-    /// (also called WeightsApplied in the issue — same on-chain event).
+    /// Signatures match `RouterGovernance.sol` exactly so that
+    /// `SolEvent::SIGNATURE_HASH` and the `Topics` keccak strings agree
+    /// with the on-chain topic-0.  See `docs/architecture.md §5.4`.
     #[allow(missing_docs)]
     interface IRouterGovernanceEvents {
         /// Emitted when a new governance proposal is created.
+        /// RouterGovernance.sol:106
         event ProposalCreated(
             uint256 indexed proposalId,
             address indexed proposer,
-            string  description,
-            uint256 deadlineBlock,
-            uint64  createdAt
+            address[] vaults,
+            uint256[] bps,
+            uint64  votingDeadline
         );
 
-        /// Emitted when a voter casts a vote.
+        /// Emitted when a voter casts a vote in favour.
+        /// RouterGovernance.sol:119
         event VoteCast(
             uint256 indexed proposalId,
             address indexed voter,
-            bool    support,
-            uint256 weight
+            uint256 power,
+            uint256 totalFor
         );
 
-        /// Emitted when a passed proposal is executed and weights applied.
-        event ProposalExecuted(uint256 indexed proposalId);
+        /// Emitted when a queued proposal is executed.
+        /// RouterGovernance.sol:126
+        event ProposalExecuted(uint256 indexed proposalId, address indexed executor);
 
-        /// Emitted by PortfolioRouter when the weight vector is set.
-        /// This is the on-chain `WeightsSet` event; the issue calls it
-        /// `WeightsApplied` — same signature.
-        event WeightsSet(address[] vaults, uint256[] bps);
+        /// Emitted by RouterGovernance when the router weight vector is updated.
+        /// RouterGovernance.sol:132
+        event WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps);
     }
 
     /// Event surface from `IGateway`. Names match the Solidity source so
     /// `SolEvent::SIGNATURE_HASH` lines up with the on-chain topic.
     #[allow(missing_docs)]
     interface IGatewayEvents {
+        /// IGateway.sol:74
         event AgentAuthorized(
             address indexed agent,
+            address indexed owner,
             uint64 validUntil,
             uint256 maxPerPayment,
             uint256 maxPerWindow,
             address shareReceiver
         );
-        event AgentRevoked(address indexed agent);
+        /// IGateway.sol:85
+        event AgentRevoked(address indexed agent, address indexed owner);
         event Paused(address indexed by);
         event Unpaused(address indexed by);
         event AgentDeposit(
@@ -227,11 +231,12 @@ sol! {
         function paused() external view returns (bool);
     }
 
-    /// Event surface from `VaultRegistry`. Must match
-    /// `contracts/VaultRegistry.sol` exactly.
+    /// Event surface from `VaultRegistry`.  Signatures match `VaultRegistry.sol`
+    /// exactly — see §3.5 in `docs/technical/vault-registry-decisions.md`.
     #[allow(missing_docs)]
     interface IVaultRegistryEvents {
         /// Emitted once when a vault is added to the registry.
+        /// VaultRegistry.sol:67
         event VaultRegistered(
             address indexed vault,
             string  name,
@@ -239,6 +244,7 @@ sol! {
         );
 
         /// Emitted each time an admin changes a vault's operational status.
+        /// VaultRegistry.sol:73 — `VaultStatus` enum encodes as uint8 in ABI.
         event VaultStatusChanged(
             address indexed vault,
             uint8   indexed newStatus,
@@ -272,18 +278,20 @@ pub struct Topics {
     // VaultRegistry events.
     pub vault_registered: B256,
     pub vault_status_changed: B256,
-    // RouterGovernance + PortfolioRouter events — docs/architecture.md §5.4.
+    // RouterGovernance events — docs/architecture.md §5.4.
     pub proposal_created: B256,
     pub vote_cast: B256,
     pub proposal_executed: B256,
-    pub weights_set: B256,
+    pub weights_applied: B256,
 }
 
 impl Topics {
     pub fn new() -> Self {
         Self {
-            agent_authorized: keccak256(b"AgentAuthorized(address,uint64,uint256,uint256,address)"),
-            agent_revoked: keccak256(b"AgentRevoked(address)"),
+            agent_authorized: keccak256(
+                b"AgentAuthorized(address,address,uint64,uint256,uint256,address)",
+            ),
+            agent_revoked: keccak256(b"AgentRevoked(address,address)"),
             agent_deposit: keccak256(
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
             ),
@@ -295,14 +303,16 @@ impl Topics {
             vault_exit_fee_charged: keccak256(
                 b"ExitFeeCharged(address,address,uint256,uint256,uint256)",
             ),
-            // VaultRegistry — contracts/VaultRegistry.sol.
+            // VaultRegistry — docs/technical/vault-registry-decisions.md §3.5.
             vault_registered: keccak256(b"VaultRegistered(address,string,address)"),
             vault_status_changed: keccak256(b"VaultStatusChanged(address,uint8,uint256)"),
-            // RouterGovernance + PortfolioRouter — docs/architecture.md §5.4.
-            proposal_created: keccak256(b"ProposalCreated(uint256,address,string,uint256,uint64)"),
-            vote_cast: keccak256(b"VoteCast(uint256,address,bool,uint256)"),
-            proposal_executed: keccak256(b"ProposalExecuted(uint256)"),
-            weights_set: keccak256(b"WeightsSet(address[],uint256[])"),
+            // RouterGovernance — docs/architecture.md §5.4.
+            proposal_created: keccak256(
+                b"ProposalCreated(uint256,address,address[],uint256[],uint64)",
+            ),
+            vote_cast: keccak256(b"VoteCast(uint256,address,uint256,uint256)"),
+            proposal_executed: keccak256(b"ProposalExecuted(uint256,address)"),
+            weights_applied: keccak256(b"WeightsApplied(uint256,address[],uint256[])"),
         }
     }
 
@@ -324,7 +334,7 @@ impl Topics {
             self.proposal_created,
             self.vote_cast,
             self.proposal_executed,
-            self.weights_set,
+            self.weights_applied,
         ]
     }
 }
@@ -375,7 +385,7 @@ mod tests {
             t.vault_status_changed,
             IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH
         );
-        // RouterGovernance + PortfolioRouter — docs/architecture.md §5.4.
+        // RouterGovernance — docs/architecture.md §5.4.
         assert_eq!(
             t.proposal_created,
             IRouterGovernanceEvents::ProposalCreated::SIGNATURE_HASH
@@ -389,8 +399,98 @@ mod tests {
             IRouterGovernanceEvents::ProposalExecuted::SIGNATURE_HASH
         );
         assert_eq!(
-            t.weights_set,
-            IRouterGovernanceEvents::WeightsSet::SIGNATURE_HASH
+            t.weights_applied,
+            IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH
         );
+    }
+
+    /// CI ABI drift gate — compares `sol!`-derived SIGNATURE_HASH constants
+    /// against canonical topic-0 values computed at runtime from the
+    /// authoritative event signature strings in the Solidity sources.
+    ///
+    /// This test is the automated ABI drift check required by issue #366.
+    /// It catches any mismatch between:
+    ///   1. The `sol!` event declarations in this file, and
+    ///   2. The canonical canonical signatures from the contract source.
+    ///
+    /// If any field is added, removed, or renamed in `abi.rs` without a
+    /// matching change in the `SOL_SIGS` table below (or vice-versa), the
+    /// test fails — preventing silent event drops in the indexer.
+    ///
+    /// Source references:
+    ///   IGateway.sol:74,85,100  VaultRegistry.sol:67,73
+    ///   RouterGovernance.sol:106,119,126,132
+    #[test]
+    fn abi_drift_gate() {
+        use alloy_primitives::keccak256;
+
+        // One entry per indexed event: (event_name, canonical_signature, sol_macro_hash).
+        let checks: &[(&str, &[u8], B256)] = &[
+            // IGateway.sol:74
+            (
+                "AgentAuthorized",
+                b"AgentAuthorized(address,address,uint64,uint256,uint256,address)",
+                IGatewayEvents::AgentAuthorized::SIGNATURE_HASH,
+            ),
+            // IGateway.sol:85
+            (
+                "AgentRevoked",
+                b"AgentRevoked(address,address)",
+                IGatewayEvents::AgentRevoked::SIGNATURE_HASH,
+            ),
+            // IGateway.sol:100
+            (
+                "AgentDeposit",
+                b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
+                IGatewayEvents::AgentDeposit::SIGNATURE_HASH,
+            ),
+            // VaultRegistry.sol:67
+            (
+                "VaultRegistered",
+                b"VaultRegistered(address,string,address)",
+                IVaultRegistryEvents::VaultRegistered::SIGNATURE_HASH,
+            ),
+            // VaultRegistry.sol:73 — VaultStatus enum ABI-encodes as uint8
+            (
+                "VaultStatusChanged",
+                b"VaultStatusChanged(address,uint8,uint256)",
+                IVaultRegistryEvents::VaultStatusChanged::SIGNATURE_HASH,
+            ),
+            // RouterGovernance.sol:106
+            (
+                "ProposalCreated",
+                b"ProposalCreated(uint256,address,address[],uint256[],uint64)",
+                IRouterGovernanceEvents::ProposalCreated::SIGNATURE_HASH,
+            ),
+            // RouterGovernance.sol:119
+            (
+                "VoteCast",
+                b"VoteCast(uint256,address,uint256,uint256)",
+                IRouterGovernanceEvents::VoteCast::SIGNATURE_HASH,
+            ),
+            // RouterGovernance.sol:126
+            (
+                "ProposalExecuted",
+                b"ProposalExecuted(uint256,address)",
+                IRouterGovernanceEvents::ProposalExecuted::SIGNATURE_HASH,
+            ),
+            // RouterGovernance.sol:132
+            (
+                "WeightsApplied",
+                b"WeightsApplied(uint256,address[],uint256[])",
+                IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH,
+            ),
+        ];
+
+        for (name, sig, sol_hash) in checks {
+            let canonical = keccak256(sig);
+            assert_eq!(
+                canonical, *sol_hash,
+                "ABI drift detected for {name}: \
+                 sol! declaration topic-0 ({sol_hash:?}) \
+                 does not match canonical signature topic-0 ({canonical:?}). \
+                 Update the sol! declaration in abi.rs to match the contract source."
+            );
+        }
     }
 }

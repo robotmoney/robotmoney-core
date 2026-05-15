@@ -54,7 +54,7 @@ pub enum CountTable {
     GovernanceProposals,
     /// Added in migration 0003 — per-voter vote events.
     GovernanceVotes,
-    /// Added in migration 0003 — weight-change history from WeightsSet events.
+    /// Added in migration 0003 — weight-change history from WeightsApplied events.
     RouterWeightSnapshots,
 }
 
@@ -550,7 +550,7 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    /// Idempotent insert of a `WeightsSet` / `WeightsApplied` snapshot row.
+    /// Idempotent insert of a `WeightsApplied` snapshot row.
     /// `vault_addresses` and `bps_values` are parallel arrays.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_router_weight_snapshot(

@@ -36,6 +36,8 @@ use explorer_indexer::{
 
 /// Encode a `VaultRegistered` log into the wire format expected by the
 /// stub server's `eth_getLogs` response.
+///
+/// New signature (VaultRegistry.sol:67): `(address indexed vault, string name, address indexed asset)`.
 #[allow(clippy::too_many_arguments)]
 fn encode_vault_registered_log(
     registry_addr: Address,
@@ -50,6 +52,7 @@ fn encode_vault_registered_log(
     use alloy_sol_types::SolEvent as _;
 
     // Build the ABI-encoded event using alloy_sol_types.
+    // asset defaults to zero address in tests (removed field).
     let event = IVaultRegistryEvents::VaultRegistered {
         vault: vault_addr,
         name: name.to_string(),
@@ -79,6 +82,9 @@ fn encode_vault_registered_log(
 }
 
 /// Encode a `VaultStatusChanged` log.
+///
+/// New signature (VaultRegistry.sol:73):
+/// `(address indexed vault, uint8 indexed newStatus, uint256 timestamp)`.
 #[allow(clippy::too_many_arguments)]
 fn encode_vault_status_changed_log(
     registry_addr: Address,

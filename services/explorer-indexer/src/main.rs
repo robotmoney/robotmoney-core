@@ -50,7 +50,7 @@ struct Cli {
 
     /// Optional PortfolioRouter / RouterGovernance contract address.
     /// When set, the indexer ingests ProposalCreated, VoteCast,
-    /// ProposalExecuted, and WeightsSet events.
+    /// ProposalExecuted, and WeightsApplied events.
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 

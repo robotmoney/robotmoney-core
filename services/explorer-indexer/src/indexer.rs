@@ -56,7 +56,7 @@ pub struct IndexerConfig {
     pub registry: Option<Address>,
     /// Optional PortfolioRouter / RouterGovernance contract address.
     /// When set, the indexer ingests `ProposalCreated`, `VoteCast`,
-    /// `ProposalExecuted`, and `WeightsSet` events.
+    /// `ProposalExecuted`, and `WeightsApplied` events.
     pub router_governance: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
@@ -457,6 +457,9 @@ async fn handle_log(
     }
 
     // VaultRegistered — upsert a row into `vaults`.
+    // New signature: (address indexed vault, string name, address indexed asset).
+    // Fields riskLabel/depositCap/registeredAt removed from contract; use
+    // empty-string/zero/block_number as DB defaults.
     if topic0 == topics.vault_registered {
         let decoded = IVaultRegistryEvents::VaultRegistered::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("VaultRegistered: {e}")))?;
@@ -467,10 +470,10 @@ async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 &decoded.name,
-                "stable-yield",
-                U256::ZERO,
-                0i16, // VaultStatus::Active at registration
-                log.block_number as i64,
+                "stable-yield", // riskLabel removed from VaultRegistered (VaultRegistry.sol:67); use default
+                U256::ZERO,     // depositCap removed
+                0i16,           // VaultStatus::Active at registration
+                log.block_number as i64, // registeredAt removed; use block_number
                 log.block_number as i64,
                 log.tx_hash.0,
             )
@@ -479,6 +482,7 @@ async fn handle_log(
     }
 
     // VaultStatusChanged — update `status` and `status_changed_at`.
+    // New signature: (address indexed vault, uint8 indexed newStatus, uint256 timestamp).
     if topic0 == topics.vault_status_changed {
         let decoded =
             IVaultRegistryEvents::VaultStatusChanged::decode_log(&into_alloy_log(log), true)
@@ -488,13 +492,17 @@ async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 decoded.newStatus as i16,
-                decoded.timestamp.to::<u64>() as i64,
+                decoded.timestamp.try_into().unwrap_or(i64::MAX),
             )
             .await?;
         return Ok(r);
     }
 
     // ProposalCreated — insert a new governance proposal row.
+    // New signature: (uint256 indexed proposalId, address indexed proposer,
+    //                  address[] vaults, uint256[] bps, uint64 votingDeadline).
+    // Fields description/createdAt/deadlineBlock removed; use empty-string/
+    // block_number/votingDeadline-as-deadline as DB defaults.
     if topic0 == topics.proposal_created {
         let decoded =
             IRouterGovernanceEvents::ProposalCreated::decode_log(&into_alloy_log(log), true)
@@ -507,15 +515,18 @@ async fn handle_log(
                 log.log_index as i32,
                 log.tx_hash.0,
                 decoded.proposer.into_array(),
-                &decoded.description,
-                decoded.createdAt as i64,
-                decoded.deadlineBlock.try_into().unwrap_or(i64::MAX),
+                "", // description removed from ProposalCreated (RouterGovernance.sol:106)
+                log.block_number as i64, // createdAt removed; use block_number
+                decoded.votingDeadline as i64,
             )
             .await?;
         return Ok(r);
     }
 
     // VoteCast — insert a per-voter vote row and update running tally.
+    // New signature: (uint256 indexed proposalId, address indexed voter,
+    //                  uint256 power, uint256 totalFor).
+    // `support` bool removed (all votes are FOR); `weight` renamed to `power`.
     if topic0 == topics.vote_cast {
         let decoded = IRouterGovernanceEvents::VoteCast::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("VoteCast: {e}")))?;
@@ -527,14 +538,15 @@ async fn handle_log(
                 log.block_number as i64,
                 log.log_index as i32,
                 log.tx_hash.0,
-                decoded.support,
-                decoded.weight,
+                true, // support bool removed; governance only records FOR votes
+                decoded.power,
             )
             .await?;
         return Ok(r);
     }
 
     // ProposalExecuted — mark proposal status = 2 (executed).
+    // New signature: (uint256 indexed proposalId, address indexed executor).
     if topic0 == topics.proposal_executed {
         let decoded =
             IRouterGovernanceEvents::ProposalExecuted::decode_log(&into_alloy_log(log), true)
@@ -549,10 +561,12 @@ async fn handle_log(
         return Ok(r);
     }
 
-    // WeightsSet — record a router weight snapshot.
-    if topic0 == topics.weights_set {
-        let decoded = IRouterGovernanceEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
-            .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;
+    // WeightsApplied — record a router weight snapshot.
+    // New signature: (uint256 indexed proposalId, address[] vaults, uint256[] bps).
+    if topic0 == topics.weights_applied {
+        let decoded =
+            IRouterGovernanceEvents::WeightsApplied::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("WeightsApplied: {e}")))?;
         let vault_addresses: Vec<[u8; 20]> =
             decoded.vaults.iter().map(|a| a.into_array()).collect();
         let bps_values: Vec<i64> = decoded

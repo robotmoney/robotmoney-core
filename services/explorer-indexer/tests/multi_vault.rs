@@ -5,7 +5,7 @@
 //! AC-2: vault_snapshots rows for the second registered vault are indexed
 //!       independently (two registered vaults, each gets its own snapshot).
 //!
-//! AC-3: router_weight_snapshots stores the full WeightsSet vector.
+//! AC-3: router_weight_snapshots populated on WeightsApplied events.
 //!
 //! AC-4: governance_proposals and governance_votes populated on
 //!       ProposalCreated and VoteCast events.
@@ -40,6 +40,7 @@ fn stub_block(number: u64, hash_byte: u8, parent_byte: u8) -> serde_json::Value 
 }
 
 /// Encode a `VaultRegistered` log for the stub server.
+/// New signature (VaultRegistry.sol:67): `(address indexed vault, string name, address indexed asset)`.
 fn encode_vault_registered_log(
     registry_addr: Address,
     vault_addr: Address,
@@ -77,7 +78,9 @@ fn encode_vault_registered_log(
     })
 }
 
-/// Encode a `WeightsSet` log from PortfolioRouter.
+/// Encode a `WeightsApplied` log from RouterGovernance.
+/// New signature (RouterGovernance.sol:132):
+/// `(uint256 indexed proposalId, address[] vaults, uint256[] bps)`.
 fn encode_weights_set_log(
     router_addr: Address,
     vaults: &[Address],
@@ -89,7 +92,8 @@ fn encode_weights_set_log(
     use alloy_primitives::LogData;
     use alloy_sol_types::SolEvent as _;
 
-    let event = IRouterGovernanceEvents::WeightsSet {
+    let event = IRouterGovernanceEvents::WeightsApplied {
+        proposalId: U256::from(1u64),
         vaults: vaults.to_vec(),
         bps: bps.to_vec(),
     };
@@ -114,12 +118,14 @@ fn encode_weights_set_log(
 }
 
 /// Encode a `ProposalCreated` log from RouterGovernance.
+/// New signature (RouterGovernance.sol:106):
+/// `(uint256 indexed proposalId, address indexed proposer, address[] vaults, uint256[] bps, uint64 votingDeadline)`.
 #[allow(clippy::too_many_arguments)]
 fn encode_proposal_created_log(
     gov_addr: Address,
     proposal_id: U256,
     proposer: Address,
-    description: &str,
+    _description: &str,
     deadline_block: U256,
     block_number: u64,
     tx_hash: [u8; 32],
@@ -131,9 +137,9 @@ fn encode_proposal_created_log(
     let event = IRouterGovernanceEvents::ProposalCreated {
         proposalId: proposal_id,
         proposer,
-        description: description.to_string(),
-        deadlineBlock: deadline_block,
-        createdAt: block_number,
+        vaults: vec![],
+        bps: vec![],
+        votingDeadline: deadline_block.try_into().unwrap_or(u64::MAX),
     };
     let log_data: LogData = event.encode_log_data();
     let topics: Vec<String> = log_data
@@ -156,12 +162,14 @@ fn encode_proposal_created_log(
 }
 
 /// Encode a `VoteCast` log from RouterGovernance.
+/// New signature (RouterGovernance.sol:119):
+/// `(uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor)`.
 #[allow(clippy::too_many_arguments)]
 fn encode_vote_cast_log(
     gov_addr: Address,
     proposal_id: U256,
     voter: Address,
-    support: bool,
+    _support: bool,
     weight: U256,
     block_number: u64,
     tx_hash: [u8; 32],
@@ -173,8 +181,8 @@ fn encode_vote_cast_log(
     let event = IRouterGovernanceEvents::VoteCast {
         proposalId: proposal_id,
         voter,
-        support,
-        weight,
+        power: weight,
+        totalFor: weight, // simplified: totalFor = power for single-voter tests
     };
     let log_data: LogData = event.encode_log_data();
     let topics: Vec<String> = log_data
@@ -327,8 +335,8 @@ async fn two_registered_vaults_indexed_independently() {
     assert!(snaps_b.0 >= 1, "vault B must have at least one snapshot");
 }
 
-/// AC-3: WeightsSet event from PortfolioRouter populates
-/// router_weight_snapshots with the full vault/weight vector.
+/// AC-3: WeightsApplied event from RouterGovernance populates
+/// router_weight_snapshots with one row per vault leg.
 #[tokio::test]
 async fn weights_set_event_populates_router_weight_snapshots() {
     let Some(fx) = try_pg_fixture().await else {
