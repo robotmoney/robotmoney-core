@@ -19,3 +19,4 @@ pub mod get_vault;
 pub mod get_vaults;
 pub mod self_check;
 pub mod status;
+pub mod withdraw;

@@ -36,6 +36,7 @@ fn main() {
         Command::GetAllowance { config, .. } => Some(config.as_path()),
         Command::GetDeposit { config, .. } => Some(config.as_path()),
         Command::GetTx { config, .. } => Some(config.as_path()),
+        Command::Withdraw { config, .. } => Some(config.as_path()),
     };
     init_logging_best_effort(config_path);
 
@@ -107,6 +108,29 @@ fn main() {
             tx_hash,
             pretty,
         } => commands::get_tx::run(&config, &tx_hash, pretty),
+        Command::Withdraw {
+            config,
+            shares,
+            source_vault,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            fee_cap,
+            pretty,
+        } => commands::withdraw::run(commands::withdraw::Args {
+            config_path: config,
+            shares,
+            source_vault,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            fee_cap_wei: fee_cap,
+            pretty,
+        }),
     };
     std::process::exit(exit_code);
 }

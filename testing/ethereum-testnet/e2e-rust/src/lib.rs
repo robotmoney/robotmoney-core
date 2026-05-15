@@ -248,6 +248,19 @@ impl Fixture {
         Ok(cmd.output()?.into())
     }
 
+    pub fn run_rmpc_withdraw<I, S>(&self, extra: I) -> Result<RmpcRun, HarnessError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        let mut cmd = self.rmpc_command();
+        cmd.args(["withdraw", "--config"]).arg(&self.config_path);
+        for a in extra {
+            cmd.arg(a);
+        }
+        Ok(cmd.output()?.into())
+    }
+
     pub fn run_rmpc_with<I, S>(
         &self,
         args: I,

@@ -310,7 +310,7 @@ fn agent_withdrawal_happy_path() {
 
     // Agent deposits USDC via gateway.deposit() → shares land at agent.address.
     approve_usdc(&agent, usdc, gateway, deposit_amount);
-    let deadline = (now_secs + 300) as u64;
+    let deadline = now_secs + 300;
     let deposit_receipt = agent
         .send(
             gateway,
@@ -341,7 +341,7 @@ fn agent_withdrawal_happy_path() {
     // Agent calls gateway.withdraw(orderId, shares_held, vault, deadline, idempotencyKey).
     // The gateway pulls shares from the agent (transferFrom(agent → gateway)) and
     // redeems them, sending USDC to assetRecipient.
-    let withdraw_deadline = (now_secs + 300) as u64;
+    let withdraw_deadline = now_secs + 300;
     let withdraw_receipt = agent
         .send(
             gateway,
@@ -483,7 +483,7 @@ fn agent_withdrawal_redirect_blocked() {
 
     // Deposit so agent holds shares.
     approve_usdc(&agent, usdc, gateway, deposit_amount);
-    let deadline = (now_secs + 300) as u64;
+    let deadline = now_secs + 300;
     agent
         .send(
             gateway,
@@ -608,7 +608,7 @@ fn agent_withdrawal_window_cap() {
 
     // Deposit full_amount so agent holds full_amount shares.
     approve_usdc(&agent, usdc, gateway, full_amount);
-    let deadline = (now_secs + 300) as u64;
+    let deadline = now_secs + 300;
     agent
         .send(
             gateway,
@@ -629,7 +629,7 @@ fn agent_withdrawal_window_cap() {
     approve_vault_shares(&agent, vault, gateway, shares);
 
     // First withdrawal: half_amount shares — should succeed and exhaust the window cap.
-    let w1_deadline = (now_secs + 300) as u64;
+    let w1_deadline = now_secs + 300;
     let w1 = agent
         .send(
             gateway,
@@ -651,7 +651,7 @@ fn agent_withdrawal_window_cap() {
     );
 
     // Second withdrawal of even 1 share in same window — must revert.
-    let w2_deadline = (now_secs + 300) as u64;
+    let w2_deadline = now_secs + 300;
     let result = agent.send(
         gateway,
         &IGateway::withdrawCall {

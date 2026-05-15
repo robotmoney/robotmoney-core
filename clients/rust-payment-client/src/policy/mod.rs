@@ -93,6 +93,22 @@ impl<'a> Preflight<'a> {
     /// paused, addresses), then per-agent reads, then balance/allowance.
     /// This minimises wasted RPC on the unhappy path.
     pub async fn run(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
+        self.run_inner(inputs, true).await
+    }
+
+    /// Gateway-level preflight only (checks 1–8). Skips the USDC
+    /// allowance and balance checks (9–10) which are deposit-specific.
+    /// Withdraw callers use this and then run vault-specific checks
+    /// separately via `withdraw_vault_preflight`.
+    pub async fn run_gateway_only(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
+        self.run_inner(inputs, false).await
+    }
+
+    async fn run_inner(
+        &self,
+        inputs: PreflightInputs,
+        check_usdc: bool,
+    ) -> Result<PreflightReport> {
         // 1. chain id
         let chain_id = self.rpc.chain_id().await?;
         if chain_id != self.config.chain_id {
@@ -167,21 +183,26 @@ impl<'a> Preflight<'a> {
             )));
         }
 
-        // 9. allowance(self, gateway) >= amount
-        let allowance = self
-            .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr)
-            .await?;
-        if allowance < inputs.amount {
-            return Err(RmpcError::ErrAllowanceInsufficient);
-        }
+        let (allowance, balance) = if check_usdc {
+            // 9. allowance(self, gateway) >= amount
+            let allowance = self
+                .call_view_allowance(usdc_addr_cfg, inputs.signer_address, gateway_addr)
+                .await?;
+            if allowance < inputs.amount {
+                return Err(RmpcError::ErrAllowanceInsufficient);
+            }
 
-        // 10. balanceOf(self) >= amount
-        let balance = self
-            .call_view_balance_of(usdc_addr_cfg, inputs.signer_address)
-            .await?;
-        if balance < inputs.amount {
-            return Err(RmpcError::ErrBalanceInsufficient);
-        }
+            // 10. balanceOf(self) >= amount
+            let balance = self
+                .call_view_balance_of(usdc_addr_cfg, inputs.signer_address)
+                .await?;
+            if balance < inputs.amount {
+                return Err(RmpcError::ErrBalanceInsufficient);
+            }
+            (allowance, balance)
+        } else {
+            (U256::ZERO, U256::ZERO)
+        };
 
         Ok(PreflightReport {
             chain_id,

@@ -1,29 +1,32 @@
 //! Canonical: docs/architecture.md §4 — High-Level Flow
-//! (See also: docs/implementation-plan.md §4.8 — CLI surface)
+//! (See also: docs/technical/rmpc-read-output-contract.md)
 //!
-//! `rmpc deposit` — sign and broadcast a USDC deposit through the gateway.
+//! `rmpc withdraw` — sign and broadcast a gateway redemption (agent-initiated).
 //!
-//! Per `docs/implementation-plan.md` §3.8 and issue #16. This is the
-//! keystone command; it ties together every other module:
+//! Per issue #312. Mirrors the structure of `rmpc deposit` with a
+//! withdraw-specific preflight:
 //!
-//! 1. Load config + signer (software keystore decrypted in-process).
-//! 2. Acquire the per-agent file lock (single-flight CLI; §3.6).
-//! 3. Run [`Preflight`] with the actual deposit amount. Any refusal exits
-//!    non-zero with a named-error JSON body — symmetric with `self-check`
-//!    so operators can correlate.
-//! 4. Compute fees from `eth_feeHistory` ([`compute_fees`]). Fee-cap
-//!    refusal → `ErrFeeCapExceeded`.
-//! 5. Build the EIP-1559 envelope, sign it via
-//!    [`AgentSigner::sign_eip1559_hash`], broadcast, poll for the receipt.
-//! 6. Decode the `AgentDeposit` event log → emit a stable JSON document
-//!    on stdout. The shape mirrors `rmpc status` so users can correlate
-//!    a deposit response with a later lookup.
+//! 1. Load config + signer.
+//! 2. Acquire the per-agent file lock (single-flight CLI).
+//! 3. Run [`WithdrawPreflight`]:
+//!    a. chain id
+//!    b. code hash pin
+//!    c. gateway paused
+//!    d. agent policy active + not expired
+//!    e. shares <= agent maxWithdrawPerPayment (reuses maxPerPayment field)
+//!    f. window gross check (reuses agentWindowGross)
+//!    g. vault.paused() == false
+//!    h. vault.allowance(agent, gateway) >= shares
+//!    i. vault.balanceOf(agent) >= shares
+//! 4. Compute fees from `eth_feeHistory`.
+//! 5. Build the EIP-1559 envelope for `gateway.withdraw(...)`.
+//! 6. Sign, broadcast, wait for receipt.
+//! 7. Decode the `AgentWithdraw` event log → emit stable JSON on stdout.
 //!
-//! Exit codes:
-//! - 0 — receipt mined with `status == 1` and an `AgentDeposit` log.
-//! - 2 — preflight refusal, fee-cap refusal, lock contention, or any
-//!   refusal that maps to an [`RmpcError`] variant.
-//! - 3 — startup failure: config / keystore / RPC client / runtime build.
+//! Exit codes mirror `rmpc deposit`:
+//! - 0 — success.
+//! - 2 — preflight refusal or on-chain failure.
+//! - 3 — startup failure.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -33,16 +36,17 @@ use alloy_primitives::{Address, Bytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
 use serde::Serialize;
 
+use crate::commands::deposit::MAX_DEADLINE_SKEW_SECS;
 use crate::commands::self_check::ChecksOutput;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::compute_fees;
-use crate::gateway::RobotMoneyGateway;
+use crate::gateway::{Erc20, MockVault, RobotMoneyGateway};
 use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::policy::{Preflight, PreflightInputs};
-use crate::rpc::RpcClient;
+use crate::rpc::{CallRequest, RpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::AgentSigner;
 use crate::tx::{
@@ -53,63 +57,47 @@ const EXIT_OK: i32 = 0;
 const EXIT_REFUSAL: i32 = 2;
 const EXIT_STARTUP_FAIL: i32 = 3;
 
-/// Gateway-side maximum deadline skew, mirrored client-side so the daemon
-/// never builds a transaction the contract is guaranteed to reject. Keep
-/// in sync with `RobotMoneyGateway.MAX_DEADLINE_SKEW`.
-pub const MAX_DEADLINE_SKEW_SECS: u64 = 600;
-
-/// Environment variable for the per-agent state directory.
-///
-/// Resolved by [`Config::resolve_state_dir`]: env override → TOML
-/// `state_dir` field → fail-fast. There is **no silent `/tmp` fallback**
-/// (audit finding M1).
-pub const STATE_DIR_ENV_VAR: &str = "RMPC_STATE_DIR";
-
-/// Inputs collected by `main.rs` from the CLI parser. Keeps the surface
-/// stable as flags evolve.
+/// Inputs collected by `main.rs` from the CLI parser.
 #[derive(Debug, Clone)]
 pub struct Args {
     pub config_path: PathBuf,
-    pub amount: String,
+    /// Vault shares to redeem (in share units).
+    pub shares: String,
+    /// Source vault address (0x-prefixed hex).
+    pub source_vault: String,
+    /// 32-byte order id, 0x-prefixed hex.
     pub order_id: String,
+    /// 32-byte idempotency key. Defaults to order_id when omitted.
     pub idempotency_key: Option<String>,
     pub deadline_secs: u64,
     pub receipt_timeout_secs: u64,
     pub gas_limit: u64,
-    /// Optional CLI override for `max_fee_per_gas_cap` in wei (issue #93).
-    /// When `Some(_)` it wins over both `[fees].max_fee_per_gas_cap` in
-    /// TOML and the per-chain default table.
+    /// Optional CLI override for `max_fee_per_gas_cap` in wei.
     pub fee_cap_wei: Option<u64>,
     pub pretty: bool,
 }
 
-/// Stable JSON shape on a successful deposit. Field names are part of
-/// the operator-visible contract — downstream e2e tests (#18/#19) match
-/// on them. Numeric values that may exceed `u64` are decimal strings so
-/// JavaScript `JSON.parse` does not silently lose precision.
+/// Stable JSON shape emitted on a successful withdrawal.
 #[derive(Debug, Serialize)]
-pub struct DepositOutput {
-    pub status: &'static str, // always "success" on the happy path
+pub struct WithdrawOutput {
+    pub status: &'static str,
     pub payment_id: String,
     pub order_id: String,
     pub agent: String,
-    pub share_receiver: String,
-    pub amount: String,
-    pub shares_minted: String,
+    pub asset_recipient: String,
+    pub source_vault: String,
+    pub shares: String,
+    pub assets_out: String,
     pub block_number: u64,
     pub tx_hash: String,
     pub gas_used: String,
     pub effective_gas_price: String,
 }
 
-/// Stable JSON shape on a refusal (preflight, fee cap, lock contention,
-/// receipt timeout, on-chain revert, ...). `error` is the variant name
-/// of the underlying [`RmpcError`]; `checks` is populated when the
-/// refusal came from preflight so operators get the same snapshot they
-/// would get from `rmpc self-check`.
+/// Stable JSON shape emitted on a refusal.
 #[derive(Debug, Serialize)]
-pub struct DepositFailure {
-    pub status: &'static str, // always "refused"
+pub struct WithdrawFailure {
+    pub status: &'static str,
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -123,34 +111,36 @@ pub struct DepositFailure {
     pub checks: Option<ChecksOutput>,
 }
 
-/// Entry point invoked from `main.rs`. Returns the desired process exit
-/// code. The function is deliberately monolithic: each fallible step
-/// runs through a small `?`-on-`Result` helper and the failure-path
-/// JSON shape is built in one place at the end.
+/// Entry point invoked from `main.rs`. Returns the desired process exit code.
 pub fn run(args: Args) -> i32 {
     let cfg = match Config::from_path(&args.config_path) {
         Ok(c) => c,
         Err(e) => {
-            log::error!("rmpc deposit: failed to load config: {e}");
+            log::error!("rmpc withdraw: failed to load config: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
 
-    let amount = match U256::from_str_radix(args.amount.trim_start_matches("0x"), 10) {
-        Ok(v) if !args.amount.starts_with("0x") => v,
-        _ => match U256::from_str(&args.amount) {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("rmpc deposit: --amount must be a decimal U256: {e}");
-                return EXIT_STARTUP_FAIL;
-            }
-        },
+    let shares = match U256::from_str(&args.shares) {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("rmpc withdraw: --shares must be a decimal U256: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let source_vault = match Address::from_str(&args.source_vault) {
+        Ok(a) => a,
+        Err(e) => {
+            log::error!("rmpc withdraw: --source-vault is not a valid address: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
     };
 
     let order_id = match B256::from_str(&args.order_id) {
         Ok(b) => b,
         Err(e) => {
-            log::error!("rmpc deposit: --order-id is not a 32-byte hex string: {e}");
+            log::error!("rmpc withdraw: --order-id is not a 32-byte hex string: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -160,7 +150,7 @@ pub fn run(args: Args) -> i32 {
         Some(s) => match B256::from_str(s) {
             Ok(b) => b,
             Err(e) => {
-                log::error!("rmpc deposit: --idempotency-key is not a 32-byte hex string: {e}");
+                log::error!("rmpc withdraw: --idempotency-key is not a 32-byte hex string: {e}");
                 return EXIT_STARTUP_FAIL;
             }
         },
@@ -169,16 +159,16 @@ pub fn run(args: Args) -> i32 {
     let gateway_addr = match Address::from_str(&cfg.gateway_address) {
         Ok(a) => a,
         Err(e) => {
-            log::error!("rmpc deposit: gateway_address parse error: {e}");
+            log::error!("rmpc withdraw: gateway_address parse error: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
 
     let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_secs(),
-        Err(_) => 0,
-    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let deadline = now.saturating_add(deadline_secs);
 
     // Decrypt keystore.
@@ -186,7 +176,7 @@ pub fn run(args: Args) -> i32 {
         Ok(s) => s,
         Err(_) => {
             log::error!(
-                "rmpc deposit: ${PASSPHRASE_ENV_VAR} is unset; refusing to prompt on stdin from a non-interactive command"
+                "rmpc withdraw: ${PASSPHRASE_ENV_VAR} is unset; refusing to prompt on stdin"
             );
             return EXIT_STARTUP_FAIL;
         }
@@ -198,16 +188,11 @@ pub fn run(args: Args) -> i32 {
     ) {
         Ok(s) => s,
         Err(crate::signer::SignerError::ErrSoftwareSignerDisallowed) => {
-            // Operator policy refused the software keystore. Surface this
-            // as a structured refusal on stdout (mirroring other refusals
-            // like ErrConcurrentInvocation) so test harnesses and audit
-            // scrapers see `ErrSoftwareSignerDisallowed` without having to
-            // tail the rotating diagnostic file.
             log::error!(
-                "rmpc deposit: ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true"
+                "rmpc withdraw: ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true"
             );
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
                     error: "ErrSoftwareSignerDisallowed".to_string(),
                     message: Some(
@@ -224,7 +209,7 @@ pub fn run(args: Args) -> i32 {
             return EXIT_REFUSAL;
         }
         Err(e) => {
-            log::error!("rmpc deposit: signer load failed: {e}");
+            log::error!("rmpc withdraw: signer load failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -235,16 +220,13 @@ pub fn run(args: Args) -> i32 {
         crate::signer::SignerBackendKind::Kms => "kms",
     };
 
-    // Audit-record skeleton. Filled in incrementally; on every exit
-    // path below we call `audit.build(...)` + `record_audit(&rec)` so
-    // every signing decision (success OR refusal) leaves a trail.
     let mut audit = AuditRecordBuilder {
         agent: format!("{agent_address:#x}"),
         backend: backend_label.to_string(),
-        request_type: "deposit".to_string(),
+        request_type: "withdraw".to_string(),
         order_id: format!("{order_id:#x}"),
         idempotency_key: format!("{idempotency_key:#x}"),
-        amount: amount.to_string(),
+        amount: shares.to_string(),
         deadline,
         gateway: format!("{gateway_addr:#x}"),
         chain_id: cfg.chain_id,
@@ -253,28 +235,21 @@ pub fn run(args: Args) -> i32 {
     };
     let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
     log::info!(
-        "deposit: starting agent={} order_id={} amount={} chain_id={} network_env={}",
+        "withdraw: starting agent={} order_id={} shares={} chain_id={} network_env={}",
         audit.agent,
         audit.order_id,
         audit.amount,
         audit.chain_id,
         network_env.as_str()
     );
-    log::info!(
-        "deposit: network environment: {}",
-        network_env.human_label()
-    );
     if let Some(warn) = network_env.production_warning() {
-        log::warn!("deposit: {warn}");
+        log::warn!("withdraw: {warn}");
     }
 
-    // State dir for the per-agent lock + replay cache. Resolved via
-    // `Config::resolve_state_dir`: env (`RMPC_STATE_DIR`) → TOML
-    // `state_dir` → fail-fast. No silent `/tmp` fallback (audit M1).
     let state_dir = match cfg.resolve_state_dir() {
         Ok(p) => p,
         Err(e) => {
-            log::error!("rmpc deposit: {e}");
+            log::error!("rmpc withdraw: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -287,7 +262,7 @@ pub fn run(args: Args) -> i32 {
                 Some("ErrConcurrentInvocation".to_string()),
             ));
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
                     error: "ErrConcurrentInvocation".to_string(),
                     message: Some(format!(
@@ -303,74 +278,18 @@ pub fn run(args: Args) -> i32 {
             return EXIT_REFUSAL;
         }
         Err(e) => {
-            log::error!("rmpc deposit: lock acquire failed: {e}");
+            log::error!("rmpc withdraw: lock acquire failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
 
-    // -- Replay cache (audit M3) -----------------------------------------
-    // Look up the gateway-equivalent paymentId in our own client-side
-    // cache.  The paymentId is keccak256(abi.encode(chain_id, gateway,
-    // agent, order_id, amount, idempotency_key)) — deadline is
-    // intentionally excluded, mirroring the on-chain formula.  On a
-    // hit, surface the prior tx_hash and exit non-zero with
-    // `ErrOrderIdAlreadySubmitted` instead of paying gas to discover
-    // the same dedupe on chain.  A retry with a fresh deadline but the
-    // same on-chain paymentId is caught here; deposits that differ by
-    // amount, chain_id, gateway, or agent produce a distinct paymentId.
-    let replay = match crate::replay_cache::ReplayCache::open(&state_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("rmpc deposit: replay cache open failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
-    let order_id_hex = format!("{order_id:#x}");
-    match replay.lookup(
-        cfg.chain_id,
-        gateway_addr,
-        agent_address,
-        order_id,
-        amount,
-        idempotency_key,
-    ) {
-        Ok(Some(prior_tx)) => {
-            let err = RmpcError::ErrOrderIdAlreadySubmitted {
-                tx_hash: prior_tx.clone(),
-            };
-            record_audit(&audit.build(
-                AuditDecision::Refused,
-                Some("ErrOrderIdAlreadySubmitted".to_string()),
-            ));
-            emit_refusal(
-                &DepositFailure {
-                    status: "refused",
-                    error: "ErrOrderIdAlreadySubmitted".to_string(),
-                    message: Some(format!("{err}")),
-                    agent: Some(format!("{agent_address:#x}")),
-                    order_id: Some(order_id_hex.clone()),
-                    tx_hash: Some(prior_tx),
-                    checks: None,
-                },
-                args.pretty,
-            );
-            return EXIT_REFUSAL;
-        }
-        Ok(None) => {}
-        Err(e) => {
-            log::error!("rmpc deposit: replay cache lookup failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    }
-
-    // Build the runtime; sync rest of the daemon stays sync.
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            log::error!("rmpc deposit: tokio runtime build failed: {e}");
+            log::error!("rmpc withdraw: tokio runtime build failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -378,17 +297,21 @@ pub fn run(args: Args) -> i32 {
     let rpc = match RpcClient::new(&cfg.rpc_url) {
         Ok(c) => c,
         Err(e) => {
-            log::error!("rmpc deposit: rpc client init failed: {e}");
+            log::error!("rmpc withdraw: rpc client init failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
 
     // -- Preflight --------------------------------------------------------
+    // First run the standard gateway preflight (chain id, code hash, gateway
+    // paused, agent active+expiry, window cap) reusing the deposit Preflight.
+    // For withdraw we pass `shares` as the "amount" so the per-payment and
+    // per-window cap checks run against shares.
     let preflight_result = rt.block_on(async {
         let pf = Preflight::new(&rpc, &cfg);
-        pf.run(PreflightInputs {
+        pf.run_gateway_only(PreflightInputs {
             signer_address: agent_address,
-            amount,
+            amount: shares,
         })
         .await
     });
@@ -398,7 +321,7 @@ pub fn run(args: Args) -> i32 {
             record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&err).to_string())));
             let checks = ChecksOutput::from_err_partial(&err);
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
                     error: error_name(&err).to_string(),
                     message: Some(format!("{err}")),
@@ -412,6 +335,28 @@ pub fn run(args: Args) -> i32 {
             return EXIT_REFUSAL;
         }
     };
+
+    // -- Withdraw-specific preflight: vault checks -------------------------
+    let vault_preflight_result = rt.block_on(async {
+        withdraw_vault_preflight(&rpc, source_vault, gateway_addr, agent_address, shares).await
+    });
+    if let Err(err) = vault_preflight_result {
+        record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&err).to_string())));
+        let checks = ChecksOutput::from_report(&report);
+        emit_refusal(
+            &WithdrawFailure {
+                status: "refused",
+                error: error_name(&err).to_string(),
+                message: Some(format!("{err}")),
+                agent: Some(format!("{agent_address:#x}")),
+                order_id: Some(format!("{order_id:#x}")),
+                tx_hash: None,
+                checks: Some(checks),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     // -- Fees -------------------------------------------------------------
     let fee_history_res = rt.block_on(async { rpc.fee_history(5, "latest", &[50.0]).await });
@@ -428,7 +373,7 @@ pub fn run(args: Args) -> i32 {
                     &audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())),
                 );
                 emit_refusal(
-                    &DepositFailure {
+                    &WithdrawFailure {
                         status: "refused",
                         error: error_name(&e).to_string(),
                         message: Some(format!("{e}")),
@@ -443,7 +388,7 @@ pub fn run(args: Args) -> i32 {
             }
         },
         Err(e) => {
-            log::error!("rmpc deposit: eth_feeHistory failed: {e}");
+            log::error!("rmpc withdraw: eth_feeHistory failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -456,15 +401,16 @@ pub fn run(args: Args) -> i32 {
     let nonce = match nonce_res {
         Ok(n) => n,
         Err(e) => {
-            log::error!("rmpc deposit: eth_getTransactionCount failed: {e}");
+            log::error!("rmpc withdraw: eth_getTransactionCount failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
 
     // -- Build + sign envelope -------------------------------------------
-    let calldata = RobotMoneyGateway::depositCall {
+    let calldata = RobotMoneyGateway::withdrawCall {
         orderId: order_id,
-        amount,
+        shares,
+        sourceVault: source_vault,
         deadline,
         idempotencyKey: idempotency_key,
     }
@@ -485,7 +431,7 @@ pub fn run(args: Args) -> i32 {
     let alloy_sig = match signer.sign_eip1559_hash(&hash_bytes) {
         Ok(s) => s,
         Err(e) => {
-            log::error!("rmpc deposit: envelope signing failed: {e}");
+            log::error!("rmpc withdraw: envelope signing failed: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -495,16 +441,13 @@ pub fn run(args: Args) -> i32 {
     let tx_hash = match rt.block_on(async { broadcast(&rpc, &raw).await }) {
         Ok(h) => h,
         Err(e) => {
-            log::error!("rmpc deposit: eth_sendRawTransaction failed: {e}");
-            // Treat broadcast failure as a refusal — operator-visible
-            // failure with a stable name. Most likely cause is a contract
-            // revert simulated by the node ahead of inclusion.
+            log::error!("rmpc withdraw: eth_sendRawTransaction failed: {e}");
             record_audit(&audit.build(
                 AuditDecision::BroadcastFailed,
                 Some(error_name(&e).to_string()),
             ));
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
                     error: error_name(&e).to_string(),
                     message: Some(format!("{e}")),
@@ -519,29 +462,10 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
-    // Stamp the broadcast tx_hash into the audit record so subsequent
-    // refusal/success emissions include it.
     let tx_hash_hex = format!("{tx_hash:#x}");
     audit.tx_hash = Some(tx_hash_hex.clone());
-    // Record the paymentId → tx_hash entry in the replay cache so a
-    // future retry hits the local check before paying gas.  deadline is
-    // stored as audit metadata only.
-    if let Err(e) = replay.insert(
-        cfg.chain_id,
-        gateway_addr,
-        agent_address,
-        order_id,
-        amount,
-        idempotency_key,
-        deadline,
-        &tx_hash_hex,
-    ) {
-        log::warn!("rmpc deposit: replay cache insert failed (non-fatal): {e}");
-    }
 
     // -- Receipt ----------------------------------------------------------
-    // 1s polling cadence (RECEIPT_POLL_INTERVAL_MS) × the operator's
-    // attempt budget. Issue #19 e2e harness sets this short on Anvil.
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
     let receipt_res = rt.block_on(async {
         wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
@@ -551,13 +475,13 @@ pub fn run(args: Args) -> i32 {
         Err(e) => {
             record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())));
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
                     error: error_name(&e).to_string(),
                     message: Some(format!("{e}")),
                     agent: Some(format!("{agent_address:#x}")),
                     order_id: Some(format!("{order_id:#x}")),
-                    tx_hash: Some(format!("{tx_hash:#x}")),
+                    tx_hash: Some(tx_hash_hex.clone()),
                     checks: None,
                 },
                 args.pretty,
@@ -568,17 +492,17 @@ pub fn run(args: Args) -> i32 {
 
     if !receipt.inner.status() {
         let err = RmpcError::ErrTxReverted {
-            tx_hash: format!("{tx_hash:#x}"),
+            tx_hash: tx_hash_hex.clone(),
         };
         record_audit(&audit.build(AuditDecision::Reverted, Some("ErrTxReverted".to_string())));
         emit_refusal(
-            &DepositFailure {
+            &WithdrawFailure {
                 status: "refused",
                 error: "ErrTxReverted".to_string(),
                 message: Some(format!("{err}")),
                 agent: Some(format!("{agent_address:#x}")),
                 order_id: Some(format!("{order_id:#x}")),
-                tx_hash: Some(format!("{tx_hash:#x}")),
+                tx_hash: Some(tx_hash_hex.clone()),
                 checks: None,
             },
             args.pretty,
@@ -586,8 +510,8 @@ pub fn run(args: Args) -> i32 {
         return EXIT_REFUSAL;
     }
 
-    // -- Decode AgentDeposit log ------------------------------------------
-    let topic0 = RobotMoneyGateway::AgentDeposit::SIGNATURE_HASH;
+    // -- Decode AgentWithdraw log -----------------------------------------
+    let topic0 = RobotMoneyGateway::AgentWithdraw::SIGNATURE_HASH;
     let log = receipt
         .inner
         .logs()
@@ -596,21 +520,21 @@ pub fn run(args: Args) -> i32 {
     let log = match log {
         Some(l) => l,
         None => {
-            let err = RmpcError::ErrAgentDepositLogMissing {
-                tx_hash: format!("{tx_hash:#x}"),
+            let err = RmpcError::ErrAgentWithdrawLogMissing {
+                tx_hash: tx_hash_hex.clone(),
             };
             record_audit(&audit.build(
                 AuditDecision::Refused,
-                Some("ErrAgentDepositLogMissing".to_string()),
+                Some("ErrAgentWithdrawLogMissing".to_string()),
             ));
             emit_refusal(
-                &DepositFailure {
+                &WithdrawFailure {
                     status: "refused",
-                    error: "ErrAgentDepositLogMissing".to_string(),
+                    error: "ErrAgentWithdrawLogMissing".to_string(),
                     message: Some(format!("{err}")),
                     agent: Some(format!("{agent_address:#x}")),
                     order_id: Some(format!("{order_id:#x}")),
-                    tx_hash: Some(format!("{tx_hash:#x}")),
+                    tx_hash: Some(tx_hash_hex.clone()),
                     checks: None,
                 },
                 args.pretty,
@@ -619,10 +543,10 @@ pub fn run(args: Args) -> i32 {
         }
     };
     let log_data = LogData::new_unchecked(log.topics().to_vec(), log.data().data.clone());
-    let decoded = match RobotMoneyGateway::AgentDeposit::decode_log_data(&log_data, true) {
+    let decoded = match RobotMoneyGateway::AgentWithdraw::decode_log_data(&log_data, true) {
         Ok(d) => d,
         Err(e) => {
-            log::error!("rmpc deposit: failed to decode AgentDeposit log: {e}");
+            log::error!("rmpc withdraw: failed to decode AgentWithdraw log: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -630,16 +554,17 @@ pub fn run(args: Args) -> i32 {
     let block_number = receipt.block_number.unwrap_or(0);
     audit.payment_id = Some(format!("{:#x}", decoded.paymentId));
     record_audit(&audit.build(AuditDecision::Signed, None));
-    let out = DepositOutput {
+    let out = WithdrawOutput {
         status: "success",
         payment_id: format!("{:#x}", decoded.paymentId),
         order_id: format!("{:#x}", decoded.orderId),
         agent: format!("{:#x}", decoded.agent),
-        share_receiver: format!("{:#x}", decoded.shareReceiver),
-        amount: decoded.amount.to_string(),
-        shares_minted: decoded.sharesMinted.to_string(),
+        asset_recipient: format!("{:#x}", decoded.assetRecipient),
+        source_vault: format!("{:#x}", decoded.sourceVault),
+        shares: decoded.shares.to_string(),
+        assets_out: decoded.assetsOut.to_string(),
         block_number,
-        tx_hash: format!("{tx_hash:#x}"),
+        tx_hash: tx_hash_hex,
         gas_used: receipt.gas_used.to_string(),
         effective_gas_price: receipt.effective_gas_price.to_string(),
     };
@@ -647,26 +572,113 @@ pub fn run(args: Args) -> i32 {
     EXIT_OK
 }
 
-fn emit<T: Serialize>(out: &T, pretty: bool) {
+/// Withdraw-specific vault preflight checks:
+/// 1. vault.paused() == false
+/// 2. vault.allowance(agent, gateway) >= shares
+/// 3. vault.balanceOf(agent) >= shares
+async fn withdraw_vault_preflight(
+    rpc: &RpcClient,
+    source_vault: Address,
+    gateway: Address,
+    agent: Address,
+    shares: U256,
+) -> Result<(), RmpcError> {
+    // 1. vault paused
+    let paused = call_vault_paused(rpc, source_vault).await?;
+    if paused {
+        return Err(RmpcError::ErrVaultPaused);
+    }
+
+    // 2. vault share allowance(agent, gateway) >= shares
+    let allowance = call_erc20_allowance(rpc, source_vault, agent, gateway).await?;
+    if allowance < shares {
+        return Err(RmpcError::ErrShareAllowanceInsufficient);
+    }
+
+    // 3. vault share balance >= shares
+    let balance = call_erc20_balance_of(rpc, source_vault, agent).await?;
+    if balance < shares {
+        return Err(RmpcError::ErrShareBalanceInsufficient);
+    }
+
+    Ok(())
+}
+
+async fn call_vault_paused(rpc: &RpcClient, vault: Address) -> Result<bool, RmpcError> {
+    let data = MockVault::pausedCall {}.abi_encode();
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to: vault,
+                from: None,
+                data: data.into(),
+            },
+            None,
+        )
+        .await?;
+    let decoded = MockVault::pausedCall::abi_decode_returns(&out, true)
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("vault.paused() decode: {e}")))?;
+    Ok(decoded._0)
+}
+
+async fn call_erc20_allowance(
+    rpc: &RpcClient,
+    token: Address,
+    owner: Address,
+    spender: Address,
+) -> Result<U256, RmpcError> {
+    let data = Erc20::allowanceCall { owner, spender }.abi_encode();
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to: token,
+                from: None,
+                data: data.into(),
+            },
+            None,
+        )
+        .await?;
+    let decoded = Erc20::allowanceCall::abi_decode_returns(&out, true)
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("allowance decode: {e}")))?;
+    Ok(decoded._0)
+}
+
+async fn call_erc20_balance_of(
+    rpc: &RpcClient,
+    token: Address,
+    who: Address,
+) -> Result<U256, RmpcError> {
+    let data = Erc20::balanceOfCall { account: who }.abi_encode();
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to: token,
+                from: None,
+                data: data.into(),
+            },
+            None,
+        )
+        .await?;
+    let decoded = Erc20::balanceOfCall::abi_decode_returns(&out, true)
+        .map_err(|e| RmpcError::ErrRpcDecode(format!("balanceOf decode: {e}")))?;
+    Ok(decoded._0)
+}
+
+fn emit<T: serde::Serialize>(out: &T, pretty: bool) {
     let json = if pretty {
         serde_json::to_string_pretty(out)
     } else {
         serde_json::to_string(out)
     }
-    .expect("deposit output serialises");
+    .expect("withdraw output serialises");
     println!("{json}");
 }
 
-fn emit_refusal(out: &DepositFailure, pretty: bool) {
+fn emit_refusal(out: &WithdrawFailure, pretty: bool) {
     emit(out, pretty);
 }
 
-/// Map an [`RmpcError`] to its variant name (the stable operator-visible
-/// string). Mirrors the table in `commands::self_check`; kept duplicated
-/// rather than re-exported because the two commands have different
-/// failure modes (deposit can hit `ErrTxReverted`,
-/// `ErrAgentDepositLogMissing`, etc.) and the lists should not silently
-/// drift through a shared helper.
+/// Map an [`RmpcError`] to its stable variant name for operator-visible output.
 fn error_name(err: &RmpcError) -> &'static str {
     match err {
         RmpcError::ErrAgentNotAuthorized => "ErrAgentNotAuthorized",
@@ -698,29 +710,180 @@ fn error_name(err: &RmpcError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::{address, hex as ahex, keccak256, Address, U256};
+    use alloy_sol_types::SolCall;
+    use mockito::Matcher;
+    use serde_json::json;
 
-    #[test]
-    fn deadline_is_capped_at_max_skew() {
-        // Sanity: the capping logic is straightforward but load-bearing —
-        // the contract rejects deadlines beyond `MAX_DEADLINE_SKEW`.
-        let cap = MAX_DEADLINE_SKEW_SECS;
-        let too_big = cap + 100;
-        assert_eq!(too_big.min(cap), cap);
+    const SIGNER: Address = address!("00000000000000000000000000000000000000aa");
+    const GATEWAY: Address = address!("0000000000000000000000000000000000000b00");
+    const VAULT: Address = address!("0000000000000000000000000000000000000d00");
+
+    fn enc_bool(v: bool) -> String {
+        let mut w = [0u8; 32];
+        w[31] = if v { 1 } else { 0 };
+        format!("0x{}", ahex::encode(w))
+    }
+
+    fn enc_u256(v: U256) -> String {
+        format!("0x{}", ahex::encode(v.to_be_bytes::<32>()))
+    }
+
+    fn jrpc_result(s: &str) -> String {
+        format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{s}"}}"#)
+    }
+
+    fn match_eth_call_selector(selector: &str) -> Matcher {
+        let prefix = selector.to_string();
+        Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_call"})),
+            Matcher::Regex(format!(r#""data":"{prefix}"#)),
+        ])
+    }
+
+    fn selector_hex<C: SolCall>() -> String {
+        format!("0x{}", ahex::encode(C::SELECTOR))
+    }
+
+    /// Install mocks for the three vault preflight calls.
+    async fn install_vault_mocks(
+        server: &mut mockito::ServerGuard,
+        paused: bool,
+        allowance: U256,
+        balance: U256,
+    ) {
+        // vault.paused()
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(&selector_hex::<
+                MockVault::pausedCall,
+            >()))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_bool(paused)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+        // vault.allowance(agent, gateway)
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(
+                &selector_hex::<Erc20::allowanceCall>(),
+            ))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_u256(allowance)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+        // vault.balanceOf(agent)
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(
+                &selector_hex::<Erc20::balanceOfCall>(),
+            ))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_u256(balance)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn vault_paused_refuses() {
+        let mut server = mockito::Server::new_async().await;
+        // paused = true, ample allowance + balance
+        install_vault_mocks(
+            &mut server,
+            true,
+            U256::from(u128::MAX),
+            U256::from(u128::MAX),
+        )
+        .await;
+        let rpc = RpcClient::new(server.url()).unwrap();
+        let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(100u64))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RmpcError::ErrVaultPaused), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn vault_allowance_insufficient_refuses() {
+        let mut server = mockito::Server::new_async().await;
+        // paused = false, allowance too low, balance ample
+        install_vault_mocks(&mut server, false, U256::from(1u64), U256::from(u128::MAX)).await;
+        let rpc = RpcClient::new(server.url()).unwrap();
+        let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrShareAllowanceInsufficient),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vault_balance_insufficient_refuses() {
+        let mut server = mockito::Server::new_async().await;
+        // paused = false, ample allowance, balance too low
+        install_vault_mocks(&mut server, false, U256::from(u128::MAX), U256::from(1u64)).await;
+        let rpc = RpcClient::new(server.url()).unwrap();
+        let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrShareBalanceInsufficient),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vault_preflight_happy_path() {
+        let mut server = mockito::Server::new_async().await;
+        install_vault_mocks(
+            &mut server,
+            false,
+            U256::from(u128::MAX),
+            U256::from(u128::MAX),
+        )
+        .await;
+        let rpc = RpcClient::new(server.url()).unwrap();
+        let result =
+            withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(100u64)).await;
+        assert!(result.is_ok(), "expected ok, got {result:?}");
     }
 
     #[test]
-    fn error_name_covers_new_variants() {
+    fn withdraw_selector_matches_canonical_signature() {
+        let canonical = "withdraw(bytes32,uint256,address,uint64,bytes32)";
+        let expected = &keccak256(canonical.as_bytes())[..4];
+        let actual = RobotMoneyGateway::withdrawCall::SELECTOR;
+        assert_eq!(&actual, expected, "withdraw selector drift");
+    }
+
+    #[test]
+    fn agent_withdraw_event_topic0_matches() {
+        let canonical =
+            b"AgentWithdraw(bytes32,bytes32,address,address,address,uint256,uint256,uint64)";
+        let expected = keccak256(canonical);
+        let actual = RobotMoneyGateway::AgentWithdraw::SIGNATURE_HASH;
+        assert_eq!(actual, expected, "AgentWithdraw topic0 drift");
+    }
+
+    #[test]
+    fn error_name_covers_withdraw_variants() {
+        assert_eq!(error_name(&RmpcError::ErrVaultPaused), "ErrVaultPaused");
         assert_eq!(
-            error_name(&RmpcError::ErrTxReverted {
-                tx_hash: "0x00".into()
-            }),
-            "ErrTxReverted"
+            error_name(&RmpcError::ErrShareAllowanceInsufficient),
+            "ErrShareAllowanceInsufficient"
         );
         assert_eq!(
-            error_name(&RmpcError::ErrAgentDepositLogMissing {
+            error_name(&RmpcError::ErrShareBalanceInsufficient),
+            "ErrShareBalanceInsufficient"
+        );
+        assert_eq!(
+            error_name(&RmpcError::ErrAgentWithdrawLogMissing {
                 tx_hash: "0x00".into()
             }),
-            "ErrAgentDepositLogMissing"
+            "ErrAgentWithdrawLogMissing"
         );
     }
 }

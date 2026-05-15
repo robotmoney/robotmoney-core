@@ -459,5 +459,18 @@
     "type": "error",
     "name": "ZeroReceiver",
     "inputs": []
+  },
+  {
+    "type": "function",
+    "name": "paused",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
   }
 ]

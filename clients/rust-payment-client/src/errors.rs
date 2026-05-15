@@ -63,6 +63,29 @@ pub enum RmpcError {
     #[error("ErrAgentDepositLogMissing: receipt has no AgentDeposit log (tx_hash={tx_hash})")]
     ErrAgentDepositLogMissing { tx_hash: String },
 
+    /// The vault being redeemed from is paused — hard refusal before signing.
+    #[error("ErrVaultPaused: source vault reports paused() == true")]
+    ErrVaultPaused,
+
+    /// Shares to withdraw exceed the agent's `maxWithdrawPerPayment` policy cap.
+    #[error("ErrWithdrawCapExceeded: shares exceed agent maxWithdrawPerPayment policy cap")]
+    ErrWithdrawCapExceeded,
+
+    /// The agent holds fewer vault shares than the requested withdrawal amount.
+    #[error("ErrShareBalanceInsufficient: agent vault share balance < requested shares")]
+    ErrShareBalanceInsufficient,
+
+    /// The vault share allowance(agent, gateway) is less than the requested shares.
+    #[error(
+        "ErrShareAllowanceInsufficient: vault share allowance(agent, gateway) < requested shares"
+    )]
+    ErrShareAllowanceInsufficient,
+
+    /// The withdraw landed in a block but the gateway emitted no
+    /// `AgentWithdraw` log — invariant violation. Operator must inspect.
+    #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdraw log (tx_hash={tx_hash})")]
+    ErrAgentWithdrawLogMissing { tx_hash: String },
+
     #[error("ErrConfig: configuration error: {0}")]
     ErrConfig(String),
 

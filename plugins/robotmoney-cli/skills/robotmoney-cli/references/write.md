@@ -1,9 +1,9 @@
 # Write commands
 
-`rmpc` ships exactly one write command: `deposit`. There is no withdraw,
-redeem, role-grant, pause, or unpause path in the MVP — those flow through
-the human dapp (implementation plan §12), not the agent client. `status` is
-listed here because it is the canonical follow-up to a write.
+`rmpc` ships two write commands: `deposit` and `withdraw`. There is no
+role-grant, pause, or unpause path — those flow through the human dapp
+(implementation plan §12), not the agent client. `status` is listed here
+because it is the canonical follow-up to a write.
 
 Every write goes through:
 
@@ -137,9 +137,67 @@ The agent's safe replay strategy:
 
 ---
 
+---
+
+## `withdraw`
+
+```bash
+rmpc withdraw --config <CONFIG> \
+  --shares <SHARES> \
+  --source-vault <0x...> \
+  --order-id <0x...> \
+  [--idempotency-key <0x...>] \
+  [--deadline-secs <N>] \
+  [--receipt-timeout-secs <N>] \
+  [--gas-limit <N>] \
+  [--pretty]
+```
+
+Redeem vault shares through the gateway (agent-initiated redemption). Performs
+the same preflight discipline as `deposit` (chain id, code hash, gateway paused,
+agent policy) plus withdraw-specific checks: vault paused, vault share
+allowance(agent, gateway), and vault share balance.
+
+Required flags:
+
+- `--config <CONFIG>` — operator config TOML.
+- `--shares <SHARES>` — number of vault shares to redeem (decimal integer string
+  in share units).
+- `--source-vault <0x...>` — vault address to redeem shares from (0x-prefixed
+  hex).
+- `--order-id <0x...>` — 32-byte order id, 0x-prefixed hex.
+
+Optional flags:
+
+- `--idempotency-key <0x...>` — 32-byte key, defaults to `--order-id`.
+- `--deadline-secs <N>` — deadline horizon in seconds from now. Capped at 600.
+  Default 300.
+- `--receipt-timeout-secs <N>` — maximum seconds to wait for the receipt.
+  Default 60.
+- `--gas-limit <N>` — gas limit. Default 350_000.
+
+### Output (success)
+
+JSON on stdout including:
+
+- `paymentId` — 32-byte hex.
+- `txHash` — 32-byte hex of the broadcast transaction.
+- `blockNumber` — receipt block.
+- `assetsOut` — underlying USDC assets returned to the agent recipient.
+- `assetRecipient` — address that received the redeemed USDC assets.
+- `sourceVault` — vault address the shares were redeemed from.
+- `shares` — shares redeemed (decimal string).
+
+### Output (refusal / error)
+
+Non-zero exit, structured JSON on stdout, with a stable `error` field. Hard
+refusals include: `ErrVaultPaused`, `ErrShareAllowanceInsufficient`,
+`ErrShareBalanceInsufficient`, `ErrAgentNotAuthorized`, `ErrGatewayPaused`.
+
+---
+
 ## What `rmpc` will not do
 
-- Withdraw, redeem, or transfer vault shares.
 - Grant or revoke roles. Authorize, revoke, or modify agent policy.
 - Pause or unpause the gateway.
 - Sign anything other than an EIP-1559 envelope hash for a typed

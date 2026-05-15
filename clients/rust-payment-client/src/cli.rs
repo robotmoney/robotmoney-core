@@ -195,4 +195,44 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Redeem vault shares through the gateway (agent-initiated redemption).
+    ///
+    /// Performs preflight reads (gateway paused, agent policy, vault paused,
+    /// share allowance, share balance) then builds and broadcasts a
+    /// `gateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey)`
+    /// call. Emits a stable JSON result with `assetsOut`, `assetRecipient`,
+    /// `txHash`, and `blockNumber` on success; exits non-zero on any refusal.
+    Withdraw {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Number of vault shares to redeem (decimal, in share units).
+        #[arg(long)]
+        shares: String,
+        /// Source vault address to redeem from (0x-prefixed hex).
+        #[arg(long = "source-vault")]
+        source_vault: String,
+        /// 32-byte order id, 0x-prefixed hex.
+        #[arg(long = "order-id")]
+        order_id: String,
+        /// 32-byte idempotency key, 0x-prefixed hex. Defaults to
+        /// `--order-id` when omitted.
+        #[arg(long = "idempotency-key")]
+        idempotency_key: Option<String>,
+        /// Deadline horizon in seconds from now. Capped at 600. Default 300.
+        #[arg(long = "deadline-secs", default_value_t = 300)]
+        deadline_secs: u64,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Gas limit for the withdraw tx envelope. Default 350_000.
+        #[arg(long = "gas-limit", default_value_t = 350_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
 }

@@ -120,6 +120,14 @@ jobs:
         working-directory: testing/ethereum-testnet/e2e-rust
         run: cargo test --release --test window_cap -- --test-threads=1 --nocapture
 
+      - name: Tear down docker (post-window-cap)
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans
+
+      - name: e2e withdraw refusal scenarios (issue #312)
+        working-directory: testing/ethereum-testnet/e2e-rust
+        run: cargo test --release --test withdraw -- --test-threads=1 --nocapture
+
       - name: Tear down docker (always)
         if: always()
         working-directory: testing/ethereum-testnet/config

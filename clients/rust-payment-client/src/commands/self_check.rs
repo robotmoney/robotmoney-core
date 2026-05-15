@@ -308,6 +308,11 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
         RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
         RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
+        RmpcError::ErrVaultPaused => "ErrVaultPaused",
+        RmpcError::ErrWithdrawCapExceeded => "ErrWithdrawCapExceeded",
+        RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
+        RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
+        RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
     }
 }
 

@@ -10,7 +10,9 @@ description: >
   run the signer self-check before any write
   ("Is my signing backend ready?");
   submit a guarded USDC deposit through the gateway
-  ("Deposit 100 USDC for order 0x...").
+  ("Deposit 100 USDC for order 0x...");
+  submit a guarded gateway redemption (agent-initiated vault share withdrawal)
+  ("Withdraw 1000 shares from vault 0x... for order 0x...").
   Always run reads first, run `self-check` before any write, and refuse to
   proceed when preflight (caps, allowance, code-hash, fee cap, role,
   pause) does not pass.
@@ -44,9 +46,9 @@ output is JSON, errors are named, and writes are gated by on-chain policy
   `get-gateway`, `get-agent`, `get-roles`, `get-balance`, `get-allowance`,
   `get-deposit`, `get-tx`. Output envelope, error fields, and call-order
   recommendations.
-- **[Write commands](references/write.md)** — `deposit`, `status`. Required
-  preflight, idempotency model, deadline semantics, gas/fee cap behavior, and
-  the single-flight nonce lock.
+- **[Write commands](references/write.md)** — `deposit`, `withdraw`, `status`.
+  Required preflight, idempotency model, deadline semantics, gas/fee cap
+  behavior, and the single-flight nonce lock.
 - **[Safety and refusal cases](references/safety.md)** — every refusal the
   client emits before broadcast, mapped to implementation-plan §4.4 (preflight),
   §4.6 (nonce lock), and §4.7 (fee cap), plus the fork-vs-mainnet warning.
@@ -60,6 +62,7 @@ The complete surface (mirrors `rmpc --help`):
 
 ```text
 rmpc deposit        Sign and broadcast a USDC deposit through the gateway
+rmpc withdraw       Redeem vault shares through the gateway (agent-initiated redemption)
 rmpc status         Look up a previously submitted payment by its on-chain `paymentId`
 rmpc self-check     Print the signer-backend self-check report (v0 §9.2 JSON)
 rmpc get-vault      Read vault state directly from chain
@@ -72,6 +75,7 @@ rmpc get-roles      Read role membership on the gateway for a target address
 rmpc get-balance    Read an ERC-20 token balance for an address (USDC by default)
 rmpc get-allowance  Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit    Look up a gateway deposit by its on-chain id (`AgentDeposit.paymentId`)
+rmpc get-vaults     List all vaults registered in the VaultRegistry
 rmpc get-tx         Look up a transaction's receipt status by hash
 ```
 
