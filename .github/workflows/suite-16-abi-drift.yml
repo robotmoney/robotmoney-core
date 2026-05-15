@@ -1,0 +1,110 @@
+# Canonical: docs/implementation-plan.md §3.2
+#
+# WHY THIS SUITE EXISTS
+# Foundry artifacts are the single canonical ABI source. Any hand-maintained
+# copy drifts; history shows the indexer already had live ABI drift (issue
+# #366). This suite regenerates the ABI binding files from `out/` and fails
+# if they differ from the committed copies. Because drift is caught here,
+# contributors can never silently break the Rust or dapp ABI surfaces by
+# changing a contract without also regenerating (issue #374).
+#
+# WHICH FILES ARE DRIFT-GATED
+# - clients/rust-payment-client/abi/Erc20.json
+# - clients/rust-payment-client/abi/RobotMoneyGateway.json
+# - clients/dapp/src/lib/abi.generated.ts
+#
+# The following files are NOT yet drift-gated because the Rust client
+# depends on hand-edited entries that diverge from the current Foundry
+# artifacts (known schema drift, tracked separately):
+# - clients/rust-payment-client/abi/MockVault.json
+# - clients/rust-payment-client/abi/PortfolioRouter.json
+# - clients/rust-payment-client/abi/RouterGovernance.json
+# - clients/rust-payment-client/abi/VaultRegistry.json
+#
+# HOW TO FIX A FAILURE
+# Run the following from the repo root and commit the updated files:
+#   forge build
+#   bash .github/scripts/generate_abi_bindings.sh
+#
+# GOTCHAS
+# - The job runs `forge build` before generation so the out/ directory always
+#   reflects the current contract source, not a cached artifact.
+# - `git diff --exit-code` fails on whitespace-only differences. The generation
+#   script always writes canonical JSON (sorted, 2-space indent) so spurious
+#   diffs are prevented.
+# - The job does NOT commit; contributors commit the generated files themselves
+#   so the diff is reviewable in the PR.
+
+name: abi-drift-gate
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - "clients/rust-payment-client/abi/Erc20.json"
+      - "clients/rust-payment-client/abi/RobotMoneyGateway.json"
+      - "clients/dapp/src/lib/abi.generated.ts"
+      - ".github/scripts/generate_abi_bindings.sh"
+      - ".github/workflows/suite-16-abi-drift.yml"
+  workflow_dispatch:
+
+jobs:
+  abi-drift:
+    name: abi-drift-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dapp dependencies (needed for Prettier in generate script)
+        run: bun install --frozen-lockfile
+        working-directory: clients/dapp
+
+      - name: forge build
+        run: forge build
+
+      - name: Regenerate ABI bindings
+        run: bash .github/scripts/generate_abi_bindings.sh
+
+      - name: Fail on ABI drift
+        # `git diff --exit-code` prints the diff and exits non-zero when any
+        # drift-gated generated file differs from what is committed. The error
+        # message tells the contributor exactly how to fix the failure.
+        run: |
+          if ! git diff --exit-code \
+               clients/rust-payment-client/abi/Erc20.json \
+               clients/rust-payment-client/abi/RobotMoneyGateway.json \
+               clients/dapp/src/lib/abi.generated.ts; then
+            echo ""
+            echo "ERROR: Generated ABI files differ from committed files."
+            echo "       Run the following from the repo root and commit the changes:"
+            echo ""
+            echo "         forge build"
+            echo "         bash .github/scripts/generate_abi_bindings.sh"
+            echo ""
+            exit 1
+          fi
+          echo "ABI bindings are up to date."

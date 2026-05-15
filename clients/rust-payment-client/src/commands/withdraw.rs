@@ -21,7 +21,7 @@
 //! 4. Compute fees from `eth_feeHistory`.
 //! 5. Build the EIP-1559 envelope for `gateway.withdraw(...)`.
 //! 6. Sign, broadcast, wait for receipt.
-//! 7. Decode the `AgentWithdraw` event log → emit stable JSON on stdout.
+//! 7. Decode the `AgentWithdrawal` event log → emit stable JSON on stdout.
 //!
 //! Exit codes mirror `rmpc deposit`:
 //! - 0 — success.
@@ -510,8 +510,8 @@ pub fn run(args: Args) -> i32 {
         return EXIT_REFUSAL;
     }
 
-    // -- Decode AgentWithdraw log -----------------------------------------
-    let topic0 = RobotMoneyGateway::AgentWithdraw::SIGNATURE_HASH;
+    // -- Decode AgentWithdrawal log ----------------------------------------
+    let topic0 = RobotMoneyGateway::AgentWithdrawal::SIGNATURE_HASH;
     let log = receipt
         .inner
         .logs()
@@ -543,10 +543,10 @@ pub fn run(args: Args) -> i32 {
         }
     };
     let log_data = LogData::new_unchecked(log.topics().to_vec(), log.data().data.clone());
-    let decoded = match RobotMoneyGateway::AgentWithdraw::decode_log_data(&log_data, true) {
+    let decoded = match RobotMoneyGateway::AgentWithdrawal::decode_log_data(&log_data, true) {
         Ok(d) => d,
         Err(e) => {
-            log::error!("rmpc withdraw: failed to decode AgentWithdraw log: {e}");
+            log::error!("rmpc withdraw: failed to decode AgentWithdrawal log: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -861,11 +861,14 @@ mod tests {
 
     #[test]
     fn agent_withdraw_event_topic0_matches() {
+        // Canonical signature from contracts/gateway/RobotMoneyGateway.sol (AgentWithdrawal).
+        // Field order: paymentId, orderId, agent(indexed), sourceVault, shares, assetsOut,
+        // assetRecipient, windowId — matches the Foundry artifact ABI.
         let canonical =
-            b"AgentWithdraw(bytes32,bytes32,address,address,address,uint256,uint256,uint64)";
+            b"AgentWithdrawal(bytes32,bytes32,address,address,uint256,uint256,address,uint64)";
         let expected = keccak256(canonical);
-        let actual = RobotMoneyGateway::AgentWithdraw::SIGNATURE_HASH;
-        assert_eq!(actual, expected, "AgentWithdraw topic0 drift");
+        let actual = RobotMoneyGateway::AgentWithdrawal::SIGNATURE_HASH;
+        assert_eq!(actual, expected, "AgentWithdrawal topic0 drift");
     }
 
     #[test]

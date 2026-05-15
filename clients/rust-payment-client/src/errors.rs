@@ -82,8 +82,8 @@ pub enum RmpcError {
     ErrShareAllowanceInsufficient,
 
     /// The withdraw landed in a block but the gateway emitted no
-    /// `AgentWithdraw` log — invariant violation. Operator must inspect.
-    #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdraw log (tx_hash={tx_hash})")]
+    /// `AgentWithdrawal` log — invariant violation. Operator must inspect.
+    #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdrawal log (tx_hash={tx_hash})")]
     ErrAgentWithdrawLogMissing { tx_hash: String },
 
     #[error("ErrConfig: configuration error: {0}")]
