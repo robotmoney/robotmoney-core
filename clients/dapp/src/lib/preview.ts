@@ -30,6 +30,14 @@ export interface AgentPolicy {
   shareReceiver: Address;
   /** Whitelist of deposit destinations (vault or router). Empty array = open policy. */
   allowedDestinations: Address[];
+  /** USDC recipient for agent-initiated withdrawals. Zero address = withdrawal disabled. */
+  assetRecipient: Address;
+  /** Max shares per withdrawal payment (0 = withdrawal disabled). */
+  maxWithdrawPerPayment: bigint;
+  /** Max shares per withdrawal window (0 = withdrawal disabled). */
+  maxWithdrawPerWindow: bigint;
+  /** Whitelist of source vaults for withdrawal. Empty = any registered vault. */
+  allowedSourceVaults: Address[];
 }
 
 export type AdminAction =
@@ -143,6 +151,10 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
               maxPerWindow: action.policy.maxPerWindow,
               shareReceiver: getAddress(action.policy.shareReceiver),
               allowedDestinations: action.policy.allowedDestinations,
+              assetRecipient: action.policy.assetRecipient,
+              maxWithdrawPerPayment: action.policy.maxWithdrawPerPayment,
+              maxWithdrawPerWindow: action.policy.maxWithdrawPerWindow,
+              allowedSourceVaults: action.policy.allowedSourceVaults,
             },
           ],
         });

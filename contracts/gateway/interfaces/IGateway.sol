@@ -27,16 +27,25 @@ interface IGateway {
     /// @notice Per-agent policy. Set by the agent's recorded owner via
     ///         `authorizeAgent` (first time) or `setPolicy` (subsequent
     ///         updates).
-    /// @param active               Policy is enabled.
-    /// @param validUntil           Unix-seconds expiry; deposits revert at/after.
-    /// @param maxPerPayment        Maximum gross USDC per single `deposit` call.
-    /// @param maxPerWindow         Maximum gross USDC per `WINDOW_SECONDS` window.
-    /// @param shareReceiver        Address that receives minted vault shares.
-    /// @param allowedDestinations  Whitelist of deposit destinations (vault or router
-    ///                             addresses). When non-empty, `depositTo` requires the
-    ///                             supplied destination to appear in this list. An empty
-    ///                             array disables the allowlist — any registered vault or
-    ///                             the router is permitted.
+    /// @param active                  Policy is enabled.
+    /// @param validUntil              Unix-seconds expiry; deposits revert at/after.
+    /// @param maxPerPayment           Maximum gross USDC per single `deposit` call.
+    /// @param maxPerWindow            Maximum gross USDC per `WINDOW_SECONDS` window.
+    /// @param shareReceiver           Address that receives minted vault shares.
+    /// @param allowedDestinations     Whitelist of deposit destinations (vault or router
+    ///                                addresses). When non-empty, `depositTo` requires the
+    ///                                supplied destination to appear in this list. An empty
+    ///                                array disables the allowlist — any registered vault or
+    ///                                the router is permitted.
+    /// @param assetRecipient          Address that receives redeemed USDC on `withdraw`.
+    ///                                Must be non-zero when `maxWithdrawPerPayment > 0`.
+    /// @param maxWithdrawPerPayment   Maximum vault shares redeemable per single `withdraw` call.
+    ///                                Set to zero to disable agent-initiated withdrawal.
+    /// @param maxWithdrawPerWindow    Maximum vault shares redeemable per `WINDOW_SECONDS` window.
+    ///                                Must be >= `maxWithdrawPerPayment` when non-zero.
+    /// @param allowedSourceVaults     Whitelist of vaults the agent may redeem from via `withdraw`.
+    ///                                When non-empty, the supplied `sourceVault` must appear in
+    ///                                this list. An empty array permits any registered vault.
     struct AgentPolicy {
         bool active;
         uint64 validUntil;
@@ -44,6 +53,10 @@ interface IGateway {
         uint256 maxPerWindow;
         address shareReceiver;
         address[] allowedDestinations;
+        address assetRecipient;
+        uint256 maxWithdrawPerPayment;
+        uint256 maxWithdrawPerWindow;
+        address[] allowedSourceVaults;
     }
 
     // -------------------------------------------------------------------
@@ -114,6 +127,26 @@ interface IGateway {
         uint64 windowId
     );
 
+    /// @notice Emitted on every successful agent withdrawal (vault redemption).
+    /// @param paymentId       Replay-protection hash for this payment.
+    /// @param orderId         Caller-supplied order identifier.
+    /// @param agent           Agent address that initiated the withdrawal.
+    /// @param sourceVault     Vault address shares were redeemed from.
+    /// @param shares          Vault shares burned.
+    /// @param assetsOut       USDC transferred to `assetRecipient`.
+    /// @param assetRecipient  Address that received the redeemed USDC.
+    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
+    event AgentWithdrawal(
+        bytes32 indexed paymentId,
+        bytes32 indexed orderId,
+        address indexed agent,
+        address sourceVault,
+        uint256 shares,
+        uint256 assetsOut,
+        address assetRecipient,
+        uint64 windowId
+    );
+
     // -------------------------------------------------------------------
     // State-changing functions
     // -------------------------------------------------------------------
@@ -156,6 +189,30 @@ interface IGateway {
         address destination,
         uint256[] calldata minSharesPerLeg
     ) external returns (bytes32 paymentId);
+
+    /// @notice Redeem `shares` from `sourceVault` on behalf of the agent's
+    ///         configured depositor. USDC proceeds are sent only to the
+    ///         policy-configured `assetRecipient` — the agent cannot redirect
+    ///         funds. The gateway pulls shares from `msg.sender` via
+    ///         `transferFrom` (agent must have approved the gateway).
+    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
+    ///      same deadline, idempotency, and policy checks as `deposit`. The
+    ///      agent must approve the gateway to spend its vault shares before
+    ///      calling this function.
+    /// @param orderId          Caller-supplied order identifier (echoed in event).
+    /// @param shares           Vault shares to redeem.
+    /// @param sourceVault      Vault address to redeem from.
+    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
+    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
+    /// @return paymentId       Hash committing chain/contract/agent/order/shares/key.
+    /// @return assetsOut       USDC transferred to `assetRecipient`.
+    function withdraw(
+        bytes32 orderId,
+        uint256 shares,
+        address sourceVault,
+        uint64 deadline,
+        bytes32 idempotencyKey
+    ) external returns (bytes32 paymentId, uint256 assetsOut);
 
     /// @notice First-time authorization for `agent`. Permissionless — any EOA
     ///         may call to register their own agent. `msg.sender` is recorded

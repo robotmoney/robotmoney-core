@@ -78,11 +78,11 @@ mod tests {
         assert_eq!(&actual, expected, "deposit selector drift");
     }
 
-    /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))` —
-    /// ensure the tuple layout matches the on-chain ABI (allowedDestinations added in #302).
+    /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))` —
+    /// ensure the tuple layout matches the on-chain ABI (withdrawal fields added in #311).
     #[test]
     fn authorize_agent_selector_matches() {
-        let canonical = "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))";
+        let canonical = "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))";
         let expected = &keccak256(canonical.as_bytes())[..4];
         let actual = RobotMoneyGateway::authorizeAgentCall::SELECTOR;
         assert_eq!(&actual, expected);
@@ -148,13 +148,14 @@ mod tests {
         assert_eq!(B256::from(topics[0].0), expected_topic0);
     }
 
-    /// Encoding `agents(address)` and decoding the 5-tuple return value
+    /// Encoding `agents(address)` and decoding the 8-tuple return value
     /// proves the view bindings line up. We hand-roll the return blob from
-    /// `(bool,uint64,uint256,uint256,address)` so the test does not depend
-    /// on a live RPC.
+    /// `(bool,uint64,uint256,uint256,address,address,uint256,uint256)` so
+    /// the test does not depend on a live RPC. Fields added in issue #311:
+    /// assetRecipient, maxWithdrawPerPayment, maxWithdrawPerWindow.
     #[test]
-    fn agents_view_decodes_5_tuple() {
-        let mut blob = Vec::with_capacity(32 * 5);
+    fn agents_view_decodes_8_tuple() {
+        let mut blob = Vec::with_capacity(32 * 8);
         // active = true
         let mut w = [0u8; 32];
         w[31] = 1;
@@ -173,6 +174,15 @@ mod tests {
         let mut w = [0u8; 32];
         w[12..].copy_from_slice(recv.as_slice());
         blob.extend_from_slice(&w);
+        // assetRecipient (added in #311)
+        let asset_recv: Address = address!("00000000000000000000000000000000000000ef");
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(asset_recv.as_slice());
+        blob.extend_from_slice(&w);
+        // maxWithdrawPerPayment = 500_000 (added in #311)
+        blob.extend_from_slice(&U256::from(500_000u64).to_be_bytes::<32>());
+        // maxWithdrawPerWindow = 5_000_000 (added in #311)
+        blob.extend_from_slice(&U256::from(5_000_000u64).to_be_bytes::<32>());
 
         let decoded =
             RobotMoneyGateway::agentsCall::abi_decode_returns(&blob, true).expect("decode");
@@ -181,6 +191,9 @@ mod tests {
         assert_eq!(decoded.maxPerPayment, U256::from(1_000_000u64));
         assert_eq!(decoded.maxPerWindow, U256::from(100_000_000u64));
         assert_eq!(decoded.shareReceiver, recv);
+        assert_eq!(decoded.assetRecipient, asset_recv);
+        assert_eq!(decoded.maxWithdrawPerPayment, U256::from(500_000u64));
+        assert_eq!(decoded.maxWithdrawPerWindow, U256::from(5_000_000u64));
     }
 
     /// The ERC-20 read-only views we need for preflight: `allowance` and

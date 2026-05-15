@@ -252,7 +252,11 @@ contract Deploy is Script {
             maxPerPayment: p.maxPerPayment,
             maxPerWindow: p.maxPerWindow,
             shareReceiver: d.shareReceiver,
-            allowedDestinations: noDestinations
+            allowedDestinations: noDestinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations
         });
 
         d.gateway.authorizeAgent(d.agent, policy);

@@ -72,8 +72,11 @@ fn enc_u256(v: U256) -> String {
     format!("0x{}", ahex::encode(v.to_be_bytes::<32>()))
 }
 
-/// Encode the 5-tuple `(bool active, uint64 validUntil, uint256 maxPerPayment,
-/// uint256 maxPerWindow, address shareReceiver)` returned by `agents()`.
+/// Encode the 8-tuple `(bool active, uint64 validUntil, uint256 maxPerPayment,
+/// uint256 maxPerWindow, address shareReceiver, address assetRecipient,
+/// uint256 maxWithdrawPerPayment, uint256 maxWithdrawPerWindow)` returned by
+/// `agents()`. The three withdrawal fields (added in #311) are zero — withdrawal
+/// disabled — so deposit preflight tests are unaffected.
 fn enc_agents(
     active: bool,
     valid_until: u64,
@@ -81,7 +84,7 @@ fn enc_agents(
     max_per_window: U256,
     share_receiver: Address,
 ) -> String {
-    let mut blob = Vec::with_capacity(32 * 5);
+    let mut blob = Vec::with_capacity(32 * 8);
     let mut w = [0u8; 32];
     w[31] = if active { 1 } else { 0 };
     blob.extend_from_slice(&w);
@@ -93,6 +96,12 @@ fn enc_agents(
     let mut w = [0u8; 32];
     w[12..].copy_from_slice(share_receiver.as_slice());
     blob.extend_from_slice(&w);
+    // assetRecipient = zero (withdrawal disabled)
+    blob.extend_from_slice(&[0u8; 32]);
+    // maxWithdrawPerPayment = 0
+    blob.extend_from_slice(&[0u8; 32]);
+    // maxWithdrawPerWindow = 0
+    blob.extend_from_slice(&[0u8; 32]);
     format!("0x{}", ahex::encode(blob))
 }
 

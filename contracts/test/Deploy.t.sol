@@ -78,7 +78,7 @@ contract DeployTest is Test {
             uint64 validUntil,
             uint256 maxPerPayment,
             uint256 maxPerWindow,
-            address recv
+            address recv,,,
         ) = d.gateway.agents(agent);
         assertTrue(active);
         assertGt(validUntil, block.timestamp);
@@ -124,7 +124,11 @@ contract DeployTest is Test {
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
             shareReceiver: shareReceiver,
-            allowedDestinations: noDestinations
+            allowedDestinations: noDestinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations
         });
 
         vm.prank(admin);
@@ -142,7 +146,11 @@ contract DeployTest is Test {
             maxPerPayment: 1e6,
             maxPerWindow: 1e6,
             shareReceiver: shareReceiver,
-            allowedDestinations: noDestinations2
+            allowedDestinations: noDestinations2,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations2
         });
 
         vm.prank(admin);

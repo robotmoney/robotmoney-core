@@ -144,26 +144,36 @@ contract GatewayRouterTest is Test {
     function _policyWithRouter() internal view returns (IGateway.AgentPolicy memory) {
         address[] memory destinations = new address[](1);
         destinations[0] = address(router);
+        address[] memory noSources = new address[](0);
         return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: destinations
+            allowedDestinations: destinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noSources
         });
     }
 
     function _policyWithVaultOnly() internal view returns (IGateway.AgentPolicy memory) {
         address[] memory destinations = new address[](1);
         destinations[0] = address(vault);
+        address[] memory noSources = new address[](0);
         return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: destinations
+            allowedDestinations: destinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noSources
         });
     }
 
@@ -175,7 +185,11 @@ contract GatewayRouterTest is Test {
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: empty
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
         });
     }
 
@@ -374,7 +388,11 @@ contract GatewayRouterTest is Test {
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: empty
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
         });
         vm.prank(depositor);
         noRouterGateway.authorizeAgent(agent, p);
@@ -475,7 +493,11 @@ contract GatewayRouterTest is Test {
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: empty
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
         });
         _authorize(agent, p);
 
@@ -500,13 +522,18 @@ contract GatewayRouterTest is Test {
     function test_depositTo_vaultDestination_routesToPinnedVault() public {
         address[] memory destinations = new address[](1);
         destinations[0] = address(vault);
+        address[] memory noSources = new address[](0);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: destinations
+            allowedDestinations: destinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noSources
         });
         _authorize(agent, p);
 
@@ -728,13 +755,18 @@ contract GatewayRouterTest is Test {
         );
         address[] memory routerDests = new address[](1);
         routerDests[0] = address(underPullRouter);
+        address[] memory noSources = new address[](0);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: routerDests
+            allowedDestinations: routerDests,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noSources
         });
         vm.prank(depositor);
         gw.authorizeAgent(agent, p);
@@ -783,13 +815,18 @@ contract GatewayRouterTest is Test {
 
         address[] memory routerDests = new address[](1);
         routerDests[0] = address(fotRouter);
+        address[] memory noSources2 = new address[](0);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: routerDests
+            allowedDestinations: routerDests,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noSources2
         });
         vm.prank(depositor);
         fotGateway.authorizeAgent(agent, p);
@@ -848,7 +885,11 @@ contract GatewayRouterTest is Test {
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: empty
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
         });
         vm.prank(depositor);
         gw.authorizeAgent(agent, p);
@@ -884,7 +925,11 @@ contract GatewayRouterTest is Test {
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
             shareReceiver: shareReceiver,
-            allowedDestinations: empty
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
         });
         vm.prank(depositor);
         gw.authorizeAgent(agent, p);

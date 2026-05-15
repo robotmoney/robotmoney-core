@@ -977,12 +977,12 @@ impl Fixture {
         // allowedDestinations left empty ([]) for smoke-test: open policy
         // allows any registered destination (vault or router).
         let policy = format!(
-            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver},[])"
+            "(true,18446744073709551615,{max_per_payment},{max_per_window},{share_receiver},[],0x0000000000000000000000000000000000000000,0,0,[])"
         );
         self.cast_send(
             DEPLOYER_PRIVATE_KEY_HEX,
             self.gateway(),
-            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[]))",
+            "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
             &[&agent, &policy],
         )
     }

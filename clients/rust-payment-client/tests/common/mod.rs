@@ -107,7 +107,7 @@ pub fn enc_agents(
     max_per_window: U256,
     share_receiver: Address,
 ) -> String {
-    let mut blob = Vec::with_capacity(32 * 5);
+    let mut blob = Vec::with_capacity(32 * 8);
     let mut w = [0u8; 32];
     w[31] = if active { 1 } else { 0 };
     blob.extend_from_slice(&w);
@@ -119,6 +119,12 @@ pub fn enc_agents(
     let mut w = [0u8; 32];
     w[12..].copy_from_slice(share_receiver.as_slice());
     blob.extend_from_slice(&w);
+    // assetRecipient = zero (withdrawal disabled)
+    blob.extend_from_slice(&[0u8; 32]);
+    // maxWithdrawPerPayment = 0
+    blob.extend_from_slice(&[0u8; 32]);
+    // maxWithdrawPerWindow = 0
+    blob.extend_from_slice(&[0u8; 32]);
     format!("0x{}", ahex::encode(blob))
 }
 

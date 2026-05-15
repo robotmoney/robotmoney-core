@@ -44,6 +44,10 @@ export function AuthorizeTab(props: Props) {
             maxPerWindow: BigInt(maxPerWindow),
             shareReceiver: props.shareReceiver as Address,
             allowedDestinations: [],
+            assetRecipient: "0x0000000000000000000000000000000000000000" as Address,
+            maxWithdrawPerPayment: 0n,
+            maxWithdrawPerWindow: 0n,
+            allowedSourceVaults: [],
           },
         }
       : null;

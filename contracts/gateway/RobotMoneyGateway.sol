@@ -70,6 +70,22 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         `allowedDestinations` list (when the list is non-empty), or the
     ///         destination is neither the pinned vault nor the router.
     error InvalidDestination();
+    /// @notice `withdraw()` called but the agent's policy has withdrawal disabled
+    ///         (`maxWithdrawPerPayment == 0`).
+    error WithdrawalNotEnabled();
+    /// @notice `withdraw()` shares argument exceeds `maxWithdrawPerPayment` cap.
+    error SharesExceedWithdrawPerPaymentCap();
+    /// @notice `withdraw()` cumulative shares in the current window would exceed `maxWithdrawPerWindow`.
+    error WithdrawWindowCapExceeded();
+    /// @notice `withdraw()` called with a `sourceVault` not in the agent's
+    ///         `allowedSourceVaults` list (when the list is non-empty), or the
+    ///         vault is not the pinned vault.
+    error InvalidSourceVault();
+    /// @notice `withdraw()` policy has `assetRecipient == address(0)`.
+    error InvalidAssetRecipient();
+    /// @notice `withdraw()` USDC balance did not increase by the expected amount,
+    ///         indicating a malicious or fee-on-transfer vault.
+    error UnexpectedAssetsReceived();
 
     // -------------------------------------------------------------------
     // Constants
@@ -109,9 +125,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         sole authority over her own agent (issue #269).
     mapping(address => address) public agentOwner;
 
-    /// @notice Per-agent windowed gross. NOT shared across agents — each
+    /// @notice Per-agent windowed gross deposit. NOT shared across agents — each
     ///         agent has an independent allowance per window.
     mapping(address => mapping(uint64 => uint256)) public agentWindowGross;
+
+    /// @notice Per-agent windowed withdrawal gross (shares redeemed). Independent per agent per window.
+    mapping(address => mapping(uint64 => uint256)) public agentWithdrawWindowGross;
 
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
@@ -235,6 +254,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (p.validUntil < block.timestamp) revert InvalidValidUntil();
         if (p.maxPerPayment == 0 || p.maxPerWindow == 0) revert InvalidAmount();
         if (p.maxPerPayment > p.maxPerWindow) revert InvalidAmount();
+        // Withdrawal fields: if withdrawal is enabled (maxWithdrawPerPayment > 0),
+        // validate the recipient and window cap relationship.
+        if (p.maxWithdrawPerPayment > 0) {
+            if (p.assetRecipient == address(0)) revert InvalidAssetRecipient();
+            if (p.maxWithdrawPerWindow == 0) revert InvalidAmount();
+            if (p.maxWithdrawPerPayment > p.maxWithdrawPerWindow) revert InvalidAmount();
+        }
     }
 
     /// @inheritdoc IGateway
@@ -527,6 +553,117 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.amount,
             sharesMinted,
             args.windowId
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Withdrawal
+    // -------------------------------------------------------------------
+
+    /// @inheritdoc IGateway
+    /// @dev The agent must have approved the gateway to spend its vault shares
+    ///      before calling this function. The gateway pulls shares via
+    ///      `transferFrom(agent, gateway, shares)`, calls `vault.redeem`, and
+    ///      forwards USDC only to `policy.assetRecipient`. CEI pattern: state
+    ///      effects written before external calls. `nonReentrant` provides
+    ///      defense-in-depth.
+    function withdraw(
+        bytes32 orderId,
+        uint256 shares,
+        address sourceVault,
+        uint64 deadline,
+        bytes32 idempotencyKey
+    ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId, uint256 assetsOut) {
+        if (_paused) revert PausedError();
+
+        AgentPolicy memory p = agents[msg.sender];
+
+        // 1. Withdrawal must be enabled for this agent.
+        if (p.maxWithdrawPerPayment == 0) revert WithdrawalNotEnabled();
+
+        // 2. shares > 0 && shares <= maxWithdrawPerPayment
+        if (shares == 0) revert InvalidAmount();
+        if (shares > p.maxWithdrawPerPayment) revert SharesExceedWithdrawPerPaymentCap();
+
+        // 3. deadline window
+        if (block.timestamp > deadline) revert DeadlineExpired();
+        if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
+
+        // 4. policy active and not expired.
+        // coverage:unreachable
+        if (!p.active) revert AgentNotAuthorized();
+        if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+
+        // 5. sourceVault validation: must be the pinned vault, and must pass
+        //    the allowedSourceVaults whitelist when non-empty.
+        if (sourceVault != address(vaultContract)) revert InvalidSourceVault();
+        {
+            uint256 len = p.allowedSourceVaults.length;
+            if (len > 0) {
+                bool found;
+                for (uint256 i = 0; i < len && !found; i++) {
+                    found = p.allowedSourceVaults[i] == sourceVault;
+                }
+                if (!found) revert InvalidSourceVault();
+            }
+        }
+
+        // 6. windowId
+        uint64 windowId = uint64(block.timestamp / WINDOW_SECONDS);
+
+        // 7. window cap
+        uint256 windowSoFar = agentWithdrawWindowGross[msg.sender][windowId];
+        if (windowSoFar + shares > p.maxWithdrawPerWindow) revert WithdrawWindowCapExceeded();
+
+        // 8. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        paymentId = keccak256(
+            abi.encode(block.chainid, address(this), msg.sender, orderId, shares, idempotencyKey)
+        );
+        if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
+
+        // 9. EFFECTS: write state before any external call (CEI pattern).
+        agentWithdrawWindowGross[msg.sender][windowId] = windowSoFar + shares;
+        usedPaymentIds[paymentId] = true;
+
+        // slither-disable-start reentrancy-balance
+        // Justification: Balance-delta pattern is used to detect unexpected USDC
+        // custody changes. State effects are written above before external calls
+        // (CEI). `nonReentrant` provides defense-in-depth. Only `AGENT_ROLE`
+        // holders can reach this code.
+
+        // 10. Pull shares from agent into the gateway via transferFrom.
+        //     Agent must have approved the gateway for at least `shares`.
+        IERC20(sourceVault).safeTransferFrom(msg.sender, address(this), shares);
+
+        // 11. Record USDC balance before redeem so we can verify the vault
+        //     transferred exactly the expected amount.
+        uint256 usdcBefore = usdcToken.balanceOf(address(this));
+
+        // 12. Call vault.redeem — sends USDC to assetRecipient directly.
+        assetsOut = IERC4626(sourceVault).redeem(shares, p.assetRecipient, address(this));
+
+        // 13. Verify the vault did not leave unexpected USDC in the gateway.
+        //     The gateway balance must not have increased (USDC went to assetRecipient).
+        if (usdcToken.balanceOf(address(this)) != usdcBefore) {
+            revert UnexpectedAssetsReceived();
+        }
+
+        // 14. Gateway must hold zero vault shares after the redemption.
+        if (IERC20(sourceVault).balanceOf(address(this)) != 0) {
+            revert ShareCustodyInvariantViolated();
+        }
+        // slither-disable-end reentrancy-balance
+
+        // 15. event.
+        emit AgentWithdrawal(
+            paymentId,
+            orderId,
+            msg.sender,
+            sourceVault,
+            shares,
+            assetsOut,
+            p.assetRecipient,
+            windowId
         );
     }
 }

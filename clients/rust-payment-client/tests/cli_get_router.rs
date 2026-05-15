@@ -153,14 +153,14 @@ async fn get_router_two_vault_weights() {
         w0["vault"].as_str().unwrap().to_lowercase(),
         format!("{VAULT:#x}")
     );
-    assert_eq!(w0["weight_bps"].as_str().unwrap(), "6000");
+    assert_eq!(w0["weight_bps"].as_u64().unwrap(), 6000);
 
     let w1 = &weights[1];
     assert_eq!(
         w1["vault"].as_str().unwrap().to_lowercase(),
         format!("{VAULT2:#x}")
     );
-    assert_eq!(w1["weight_bps"].as_str().unwrap(), "4000");
+    assert_eq!(w1["weight_bps"].as_u64().unwrap(), 4000);
 
     assert_eq!(v["data"]["router_cap"].as_str().unwrap(), "0");
 }

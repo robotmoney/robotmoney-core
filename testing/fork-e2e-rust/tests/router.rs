@@ -150,6 +150,10 @@ sol! {
             uint256 maxPerWindow;
             address shareReceiver;
             address[] allowedDestinations;
+            address assetRecipient;
+            uint256 maxWithdrawPerPayment;
+            uint256 maxWithdrawPerWindow;
+            address[] allowedSourceVaults;
         }
 
         function authorizeAgent(address agent, AgentPolicy calldata p) external;
@@ -719,6 +723,10 @@ fn agent_gateway_router_deposit() {
         maxPerWindow: deposit_amount,
         shareReceiver: owner.address,
         allowedDestinations: vec![router],
+        assetRecipient: Address::ZERO,
+        maxWithdrawPerPayment: U256::ZERO,
+        maxWithdrawPerWindow: U256::ZERO,
+        allowedSourceVaults: vec![],
     };
     owner
         .send(

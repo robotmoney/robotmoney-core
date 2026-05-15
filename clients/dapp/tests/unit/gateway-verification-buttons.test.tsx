@@ -31,6 +31,10 @@ const policy = {
   maxPerWindow: 500_000_000n,
   shareReceiver: receiver,
   allowedDestinations: [] as `0x${string}`[],
+  assetRecipient: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+  maxWithdrawPerPayment: 0n,
+  maxWithdrawPerWindow: 0n,
+  allowedSourceVaults: [] as `0x${string}`[],
 };
 
 const verifiedCtx: PreviewContext = {

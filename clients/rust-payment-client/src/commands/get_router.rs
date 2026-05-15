@@ -37,7 +37,7 @@ pub struct WeightEntry {
     /// Vault contract address (lowercase 0x-hex).
     pub vault: String,
     /// Weight in basis points (0–10 000).
-    pub bps: u64,
+    pub weight_bps: u64,
 }
 
 /// `data` payload for `rmpc get-router`.
@@ -138,7 +138,7 @@ async fn read_router(
                 .zip(bps)
                 .map(|(v, bps_val)| WeightEntry {
                     vault: format!("{v:#x}"),
-                    bps: bps_val.saturating_to::<u64>(),
+                    weight_bps: bps_val.saturating_to::<u64>(),
                 })
                 .collect();
             b.data_mut().weights = entries;
@@ -251,10 +251,10 @@ keystore_path           = "{ks}"
     fn weight_entry_serialises_correctly() {
         let entry = WeightEntry {
             vault: "0x0000000000000000000000000000000000000001".to_string(),
-            bps: 6000,
+            weight_bps: 6000,
         };
         let v: serde_json::Value = serde_json::to_value(&entry).unwrap();
-        assert_eq!(v["bps"].as_u64().unwrap(), 6000);
+        assert_eq!(v["weight_bps"].as_u64().unwrap(), 6000);
         assert_eq!(
             v["vault"].as_str().unwrap(),
             "0x0000000000000000000000000000000000000001"
