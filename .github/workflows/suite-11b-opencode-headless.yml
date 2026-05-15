@@ -133,23 +133,26 @@ jobs:
       - name: Generate agent EOA + fund
         run: |
           set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
           cargo run --release --manifest-path clients/rust-payment-client/Cargo.toml \
-            --bin rmpc-keystore-import -- --generate > agent.json
-          AGENT=$(jq -r '.address' agent.json)
+            --bin rmpc-keystore-import -- --generate > "${RUNNER_TEMP}/robotmoney-opencode/agent.json"
+          AGENT=$(jq -r '.address' "${RUNNER_TEMP}/robotmoney-opencode/agent.json")
           cast rpc anvil_setBalance "$AGENT" "0xDE0B6B3A7640000" --rpc-url http://127.0.0.1:8545
 
       - name: Headless deposit run
-        run: opencode run "deposit 1 USDC to the vault" --format json | tee headless-deposit.json
+        run: |
+          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
+          opencode run "deposit 1 USDC to the vault" --format json | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
 
       - name: Assert deposit transcript
-        run: python3 .github/scripts/assert_headless_deposit_transcript.py headless-deposit.json
+        run: python3 .github/scripts/assert_headless_deposit_transcript.py "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
 
       - name: Upload deposit transcript
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: headless-deposit-transcript
-          path: headless-deposit.json
+          path: ${{ runner.temp }}/robotmoney-opencode/headless-deposit.json
 
   read:
     name: opencode-headless-read
@@ -206,14 +209,16 @@ jobs:
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
       - name: Headless read run
-        run: opencode run "show me the vault state and my balance" --format json | tee headless-read.json
+        run: |
+          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
+          opencode run "show me the vault state and my balance" --format json | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
 
       - name: Assert read transcript
-        run: python3 .github/scripts/assert_headless_read_transcript.py headless-read.json
+        run: python3 .github/scripts/assert_headless_read_transcript.py "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
 
       - name: Upload read transcript
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: headless-read-transcript
-          path: headless-read.json
+          path: ${{ runner.temp }}/robotmoney-opencode/headless-read.json

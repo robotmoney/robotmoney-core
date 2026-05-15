@@ -100,7 +100,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 2. Install Rust toolchain + rustdoc
 3. Cargo cache
 4. `cargo build --all-targets` — clean build; surfaces compile errors not caught by clippy
-5. `cargo doc --no-deps --all-features 2>&1 | tee rustdoc.log` + `check_rustdoc_coverage.py` — enforces doc coverage threshold: every `pub` function, struct, and enum in `rmpc` and `explorer-indexer` crates must carry a doc comment; script exits non-zero if coverage falls below threshold
+5. `cargo doc --no-deps --all-features 2>&1 | tee "$RUNNER_TEMP/.../rustdoc.log"` + `check_rustdoc_coverage.py` — enforces doc coverage threshold: every `pub` function, struct, and enum in `rmpc` and `explorer-indexer` crates must carry a doc comment; script exits non-zero if coverage falls below threshold
 
 ---
 
@@ -367,7 +367,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 2. Install Rust toolchain
 3. Cargo cache
 4. `bash test_long_running.sh` — deposit walkthrough driven through OpenClaw runtime against devnet; same transcript assertions as the OpenCode deposit suite
-5. Upload `artifacts/long-running/outcome.txt` artifact; assert it is well-formed (`outcome=pass|skipped|fail`, `reason=` present)
+5. Upload the long-running `outcome.txt` from `$RUNNER_TEMP/robotmoney-openclaw/long-running/`; assert it is well-formed (`outcome=pass|skipped|fail`, `reason=` present)
 
 ---
 
@@ -390,7 +390,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. Upload `testing/smoke-test/smoke-test*.log` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
+11. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A

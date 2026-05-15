@@ -23,7 +23,14 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [["list"], ["html", { open: "never" }]],
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "test-results",
+  reporter: [
+    ["list"],
+    [
+      "html",
+      { open: "never", outputFolder: process.env.PLAYWRIGHT_HTML_REPORT ?? "playwright-report" },
+    ],
+  ],
   globalSetup: "./tests/e2e/devnet-global-setup.ts",
   globalTeardown: "./tests/e2e/devnet-global-teardown.ts",
   use: {

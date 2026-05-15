@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{SecondsFormat, Utc};
 
-const DEFAULT_LOG_FILE: &str = "smoke-test.log";
+const DEFAULT_LOG_FILE: &str = "target/smoke-test/smoke-test.log";
 const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

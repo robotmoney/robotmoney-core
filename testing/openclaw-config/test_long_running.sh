@@ -24,8 +24,9 @@ source "${SCRIPT_DIR}/_lib.sh"
 ITERATIONS="${RMPC_MONITOR_ITERATIONS:-3}"
 INTERVAL="${RMPC_MONITOR_INTERVAL_SECS:-1}"
 
-# Outcome file location (read by the CI workflow's assert step).
-OUTCOME_DIR="${SCRIPT_DIR}/artifacts/long-running"
+# Outcome file location (read by the CI workflow's assert step). CI sets
+# OPENCLAW_OUTCOME_DIR to keep generated artifacts out of the source checkout.
+OUTCOME_DIR="${OPENCLAW_OUTCOME_DIR:-${SCRIPT_DIR}/artifacts/long-running}"
 mkdir -p "$OUTCOME_DIR"
 OUTCOME_FILE="${OUTCOME_DIR}/outcome.txt"
 

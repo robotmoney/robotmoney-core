@@ -124,18 +124,20 @@ jobs:
 
       - name: Long-running deposit walkthrough
         working-directory: testing/openclaw-config
+        env:
+          OPENCLAW_OUTCOME_DIR: ${{ runner.temp }}/robotmoney-openclaw/long-running
         run: bash test_long_running.sh
 
       - name: Upload outcome artifact
         uses: actions/upload-artifact@v4
         with:
           name: openclaw-walkthrough-outcome
-          path: testing/openclaw-config/artifacts/long-running/
+          path: ${{ runner.temp }}/robotmoney-openclaw/long-running/
 
       - name: Assert outcome is well-formed
         run: |
           set -euo pipefail
-          OUTCOME_FILE="testing/openclaw-config/artifacts/long-running/outcome.txt"
+          OUTCOME_FILE="${RUNNER_TEMP}/robotmoney-openclaw/long-running/outcome.txt"
           if ! grep -qE "^outcome=(pass|skipped|fail)$" "$OUTCOME_FILE"; then
             echo "::error::outcome.txt missing valid 'outcome=' line" >&2
             cat "$OUTCOME_FILE" >&2 || true

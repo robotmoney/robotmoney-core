@@ -105,13 +105,13 @@ jobs:
       - name: cargo test (boots full-stack CLI, asserts summary + teardown)
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LOG_FILE: ${{ github.workspace }}/testing/smoke-test/smoke-test-cli_meta.log
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-cli_meta.log
         run: cargo test -p smoke-test --release --test cli_meta -- --nocapture
 
       - name: cargo test (boots devnet, deploys contracts, asserts RPC + blocks, tears down)
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LOG_FILE: ${{ github.workspace }}/testing/smoke-test/smoke-test-fixture_meta.log
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-fixture_meta.log
         run: cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture
 
       - name: Upload smoke-test logs
@@ -119,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-test-logs
-          path: testing/smoke-test/smoke-test*.log
+          path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
       - name: Safety-net teardown (always)
         if: always()

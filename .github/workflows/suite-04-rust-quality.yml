@@ -107,5 +107,7 @@ jobs:
 
       - name: cargo doc + coverage check
         run: |
-          cargo doc --no-deps --all-features 2>&1 | tee rustdoc.log
-          python3 .github/scripts/check_rustdoc_coverage.py rustdoc.log
+          mkdir -p "${RUNNER_TEMP}/robotmoney-rustdoc"
+          RUSTDOC_LOG="${RUNNER_TEMP}/robotmoney-rustdoc/rustdoc.log"
+          cargo doc --no-deps --all-features 2>&1 | tee "${RUSTDOC_LOG}"
+          python3 .github/scripts/check_rustdoc_coverage.py "${RUSTDOC_LOG}"
