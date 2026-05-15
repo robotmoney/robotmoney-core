@@ -158,6 +158,15 @@ struct RouterDeploymentJson {
     chain_id: u64,
 }
 
+/// Typed view over the governance deployment JSON produced by DeployRouterGovernance.s.sol.
+#[derive(Debug, Deserialize)]
+struct GovernanceDeploymentJson {
+    governance: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ComposePsEntry {
     #[serde(rename = "Name")]
@@ -184,6 +193,7 @@ pub struct Fixture {
     deployment: DeploymentJson,
     registry_deployment: RegistryDeploymentJson,
     router_deployment: RouterDeploymentJson,
+    governance_deployment: GovernanceDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -756,6 +766,30 @@ impl Fixture {
 
         let router_deployment = read_router_deployment(&router_out)?;
 
+        // Deploy RouterGovernance and wire it to the PortfolioRouter (issue #364).
+        // ADMIN_ROLE is held by the deployer; voting power is assigned per test.
+        let governance_out = tmp.path().join("governance.json");
+        run_forge_deploy_governance(
+            &repo_root,
+            &rpc_url,
+            &governance_out,
+            &router_deployment.router,
+        )
+        .inspect_err(|err| {
+            logging::error("smoke-test", format!("forge deploy governance failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "governance deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        let governance_deployment = read_governance_deployment(&governance_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -794,6 +828,7 @@ impl Fixture {
             deployment,
             registry_deployment,
             router_deployment,
+            governance_deployment,
             repo_root,
         };
 
@@ -897,6 +932,15 @@ impl Fixture {
     /// Raw string form of the PortfolioRouter address.
     pub fn router_hex(&self) -> &str {
         &self.router_deployment.router
+    }
+    /// RouterGovernance address deployed by DeployRouterGovernance.s.sol (issue #364).
+    /// Deployer holds ADMIN_ROLE; voting power is assigned per test via setVotingPower.
+    pub fn governance(&self) -> Address {
+        parse_addr(&self.governance_deployment.governance)
+    }
+    /// Raw string form of the RouterGovernance address.
+    pub fn governance_hex(&self) -> &str {
+        &self.governance_deployment.governance
     }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
@@ -1002,6 +1046,17 @@ impl Fixture {
             self.gateway(),
             "authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))",
             &[&agent, &policy],
+        )
+    }
+
+    /// Assign `power` voting power to `voter` on the RouterGovernance contract.
+    /// Callable by the deployer, who holds ADMIN_ROLE on the governance contract.
+    pub fn set_voting_power(&self, voter: Address, power: u128) -> Result<String, HarnessError> {
+        self.cast_send(
+            DEPLOYER_PRIVATE_KEY_HEX,
+            self.governance(),
+            "setVotingPower(address,uint256)",
+            &[&format!("{voter:#x}"), &power.to_string()],
         )
     }
 
@@ -1621,6 +1676,48 @@ fn read_router_deployment(path: &Path) -> Result<RouterDeploymentJson, HarnessEr
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
 }
 
+/// Deploy RouterGovernance via forge script. The deployer holds ADMIN_ROLE.
+/// Voting power is assigned per-test via `setVotingPower` (issue #364).
+fn run_forge_deploy_governance(
+    repo_root: &Path,
+    rpc_url: &str,
+    governance_out: &Path,
+    router_address: &str,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    .env("ROUTER_ADDRESS", router_address)
+    .env("DEPLOYMENT_OUT", governance_out)
+    .current_dir(repo_root);
+    let out = cmd.output()?;
+    logging::log_command_output("forge-governance", &out);
+    if !out.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployRouterGovernance exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_governance_deployment(path: &Path) -> Result<GovernanceDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
 /// Walk up from the crate manifest dir until we find the repo root
 /// (identified by `foundry.toml` + `clients/rust-payment-client`).
 pub fn locate_repo_root() -> Result<PathBuf, HarnessError> {
@@ -2002,6 +2099,8 @@ impl DappStack {
             // Portfolio Router deposit path.
             ("VITE_REGISTRY_ADDRESS", fixture.registry_hex().to_string()),
             ("VITE_ROUTER_ADDRESS", fixture.router_hex().to_string()),
+            // Issue #364: RouterGovernance address for the Governance tab.
+            ("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex().to_string()),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
             ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
@@ -2078,6 +2177,11 @@ impl DappStack {
                 "VITE_ROUTER_ADDRESS".into(),
                 fixture.router_hex().to_string(),
             ),
+            // Issue #364: RouterGovernance address for the Governance tab.
+            (
+                "VITE_GOVERNANCE_ADDRESS".into(),
+                fixture.governance_hex().to_string(),
+            ),
             ("INDEXER_GATEWAY".into(), gateway_hex.to_string()),
             ("INDEXER_VAULT".into(), vault_hex.to_string()),
             (
@@ -2123,6 +2227,8 @@ impl DappStack {
             // build so the DestinationSelector and router deposit flow work.
             .env("VITE_REGISTRY_ADDRESS", fixture.registry_hex())
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
+            // Issue #364: thread governance address into the dapp build.
+            .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
             .env("INDEXER_REGISTRY", fixture.registry_hex())

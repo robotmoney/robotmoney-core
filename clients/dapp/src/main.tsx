@@ -41,7 +41,6 @@ const router = env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : 
 const governance = env.VITE_GOVERNANCE_ADDRESS
   ? (env.VITE_GOVERNANCE_ADDRESS as Address)
   : undefined;
-const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined;
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
@@ -112,18 +111,14 @@ function App() {
               content: (
                 <div className="tab-section-stack">
                   <RouterView apiUrl={explorerApiUrl} />
-                  {governance && rmToken ? (
-                    <GovernancePanel
-                      governanceAddress={governance}
-                      rmTokenAddress={rmToken}
-                      apiUrl={explorerApiUrl}
-                    />
+                  {governance ? (
+                    <GovernancePanel governanceAddress={governance} apiUrl={explorerApiUrl} />
                   ) : (
                     <section data-testid="governance-config-missing">
                       <h2>Governance — Weight Proposals</h2>
                       <p className="hint">
-                        Router governance voting is unavailable until governance and RM-token
-                        contract addresses are configured.
+                        Router governance voting is unavailable until the governance contract
+                        address is configured.
                       </p>
                     </section>
                   )}

@@ -121,6 +121,10 @@ services:
         # the smoke-test harness.
         VITE_REGISTRY_ADDRESS: ${VITE_REGISTRY_ADDRESS:-0x0000000000000000000000000000000000000000}
         VITE_ROUTER_ADDRESS: ${VITE_ROUTER_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Issue #364: RouterGovernance address for the Governance tab.
+        # Default to zero address so the governance panel shows the
+        # config-missing placeholder in standalone builds.
+        VITE_GOVERNANCE_ADDRESS: ${VITE_GOVERNANCE_ADDRESS:-0x0000000000000000000000000000000000000000}
     container_name: dapp-frontend
     restart: unless-stopped
     depends_on:

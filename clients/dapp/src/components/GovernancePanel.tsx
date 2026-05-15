@@ -1,11 +1,11 @@
 /**
- * GovernancePanel — issue #322 / docs/architecture.md §5.3
+ * GovernancePanel — issue #322 / #364 / docs/architecture.md §5.3
  *
- * Displays the active admin-weighted MVP governance proposal: proposed
- * weight vector, current vote tally, quorum threshold, time remaining,
- * and execution state. Connected accounts with admin-assigned voting
- * power see a "Vote" button that encodes a
- * `RouterGovernance.vote(proposalId)` call and hands it to the wallet.
+ * Displays the active governance proposal: proposed weight vector,
+ * current vote tally, quorum threshold, time remaining, and execution
+ * state. Connected accounts with admin-assigned voting power see a
+ * "Vote" button that encodes a `RouterGovernance.vote(proposalId)` call
+ * and hands it to the wallet.
  *
  * NOTE: Current governance is admin-weighted (MVP mock). Voting power is
  * assigned by ADMIN_ROLE, not derived from token holdings. Token-holder
@@ -14,8 +14,9 @@
  * Data flow:
  *   - Proposal list and tally: fetched from GET /v1/governance/proposals
  *     (indexed API per §12 — no live RPC for proposal state).
- *   - RM-token balance: read via wagmi `useReadContract` so the holder
- *     can see their vote weight before signing.
+ *   - Voting power: read via wagmi `useReadContract` calling
+ *     `RouterGovernance.votingPower(connectedAddress)` — RouterGovernance
+ *     uses admin-assigned on-chain voting power, not an ERC-20 token.
  *   - Voting: wagmi `useWriteContract` encodes vote(proposalId) calldata
  *     against the on-chain RouterGovernance ABI before wallet invocation.
  *
@@ -26,17 +27,16 @@
 import { useEffect, useState } from "react";
 import { useAccount, useReadContract, useWriteContract, useSimulateContract } from "wagmi";
 import type { Address } from "viem";
-import { erc20Abi } from "../lib/abi";
 import type { FetchLike } from "../lib/explorerApi";
 import { fetchProposals, type ProposalSummary, type ProposalsResponse } from "../lib/governanceApi";
 
-// ─── RouterGovernance ABI (vote function only) ───────────────────────────────
+// ─── RouterGovernance ABI (vote + votingPower) ───────────────────────────────
 
 /**
- * Minimal ABI fragment for RouterGovernance.vote(uint256 proposalId).
+ * Minimal ABI fragments for RouterGovernance.
  * Tracks the canonical interface in `contracts/RouterGovernance.sol`.
- * Only the `vote` function appears here; the full ABI lives with the
- * Foundry contracts and is not needed for this action-layer component.
+ * Only the functions needed by this component appear here; the full
+ * ABI lives with the Foundry contracts.
  */
 export const routerGovernanceVoteAbi = [
   {
@@ -46,6 +46,13 @@ export const routerGovernanceVoteAbi = [
     inputs: [{ name: "proposalId", type: "uint256" }],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "votingPower",
+    stateMutability: "view",
+    inputs: [{ name: "voter", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -53,8 +60,6 @@ export const routerGovernanceVoteAbi = [
 export interface GovernancePanelProps {
   /** 0x-prefixed RouterGovernance contract address. */
   readonly governanceAddress: Address;
-  /** 0x-prefixed RM token address for balance reads. */
-  readonly rmTokenAddress: Address;
   /** Resolved explorer API base URL (no trailing slash). */
   readonly apiUrl: string;
   /**
@@ -145,11 +150,13 @@ export function GovernancePanel(props: GovernancePanelProps) {
     };
   }, [props.apiUrl, props.fetchImpl]);
 
-  // ── RM-token balance read (vote weight) ─────────────────────────────────────
-  const { data: rmBalance } = useReadContract({
-    address: props.rmTokenAddress,
-    abi: erc20Abi,
-    functionName: "balanceOf",
+  // ── Admin-assigned voting power read (RouterGovernance.votingPower) ─────────
+  // RouterGovernance uses admin-assigned on-chain voting power — not ERC-20
+  // token balances. Read the power directly from the governance contract.
+  const { data: votingPower } = useReadContract({
+    address: props.governanceAddress,
+    abi: routerGovernanceVoteAbi,
+    functionName: "votingPower",
     args: address ? [address] : undefined,
     query: { enabled: isConnected && Boolean(address) },
   });
@@ -167,8 +174,8 @@ export function GovernancePanel(props: GovernancePanelProps) {
     Boolean(address) &&
     selectedProposal !== null &&
     selectedProposal.status === "open" &&
-    typeof rmBalance === "bigint" &&
-    rmBalance > 0n;
+    typeof votingPower === "bigint" &&
+    votingPower > 0n;
 
   const { data: voteSim } = useSimulateContract({
     account: address,
@@ -218,12 +225,12 @@ export function GovernancePanel(props: GovernancePanelProps) {
             <code>{panelState.indexedAt}</code>
           </p>
 
-          {/* RM-token balance — vote weight hint */}
+          {/* Voting power — admin-assigned on-chain weight */}
           {isConnected && (
-            <p data-testid="governance-rm-balance">
-              Your RM balance:{" "}
-              <strong data-testid="governance-rm-balance-value">
-                {typeof rmBalance === "bigint" ? rmBalance.toString() : "—"}
+            <p data-testid="governance-voting-power">
+              Your voting power:{" "}
+              <strong data-testid="governance-voting-power-value">
+                {typeof votingPower === "bigint" ? votingPower.toString() : "—"}
               </strong>
             </p>
           )}
@@ -311,9 +318,9 @@ export function GovernancePanel(props: GovernancePanelProps) {
                   {!isConnected && (
                     <p data-testid="governance-connect-hint">Connect your wallet to vote.</p>
                   )}
-                  {isConnected && typeof rmBalance === "bigint" && rmBalance === 0n && (
-                    <p data-testid="governance-no-rm-hint">
-                      You have no admin-assigned voting power and cannot vote on this proposal.
+                  {isConnected && typeof votingPower === "bigint" && votingPower === 0n && (
+                    <p data-testid="governance-no-voting-power-hint">
+                      You have no voting power assigned and cannot vote on this proposal.
                     </p>
                   )}
                   {voteError && <p data-testid="governance-vote-error">Vote failed: {voteError}</p>}

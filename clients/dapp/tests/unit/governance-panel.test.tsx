@@ -38,7 +38,6 @@ vi.mock("wagmi", () => ({
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
 const GOVERNANCE_ADDR = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01" as Address;
-const RM_TOKEN_ADDR = "0x1234567890123456789012345678901234567890" as Address;
 
 function makeProposalsResponse(status: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -83,7 +82,6 @@ function renderPanel(fetchImpl: FetchLike) {
   return render(
     <GovernancePanel
       governanceAddress={GOVERNANCE_ADDR}
-      rmTokenAddress={RM_TOKEN_ADDR}
       apiUrl="http://localhost:8080"
       fetchImpl={fetchImpl}
     />,
@@ -208,7 +206,6 @@ describe("GovernancePanel — tally updates", () => {
     rerender(
       <GovernancePanel
         governanceAddress={GOVERNANCE_ADDR}
-        rmTokenAddress={RM_TOKEN_ADDR}
         apiUrl="http://localhost:8080"
         fetchImpl={updatedFetch}
       />,
