@@ -75,3 +75,175 @@ export async function fetchAgentDeposits(
   const body = (await res.json()) as DepositsResponse;
   return body;
 }
+
+// ─── Vault registry types (issue #318) ─────────────────────────────────────
+
+export interface VaultRow {
+  readonly chain_id: number;
+  readonly address: string;
+  readonly name: string;
+  readonly risk_label: string;
+  /** 0 = Active, 1 = Paused, 2 = Retired */
+  readonly status: number;
+  readonly deposit_cap: string;
+  readonly total_assets: string | null;
+  readonly exit_fee_bps: number | null;
+  readonly indexed_at: string;
+}
+
+export interface VaultsResponse {
+  readonly vaults: readonly VaultRow[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+export interface VaultTvlPoint {
+  readonly block_number: number;
+  readonly total_assets: string;
+  readonly total_supply: string;
+  readonly indexed_at: string;
+}
+
+export interface VaultDetailRow {
+  readonly chain_id: number;
+  readonly address: string;
+  readonly name: string;
+  readonly risk_label: string;
+  readonly status: number;
+  readonly deposit_cap: string;
+  readonly tvl_history: readonly VaultTvlPoint[];
+  readonly indexed_at: string;
+}
+
+export interface VaultDetailResponse {
+  readonly vault: VaultDetailRow;
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+// ─── Router / governance types (issue #318) ─────────────────────────────────
+
+export interface VaultWeight {
+  readonly vault: string;
+  readonly bps: number;
+}
+
+export interface WeightHistoryEntry {
+  readonly block_number: number;
+  readonly tx_hash: string;
+  readonly weights: readonly VaultWeight[];
+  readonly indexed_at: string;
+}
+
+export interface RouterWeightsResponse {
+  readonly current_weights: readonly VaultWeight[];
+  readonly history: readonly WeightHistoryEntry[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+export interface ProposalSummary {
+  readonly chain_id: number;
+  readonly proposal_id: number;
+  readonly proposer: string;
+  readonly description: string;
+  readonly created_at: number;
+  readonly deadline_block: number;
+  readonly status: string;
+  readonly votes_for: number;
+  readonly votes_against: number;
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+export interface ProposalsResponse {
+  readonly proposals: readonly ProposalSummary[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+// ─── Protocol stats types (issue #318) ──────────────────────────────────────
+
+/** One entry in the GET /v1/stats activity feed — always a deposit event. */
+export interface ActivityEvent {
+  readonly chain_id: number;
+  readonly block_number: number;
+  readonly log_index: number;
+  readonly tx_hash: string;
+  readonly vault: string;
+  readonly agent: string;
+  readonly share_receiver: string;
+  readonly amount: string;
+  readonly indexed_at: string;
+}
+
+export interface StatsResponse {
+  readonly total_tvl: string;
+  readonly unique_depositors: number;
+  readonly activity_feed: readonly ActivityEvent[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+// ─── Fetch helpers (issue #318) ─────────────────────────────────────────────
+
+/** GET /v1/vaults — list all registered vaults (no wallet required). */
+export async function fetchVaults(
+  baseUrl: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<VaultsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/vaults`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as VaultsResponse;
+}
+
+/** GET /v1/vaults/:address — single vault detail with TVL history. */
+export async function fetchVaultDetail(
+  baseUrl: string,
+  address: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<VaultDetailResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/vaults/${address}`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as VaultDetailResponse;
+}
+
+/** GET /v1/router/weights — current weight vector and history. */
+export async function fetchRouterWeights(
+  baseUrl: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<RouterWeightsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/router/weights`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as RouterWeightsResponse;
+}
+
+/** GET /v1/governance/proposals — list governance proposals. */
+export async function fetchProposals(
+  baseUrl: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<ProposalsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/governance/proposals`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as ProposalsResponse;
+}
+
+/** GET /v1/stats — aggregate protocol statistics. */
+export async function fetchStats(
+  baseUrl: string,
+  options: { fetchImpl?: FetchLike; signal?: AbortSignal } = {},
+): Promise<StatsResponse> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const url = `${baseUrl.replace(/\/+$/, "")}/v1/stats`;
+  const res = await fetchImpl(url, { signal: options.signal });
+  if (!res.ok) throw new Error(`explorer API ${res.status}`);
+  return (await res.json()) as StatsResponse;
+}

@@ -45,10 +45,13 @@ pub const CANONICAL_MIGRATION: &str =
 pub const VAULTS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql");
 
-/// Migration 0003: adds the `governance_proposals`, `governance_votes`, and
+/// Migration 0005: adds the `governance_proposals`, `governance_votes`, and
 /// `router_weight_snapshots` tables (issue #307 and #316).
+/// Renumbered from 0003 to resolve version conflict with migrations 0003
+/// (multi-vault schema) and 0004 (router weight snapshots) added by issues
+/// #315 and #316 respectively.
 pub const GOVERNANCE_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0003_add_governance_tables.sql");
+    include_str!("../../../../services/explorer-indexer/migrations/0005_add_governance_tables.sql");
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet

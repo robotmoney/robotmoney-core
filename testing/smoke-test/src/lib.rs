@@ -2072,9 +2072,9 @@ impl DappStack {
         let mut compose_log_followers = Vec::new();
         let dapp_log_env = {
             let mut env = dapp_log_env;
-            env[8] = ("VITE_DEVNET_RPC_URL", vite_rpc_url.clone());
-            env[9] = ("VITE_EXPLORER_API_URL", vite_explorer_api_url.clone());
-            env[10] = ("VITE_DAPP_URL", vite_dapp_url.clone());
+            env[9] = ("VITE_DEVNET_RPC_URL", vite_rpc_url.clone());
+            env[10] = ("VITE_EXPLORER_API_URL", vite_explorer_api_url.clone());
+            env[11] = ("VITE_DAPP_URL", vite_dapp_url.clone());
             env
         };
         let dapp_log_follower = start_compose_log_follower(
