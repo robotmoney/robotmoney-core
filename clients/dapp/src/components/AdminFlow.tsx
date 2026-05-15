@@ -22,6 +22,10 @@ type Props = Readonly<{
   flagEnv: Record<string, string | undefined>;
   /** Wall-clock ms at mount, injected so render stays deterministic. */
   now: number;
+  /** VaultRegistry address — forwarded to the Deposit & Withdraw tab (issue #320). */
+  registryAddress?: Address;
+  /** PortfolioRouter address — forwarded to the Deposit & Withdraw tab (issue #320). */
+  routerAddress?: Address;
 }>;
 
 export function AdminFlow(props: Props) {
@@ -67,6 +71,8 @@ export function AdminFlow(props: Props) {
     // gracefully renders "(no wallets connected)" when empty.
     faucetWalletAddresses: address ? [address] : [],
     now: props.now,
+    registryAddress: props.registryAddress,
+    routerAddress: props.routerAddress,
   });
 
   return (

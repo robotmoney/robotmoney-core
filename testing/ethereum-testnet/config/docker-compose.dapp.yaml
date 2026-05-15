@@ -114,6 +114,12 @@ services:
         # (e.g. ad-hoc local builds without the harness running); the
         # FaucetTab and seed handler fail closed in that case.
         VITE_FAUCET_HARNESS_PRIVATE_KEY: ${VITE_FAUCET_HARNESS_PRIVATE_KEY:-}
+        # Issue #320: VaultRegistry and PortfolioRouter addresses for
+        # the DestinationSelector. Default to zero address so the
+        # router deposit path is hidden in standalone builds without
+        # the smoke-test harness.
+        VITE_REGISTRY_ADDRESS: ${VITE_REGISTRY_ADDRESS:-0x0000000000000000000000000000000000000000}
+        VITE_ROUTER_ADDRESS: ${VITE_ROUTER_ADDRESS:-0x0000000000000000000000000000000000000000}
     container_name: dapp-frontend
     restart: unless-stopped
     depends_on:

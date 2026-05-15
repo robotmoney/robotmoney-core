@@ -298,3 +298,62 @@ export const vaultAbi = [
 ] as const;
 
 export type VaultActionName = "deposit" | "redeem";
+
+/**
+ * Minimal VaultRegistry ABI excerpt for the DestinationSelector (issue #320).
+ * Exposes `listVaults()` to enumerate registered vault addresses.
+ * Status and metadata per-vault are not needed by the dapp directly —
+ * the router's `previewDeposit` already marks unavailable legs.
+ */
+export const registryAbi = [
+  {
+    type: "function",
+    name: "listVaults",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "addresses", type: "address[]" }],
+  },
+] as const;
+
+/**
+ * Minimal PortfolioRouter ABI excerpt for the DestinationSelector and
+ * router deposit flow (issue #320). Exposes:
+ *   - `previewDeposit(amount)` — per-vault breakdown without state change.
+ *   - `deposit(amount, minSharesPerLeg)` — all-or-revert multi-vault deposit.
+ *
+ * The LegPreview tuple matches `PortfolioRouter.sol`'s `LegPreview` struct:
+ * { vault, weightBps, legAmount, estShares, unavailable }.
+ */
+export const routerAbi = [
+  {
+    type: "function",
+    name: "previewDeposit",
+    stateMutability: "view",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [
+      {
+        name: "legs",
+        type: "tuple[]",
+        components: [
+          { name: "vault", type: "address" },
+          { name: "weightBps", type: "uint256" },
+          { name: "legAmount", type: "uint256" },
+          { name: "estShares", type: "uint256" },
+          { name: "unavailable", type: "bool" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "deposit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "minSharesPerLeg", type: "uint256[]" },
+    ],
+    outputs: [{ name: "sharesPerLeg", type: "uint256[]" }],
+  },
+] as const;
+
+export type RouterActionName = "deposit";

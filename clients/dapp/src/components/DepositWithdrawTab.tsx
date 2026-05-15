@@ -5,6 +5,14 @@
  *   Deposit:  USDC.approve(vault, assets) → vault.deposit(assets, receiver)
  *   Withdraw: vault.redeem(shares, receiver, owner)
  *
+ * Extended in issue #320 to support a vault-selector:
+ *   - When `registryAddress` and `routerAddress` are non-zero, a
+ *     DestinationSelector is rendered above the deposit form.
+ *   - Selecting "Portfolio Router" switches the deposit section to
+ *     RouterDepositSection (multi-vault, all-or-revert).
+ *   - Selecting a specific vault uses the original single-vault flow.
+ *   - Withdraw always targets the primary vault (unchanged from #257).
+ *
  * Both flows follow the same "simulate before write" gate used by
  * AuthorizeTab and RotationTab — `useSimulateContract` must return a
  * valid request before the submit button enables, and the TxPreview
@@ -30,11 +38,18 @@ import type { Address, Hash } from "viem";
 import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
+import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
+import { RouterDepositSection } from "./RouterDepositSection";
+import type { RouterPreviewContext } from "../lib/routerPreview";
 
 type Props = Readonly<{
   vaultAddress: Address;
   usdcAddress: Address;
   ctx: VaultPreviewContext;
+  /** Optional: registry address for listing registered vaults (issue #320). */
+  registryAddress?: Address;
+  /** Optional: Portfolio Router address for multi-vault deposits (issue #320). */
+  routerAddress?: Address;
 }>;
 
 /**
@@ -59,6 +74,16 @@ export function parseUsdcAmount(input: string): bigint | null {
 
 export function DepositWithdrawTab(props: Props) {
   const { address, isConnected } = useAccount();
+
+  // Vault selector state (issue #320). Default to the primary vault so the
+  // existing single-vault flow is unchanged when no selector is available.
+  const hasSelector =
+    Boolean(props.registryAddress) &&
+    Boolean(props.routerAddress) &&
+    props.registryAddress !== "0x0000000000000000000000000000000000000000" &&
+    props.routerAddress !== "0x0000000000000000000000000000000000000000";
+
+  const [destination, setDestination] = useState<Destination>(props.vaultAddress);
   // Three independent write hooks so each action exposes its own
   // `data` (tx hash) and `isPending`. We then wait for each receipt
   // before refetching downstream reads — without this gate the
@@ -229,56 +254,83 @@ export function DepositWithdrawTab(props: Props) {
     }
   }, [withdrawReceipt.isSuccess, refetchShareBalance]);
 
+  const routerCtx: RouterPreviewContext | null =
+    hasSelector && props.routerAddress ? { ...props.ctx, router: props.routerAddress } : null;
+
   return (
     <div className="form-grid">
-      <section data-testid="deposit-form">
-        <h2>Deposit USDC</h2>
-        <p>Approve USDC, then deposit into the vault to receive rmUSDC shares.</p>
-        <label>
-          Amount (USDC)
-          <input
-            data-testid="deposit-amount"
-            value={depositInput}
-            onChange={(e) => setDepositInput(e.target.value)}
-            placeholder="0.00"
-            inputMode="decimal"
-          />
-        </label>
-        {depositPreview && <TxPreview preview={depositPreview} />}
-        {approveNeeded && (
+      {/* Vault / router selector — only shown when registry+router are configured */}
+      {hasSelector && props.registryAddress && props.routerAddress && (
+        <DestinationSelector
+          registryAddress={props.registryAddress}
+          routerAddress={props.routerAddress}
+          selected={destination}
+          onSelect={setDestination}
+        />
+      )}
+
+      {/* Router deposit path */}
+      {destination === ROUTER_DESTINATION && routerCtx ? (
+        <RouterDepositSection
+          routerAddress={props.routerAddress as Address}
+          usdcAddress={props.usdcAddress}
+          ctx={routerCtx}
+        />
+      ) : (
+        /* Single-vault deposit path (unchanged from issue #257) */
+        <section data-testid="deposit-form">
+          <h2>Deposit USDC</h2>
+          <p>Approve USDC, then deposit into the vault to receive rmUSDC shares.</p>
+          <label>
+            Amount (USDC)
+            <input
+              data-testid="deposit-amount"
+              value={depositInput}
+              onChange={(e) => setDepositInput(e.target.value)}
+              placeholder="0.00"
+              inputMode="decimal"
+            />
+          </label>
+          {depositPreview && <TxPreview preview={depositPreview} />}
+          {approveNeeded && (
+            <button
+              type="button"
+              data-testid="deposit-approve"
+              onClick={onApprove}
+              disabled={!isConnected || !approveSim || isPending}
+            >
+              Approve USDC for vault
+            </button>
+          )}
           <button
             type="button"
-            data-testid="deposit-approve"
-            onClick={onApprove}
-            disabled={!isConnected || !approveSim || isPending}
+            data-testid="deposit-submit"
+            onClick={onDeposit}
+            disabled={
+              !isConnected ||
+              !depositSim ||
+              !allowanceOk ||
+              isPending ||
+              depositPreview?.ok !== true
+            }
           >
-            Approve USDC for vault
+            Sign deposit with wallet
           </button>
-        )}
-        <button
-          type="button"
-          data-testid="deposit-submit"
-          onClick={onDeposit}
-          disabled={
-            !isConnected || !depositSim || !allowanceOk || isPending || depositPreview?.ok !== true
-          }
-        >
-          Sign deposit with wallet
-        </button>
-        <p className="hint" data-testid="deposit-share-balance">
-          rmUSDC balance: {typeof shareBalance === "bigint" ? shareBalance.toString() : "—"}
-        </p>
-        {approveSimError && (
-          <p className="hint" data-testid="approve-sim-error">
-            approve simulate failed: {approveSimError.message}
+          <p className="hint" data-testid="deposit-share-balance">
+            rmUSDC balance: {typeof shareBalance === "bigint" ? shareBalance.toString() : "—"}
           </p>
-        )}
-        {depositSimError && (
-          <p className="hint" data-testid="deposit-sim-error">
-            deposit simulate failed: {depositSimError.message}
-          </p>
-        )}
-      </section>
+          {approveSimError && (
+            <p className="hint" data-testid="approve-sim-error">
+              approve simulate failed: {approveSimError.message}
+            </p>
+          )}
+          {depositSimError && (
+            <p className="hint" data-testid="deposit-sim-error">
+              deposit simulate failed: {depositSimError.message}
+            </p>
+          )}
+        </section>
+      )}
 
       <section data-testid="withdraw-form">
         <h2>Withdraw</h2>

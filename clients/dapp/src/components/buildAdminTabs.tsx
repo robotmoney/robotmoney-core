@@ -38,6 +38,10 @@ export type BuildAdminTabsArgs = Readonly<{
    */
   faucetWalletAddresses: ReadonlyArray<Address>;
   now: number;
+  /** VaultRegistry address for the DestinationSelector (issue #320). Optional. */
+  registryAddress?: Address;
+  /** PortfolioRouter address for multi-vault deposits (issue #320). Optional. */
+  routerAddress?: Address;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -71,6 +75,8 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
           vaultAddress={a.vaultAddress}
           usdcAddress={a.usdcAddress}
           ctx={{ ...a.ctx, vault: a.vaultAddress }}
+          registryAddress={a.registryAddress}
+          routerAddress={a.routerAddress}
         />
       ),
     },

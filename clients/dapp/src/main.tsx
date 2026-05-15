@@ -31,6 +31,8 @@ const queryClient = new QueryClient();
 const gateway = (env.VITE_GATEWAY_ADDRESS ??
   "0x0000000000000000000000000000000000000000") as Address;
 const vault = (env.VITE_VAULT_ADDRESS ?? "0x0000000000000000000000000000000000000000") as Address;
+const registry = env.VITE_REGISTRY_ADDRESS ? (env.VITE_REGISTRY_ADDRESS as Address) : undefined;
+const router = env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : undefined;
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
@@ -74,6 +76,8 @@ function App() {
         flagEnv={env}
         // eslint-disable-next-line no-restricted-syntax -- boundary: real clock injected here.
         now={Date.now()}
+        registryAddress={registry}
+        routerAddress={router}
       />
       {/* Account layer — portfolio position view (issue #319) */}
       <AccountLayerView

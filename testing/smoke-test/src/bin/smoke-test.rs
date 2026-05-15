@@ -259,6 +259,10 @@ fn run() -> i32 {
             hex::encode(smoke_test::AGENT_PRIVATE_KEY)
         );
         println!("gateway_runtime_hash={}", fixture.gateway_runtime_hash());
+        // Issue #320: surface registry and router addresses so dapp e2e
+        // tests can drive the vault-selector and router deposit flow.
+        println!("registry_addr={:#x}", fixture.registry());
+        println!("router_addr={:#x}", fixture.router());
         // Issue #261: surface the harness USDC holder so dapp e2e tests
         // can verify the testnet faucet path drips from the same EOA the
         // Rust `Fixture::fund_usdc` helper uses.

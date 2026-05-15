@@ -29,6 +29,10 @@ type Props = Readonly<{
   envClass: "fork" | "devnet" | "testnet" | "mainnet";
   flagEnv: Record<string, string | undefined>;
   now: number;
+  /** VaultRegistry address (issue #320). Optional. */
+  registryAddress?: Address;
+  /** PortfolioRouter address (issue #320). Optional. */
+  routerAddress?: Address;
 }>;
 
 export function AgentsPanel(props: Props) {
@@ -120,6 +124,8 @@ export function AgentsPanel(props: Props) {
       envClass={props.envClass}
       flagEnv={props.flagEnv}
       now={props.now}
+      registryAddress={props.registryAddress}
+      routerAddress={props.routerAddress}
     />
   );
 }

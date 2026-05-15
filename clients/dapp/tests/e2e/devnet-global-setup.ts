@@ -45,6 +45,9 @@ const REQUIRED_KEYS = [
   "gateway_runtime_hash",
   "harness_usdc_holder_addr",
   "harness_usdc_holder_private_key",
+  // Issue #320: vault-selector and router deposit flow.
+  "registry_addr",
+  "router_addr",
 ] as const;
 type RequiredKey = (typeof REQUIRED_KEYS)[number];
 
@@ -172,6 +175,9 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     gateway_runtime_hash: raw.gateway_runtime_hash,
     harness_usdc_holder_addr: raw.harness_usdc_holder_addr,
     harness_usdc_holder_private_key: raw.harness_usdc_holder_private_key,
+    // Issue #320: vault-selector and router deposit flow.
+    registry_addr: raw.registry_addr,
+    router_addr: raw.router_addr,
   };
 
   console.log("devnet-global-setup: endpoint summary received");

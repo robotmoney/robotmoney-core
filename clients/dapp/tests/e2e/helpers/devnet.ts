@@ -26,6 +26,10 @@ export interface DevnetEndpoints {
   gateway_runtime_hash: string;
   harness_usdc_holder_addr: string;
   harness_usdc_holder_private_key: string;
+  /** VaultRegistry contract address (issue #320). */
+  registry_addr: string;
+  /** PortfolioRouter contract address (issue #320). */
+  router_addr: string;
 }
 
 export function loadEndpoints(): DevnetEndpoints {
