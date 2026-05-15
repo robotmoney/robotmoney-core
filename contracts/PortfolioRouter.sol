@@ -306,9 +306,23 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             revert MinSharesLengthMismatch();
         }
 
+        // Pre-compute all leg amounts so the remainder can be assigned to the
+        // final leg before any vault interaction begins.
+        uint256[] memory legAmounts = new uint256[](n);
+        uint256 allocated;
+        for (uint256 i = 0; i < n; i++) {
+            legAmounts[i] = (amount * _weightBps[i]) / BPS_DENOMINATOR;
+            allocated += legAmounts[i];
+        }
+        // Assign rounding remainder to the final leg so the router holds zero
+        // USDC after a successful deposit (pass-through invariant).
+        if (allocated < amount) {
+            legAmounts[n - 1] += amount - allocated;
+        }
+
         for (uint256 i = 0; i < n; i++) {
             address vault = _weightVaultList[i];
-            uint256 legAmount = (amount * _weightBps[i]) / BPS_DENOMINATOR;
+            uint256 legAmount = legAmounts[i];
 
             // Registry status check — revert unless this vault is Active.
             (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);

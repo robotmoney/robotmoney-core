@@ -562,6 +562,8 @@ contract PortfolioRouterTest is Test {
     }
 
     /// @notice A two-vault deposit always splits proportionally (capped to avoid overflow).
+    ///         The first leg receives the floored BPS allocation; the final leg receives
+    ///         the floored allocation plus any rounding remainder so the router holds zero.
     function testFuzz_deposit_proportionalSplit(uint256 amount, uint256 bpsA) public {
         bpsA = bound(bpsA, 1, 9999);
         uint256 bpsB = 10_000 - bpsA;
@@ -580,8 +582,74 @@ contract PortfolioRouterTest is Test {
         vm.prank(depositor);
         uint256[] memory shares = router.deposit(amount, new uint256[](0));
 
-        // Each share should match the proportional split.
-        assertEq(shares[0], (amount * bpsA) / 10_000);
-        assertEq(shares[1], (amount * bpsB) / 10_000);
+        uint256 expectedA = (amount * bpsA) / 10_000;
+        // The final leg absorbs the rounding remainder so that total == amount.
+        uint256 expectedB = amount - expectedA;
+
+        assertEq(shares[0], expectedA);
+        assertEq(shares[1], expectedB);
+        // Conservation invariant: no dust left in router.
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds dust");
+    }
+
+    // ─── BPS rounding / dust invariant ───────────────────────────────────────
+
+    /// @notice Deposit with an amount not divisible by leg count leaves zero
+    ///         USDC in the router (remainder is assigned to the final leg).
+    function test_deposit_noRouterDustOnUnevenSplit() public {
+        // Weights [3334, 3333, 3333] — three vaults, intentionally uneven.
+        vm.startPrank(admin);
+        registry.registerVault(address(vaultC), metaC);
+        address[] memory vaults = new address[](3);
+        uint256[] memory bps = new uint256[](3);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        vaults[2] = address(vaultC);
+        bps[0] = 3334;
+        bps[1] = 3333;
+        bps[2] = 3333;
+        router.setWeights(vaults, bps);
+        vm.stopPrank();
+
+        // 100 USDC: floored amounts are [33, 33, 33] = 99, remainder = 1
+        uint256 amount = 100 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        // Router must hold zero USDC after the deposit.
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds dust");
+
+        // All deposited USDC must reach the vaults.
+        uint256 totalShares = shares[0] + shares[1] + shares[2];
+        assertEq(totalShares, amount, "shares do not sum to deposited amount");
+    }
+
+    /// @notice Fuzz: arbitrary deposit amounts and two-leg weights — router
+    ///         balance is always zero after a successful deposit.
+    function testFuzz_deposit_routerBalanceAlwaysZero(uint256 amount, uint256 bpsA) public {
+        bpsA = bound(bpsA, 1, 9999);
+        uint256 bpsB = 10_000 - bpsA;
+        amount = bound(amount, 1, 1_000_000 * ONE_USDC);
+
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = bpsA;
+        bps[1] = bpsB;
+        vm.prank(admin);
+        router.setWeights(vaults, bps);
+
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        // Pass-through invariant: router holds zero USDC.
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds dust");
+
+        // Conservation: sum of shares equals total deposited amount.
+        assertEq(shares[0] + shares[1], amount, "shares do not sum to deposited amount");
     }
 }
