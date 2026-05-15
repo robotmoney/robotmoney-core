@@ -47,6 +47,13 @@ sol!(
     "abi/VaultRegistry.json"
 );
 
+sol!(
+    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    PortfolioRouter,
+    "abi/PortfolioRouter.json"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

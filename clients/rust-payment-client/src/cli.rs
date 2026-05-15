@@ -96,6 +96,24 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Read PortfolioRouter state: vault addresses, weight bps, and router
+    /// cap (issue #308 / §5.1).
+    GetRouter {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Read RouterGovernance state: active proposal, cadence params, and
+    /// last applied weight vector (issue #308 / §5.1).
+    GetGovernance {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Read gateway state directly from chain (issue #49 / §9).
     GetGateway {
         #[arg(long, short = 'c')]

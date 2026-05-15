@@ -75,6 +75,46 @@ Use it to discover all available deposit destinations programmatically.
 
 ---
 
+## `get-router`
+
+```bash
+rmpc get-router --config ./config.toml [--pretty]
+```
+
+Reads the configured `PortfolioRouter` contract (requires `router_address` in
+the operator config). Returns the router address, the ordered list of vault
+addresses with their weight in basis points (max 10 000 = 100%), and the
+global `routerCap` in USDC base units (0 = uncapped).
+
+All reads are pinned to a single `eth_blockNumber` snapshot. If any sub-read
+fails the response is a partial envelope (`partial: true`) with per-field
+errors; exit code is still 0.
+
+Use it before a deposit to confirm current allocation weights.
+
+---
+
+## `get-governance`
+
+```bash
+rmpc get-governance --config ./config.toml [--pretty]
+```
+
+Reads the configured `RouterGovernance` contract (requires `governance_address`
+in the operator config). Returns:
+
+- `active_proposal` — `null` when no proposal is pending; otherwise the
+  proposal id, proposed vault addresses, proposed weight bps, vote tallies
+  (`votes_for`, `votes_against`), and expiry timestamp.
+- `cadence` — quorum threshold (decimal string), execution delay in seconds,
+  and minimum cadence between proposals in seconds.
+- `current_weights` — the last applied weight vector (vault addresses + bps).
+
+All reads are pinned to a single `eth_blockNumber` snapshot. Partial envelopes
+are supported; exit code is 0 even for partial results.
+
+---
+
 ## `get-gateway`
 
 ```bash
