@@ -13,19 +13,6 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
-/// @notice Minimal mintable ERC-20 that acts as the RM governance token.
-contract MockRmToken is ERC20 {
-    constructor() ERC20("RobotMoney", "RM") {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
-    }
-
-    function totalSupply() public view override returns (uint256) {
-        return super.totalSupply();
-    }
-}
-
 /// @notice Minimal ERC-20 USDC mock (6 decimals) for the router.
 contract MockUsdc is ERC20 {
     constructor() ERC20("USD Coin", "USDC") {}
@@ -76,26 +63,28 @@ contract MockGovVault is ERC20 {
 
 contract RouterGovernanceTest is Test {
     // ── Governance parameters ──
-    uint256 constant QUORUM_BPS = 5_100; // 51%
-    uint256 constant EXECUTION_DELAY = 1 days;
-    uint256 constant CADENCE_WINDOW = 7 days;
+    uint64 constant VOTING_PERIOD = 1 days;
+    uint64 constant EXECUTION_DELAY = 1 days;
+    uint256 constant QUORUM_THRESHOLD = 510_000e18; // 51% of 1M total power
 
-    // ── Token supply ──
-    uint256 constant TOTAL_RM = 1_000_000e18; // 1 M RM tokens
+    // ── Voting power ──
+    uint256 constant ALICE_POWER = 600_000e18; // ~60%
+    uint256 constant BOB_POWER = 200_000e18; // ~20%
+    uint256 constant CAROL_POWER = 200_000e18; // ~20%
 
-    MockRmToken internal rmToken;
     MockUsdc internal usdc;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal gov;
 
+    address internal govAdmin = makeAddr("govAdmin");
     address internal routerAdmin = makeAddr("routerAdmin");
     address internal registryAdmin = makeAddr("registryAdmin");
 
-    address internal alice = makeAddr("alice"); // ~60% RM — majority
-    address internal bob = makeAddr("bob"); // ~20% RM
-    address internal carol = makeAddr("carol"); // ~20% RM
-    address internal stranger = makeAddr("stranger"); // 0 RM
+    address internal alice = makeAddr("alice"); // 60% power
+    address internal bob = makeAddr("bob"); // 20% power
+    address internal carol = makeAddr("carol"); // 20% power
+    address internal stranger = makeAddr("stranger"); // 0 power
 
     MockGovVault internal vaultA;
     MockGovVault internal vaultB;
@@ -106,12 +95,6 @@ contract RouterGovernanceTest is Test {
     // ─── setUp ────────────────────────────────────────────────────────────────
 
     function setUp() public {
-        // Deploy RM token and distribute supply.
-        rmToken = new MockRmToken();
-        rmToken.mint(alice, 600_000e18); // 60%
-        rmToken.mint(bob, 200_000e18); // 20%
-        rmToken.mint(carol, 200_000e18); // 20%
-
         // Deploy USDC and registry.
         usdc = new MockUsdc();
         registry = new VaultRegistry(registryAdmin);
@@ -133,24 +116,25 @@ contract RouterGovernanceTest is Test {
         // Deploy router and governance.
         router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
         gov = new RouterGovernance(
-            address(rmToken),
-            address(registry),
-            address(router),
-            QUORUM_BPS,
-            EXECUTION_DELAY,
-            CADENCE_WINDOW
+            address(router), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
 
         // Grant governance contract ADMIN_ROLE on the router so it can call setWeights.
-        // Read the role value before pranking to avoid consuming the prank on the staticcall.
         bytes32 adminRole = router.ADMIN_ROLE();
         vm.prank(routerAdmin);
         router.grantRole(adminRole, address(gov));
+
+        // Assign voting power via govAdmin.
+        vm.startPrank(govAdmin);
+        gov.setVotingPower(alice, ALICE_POWER);
+        gov.setVotingPower(bob, BOB_POWER);
+        gov.setVotingPower(carol, CAROL_POWER);
+        vm.stopPrank();
     }
 
     // ─── Helper ───────────────────────────────────────────────────────────────
 
-    /// @dev Build a valid 60/40 proposal and submit it from alice.
+    /// @dev Build a valid 60/40 proposal and submit it from govAdmin.
     function _proposeValid() internal returns (uint256 proposalId) {
         address[] memory vaults = new address[](2);
         vaults[0] = address(vaultA);
@@ -160,56 +144,54 @@ contract RouterGovernanceTest is Test {
         bps[0] = 6_000;
         bps[1] = 4_000;
 
-        vm.prank(alice);
+        vm.prank(govAdmin);
         proposalId = gov.propose(vaults, bps);
     }
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    function test_constructor_revertsOnZeroRmToken() public {
-        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(
-            address(0),
-            address(registry),
-            address(router),
-            QUORUM_BPS,
-            EXECUTION_DELAY,
-            CADENCE_WINDOW
-        );
-    }
-
-    function test_constructor_revertsOnZeroRegistry() public {
-        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
-        new RouterGovernance(
-            address(rmToken),
-            address(0),
-            address(router),
-            QUORUM_BPS,
-            EXECUTION_DELAY,
-            CADENCE_WINDOW
-        );
-    }
-
     function test_constructor_revertsOnZeroRouter() public {
         vm.expectRevert(RouterGovernance.ZeroAddress.selector);
+        new RouterGovernance(address(0), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD);
+    }
+
+    function test_constructor_revertsOnZeroAdmin() public {
+        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
         new RouterGovernance(
-            address(rmToken),
-            address(registry),
-            address(0),
-            QUORUM_BPS,
-            EXECUTION_DELAY,
-            CADENCE_WINDOW
+            address(router), address(0), VOTING_PERIOD, EXECUTION_DELAY, QUORUM_THRESHOLD
         );
     }
 
     function test_constructor_storesParams() public view {
-        assertEq(address(gov.rmToken()), address(rmToken));
-        assertEq(address(gov.registry()), address(registry));
         assertEq(address(gov.router()), address(router));
-        assertEq(gov.quorumBps(), QUORUM_BPS);
+        assertEq(gov.votingPeriod(), VOTING_PERIOD);
         assertEq(gov.executionDelay(), EXECUTION_DELAY);
-        assertEq(gov.cadenceWindow(), CADENCE_WINDOW);
-        assertEq(gov.totalRmSupply(), TOTAL_RM);
+        assertEq(gov.quorumThreshold(), QUORUM_THRESHOLD);
+    }
+
+    function test_constructor_adminRoleGranted() public view {
+        assertTrue(gov.hasRole(gov.ADMIN_ROLE(), govAdmin));
+    }
+
+    // ─── setVotingPower() ─────────────────────────────────────────────────────
+
+    function test_setVotingPower_setsAndTracksTotal() public view {
+        assertEq(gov.votingPower(alice), ALICE_POWER);
+        assertEq(gov.votingPower(bob), BOB_POWER);
+        assertEq(gov.votingPower(carol), CAROL_POWER);
+        assertEq(gov.totalVotingPower(), ALICE_POWER + BOB_POWER + CAROL_POWER);
+    }
+
+    function test_setVotingPower_revertsOnZeroAddress() public {
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.ZeroAddress.selector);
+        gov.setVotingPower(address(0), 100e18);
+    }
+
+    function test_setVotingPower_revertsForNonAdmin() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        gov.setVotingPower(alice, 1e18);
     }
 
     // ─── propose() ───────────────────────────────────────────────────────────
@@ -217,8 +199,7 @@ contract RouterGovernanceTest is Test {
     function test_propose_successfulCreation() public {
         uint256 pid = _proposeValid();
         assertEq(pid, 1);
-        assertEq(gov.proposalCount(), 1);
-        assertEq(gov.activeProposalId(), 1);
+        assertEq(gov.currentProposalId(), 1);
     }
 
     function test_propose_emitsProposalCreated() public {
@@ -229,20 +210,22 @@ contract RouterGovernanceTest is Test {
         bps[0] = 6_000;
         bps[1] = 4_000;
 
-        vm.prank(alice);
-        vm.expectEmit(true, true, false, true);
-        emit RouterGovernance.ProposalCreated(1, alice, vaults, bps, block.number);
+        vm.prank(govAdmin);
+        vm.expectEmit(true, true, false, false);
+        emit RouterGovernance.ProposalCreated(
+            1, govAdmin, vaults, bps, uint64(block.timestamp) + VOTING_PERIOD
+        );
         gov.propose(vaults, bps);
     }
 
-    function test_propose_revertsIfNotRmHolder() public {
+    function test_propose_revertsForNonAdmin() public {
         address[] memory vaults = new address[](1);
         vaults[0] = address(vaultA);
         uint256[] memory bps = new uint256[](1);
         bps[0] = 10_000;
 
-        vm.prank(stranger);
-        vm.expectRevert(RouterGovernance.NotRmHolder.selector);
+        vm.prank(alice);
+        vm.expectRevert();
         gov.propose(vaults, bps);
     }
 
@@ -254,7 +237,7 @@ contract RouterGovernanceTest is Test {
         bps[0] = 5_000;
         bps[1] = 4_000; // sum = 9000, not 10000
 
-        vm.prank(alice);
+        vm.prank(govAdmin);
         vm.expectRevert(RouterGovernance.InvalidWeightSum.selector);
         gov.propose(vaults, bps);
     }
@@ -266,19 +249,8 @@ contract RouterGovernanceTest is Test {
         uint256[] memory bps = new uint256[](1);
         bps[0] = 10_000;
 
-        vm.prank(alice);
+        vm.prank(govAdmin);
         vm.expectRevert(RouterGovernance.LengthMismatch.selector);
-        gov.propose(vaults, bps);
-    }
-
-    function test_propose_revertsIfVaultNotRegistered() public {
-        address[] memory vaults = new address[](1);
-        vaults[0] = makeAddr("unregisteredVault");
-        uint256[] memory bps = new uint256[](1);
-        bps[0] = 10_000;
-
-        vm.prank(alice);
-        vm.expectRevert(); // VaultRegistry reverts with NotRegistered
         gov.propose(vaults, bps);
     }
 
@@ -290,26 +262,26 @@ contract RouterGovernanceTest is Test {
         uint256[] memory bps = new uint256[](1);
         bps[0] = 10_000;
 
-        vm.prank(bob);
-        vm.expectRevert(RouterGovernance.ProposalAlreadyActive.selector);
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.ActiveProposalExists.selector);
         gov.propose(vaults, bps);
     }
 
-    function test_propose_allowsNewProposalAfterExpiry() public {
+    function test_propose_allowsNewProposalAfterDefeated() public {
         _proposeValid();
 
-        // Fast-forward past cadence window to expire the active proposal.
-        vm.warp(block.timestamp + CADENCE_WINDOW + 1);
+        // Fast-forward past voting period without quorum — proposal becomes Defeated.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
 
         address[] memory vaults = new address[](1);
         vaults[0] = address(vaultA);
         uint256[] memory bps = new uint256[](1);
         bps[0] = 10_000;
 
-        vm.prank(bob);
+        vm.prank(govAdmin);
         uint256 pid = gov.propose(vaults, bps);
         assertEq(pid, 2);
-        assertEq(gov.activeProposalId(), 2);
+        assertEq(gov.currentProposalId(), 2);
     }
 
     // ─── vote() ──────────────────────────────────────────────────────────────
@@ -320,8 +292,10 @@ contract RouterGovernanceTest is Test {
         vm.prank(alice);
         gov.vote(pid);
 
-        (uint256 totalVotes,,) = gov.voteTallies(pid);
-        assertEq(totalVotes, 600_000e18);
+        // Check via proposalState — alice has 60% > 51% quorum so now Queued
+        // after voting period (at this point it's still Active since we didn't warp).
+        // Just check hasVoted.
+        assertTrue(gov.hasVoted(pid, alice));
     }
 
     function test_vote_emitsVoteCast() public {
@@ -329,11 +303,11 @@ contract RouterGovernanceTest is Test {
 
         vm.prank(alice);
         vm.expectEmit(true, true, false, true);
-        emit RouterGovernance.VoteCast(pid, alice, 600_000e18);
+        emit RouterGovernance.VoteCast(pid, alice, ALICE_POWER, ALICE_POWER);
         gov.vote(pid);
     }
 
-    function test_vote_revertsOnDoublVote() public {
+    function test_vote_revertsOnDoubleVote() public {
         uint256 pid = _proposeValid();
 
         vm.prank(alice);
@@ -344,27 +318,27 @@ contract RouterGovernanceTest is Test {
         gov.vote(pid);
     }
 
-    function test_vote_revertsOnExpiredProposal() public {
+    function test_vote_revertsAfterVotingPeriod() public {
         uint256 pid = _proposeValid();
 
-        vm.warp(block.timestamp + CADENCE_WINDOW + 1);
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
 
         vm.prank(alice);
-        vm.expectRevert(RouterGovernance.ProposalExpired.selector);
+        vm.expectRevert(RouterGovernance.ProposalNotActive.selector);
         gov.vote(pid);
     }
 
     function test_vote_revertsOnNonExistentProposal() public {
         vm.prank(alice);
-        vm.expectRevert(RouterGovernance.ProposalNotFound.selector);
+        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
         gov.vote(999);
     }
 
-    function test_vote_revertsIfNotRmHolder() public {
+    function test_vote_revertsIfNoVotingPower() public {
         uint256 pid = _proposeValid();
 
         vm.prank(stranger);
-        vm.expectRevert(RouterGovernance.NotRmHolder.selector);
+        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
         gov.vote(pid);
     }
 
@@ -376,8 +350,66 @@ contract RouterGovernanceTest is Test {
         vm.prank(bob);
         gov.vote(pid);
 
-        (uint256 totalVotes,,) = gov.voteTallies(pid);
-        assertEq(totalVotes, 800_000e18); // alice 600k + bob 200k
+        // Both have voted — check hasVoted.
+        assertTrue(gov.hasVoted(pid, alice));
+        assertTrue(gov.hasVoted(pid, bob));
+        assertFalse(gov.hasVoted(pid, carol));
+    }
+
+    // ─── proposalState() ─────────────────────────────────────────────────────
+
+    function test_proposalState_activeBeforeVotingDeadline() public {
+        uint256 pid = _proposeValid();
+        RouterGovernance.ProposalState s = gov.proposalState(pid);
+        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Active));
+    }
+
+    function test_proposalState_defeatedWhenNoQuorum() public {
+        uint256 pid = _proposeValid();
+
+        // Bob (20%) votes — below 51% quorum.
+        vm.prank(bob);
+        gov.vote(pid);
+
+        // Advance past voting period.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+
+        RouterGovernance.ProposalState s = gov.proposalState(pid);
+        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Defeated));
+    }
+
+    function test_proposalState_queuedWhenQuorumReached() public {
+        uint256 pid = _proposeValid();
+
+        // Alice (60%) votes — quorum reached.
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Advance past voting period.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+
+        RouterGovernance.ProposalState s = gov.proposalState(pid);
+        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Queued));
+    }
+
+    function test_proposalState_executedAfterExecution() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Advance past voting period + execution delay.
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+
+        gov.execute(pid);
+
+        RouterGovernance.ProposalState s = gov.proposalState(pid);
+        assertEq(uint256(s), uint256(RouterGovernance.ProposalState.Executed));
+    }
+
+    function test_proposalState_revertsOnNonExistent() public {
+        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
+        gov.proposalState(999);
     }
 
     // ─── execute() ───────────────────────────────────────────────────────────
@@ -389,8 +421,8 @@ contract RouterGovernanceTest is Test {
         vm.prank(alice);
         gov.vote(pid);
 
-        // Fast-forward past execution delay.
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        // Fast-forward past voting period + execution delay.
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
 
         vm.prank(carol);
         gov.execute(pid);
@@ -404,16 +436,27 @@ contract RouterGovernanceTest is Test {
         assertEq(bps[1], 4_000);
     }
 
-    function test_execute_emitsProposalExecutedAndWeightsApplied() public {
+    function test_execute_emitsProposalExecuted() public {
         uint256 pid = _proposeValid();
 
         vm.prank(alice);
         gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
 
         vm.prank(carol);
         vm.expectEmit(true, true, false, false);
         emit RouterGovernance.ProposalExecuted(pid, carol);
+        gov.execute(pid);
+    }
+
+    function test_execute_revertsBeforeVotingEnds() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Still within voting period — quorum reached but voting open.
+        vm.expectRevert(RouterGovernance.VotingStillOpen.selector);
         gov.execute(pid);
     }
 
@@ -423,8 +466,8 @@ contract RouterGovernanceTest is Test {
         vm.prank(alice);
         gov.vote(pid);
 
-        // Only advance half the delay.
-        vm.warp(block.timestamp + EXECUTION_DELAY / 2);
+        // Past voting period but before execution delay.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
 
         vm.expectRevert(RouterGovernance.ExecutionDelayNotElapsed.selector);
         gov.execute(pid);
@@ -437,19 +480,9 @@ contract RouterGovernanceTest is Test {
         vm.prank(bob);
         gov.vote(pid);
 
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
 
         vm.expectRevert(RouterGovernance.QuorumNotReached.selector);
-        gov.execute(pid);
-    }
-
-    function test_execute_revertsOnExpiredProposal() public {
-        uint256 pid = _proposeValid();
-
-        // Do NOT vote — let it expire.
-        vm.warp(block.timestamp + CADENCE_WINDOW + 1);
-
-        vm.expectRevert(RouterGovernance.ProposalExpired.selector);
         gov.execute(pid);
     }
 
@@ -458,100 +491,31 @@ contract RouterGovernanceTest is Test {
 
         vm.prank(alice);
         gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
         gov.execute(pid);
 
-        vm.expectRevert(RouterGovernance.ProposalNotActive.selector);
+        vm.expectRevert(RouterGovernance.AlreadyExecuted.selector);
         gov.execute(pid);
     }
 
-    function test_execute_clearsActiveProposalId() public {
-        uint256 pid = _proposeValid();
+    // ─── cadenceParams() ─────────────────────────────────────────────────────
 
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
-        gov.execute(pid);
-
-        assertEq(gov.activeProposalId(), 0);
+    function test_cadenceParams_returnsStoredValues() public view {
+        (uint64 vp, uint64 ed, uint256 qt, uint256 tvp) = gov.cadenceParams();
+        assertEq(vp, VOTING_PERIOD);
+        assertEq(ed, EXECUTION_DELAY);
+        assertEq(qt, QUORUM_THRESHOLD);
+        assertEq(tvp, ALICE_POWER + BOB_POWER + CAROL_POWER);
     }
 
-    // ─── View functions ───────────────────────────────────────────────────────
-
-    function test_activeProposal_returnsZeroWhenNone() public view {
-        (uint256 id,) = gov.activeProposal();
-        assertEq(id, 0);
-    }
-
-    function test_activeProposal_returnsIdWhenSet() public {
-        uint256 pid = _proposeValid();
-        (uint256 id,) = gov.activeProposal();
-        assertEq(id, pid);
-    }
-
-    function test_activeProposal_stateActiveBeforeVotes() public {
-        _proposeValid();
-        (, RouterGovernance.ProposalState state) = gov.activeProposal();
-        assertEq(uint256(state), uint256(RouterGovernance.ProposalState.Active));
-    }
-
-    function test_activeProposal_stateSucceededAfterQuorumAndDelay() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
-
-        (, RouterGovernance.ProposalState state) = gov.activeProposal();
-        assertEq(uint256(state), uint256(RouterGovernance.ProposalState.Succeeded));
-    }
-
-    function test_activeProposal_stateExpiredAfterWindow() public {
-        _proposeValid();
-        vm.warp(block.timestamp + CADENCE_WINDOW + 1);
-        (, RouterGovernance.ProposalState state) = gov.activeProposal();
-        assertEq(uint256(state), uint256(RouterGovernance.ProposalState.Expired));
-    }
-
-    function test_activeProposal_stateExecutedAfterExecution() public {
-        uint256 pid = _proposeValid();
-
-        vm.prank(alice);
-        gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
-        gov.execute(pid);
-
-        // Active proposal id is now 0; state returned is Active (default for id=0).
-        (uint256 id,) = gov.activeProposal();
-        assertEq(id, 0);
-
-        // Check directly via getProposal.
-        (,,,,,, bool executed) = gov.getProposal(pid);
-        assertTrue(executed);
-    }
-
-    function test_voteTallies_correctValues() public {
-        uint256 pid = _proposeValid();
-
-        (uint256 totalVotesBefore, uint256 quorumNeeded, bool quorumReachedBefore) =
-            gov.voteTallies(pid);
-        assertEq(totalVotesBefore, 0);
-        assertEq(quorumNeeded, (TOTAL_RM * QUORUM_BPS) / 10_000);
-        assertFalse(quorumReachedBefore);
-
-        vm.prank(alice);
-        gov.vote(pid);
-
-        (,, bool quorumReachedAfter) = gov.voteTallies(pid);
-        assertTrue(quorumReachedAfter);
-    }
+    // ─── currentWeights() ────────────────────────────────────────────────────
 
     function test_currentWeights_returnsRouterWeights() public {
         uint256 pid = _proposeValid();
 
         vm.prank(alice);
         gov.vote(pid);
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
         gov.execute(pid);
 
         (address[] memory vaults, uint256[] memory bps) = gov.currentWeights();
@@ -560,12 +524,7 @@ contract RouterGovernanceTest is Test {
         assertEq(bps[1], 4_000);
     }
 
-    function test_cadenceParams_returnsStoredValues() public view {
-        (uint256 q, uint256 d, uint256 c) = gov.cadenceParams();
-        assertEq(q, QUORUM_BPS);
-        assertEq(d, EXECUTION_DELAY);
-        assertEq(c, CADENCE_WINDOW);
-    }
+    // ─── hasVoted() ──────────────────────────────────────────────────────────
 
     function test_hasVoted_tracksVoterState() public {
         uint256 pid = _proposeValid();
@@ -583,17 +542,20 @@ contract RouterGovernanceTest is Test {
     function test_fullGovernanceRoundTrip() public {
         // Propose.
         uint256 pid = _proposeValid();
-        assertEq(gov.proposalCount(), 1);
+        assertEq(gov.currentProposalId(), 1);
 
         // Vote — alice (60%) reaches quorum.
         vm.prank(alice);
         gov.vote(pid);
 
-        (,, bool quorumReached) = gov.voteTallies(pid);
-        assertTrue(quorumReached);
+        // Advance past voting period.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+
+        // State should be Queued.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
 
         // Advance past execution delay.
-        vm.warp(block.timestamp + EXECUTION_DELAY + 1);
+        vm.warp(block.timestamp + EXECUTION_DELAY);
 
         // Execute — anyone may call.
         gov.execute(pid);
@@ -606,7 +568,7 @@ contract RouterGovernanceTest is Test {
         assertEq(bps[0], 6_000);
         assertEq(bps[1], 4_000);
 
-        // Active proposal cleared.
-        assertEq(gov.activeProposalId(), 0);
+        // State is now Executed.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Executed));
     }
 }

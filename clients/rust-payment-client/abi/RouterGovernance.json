@@ -1,0 +1,109 @@
+[
+  {
+    "type": "function",
+    "name": "currentProposalId",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "cadenceParams",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "votingPeriod",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "executionDelay",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "quorumThreshold",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "totalVotingPower",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "activeProposal",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "bps",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "votingDeadline",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "executableAfter",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "votesFor",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "executed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "currentWeights",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "bps",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

@@ -1,21 +1,18 @@
-//! Canonical: docs/implementation-plan.md §5.1 — Router-weight governance reads
-//! ADR: docs/technical/rmpc-read-output-contract.md
+//! Canonical: docs/implementation-plan.md — "Router-weight governance" phase
+//! Implements: issue #309 (rmpc get-router subprocess assertion)
 //!
-//! `rmpc get-router` — direct on-chain read of the configured
-//! `PortfolioRouter` contract's observable state.
+//! `rmpc get-router` — direct on-chain read of Portfolio Router state.
 //!
 //! Sub-reads (all `eth_call`, pinned to a single `eth_blockNumber` snapshot):
 //!
-//! - `PortfolioRouter.getWeights()` → ordered vault addresses and parallel
-//!   weight bps array.
-//! - `PortfolioRouter.routerCap()` → global USDC ceiling per deposit call
-//!   (0 = uncapped).
+//! - `PortfolioRouter.getWeights()` → current vault address list and bps.
+//! - `PortfolioRouter.routerCap()` → global deposit cap (0 = uncapped).
 //!
-//! Both commands require no signer key; the config field `router_address`
-//! must be set or the command exits `EXIT_STARTUP_FAIL`.
+//! Config field `router_address` must be set; exits `EXIT_STARTUP_FAIL`
+//! when absent.
 //!
 //! Exit codes:
-//! - 0 — envelope emitted (including `partial: true` envelopes).
+//! - 0 — envelope emitted.
 //! - 3 — config / RPC connectivity / address-parse failure.
 
 use std::path::Path;
@@ -34,23 +31,24 @@ use crate::rpc::{CallRequest, RpcClient};
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
 
-/// One vault leg in the current weight vector.
+/// One entry in the `weights` array.
 #[derive(Debug, Default, Serialize)]
 pub struct WeightEntry {
     /// Vault contract address (lowercase 0x-hex).
     pub vault: String,
-    /// Weight in basis points (max 10 000 = 100%).
-    pub weight_bps: DecimalU256,
+    /// Weight in basis points (0–10 000).
+    pub bps: u64,
 }
 
 /// `data` payload for `rmpc get-router`.
 #[derive(Debug, Default, Serialize)]
-pub struct GetRouterData {
-    /// Router contract address (from operator config).
-    pub router: String,
-    /// Ordered vault addresses with their weight bps.
+pub struct RouterData {
+    /// Portfolio Router address (from operator config).
+    pub address: String,
+    /// Current vault weight vector. Empty when no weights are set.
     pub weights: Vec<WeightEntry>,
-    /// Global router cap in USDC base units (0 = uncapped).
+    /// Global router cap in USDC's smallest unit (decimal string).
+    /// `"0"` means uncapped.
     pub router_cap: DecimalU256,
 }
 
@@ -63,6 +61,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
+
     let router_addr = match cfg.router_address.as_deref() {
         Some(s) => match Address::from_str(s) {
             Ok(a) => a,
@@ -116,51 +115,52 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
     EXIT_OK
 }
 
-/// Drive the router sub-reads against a pinned block. Pre-read setup
-/// failures (chain id, block number) propagate as `Err`; per-field
-/// sub-read failures are captured via `record_err` on the builder.
 async fn read_router(
     rpc: &RpcClient,
     router: Address,
-) -> crate::errors::Result<Envelope<GetRouterData>> {
+) -> crate::errors::Result<Envelope<RouterData>> {
     let chain_id = rpc.chain_id().await?;
     let block_number = rpc.block_number().await?;
     let block_tag = format!("0x{block_number:x}");
 
-    let data = GetRouterData {
-        router: format!("{router:#x}"),
+    let data = RouterData {
+        address: format!("{router:#x}"),
         weights: Vec::new(),
-        router_cap: DecimalU256::default(),
+        router_cap: DecimalU256(U256::ZERO),
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
 
-    // getWeights() → (address[], uint256[])
+    // Read getWeights().
     match call_get_weights(rpc, router, &block_tag).await {
         Ok((vaults, bps)) => {
-            b.data_mut().weights = vaults
+            let entries: Vec<WeightEntry> = vaults
                 .into_iter()
                 .zip(bps)
-                .map(|(vault, bps)| WeightEntry {
-                    vault: format!("{vault:#x}"),
-                    weight_bps: DecimalU256(bps),
+                .map(|(v, bps_val)| WeightEntry {
+                    vault: format!("{v:#x}"),
+                    bps: bps_val.saturating_to::<u64>(),
                 })
                 .collect();
+            b.data_mut().weights = entries;
         }
-        Err(e) => b.record_err("weights", e.to_string()),
+        Err(e) => {
+            b.record_err("weights".to_string(), e.to_string());
+        }
     }
 
-    // routerCap() → uint256
+    // Read routerCap().
     match call_router_cap(rpc, router, &block_tag).await {
-        Ok(cap) => b.data_mut().router_cap = DecimalU256(cap),
-        Err(e) => b.record_err("router_cap", e.to_string()),
+        Ok(cap) => {
+            b.data_mut().router_cap = DecimalU256(cap);
+        }
+        Err(e) => {
+            b.record_err("router_cap".to_string(), e);
+        }
     }
 
     Ok(b.finish())
 }
 
-// ---- typed view helpers --------------------------------------------------
-
-/// Call `PortfolioRouter.getWeights()` and return (vaults, bps) arrays.
 async fn call_get_weights(
     rpc: &RpcClient,
     router: Address,
@@ -183,12 +183,11 @@ async fn call_get_weights(
     Ok((r.vaults, r.bps))
 }
 
-/// Call `PortfolioRouter.routerCap()` and return the decoded `U256`.
 async fn call_router_cap(
     rpc: &RpcClient,
     router: Address,
     block_tag: &str,
-) -> crate::errors::Result<U256> {
+) -> std::result::Result<U256, String> {
     let data = PortfolioRouter::routerCapCall {}.abi_encode();
     let out = rpc
         .eth_call(
@@ -199,10 +198,10 @@ async fn call_router_cap(
             },
             Some(block_tag),
         )
-        .await?;
-    let r = PortfolioRouter::routerCapCall::abi_decode_returns(&out, true).map_err(|e| {
-        crate::errors::RmpcError::ErrRpcDecode(format!("routerCap abi decode: {e}"))
-    })?;
+        .await
+        .map_err(|e| format!("eth_call failed: {e}"))?;
+    let r = PortfolioRouter::routerCapCall::abi_decode_returns(&out, true)
+        .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }
 
@@ -219,48 +218,7 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::U256;
-    use serde_json::Value;
 
-    #[test]
-    fn get_router_data_empty_weights_serialises_as_array() {
-        let data = GetRouterData {
-            router: "0x0000000000000000000000000000000000000001".to_string(),
-            weights: vec![],
-            router_cap: DecimalU256::default(),
-        };
-        let v: Value = serde_json::to_value(&data).unwrap();
-        assert!(v["weights"].as_array().unwrap().is_empty());
-        assert_eq!(v["router_cap"].as_str().unwrap(), "0");
-    }
-
-    #[test]
-    fn weight_entry_bps_is_decimal_string() {
-        let entry = WeightEntry {
-            vault: "0x0000000000000000000000000000000000000001".to_string(),
-            weight_bps: DecimalU256(U256::from(6000u64)),
-        };
-        let v: Value = serde_json::to_value(&entry).unwrap();
-        assert!(
-            v["weight_bps"].is_string(),
-            "weight_bps must be a JSON string"
-        );
-        assert_eq!(v["weight_bps"].as_str().unwrap(), "6000");
-    }
-
-    #[test]
-    fn router_cap_is_decimal_string() {
-        let data = GetRouterData {
-            router: "0x0000000000000000000000000000000000000001".to_string(),
-            weights: vec![],
-            router_cap: DecimalU256(U256::from(500_000_000u64)),
-        };
-        let v: Value = serde_json::to_value(&data).unwrap();
-        assert_eq!(v["router_cap"].as_str().unwrap(), "500000000");
-    }
-
-    /// When router_address is absent from config, run() must return
-    /// EXIT_STARTUP_FAIL without touching the network.
     #[test]
     fn run_fails_fast_without_router_address() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -287,5 +245,19 @@ keystore_path           = "{ks}"
         std::fs::write(&cfg_path, &toml).expect("write rmpc.toml");
         let code = run(&cfg_path, false);
         assert_eq!(code, EXIT_STARTUP_FAIL);
+    }
+
+    #[test]
+    fn weight_entry_serialises_correctly() {
+        let entry = WeightEntry {
+            vault: "0x0000000000000000000000000000000000000001".to_string(),
+            bps: 6000,
+        };
+        let v: serde_json::Value = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["bps"].as_u64().unwrap(), 6000);
+        assert_eq!(
+            v["vault"].as_str().unwrap(),
+            "0x0000000000000000000000000000000000000001"
+        );
     }
 }

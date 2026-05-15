@@ -180,6 +180,33 @@ otherwise.
 
 ---
 
+## `get-router`
+
+```bash
+rmpc get-router --config ./config.toml [--pretty]
+```
+
+Reads the Portfolio Router state. Returns the current vault weight vector
+(`weights` array of `{vault, bps}` entries) and the global `router_cap`
+(decimal string; `"0"` means uncapped). Requires `router_address` in the
+operator config.
+
+---
+
+## `get-governance`
+
+```bash
+rmpc get-governance --config ./config.toml [--pretty]
+```
+
+Reads the RouterGovernance state. Returns the current proposal id,
+cadence parameters (`voting_period_secs`, `execution_delay_secs`,
+`quorum_threshold`, `total_voting_power`), the current router weight vector
+as seen by governance, and the active proposal details (if any). Requires
+`governance_address` in the operator config.
+
+---
+
 ## `get-deposit`
 
 ```bash

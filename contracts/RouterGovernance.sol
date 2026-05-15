@@ -1,30 +1,32 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
-// (See also: docs/prd.md §5 — Multi-vault product direction)
+// Implements: docs/implementation-plan.md "Router-weight governance" phase
+// Implements: issue #309
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {VaultRegistry} from "./VaultRegistry.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 
 /// @title RouterGovernance
-/// @notice RM-token weight-vote module that gives RM holders on-chain control
-///         over Portfolio Router target weights.
+/// @notice Narrow governance module that controls Portfolio Router target
+///         weights. Token holders (tracked as on-chain voting power assigned
+///         by the admin) may propose a new weight vector, vote, and execute
+///         after quorum is reached and the execution delay elapses.
 ///
-/// Flow:
-///   1. An RM holder calls `propose(vaults, bps)` to submit a new weight vector.
-///      Vote weight is snapshotted at the proposal block.
-///   2. RM holders call `vote(proposalId)`. Each holder may vote once, weighted
-///      by their RM `balanceOf` at the snapshot block.
-///   3. After `executionDelay` seconds and once quorum is reached, anyone calls
-///      `execute(proposalId)`. The router's weights are updated via
-///      `PortfolioRouter.setWeights`.
-///   4. A proposal expires if quorum is not reached within `cadenceWindow` seconds.
+///         Design constraints (docs/architecture.md §2.3):
+///         - Controls router weights only; cannot govern vault internals,
+///           agent permissions, or protocol admin operations.
+///         - Exposes proposal state, vote tallies, cadence metadata, and
+///           resulting weights for rmpc and dapp reads.
+///         - One active proposal at a time (simple linear cadence).
 ///
-/// Events: ProposalCreated, VoteCast, ProposalExecuted, WeightsApplied.
-///
-/// Canonical: docs/architecture.md §2.3
-contract RouterGovernance {
+/// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`.
+contract RouterGovernance is AccessControl {
+    // ─── Roles ───────────────────────────────────────────────────────────────
+
+    /// @notice Grants voting power to addresses, creates proposals, sets params.
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
     // ─── Constants ───────────────────────────────────────────────────────────
 
     /// @notice Basis-points denominator (10 000 = 100%).
@@ -32,343 +34,339 @@ contract RouterGovernance {
 
     // ─── Proposal state ──────────────────────────────────────────────────────
 
-    /// @notice Lifecycle status of a proposal.
     enum ProposalState {
-        Active, // Voting ongoing; quorum not yet reached or delay not elapsed.
-        Succeeded, // Quorum reached and execution delay elapsed; ready to execute.
-        Executed, // Weights applied to the Portfolio Router.
-        Expired // Cadence window elapsed without quorum.
+        /// Proposal is collecting votes.
+        Active,
+        /// Voting period ended; not enough votes reached quorum.
+        Defeated,
+        /// Quorum reached; waiting for execution delay to elapse.
+        Queued,
+        /// Executed: weights applied to the router.
+        Executed
     }
 
-    /// @notice Full on-chain record for a single weight proposal.
-    /// @param proposer       Address that submitted the proposal.
-    /// @param vaults         Ordered vault list proposed.
-    /// @param bps            Parallel weight bps proposed.
-    /// @param snapshotBlock  Block at which RM balances are snapshotted for vote weight.
-    /// @param createdAt      Timestamp when the proposal was created.
-    /// @param totalVotes     Running sum of weighted votes cast.
-    /// @param executed       True once `execute()` has been called and succeeded.
     struct Proposal {
+        /// Sequential proposal id (1-indexed).
+        uint256 id;
+        /// Address that submitted the proposal.
         address proposer;
+        /// Proposed vault address list (parallel to bps).
         address[] vaults;
+        /// Proposed weight bps list (must sum to BPS_DENOMINATOR).
         uint256[] bps;
-        uint256 snapshotBlock;
-        uint256 createdAt;
-        uint256 totalVotes;
+        /// Block timestamp when voting period ends.
+        uint64 votingDeadline;
+        /// Block timestamp after which the proposal may be executed
+        /// (= votingDeadline + executionDelay).
+        uint64 executableAfter;
+        /// Total voting power cast in favour.
+        uint256 votesFor;
+        /// Whether the proposal has been executed.
         bool executed;
     }
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
-    /// @notice The RM token; `balanceOf(account)` at snapshot block determines vote weight.
-    IERC20 public immutable rmToken;
-
-    /// @notice VaultRegistry used to validate proposed vault addresses.
-    VaultRegistry public immutable registry;
-
-    /// @notice Portfolio Router whose weights are updated upon execution.
+    /// @notice The Portfolio Router whose `setWeights` is called on execution.
     PortfolioRouter public immutable router;
 
-    /// @notice Total RM supply at deploy time, used as quorum denominator.
-    ///         Stored once to avoid repeated token calls in governance math.
-    uint256 public immutable totalRmSupply;
+    /// @notice Duration of the voting period in seconds.
+    uint64 public votingPeriod;
 
-    /// @notice Minimum fraction of total RM supply that must vote for quorum, in bps.
-    ///         Default: 5 100 = 51%.
-    uint256 public quorumBps;
+    /// @notice Delay from voting deadline to earliest execution timestamp, in seconds.
+    uint64 public executionDelay;
 
-    /// @notice Seconds that must elapse after proposal creation before execution.
-    uint256 public executionDelay;
+    /// @notice Minimum voting power that must vote FOR to reach quorum.
+    uint256 public quorumThreshold;
 
-    /// @notice Seconds within which quorum must be reached before expiry.
-    uint256 public cadenceWindow;
+    /// @notice Voting power per address. Assigned by ADMIN_ROLE.
+    mapping(address => uint256) public votingPower;
 
-    /// @notice Monotonically incrementing proposal id counter.
-    uint256 public proposalCount;
+    /// @notice Total voting power outstanding (sum of all assigned powers).
+    uint256 public totalVotingPower;
 
-    /// @notice The proposal id currently accepting votes (0 = none).
-    uint256 public activeProposalId;
-
-    /// @notice All proposals indexed by id (1-based).
+    /// @dev Proposals by id (1-indexed; id 0 is never used).
     mapping(uint256 => Proposal) private _proposals;
 
-    /// @notice Whether a given address has voted on a given proposal.
+    /// @dev Id of the currently active / queued / executed proposal.
+    ///      0 = no proposal ever created.
+    uint256 public currentProposalId;
+
+    /// @dev Vote tracking: proposalId -> voter -> voted.
     mapping(uint256 => mapping(address => bool)) private _hasVoted;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new weight proposal is created.
-    /// @param proposalId     Proposal identifier.
-    /// @param proposer       Address that submitted the proposal.
-    /// @param vaults         Proposed vault list.
-    /// @param bps            Proposed weight array.
-    /// @param snapshotBlock  Block at which RM balances are snapshotted.
+    /// @param proposalId     Sequential proposal id.
+    /// @param proposer       Address that created the proposal.
+    /// @param vaults         Proposed vault addresses.
+    /// @param bps            Proposed weight bps (parallel to vaults).
+    /// @param votingDeadline Block timestamp when voting ends.
     event ProposalCreated(
         uint256 indexed proposalId,
         address indexed proposer,
         address[] vaults,
         uint256[] bps,
-        uint256 snapshotBlock
+        uint64 votingDeadline
     );
 
-    /// @notice Emitted when an RM holder casts a vote.
-    /// @param proposalId  Proposal voted on.
-    /// @param voter       Voter's address.
-    /// @param weight      Vote weight (RM balance at snapshot block).
-    event VoteCast(uint256 indexed proposalId, address indexed voter, uint256 weight);
+    /// @notice Emitted when a voter casts a vote in favour.
+    /// @param proposalId Proposal the vote was cast on.
+    /// @param voter      Voter address.
+    /// @param power      Voting power applied.
+    /// @param totalFor   Running total of FOR votes after this cast.
+    event VoteCast(
+        uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor
+    );
 
-    /// @notice Emitted when a proposal is executed and weights are applied.
-    /// @param proposalId  Proposal identifier.
-    /// @param executor    Address that called `execute`.
+    /// @notice Emitted when a queued proposal is executed.
+    /// @param proposalId Executed proposal id.
+    /// @param executor   Address that called `execute`.
     event ProposalExecuted(uint256 indexed proposalId, address indexed executor);
 
-    /// @notice Emitted after `PortfolioRouter.setWeights` succeeds.
-    /// @param vaults  Vault list applied to the router.
-    /// @param bps     Weight array applied to the router.
-    event WeightsApplied(address[] vaults, uint256[] bps);
+    /// @notice Emitted when the router weight vector is updated by this contract.
+    /// @param proposalId Source proposal.
+    /// @param vaults     New vault address list.
+    /// @param bps        New weight bps list (parallel to vaults).
+    event WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps);
+
+    /// @notice Emitted when the quorum threshold is changed.
+    event QuorumThresholdSet(uint256 oldThreshold, uint256 newThreshold);
+
+    /// @notice Emitted when the voting period is changed.
+    event VotingPeriodSet(uint64 oldPeriod, uint64 newPeriod);
+
+    /// @notice Emitted when the execution delay is changed.
+    event ExecutionDelaySet(uint64 oldDelay, uint64 newDelay);
+
+    /// @notice Emitted when voting power is granted or revoked.
+    event VotingPowerSet(address indexed voter, uint256 oldPower, uint256 newPower);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
-    /// @notice Caller holds zero RM tokens at the snapshot block.
-    error NotRmHolder();
-
-    /// @notice An active proposal already exists; only one at a time is allowed.
-    error ProposalAlreadyActive();
-
-    /// @notice Proposal id does not exist.
-    error ProposalNotFound();
-
-    /// @notice Proposal is not in Active state (already executed, expired, or succeeded).
-    error ProposalNotActive();
-
-    /// @notice Caller has already voted on this proposal.
-    error AlreadyVoted();
-
-    /// @notice Proposal has expired (cadence window elapsed without quorum).
-    error ProposalExpired();
-
-    /// @notice Execution delay has not elapsed yet.
-    error ExecutionDelayNotElapsed();
-
-    /// @notice Quorum has not been reached.
-    error QuorumNotReached();
-
-    /// @notice Weight bps array does not sum to BPS_DENOMINATOR.
-    error InvalidWeightSum();
-
-    /// @notice Vaults and bps arrays have mismatched lengths.
-    error LengthMismatch();
-
-    /// @notice A vault in the proposed list is not registered in the VaultRegistry.
-    error VaultNotRegistered();
-
-    /// @notice Address argument is `address(0)`.
     error ZeroAddress();
+    error InvalidWeightSum();
+    error LengthMismatch();
+    error NoActiveProposal();
+    error ProposalNotActive();
+    error AlreadyVoted();
+    error NoVotingPower();
+    error VotingStillOpen();
+    error QuorumNotReached();
+    error ExecutionDelayNotElapsed();
+    error AlreadyExecuted();
+    error ProposalDefeated();
+    error ActiveProposalExists();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
-    /// @param _rmToken         RM governance token address.
-    /// @param _registry        VaultRegistry for vault validation.
     /// @param _router          Portfolio Router whose weights this contract controls.
-    /// @param _quorumBps       Quorum threshold in bps of total RM supply (e.g. 5100 = 51%).
-    /// @param _executionDelay  Seconds required between proposal creation and execution.
-    /// @param _cadenceWindow   Seconds within which quorum must be reached before expiry.
+    /// @param _admin           Address that receives ADMIN_ROLE.
+    /// @param _votingPeriod    Duration of the voting period in seconds.
+    /// @param _executionDelay  Delay from voting end to earliest execution, in seconds.
+    /// @param _quorumThreshold Minimum FOR voting power required for quorum.
     constructor(
-        address _rmToken,
-        address _registry,
         address _router,
-        uint256 _quorumBps,
-        uint256 _executionDelay,
-        uint256 _cadenceWindow
+        address _admin,
+        uint64 _votingPeriod,
+        uint64 _executionDelay,
+        uint256 _quorumThreshold
     ) {
-        if (_rmToken == address(0) || _registry == address(0) || _router == address(0)) {
+        if (_router == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
-        rmToken = IERC20(_rmToken);
-        registry = VaultRegistry(_registry);
         router = PortfolioRouter(_router);
-        quorumBps = _quorumBps;
+        votingPeriod = _votingPeriod;
         executionDelay = _executionDelay;
-        cadenceWindow = _cadenceWindow;
-        totalRmSupply = IERC20(_rmToken).totalSupply();
+        quorumThreshold = _quorumThreshold;
+        _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
+        _grantRole(ADMIN_ROLE, _admin);
     }
 
-    // ─── Propose ─────────────────────────────────────────────────────────────
+    // ─── Admin: cadence parameters ────────────────────────────────────────────
 
-    /// @notice Submit a new weight proposal. Permissionless for RM holders.
-    ///         Only one active proposal may exist at a time.
-    /// @param vaults  Ordered vault list; each must be registered in VaultRegistry.
-    /// @param bps     Parallel weight array in basis points; must sum to BPS_DENOMINATOR.
-    /// @return proposalId  Assigned proposal id.
+    /// @notice Update the quorum threshold. Restricted to ADMIN_ROLE.
+    function setQuorumThreshold(uint256 threshold) external onlyRole(ADMIN_ROLE) {
+        emit QuorumThresholdSet(quorumThreshold, threshold);
+        quorumThreshold = threshold;
+    }
+
+    /// @notice Update the voting period. Restricted to ADMIN_ROLE.
+    function setVotingPeriod(uint64 period) external onlyRole(ADMIN_ROLE) {
+        emit VotingPeriodSet(votingPeriod, period);
+        votingPeriod = period;
+    }
+
+    /// @notice Update the execution delay. Restricted to ADMIN_ROLE.
+    function setExecutionDelay(uint64 delay) external onlyRole(ADMIN_ROLE) {
+        emit ExecutionDelaySet(executionDelay, delay);
+        executionDelay = delay;
+    }
+
+    /// @notice Grant `power` voting weight to `voter`. Setting to 0 removes voting rights.
+    ///         Restricted to ADMIN_ROLE.
+    function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE) {
+        if (voter == address(0)) revert ZeroAddress();
+        uint256 old = votingPower[voter];
+        totalVotingPower = totalVotingPower - old + power;
+        votingPower[voter] = power;
+        emit VotingPowerSet(voter, old, power);
+    }
+
+    // ─── Governance: propose ─────────────────────────────────────────────────
+
+    /// @notice Submit a new weight proposal. Restricted to ADMIN_ROLE.
+    ///         Only one proposal may be active or queued at a time.
+    /// @param vaults  Ordered vault address list.
+    /// @param bps     Parallel weight array; must sum to BPS_DENOMINATOR.
     function propose(address[] calldata vaults, uint256[] calldata bps)
         external
+        onlyRole(ADMIN_ROLE)
         returns (uint256 proposalId)
     {
-        // Caller must hold RM tokens at the current block.
-        if (rmToken.balanceOf(msg.sender) == 0) revert NotRmHolder();
-
-        // Only one active proposal allowed at a time.
-        if (activeProposalId != 0) {
-            // Allow a new proposal if the active one has expired.
-            uint256 aid = activeProposalId;
-            Proposal storage ap = _proposals[aid];
-            if (!ap.executed && block.timestamp <= ap.createdAt + cadenceWindow) {
-                revert ProposalAlreadyActive();
-            }
-            // Stale/expired active proposal — clear it.
-            activeProposalId = 0;
-        }
-
-        // Validate weight vector.
         if (vaults.length != bps.length) revert LengthMismatch();
+
+        // Validate weight sum.
         uint256 total;
-        for (uint256 i = 0; i < vaults.length; i++) {
-            if (vaults[i] == address(0)) revert ZeroAddress();
-            registry.getVault(vaults[i]); // reverts with NotRegistered if unknown
+        for (uint256 i = 0; i < bps.length; i++) {
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
 
-        // Create proposal.
-        proposalId = ++proposalCount;
+        // Only one active/queued proposal at a time.
+        if (currentProposalId != 0) {
+            ProposalState s = _state(currentProposalId);
+            if (s == ProposalState.Active || s == ProposalState.Queued) {
+                revert ActiveProposalExists();
+            }
+        }
+
+        proposalId = currentProposalId + 1;
+        currentProposalId = proposalId;
+
+        uint64 deadline = uint64(block.timestamp) + votingPeriod;
+        uint64 execAfter = deadline + executionDelay;
 
         Proposal storage p = _proposals[proposalId];
+        p.id = proposalId;
         p.proposer = msg.sender;
-        p.snapshotBlock = block.number;
-        p.createdAt = block.timestamp;
+        p.votingDeadline = deadline;
+        p.executableAfter = execAfter;
+
         // Copy arrays into storage.
         for (uint256 i = 0; i < vaults.length; i++) {
             p.vaults.push(vaults[i]);
             p.bps.push(bps[i]);
         }
 
-        activeProposalId = proposalId;
-
-        emit ProposalCreated(proposalId, msg.sender, vaults, bps, block.number);
+        emit ProposalCreated(proposalId, msg.sender, vaults, bps, deadline);
     }
 
-    // ─── Vote ────────────────────────────────────────────────────────────────
+    // ─── Governance: vote ────────────────────────────────────────────────────
 
-    /// @notice Cast a vote on the active proposal. Permissionless for RM holders.
-    ///         Weight equals the voter's RM `balanceOf` at the proposal's snapshot block.
-    ///         Note: standard ERC-20 does not support historical balance queries; this
-    ///         contract reads the current balance. For production, use ERC20Votes.
-    /// @param proposalId  Id of the proposal to vote on.
+    /// @notice Cast a FOR vote on the currently active proposal.
+    ///         Caller must have voting power assigned by ADMIN_ROLE.
     function vote(uint256 proposalId) external {
-        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotFound();
-
         Proposal storage p = _proposals[proposalId];
-
-        // Must be the active proposal.
-        if (p.executed) revert ProposalNotActive();
-
-        // Check expiry.
-        if (block.timestamp > p.createdAt + cadenceWindow) revert ProposalExpired();
-
-        // Double-vote guard.
+        if (p.id == 0) revert NoActiveProposal();
+        if (_state(proposalId) != ProposalState.Active) revert ProposalNotActive();
         if (_hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
-        // Vote weight: RM balance at snapshot block.
-        // NOTE: standard ERC-20 has no historical balance; we use current balance
-        //       as a best-effort approximation. A production upgrade should migrate
-        //       rmToken to ERC20Votes and use `getPastVotes(voter, snapshotBlock)`.
-        uint256 weight = rmToken.balanceOf(msg.sender);
-        if (weight == 0) revert NotRmHolder();
+        uint256 power = votingPower[msg.sender];
+        if (power == 0) revert NoVotingPower();
 
         _hasVoted[proposalId][msg.sender] = true;
-        p.totalVotes += weight;
+        p.votesFor += power;
 
-        emit VoteCast(proposalId, msg.sender, weight);
+        emit VoteCast(proposalId, msg.sender, power, p.votesFor);
     }
 
-    // ─── Execute ─────────────────────────────────────────────────────────────
+    // ─── Governance: execute ─────────────────────────────────────────────────
 
-    /// @notice Apply the proposed weights to the Portfolio Router. Permissionless
-    ///         once the execution delay has elapsed and quorum is reached.
-    /// @param proposalId  Id of the proposal to execute.
+    /// @notice Execute a queued proposal — call `router.setWeights` with the
+    ///         proposed weight vector. Anyone may call once quorum is reached
+    ///         and the execution delay has elapsed.
     function execute(uint256 proposalId) external {
-        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotFound();
-
         Proposal storage p = _proposals[proposalId];
+        if (p.id == 0) revert NoActiveProposal();
+        if (p.executed) revert AlreadyExecuted();
 
-        // Cannot execute an already-executed proposal.
-        if (p.executed) revert ProposalNotActive();
+        ProposalState s = _state(proposalId);
+        if (s == ProposalState.Active) {
+            // Voting period still open.
+            if (block.timestamp <= p.votingDeadline) revert VotingStillOpen();
+            // Voting closed but quorum not reached.
+            revert QuorumNotReached();
+        }
+        if (s == ProposalState.Defeated) revert QuorumNotReached();
+        if (s == ProposalState.Queued) {
+            if (block.timestamp < p.executableAfter) revert ExecutionDelayNotElapsed();
+        }
+        if (s == ProposalState.Executed) revert AlreadyExecuted();
 
-        // Cannot execute an expired proposal.
-        if (block.timestamp > p.createdAt + cadenceWindow) revert ProposalExpired();
-
-        // Execution delay must have elapsed.
-        if (block.timestamp < p.createdAt + executionDelay) revert ExecutionDelayNotElapsed();
-
-        // Quorum check: totalVotes must be >= quorumBps % of totalRmSupply.
-        uint256 quorumThreshold = (totalRmSupply * quorumBps) / BPS_DENOMINATOR;
-        if (p.totalVotes < quorumThreshold) revert QuorumNotReached();
-
-        // Mark executed before external call (reentrancy protection).
         p.executed = true;
-        activeProposalId = 0;
 
         // Apply weights to the Portfolio Router.
         router.setWeights(p.vaults, p.bps);
 
         emit ProposalExecuted(proposalId, msg.sender);
-        emit WeightsApplied(p.vaults, p.bps);
+        emit WeightsApplied(proposalId, p.vaults, p.bps);
     }
 
-    // ─── View: proposal lifecycle ─────────────────────────────────────────────
+    // ─── Read surface ────────────────────────────────────────────────────────
 
-    /// @notice Return the full record for a proposal.
-    /// @param proposalId  Proposal identifier.
-    function getProposal(uint256 proposalId)
+    /// @notice Return the current state of a proposal.
+    function proposalState(uint256 proposalId) external view returns (ProposalState) {
+        if (_proposals[proposalId].id == 0) revert NoActiveProposal();
+        return _state(proposalId);
+    }
+
+    /// @notice Return the full proposal struct for inspection.
+    function activeProposal()
         external
         view
         returns (
+            uint256 id,
             address proposer,
             address[] memory vaults,
             uint256[] memory bps,
-            uint256 snapshotBlock,
-            uint256 createdAt,
-            uint256 totalVotes,
+            uint64 votingDeadline,
+            uint64 executableAfter,
+            uint256 votesFor,
             bool executed
         )
     {
-        if (proposalId == 0 || proposalId > proposalCount) {
-            revert ProposalNotFound();
-        }
-        Proposal storage p = _proposals[proposalId];
-        return (p.proposer, p.vaults, p.bps, p.snapshotBlock, p.createdAt, p.totalVotes, p.executed);
+        uint256 pid = currentProposalId;
+        if (pid == 0) revert NoActiveProposal();
+        Proposal storage p = _proposals[pid];
+        return (
+            p.id,
+            p.proposer,
+            p.vaults,
+            p.bps,
+            p.votingDeadline,
+            p.executableAfter,
+            p.votesFor,
+            p.executed
+        );
     }
 
-    /// @notice Return the id of the currently active proposal (0 = none) and its
-    ///         lifecycle state. Useful for dapp and rmpc reads.
-    /// @return id     Active proposal id (0 if none).
-    /// @return state  Current lifecycle state of the active proposal.
-    function activeProposal() external view returns (uint256 id, ProposalState state) {
-        id = activeProposalId;
-        if (id == 0) return (0, ProposalState.Active); // no active proposal
-        state = _proposalState(id);
-    }
-
-    /// @notice Return vote tallies for a proposal.
-    /// @param proposalId  Proposal identifier.
-    /// @return totalVotes  Aggregate weighted votes cast.
-    /// @return quorumNeeded  Minimum votes required for quorum.
-    /// @return quorumReached  Whether quorum has been met.
-    function voteTallies(uint256 proposalId)
+    /// @notice Return cadence parameters in one call for rmpc/dapp reads.
+    function cadenceParams()
         external
         view
-        returns (uint256 totalVotes, uint256 quorumNeeded, bool quorumReached)
+        returns (
+            uint64 _votingPeriod,
+            uint64 _executionDelay,
+            uint256 _quorumThreshold,
+            uint256 _totalVotingPower
+        )
     {
-        if (proposalId == 0 || proposalId > proposalCount) revert ProposalNotFound();
-        Proposal storage p = _proposals[proposalId];
-        totalVotes = p.totalVotes;
-        quorumNeeded = (totalRmSupply * quorumBps) / BPS_DENOMINATOR;
-        quorumReached = totalVotes >= quorumNeeded;
+        return (votingPeriod, executionDelay, quorumThreshold, totalVotingPower);
     }
 
-    /// @notice Return the current weight vector from the Portfolio Router.
-    /// @return vaults  Ordered vault addresses.
-    /// @return bps     Parallel weight array in basis points.
+    /// @notice Return the current Portfolio Router weight vector directly.
     function currentWeights()
         external
         view
@@ -377,34 +375,27 @@ contract RouterGovernance {
         return router.getWeights();
     }
 
-    /// @notice Return governance cadence parameters.
-    /// @return _quorumBps       Quorum threshold in bps.
-    /// @return _executionDelay  Seconds required before execution.
-    /// @return _cadenceWindow   Seconds within which quorum must be reached.
-    function cadenceParams()
-        external
-        view
-        returns (uint256 _quorumBps, uint256 _executionDelay, uint256 _cadenceWindow)
-    {
-        return (quorumBps, executionDelay, cadenceWindow);
-    }
-
-    /// @notice Whether `voter` has voted on `proposalId`.
+    /// @notice Whether `voter` has already voted on `proposalId`.
     function hasVoted(uint256 proposalId, address voter) external view returns (bool) {
         return _hasVoted[proposalId][voter];
     }
 
-    // ─── Internal helpers ─────────────────────────────────────────────────────
+    // ─── Internal helpers ────────────────────────────────────────────────────
 
-    /// @dev Compute the lifecycle state for an existing proposal.
-    function _proposalState(uint256 proposalId) internal view returns (ProposalState) {
+    /// @dev Compute proposal state without requiring `id != 0`.
+    function _state(uint256 proposalId) internal view returns (ProposalState) {
         Proposal storage p = _proposals[proposalId];
         if (p.executed) return ProposalState.Executed;
-        if (block.timestamp > p.createdAt + cadenceWindow) return ProposalState.Expired;
-        uint256 quorumThreshold = (totalRmSupply * quorumBps) / BPS_DENOMINATOR;
-        if (p.totalVotes >= quorumThreshold && block.timestamp >= p.createdAt + executionDelay) {
-            return ProposalState.Succeeded;
+
+        if (block.timestamp <= p.votingDeadline) {
+            return ProposalState.Active;
         }
-        return ProposalState.Active;
+
+        // Voting ended — check quorum.
+        if (p.votesFor < quorumThreshold) {
+            return ProposalState.Defeated;
+        }
+
+        return ProposalState.Queued;
     }
 }

@@ -1085,6 +1085,27 @@ impl Rpc {
         }
     }
 
+    /// Advance the EVM clock by `seconds` seconds and produce a new block.
+    /// Thin wrappers over `evm_increaseTime` + `evm_mine` — the standard
+    /// Hardhat/Anvil time-travel pattern.
+    pub fn evm_increase_time(&self, seconds: u64) -> Result<(), HarnessError> {
+        let _: serde_json::Value = self.rpc("evm_increaseTime", serde_json::json!([seconds]))?;
+        let _: serde_json::Value = self.rpc("evm_mine", serde_json::json!([]))?;
+        Ok(())
+    }
+
+    /// Raw JSON-RPC call — exposed for test helpers that need methods not
+    /// wrapped by named helpers (e.g. `evm_increaseTime`). The `T` bound
+    /// lets callers assert on the return type; use `serde_json::Value` to
+    /// accept any JSON.
+    pub fn rpc_raw<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<T, HarnessError> {
+        self.rpc(method, params)
+    }
+
     /// Take an EVM state snapshot. Returns the snapshot ID.
     pub fn evm_snapshot(&self) -> Result<B256, HarnessError> {
         let s: String = self.rpc("evm_snapshot", serde_json::json!([]))?;

@@ -54,6 +54,13 @@ sol!(
     "abi/PortfolioRouter.json"
 );
 
+sol!(
+    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    RouterGovernance,
+    "abi/RouterGovernance.json"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

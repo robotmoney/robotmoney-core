@@ -36,6 +36,7 @@ on:
       - "testing/fork-e2e-rust/**"
       - "contracts/VaultRegistry.sol"
       - "contracts/PortfolioRouter.sol"
+      - "contracts/RouterGovernance.sol"
       - "contracts/gateway/RobotMoneyGateway.sol"
       - "contracts/gateway/MockVault.sol"
       - ".github/workflows/suite-05-fork-integration.yml"
