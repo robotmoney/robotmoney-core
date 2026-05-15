@@ -121,6 +121,11 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice No weight vector has been set; cannot deposit.
     error NoWeightsSet();
 
+    /// @notice A vault's registry status is not Active; deposit is blocked.
+    /// @param vault  The vault address that is not Active.
+    /// @param status The current non-Active status of the vault.
+    error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
@@ -304,6 +309,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         for (uint256 i = 0; i < n; i++) {
             address vault = _weightVaultList[i];
             uint256 legAmount = (amount * _weightBps[i]) / BPS_DENOMINATOR;
+
+            // Registry status check — revert unless this vault is Active.
+            (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
+            if (vaultStatus != VaultRegistry.VaultStatus.Active) {
+                revert VaultNotActive(vault, vaultStatus);
+            }
 
             // Per-vault cap check.
             if (vaultCap[vault] != 0 && legAmount > vaultCap[vault]) revert VaultCapExceeded();

@@ -495,6 +495,56 @@ contract PortfolioRouterTest is Test {
         router.setVaultCap(address(0), 1000);
     }
 
+    // ─── deposit: registry status enforcement ────────────────────────────────
+
+    /// @notice Deposit reverts when a vault in the weight list is Paused in the
+    ///         registry, even if the vault contract itself would still accept
+    ///         deposits.
+    function test_deposit_revertsIfRegistryVaultIsPaused() public {
+        _setEqualWeights();
+
+        // Pause vaultA in the registry; the vault contract still accepts deposits.
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vaultA),
+                VaultRegistry.VaultStatus.Paused
+            )
+        );
+        router.deposit(amount, new uint256[](0));
+    }
+
+    /// @notice Deposit reverts when a vault in the weight list is Retired in the
+    ///         registry, even if the vault contract itself would still accept
+    ///         deposits.
+    function test_deposit_revertsIfRegistryVaultIsRetired() public {
+        _setEqualWeights();
+
+        // Retire vaultB in the registry; the vault contract still accepts deposits.
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vaultB),
+                VaultRegistry.VaultStatus.Retired
+            )
+        );
+        router.deposit(amount, new uint256[](0));
+    }
+
     // ─── Fuzz: weight sum must equal 10000 ───────────────────────────────────
 
     /// @notice Any single-vault weight that is not 10000 must revert.

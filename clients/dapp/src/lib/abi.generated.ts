@@ -3340,6 +3340,22 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "VaultNotActive",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "status",
+        type: "uint8",
+        internalType: "enum VaultRegistry.VaultStatus",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "VaultNotRegistered",
     inputs: [],
   },
