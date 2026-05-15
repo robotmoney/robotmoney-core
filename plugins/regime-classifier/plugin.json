@@ -1,0 +1,10 @@
+{
+  "name": "regime-classifier",
+  "version": "0.1.0",
+  "description": "Read the current Robot Money macro + on-chain regime snapshot from robotmoney.net and surface regime, composite score, and sub-regime labels as session context for deposit decisions.",
+  "author": "Robot Money",
+  "homepage": "https://robotmoney.net/regime",
+  "repository": "https://github.com/robotmoney/robotmoney-skills",
+  "license": "Apache-2.0",
+  "skills": ["regime-classifier"]
+}

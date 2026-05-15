@@ -1,0 +1,14 @@
+{
+  "asof": "2026-05-14T00:00:00Z",
+  "composite": 51.3,
+  "composite_percentile": 54.2,
+  "macro_regime": "expansion",
+  "onchain_regime": "accumulation",
+  "macro_index": 55.1,
+  "onchain_index": 47.5,
+  "bucket_thresholds": {
+    "risk_off": { "max": 33 },
+    "neutral":  { "min": 33, "max": 66 },
+    "risk_on":  { "min": 66 }
+  }
+}

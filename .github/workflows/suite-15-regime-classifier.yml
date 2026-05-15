@@ -1,0 +1,53 @@
+# Canonical: plugins/regime-classifier/skills/regime-classifier/SKILL.md
+#
+# WHY THIS SUITE EXISTS
+# The regime-classifier plugin is a read-only Claude skill that fetches
+# https://www.robotmoney.net/data/regime-snapshot.json and surfaces regime
+# context for deposit decisions. The plugin has no contract or Rust dependencies
+# but must be tested against offline fixtures to guarantee: (a) the plugin.json
+# is valid and correctly named, (b) the fetch helper validates required fields
+# and exits non-zero with a named error on missing fields, (c) the cache layer
+# works correctly (second call on the same UTC date reads from cache, not the
+# network), and (d) no restricted paths (contracts/, crates/, clients/, services/)
+# are touched by the plugin.
+#
+# WHY OFFLINE FIXTURES ONLY
+# CI does not have reliable network access to robotmoney.net, and the snapshot
+# URL can change without notice during early development. Testing against fixtures
+# gives deterministic output regardless of network state. The fetch helper supports
+# --offline for exactly this purpose.
+#
+# WHY shellcheck IS INCLUDED
+# The fetch helper is a bash script with set -euo pipefail. Shell bugs (unquoted
+# variables, missing error handling, path injection) can silently pass all output
+# tests but still misbehave at runtime. shellcheck catches these statically.
+#
+# WHY paths: FILTER IS USED HERE (unlike suite-13)
+# This suite only verifies regime-classifier plugin artifacts and the helper script.
+# It does not check cross-cutting repo invariants. Restricting to plugin paths keeps
+# the suite fast and avoids running it on every unrelated change.
+
+name: regime-classifier-plugin-checks
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  regime-classifier:
+    name: regime-classifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (jq, shellcheck)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq shellcheck
+
+      - name: Run regime-classifier tests
+        run: bash plugins/regime-classifier/test/run-tests.sh
