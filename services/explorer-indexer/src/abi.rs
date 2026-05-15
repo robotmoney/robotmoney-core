@@ -3,6 +3,140 @@
 //! the contract sources in `contracts/gateway/interfaces/IGateway.sol`,
 //! `contracts/RobotMoneyVault.sol`, and the canonical event signatures
 //! in `docs/technical/vault-registry-decisions.md` §3.5.
+//!
+//! # ABI Drift Map (dev-scout #383 findings — 2026-05-15)
+//!
+//! The following divergences were identified between the `sol!` declarations
+//! in this file and the compiled Solidity sources.  Each item maps to the
+//! downstream fix issue that will correct it.  No runtime behavior is changed
+//! by this scout pass — only documentation is added.
+//!
+//! ## IGatewayEvents — `contracts/gateway/interfaces/IGateway.sol`
+//!
+//! ### `AgentAuthorized` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `AgentAuthorized(address indexed agent, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)`
+//! - **IGateway.sol:74 (authoritative):**
+//!   `AgentAuthorized(address indexed agent, address indexed owner, uint64 validUntil, uint256 maxPerPayment, uint256 maxPerWindow, address shareReceiver)`
+//! - **Missing:** `address indexed owner` as second parameter.
+//! - **Topic-0 impact:** `keccak256("AgentAuthorized(address,uint64,uint256,uint256,address)")` ≠
+//!   `keccak256("AgentAuthorized(address,address,uint64,uint256,uint256,address)")` — all
+//!   `AgentAuthorized` events are silently dropped by the indexer.
+//!
+//! ### `AgentRevoked` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `AgentRevoked(address indexed agent)`
+//! - **IGateway.sol:85 (authoritative):**
+//!   `AgentRevoked(address indexed agent, address indexed owner)`
+//! - **Missing:** `address indexed owner` as second parameter.
+//! - **Topic-0 impact:** All `AgentRevoked` events silently dropped.
+//!
+//! ### `AgentDepositRouted` — MISSING (not indexed; add if needed)
+//! - **IGateway.sol:119** declares `AgentDepositRouted(...)` for multi-leg router deposits.
+//!   Not present in this file — add to `IGatewayEvents` when router path is ingested.
+//!
+//! ### `AgentWithdrawal` — MISSING (not indexed; add if needed)
+//! - **IGateway.sol:139** declares `AgentWithdrawal(...)` for agent-initiated withdrawals.
+//!   Not present in this file — add to `IGatewayEvents` when withdrawal path is ingested.
+//!
+//! ## IVaultRegistryEvents — `contracts/VaultRegistry.sol`
+//!
+//! ### `VaultRegistered` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `VaultRegistered(address indexed vault, string name, string riskLabel, uint256 depositCap, uint64 registeredAt)`
+//! - **VaultRegistry.sol:67 (authoritative):**
+//!   `VaultRegistered(address indexed vault, string name, address indexed asset)`
+//! - **Fields removed:** `riskLabel`, `depositCap`, `registeredAt` (no longer in Solidity).
+//! - **Fields added:** `asset` (indexed address).
+//! - **Topic-0 impact:** All `VaultRegistered` events silently dropped.
+//!
+//! ### `VaultStatusChanged` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `VaultStatusChanged(address indexed vault, uint8 oldStatus, uint8 newStatus, uint64 changedAt)`
+//! - **VaultRegistry.sol:73 (authoritative):**
+//!   `VaultStatusChanged(address indexed vault, VaultStatus indexed newStatus, uint256 timestamp)`
+//! - **Fields removed:** `oldStatus`, `changedAt`.
+//! - **Fields changed:** `newStatus` is now `indexed`; `timestamp` is `uint256` not `uint64`.
+//! - **Topic-0 impact:** All `VaultStatusChanged` events silently dropped.
+//!
+//! ## IRouterGovernanceEvents — `contracts/RouterGovernance.sol`
+//!
+//! ### `ProposalCreated` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `ProposalCreated(uint256 indexed proposalId, address indexed proposer, string description, uint256 deadlineBlock, uint64 createdAt)`
+//! - **RouterGovernance.sol:106 (authoritative):**
+//!   `ProposalCreated(uint256 indexed proposalId, address indexed proposer, address[] vaults, uint256[] bps, uint64 votingDeadline)`
+//! - **Fields changed:** `description`→`address[] vaults`, `deadlineBlock`→`uint256[] bps`, `createdAt`→`uint64 votingDeadline`.
+//! - **Topic-0 impact:** All `ProposalCreated` events silently dropped.
+//!
+//! ### `VoteCast` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `VoteCast(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight)`
+//! - **RouterGovernance.sol:119 (authoritative):**
+//!   `VoteCast(uint256 indexed proposalId, address indexed voter, uint256 power, uint256 totalFor)`
+//! - **Fields changed:** `bool support` removed, `weight`→`power`, `totalFor` added.
+//! - **Topic-0 impact:** All `VoteCast` events silently dropped.
+//!
+//! ### `ProposalExecuted` — DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `ProposalExecuted(uint256 indexed proposalId)`
+//! - **RouterGovernance.sol:126 (authoritative):**
+//!   `ProposalExecuted(uint256 indexed proposalId, address indexed executor)`
+//! - **Missing:** `address indexed executor`.
+//! - **Topic-0 impact:** All `ProposalExecuted` events silently dropped.
+//!
+//! ### `WeightsSet` → `WeightsApplied` — NAME AND SIGNATURE DRIFTED (fix in issue #366)
+//! - **abi.rs (current):**
+//!   `WeightsSet(address[] vaults, uint256[] bps)`
+//! - **RouterGovernance.sol:132 (authoritative):**
+//!   `WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps)`
+//! - **Name changed** from `WeightsSet` to `WeightsApplied`; `proposalId` added.
+//! - **Topic-0 impact:** All `WeightsApplied` events silently dropped (wrong name too).
+//!
+//! # Vault Pause Split Seam (issue #368)
+//!
+//! `RobotMoneyVault` inherits OZ `Pausable` which uses a single boolean pause flag.
+//! Both `_deposit` (line 303: `whenNotPaused`) and `_withdraw` (line 401: `whenNotPaused`)
+//! gate on the same flag.  `emergencyWithdraw()` (line 610) calls `_pause()` then drains
+//! adapters — leaving USDC idle in the vault — but blocks all user redemptions because
+//! `_withdraw` is still guarded by `whenNotPaused`.
+//!
+//! **State variables to split for issue #368:**
+//! - Replace OZ `Pausable` (single `_paused` bool) with two independent booleans:
+//!   `depositsPaused` and `withdrawalsPaused` (or equivalent modifier split).
+//! - `pause()` (EMERGENCY_ROLE) sets both to `true`.
+//! - `emergencyWithdraw()` (EMERGENCY_ROLE) sets only `depositsPaused = true`.
+//! - `unpause()` (ADMIN_ROLE) clears both.
+//! - `_deposit` guards on `depositsPaused`; `_withdraw` guards on `withdrawalsPaused`.
+//! - Coupling risk: removing OZ `Pausable` also removes `Paused(address)`/`Unpaused(address)`
+//!   events from the inherited contract — those are re-declared in `IGateway` (gateway-side);
+//!   the vault emits them via `_pause()`/`_unpause()` calls today.  Issue #368 must either
+//!   retain those OZ events or re-emit them manually from the new modifier paths.
+//!
+//! # Gateway Pinned-Vault vs Multi-Vault Constraint (issue #370)
+//!
+//! `IGateway.sol:35` documents `allowedDestinations`: "An empty array disables the allowlist —
+//! any registered vault or the router is permitted." `IGateway.sol:46` similarly documents
+//! `allowedSourceVaults`: "An empty array permits any registered vault."
+//!
+//! **Actual enforcement in `RobotMoneyGateway.sol`:**
+//! - `_validateDestination` (line 473): checks `destination == address(vaultContract)` OR
+//!   `destination == address(routerContract)` — only the single pinned vault and the router.
+//! - `withdraw()` (line 599): `if (sourceVault != address(vaultContract)) revert InvalidSourceVault()`.
+//! - **Conclusion: Option A (docs fix) is sufficient.** There is no VaultRegistry injection
+//!   point in the constructor or storage — the immutables `vaultContract` and `routerContract`
+//!   are the only valid targets. Issue #370 should update IGateway NatSpec for both
+//!   `allowedDestinations` (line 35-40) and `allowedSourceVaults` (line 46-48) to state:
+//!   "When empty, only the pinned vault (`vault()`) and the portfolio router (`router()`) are
+//!   accepted." No contract logic change is required for Option A.
+//!
+//! # Governance Documentation Ownership (issue #372)
+//!
+//! `RouterGovernance.sol` implements admin-weighted voting via explicit `votingPower` mapping
+//! (set by `ADMIN_ROLE` via `setVotingPower`).  The contract is NOT token-holder governance.
+//! Documentation in `docs/prd.md` and NatSpec should label it as an admin-weighted MVP mock.
+//! The `WeightsApplied` event (not `WeightsSet`) is the canonical on-chain signal that the
+//! weight vector changed as a result of a governance proposal execution.
 
 use alloy_primitives::{keccak256, B256};
 use alloy_sol_types::sol;
