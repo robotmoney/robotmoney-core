@@ -46,7 +46,7 @@ pub const VAULTS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql");
 
 /// Migration 0003: adds the `governance_proposals`, `governance_votes`, and
-/// `router_weight_snapshots` tables (issue #307).
+/// `router_weight_snapshots` tables (issue #307 and #316).
 pub const GOVERNANCE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0003_add_governance_tables.sql");
 
@@ -370,6 +370,53 @@ async fn seed_fixture(pool: &PgPool) {
     .bind(25_i64)
     .bind("1000000000")
     .bind(false)
+    .bind(indexed_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- wallet_positions (issue #316 suite-08 fixture) ---
+    // Seed a share balance for `agent` on vault_a so account positions tests pass.
+    // shares = 50000000, same block as the vault_a snapshot (500) for clean math:
+    //   usdc_value = 50000000 * 99999999 / 99999999 = 50000000.
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares, indexed_at) \
+         VALUES ($1, $2, $3, $4, $5::NUMERIC, $6)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&vault_a_addr[..])
+    .bind(&agent[..])
+    .bind(500_i64)
+    .bind("50000000")
+    .bind(indexed_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // vault_b_addr must exist in contracts for the wallet_positions FK.
+    sqlx::query(
+        "INSERT INTO contracts (chain_id, address, kind, deployed_block) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&vault_b_addr[..])
+    .bind("vault")
+    .bind(Some(900_i64))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Seed a share balance for `agent` on vault_b.
+    // shares = 30000000 (distinct from vault_a's 50000000 so the two-vault test
+    // can identify each position unambiguously).
+    sqlx::query(
+        "INSERT INTO wallet_positions (chain_id, contract, owner, block_number, shares, indexed_at) \
+         VALUES ($1, $2, $3, $4, $5::NUMERIC, $6)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(&vault_b_addr[..])
+    .bind(&agent[..])
+    .bind(500_i64)
+    .bind("30000000")
     .bind(indexed_at)
     .execute(pool)
     .await

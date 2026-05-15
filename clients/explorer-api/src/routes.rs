@@ -1,6 +1,8 @@
 // HTTP route table.
 //
-// Endpoints are exactly the §11 list plus the vault registry additions (issue #296):
+// Endpoints are exactly the §11 list plus the vault registry additions (issue #296),
+// the governance additions (issue #307), and the multi-vault protocol stats
+// additions (issue #316):
 //   GET /health
 //   GET /v1/chains/:chain_id/contracts
 //   GET /v1/vault/snapshot/latest
@@ -11,6 +13,13 @@
 //   GET /v1/deposits/:deposit_id
 //   GET /v1/vaults
 //   GET /v1/vaults/:address
+//   GET /v1/router/weights
+//   GET /v1/governance/proposals
+//   GET /v1/governance/proposals/:id
+//   GET /v1/stats
+//   GET /v1/router/state
+//   GET /v1/accounts/:address/positions
+//   GET /v1/accounts/:address/history
 //
 // Boundary (§11): only GET methods. Any other method on any path returns
 // 405. Any /v1/sign* or /v1/authorize* path falls through to a global 404
@@ -40,12 +49,13 @@ use serde::Deserialize;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    dec_to_string, proposal_status_label, AgentPolicy, AgentResponse, Contract, ContractsResponse,
-    Deposit, DepositResponse, DepositsResponse, Freshness, Health, ProposalDetail,
-    ProposalDetailResponse, ProposalSummary, ProposalsResponse, RouterWeightsResponse, Transaction,
-    TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultSnapshot,
-    VaultSnapshotsResponse, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry,
-    WeightHistoryEntry,
+    dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
+    AccountPositionsResponse, ActivityEvent, AgentPolicy, AgentResponse, Contract,
+    ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness, Health,
+    ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
+    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
+    Vault, VaultDetail, VaultDetailResponse, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
+    VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -86,7 +96,73 @@ type VaultDetailRow = (Vec<u8>, String, String, i16, BigDecimal, DateTime<Utc>);
 // (block_number, total_assets, total_supply, indexed_at)
 type TvlPointRow = (i64, BigDecimal, BigDecimal, DateTime<Utc>);
 
+// Row types for governance queries.
+// (router_address BYTEA, block_number, log_index, tx_hash BYTEA, vault_addresses BYTEA[], bps_values BIGINT[], indexed_at)
+type WeightSnapshotRow = (
+    Vec<u8>,
+    i64,
+    i32,
+    Vec<u8>,
+    Vec<Vec<u8>>,
+    Vec<i64>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+// (chain_id, proposal_id, proposer BYTEA, description, created_at, deadline_block, status, votes_for, votes_against, block_number, executed_block, indexed_at)
+type ProposalRow = (
+    i64,
+    i64,
+    Vec<u8>,
+    String,
+    i64,
+    i64,
+    i16,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+// (voter BYTEA, support, weight NUMERIC, block_number, tx_hash BYTEA)
+type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
+
+// Row types for the new multi-vault endpoints.
+
+// (chain_id, vault_address, block_number, shares, total_assets, total_supply, indexed_at)
+// Used by get_account_positions to join wallet_positions with vault_snapshots.
+type PositionRow = (
+    i64,
+    Vec<u8>,
+    i64,
+    BigDecimal,
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    DateTime<Utc>,
+);
+
+// (chain_id, block_number, log_index, tx_hash, vault, agent, share_receiver, amount, indexed_at)
+// Used by get_stats activity feed and get_account_history.
+type DepositFeedRow = (
+    i64,
+    i64,
+    i32,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    BigDecimal,
+    DateTime<Utc>,
+);
+
 /// Build the application router. All routes are GET-only.
+///
+/// `#[rustfmt::skip]` is intentional: the router-introspection test
+/// (tests/router_introspection.rs) reads this source file line by line and
+/// asserts that every `.route(` line also contains `get(`.  Rustfmt would
+/// split long `.route(...)` calls across multiple lines, causing the test to
+/// fail.  The skip keeps all route declarations on one line per §11 invariant.
+#[rustfmt::skip]
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -103,6 +179,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/router/weights", get(get_router_weights))
         .route("/v1/governance/proposals", get(list_proposals))
         .route("/v1/governance/proposals/:id", get(get_proposal))
+        // Multi-vault protocol stats endpoints (issue #316).
+        .route("/v1/stats", get(get_stats))
+        .route("/v1/router/state", get(get_router_state))
+        .route("/v1/accounts/:address/positions", get(get_account_positions))
+        .route("/v1/accounts/:address/history", get(get_account_history))
         .fallback(not_found)
         .with_state(state)
 }
@@ -518,37 +599,6 @@ async fn get_vault(
 
 // ─── Governance handlers (issue #307) ──────────────────────────────────────
 
-// Row types for governance queries.
-// (router_address BYTEA, block_number, log_index, tx_hash BYTEA, vault_addresses BYTEA[], bps_values BIGINT[], indexed_at)
-type WeightSnapshotRow = (
-    Vec<u8>,
-    i64,
-    i32,
-    Vec<u8>,
-    Vec<Vec<u8>>,
-    Vec<i64>,
-    chrono::DateTime<chrono::Utc>,
-);
-
-// (chain_id, proposal_id, proposer BYTEA, description, created_at, deadline_block, status, votes_for, votes_against, block_number, executed_block, indexed_at)
-type ProposalRow = (
-    i64,
-    i64,
-    Vec<u8>,
-    String,
-    i64,
-    i64,
-    i16,
-    i64,
-    i64,
-    i64,
-    Option<i64>,
-    chrono::DateTime<chrono::Utc>,
-);
-
-// (voter BYTEA, support, weight NUMERIC, block_number, tx_hash BYTEA)
-type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
-
 /// GET /v1/router/weights — current weight vector and history of WeightsSet
 /// events for the PortfolioRouter.
 async fn get_router_weights(
@@ -747,6 +797,302 @@ async fn get_proposal(
             indexed_at: proposal.indexed_at,
         },
         proposal,
+    }))
+}
+
+// ─── Multi-vault protocol stats handlers (issue #316) ─────────────────────
+
+/// GET /v1/stats — aggregate TVL, unique depositor count, and global activity feed.
+///
+/// TVL = sum of the latest total_assets snapshot per registered vault.
+/// Depositor count = distinct share_receiver values in agent_deposits.
+/// Activity feed = last 50 deposit events across all vaults (descending by block).
+/// Chain-scoped to state.chain_id.
+async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsResponse>> {
+    // Aggregate TVL: sum of the most recent total_assets per vault.
+    let tvl_row: (Option<BigDecimal>,) = sqlx::query_as(
+        "SELECT SUM(latest.total_assets) \
+         FROM ( \
+             SELECT DISTINCT ON (chain_id, contract) total_assets \
+             FROM vault_snapshots \
+             WHERE chain_id = $1 \
+             ORDER BY chain_id, contract, block_number DESC \
+         ) AS latest",
+    )
+    .bind(state.chain_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let total_tvl = tvl_row
+        .0
+        .as_ref()
+        .map(dec_to_string)
+        .unwrap_or_else(|| "0".to_string());
+
+    // Unique depositor count.
+    let depositor_row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT share_receiver)::BIGINT FROM agent_deposits WHERE chain_id = $1",
+    )
+    .bind(state.chain_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let unique_depositors = depositor_row.0;
+
+    // Global activity feed: last 50 deposit events.
+    // agent_deposits does not have a dedicated `vault` column; use `share_receiver`
+    // as the best available proxy for the vault contract in the existing schema.
+    // When the multi-vault indexer migration (issue #315) lands and adds a `vault`
+    // column, this query should be updated to use it.
+    let feed_rows: Vec<DepositFeedRow> = sqlx::query_as(
+        "SELECT chain_id, block_number, log_index, tx_hash, \
+                share_receiver AS vault, agent, share_receiver, amount, indexed_at \
+         FROM agent_deposits \
+         WHERE chain_id = $1 \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT 50",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let activity_feed: Vec<ActivityEvent> = feed_rows
+        .into_iter()
+        .map(
+            |(
+                chain_id,
+                block_number,
+                log_index,
+                tx_hash,
+                vault,
+                agent,
+                share_receiver,
+                amount,
+                indexed_at,
+            )| {
+                ActivityEvent {
+                    chain_id,
+                    block_number,
+                    log_index,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    vault: addr_to_hex(&vault),
+                    agent: addr_to_hex(&agent),
+                    share_receiver: addr_to_hex(&share_receiver),
+                    amount: dec_to_string(&amount),
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(StatsResponse {
+        total_tvl,
+        unique_depositors,
+        activity_feed,
+        freshness,
+    }))
+}
+
+/// GET /v1/router/state — current PortfolioRouter weights and WeightsApplied history.
+///
+/// Reads router_weight_snapshots (added in migration 0003).  Returns an empty
+/// current_weights and empty history when no WeightsApplied events have been
+/// indexed yet (table exists but is empty). Chain-scoped to state.chain_id.
+async fn get_router_state(State(state): State<AppState>) -> ApiResult<Json<RouterStateResponse>> {
+    let rows: Vec<WeightSnapshotRow> = sqlx::query_as(
+        "SELECT router_address, block_number, log_index, tx_hash, \
+                vault_addresses, bps_values, indexed_at \
+         FROM router_weight_snapshots \
+         WHERE chain_id = $1 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let history: Vec<WeightHistoryEntry> = rows
+        .iter()
+        .map(|(_, bn, _, tx, vaults, bps, ia)| {
+            let weights = vaults
+                .iter()
+                .zip(bps.iter())
+                .map(|(v, b)| VaultWeight {
+                    vault: addr_to_hex(v),
+                    bps: *b,
+                })
+                .collect();
+            WeightHistoryEntry {
+                block_number: *bn,
+                tx_hash: hash_to_hex(tx),
+                weights,
+                indexed_at: *ia,
+            }
+        })
+        .collect();
+
+    let current_weights = history
+        .last()
+        .map(|e| e.weights.clone())
+        .unwrap_or_default();
+
+    let freshness = match history.last() {
+        Some(e) => Freshness {
+            block_number: e.block_number,
+            indexed_at: e.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    Ok(Json(RouterStateResponse {
+        current_weights,
+        history,
+        freshness,
+    }))
+}
+
+/// GET /v1/accounts/:address/positions — receipt balance per vault and USDC value.
+///
+/// For each vault where the address holds a non-zero share balance (latest
+/// wallet_positions row), computes:
+///   usdc_value = shares * total_assets / total_supply
+/// using the most recent vault_snapshot for that vault.
+/// Chain-scoped to state.chain_id.
+async fn get_account_positions(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AccountPositionsResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    // Latest wallet_position per vault for this owner, joined with the
+    // most recent vault_snapshot per vault for the share-price computation.
+    let rows: Vec<PositionRow> = sqlx::query_as(
+        "SELECT wp.chain_id, wp.contract, wp.block_number, wp.shares, \
+                s.total_assets, s.total_supply, wp.indexed_at \
+         FROM ( \
+             SELECT DISTINCT ON (chain_id, contract) \
+                    chain_id, contract, block_number, shares, indexed_at \
+             FROM wallet_positions \
+             WHERE chain_id = $1 AND owner = $2 \
+             ORDER BY chain_id, contract, block_number DESC \
+         ) AS wp \
+         LEFT JOIN LATERAL ( \
+             SELECT total_assets, total_supply \
+             FROM vault_snapshots \
+             WHERE chain_id = wp.chain_id AND contract = wp.contract \
+             ORDER BY block_number DESC \
+             LIMIT 1 \
+         ) AS s ON true \
+         ORDER BY wp.contract ASC",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let positions: Vec<VaultPosition> = rows
+        .into_iter()
+        .map(
+            |(_, contract, block_number, shares, total_assets, total_supply, indexed_at)| {
+                // usdc_value = shares * total_assets / total_supply
+                // Use BigDecimal arithmetic; guard against zero supply.
+                let usdc_value = match (total_assets.as_ref(), total_supply.as_ref()) {
+                    (Some(ta), Some(ts)) if ts != &BigDecimal::from(0) => {
+                        let val = &shares * ta / ts;
+                        Some(dec_to_string(&val.with_scale(0)))
+                    }
+                    _ => None,
+                };
+                VaultPosition {
+                    vault: addr_to_hex(&contract),
+                    shares: dec_to_string(&shares),
+                    usdc_value,
+                    block_number,
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+
+    let freshness = match positions.first() {
+        Some(p) => Freshness {
+            block_number: p.block_number,
+            indexed_at: p.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    Ok(Json(AccountPositionsResponse {
+        address: addr_to_hex(&address_bytes),
+        positions,
+        freshness,
+    }))
+}
+
+/// GET /v1/accounts/:address/history — chronological deposit event log.
+///
+/// Returns all agent_deposits where share_receiver = address, ordered
+/// by block ascending (chronological).  Includes up to 500 rows.
+/// Chain-scoped to state.chain_id.
+async fn get_account_history(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AccountHistoryResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    let rows: Vec<DepositFeedRow> = sqlx::query_as(
+        "SELECT chain_id, block_number, log_index, tx_hash, \
+                share_receiver AS vault, agent, share_receiver, amount, indexed_at \
+         FROM agent_deposits \
+         WHERE chain_id = $1 AND share_receiver = $2 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let events: Vec<AccountHistoryEntry> = rows
+        .into_iter()
+        .map(
+            |(
+                chain_id,
+                block_number,
+                log_index,
+                tx_hash,
+                vault,
+                agent,
+                _share_receiver,
+                amount,
+                indexed_at,
+            )| {
+                AccountHistoryEntry {
+                    kind: EventKind::Deposit,
+                    chain_id,
+                    block_number,
+                    log_index,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    vault: addr_to_hex(&vault),
+                    agent: addr_to_hex(&agent),
+                    amount: dec_to_string(&amount),
+                    indexed_at,
+                }
+            },
+        )
+        .collect();
+
+    let freshness = match events.last() {
+        Some(e) => Freshness {
+            block_number: e.block_number,
+            indexed_at: e.indexed_at,
+        },
+        None => latest_freshness(&state).await?,
+    };
+
+    Ok(Json(AccountHistoryResponse {
+        address: addr_to_hex(&address_bytes),
+        events,
+        freshness,
     }))
 }
 

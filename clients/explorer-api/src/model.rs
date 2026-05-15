@@ -288,3 +288,107 @@ pub fn proposal_status_label(status: i16) -> &'static str {
         _ => "expired",
     }
 }
+
+// ─── GET /v1/stats ──────────────────────────────────────────────────────────
+
+/// A single entry in the global activity feed (last 50 events across all vaults).
+#[derive(Debug, Serialize)]
+pub struct ActivityEvent {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: String,
+    /// Vault contract that received the deposit.
+    pub vault: String,
+    pub agent: String,
+    pub share_receiver: String,
+    pub amount: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/stats.
+#[derive(Debug, Serialize)]
+pub struct StatsResponse {
+    /// Aggregate total_assets across all active vaults (sum of latest snapshot
+    /// per vault), as a decimal string.
+    pub total_tvl: String,
+    /// Count of distinct share_receiver addresses across all agent_deposits.
+    pub unique_depositors: i64,
+    /// Last 50 deposit events across all vaults, descending by block.
+    pub activity_feed: Vec<ActivityEvent>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+// ─── GET /v1/router/state ────────────────────────────────────────────────────
+
+/// Response envelope for GET /v1/router/state.
+#[derive(Debug, Serialize)]
+pub struct RouterStateResponse {
+    /// Most recent weight allocation (empty when no WeightsApplied ingested yet).
+    pub current_weights: Vec<VaultWeight>,
+    /// Full history of WeightsApplied events, ascending by block.
+    pub history: Vec<WeightHistoryEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+// ─── GET /v1/accounts/:address/positions ─────────────────────────────────────
+
+/// Per-vault receipt balance and computed USDC value for one account.
+#[derive(Debug, Serialize)]
+pub struct VaultPosition {
+    /// ERC-4626 vault contract address.
+    pub vault: String,
+    /// Most recent indexed share balance (receipt token units), decimal string.
+    pub shares: String,
+    /// USDC value of shares at the latest snapshot share price, decimal string.
+    /// Computed as: shares * total_assets / total_supply.
+    /// Null when no vault_snapshot exists for this vault.
+    pub usdc_value: Option<String>,
+    /// Block of the most recent wallet_positions row for this vault.
+    pub block_number: i64,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/accounts/:address/positions.
+#[derive(Debug, Serialize)]
+pub struct AccountPositionsResponse {
+    pub address: String,
+    pub positions: Vec<VaultPosition>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+// ─── GET /v1/accounts/:address/history ───────────────────────────────────────
+
+/// Kinds of events that appear in the per-account history feed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Deposit,
+}
+
+/// A single entry in the per-account chronological history.
+#[derive(Debug, Serialize)]
+pub struct AccountHistoryEntry {
+    pub kind: EventKind,
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: String,
+    /// Vault that received the deposit (contract address).
+    pub vault: String,
+    pub agent: String,
+    pub amount: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/accounts/:address/history.
+#[derive(Debug, Serialize)]
+pub struct AccountHistoryResponse {
+    pub address: String,
+    pub events: Vec<AccountHistoryEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
