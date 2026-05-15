@@ -149,6 +149,15 @@ struct RegistryDeploymentJson {
     vault_registered: bool,
 }
 
+/// Typed view over the router deployment JSON produced by DeployPortfolioRouter.s.sol.
+#[derive(Debug, Deserialize)]
+struct RouterDeploymentJson {
+    router: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ComposePsEntry {
     #[serde(rename = "Name")]
@@ -174,6 +183,7 @@ pub struct Fixture {
     chain_id: u64,
     deployment: DeploymentJson,
     registry_deployment: RegistryDeploymentJson,
+    router_deployment: RouterDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -702,6 +712,32 @@ impl Fixture {
 
         let registry_deployment = read_registry_deployment(&reg_out)?;
 
+        // Deploy PortfolioRouter and wire initial weights (issue #303).
+        // 10 000 bps → RobotMoneyVault as the sole active vault.
+        let router_out = tmp.path().join("router.json");
+        run_forge_deploy_router(
+            &repo_root,
+            &rpc_url,
+            &router_out,
+            &registry_deployment.registry,
+            &deployment.vault,
+            &deployment.usdc,
+        )
+        .inspect_err(|err| {
+            logging::error("smoke-test", format!("forge deploy router failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "router deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        let router_deployment = read_router_deployment(&router_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -739,6 +775,7 @@ impl Fixture {
             chain_id,
             deployment,
             registry_deployment,
+            router_deployment,
             repo_root,
         };
 
@@ -833,6 +870,15 @@ impl Fixture {
     /// Raw string form of the VaultRegistry address.
     pub fn registry_hex(&self) -> &str {
         &self.registry_deployment.registry
+    }
+    /// PortfolioRouter address deployed by DeployPortfolioRouter.s.sol (issue #303).
+    /// Initial weights: 10 000 bps to RobotMoneyVault.
+    pub fn router(&self) -> Address {
+        parse_addr(&self.router_deployment.router)
+    }
+    /// Raw string form of the PortfolioRouter address.
+    pub fn router_hex(&self) -> &str {
+        &self.router_deployment.router
     }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
@@ -1478,6 +1524,53 @@ fn run_forge_deploy_registry(
 }
 
 fn read_registry_deployment(path: &Path) -> Result<RegistryDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
+/// Run the DeployPortfolioRouter forge script (issue #303) and write the
+/// router deployment JSON to `router_out`. Sets initial weights to 10 000 bps
+/// (100%) pointing at RobotMoneyVault — the sole active vault at this phase.
+fn run_forge_deploy_router(
+    repo_root: &Path,
+    rpc_url: &str,
+    router_out: &Path,
+    registry_address: &str,
+    vault_address: &str,
+    usdc_address: &str,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    .env("REGISTRY_ADDRESS", registry_address)
+    .env("VAULT_ADDRESS", vault_address)
+    .env("USDC_ADDRESS", usdc_address)
+    .env("DEPLOYMENT_OUT", router_out)
+    .current_dir(repo_root);
+    let out = cmd.output()?;
+    logging::log_command_output("forge-router", &out);
+    if !out.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployPortfolioRouter exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_router_deployment(path: &Path) -> Result<RouterDeploymentJson, HarnessError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
     serde_json::from_str(&raw)
