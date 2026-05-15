@@ -35,8 +35,8 @@ interface IGateway {
     /// @param allowedDestinations     Whitelist of deposit destinations (vault or router
     ///                                addresses). When non-empty, `depositTo` requires the
     ///                                supplied destination to appear in this list. An empty
-    ///                                array disables the allowlist — any registered vault or
-    ///                                the router is permitted.
+    ///                                array disables the allowlist — only the pinned vault
+    ///                                or the pinned router is permitted (no registry lookup).
     /// @param assetRecipient          Address that receives redeemed USDC on `withdraw`.
     ///                                Must be non-zero when `maxWithdrawPerPayment > 0`.
     /// @param maxWithdrawPerPayment   Maximum vault shares redeemable per single `withdraw` call.
@@ -45,7 +45,9 @@ interface IGateway {
     ///                                Must be >= `maxWithdrawPerPayment` when non-zero.
     /// @param allowedSourceVaults     Whitelist of vaults the agent may redeem from via `withdraw`.
     ///                                When non-empty, the supplied `sourceVault` must appear in
-    ///                                this list. An empty array permits any registered vault.
+    ///                                this list. An empty array permits only the pinned vault
+    ///                                (no registry lookup; arbitrary vault addresses are never
+    ///                                accepted).
     struct AgentPolicy {
         bool active;
         uint64 validUntil;
@@ -172,7 +174,8 @@ interface IGateway {
     /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
     ///      same caps, deadline, idempotency, and policy checks as `deposit`.
     ///      `destination` must appear in the agent's `allowedDestinations` list
-    ///      (or the list must be empty to allow any registered destination).
+    ///      (or the list must be empty, in which case only the pinned vault or
+    ///      the pinned router is accepted — no registry lookup is performed).
     /// @param orderId          Caller-supplied order identifier (echoed in event).
     /// @param amount           Gross USDC amount, in 6-decimal base units.
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
