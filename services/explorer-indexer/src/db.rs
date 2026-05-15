@@ -56,6 +56,8 @@ pub enum CountTable {
     GovernanceVotes,
     /// Added in migration 0003 — weight-change history from WeightsApplied events.
     RouterWeightSnapshots,
+    /// Added in migration 0006 — per-leg data from RouterDeposit events (issue #373).
+    RouterDepositLegs,
 }
 
 impl CountTable {
@@ -75,6 +77,7 @@ impl CountTable {
             CountTable::GovernanceProposals => "governance_proposals",
             CountTable::GovernanceVotes => "governance_votes",
             CountTable::RouterWeightSnapshots => "router_weight_snapshots",
+            CountTable::RouterDepositLegs => "router_deposit_legs",
         }
     }
 }
@@ -196,6 +199,7 @@ impl Db {
             "governance_votes",
             "governance_proposals",
             "router_weight_snapshots",
+            "router_deposit_legs",
             "transactions",
             "blocks",
         ] {
@@ -242,6 +246,12 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Insert a row into `agent_deposits`.
+    ///
+    /// `vault` is the vault address the deposit was routed to.  For
+    /// single-vault `AgentDeposit` events, pass the gateway's pinned vault
+    /// address.  For multi-leg `AgentDepositRouted` events, pass `None`
+    /// (per-leg vault addresses are stored in `router_deposit_legs`).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_agent_deposit(
         &self,
@@ -256,10 +266,12 @@ impl Db {
         amount: U256,
         shares_minted: U256,
         window_id: i64,
+        vault: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
+        let vault_bytes: Option<&[u8]> = vault.as_ref().map(|a| &a[..]);
         let r = sqlx::query(
-            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+            "INSERT INTO agent_deposits (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, vault) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
         )
         .bind(chain_id)
@@ -273,6 +285,45 @@ impl Db {
         .bind(u256_to_decimal(amount))
         .bind(u256_to_decimal(shares_minted))
         .bind(window_id)
+        .bind(vault_bytes)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Insert a per-leg row into `router_deposit_legs` from a `RouterDeposit`
+    /// event emitted by `PortfolioRouter`.  Uses `ON CONFLICT DO NOTHING` so
+    /// re-indexing the same range is a no-op (issue #57 AC).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_router_deposit_leg(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        payment_id: [u8; 32],
+        depositor: [u8; 20],
+        vault: [u8; 20],
+        amount: U256,
+        shares: U256,
+        weight_bps: U256,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO router_deposit_legs \
+             (chain_id, block_number, log_index, tx_hash, payment_id, depositor, vault, amount, shares, weight_bps) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&payment_id[..])
+        .bind(&depositor[..])
+        .bind(&vault[..])
+        .bind(u256_to_decimal(amount))
+        .bind(u256_to_decimal(shares))
+        .bind(u256_to_decimal(weight_bps))
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())

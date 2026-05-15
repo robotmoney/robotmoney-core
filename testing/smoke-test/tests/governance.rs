@@ -94,7 +94,9 @@ fn deployer_holds_admin_role() {
         return;
     }
     let fx = fixture();
-    let deployer: Address = DEPLOYER_ADDRESS_HEX.parse().expect("parse deployer address");
+    let deployer: Address = DEPLOYER_ADDRESS_HEX
+        .parse()
+        .expect("parse deployer address");
 
     // hasRole(ADMIN_ROLE, deployer) — ADMIN_ROLE = keccak256("ADMIN_ROLE")
     // selector for hasRole(bytes32,address) = 0x91d14854
@@ -155,7 +157,11 @@ fn deployer_has_admin_role(fx: &Fixture, account: Address) -> bool {
 fn u256_from_hex(hex: &str) -> u128 {
     let stripped = hex.trim_start_matches("0x");
     let len = stripped.len();
-    let slice = if len > 32 { &stripped[len - 32..] } else { stripped };
+    let slice = if len > 32 {
+        &stripped[len - 32..]
+    } else {
+        stripped
+    };
     u128::from_str_radix(slice, 16).unwrap_or(0)
 }
 
@@ -168,8 +174,7 @@ fn rpc_call<T: for<'de> serde::Deserialize<'de>>(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap();
-    let body =
-        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     let resp: serde_json::Value = client
         .post(url)
         .json(&body)

@@ -22,7 +22,8 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IGatewayEvents, IRouterGovernanceEvents, IVaultReads, IVaultRegistryEvents, Topics,
+    IGatewayEvents, IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultReads,
+    IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -397,6 +398,40 @@ async fn handle_log(
                 decoded.amount,
                 decoded.sharesMinted,
                 decoded.windowId as i64,
+                // Single-vault path: the deposit went to the gateway's pinned vault.
+                Some(cfg.vault.into_array()),
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // AgentDepositRouted — multi-leg router deposit (IGateway.sol:119).
+    // Stores a parent row in agent_deposits (vault = NULL; per-leg data is
+    // written by the corresponding RouterDeposit events from PortfolioRouter).
+    if topic0 == topics.agent_deposit_routed {
+        let decoded = IGatewayEvents::AgentDepositRouted::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("AgentDepositRouted: {e}")))?;
+        // Sum sharesPerLeg to populate shares_minted on the parent row.
+        let total_shares: U256 = decoded
+            .sharesPerLeg
+            .iter()
+            .copied()
+            .fold(U256::ZERO, |acc, s| acc.saturating_add(s));
+        let r = db
+            .insert_agent_deposit(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.paymentId.0,
+                decoded.orderId.0,
+                decoded.agent.into_array(),
+                decoded.shareReceiver.into_array(),
+                decoded.amount,
+                total_shares,
+                decoded.windowId as i64,
+                // Router path: vault is NULL; per-leg rows carry the vault address.
+                None,
             )
             .await?;
         return Ok(r);
@@ -437,6 +472,38 @@ async fn handle_log(
                 None,
                 None,
                 None,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // RouterDeposit — per-leg event from PortfolioRouter.sol:71.
+    // Each leg records (depositor, vault, amount, shares, weightBps) for one
+    // vault in the router's weight vector.  Legs are linked to the parent
+    // AgentDepositRouted row via payment_id.
+    //
+    // Note: RouterDeposit carries no paymentId of its own — the payment_id
+    // stored here is the tx_hash (best-effort correlation key) because the
+    // PortfolioRouter does not forward the gateway's paymentId.  Callers
+    // should join on (chain_id, tx_hash) to correlate with agent_deposits.
+    if topic0 == topics.router_deposit {
+        let decoded = IPortfolioRouterEvents::RouterDeposit::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("RouterDeposit: {e}")))?;
+        // Use the tx_hash as the payment_id correlation key: PortfolioRouter
+        // does not forward the gateway's paymentId, so the tx hash is the
+        // best available link between leg rows and the parent deposit.
+        let r = db
+            .insert_router_deposit_leg(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.tx_hash.0, // payment_id = tx_hash (correlation key)
+                decoded.depositor.into_array(),
+                decoded.vault.into_array(),
+                decoded.amount,
+                decoded.shares,
+                decoded.weightBps,
             )
             .await?;
         return Ok(r);

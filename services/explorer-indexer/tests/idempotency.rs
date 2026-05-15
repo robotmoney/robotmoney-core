@@ -39,6 +39,7 @@ async fn agent_deposit_insert_is_idempotent() {
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             42,
+            None,
         )
         .await
         .unwrap();
@@ -58,6 +59,7 @@ async fn agent_deposit_insert_is_idempotent() {
             U256::from(1_000_000u64),
             U256::from(1_000_000u64),
             42,
+            None,
         )
         .await
         .unwrap();

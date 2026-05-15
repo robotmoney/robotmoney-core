@@ -203,6 +203,17 @@ sol! {
             uint256 sharesMinted,
             uint64 windowId
         );
+        /// IGateway.sol:119 — emitted for router-path deposits (multi-leg).
+        event AgentDepositRouted(
+            bytes32 indexed paymentId,
+            bytes32 indexed orderId,
+            address indexed agent,
+            address shareReceiver,
+            address router,
+            uint256 amount,
+            uint256[] sharesPerLeg,
+            uint64  windowId
+        );
     }
 
     /// Event surface from `RobotMoneyVault`. Trigger set for state
@@ -252,6 +263,24 @@ sol! {
         );
     }
 
+    /// Event surface from `PortfolioRouter`.  The `RouterDeposit` event is
+    /// emitted once per vault leg on every successful `deposit()` call.
+    ///
+    /// Signature matches `PortfolioRouter.sol:71` exactly so that
+    /// `SolEvent::SIGNATURE_HASH` agrees with the on-chain topic-0.
+    #[allow(missing_docs)]
+    interface IPortfolioRouterEvents {
+        /// Emitted once per vault leg on each `deposit()` call.
+        /// PortfolioRouter.sol:71
+        event RouterDeposit(
+            address indexed depositor,
+            address indexed vault,
+            uint256 amount,
+            uint256 shares,
+            uint256 weightBps
+        );
+    }
+
     /// Minimum stable read surface for `VaultRegistry`.  Defined in
     /// `docs/technical/vault-registry-decisions.md` §3.4.
     #[allow(missing_docs)]
@@ -269,6 +298,8 @@ pub struct Topics {
     pub agent_authorized: B256,
     pub agent_revoked: B256,
     pub agent_deposit: B256,
+    /// Multi-leg router deposit emitted by IGateway.sol:119.
+    pub agent_deposit_routed: B256,
     pub paused: B256,
     pub unpaused: B256,
     pub vault_allocated: B256,
@@ -283,6 +314,8 @@ pub struct Topics {
     pub vote_cast: B256,
     pub proposal_executed: B256,
     pub weights_applied: B256,
+    /// Per-leg deposit emitted by PortfolioRouter.sol:71.
+    pub router_deposit: B256,
 }
 
 impl Topics {
@@ -294,6 +327,9 @@ impl Topics {
             agent_revoked: keccak256(b"AgentRevoked(address,address)"),
             agent_deposit: keccak256(
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
+            ),
+            agent_deposit_routed: keccak256(
+                b"AgentDepositRouted(bytes32,bytes32,address,address,address,uint256,uint256[],uint64)",
             ),
             paused: keccak256(b"Paused(address)"),
             unpaused: keccak256(b"Unpaused(address)"),
@@ -313,6 +349,9 @@ impl Topics {
             vote_cast: keccak256(b"VoteCast(uint256,address,uint256,uint256)"),
             proposal_executed: keccak256(b"ProposalExecuted(uint256,address)"),
             weights_applied: keccak256(b"WeightsApplied(uint256,address[],uint256[])"),
+            router_deposit: keccak256(
+                b"RouterDeposit(address,address,uint256,uint256,uint256)",
+            ),
         }
     }
 
@@ -323,6 +362,7 @@ impl Topics {
             self.agent_authorized,
             self.agent_revoked,
             self.agent_deposit,
+            self.agent_deposit_routed,
             self.paused,
             self.unpaused,
             self.vault_allocated,
@@ -335,6 +375,7 @@ impl Topics {
             self.vote_cast,
             self.proposal_executed,
             self.weights_applied,
+            self.router_deposit,
         ]
     }
 }
@@ -358,6 +399,10 @@ mod tests {
         assert_eq!(
             t.agent_deposit,
             IGatewayEvents::AgentDeposit::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.agent_deposit_routed,
+            IGatewayEvents::AgentDepositRouted::SIGNATURE_HASH
         );
         assert_eq!(
             t.agent_authorized,
@@ -402,6 +447,11 @@ mod tests {
             t.weights_applied,
             IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH
         );
+        // PortfolioRouter events.
+        assert_eq!(
+            t.router_deposit,
+            IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH
+        );
     }
 
     /// CI ABI drift gate — compares `sol!`-derived SIGNATURE_HASH constants
@@ -418,8 +468,8 @@ mod tests {
     /// test fails — preventing silent event drops in the indexer.
     ///
     /// Source references:
-    ///   IGateway.sol:74,85,100  VaultRegistry.sol:67,73
-    ///   RouterGovernance.sol:106,119,126,132
+    ///   IGateway.sol:74,85,100,119  VaultRegistry.sol:67,73
+    ///   RouterGovernance.sol:106,119,126,132  PortfolioRouter.sol:71
     #[test]
     fn abi_drift_gate() {
         use alloy_primitives::keccak256;
@@ -443,6 +493,12 @@ mod tests {
                 "AgentDeposit",
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
                 IGatewayEvents::AgentDeposit::SIGNATURE_HASH,
+            ),
+            // IGateway.sol:119
+            (
+                "AgentDepositRouted",
+                b"AgentDepositRouted(bytes32,bytes32,address,address,address,uint256,uint256[],uint64)",
+                IGatewayEvents::AgentDepositRouted::SIGNATURE_HASH,
             ),
             // VaultRegistry.sol:67
             (
@@ -479,6 +535,12 @@ mod tests {
                 "WeightsApplied",
                 b"WeightsApplied(uint256,address[],uint256[])",
                 IRouterGovernanceEvents::WeightsApplied::SIGNATURE_HASH,
+            ),
+            // PortfolioRouter.sol:71
+            (
+                "RouterDeposit",
+                b"RouterDeposit(address,address,uint256,uint256,uint256)",
+                IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH,
             ),
         ];
 

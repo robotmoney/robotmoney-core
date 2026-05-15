@@ -223,6 +223,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
             alloy_primitives::U256::from(1_000_000u64),
             alloy_primitives::U256::from(1_000_000u64),
             1,
+            None,
         )
         .await
         .unwrap();
@@ -377,6 +378,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
             alloy_primitives::U256::from(500_000u64),
             alloy_primitives::U256::from(500_000u64),
             2,
+            None,
         )
         .await
         .unwrap();

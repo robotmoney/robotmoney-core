@@ -776,7 +776,10 @@ impl Fixture {
             &router_deployment.router,
         )
         .inspect_err(|err| {
-            logging::error("smoke-test", format!("forge deploy governance failed: {err}"));
+            logging::error(
+                "smoke-test",
+                format!("forge deploy governance failed: {err}"),
+            );
             log_compose_state(
                 &compose_dir,
                 &compose_files_owned,
@@ -2100,7 +2103,10 @@ impl DappStack {
             ("VITE_REGISTRY_ADDRESS", fixture.registry_hex().to_string()),
             ("VITE_ROUTER_ADDRESS", fixture.router_hex().to_string()),
             // Issue #364: RouterGovernance address for the Governance tab.
-            ("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex().to_string()),
+            (
+                "VITE_GOVERNANCE_ADDRESS",
+                fixture.governance_hex().to_string(),
+            ),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
             ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),

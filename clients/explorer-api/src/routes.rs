@@ -838,13 +838,12 @@ async fn get_stats(State(state): State<AppState>) -> ApiResult<Json<StatsRespons
     let unique_depositors = depositor_row.0;
 
     // Global activity feed: last 50 deposit events.
-    // agent_deposits does not have a dedicated `vault` column; use `share_receiver`
-    // as the best available proxy for the vault contract in the existing schema.
-    // When the multi-vault indexer migration (issue #315) lands and adds a `vault`
-    // column, this query should be updated to use it.
+    // Use the `vault` column added in migration 0006 (issue #373).
+    // COALESCE with share_receiver provides backwards compatibility for
+    // rows indexed before the migration (where vault IS NULL).
     let feed_rows: Vec<DepositFeedRow> = sqlx::query_as(
         "SELECT chain_id, block_number, log_index, tx_hash, \
-                share_receiver AS vault, agent, share_receiver, amount, indexed_at \
+                COALESCE(vault, share_receiver) AS vault, agent, share_receiver, amount, indexed_at \
          FROM agent_deposits \
          WHERE chain_id = $1 \
          ORDER BY block_number DESC, log_index DESC \
@@ -1041,7 +1040,7 @@ async fn get_account_history(
 
     let rows: Vec<DepositFeedRow> = sqlx::query_as(
         "SELECT chain_id, block_number, log_index, tx_hash, \
-                share_receiver AS vault, agent, share_receiver, amount, indexed_at \
+                COALESCE(vault, share_receiver) AS vault, agent, share_receiver, amount, indexed_at \
          FROM agent_deposits \
          WHERE chain_id = $1 AND share_receiver = $2 \
          ORDER BY block_number ASC, log_index ASC \
