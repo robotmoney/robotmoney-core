@@ -28,6 +28,11 @@
 //! 9. `usdc.allowance(self, gateway) >= amount`
 //! 10. `usdc.balanceOf(self) >= amount`
 //!
+//! For withdrawals, checks 7–8 use the withdrawal-specific cap fields
+//! `maxWithdrawPerPayment` and `maxWithdrawPerWindow` together with
+//! `agentWithdrawWindowGross` instead of the deposit fields. See
+//! `run_withdraw_gateway` and issue #371.
+//!
 //! Each rule maps onto a specific [`RmpcError`] variant. Operator tooling
 //! matches on those names; renaming them is a breaking change.
 
@@ -58,8 +63,8 @@ pub struct PreflightInputs {
     pub amount: U256,
 }
 
-/// Structured report returned on success. Callers (self-check, deposit)
-/// can introspect the on-chain state the preflight observed without
+/// Structured report returned on success. Callers (self-check, deposit,
+/// withdraw) can introspect the on-chain state the preflight observed without
 /// re-issuing the same RPCs.
 #[derive(Debug, Clone)]
 pub struct PreflightReport {
@@ -102,6 +107,116 @@ impl<'a> Preflight<'a> {
     /// separately via `withdraw_vault_preflight`.
     pub async fn run_gateway_only(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
         self.run_inner(inputs, false).await
+    }
+
+    /// Withdraw-specific gateway preflight. Runs checks 1–6 (chain id, code
+    /// hash, paused, usdc/vault addresses, agent active+expiry) then checks
+    /// 7–8 using the withdrawal-specific caps:
+    ///   7w. `shares <= agents(self).maxWithdrawPerPayment`
+    ///   8w. `agentWithdrawWindowGross(self, window) + shares <=
+    ///         agents(self).maxWithdrawPerWindow`
+    ///
+    /// USDC allowance/balance checks are skipped (N/A for withdrawals).
+    /// Vault-level share checks run separately in `withdraw_vault_preflight`.
+    ///
+    /// Addresses issue #371: the old `run_gateway_only` path checked the
+    /// deposit caps (`maxPerPayment`, `maxPerWindow`) instead of the
+    /// withdrawal caps, which could reject valid withdrawals and pass
+    /// invalid ones.
+    pub async fn run_withdraw_gateway(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
+        self.run_withdraw_inner(inputs).await
+    }
+
+    /// Inner implementation of the withdrawal gateway preflight.
+    /// Uses `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, and
+    /// `agentWithdrawWindowGross` for cap checks (issue #371).
+    async fn run_withdraw_inner(&self, inputs: PreflightInputs) -> Result<PreflightReport> {
+        // 1. chain id
+        let chain_id = self.rpc.chain_id().await?;
+        if chain_id != self.config.chain_id {
+            return Err(RmpcError::ErrChainIdMismatch);
+        }
+
+        let gateway_addr = parse_addr(&self.config.gateway_address, "gateway_address")?;
+
+        // 2. code hash pin
+        let code = self.rpc.get_code(gateway_addr, None).await?;
+        if code.is_empty() {
+            return Err(RmpcError::ErrCodeHashMismatch);
+        }
+        let observed_hash = keccak256(code.as_ref());
+        let expected_hash = parse_b256_hex(&self.config.gateway_runtime_hash)?;
+        if observed_hash.as_slice() != expected_hash.as_slice() {
+            return Err(RmpcError::ErrCodeHashMismatch);
+        }
+
+        // 3. paused()
+        let paused = self.call_view_paused(gateway_addr).await?;
+        if paused {
+            return Err(RmpcError::ErrGatewayPaused);
+        }
+
+        // 4-5. usdc()/vault() addresses pinned in config
+        let usdc_addr_on_chain = self.call_view_usdc(gateway_addr).await?;
+        let usdc_addr_cfg = parse_addr(&self.config.usdc_address, "usdc_address")?;
+        if usdc_addr_on_chain != usdc_addr_cfg {
+            return Err(RmpcError::ErrConfig(format!(
+                "gateway.usdc() = {usdc_addr_on_chain:?} does not match configured usdc_address = {usdc_addr_cfg:?}"
+            )));
+        }
+        let vault_addr_on_chain = self.call_view_vault(gateway_addr).await?;
+        let vault_addr_cfg = parse_addr(&self.config.vault_address, "vault_address")?;
+        if vault_addr_on_chain != vault_addr_cfg {
+            return Err(RmpcError::ErrConfig(format!(
+                "gateway.vault() = {vault_addr_on_chain:?} does not match configured vault_address = {vault_addr_cfg:?}"
+            )));
+        }
+
+        // 6. agents(self) — active + validUntil
+        let agent = self
+            .call_view_agents(gateway_addr, inputs.signer_address)
+            .await?;
+        if !agent.active {
+            return Err(RmpcError::ErrAgentNotAuthorized);
+        }
+        let now = now_unix();
+        if (agent.validUntil as u64) < now {
+            return Err(RmpcError::ErrAgentNotAuthorized);
+        }
+
+        // 7w. shares <= maxWithdrawPerPayment
+        if inputs.amount > agent.maxWithdrawPerPayment {
+            return Err(RmpcError::ErrConfig(format!(
+                "shares {} exceeds agent maxWithdrawPerPayment {}",
+                inputs.amount, agent.maxWithdrawPerPayment,
+            )));
+        }
+
+        // 8w. agentWithdrawWindowGross + shares <= maxWithdrawPerWindow
+        let window_id = now / WINDOW_SECONDS;
+        let window_gross = self
+            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address, window_id)
+            .await?;
+        let projected = window_gross.saturating_add(inputs.amount);
+        if projected > agent.maxWithdrawPerWindow {
+            return Err(RmpcError::ErrConfig(format!(
+                "withdrawWindowGross {} + shares {} exceeds maxWithdrawPerWindow {}",
+                window_gross, inputs.amount, agent.maxWithdrawPerWindow,
+            )));
+        }
+
+        Ok(PreflightReport {
+            chain_id,
+            gateway_runtime_hash_ok: true,
+            paused: false,
+            agent_active: agent.active,
+            agent_valid_until: agent.validUntil,
+            max_per_payment: agent.maxWithdrawPerPayment,
+            max_per_window: agent.maxWithdrawPerWindow,
+            window_gross,
+            allowance: U256::ZERO,
+            balance: U256::ZERO,
+        })
     }
 
     async fn run_inner(
@@ -319,6 +434,38 @@ impl<'a> Preflight<'a> {
             .await?;
         let decoded = RobotMoneyGateway::agentWindowGrossCall::abi_decode_returns(&out, true)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("agentWindowGross decode: {e}")))?;
+        Ok(decoded._0)
+    }
+
+    /// Read `agentWithdrawWindowGross(agent, windowId)` from the gateway.
+    /// Used by the withdrawal-specific preflight path (issue #371).
+    async fn call_view_agent_withdraw_window_gross(
+        &self,
+        gateway: Address,
+        agent: Address,
+        window_id: u64,
+    ) -> Result<U256> {
+        let data = RobotMoneyGateway::agentWithdrawWindowGrossCall {
+            _0: agent,
+            _1: window_id,
+        }
+        .abi_encode();
+        let out = self
+            .rpc
+            .eth_call(
+                &CallRequest {
+                    to: gateway,
+                    from: None,
+                    data: data.into(),
+                },
+                None,
+            )
+            .await?;
+        let decoded =
+            RobotMoneyGateway::agentWithdrawWindowGrossCall::abi_decode_returns(&out, true)
+                .map_err(|e| {
+                    RmpcError::ErrRpcDecode(format!("agentWithdrawWindowGross decode: {e}"))
+                })?;
         Ok(decoded._0)
     }
 

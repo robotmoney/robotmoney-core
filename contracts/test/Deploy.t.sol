@@ -78,13 +78,17 @@ contract DeployTest is Test {
             uint64 validUntil,
             uint256 maxPerPayment,
             uint256 maxPerWindow,
-            address recv,,,
+            address recv,,
+            uint256 maxWithdrawPerPayment,
+            uint256 maxWithdrawPerWindow
         ) = d.gateway.agents(agent);
         assertTrue(active);
         assertGt(validUntil, block.timestamp);
         assertEq(maxPerPayment, script.DEFAULT_MAX_PER_PAYMENT());
         assertEq(maxPerWindow, script.DEFAULT_MAX_PER_WINDOW());
         assertEq(recv, shareReceiver);
+        assertEq(maxWithdrawPerPayment, script.DEFAULT_MAX_WITHDRAW_PER_PAYMENT());
+        assertEq(maxWithdrawPerWindow, script.DEFAULT_MAX_WITHDRAW_PER_WINDOW());
     }
 
     function test_deploy_doesNotMintToAgent() public {

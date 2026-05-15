@@ -84,6 +84,28 @@ fn enc_agents(
     max_per_window: U256,
     share_receiver: Address,
 ) -> String {
+    enc_agents_full(
+        active,
+        valid_until,
+        max_per_payment,
+        max_per_window,
+        share_receiver,
+        U256::ZERO,
+        U256::ZERO,
+    )
+}
+
+/// Encode the full 8-tuple including withdrawal-specific cap fields.
+/// Used by withdrawal preflight tests (issue #371).
+fn enc_agents_full(
+    active: bool,
+    valid_until: u64,
+    max_per_payment: U256,
+    max_per_window: U256,
+    share_receiver: Address,
+    max_withdraw_per_payment: U256,
+    max_withdraw_per_window: U256,
+) -> String {
     let mut blob = Vec::with_capacity(32 * 8);
     let mut w = [0u8; 32];
     w[31] = if active { 1 } else { 0 };
@@ -96,12 +118,10 @@ fn enc_agents(
     let mut w = [0u8; 32];
     w[12..].copy_from_slice(share_receiver.as_slice());
     blob.extend_from_slice(&w);
-    // assetRecipient = zero (withdrawal disabled)
+    // assetRecipient = zero
     blob.extend_from_slice(&[0u8; 32]);
-    // maxWithdrawPerPayment = 0
-    blob.extend_from_slice(&[0u8; 32]);
-    // maxWithdrawPerWindow = 0
-    blob.extend_from_slice(&[0u8; 32]);
+    blob.extend_from_slice(&max_withdraw_per_payment.to_be_bytes::<32>());
+    blob.extend_from_slice(&max_withdraw_per_window.to_be_bytes::<32>());
     format!("0x{}", ahex::encode(blob))
 }
 
@@ -549,6 +569,170 @@ async fn balance_too_low_refuses() {
         matches!(err, RmpcError::ErrBalanceInsufficient),
         "got {err:?}"
     );
+}
+
+/// Wire up happy-path mocks for `run_withdraw_gateway`. Uses
+/// `enc_agents_full` so deposit caps and withdrawal caps can differ.
+/// `agentWithdrawWindowGross` is stubbed to `withdraw_window_gross`.
+async fn install_withdraw_gateway_mocks(
+    server: &mut mockito::ServerGuard,
+    cfg: &Config,
+    max_per_payment: U256,
+    max_per_window: U256,
+    max_withdraw_per_payment: U256,
+    max_withdraw_per_window: U256,
+    withdraw_window_gross: U256,
+) {
+    // chain_id
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{:x}", cfg.chain_id)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // eth_getCode
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_getCode"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{}", ahex::encode(GATEWAY_CODE))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // paused() = false
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::pausedCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_bool(false)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // usdc()
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::usdcCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(USDC)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // vault()
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::vaultCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_address(VAULT)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // agents() — with split deposit / withdrawal caps
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_agents_full(
+            true,
+            u64::MAX,
+            max_per_payment,
+            max_per_window,
+            address!("00000000000000000000000000000000000000ee"),
+            max_withdraw_per_payment,
+            max_withdraw_per_window,
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // agentWithdrawWindowGross()
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentWithdrawWindowGrossCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(withdraw_window_gross)))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+}
+
+/// Issue #371 — deposit caps are high but withdrawal caps are low.
+/// A medium-sized withdrawal must be rejected even though the deposit
+/// caps would allow it.
+#[tokio::test]
+async fn withdraw_gateway_rejects_when_deposit_caps_high_withdraw_caps_low() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = config();
+    // deposit caps: 10 USDC per payment, 1000 USDC per window (generous)
+    // withdrawal caps: 50 shares per payment, 500 shares per window (tight)
+    // attempt: 100 shares — within deposit caps but exceeds withdrawal cap
+    install_withdraw_gateway_mocks(
+        &mut server,
+        &cfg,
+        U256::from(10_000_000u64),    // maxPerPayment (deposit) = 10 USDC
+        U256::from(1_000_000_000u64), // maxPerWindow (deposit)  = 1000 USDC
+        U256::from(50u64),            // maxWithdrawPerPayment   = 50 shares
+        U256::from(500u64),           // maxWithdrawPerWindow    = 500 shares
+        U256::ZERO,                   // withdrawWindowGross     = 0
+    )
+    .await;
+    let rpc = RpcClient::new(server.url()).unwrap();
+    let pf = Preflight::new(&rpc, &cfg);
+    let err = pf
+        .run_withdraw_gateway(PreflightInputs {
+            signer_address: SIGNER,
+            amount: U256::from(100u64), // exceeds maxWithdrawPerPayment=50
+        })
+        .await
+        .unwrap_err();
+    match err {
+        RmpcError::ErrConfig(m) => assert!(
+            m.contains("maxWithdrawPerPayment"),
+            "expected maxWithdrawPerPayment in msg, got: {m}"
+        ),
+        other => panic!("expected ErrConfig(maxWithdrawPerPayment), got {other:?}"),
+    }
+}
+
+/// Issue #371 — deposit caps are low but withdrawal caps are high.
+/// A medium-sized withdrawal must be accepted even though the deposit
+/// caps would reject it.
+#[tokio::test]
+async fn withdraw_gateway_allows_when_deposit_caps_low_withdraw_caps_high() {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = config();
+    // deposit caps: 50 shares per payment, 500 shares per window (tight)
+    // withdrawal caps: 10_000 shares per payment, 100_000 per window (generous)
+    // attempt: 100 shares — within withdrawal caps, would exceed deposit caps
+    install_withdraw_gateway_mocks(
+        &mut server,
+        &cfg,
+        U256::from(50u64),      // maxPerPayment (deposit)  = 50 (tight)
+        U256::from(500u64),     // maxPerWindow  (deposit)  = 500 (tight)
+        U256::from(10_000u64),  // maxWithdrawPerPayment    = 10_000
+        U256::from(100_000u64), // maxWithdrawPerWindow     = 100_000
+        U256::ZERO,             // withdrawWindowGross      = 0
+    )
+    .await;
+    let rpc = RpcClient::new(server.url()).unwrap();
+    let pf = Preflight::new(&rpc, &cfg);
+    let result = pf
+        .run_withdraw_gateway(PreflightInputs {
+            signer_address: SIGNER,
+            amount: U256::from(100u64), // within withdrawal caps
+        })
+        .await;
+    assert!(result.is_ok(), "expected ok, got {result:?}");
 }
 
 #[test]

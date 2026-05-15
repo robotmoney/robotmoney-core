@@ -45,9 +45,11 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///                                via `runInProcessWithUsdc`.
 ///
 ///      Optional env vars (with safe defaults):
-///        AGENT_VALID_UNTIL      — uint64, default = block.timestamp + 30 days
-///        AGENT_MAX_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (USDC, 6dp)
-///        AGENT_MAX_PER_WINDOW   — uint256, default = 100_000 * 1e6
+///        AGENT_VALID_UNTIL               — uint64, default = block.timestamp + 30 days
+///        AGENT_MAX_PER_PAYMENT           — uint256, default = 10_000 * 1e6 (USDC, 6dp)
+///        AGENT_MAX_PER_WINDOW            — uint256, default = 100_000 * 1e6
+///        AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp)
+///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
 contract Deploy is Script {
@@ -83,6 +85,10 @@ contract Deploy is Script {
     uint256 public constant DEFAULT_MAX_PER_PAYMENT = 10_000 * 1e6;
     /// @notice Default per-window cap if `AGENT_MAX_PER_WINDOW` is unset.
     uint256 public constant DEFAULT_MAX_PER_WINDOW = 100_000 * 1e6;
+    /// @notice Default withdrawal per-payment cap if `AGENT_MAX_WITHDRAW_PER_PAYMENT` is unset.
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_PAYMENT = 10_000 * 1e6;
+    /// @notice Default withdrawal per-window cap if `AGENT_MAX_WITHDRAW_PER_WINDOW` is unset.
+    uint256 public constant DEFAULT_MAX_WITHDRAW_PER_WINDOW = 100_000 * 1e6;
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
@@ -139,6 +145,8 @@ contract Deploy is Script {
         p.validUntil = uint64(block.timestamp + DEFAULT_VALID_UNTIL_OFFSET);
         p.maxPerPayment = DEFAULT_MAX_PER_PAYMENT;
         p.maxPerWindow = DEFAULT_MAX_PER_WINDOW;
+        p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
+        p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
         d = _doDeploy(p);
         // In-process (no broadcast): addAdapter requires ADMIN_ROLE which is
@@ -155,6 +163,8 @@ contract Deploy is Script {
         uint64 validUntil;
         uint256 maxPerPayment;
         uint256 maxPerWindow;
+        uint256 maxWithdrawPerPayment;
+        uint256 maxWithdrawPerWindow;
         /// @dev Address of the USDC token to bind the gateway to. Must be
         ///      non-zero and have code deployed. The smoke-test devnet sets
         ///      this to the canonical Base USDC ([`CANONICAL_BASE_USDC`]);
@@ -172,6 +182,10 @@ contract Deploy is Script {
         );
         p.maxPerPayment = _envOrDefault("AGENT_MAX_PER_PAYMENT", DEFAULT_MAX_PER_PAYMENT);
         p.maxPerWindow = _envOrDefault("AGENT_MAX_PER_WINDOW", DEFAULT_MAX_PER_WINDOW);
+        p.maxWithdrawPerPayment =
+            _envOrDefault("AGENT_MAX_WITHDRAW_PER_PAYMENT", DEFAULT_MAX_WITHDRAW_PER_PAYMENT);
+        p.maxWithdrawPerWindow =
+            _envOrDefault("AGENT_MAX_WITHDRAW_PER_WINDOW", DEFAULT_MAX_WITHDRAW_PER_WINDOW);
         p.usdcAddress = vm.envAddress("USDC_ADDRESS");
     }
 
@@ -246,6 +260,10 @@ contract Deploy is Script {
         //    happy-path smoke-tests and may later `setPolicy`/`revokeAgent`
         //    against this agent without holding any privileged role.
         address[] memory noDestinations = new address[](0);
+        // When withdrawals are enabled (maxWithdrawPerPayment > 0) the contract
+        // requires assetRecipient != address(0).  Use shareReceiver as the
+        // USDC recipient for devnet/test deployments.
+        address assetRecipient = p.maxWithdrawPerPayment > 0 ? d.shareReceiver : address(0);
         IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
             active: true,
             validUntil: p.validUntil,
@@ -253,9 +271,9 @@ contract Deploy is Script {
             maxPerWindow: p.maxPerWindow,
             shareReceiver: d.shareReceiver,
             allowedDestinations: noDestinations,
-            assetRecipient: address(0),
-            maxWithdrawPerPayment: 0,
-            maxWithdrawPerWindow: 0,
+            assetRecipient: assetRecipient,
+            maxWithdrawPerPayment: p.maxWithdrawPerPayment,
+            maxWithdrawPerWindow: p.maxWithdrawPerWindow,
             allowedSourceVaults: noDestinations
         });
 

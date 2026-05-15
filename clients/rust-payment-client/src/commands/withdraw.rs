@@ -8,13 +8,13 @@
 //!
 //! 1. Load config + signer.
 //! 2. Acquire the per-agent file lock (single-flight CLI).
-//! 3. Run [`WithdrawPreflight`]:
+//! 3. Run gateway preflight via [`Preflight::run_withdraw_gateway`]:
 //!    a. chain id
 //!    b. code hash pin
 //!    c. gateway paused
 //!    d. agent policy active + not expired
-//!    e. shares <= agent maxWithdrawPerPayment (reuses maxPerPayment field)
-//!    f. window gross check (reuses agentWindowGross)
+//!    e. shares <= agent maxWithdrawPerPayment (withdrawal-specific cap)
+//!    f. agentWithdrawWindowGross + shares <= maxWithdrawPerWindow
 //!    g. vault.paused() == false
 //!    h. vault.allowance(agent, gateway) >= shares
 //!    i. vault.balanceOf(agent) >= shares
@@ -303,13 +303,15 @@ pub fn run(args: Args) -> i32 {
     };
 
     // -- Preflight --------------------------------------------------------
-    // First run the standard gateway preflight (chain id, code hash, gateway
-    // paused, agent active+expiry, window cap) reusing the deposit Preflight.
-    // For withdraw we pass `shares` as the "amount" so the per-payment and
-    // per-window cap checks run against shares.
+    // Run the withdrawal-specific gateway preflight (chain id, code hash,
+    // gateway paused, agent active+expiry, withdrawal window cap).
+    // Unlike the deposit path this checks maxWithdrawPerPayment,
+    // maxWithdrawPerWindow, and agentWithdrawWindowGross — not the deposit
+    // caps — so valid withdrawals are not refused and out-of-policy
+    // withdrawals are caught before signing (issue #371).
     let preflight_result = rt.block_on(async {
         let pf = Preflight::new(&rpc, &cfg);
-        pf.run_gateway_only(PreflightInputs {
+        pf.run_withdraw_gateway(PreflightInputs {
             signer_address: agent_address,
             amount: shares,
         })
