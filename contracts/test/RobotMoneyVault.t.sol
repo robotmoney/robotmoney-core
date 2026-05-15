@@ -545,4 +545,95 @@ contract RobotMoneyVaultTest is Test {
         vault.unpause();
         assertFalse(vault.paused(), "vault must be unpaused after admin unpause");
     }
+
+    // ─── Issue #368: split pause semantics — emergency withdraw preserves redemption rights ────
+
+    /// @notice After emergencyWithdraw(), users can redeem their shares (assets moved to idle USDC).
+    ///         New deposits must be blocked.
+    function test_emergencyWithdraw_userCanRedeem_newDepositBlocked() public {
+        // Alice deposits 10 000 USDC.
+        uint256 depositAmount = 10_000 * ONE_USDC;
+        vm.prank(alice);
+        uint256 aliceShares = vault.deposit(depositAmount, alice);
+        assertGt(aliceShares, 0, "alice must receive shares");
+
+        // Admin triggers emergency withdraw (admin also holds EMERGENCY_ROLE in setUp).
+        vm.prank(admin);
+        vault.emergencyWithdraw();
+
+        // After emergencyWithdraw, deposits must be blocked.
+        assertEq(vault.depositsPaused(), true, "deposits must be paused after emergencyWithdraw");
+        // Withdrawals must NOT be blocked.
+        assertEq(
+            vault.withdrawalsPaused(),
+            false,
+            "withdrawals must not be paused after emergencyWithdraw"
+        );
+        // paused() (= both flags) must be false.
+        assertFalse(vault.paused(), "full paused() must be false after emergencyWithdraw");
+
+        // Alice can redeem — assets are now in idle USDC in the vault.
+        vm.prank(alice);
+        uint256 assetsOut = vault.redeem(aliceShares, alice, alice);
+        assertApproxEqAbs(assetsOut, depositAmount, 1, "alice must recover her deposit on redeem");
+
+        // Bob tries a new deposit → must revert with DepositsPaused.
+        uint256 bobDeposit = 1_000 * ONE_USDC;
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.DepositsPaused.selector));
+        vault.deposit(bobDeposit, bob);
+    }
+
+    /// @notice full pause() blocks both deposits and withdrawals.
+    function test_fullPause_blocksDepositsAndWithdrawals() public {
+        // Alice deposits.
+        uint256 depositAmount = 5_000 * ONE_USDC;
+        vm.prank(alice);
+        uint256 aliceShares = vault.deposit(depositAmount, alice);
+
+        // Admin full-pauses the vault.
+        vm.prank(admin);
+        vault.pause();
+
+        assertTrue(vault.depositsPaused(), "deposits must be paused");
+        assertTrue(vault.withdrawalsPaused(), "withdrawals must be paused");
+        assertTrue(vault.paused(), "paused() must be true");
+
+        // Deposit blocked.
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.DepositsPaused.selector));
+        vault.deposit(1_000 * ONE_USDC, bob);
+
+        // Redeem blocked.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.WithdrawalsPaused.selector));
+        vault.redeem(aliceShares, alice, alice);
+    }
+
+    /// @notice After emergencyWithdraw, split-pause state is correctly set; full unpause restores both.
+    function test_emergencyWithdraw_thenUnpause_restoresFullFunctionality() public {
+        // Alice deposits.
+        uint256 depositAmount = 8_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+
+        // Emergency withdraw — only deposits paused.
+        vm.prank(admin);
+        vault.emergencyWithdraw();
+
+        assertEq(vault.depositsPaused(), true, "deposits paused after emergencyWithdraw");
+        assertEq(vault.withdrawalsPaused(), false, "withdrawals open after emergencyWithdraw");
+
+        // Admin unpauses fully.
+        vm.prank(admin);
+        vault.unpause();
+
+        assertEq(vault.depositsPaused(), false, "deposits unpaused after unpause");
+        assertEq(vault.withdrawalsPaused(), false, "withdrawals unpaused after unpause");
+
+        // Bob can now deposit again.
+        vm.prank(bob);
+        uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
+        assertGt(bobShares, 0, "bob must receive shares after unpause");
+    }
 }

@@ -9,7 +9,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 
@@ -21,7 +20,7 @@ import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 ///
 /// Deployed: 0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd (Base mainnet)
 /// Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun
-contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
+contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
@@ -75,6 +74,15 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     /// @notice Whether the vault has been permanently shut down. Irreversible.
     bool public shutdown;
+
+    // ─── Split pause semantics ─────────────────────────────────────────
+    // Deposits and withdrawals are gated independently so that emergencyWithdraw()
+    // can block new capital inflows while preserving user exit rights.
+
+    /// @notice When true, new deposits and mints are blocked.
+    bool public depositsPaused;
+    /// @notice When true, withdrawals and redeems are blocked.
+    bool public withdrawalsPaused;
 
     // ─── Rebalance throttling ──
 
@@ -168,6 +176,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     );
     /// @notice Emitted when the vault is permanently shut down.
     event Shutdown();
+    /// @notice Emitted when deposit pause state changes.
+    /// @param paused True when deposits are blocked, false when unblocked.
+    event DepositsPausedChanged(bool paused);
+    /// @notice Emitted when withdrawal pause state changes.
+    /// @param paused True when withdrawals are blocked, false when unblocked.
+    event WithdrawalsPausedChanged(bool paused);
     /// @notice Emitted when a deposit cannot be fully routed into adapters (e.g. all caps are full).
     /// @param amount USDC that remains idle in the vault after both routing passes.
     event UnroutedDeposit(uint256 amount);
@@ -204,6 +218,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     error RebalanceTooSoon();
     /// @notice Caller lacks `KEEPER_ROLE` (or `ADMIN_ROLE` where the rebalancer path also accepts it).
     error UnauthorizedRebalancer();
+    /// @notice Deposit attempted while deposits are paused.
+    error DepositsPaused();
+    /// @notice Withdrawal attempted while withdrawals are paused.
+    error WithdrawalsPaused();
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -302,9 +320,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
         internal
         override
-        whenNotPaused
         nonReentrant
     {
+        if (depositsPaused) revert DepositsPaused();
         if (shutdown) revert VaultShutdown();
         if (assets > perDepositCap) revert PerDepositCapExceeded();
         if (totalAssets() + assets > tvlCap) revert TVLCapExceeded();
@@ -398,7 +416,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         address owner,
         uint256 assets,
         uint256 shares
-    ) internal override whenNotPaused nonReentrant {
+    ) internal override nonReentrant {
+        if (withdrawalsPaused) revert WithdrawalsPaused();
         if (caller != owner) {
             _spendAllowance(owner, caller, shares);
         }
@@ -425,22 +444,35 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     function _pullProportional(uint256 assetsNeeded) internal {
         if (assetsNeeded == 0) return;
 
+        // First satisfy from idle USDC already sitting in the vault (e.g. after emergencyWithdraw).
+        uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
+        if (idleBalance >= assetsNeeded) {
+            // Idle balance covers the full withdrawal — no adapter pull needed.
+            return;
+        }
+
         uint256 totalInAdapters = 0;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (adapters[i].active) totalInAdapters += adapters[i].adapter.totalAssets();
         }
-        if (totalInAdapters == 0) revert NoActiveAdapters();
-        if (assetsNeeded > totalInAdapters) assetsNeeded = totalInAdapters;
 
-        uint256 remaining = assetsNeeded;
+        // Remaining amount that must come from adapters (after idle covers part of it).
+        uint256 remainingNeeded = assetsNeeded - idleBalance;
+        if (totalInAdapters == 0) {
+            // All assets are idle in the vault — nothing left to pull from adapters.
+            return;
+        }
+        if (remainingNeeded > totalInAdapters) remainingNeeded = totalInAdapters;
+
+        uint256 remaining = remainingNeeded;
         uint256 lastActiveIdx = type(uint256).max;
 
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!adapters[i].active) continue;
             lastActiveIdx = i;
             uint256 adapterBalance = adapters[i].adapter.totalAssets();
-            uint256 pull = (assetsNeeded * adapterBalance) / totalInAdapters;
+            uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
             if (pull == 0) continue;
             uint256 actual = adapters[i].adapter.withdraw(pull);
@@ -595,20 +627,24 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     /// @notice Pause all deposits and withdrawals. Restricted to `EMERGENCY_ROLE`.
     function pause() external onlyRole(EMERGENCY_ROLE) {
-        _pause();
+        _setDepositsPaused(true);
+        _setWithdrawalsPaused(true);
     }
 
     /// @notice Resume deposits and withdrawals. Restricted to `ADMIN_ROLE`.
     ///         Intentionally asymmetric: pausing is fast and unilateral (`EMERGENCY_ROLE`);
     ///         unpausing is deliberate and requires the higher-trust admin role.
     function unpause() external onlyRole(ADMIN_ROLE) {
-        _unpause();
+        _setDepositsPaused(false);
+        _setWithdrawalsPaused(false);
     }
 
     /// @notice Pause the vault and attempt to withdraw all assets from every active adapter.
     ///         Uses `try/catch` so a failed adapter does not block others. Restricted to `EMERGENCY_ROLE`.
+    ///         After this call, deposits are blocked but withdrawals remain open so users can exit.
     function emergencyWithdraw() external onlyRole(EMERGENCY_ROLE) nonReentrant {
-        _pause();
+        _setDepositsPaused(true);
+        // Withdrawals are intentionally left open so existing users can redeem idle USDC.
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (!adapters[i].active) continue;
@@ -623,7 +659,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         emit EmergencyWithdrawCalled();
     }
 
-    /// @notice Pause the vault and withdraw all assets from a single adapter. Restricted to `EMERGENCY_ROLE`.
+    /// @notice Pause deposits and withdraw all assets from a single adapter. Restricted to `EMERGENCY_ROLE`.
+    ///         Withdrawals remain open so users can redeem assets pulled into idle USDC.
     /// @param index Registry index of the adapter to drain.
     function emergencyWithdrawAdapter(uint256 index)
         external
@@ -631,7 +668,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
         nonReentrant
     {
         if (index >= adapters.length) revert AdapterNotFound();
-        _pause();
+        _setDepositsPaused(true);
         uint256 balance = adapters[index].adapter.totalAssets();
         if (balance == 0) {
             emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, true);
@@ -714,6 +751,22 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
 
     // ─── Internal helpers ─────────────────────────────────────────────
 
+    /// @dev Set `depositsPaused` and emit an event if the state changes.
+    function _setDepositsPaused(bool paused_) internal {
+        if (depositsPaused != paused_) {
+            depositsPaused = paused_;
+            emit DepositsPausedChanged(paused_);
+        }
+    }
+
+    /// @dev Set `withdrawalsPaused` and emit an event if the state changes.
+    function _setWithdrawalsPaused(bool paused_) internal {
+        if (withdrawalsPaused != paused_) {
+            withdrawalsPaused = paused_;
+            emit WithdrawalsPausedChanged(paused_);
+        }
+    }
+
     function _targetBpsFor() internal view returns (uint256) {
         uint256 active = _activeAdapterCount();
         return active == 0 ? 0 : MAX_BPS / active;
@@ -729,6 +782,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
     }
 
     // ─── Views ────────────────────────────────────────────────────────
+
+    /// @notice Returns true when both deposits and withdrawals are blocked (full pause).
+    ///         Provided for compatibility with tooling that queries `paused()`.
+    function paused() external view returns (bool) {
+        return depositsPaused && withdrawalsPaused;
+    }
 
     /// @notice Total number of adapters in the registry (active and inactive).
     function adapterCount() external view returns (uint256) {
