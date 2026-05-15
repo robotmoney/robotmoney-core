@@ -23,8 +23,9 @@ and rely on consistent controls across human and agent-operated flows.
   Portfolio Router paths.
 - Autonomous depositors can authorize agent activity with user-defined
   limits, destinations, recipients, and expiration.
-- Token holders can vote on target weights for the Portfolio Router
-  allocation.
+- Addresses with admin-assigned voting power can vote on target weights
+  for the Portfolio Router allocation. (Current governance is an
+  admin-weighted MVP mock; token-holder voting is a future goal.)
 - Any user can inspect vault availability, allocation weights,
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
@@ -48,9 +49,11 @@ Success is measured by:
 - **Human depositor.** A person who deposits USDC, chooses vault or
   Portfolio Router allocation exposure, withdraws funds, and monitors
   positions.
-- **Token holder.** A `$ROBOTMONEY` holder who votes on target weights
-  for the Portfolio Router allocation and observes protocol value
-  capture.
+- **Governance voter.** An address with admin-assigned voting power
+  (current MVP) who votes on target weights for the Portfolio Router
+  allocation and observes protocol value capture. Token-holder voting
+  is a future goal once a real token snapshot or voting-power source
+  is integrated.
 - **Integrator.** A builder who embeds Robot Money treasury actions and
   reporting into an agent runtime, treasury workflow, or external
   product.
@@ -65,8 +68,10 @@ Access expectations:
   permissions, and revoke those permissions.
 - Autonomous depositors can act only within permissions set by the
   depositor who authorized them.
-- Token holders can participate in allocation-weight governance and view
-  governance history.
+- Addresses with admin-assigned voting power can participate in
+  allocation-weight governance and view governance history. (Current
+  governance is admin-weighted MVP; token-holder voting is a future
+  goal.)
 - Integrators can read public product state and submit user-authorized
   actions.
 - Protocol operators can use product-wide safety controls, but cannot
@@ -84,9 +89,10 @@ Access expectations:
   understand where my funds go and what I receive.
 - As a human depositor, I want to withdraw synchronously from eligible
   positions so that funds are available when needed.
-- As a token holder, I want to vote on Portfolio Router target weights
-  so that I can influence how the composite treasury exposure is
-  balanced.
+- As an address with admin-assigned voting power, I want to vote on
+  Portfolio Router target weights so that I can influence how the
+  composite treasury exposure is balanced. (Token-holder voting is a
+  future goal; current governance is admin-weighted MVP.)
 - As an integrator, I want stable read and action surfaces so that agent
   runtimes and treasury tools can embed Robot Money safely.
 - As a protocol operator, I want narrow product-wide safety controls so
@@ -130,9 +136,14 @@ Access expectations:
 
 ### Allocation Governance
 
-1. A token holder reviews active allocation-weight proposals, target
-   weights, timing, and expected impact.
-2. The token holder votes.
+NOTE: Current governance is admin-weighted MVP (RouterGovernance.sol).
+Voting power is assigned by ADMIN_ROLE; proposal creation is
+ADMIN_ROLE-only. Token-holder voting is a future goal.
+
+1. An address with admin-assigned voting power reviews active
+   allocation-weight proposals, target weights, timing, and expected
+   impact.
+2. The voter votes.
 3. The product publishes vote outcome, execution state, and resulting
    allocation weights.
 4. Depositors and agents see the resulting weights before future

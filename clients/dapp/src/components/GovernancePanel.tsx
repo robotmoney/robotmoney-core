@@ -1,10 +1,15 @@
 /**
  * GovernancePanel — issue #322 / docs/architecture.md §5.3
  *
- * Displays the active governance proposal: proposed weight vector,
- * current vote tally, quorum threshold, time remaining, and execution
- * state. Connected RM-token holders see a "Vote" button that encodes a
+ * Displays the active admin-weighted MVP governance proposal: proposed
+ * weight vector, current vote tally, quorum threshold, time remaining,
+ * and execution state. Connected accounts with admin-assigned voting
+ * power see a "Vote" button that encodes a
  * `RouterGovernance.vote(proposalId)` call and hands it to the wallet.
+ *
+ * NOTE: Current governance is admin-weighted (MVP mock). Voting power is
+ * assigned by ADMIN_ROLE, not derived from token holdings. Token-holder
+ * voting is a future goal.
  *
  * Data flow:
  *   - Proposal list and tally: fetched from GET /v1/governance/proposals
@@ -194,7 +199,7 @@ export function GovernancePanel(props: GovernancePanelProps) {
 
   return (
     <section data-testid="governance-panel">
-      <h2>Governance — Weight Proposals</h2>
+      <h2>Admin-weighted governance (MVP) — Weight Proposals</h2>
 
       {panelState.kind === "loading" && <p data-testid="governance-loading">Loading proposals…</p>}
 
@@ -308,7 +313,7 @@ export function GovernancePanel(props: GovernancePanelProps) {
                   )}
                   {isConnected && typeof rmBalance === "bigint" && rmBalance === 0n && (
                     <p data-testid="governance-no-rm-hint">
-                      You hold no RM tokens and cannot vote on this proposal.
+                      You have no admin-assigned voting power and cannot vote on this proposal.
                     </p>
                   )}
                   {voteError && <p data-testid="governance-vote-error">Vote failed: {voteError}</p>}

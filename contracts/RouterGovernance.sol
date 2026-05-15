@@ -8,10 +8,11 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 
 /// @title RouterGovernance
-/// @notice Narrow governance module that controls Portfolio Router target
-///         weights. Token holders (tracked as on-chain voting power assigned
-///         by the admin) may propose a new weight vector, vote, and execute
-///         after quorum is reached and the execution delay elapses.
+/// @notice Admin-weighted MVP governance module that controls Portfolio Router
+///         target weights. ADMIN_ROLE assigns voting power to addresses, creates
+///         proposals, and executes after quorum is reached and the execution
+///         delay elapses. This is an MVP mock — voting power is admin-assigned,
+///         not derived from token holdings. Token-holder voting is a future goal.
 ///
 ///         Design constraints (docs/architecture.md §2.3):
 ///         - Controls router weights only; cannot govern vault internals,
@@ -206,6 +207,8 @@ contract RouterGovernance is AccessControl {
 
     /// @notice Grant `power` voting weight to `voter`. Setting to 0 removes voting rights.
     ///         Restricted to ADMIN_ROLE.
+    ///         NOTE: This is admin-assigned MVP governance — voting power is not derived
+    ///         from token holdings. Token-holder voting is a future goal.
     function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE) {
         if (voter == address(0)) revert ZeroAddress();
         uint256 old = votingPower[voter];
@@ -218,6 +221,8 @@ contract RouterGovernance is AccessControl {
 
     /// @notice Submit a new weight proposal. Restricted to ADMIN_ROLE.
     ///         Only one proposal may be active or queued at a time.
+    ///         NOTE: Proposal creation is admin-only in this MVP mock.
+    ///         Public proposal submission is a future goal.
     /// @param vaults  Ordered vault address list.
     /// @param bps     Parallel weight array; must sum to BPS_DENOMINATOR.
     function propose(address[] calldata vaults, uint256[] calldata bps)
