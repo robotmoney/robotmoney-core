@@ -2,6 +2,12 @@
 
 Implements [`docs/implementation-plan.md`](../../docs/implementation-plan.md) §12 against the credential / custody / preview / export decisions in [`docs/technical/dapp-credential-decisions.md`](../../docs/technical/dapp-credential-decisions.md).
 
+## Package manager
+
+**[bun](https://bun.sh)** is the canonical package manager for this workspace.
+`package.json` declares `"packageManager": "bun@1.3.5"` and all CI steps use `bun install --frozen-lockfile`.
+Do not commit `pnpm-lock.yaml`, `package-lock.json`, or `yarn.lock`.
+
 ## Stack
 
 - Vite + React + TypeScript
