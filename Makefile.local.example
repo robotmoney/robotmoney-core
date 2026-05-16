@@ -1,0 +1,40 @@
+# Makefile.local.example — per-machine overrides for the root Makefile.
+#
+# Copy this file to Makefile.local (which is gitignored) and customise the
+# values for your local setup.  The root Makefile includes Makefile.local
+# automatically when it exists.
+#
+# Example: cloudflared tunnel ingress for a developer named "alice":
+#
+#   ~/.config/cloudflared/config.yml (or /etc/cloudflared/config.yml):
+#     tunnel: <your-tunnel-id>
+#     ingress:
+#       - hostname: robotmoney-dev-dapp.<your-domain>
+#         service: http://localhost:5173
+#       - hostname: robotmoney-dev-rpc.<your-domain>
+#         service: http://localhost:18545
+#       - hostname: robotmoney-dev-explorer.<your-domain>
+#         service: http://localhost:18546
+#       - service: http_status:404
+#
+# Usage:
+#   cp Makefile.local.example Makefile.local
+#   # Edit the PUBLIC_* variables below to match your tunnel hostnames.
+#   make testnet-tunnel
+
+# Override these with your own tunnel hostnames.
+PUBLIC_DAPP_URL     ?= https://robotmoney-dev-dapp.example.com
+PUBLIC_RPC_URL      ?= https://robotmoney-dev-rpc.example.com
+PUBLIC_EXPLORER_URL ?= https://robotmoney-dev-explorer.example.com
+
+.PHONY: testnet-tunnel
+
+testnet-tunnel: teardown-zombies ## Boot the full-stack devnet wired to local tunnel hostnames
+	cargo run -p smoke-test -- \
+		--full-stack \
+		--dapp-port 5173 \
+		--rpc-port 18545 \
+		--explorer-port 18546 \
+		--public-dapp-url     $(PUBLIC_DAPP_URL) \
+		--public-rpc-url      $(PUBLIC_RPC_URL) \
+		--public-explorer-url $(PUBLIC_EXPLORER_URL)

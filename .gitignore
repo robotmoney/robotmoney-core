@@ -19,6 +19,9 @@ lcov.info
 # Rust / Cargo (Cargo.lock is checked in for binary crates)
 target/
 
+# Per-machine Makefile overrides (tunnel hostnames, local paths, etc.)
+Makefile.local
+
 # Internal planning docs — not for public history
 plan.md
 
