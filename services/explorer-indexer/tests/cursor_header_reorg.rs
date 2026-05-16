@@ -104,6 +104,7 @@ async fn cursor_header_persisted_for_no_event_target() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
+        feature_flags: 0,
     };
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
@@ -189,6 +190,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
+        feature_flags: 0,
     };
 
     let o1 = run_once(&fx.db, &rpc1, &cfg).await.unwrap();
@@ -271,6 +273,7 @@ async fn reorg_below_no_event_cursor_deletes_stale_rows() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
+        feature_flags: 0,
     };
 
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();
@@ -343,6 +346,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         router_governance: None,
         max_blocks_per_tick: 50,
         end_block: Some(10),
+        feature_flags: 0,
     };
 
     let o1 = run_once(&fx.db, &rpc1, &cfg).await.unwrap();
@@ -420,6 +424,7 @@ async fn walk_back_does_not_accept_missing_hash_as_root() {
         router_governance: None,
         max_blocks_per_tick: 50,
         end_block: Some(10),
+        feature_flags: 0,
     };
 
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();

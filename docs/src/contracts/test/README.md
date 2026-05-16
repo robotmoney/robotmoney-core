@@ -8,6 +8,7 @@
 - [MockVaultForRouter](DeployPortfolioRouter.t.sol/contract.MockVaultForRouter.md)
 - [DeployPortfolioRouterTest](DeployPortfolioRouter.t.sol/contract.DeployPortfolioRouterTest.md)
 - [DeployVaultRegistryTest](DeployVaultRegistry.t.sol/contract.DeployVaultRegistryTest.md)
+- [FeatureFlagsTest](FeatureFlags.t.sol/contract.FeatureFlagsTest.md)
 - [RouterMockVault](GatewayRouter.t.sol/contract.RouterMockVault.md)
 - [UnderPullRouter](GatewayRouter.t.sol/contract.UnderPullRouter.md)
 - [GatewayRouterTest](GatewayRouter.t.sol/contract.GatewayRouterTest.md)

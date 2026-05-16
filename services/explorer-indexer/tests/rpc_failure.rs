@@ -43,6 +43,7 @@ async fn rpc_failure_recorded_in_indexer_runs() {
         router_governance: None,
         max_blocks_per_tick: 100,
         end_block: None,
+        feature_flags: 0,
     };
 
     // Forced failure → run_once must catch the RPC error and write

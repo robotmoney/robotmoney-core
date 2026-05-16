@@ -183,6 +183,7 @@ async fn vault_registered_event_inserts_vaults_row() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
@@ -271,6 +272,7 @@ async fn vault_status_changed_updates_status() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o1 = run_once(&fx.db, &rpc1, &cfg).await.unwrap();
@@ -326,6 +328,7 @@ async fn vault_status_changed_updates_status() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(89),
+        feature_flags: 4,
     };
 
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();
@@ -454,6 +457,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o1 = run_once(&fx.db, &rpc1, &cfg).await.unwrap();
@@ -512,6 +516,7 @@ async fn reorg_deletes_snapshot_rows_but_preserves_vaults_rows() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();

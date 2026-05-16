@@ -272,6 +272,7 @@ async fn two_registered_vaults_indexed_independently() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o1 = run_once(&fx.db, &rpc1, &cfg).await.unwrap();
@@ -307,6 +308,7 @@ async fn two_registered_vaults_indexed_independently() {
         router_governance: None,
         max_blocks_per_tick: 200,
         end_block: Some(89),
+        feature_flags: 4,
     };
 
     let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();
@@ -380,6 +382,7 @@ async fn weights_set_event_populates_router_weight_snapshots() {
         router_governance: Some(router_addr),
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
@@ -458,6 +461,7 @@ async fn proposal_created_event_populates_governance_proposals() {
         router_governance: Some(gov_addr),
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
@@ -541,6 +545,7 @@ async fn vote_cast_event_populates_governance_votes() {
         router_governance: Some(gov_addr),
         max_blocks_per_tick: 200,
         end_block: Some(65),
+        feature_flags: 4,
     };
 
     let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();

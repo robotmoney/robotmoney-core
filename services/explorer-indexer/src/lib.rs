@@ -26,6 +26,7 @@
 
 pub mod abi;
 pub mod db;
+pub mod feature_flags;
 pub mod indexer;
 pub mod rpc;
 

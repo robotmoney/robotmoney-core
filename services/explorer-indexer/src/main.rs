@@ -5,7 +5,8 @@
 use alloy_primitives::Address;
 use clap::Parser;
 use explorer_indexer::{
-    db::Db, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc, DEFAULT_TICK_SECONDS,
+    db::Db, feature_flags, indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc,
+    DEFAULT_TICK_SECONDS,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -118,6 +119,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router_governance,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
+        // Load feature flags from FEATURE_FLAGS env var at startup.
+        // config/feature-flags.json is the canonical registry.
+        feature_flags: feature_flags::bitmap_from_env(),
     };
 
     let mut interval = tokio::time::interval(Duration::from_secs(cli.tick_seconds));

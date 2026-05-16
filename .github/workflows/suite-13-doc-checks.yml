@@ -132,3 +132,22 @@ jobs:
 
       - name: Check generated contract docs freshness
         run: python3 .github/scripts/check_generated_contract_docs_freshness.py
+
+  feature-flag-consistency:
+    name: feature-flag-consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cross-system feature flag consistency
+        # Verifies that flag IDs in config/feature-flags.json match the
+        # constants in contracts/FeatureFlags.sol, clients/dapp/src/feature-flags.ts,
+        # and services/explorer-indexer/src/feature_flags.rs.
+        # Implements: issue #389
+        run: python3 .github/scripts/check_feature_flag_consistency.py

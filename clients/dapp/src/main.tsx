@@ -36,6 +36,12 @@ import { makeConfig } from "./lib/wagmi";
 import { useGatewayVerifier } from "./lib/useGatewayVerifier";
 import { resolveExplorerApiUrl } from "./lib/explorerApi";
 import { initErrorCapture } from "./lib/error-capture";
+import {
+  MULTI_VAULT_ENABLED,
+  PORTFOLIO_ROUTER_ENABLED,
+  isEnabled,
+  parseFlagBitmap,
+} from "./feature-flags";
 
 // Install global error capture before React renders so startup errors are
 // included in the /debug feed.
@@ -59,6 +65,10 @@ const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Addres
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
+// Cross-system feature flag bitmap (config/feature-flags.json, issue #389).
+const featureFlagBitmap = parseFlagBitmap(env);
+const multiVaultEnabled = isEnabled(MULTI_VAULT_ENABLED, featureFlagBitmap);
+const portfolioRouterEnabled = isEnabled(PORTFOLIO_ROUTER_ENABLED, featureFlagBitmap);
 
 function App() {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
@@ -121,7 +131,10 @@ function App() {
       <main className="dapp-shell">
         <div className="landing-overview">
           <ProtocolStats apiUrl={explorerApiUrl} />
-          <VaultCards apiUrl={explorerApiUrl} />
+          {/* MULTI_VAULT_ENABLED (flag 0) gates the multi-vault card grid.
+              Without the flag the operator's single vault is shown via
+              the VaultDetail route. config/feature-flags.json, issue #389. */}
+          {multiVaultEnabled && <VaultCards apiUrl={explorerApiUrl} />}
         </div>
 
         <Tabs
@@ -146,7 +159,9 @@ function App() {
                 />
               ),
             },
-            {
+            // PORTFOLIO_ROUTER_ENABLED (flag 1) gates the Router Governance tab.
+            // config/feature-flags.json, issue #389.
+            portfolioRouterEnabled && {
               id: "router-governance",
               label: "Router Governance",
               content: (
@@ -187,7 +202,7 @@ function App() {
                 </div>
               ),
             },
-          ]}
+          ].filter(Boolean as unknown as <T>(v: T | false) => v is T)}
         />
       </main>
     </>

@@ -65,13 +65,25 @@ pub struct IndexerConfig {
     /// Optional explicit upper bound — useful for bounded test runs.
     /// When `Some(end)`, the indexer never advances past `end`.
     pub end_block: Option<u64>,
+    /// Feature flag bitmap loaded from `FEATURE_FLAGS` env var via
+    /// `feature_flags::bitmap_from_env()`.  Bit positions are defined in
+    /// `config/feature-flags.json` and `feature_flags.rs`.  Default `0`
+    /// disables all optional paths (conservative / backwards-compatible).
+    pub feature_flags: u64,
 }
 
 impl IndexerConfig {
     pub fn watched_addresses(&self) -> Vec<Address> {
         let mut addrs = vec![self.gateway, self.vault];
-        if let Some(reg) = self.registry {
-            addrs.push(reg);
+        // Gate VaultRegistry event ingestion behind INDEXER_MULTI_VAULT_EVENTS
+        // (config/feature-flags.json id=2).
+        if crate::feature_flags::is_enabled(
+            crate::feature_flags::INDEXER_MULTI_VAULT_EVENTS,
+            self.feature_flags,
+        ) {
+            if let Some(reg) = self.registry {
+                addrs.push(reg);
+            }
         }
         if let Some(gov) = self.router_governance {
             addrs.push(gov);

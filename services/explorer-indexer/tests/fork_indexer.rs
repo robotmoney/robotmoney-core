@@ -60,6 +60,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         // run at the pin so the heartbeat snapshot lands at a known
         // block.
         end_block: Some(fork.pin.block - explorer_indexer::CONFIRMATIONS),
+        feature_flags: 0,
     };
 
     // First run.

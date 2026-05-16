@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical cross-system feature flag registry. Each flag has a stable numeric ID used as the bit position in an on-chain uint256 bitmap. IDs must never be renumbered once assigned; deprecated flags should be kept and noted as retired.",
+  "flags": [
+    {
+      "id": 0,
+      "name": "MULTI_VAULT_ENABLED",
+      "description": "Gates multi-vault UI surfaces in the dapp (VaultCards, VaultList tab) and multi-vault event indexing paths in the explorer-indexer. When false the dapp shows only the single legacy vault configured via VITE_VAULT_ADDRESS.",
+      "systems": ["dapp", "indexer", "contracts"]
+    },
+    {
+      "id": 1,
+      "name": "PORTFOLIO_ROUTER_ENABLED",
+      "description": "Gates the router deposit path in the dapp (RouterDepositSection) and RouterGovernance panel. When false the governance tab is hidden regardless of VITE_ROUTER_ADDRESS being set.",
+      "systems": ["dapp", "contracts"]
+    },
+    {
+      "id": 2,
+      "name": "INDEXER_MULTI_VAULT_EVENTS",
+      "description": "Gates multi-vault VaultRegistered and VaultStatusChanged event ingestion in the explorer-indexer. When false the indexer skips VaultRegistry log fetches even if registry address is configured.",
+      "systems": ["indexer"]
+    }
+  ]
+}
