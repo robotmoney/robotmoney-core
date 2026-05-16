@@ -2,6 +2,8 @@
 
 Paste the prompt below into a fresh session of your agent runtime, then come back to the Robot Money dapp once the agent prints its public address.
 
+> **Environment reference:** for a full map of environment modes (local devnet, fork e2e, full-stack staging, mainnet read-only), startup commands, required env vars, and CI suites, see [`docs/environments.md`](docs/environments.md).
+
 > Agent, install Robot Money per the instructions in this file.
 
 The agent should perform all of the steps below itself. Vendor-specific nuances are called out inline.

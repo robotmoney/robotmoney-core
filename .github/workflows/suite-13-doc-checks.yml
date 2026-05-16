@@ -75,6 +75,9 @@ jobs:
       - name: Source-doc reconciliation
         run: python3 .github/scripts/check_source_doc_reconciliation.py
 
+      - name: environments.md script-paths and env-var coverage
+        run: python3 .github/scripts/check_environments_doc.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest
