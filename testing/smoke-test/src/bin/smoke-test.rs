@@ -77,7 +77,7 @@ struct Cli {
     public_explorer_url: Option<String>,
 
     /// Write harness logs to this file instead of the default
-    /// `target/smoke-test/smoke-test.log`.
+    /// `artifacts/smoke-test/smoke-test.log`.
     #[arg(long, value_name = "PATH")]
     log_file: Option<PathBuf>,
 
