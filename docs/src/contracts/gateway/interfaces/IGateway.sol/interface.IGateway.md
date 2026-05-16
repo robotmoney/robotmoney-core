@@ -1,16 +1,24 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-skills/blob/b462a72b60a914ceeff6cdf3ad7148bfb0361abb/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1421cc6201de54f6b9e3c222f9419f45c65b6f43/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
 
 Minimal interface stub for the RobotMoney deposit gateway.
 
-This is the surface downstream issues (#9 RobotMoneyGateway, #10 deploy
-script, #13 forge tests) compile against. Keep it stable. Per the MVP
-plan (`docs/implementation-plan.md` §2.2), the gateway exposes a
-single state-mutating entrypoint for agents (`deposit`), admin
-lifecycle calls, and a pause asymmetry (PAUSER pauses, ADMIN unpauses).
+Per the MVP plan (`docs/implementation-plan.md` §2.2), the gateway
+exposes a single state-mutating entrypoint for agents (`deposit`),
+a permissionless depositor-owned authorize/revoke/policy surface
+(`authorizeAgent`, `revokeAgent`, `setPolicy`), and a protocol-wide
+pause asymmetry (PAUSER pauses, ADMIN unpauses) retained as a
+kill-switch by the contract upgrader.
+Authority model (see issue #269). Each depositor is the sole authority
+over her own agent. `authorizeAgent` is callable by any EOA;
+`msg.sender` is recorded as the agent's owner. Only that recorded
+owner can update policy or revoke. The Robot Money team has no
+runtime authority over any agent's lifecycle — `ADMIN_ROLE` is
+reserved for protocol-wide kill switches (e.g. `unpause`) retained
+by the contract upgrader for incident response.
 
 
 ## Functions
@@ -45,23 +53,141 @@ function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idemp
 |`sharesMinted`|`uint256`|   Vault shares minted to `shareReceiver`.|
 
 
+### depositTo
+
+Pull `amount` USDC from caller, route to `destination` (vault or
+Portfolio Router), and deliver resulting shares to the agent's
+configured `shareReceiver`. When `destination` is the router,
+`minSharesPerLeg` provides per-leg slippage protection.
+
+Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
+same caps, deadline, idempotency, and policy checks as `deposit`.
+`destination` must appear in the agent's `allowedDestinations` list
+(or the list must be empty, in which case only the pinned vault or
+the pinned router is accepted — no registry lookup is performed).
+
+
+```solidity
+function depositTo(
+    bytes32 orderId,
+    uint256 amount,
+    uint64 deadline,
+    bytes32 idempotencyKey,
+    address destination,
+    uint256[] calldata minSharesPerLeg
+) external returns (bytes32 paymentId);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
+|`amount`|`uint256`|          Gross USDC amount, in 6-decimal base units.|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
+|`destination`|`address`|     Vault address or Portfolio Router address.|
+|`minSharesPerLeg`|`uint256[]`| Per-leg slippage floor (router path only). Pass empty array when routing to a single vault.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/amount/key.|
+
+
+### withdraw
+
+Redeem `shares` from `sourceVault` on behalf of the agent's
+configured depositor. USDC proceeds are sent only to the
+policy-configured `assetRecipient` — the agent cannot redirect
+funds. The gateway pulls shares from `msg.sender` via
+`transferFrom` (agent must have approved the gateway).
+
+Restricted to `AGENT_ROLE`. Reverts when paused. Enforces all the
+same deadline, idempotency, and policy checks as `deposit`. The
+agent must approve the gateway to spend its vault shares before
+calling this function.
+
+
+```solidity
+function withdraw(
+    bytes32 orderId,
+    uint256 shares,
+    address sourceVault,
+    uint64 deadline,
+    bytes32 idempotencyKey
+) external returns (bytes32 paymentId, uint256 assetsOut);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
+|`shares`|`uint256`|          Vault shares to redeem.|
+|`sourceVault`|`address`|     Vault address to redeem from.|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/shares/key.|
+|`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
+
+
 ### authorizeAgent
 
-Set or replace the policy for `agent`. Restricted to `ADMIN_ROLE`.
+First-time authorization for `agent`. Permissionless — any EOA
+may call to register their own agent. `msg.sender` is recorded
+as the agent's owner. Reverts if `agent` already has a
+recorded owner; that owner must call `setPolicy` to update or
+`revokeAgent` to release.
 
 
 ```solidity
 function authorizeAgent(address agent, AgentPolicy calldata p) external;
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address to authorize (must not already be owned).|
+|`p`|`AgentPolicy`|    Initial policy parameters.|
+
+
+### setPolicy
+
+Update the policy for an agent the caller already owns.
+Reverts if `msg.sender` is not the recorded owner of `agent`.
+
+
+```solidity
+function setPolicy(address agent, AgentPolicy calldata p) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address whose policy to update.|
+|`p`|`AgentPolicy`|    New policy parameters.|
+
 
 ### revokeAgent
 
-Disable policy for `agent`. Restricted to `ADMIN_ROLE`.
+Revoke an agent. Reverts if `msg.sender` is not the recorded
+owner. Clears policy, role, and owner record.
 
 
 ```solidity
 function revokeAgent(address agent) external;
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address whose policy and role are revoked.|
+
 
 ### pause
 
@@ -75,6 +201,9 @@ function pause() external;
 ### unpause
 
 Resume operations. Restricted to `ADMIN_ROLE` (asymmetric).
+`ADMIN_ROLE` is retained as a protocol-wide kill-switch
+counterweight to `pause`; it has no authority over any
+agent's lifecycle.
 
 
 ```solidity
@@ -108,6 +237,15 @@ Pinned ERC-4626 vault address.
 function vault() external view returns (address);
 ```
 
+### router
+
+Portfolio Router address, or `address(0)` if not configured.
+
+
+```solidity
+function router() external view returns (address);
+```
+
 ### paused
 
 Whether the gateway is currently paused.
@@ -117,12 +255,37 @@ Whether the gateway is currently paused.
 function paused() external view returns (bool);
 ```
 
+### agentOwner
+
+Recorded owner (depositor EOA) for `agent`, or `address(0)`
+if no policy is recorded.
+
+
+```solidity
+function agentOwner(address agent) external view returns (address);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address whose recorded owner to look up.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`<none>`|`address`|The depositor EOA that authorized `agent`, or zero if none.|
+
+
 ## Events
 ### AgentAuthorized
+Emitted when an agent's policy is created or updated.
+
 
 ```solidity
 event AgentAuthorized(
     address indexed agent,
+    address indexed owner,
     uint64 validUntil,
     uint256 maxPerPayment,
     uint256 maxPerWindow,
@@ -130,25 +293,63 @@ event AgentAuthorized(
 );
 ```
 
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|         Agent address whose policy was set.|
+|`owner`|`address`|         Depositor EOA that authorized the agent (`msg.sender` at first `authorizeAgent` call).|
+|`validUntil`|`uint64`|    Policy expiry timestamp (Unix seconds).|
+|`maxPerPayment`|`uint256`| Maximum USDC per single deposit call.|
+|`maxPerWindow`|`uint256`|  Maximum USDC per rolling window.|
+|`shareReceiver`|`address`| Address receiving minted vault shares.|
+
 ### AgentRevoked
+Emitted when an agent's policy and role are revoked.
+
 
 ```solidity
-event AgentRevoked(address indexed agent);
+event AgentRevoked(address indexed agent, address indexed owner);
 ```
 
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|Agent address whose policy was removed.|
+|`owner`|`address`|Depositor EOA that revoked (must equal the recorded owner).|
+
 ### Paused
+Emitted when the gateway is paused.
+
 
 ```solidity
 event Paused(address indexed by);
 ```
 
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`by`|`address`|Address that called `pause()`.|
+
 ### Unpaused
+Emitted when the gateway is unpaused.
+
 
 ```solidity
 event Unpaused(address indexed by);
 ```
 
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`by`|`address`|Address that called `unpause()`.|
+
 ### AgentDeposit
+Emitted on every successful agent deposit to a single vault.
+
 
 ```solidity
 event AgentDeposit(
@@ -162,9 +363,83 @@ event AgentDeposit(
 );
 ```
 
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|    Replay-protection hash for this payment.|
+|`orderId`|`bytes32`|      Caller-supplied order identifier.|
+|`agent`|`address`|        Agent address that made the deposit.|
+|`shareReceiver`|`address`|Address that received the minted vault shares.|
+|`amount`|`uint256`|       Gross USDC deposited (6-decimal units).|
+|`sharesMinted`|`uint256`| Vault shares minted to `shareReceiver`.|
+|`windowId`|`uint64`|     Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).|
+
+### AgentDepositRouted
+Emitted on every successful agent deposit routed through the Portfolio Router.
+
+
+```solidity
+event AgentDepositRouted(
+    bytes32 indexed paymentId,
+    bytes32 indexed orderId,
+    address indexed agent,
+    address shareReceiver,
+    address router,
+    uint256 amount,
+    uint256[] sharesPerLeg,
+    uint64 windowId
+);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Replay-protection hash for this payment.|
+|`orderId`|`bytes32`|        Caller-supplied order identifier.|
+|`agent`|`address`|          Agent address that made the deposit.|
+|`shareReceiver`|`address`|  Address that received the minted vault shares per leg.|
+|`router`|`address`|         Portfolio Router address used for this deposit.|
+|`amount`|`uint256`|         Gross USDC deposited (6-decimal units).|
+|`sharesPerLeg`|`uint256[]`|   Vault shares minted per leg (parallel to router weight list).|
+|`windowId`|`uint64`|       Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).|
+
+### AgentWithdrawal
+Emitted on every successful agent withdrawal (vault redemption).
+
+
+```solidity
+event AgentWithdrawal(
+    bytes32 indexed paymentId,
+    bytes32 indexed orderId,
+    address indexed agent,
+    address sourceVault,
+    uint256 shares,
+    uint256 assetsOut,
+    address assetRecipient,
+    uint64 windowId
+);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Replay-protection hash for this payment.|
+|`orderId`|`bytes32`|        Caller-supplied order identifier.|
+|`agent`|`address`|          Agent address that initiated the withdrawal.|
+|`sourceVault`|`address`|    Vault address shares were redeemed from.|
+|`shares`|`uint256`|         Vault shares burned.|
+|`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
+|`assetRecipient`|`address`| Address that received the redeemed USDC.|
+|`windowId`|`uint64`|       Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).|
+
 ## Structs
 ### AgentPolicy
-Per-agent policy. Set by ADMIN via `authorizeAgent`.
+Per-agent policy. Set by the agent's recorded owner via
+`authorizeAgent` (first time) or `setPolicy` (subsequent
+updates).
 
 
 ```solidity
@@ -174,6 +449,11 @@ struct AgentPolicy {
     uint256 maxPerPayment;
     uint256 maxPerWindow;
     address shareReceiver;
+    address[] allowedDestinations;
+    address assetRecipient;
+    uint256 maxWithdrawPerPayment;
+    uint256 maxWithdrawPerWindow;
+    address[] allowedSourceVaults;
 }
 ```
 
@@ -181,9 +461,14 @@ struct AgentPolicy {
 
 |Name|Type|Description|
 |----|----|-----------|
-|`active`|`bool`|        Policy is enabled.|
-|`validUntil`|`uint64`|    Unix-seconds expiry; deposits revert at/after.|
-|`maxPerPayment`|`uint256`| Maximum gross USDC per single `deposit` call.|
-|`maxPerWindow`|`uint256`|  Maximum gross USDC per `WINDOW_SECONDS` window.|
-|`shareReceiver`|`address`| Address that receives minted vault shares.|
+|`active`|`bool`|                 Policy is enabled.|
+|`validUntil`|`uint64`|             Unix-seconds expiry; deposits revert at/after.|
+|`maxPerPayment`|`uint256`|          Maximum gross USDC per single `deposit` call.|
+|`maxPerWindow`|`uint256`|           Maximum gross USDC per `WINDOW_SECONDS` window.|
+|`shareReceiver`|`address`|          Address that receives minted vault shares.|
+|`allowedDestinations`|`address[]`|    Whitelist of deposit destinations (vault or router addresses). When non-empty, `depositTo` requires the supplied destination to appear in this list. An empty array disables the allowlist — only the pinned vault or the pinned router is permitted (no registry lookup).|
+|`assetRecipient`|`address`|         Address that receives redeemed USDC on `withdraw`. Must be non-zero when `maxWithdrawPerPayment > 0`.|
+|`maxWithdrawPerPayment`|`uint256`|  Maximum vault shares redeemable per single `withdraw` call. Set to zero to disable agent-initiated withdrawal.|
+|`maxWithdrawPerWindow`|`uint256`|   Maximum vault shares redeemable per `WINDOW_SECONDS` window. Must be >= `maxWithdrawPerPayment` when non-zero.|
+|`allowedSourceVaults`|`address[]`|    Whitelist of vaults the agent may redeem from via `withdraw`. When non-empty, the supplied `sourceVault` must appear in this list. An empty array permits only the pinned vault (no registry lookup; arbitrary vault addresses are never accepted).|
 

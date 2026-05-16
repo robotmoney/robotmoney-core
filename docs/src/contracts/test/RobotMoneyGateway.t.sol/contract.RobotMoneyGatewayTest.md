@@ -1,15 +1,37 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-skills/blob/b462a72b60a914ceeff6cdf3ad7148bfb0361abb/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1421cc6201de54f6b9e3c222f9419f45c65b6f43/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
+
+
+## Constants
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6
+```
+
+
+### MAX_PER_PAYMENT
+
+```solidity
+uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC
+```
+
+
+### MAX_PER_WINDOW
+
+```solidity
+uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC
+```
 
 
 ## State Variables
 ### usdc
 
 ```solidity
-MockUSDC internal usdc
+TestERC20 internal usdc
 ```
 
 
@@ -90,24 +112,15 @@ bytes32 internal agentRole
 ```
 
 
-### ONE_USDC
+### depositor
+Default owner used by `_authorize` when none is specified.
+Matches the pre-#269 admin-as-authorizer behavior at the test
+level while exercising the new permissionless path under the
+hood (any EOA may authorize; recorded owner == msg.sender).
+
 
 ```solidity
-uint256 internal constant ONE_USDC = 1e6
-```
-
-
-### MAX_PER_PAYMENT
-
-```solidity
-uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC
-```
-
-
-### MAX_PER_WINDOW
-
-```solidity
-uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC
+address internal depositor = makeAddr("depositor")
 ```
 
 
@@ -131,6 +144,13 @@ function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory);
 
 ```solidity
 function _authorize(address who, IGateway.AgentPolicy memory p) internal;
+```
+
+### _authorizeAs
+
+
+```solidity
+function _authorizeAs(address owner, address who, IGateway.AgentPolicy memory p) internal;
 ```
 
 ### _fundAndApprove
@@ -168,11 +188,24 @@ function test_constructor_revertsOnAssetMismatch() public;
 function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
 ```
 
-### test_authorizeAgent_nonAdminReverts
+### test_authorizeAgent_permissionless
+
+AC: a non-`ADMIN_ROLE` EOA calls `authorizeAgent` and the gateway
+records `(msg.sender, agent)` as the owner pair (issue #269).
 
 
 ```solidity
-function test_authorizeAgent_nonAdminReverts() public;
+function test_authorizeAgent_permissionless() public;
+```
+
+### test_authorizeAgent_no_longer_requires_admin_role
+
+AC: calling `authorizeAgent` from an EOA holding no roles does
+not revert (issue #269).
+
+
+```solidity
+function test_authorizeAgent_no_longer_requires_admin_role() public;
 ```
 
 ### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin
@@ -217,25 +250,81 @@ function test_authorizeAgent_revertsOnZeroCaps() public;
 function test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap() public;
 ```
 
-### test_authorizeAgent_replaceExistingPolicy_keepsAgentRole
+### test_authorizeAgent_revertsWhenAlreadyOwned
+
+Re-authorizing an already-owned agent is rejected; the owner
+must `setPolicy` (or `revokeAgent` first). Replaces the
+pre-#269 "admin re-authorizes" semantic.
 
 
 ```solidity
-function test_authorizeAgent_replaceExistingPolicy_keepsAgentRole() public;
+function test_authorizeAgent_revertsWhenAlreadyOwned() public;
 ```
 
-### test_revokeAgent_clearsPolicyAndRole
+### test_setPolicy_updatesPolicyKeepsRoleAndOwner
 
 
 ```solidity
-function test_revokeAgent_clearsPolicyAndRole() public;
+function test_setPolicy_updatesPolicyKeepsRoleAndOwner() public;
 ```
 
-### test_revokeAgent_nonAdminReverts
+### test_setPolicy_requires_recorded_owner
+
+AC: only the recorded owner can update policy for an agent
+they authorized (issue #269).
 
 
 ```solidity
-function test_revokeAgent_nonAdminReverts() public;
+function test_setPolicy_requires_recorded_owner() public;
+```
+
+### test_setPolicy_revertsOnZeroAgent
+
+
+```solidity
+function test_setPolicy_revertsOnZeroAgent() public;
+```
+
+### test_setPolicy_revertsBeforeAuthorize
+
+
+```solidity
+function test_setPolicy_revertsBeforeAuthorize() public;
+```
+
+### test_setPolicy_validatesPolicyShape
+
+
+```solidity
+function test_setPolicy_validatesPolicyShape() public;
+```
+
+### test_revokeAgent_clearsPolicyAndRoleAndOwner
+
+
+```solidity
+function test_revokeAgent_clearsPolicyAndRoleAndOwner() public;
+```
+
+### test_revokeAgent_requires_recorded_owner
+
+AC: only the recorded owner can revoke; a third-party caller
+reverts with the new ownership-check error (issue #269).
+
+
+```solidity
+function test_revokeAgent_requires_recorded_owner() public;
+```
+
+### test_revokeAgent_then_authorizeAgent_by_different_owner
+
+After revoke, the agent address is releasable: a fresh depositor
+can claim it via `authorizeAgent`. This is the round-trip
+property the dapp's onboarding wizard relies on.
+
+
+```solidity
+function test_revokeAgent_then_authorizeAgent_by_different_owner() public;
 ```
 
 ### test_pause_byPauser_unpause_byAdmin
@@ -364,6 +453,27 @@ function test_deposit_perAgentWindowsAreIndependent() public;
 function test_deposit_revertsOnFeeOnTransferToken() public;
 ```
 
+### test_deposit_still_gated_on_agent_role
+
+AC: `deposit()` still reverts for non-AGENT_ROLE callers. The
+depositor-owned authorize redesign must not weaken the deposit
+surface in any way (issue #269).
+
+
+```solidity
+function test_deposit_still_gated_on_agent_role() public;
+```
+
+### test_role_separation_invariants_hold
+
+AC: `_grantRole` and `_assertRoleSeparation` continue to reject
+overlap on the roles that survive (issue #269).
+
+
+```solidity
+function test_role_separation_invariants_hold() public;
+```
+
 ### test_authorizeAgent_revertsOnZeroAgent
 
 
@@ -404,5 +514,12 @@ function test_deposit_revertsOnPostCallShareCustodyInvariant() public;
 
 ```solidity
 function test_deposit_revertsOnPostCallUsdcCustodyInvariant() public;
+```
+
+### test_deposit_revertsOnReentrancyAttempt
+
+
+```solidity
+function test_deposit_revertsOnReentrancyAttempt() public;
 ```
 

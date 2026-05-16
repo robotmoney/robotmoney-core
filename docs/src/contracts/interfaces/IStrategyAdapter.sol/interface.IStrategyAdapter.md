@@ -1,5 +1,5 @@
 # IStrategyAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-skills/blob/b462a72b60a914ceeff6cdf3ad7148bfb0361abb/contracts/interfaces/IStrategyAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1421cc6201de54f6b9e3c222f9419f45c65b6f43/contracts/interfaces/IStrategyAdapter.sol)
 
 Minimal interface every Robot Money strategy adapter must implement.
 
@@ -15,6 +15,12 @@ Receive `amount` USDC from the vault and deploy it into the underlying protocol.
 ```solidity
 function deploy(uint256 amount) external;
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`amount`|`uint256`|Amount of USDC (6-decimal units) to deploy into the protocol.|
+
 
 ### withdraw
 
@@ -24,6 +30,12 @@ Withdraw `amount` USDC from the underlying protocol and return it to the vault.
 ```solidity
 function withdraw(uint256 amount) external returns (uint256 actual);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`amount`|`uint256`|Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all.|
+
 **Returns**
 
 |Name|Type|Description|
@@ -48,4 +60,11 @@ Rescue non-USDC tokens accidentally sent to this contract.
 ```solidity
 function rescueTokens(address token, address to) external;
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|Address of the ERC-20 token to rescue (must not be USDC or the protocol token).|
+|`to`|`address`|   Recipient address for the rescued tokens.|
+
 

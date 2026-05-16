@@ -89,3 +89,43 @@ jobs:
 
       - name: Explorer migrations single-canonical-home
         run: python3 .github/scripts/check_explorer_migrations.py
+
+  generated-docs-freshness:
+    name: generated-docs-freshness
+    # WHY THIS JOB EXISTS
+    # docs/src/contracts/ is machine-generated output from `forge doc`. It carries
+    # a top-of-file banner marking it as generated. Without a staleness check, a
+    # developer who adds NatSpec to a contract and forgets to commit the regenerated
+    # markdown will leave the docs stale — and a later `forge doc` run will silently
+    # overwrite any manual edits. This job catches both failure modes: stale docs
+    # (committed behind the source) and spurious hand-edits (committed ahead of the
+    # generator).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Check generated contract docs freshness
+        run: python3 .github/scripts/check_generated_contract_docs_freshness.py
