@@ -790,6 +790,7 @@ sol! {
         function paused() external view returns (bool);
         function symbol() external view returns (string memory);
         function decimals() external view returns (uint8);
+        function activeAdapterCount() external view returns (uint256);
     }
 }
 

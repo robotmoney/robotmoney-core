@@ -7,19 +7,29 @@ import {Deploy} from "../script/Deploy.s.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
+import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
+import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {AccessRoles} from "../gateway/AccessRoles.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 
 /// @dev Exercises the deploy script in-process and asserts the post-deploy
 ///      invariants the operator and downstream tooling rely on (issue #10).
-///      The script now deploys RobotMoneyVault + PassthroughAdapter (issue #277)
-///      instead of MockVault. MockVault is retained only for gateway unit tests.
-///      The script always binds the gateway to an externally-supplied USDC
-///      token; this test deploys a `TestERC20` helper and passes its address
-///      in. The smoke-test devnet does the same with the canonical Base USDC
-///      proxy seeded into genesis alloc (issue #255).
+///      The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
+///      + MorphoAdapter (issue #363) instead of MockVault or PassthroughAdapter.
+///      MockVault and PassthroughAdapter are retained only for their own unit
+///      tests.  The script always binds the gateway to an externally-supplied
+///      USDC token; this test deploys a `TestERC20` helper and passes its
+///      address in.  The smoke-test devnet does the same with the canonical
+///      Base USDC proxy seeded into genesis alloc (issue #255).
+///
+///      Note: adapter constructors only check for address(0) — they do NOT
+///      require the protocol contracts to have bytecode. The in-process test
+///      therefore succeeds even though AAVE_V3_POOL et al. are not deployed
+///      in the forge unit-test environment. Actual protocol interaction is
+///      tested by the fork regression suite (VaultForkRegressions.t.sol) and
+///      the fork-e2e-rust harness.
 contract DeployTest is Test {
     Deploy internal script;
     TestERC20 internal usdc;
@@ -50,12 +60,16 @@ contract DeployTest is Test {
         assertEq(d.vault.asset(), d.usdc, "vault.asset mismatch");
         assertEq(d.usdc, address(usdc), "usdc passthrough");
 
-        // PassthroughAdapter is wired into the vault with the correct USDC and VAULT addresses.
-        assertEq(address(d.adapter.USDC()), d.usdc, "adapter.USDC mismatch");
-        assertEq(d.adapter.VAULT(), address(d.vault), "adapter.VAULT mismatch");
+        // All three adapters are wired to the correct USDC and VAULT addresses.
+        assertEq(address(d.aaveAdapter.USDC()), d.usdc, "aaveAdapter.USDC mismatch");
+        assertEq(d.aaveAdapter.VAULT(), address(d.vault), "aaveAdapter.VAULT mismatch");
+        assertEq(address(d.compoundAdapter.USDC()), d.usdc, "compoundAdapter.USDC mismatch");
+        assertEq(d.compoundAdapter.VAULT(), address(d.vault), "compoundAdapter.VAULT mismatch");
+        assertEq(address(d.morphoAdapter.USDC()), d.usdc, "morphoAdapter.USDC mismatch");
+        assertEq(d.morphoAdapter.VAULT(), address(d.vault), "morphoAdapter.VAULT mismatch");
 
-        // Vault has exactly one active adapter registered.
-        assertEq(d.vault.activeAdapterCount(), 1, "vault should have 1 active adapter");
+        // Vault has all three real adapters registered.
+        assertEq(d.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
 
         // Admin + Pauser hold their roles.
         assertTrue(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), admin), "admin role");

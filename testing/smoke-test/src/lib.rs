@@ -121,10 +121,18 @@ struct DeploymentJson {
     chain_id: u64,
     usdc: String,
     vault: String,
-    /// PassthroughAdapter address registered with the vault at deploy time.
-    /// Absent on legacy deployments (pre-#277); those used MockVault with no adapter.
+    /// Aave V3 strategy adapter address registered with the vault at deploy time.
+    /// Absent on legacy deployments (pre-#363).
     #[serde(default)]
-    adapter: String,
+    aave_adapter: String,
+    /// Compound V3 strategy adapter address registered with the vault at deploy time.
+    /// Absent on legacy deployments (pre-#363).
+    #[serde(default)]
+    compound_adapter: String,
+    /// Morpho strategy adapter address registered with the vault at deploy time.
+    /// Absent on legacy deployments (pre-#363).
+    #[serde(default)]
+    morpho_adapter: String,
     gateway: String,
     #[serde(default)]
     #[allow(dead_code)]
@@ -433,8 +441,18 @@ impl DappPorts {
 impl Fixture {
     /// Boot the Docker Geth+Lighthouse devnet, run the gateway deploy
     /// script, and fund the test EOAs.
+    ///
+    /// The Geth devnet boots from a genesis snapshot that contains only
+    /// warm-storage slots (produced by `anvil --dump-state`).  Real Aave,
+    /// Compound, and Morpho contracts have bytecode but no on-chain state at
+    /// the ingested addresses, so any call returning `uint256` (e.g.
+    /// `balanceOf`) would ABI-decode empty return-data and revert — aborting
+    /// every deposit.  We therefore deploy a single `PassthroughAdapter`
+    /// instead of the three real protocol adapters for smoke-test runs.
+    /// Fork-based integration tests (`ForkFixture`) use real adapters because
+    /// they fork Base mainnet where protocol state is present.
     pub fn new() -> Result<Self, HarnessError> {
-        Self::with_deploy_env(&[])
+        Self::with_deploy_env(&[("USE_PASSTHROUGH_ADAPTER", "true")])
     }
 
     /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
@@ -816,10 +834,7 @@ impl Fixture {
             HARNESS_USDC_HOLDER_ADDRESS_HEX,
         )
         .inspect_err(|err| {
-            logging::error(
-                "smoke-test",
-                format!("forge deploy rm-token failed: {err}"),
-            );
+            logging::error("smoke-test", format!("forge deploy rm-token failed: {err}"));
             log_compose_state(
                 &compose_dir,
                 &compose_files_owned,
@@ -929,13 +944,31 @@ impl Fixture {
     pub fn vault(&self) -> Address {
         parse_addr(&self.deployment.vault)
     }
-    /// PassthroughAdapter address registered with the vault at deploy time.
-    /// Returns `Address::ZERO` for legacy deployments that predate issue #277.
-    pub fn adapter(&self) -> Address {
-        if self.deployment.adapter.is_empty() {
+    /// AaveV3Adapter address registered with the vault at deploy time (issue #363).
+    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
+    pub fn aave_adapter(&self) -> Address {
+        if self.deployment.aave_adapter.is_empty() {
             Address::ZERO
         } else {
-            parse_addr(&self.deployment.adapter)
+            parse_addr(&self.deployment.aave_adapter)
+        }
+    }
+    /// CompoundV3Adapter address registered with the vault at deploy time (issue #363).
+    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
+    pub fn compound_adapter(&self) -> Address {
+        if self.deployment.compound_adapter.is_empty() {
+            Address::ZERO
+        } else {
+            parse_addr(&self.deployment.compound_adapter)
+        }
+    }
+    /// MorphoAdapter address registered with the vault at deploy time (issue #363).
+    /// Returns `Address::ZERO` for legacy deployments that predate issue #363.
+    pub fn morpho_adapter(&self) -> Address {
+        if self.deployment.morpho_adapter.is_empty() {
+            Address::ZERO
+        } else {
+            parse_addr(&self.deployment.morpho_adapter)
         }
     }
     pub fn agent(&self) -> Address {
@@ -1140,11 +1173,7 @@ impl Fixture {
     /// deploy time by DeployRmToken.s.sol). The transfer is a vanilla ERC-20
     /// call — no Anvil cheats, no impersonation. The signature is recoverable
     /// and the `Transfer` event fires, matching production semantics (issue #365).
-    pub fn fund_rm_token(
-        &self,
-        recipient: Address,
-        amount: u128,
-    ) -> Result<String, HarnessError> {
+    pub fn fund_rm_token(&self, recipient: Address, amount: u128) -> Result<String, HarnessError> {
         self.cast_send(
             HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
             self.rm_token(),
@@ -1802,15 +1831,18 @@ fn run_forge_deploy_rm_token(
     initial_holder: &str,
 ) -> Result<(), HarnessError> {
     let mut cmd = Command::new("forge");
-    cmd.args(["script", "contracts/script/DeployRmToken.s.sol:DeployRmToken"])
-        .args(["--rpc-url", rpc_url])
-        .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
-        .arg("--broadcast")
-        .arg("--slow")
-        .arg("-vvv")
-        .env("INITIAL_HOLDER", initial_holder)
-        .env("DEPLOYMENT_OUT", rm_token_out)
-        .current_dir(repo_root);
+    cmd.args([
+        "script",
+        "contracts/script/DeployRmToken.s.sol:DeployRmToken",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("INITIAL_HOLDER", initial_holder)
+    .env("DEPLOYMENT_OUT", rm_token_out)
+    .current_dir(repo_root);
     let out = cmd.output()?;
     logging::log_command_output("forge-rm-token", &out);
     if !out.status.success() {

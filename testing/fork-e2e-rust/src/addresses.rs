@@ -30,6 +30,30 @@ pub const COMPOUND_V3_ADAPTER: Address = address!("8247da22a59fce074c102431048d0
 /// Admin / fee-recipient Safe multisig.
 pub const ADMIN_SAFE: Address = address!("88ba7364cc6ce5054981d571b33f8fb3e91475a0");
 
+// -- Protocol-level contract addresses (Base mainnet) -----------------
+// These are the underlying protocol contracts that the Robot Money
+// strategy adapters delegate to. Used by Deploy.s.sol when deploying
+// fresh adapter instances against a new vault (e.g. smoke-test devnet).
+
+/// Aave V3 Pool on Base mainnet. Used by [`AAVE_V3_ADAPTER`] and by
+/// Deploy.s.sol to construct new AaveV3Adapter instances.
+pub const AAVE_V3_POOL: Address = address!("a238dd80c259a72e81d7e4664a9801593f98d1c5");
+
+/// aBasUSDC — Aave V3 interest-bearing USDC token on Base. Held by
+/// AaveV3Adapter instances as the receipt token for supplied USDC.
+pub const AAVE_V3_A_TOKEN: Address = address!("4e65fe4dba92790696d040ac24aa414708f5c0ab");
+
+/// Morpho Gauntlet USDC Prime ERC-4626 vault on Base. The underlying
+/// yield venue for [`MORPHO_ADAPTER`] and newly deployed MorphoAdapter
+/// instances.
+pub const MORPHO_GAUNTLET_USDC_PRIME: Address =
+    address!("c1256ae5ff1cf2719d4937adb3bbccab2e00a2ca");
+
+/// Compound V3 (Comet) USDC market on Base. The underlying venue for
+/// [`COMPOUND_V3_ADAPTER`] and newly deployed CompoundV3Adapter instances.
+/// Verified against `cast call <compound-adapter> "COMET()(address)"` on Base mainnet.
+pub const COMPOUND_V3_COMET: Address = address!("b125e6687d4313864e53df431d5425969c15eb2f");
+
 /// USDC whale on Base used for funding ephemeral test accounts via
 /// `anvil_impersonateAccount`. This address holds a large enough
 /// USDC balance to cover all per-test funding amounts at any

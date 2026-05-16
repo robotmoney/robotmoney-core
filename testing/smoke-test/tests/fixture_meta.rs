@@ -69,7 +69,13 @@ fn deployed_addresses_are_non_zero() {
     assert_ne!(fx.gateway(), Address::ZERO, "gateway is zero");
     assert_ne!(fx.usdc(), Address::ZERO, "usdc is zero");
     assert_ne!(fx.vault(), Address::ZERO, "vault is zero");
-    assert_ne!(fx.adapter(), Address::ZERO, "adapter is zero");
+    assert_ne!(fx.aave_adapter(), Address::ZERO, "aave_adapter is zero");
+    assert_ne!(
+        fx.compound_adapter(),
+        Address::ZERO,
+        "compound_adapter is zero"
+    );
+    assert_ne!(fx.morpho_adapter(), Address::ZERO, "morpho_adapter is zero");
     assert_ne!(fx.agent(), Address::ZERO, "agent is zero");
 }
 
@@ -84,7 +90,9 @@ fn contracts_have_code() {
         ("gateway", fx.gateway()),
         ("usdc", fx.usdc()),
         ("vault", fx.vault()),
-        ("adapter", fx.adapter()),
+        ("aave_adapter", fx.aave_adapter()),
+        ("compound_adapter", fx.compound_adapter()),
+        ("morpho_adapter", fx.morpho_adapter()),
     ] {
         let code = get_code(fx.rpc_url(), addr);
         assert!(

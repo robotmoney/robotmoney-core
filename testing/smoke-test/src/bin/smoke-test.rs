@@ -264,6 +264,10 @@ fn run() -> i32 {
         // tests can drive the vault-selector and router deposit flow.
         println!("registry_addr={:#x}", fixture.registry());
         println!("router_addr={:#x}", fixture.router());
+        // Issue #363: surface real adapter addresses for dapp e2e tests.
+        println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
+        println!("compound_adapter_addr={:#x}", fixture.compound_adapter());
+        println!("morpho_adapter_addr={:#x}", fixture.morpho_adapter());
         // Issue #261: surface the harness USDC holder so dapp e2e tests
         // can verify the testnet faucet path drips from the same EOA the
         // Rust `Fixture::fund_usdc` helper uses.

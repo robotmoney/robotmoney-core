@@ -117,11 +117,14 @@ struct AnvilState {
 }
 
 /// One account entry in Anvil's dump. Anvil emits `balance` as `0x…` hex,
-/// `nonce` as a decimal integer, `code` as `0x…` hex (including `0x` for
-/// empty EOAs), and `storage` as a `{ "0x…32bytes" : "0x…32bytes" }` map.
+/// `nonce` as either a decimal integer or a `0x…` hex string (both forms are
+/// observed across different Anvil versions and fork snapshots — e.g. proxied
+/// contracts added at Base-mainnet block 45743443 carry `"nonce":"0x1"`),
+/// `code` as `0x…` hex (including `0x` for empty EOAs), and `storage` as a
+/// `{ "0x…32bytes" : "0x…32bytes" }` map.
 #[derive(Debug, Deserialize, Clone)]
 struct AnvilAccount {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_nonce")]
     nonce: u64,
     #[serde(default)]
     balance: String,
@@ -129,6 +132,31 @@ struct AnvilAccount {
     code: String,
     #[serde(default)]
     storage: BTreeMap<String, String>,
+}
+
+/// Deserialize a nonce that may be either a JSON number (`1`) or a `0x`-hex
+/// string (`"0x1"`). Both forms appear in Anvil `--dump-state` output
+/// depending on the snapshot origin.
+fn de_nonce<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    use serde::de::{Error, Unexpected};
+    use serde_json::Value;
+    let v = Value::deserialize(d)?;
+    match &v {
+        Value::Number(n) => n
+            .as_u64()
+            .ok_or_else(|| D::Error::invalid_value(Unexpected::Other("non-u64 number"), &"u64")),
+        Value::String(s) => {
+            let hex = s.trim_start_matches("0x");
+            u64::from_str_radix(hex, 16)
+                .map_err(|_| D::Error::invalid_value(Unexpected::Str(s), &"hex u64 string"))
+        }
+        // JSON `null` treated as 0 (matches `#[serde(default)]` semantics).
+        Value::Null => Ok(0),
+        other => Err(D::Error::invalid_type(
+            Unexpected::Other(other.as_str().unwrap_or("unknown")),
+            &"u64 or 0x-hex string",
+        )),
+    }
 }
 
 // -- Builder errors --------------------------------------------------------
