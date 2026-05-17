@@ -3,9 +3,9 @@
  *
  * Verifies that a visitor can load the dapp WITHOUT connecting a wallet
  * and see the protocol-layer UI:
- *   - VaultList renders registered vaults from GET /v1/vaults
- *   - VaultDetail renders after clicking a vault row
- *   - ProtocolStats renders aggregate TVL and depositor count
+ *   - VaultList renders a row for every vault registered in VaultRegistry
+ *   - Each vault row shows a non-blank TVL stat and a numeric depositor count
+ *   - ProtocolStats aggregate TVL is a parseable number (not blank, not error)
  *
  * The devnet globalSetup has already deployed contracts, registered vaults
  * via the VaultRegistry, and seeded at least one deposit. The explorer-api
@@ -19,14 +19,56 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints } from "./helpers/devnet";
+import { registryAbi } from "../../src/lib/abi";
+
+/**
+ * Call VaultRegistry.listVaults() via a raw eth_call (no wallet needed).
+ * Returns the array of registered vault addresses.
+ */
+async function listVaults(rpc: string, registry: string): Promise<Address[]> {
+  const data = encodeFunctionData({
+    abi: registryAbi,
+    functionName: "listVaults",
+    args: [],
+  });
+  const res = await fetch(rpc, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to: registry, data }, "latest"],
+    }),
+  });
+  const j = (await res.json()) as { result?: string; error?: { message: string } };
+  if (j.error) throw new Error(`registry.listVaults eth_call error: ${j.error.message}`);
+  // Decode ABI-encoded address[] return value.
+  // Layout: offset (32 bytes) + length (32 bytes) + N × address (32 bytes each).
+  const hex = (j.result ?? "0x").slice(2); // strip 0x
+  if (hex.length < 128) return [];
+  const count = parseInt(hex.slice(64, 128), 16);
+  const vaults: Address[] = [];
+  for (let i = 0; i < count; i++) {
+    const start = 128 + i * 64;
+    const addrHex = hex.slice(start + 24, start + 64); // last 20 bytes of 32-byte slot
+    vaults.push(`0x${addrHex}` as Address);
+  }
+  return vaults;
+}
 
 test.describe("Suite-10: Protocol layer — no wallet required", () => {
   let dappUrl: string;
+  let rpcUrl: string;
+  let registryAddr: string;
 
   test.beforeAll(() => {
     const ep = loadEndpoints();
     dappUrl = ep.dapp_url;
+    rpcUrl = ep.rpc_url;
+    registryAddr = ep.registry_addr;
   });
 
   test("dapp loads without a connected wallet", async ({ page }) => {
@@ -38,36 +80,90 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(page).toHaveURL(new RegExp(dappUrl.replace(/\/+$/, "")));
   });
 
-  test("VaultList renders registered vaults without wallet", async ({ page }) => {
+  test("VaultList renders a row for every on-chain registered vault", async ({ page }) => {
+    // Fetch the ground-truth set of registered vaults from the chain.
+    const registeredVaults = await listVaults(rpcUrl, registryAddr);
+    expect(
+      registeredVaults.length,
+      "VaultRegistry.listVaults() must return at least 1 vault — devnet globalSetup must have registered vaults",
+    ).toBeGreaterThan(0);
+
     await page.goto(dappUrl);
-    // Wait for the vault list to appear and load.
     const vaultList = page.getByTestId("vault-list");
     await expect(vaultList).toBeVisible({ timeout: 30_000 });
 
-    // The list should not be in an error state.
+    // The list must not be in an error state.
     await expect(page.getByTestId("vault-list-error")).not.toBeVisible();
 
-    // Either a table (with rows) or an empty-state message must render.
+    // A table must render — empty state is a failure because we asserted at least 1 vault exists.
     const table = page.getByTestId("vault-list-table");
-    const empty = page.getByTestId("vault-list-empty");
-    const hasTable = await table.isVisible().catch(() => false);
-    const hasEmpty = await empty.isVisible().catch(() => false);
-    expect(hasTable || hasEmpty, "vault list must render table or empty state").toBe(true);
+    await expect(table).toBeVisible({ timeout: 15_000 });
+
+    // Each registered vault address must have a corresponding row in the dapp.
+    for (const vaultAddr of registeredVaults) {
+      const row = page
+        .getByTestId(`vault-list-row-${vaultAddr.toLowerCase()}`)
+        .or(page.locator(`[data-vault-addr="${vaultAddr.toLowerCase()}"]`));
+      await expect(
+        row,
+        `dapp must render a vault row for registered vault ${vaultAddr}`,
+      ).toBeVisible({ timeout: 10_000 });
+    }
+  });
+
+  test("VaultList rows show non-blank TVL and numeric depositor count", async ({ page }) => {
+    const registeredVaults = await listVaults(rpcUrl, registryAddr);
+    expect(
+      registeredVaults.length,
+      "VaultRegistry.listVaults() must return at least 1 vault",
+    ).toBeGreaterThan(0);
+
+    await page.goto(dappUrl);
+    const vaultList = page.getByTestId("vault-list");
+    await expect(vaultList).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("vault-list-error")).not.toBeVisible();
+    await expect(page.getByTestId("vault-list-table")).toBeVisible({ timeout: 15_000 });
+
+    // Every vault row must expose a TVL cell and a depositor count cell.
+    // TVL must be a non-blank string; depositor count must be a numeric string
+    // (zero is acceptable, blank/error is not).
+    const tvlCells = page.getByTestId("vault-list-row-tvl");
+    const depositorCells = page.getByTestId("vault-list-row-depositors");
+
+    const tvlCount = await tvlCells.count();
+    expect(tvlCount, "each registered vault must have a TVL cell").toBeGreaterThanOrEqual(
+      registeredVaults.length,
+    );
+
+    for (let i = 0; i < tvlCount; i++) {
+      const tvlText = await tvlCells.nth(i).textContent();
+      expect(tvlText?.trim(), `vault row ${i} TVL must not be blank`).toBeTruthy();
+    }
+
+    const depCount = await depositorCells.count();
+    expect(
+      depCount,
+      "each registered vault must have a depositor count cell",
+    ).toBeGreaterThanOrEqual(registeredVaults.length);
+
+    for (let i = 0; i < depCount; i++) {
+      const depText = await depositorCells.nth(i).textContent();
+      expect(
+        depText?.trim(),
+        `vault row ${i} depositor count must be a numeric string (got "${depText}")`,
+      ).toMatch(/^\d+$/);
+    }
   });
 
   test("VaultList shows correct status for registered vaults", async ({ page }) => {
     await page.goto(dappUrl);
     const vaultList = page.getByTestId("vault-list");
     await expect(vaultList).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("vault-list-error")).not.toBeVisible();
 
-    // If the devnet has registered vaults, their status must be a known label.
     const table = page.getByTestId("vault-list-table");
-    const hasTable = await table.isVisible().catch(() => false);
-    if (!hasTable) {
-      // No vaults registered — skip status assertion.
-      test.skip();
-      return;
-    }
+    await expect(table).toBeVisible({ timeout: 15_000 });
+
     const statusCells = page.getByTestId("vault-list-row-status");
     const count = await statusCells.count();
     expect(count).toBeGreaterThan(0);
@@ -78,7 +174,7 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     }
   });
 
-  test("ProtocolStats renders aggregate TVL and depositor count", async ({ page }) => {
+  test("ProtocolStats aggregate TVL is a parseable number", async ({ page }) => {
     await page.goto(dappUrl);
     const stats = page.getByTestId("protocol-stats");
     await expect(stats).toBeVisible({ timeout: 30_000 });
@@ -91,11 +187,18 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(tvl).toBeVisible();
     await expect(depositors).toBeVisible();
 
-    // Values must be numeric strings.
+    // TVL must be a parseable number — not blank, not an error message.
     const tvlText = await tvl.textContent();
-    expect(tvlText).toMatch(/^\d+$/);
+    expect(
+      tvlText?.trim(),
+      `ProtocolStats TVL must be a parseable number (got "${tvlText}")`,
+    ).toMatch(/^\d+(\.\d+)?$/);
+
     const depText = await depositors.textContent();
-    expect(depText).toMatch(/^\d+$/);
+    expect(
+      depText?.trim(),
+      `ProtocolStats depositor count must be a numeric string (got "${depText}")`,
+    ).toMatch(/^\d+$/);
   });
 
   test("RouterView renders without wallet — shows weights or empty state", async ({ page }) => {
@@ -117,13 +220,7 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await page.goto(dappUrl);
     const vaultList = page.getByTestId("vault-list");
     await expect(vaultList).toBeVisible({ timeout: 30_000 });
-
-    const table = page.getByTestId("vault-list-table");
-    const hasTable = await table.isVisible().catch(() => false);
-    if (!hasTable) {
-      test.skip();
-      return;
-    }
+    await expect(page.getByTestId("vault-list-table")).toBeVisible({ timeout: 15_000 });
 
     // Click the first vault row.
     const firstRow = page.getByTestId("vault-list-row").first();

@@ -61,16 +61,16 @@ cd testing/ethereum-testnet/config
 docker compose up -d
 ```
 
-Then deploy contracts manually:
+Then deploy contracts via the smoke-test binary:
 
 ```bash
-bash testing/ethereum-testnet/scripts/deploy-gateway.sh
+cargo run -p smoke-test
 ```
 
 ### Contract address source
 
-`deployments/devnet.json` — written by `Deploy.s.sol` or `deploy-gateway.sh`
-at deploy time. Read the addresses out with:
+`deployments/devnet.json` — written by `Deploy.s.sol` at deploy time.
+Read the addresses out with:
 
 ```bash
 python3 -c "import json; d=json.load(open('deployments/devnet.json')); print(d['gateway'], d['vault'])"
@@ -220,7 +220,6 @@ Everything in §1 plus:
 Compose files:
 - `testing/ethereum-testnet/config/docker-compose.yaml` (chain)
 - `testing/ethereum-testnet/config/docker-compose.dapp.yaml` (dapp overlay)
-- `testing/ethereum-testnet/config/docker-compose.deployer.yaml` (deployer overlay — used by the smoke-test binary)
 
 ### Required env vars
 
