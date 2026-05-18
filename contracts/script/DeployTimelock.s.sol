@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/security-model.md §4 — Access control & admin (Timelock bypass → Mitigated)
-// Implements: issue #414
+// Implements: issue #414, issue #422
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
@@ -14,6 +14,12 @@ import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
+
+/// @dev Minimal Safe interface — only `getThreshold()` is required for the
+///      deploy-time guard that rejects EOA or low-threshold Safe addresses.
+interface ISafeMinimal {
+    function getThreshold() external view returns (uint256);
+}
 
 /// @title DeployTimelock
 /// @notice Deploy an OZ TimelockController and transfer ADMIN_ROLE on all five
@@ -105,7 +111,7 @@ contract DeployTimelock is Script {
 
     // ─── Internal ──────────────────────────────────────────────────────────────
 
-    function _validate(Deployed memory d) internal pure {
+    function _validate(Deployed memory d) internal view {
         require(d.vault != address(0), "VAULT_ADDRESS=0");
         require(d.gateway != address(0), "GATEWAY_ADDRESS=0");
         require(d.registry != address(0), "REGISTRY_ADDRESS=0");
@@ -113,6 +119,18 @@ contract DeployTimelock is Script {
         require(d.governance != address(0), "GOVERNANCE_ADDRESS=0");
         require(d.safe != address(0), "SAFE_ADDRESS=0");
         require(d.minDelay > 0, "TIMELOCK_MIN_DELAY=0");
+
+        // AC: SAFE_ADDRESS must have deployed bytecode (not an EOA).
+        // An EOA at SAFE_ADDRESS would let a single private key control all
+        // ADMIN_ROLE operations — defeating the multisig security model.
+        require(
+            d.safe.code.length > 0, "SAFE_ADDRESS is an EOA: deploy a Safe multisig contract first"
+        );
+
+        // AC: The Safe at SAFE_ADDRESS must have threshold >= 2.
+        // A 1-of-N threshold provides no meaningful quorum protection.
+        uint256 threshold = ISafeMinimal(d.safe).getThreshold();
+        require(threshold >= 2, "SAFE_ADDRESS threshold < 2: configure at least 2-of-N quorum");
     }
 
     function _deployAndWire(Deployed memory d) internal returns (TimelockController timelock) {

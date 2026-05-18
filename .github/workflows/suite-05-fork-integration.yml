@@ -39,6 +39,7 @@ on:
       - "contracts/RouterGovernance.sol"
       - "contracts/gateway/RobotMoneyGateway.sol"
       - "contracts/gateway/MockVault.sol"
+      - "contracts/script/DeployTimelock.s.sol"
       - ".github/workflows/suite-05-fork-integration.yml"
   workflow_dispatch:
 

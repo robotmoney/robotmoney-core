@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/49fdc0c3c31bec47921788de2ceaba90e0447685/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -44,7 +44,7 @@ address internal admin = makeAddr("admin")
 ### safe
 
 ```solidity
-address internal safe = makeAddr("safe")
+address internal safe
 ```
 
 
@@ -273,5 +273,30 @@ function test_deploy_revertsOnZeroSafe() public;
 
 ```solidity
 function test_deploy_revertsOnZeroMinDelay() public;
+```
+
+### test_deploy_revertsWhenSafeIsEOA
+
+DeployTimelock.s.sol aborts when SAFE_ADDRESS has no deployed code.
+
+We pass a freshly-minted address that has no bytecode.  The script's
+new `code.length` guard should revert before attempting any state writes.
+
+
+```solidity
+function test_deploy_revertsWhenSafeIsEOA() public;
+```
+
+### test_deploy_revertsWhenSafeThresholdTooLow
+
+DeployTimelock.s.sol aborts when the Safe at SAFE_ADDRESS has threshold < 2.
+
+We deploy a `MockLowThresholdSafe` that returns `1` from `getThreshold()`.
+Passing a 1-of-N Safe as PROPOSER would reduce multisig security to a
+single-key model.
+
+
+```solidity
+function test_deploy_revertsWhenSafeThresholdTooLow() public;
 ```
 

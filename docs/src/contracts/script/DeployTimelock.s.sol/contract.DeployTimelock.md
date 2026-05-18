@@ -1,5 +1,5 @@
 # DeployTimelock
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/49fdc0c3c31bec47921788de2ceaba90e0447685/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:**
 Script
@@ -76,7 +76,7 @@ function runInProcess(
 
 
 ```solidity
-function _validate(Deployed memory d) internal pure;
+function _validate(Deployed memory d) internal view;
 ```
 
 ### _deployAndWire
