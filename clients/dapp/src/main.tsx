@@ -10,6 +10,11 @@
  *
  * The global error capture module is installed before React renders so that
  * all errors and warnings are captured from startup.
+ *
+ * VaultRegistryContext and RouterContext (issue #417) are mounted here as
+ * shared data-fetching seams so all downstream components receive vault
+ * metadata from a single batched registry read rather than N independent
+ * chain reads. See docs/technical/multi-vault-dapp-decisions.md §4.1.
  */
 import "./styles.css";
 import React, { useEffect, useState } from "react";
@@ -36,6 +41,8 @@ import { makeConfig } from "./lib/wagmi";
 import { useGatewayVerifier } from "./lib/useGatewayVerifier";
 import { resolveExplorerApiUrl } from "./lib/explorerApi";
 import { initErrorCapture } from "./lib/error-capture";
+import { VaultRegistryProvider } from "./lib/VaultRegistryContext";
+import { RouterProvider } from "./lib/RouterContext";
 import {
   MULTI_VAULT_ENABLED,
   PORTFOLIO_ROUTER_ENABLED,
@@ -211,12 +218,29 @@ function App() {
 
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element missing from index.html");
+
+// Wrap App with VaultRegistryProvider and RouterProvider when the relevant
+// feature flags and contract addresses are configured. Both providers are
+// no-ops when their address is missing (e.g. single-vault deployments).
+// docs/technical/multi-vault-dapp-decisions.md §4.1.
+const appWithProviders = registry ? (
+  <VaultRegistryProvider registryAddress={registry}>
+    {router ? (
+      <RouterProvider routerAddress={router}>
+        <App />
+      </RouterProvider>
+    ) : (
+      <App />
+    )}
+  </VaultRegistryProvider>
+) : (
+  <App />
+);
+
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
     <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
+      <QueryClientProvider client={queryClient}>{appWithProviders}</QueryClientProvider>
     </WagmiProvider>
   </React.StrictMode>,
 );

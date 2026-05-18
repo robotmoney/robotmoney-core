@@ -300,10 +300,16 @@ export const vaultAbi = [
 export type VaultActionName = "deposit" | "redeem";
 
 /**
- * Minimal VaultRegistry ABI excerpt for the DestinationSelector (issue #320).
- * Exposes `listVaults()` to enumerate registered vault addresses.
- * Status and metadata per-vault are not needed by the dapp directly —
- * the router's `previewDeposit` already marks unavailable legs.
+ * Minimal VaultRegistry ABI excerpt for VaultRegistryContext and the
+ * DestinationSelector (issue #320, extended issue #417).
+ * Exposes:
+ *   - `listVaults()` — enumerate all registered vault addresses.
+ *   - `getVault(address)` — per-vault metadata including status, name,
+ *     riskLabel, and depositCap (docs/technical/vault-registry-decisions.md §3.4).
+ *
+ * VaultRecord.status encodes as uint8: 0=Active, 1=Paused, 2=Retired.
+ * The `VaultSelectorDepositTab` calls `getVault` live before submit to
+ * guard against cached paused-vault state (issue #417 AC §4).
  */
 export const registryAbi = [
   {
@@ -313,13 +319,58 @@ export const registryAbi = [
     inputs: [],
     outputs: [{ name: "addresses", type: "address[]" }],
   },
+  {
+    type: "function",
+    name: "getVault",
+    stateMutability: "view",
+    inputs: [{ name: "vault", type: "address" }],
+    outputs: [
+      {
+        name: "record",
+        type: "tuple",
+        components: [
+          { name: "vault", type: "address" },
+          { name: "name", type: "string" },
+          { name: "riskLabel", type: "string" },
+          { name: "mandate", type: "string" },
+          { name: "status", type: "uint8" },
+          { name: "receiptToken", type: "address" },
+          { name: "depositCap", type: "uint256" },
+          { name: "exitFeeBps", type: "uint16" },
+          { name: "registeredAt", type: "uint64" },
+        ],
+      },
+    ],
+  },
 ] as const;
+
+/** VaultStatus enum — matches VaultRegistry.sol's enum order. */
+export const VaultStatus = { Active: 0, Paused: 1, Retired: 2 } as const;
+export type VaultStatusValue = (typeof VaultStatus)[keyof typeof VaultStatus];
+
+/**
+ * Decoded on-chain vault record from `registry.getVault(address)`.
+ * The `status` field is a uint8 enum matching `VaultStatus` above.
+ */
+export interface VaultRecord {
+  vault: `0x${string}`;
+  name: string;
+  riskLabel: string;
+  mandate: string;
+  status: VaultStatusValue;
+  receiptToken: `0x${string}`;
+  depositCap: bigint;
+  exitFeeBps: number;
+  registeredAt: bigint;
+}
 
 /**
  * Minimal PortfolioRouter ABI excerpt for the DestinationSelector and
- * router deposit flow (issue #320). Exposes:
+ * router deposit flow (issue #320, extended issue #417). Exposes:
  *   - `previewDeposit(amount)` — per-vault breakdown without state change.
  *   - `deposit(amount, minSharesPerLeg)` — all-or-revert multi-vault deposit.
+ *   - `activeVaults()` — current active vault list; used by RouterDepositTab
+ *     to detect vault-list changes between preview and submit (AC §7).
  *
  * The LegPreview tuple matches `PortfolioRouter.sol`'s `LegPreview` struct:
  * { vault, weightBps, legAmount, estShares, unavailable }.
@@ -353,6 +404,13 @@ export const routerAbi = [
       { name: "minSharesPerLeg", type: "uint256[]" },
     ],
     outputs: [{ name: "sharesPerLeg", type: "uint256[]" }],
+  },
+  {
+    type: "function",
+    name: "activeVaults",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "vaults", type: "address[]" }],
   },
 ] as const;
 
