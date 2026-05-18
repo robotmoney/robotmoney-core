@@ -74,6 +74,10 @@ export function AdminFlow(props: Props) {
     // from the explorer API (issue #321).
     explorerApiUrl: resolveExplorerApiUrl(props.flagEnv),
     rmTokenAddress: props.rmTokenAddress,
+    gatewayRuntimeHash:
+      gatewayVerificationState.status === "verified"
+        ? gatewayVerificationState.computedHash
+        : undefined,
   });
 
   return (
@@ -99,7 +103,9 @@ export function AdminFlow(props: Props) {
 
       {gatewayVerificationState.status === "verified" && (
         <p data-testid="gateway-verification-ok" className="verification-ok">
-          Gateway bytecode verified: <code>{gatewayVerificationState.computedHash}</code>
+          Gateway bytecode verified:{" "}
+          <code>{`0x${props.gatewayAddress.slice(2, 6)}…${props.gatewayAddress.slice(-4)}`}</code>{" "}
+          <code>{gatewayVerificationState.computedHash}</code>
         </p>
       )}
 

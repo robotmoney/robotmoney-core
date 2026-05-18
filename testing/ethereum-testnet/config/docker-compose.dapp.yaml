@@ -72,6 +72,14 @@ services:
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
+      # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
+      # VaultStatusChanged event ingestion from the VaultRegistry.  Without
+      # this flag the /v1/vaults explorer endpoint returns an empty list even
+      # when INDEXER_REGISTRY is set.  Default to 4 (bit 2 only) so devnet
+      # smoke-test runs that do not explicitly set FEATURE_FLAGS still index
+      # vault-registry events and suite-10 dapp-e2e tests can see vault rows.
+      # config/feature-flags.json id=2; services/explorer-indexer/src/feature_flags.rs.
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-4}
 
   explorer-api:
     build:

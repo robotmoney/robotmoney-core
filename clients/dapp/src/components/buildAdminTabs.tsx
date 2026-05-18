@@ -10,6 +10,9 @@ import { RotationTab } from "./RotationTab";
 import { RoleTab } from "./RoleTab";
 import { DepositWithdrawTab } from "./DepositWithdrawTab";
 import { FaucetTab } from "./FaucetTab";
+import { PauseFlow } from "./PauseFlow";
+import { HistoryPane } from "./HistoryPane";
+import { ConfigExportPanel } from "./ConfigExportPanel";
 import { classifyChain } from "../lib/chainClassifier";
 import { readHarnessPrivateKey } from "../lib/faucetClient";
 
@@ -47,6 +50,12 @@ export type BuildAdminTabsArgs = Readonly<{
    * governance voting power.
    */
   rmTokenAddress?: Address;
+  /**
+   * keccak256(eth_getCode(gateway)) pinned at deploy time. Passed through to
+   * ConfigExportPanel so the exported TOML carries the verified hash.
+   * Defaults to an empty string when not yet verified.
+   */
+  gatewayRuntimeHash?: string;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -124,6 +133,49 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
       ),
     },
   ];
+
+  tabs.push({
+    id: "pause",
+    label: "Pause / Unpause",
+    content: (
+      <PauseFlow
+        gatewayAddress={a.gatewayAddress}
+        gatewayCodeHashVerified={a.ctx.gatewayCodeHashVerified}
+        envClass={a.ctx.envClass}
+      />
+    ),
+  });
+
+  // History tab — only when an explorer API URL and a plausible agent
+  // address are provided. The agent address is user-supplied state so it
+  // may be an empty string before the user types anything.
+  if (a.explorerApiUrl && a.agent && a.agent.startsWith("0x")) {
+    tabs.push({
+      id: "history",
+      label: "Deposit History",
+      content: <HistoryPane agent={a.agent as Address} apiUrl={a.explorerApiUrl} />,
+    });
+  }
+
+  // Export tab — renders the rmpc TOML config once the agent address is
+  // known. Conditionally inserted so the tab is absent when the field is
+  // empty (avoids a type-cast to an empty address).
+  if (a.agent && a.agent.startsWith("0x")) {
+    tabs.push({
+      id: "export",
+      label: "Export Config",
+      content: (
+        <ConfigExportPanel
+          gateway={a.gatewayAddress}
+          vault={a.vaultAddress}
+          usdcAddress={a.usdcAddress}
+          gatewayRuntimeHash={a.gatewayRuntimeHash ?? ""}
+          chainId={a.chainId}
+          agent={a.agent as Address}
+        />
+      ),
+    });
+  }
 
   tabs.push({
     id: "deposit-withdraw",

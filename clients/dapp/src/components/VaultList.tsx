@@ -96,8 +96,8 @@ export function VaultList({ apiUrl, fetchImpl, onSelectVault }: VaultListProps) 
             {vaults.map((v) => (
               <tr
                 key={v.address}
-                data-testid="vault-list-row"
-                data-address={v.address}
+                data-testid={`vault-list-row-${v.address.toLowerCase()}`}
+                data-vault-addr={v.address.toLowerCase()}
                 onClick={() => onSelectVault?.(v.address)}
                 style={onSelectVault ? { cursor: "pointer" } : undefined}
               >

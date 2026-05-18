@@ -178,7 +178,7 @@ function makeRouterFetch(): FetchLike {
 
 describe("VaultList", () => {
   it("renders a row per vault with correct fields", async () => {
-    const { getByTestId, getAllByTestId } = render(
+    const { getByTestId, getAllByTestId, container } = render(
       <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
     );
 
@@ -186,7 +186,8 @@ describe("VaultList", () => {
       expect(getByTestId("vault-list-table")).toBeTruthy();
     });
 
-    const rows = getAllByTestId("vault-list-row");
+    // Rows use per-address testids (vault-list-row-<addr>) and data-vault-addr
+    const rows = container.querySelectorAll("[data-vault-addr]");
     expect(rows).toHaveLength(2);
 
     const names = getAllByTestId("vault-list-row-name").map((n) => n.textContent);

@@ -79,6 +79,10 @@ test("watched address — portfolio position and transaction history render from
   // read-only and requires no wallet).
   await page.goto(endpoints.dapp_url);
 
+  // The WatchedAddressInput lives in the "Portfolio Explorer" tab.
+  await page.getByTestId("tab-portfolio-explorer").click();
+  await page.getByTestId("tabpanel-portfolio-explorer").waitFor({ state: "visible" });
+
   // Enter the watched address and submit.
   await expect(page.getByTestId("watched-address-form")).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("watched-address-input").fill(watchedAddress);
