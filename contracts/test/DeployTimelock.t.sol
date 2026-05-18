@@ -8,6 +8,8 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
+import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -42,6 +44,8 @@ contract DeployTimelockTest is Test {
     // ─── Contracts ────────────────────────────────────────────────────────────
 
     TestERC20 internal usdc;
+    RobotMoneyVault internal vault;
+    RobotMoneyGateway internal gateway;
     VaultRegistry internal registry;
     PortfolioRouter internal router;
     RouterGovernance internal governance;
@@ -65,6 +69,26 @@ contract DeployTimelockTest is Test {
         //
         // Therefore we must grant ADMIN_ROLE to address(script) at construction
         // so the grantRole/revokeRole calls inside _deployAndWire succeed.
+        //
+        // RobotMoneyVault and RobotMoneyGateway are instantiated as real
+        // contracts (issue #420 — replacing the registry placeholder that was
+        // used as a stub for both).  Vault is constructed first so that the
+        // gateway can validate vault.asset() == address(usdc) at deploy time.
+        vault = new RobotMoneyVault(
+            usdc,
+            type(uint256).max, // tvlCap (no cap for tests)
+            type(uint256).max, // perDepositCap
+            0, // exitFeeBps
+            safe, // feeRecipient (non-zero; reuses the safe test address)
+            address(script) // admin — script must hold ADMIN_ROLE to wire timelock
+        );
+        gateway = new RobotMoneyGateway(
+            usdc,
+            vault,
+            address(script), // admin — script holds ADMIN_ROLE to wire timelock
+            admin, // pauser — must be distinct from admin (RoleSeparationViolated guard)
+            address(0) // router (not exercised in these tests)
+        );
         registry = new VaultRegistry(address(script));
         router = new PortfolioRouter(address(usdc), address(registry), address(script));
         governance = new RouterGovernance(
@@ -76,8 +100,8 @@ contract DeployTimelockTest is Test {
         );
 
         d = script.runInProcess(
-            address(registry), // vault placeholder (unit test reuses registry)
-            address(registry), // gateway placeholder
+            address(vault),
+            address(gateway),
             address(registry),
             address(router),
             address(governance),
@@ -108,6 +132,24 @@ contract DeployTimelockTest is Test {
         assertTrue(
             IAccessControl(address(governance)).hasRole(ADMIN_ROLE, address(d.timelock)),
             "timelock missing ADMIN_ROLE on governance"
+        );
+    }
+
+    /// @notice After DeployTimelock, the TimelockController holds ADMIN_ROLE on
+    ///         the real RobotMoneyVault instance (not a registry placeholder).
+    function test_timelock_holdsAdminRoleOnVault() public view {
+        assertTrue(
+            IAccessControl(address(vault)).hasRole(ADMIN_ROLE, address(d.timelock)),
+            "timelock missing ADMIN_ROLE on vault"
+        );
+    }
+
+    /// @notice After DeployTimelock, the TimelockController holds ADMIN_ROLE on
+    ///         the real RobotMoneyGateway instance (not a registry placeholder).
+    function test_timelock_holdsAdminRoleOnGateway() public view {
+        assertTrue(
+            IAccessControl(address(gateway)).hasRole(ADMIN_ROLE, address(d.timelock)),
+            "timelock missing ADMIN_ROLE on gateway"
         );
     }
 

@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/b447b3c942571522a243df98942e1c4f5c32d4e3/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/49fdc0c3c31bec47921788de2ceaba90e0447685/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -69,6 +69,20 @@ TestERC20 internal usdc
 ```
 
 
+### vault
+
+```solidity
+RobotMoneyVault internal vault
+```
+
+
+### gateway
+
+```solidity
+RobotMoneyGateway internal gateway
+```
+
+
 ### registry
 
 ```solidity
@@ -134,6 +148,26 @@ function test_timelock_holdsAdminRoleOnRouter() public view;
 
 ```solidity
 function test_timelock_holdsAdminRoleOnGovernance() public view;
+```
+
+### test_timelock_holdsAdminRoleOnVault
+
+After DeployTimelock, the TimelockController holds ADMIN_ROLE on
+the real RobotMoneyVault instance (not a registry placeholder).
+
+
+```solidity
+function test_timelock_holdsAdminRoleOnVault() public view;
+```
+
+### test_timelock_holdsAdminRoleOnGateway
+
+After DeployTimelock, the TimelockController holds ADMIN_ROLE on
+the real RobotMoneyGateway instance (not a registry placeholder).
+
+
+```solidity
+function test_timelock_holdsAdminRoleOnGateway() public view;
 ```
 
 ### test_deployer_noLongerHasAdminRoleOnRegistry
