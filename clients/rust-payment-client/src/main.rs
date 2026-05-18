@@ -29,6 +29,7 @@ fn main() {
         Command::GetVaults { config, .. } => Some(config.as_path()),
         Command::GetRouter { config, .. } => Some(config.as_path()),
         Command::GetGovernance { config, .. } => Some(config.as_path()),
+        Command::GetTimelock { config, .. } => Some(config.as_path()),
         Command::GetGateway { config, .. } => Some(config.as_path()),
         Command::GetAgent { config, .. } => Some(config.as_path()),
         Command::GetRoles { config, .. } => Some(config.as_path()),
@@ -76,6 +77,7 @@ fn main() {
         Command::GetVaults { config, pretty } => commands::get_vaults::run(&config, pretty),
         Command::GetRouter { config, pretty } => commands::get_router::run(&config, pretty),
         Command::GetGovernance { config, pretty } => commands::get_governance::run(&config, pretty),
+        Command::GetTimelock { config, pretty } => commands::get_timelock::run(&config, pretty),
         Command::GetGateway { config, pretty } => commands::get_gateway::run(&config, pretty),
         Command::GetAgent {
             config,

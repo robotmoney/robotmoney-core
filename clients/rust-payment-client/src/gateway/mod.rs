@@ -61,6 +61,13 @@ sol!(
     "abi/RouterGovernance.json"
 );
 
+sol!(
+    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    TimelockController,
+    "abi/TimelockController.json"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

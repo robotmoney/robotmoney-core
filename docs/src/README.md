@@ -9,6 +9,40 @@ This repository hosts the in-development pieces that let agents transact against
 - **`testing/ethereum-testnet/`** — Geth + Lighthouse devnet harness, deploy overlay, and an end-to-end Rust test crate (`e2e-rust/`) that drives `rmpc` against a live devnet.
 - **`docs/`** — architecture proposal, MVP implementation plan, project roadmap, and on-chain reference docs.
 
+## Onboarding an agent
+
+1. **Start your agent runtime** — export the keystore passphrase before launching so the agent inherits it:
+
+   ```bash
+   read -s -p "Agent keystore passphrase: " RMPC_KEYSTORE_PASSPHRASE
+   export RMPC_KEYSTORE_PASSPHRASE
+   opencode
+   ```
+
+2. **Paste this prompt** into the agent session:
+
+   > Agent, install Robot Money per the instructions in this file.
+
+   The agent reads [BOOTSTRAP.md](BOOTSTRAP.md), installs `rmpc`, writes the operator config, creates a keystore, runs self-check, and returns its public address for you to authorize in the dapp.
+
+## Starting a local devnet
+
+**Prerequisites (Ubuntu):** Docker and [Foundry](https://getfoundry.sh).
+
+```bash
+# Keep a devnet alive for interactive use — prints RPC URL and contract addresses:
+cargo run -p smoke-test
+
+# Add the full service graph:
+cargo run -p smoke-test -- --full-stack
+
+# Or boot a devnet inside a single integration test:
+# let fixture = smoke_test::Fixture::new()?;
+# Drop tears the stack down automatically.
+```
+
+`smoke-test` starts the Geth + Lighthouse compose stack from `testing/ethereum-testnet/`, deploys contracts, and funds test EOAs. See `docs/testing/smoke-test-design.md` for details.
+
 ## Status
 
 The MVP is merged on `dev`. See `docs/implementation-plan.md` for the build plan and PRs #22–#41 for the delivery history.

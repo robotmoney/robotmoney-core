@@ -207,6 +207,29 @@ as seen by governance, and the active proposal details (if any). Requires
 
 ---
 
+## `get-timelock`
+
+```bash
+rmpc get-timelock --config ./config.toml [--pretty]
+```
+
+Reads the deployed `TimelockController` contract state (issue #414). Returns:
+
+- `min_delay_secs` — minimum delay in seconds before a scheduled operation
+  can be executed.
+- `proposers` — list of addresses holding `PROPOSER_ROLE` on the timelock.
+- `executors` — list of addresses holding `EXECUTOR_ROLE` on the timelock.
+- `pending_ops` — array of scheduled operations that have not yet been
+  executed or cancelled. Each entry includes `operation_id` (0x-hex bytes32)
+  and `ready_timestamp` (unix seconds after which execution is allowed).
+
+Requires `timelock_address` in the operator config.
+
+All reads are pinned to a single `eth_blockNumber` snapshot. Partial envelopes
+are supported; exit code is 0 even for partial results.
+
+---
+
 ## `get-deposit`
 
 ```bash

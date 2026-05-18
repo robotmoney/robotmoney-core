@@ -114,6 +114,15 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Read TimelockController state: proposers, executors, min delay, and
+    /// pending operation hashes with ready timestamps (issue #414).
+    GetTimelock {
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Read gateway state directly from chain (issue #49 / §9).
     GetGateway {
         #[arg(long, short = 'c')]

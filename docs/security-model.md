@@ -82,7 +82,7 @@ attestation.
 | Fee-recipient swap to attacker address | Inherited | `setFeeRecipient` is admin-gated; trust collapses to multisig integrity |
 | Multisig social engineering (Drift-class, pre-signing under false pretenses) | Unaddressed | No documented operational policy for what signers must verify before approving. Triage: publish a signer playbook (calldata diff review, simulation requirement, per-signer independent verification, time-on-screen minimum) |
 | Signer-device compromise | Inherited | Hardware-wallet recommendation in `architecture.md` §15. Operational, not a code mitigation |
-| Timelock bypass | Out-of-scope | No timelock today. Acceptable while admin surface is small and exit fee is capped at 1%. Revisit when bucket-B/C governance lands |
+| Timelock bypass | Mitigated | `TimelockController` (OZ v5) holds `ADMIN_ROLE` on all five contracts (RobotMoneyVault, RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance). The Safe multisig `0x88bA…75A0` is the sole PROPOSER and EXECUTOR. Admin operations must route through `schedule → delay → execute`; direct `ADMIN_ROLE` calls from any EOA revert with `AccessControlUnauthorizedAccount`. Deployed by `contracts/script/DeployTimelock.s.sol`; configurable min delay at deploy time. `rmpc get-timelock` surfaces current proposers, executors, min delay, and pending operations. See also `clients/dapp/src/components/TimelockPanel.tsx`. |
 | Role separation drift over time | Unaddressed | No on-chain assertion that pause and admin keys differ. Triage: monitor or attest at deploy/configure time |
 
 ---

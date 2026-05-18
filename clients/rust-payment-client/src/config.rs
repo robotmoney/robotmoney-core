@@ -40,6 +40,11 @@ pub struct Config {
     /// `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub governance_address: Option<String>,
+    /// `TimelockController` contract address (0x-prefixed hex). Optional — only
+    /// required for `rmpc get-timelock`. When absent that command exits with
+    /// `EXIT_STARTUP_FAIL`.
+    #[serde(default)]
+    pub timelock_address: Option<String>,
     /// Pinned `keccak256(eth_getCode(gateway_address))` (0x-prefixed hex).
     pub gateway_runtime_hash: String,
     /// Operator-policy ceiling on `maxFeePerGas`, in wei.
