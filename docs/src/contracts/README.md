@@ -8,6 +8,7 @@
 - [test](/contracts/test)
 - [vaults](/contracts/vaults)
 - [FeatureFlags](FeatureFlags.sol/library.FeatureFlags.md)
+- [IPrototypeAware](PortfolioRouter.sol/interface.IPrototypeAware.md)
 - [PortfolioRouter](PortfolioRouter.sol/contract.PortfolioRouter.md)
 - [RmToken](RmToken.sol/contract.RmToken.md)
 - [RobotMoneyVault](RobotMoneyVault.sol/contract.RobotMoneyVault.md)

@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5f3c3bfe955810832b34a58296a18cb976126c6d/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75c9d821b281975c99c1bcf5090a766acfe071b0/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -473,5 +473,152 @@ balance is always zero after a successful deposit.
 
 ```solidity
 function testFuzz_deposit_routerBalanceAlwaysZero(uint256 amount, uint256 bpsA) public;
+```
+
+### _registerPrototype
+
+Helper: register a prototype-declared vault in the registry so
+setWeights can reach the eligibility gate.
+
+
+```solidity
+function _registerPrototype(address vault) internal;
+```
+
+### test_setWeights_revertsIfVaultIsPrototype
+
+AC#1 + Test plan #2: production-like router configuration
+cannot include a vault that self-declares prototype status
+without an explicit eligibility override. The default
+override value is false for every address, so a fresh
+deployment is gated by construction.
+
+
+```solidity
+function test_setWeights_revertsIfVaultIsPrototype() public;
+```
+
+### test_setWeights_allowsPrototypeWithOverride
+
+AC#1: a prototype vault with an explicit override CAN be
+weighted. Devnet / test deployments use this path.
+
+
+```solidity
+function test_setWeights_allowsPrototypeWithOverride() public;
+```
+
+### test_deposit_revertsIfVaultBecomesPrototypeAtRuntime
+
+AC#4 + Test plan #1: the prototype gate also fires at deposit
+time as defence-in-depth, so a vault that flipped its
+`isPrototype()` to true after weighting cannot receive USDC.
+
+
+```solidity
+function test_deposit_revertsIfVaultBecomesPrototypeAtRuntime() public;
+```
+
+### test_deposit_succeedsForOverriddenPrototype
+
+AC#3 + Test plan #3: an overridden prototype vault accepts
+deposits end-to-end. This is the devnet/test fixture path
+that must keep working alongside the production gate.
+
+
+```solidity
+function test_deposit_succeedsForOverriddenPrototype() public;
+```
+
+### test_isRouterEligible_falseForPrototypeWithoutOverride
+
+`isRouterEligible` returns false for a prototype-declared
+vault unless an override is set, regardless of asset match.
+
+
+```solidity
+function test_isRouterEligible_falseForPrototypeWithoutOverride() public;
+```
+
+### test_isRouterEligible_trueForPrototypeWithOverride
+
+`isRouterEligible` returns true for a prototype-declared
+vault once governance opts it in via override.
+
+
+```solidity
+function test_isRouterEligible_trueForPrototypeWithOverride() public;
+```
+
+### test_isRouterEligible_unaffectedForNonPrototypeVault
+
+Non-prototype USDC vaults are unaffected by the new gate —
+this guards against false positives that would break the
+existing router weighting flow for production-ready vaults.
+
+
+```solidity
+function test_isRouterEligible_unaffectedForNonPrototypeVault() public view;
+```
+
+### test_setPrototypeOverride_revertsForUnauthorized
+
+`setPrototypeOverride` is admin-gated.
+
+
+```solidity
+function test_setPrototypeOverride_revertsForUnauthorized() public;
+```
+
+### test_setPrototypeOverride_revertsOnZeroAddress
+
+`setPrototypeOverride` rejects address(0).
+
+
+```solidity
+function test_setPrototypeOverride_revertsOnZeroAddress() public;
+```
+
+### test_setPrototypeOverride_emitsEvent
+
+`setPrototypeOverride` emits the audit event with old/new.
+
+
+```solidity
+function test_setPrototypeOverride_emitsEvent() public;
+```
+
+### test_setPrototypeOverride_toggleOffReengagesGate
+
+Toggling an override OFF re-engages the gate: a previously
+allowed prototype vault can no longer be re-weighted.
+
+
+```solidity
+function test_setPrototypeOverride_toggleOffReengagesGate() public;
+```
+
+### test_docs_warningPresentForPrototypeBasketVaults
+
+Test plan #4 (issue #427): the canonical code-review doc keeps
+the production-readiness warning for BasketVault slot0
+pricing. Acts as a docs-grep regression so a future edit
+cannot silently remove the warning that anchors the gate.
+
+
+```solidity
+function test_docs_warningPresentForPrototypeBasketVaults() public view;
+```
+
+### test_basketVaultSubclass_declaresPrototype
+
+AC#4: BasketVault concretely returns `isPrototype() == true`
+from the abstract base, so every subclass inherits the gate.
+This is a static/regression check that the marker is wired
+on the real production contract path, not just the mock.
+
+
+```solidity
+function test_basketVaultSubclass_declaresPrototype() public;
 ```
 

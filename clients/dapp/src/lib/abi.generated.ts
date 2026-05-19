@@ -2923,6 +2923,25 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "prototypeOverride",
+    inputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "registry",
     inputs: [],
     outputs: [
@@ -2982,6 +3001,24 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "setPrototypeOverride",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "allowed",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -3082,6 +3119,31 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "event",
+    name: "PrototypeOverrideSet",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "oldValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+      {
+        name: "newValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+    ],
+    anonymous: false,
   },
   {
     type: "event",
@@ -3383,6 +3445,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "VaultCapExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "VaultIsPrototype",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

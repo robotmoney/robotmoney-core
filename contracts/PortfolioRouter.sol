@@ -10,6 +10,17 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {VaultRegistry} from "./VaultRegistry.sol";
 
+/// @dev Minimal introspection interface used to detect vaults that
+///      self-declare prototype status via `isPrototype()`. Implemented by
+///      `contracts/vaults/BasketVault.sol` and inherited by every
+///      `BasketVault` subclass. Defined here as a local interface so
+///      `PortfolioRouter` has no compile-time dependency on the prototype
+///      vaults themselves — any contract that exposes `isPrototype()
+///      returns (bool)` participates in the production-readiness gate.
+interface IPrototypeAware {
+    function isPrototype() external view returns (bool);
+}
+
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
 ///         across active vaults by RM-governed weight bps.
@@ -53,6 +64,18 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         0 means no cap enforced for that vault.
     mapping(address => uint256) public vaultCap;
 
+    /// @notice Per-vault override that allows a prototype vault (one that
+    ///         returns `true` from `isPrototype()`) to be included in the
+    ///         router weight vector and receive deposits. False by default —
+    ///         a fresh deployment cannot accidentally route real USDC into a
+    ///         slot0-priced prototype basket vault. Intended for devnet /
+    ///         test deployments that intentionally exercise prototype
+    ///         vaults, and for the eventual case where governance has
+    ///         completed TWAP hardening but the contract still declares
+    ///         itself a prototype. See issue #427 and
+    ///         docs/code-reviews/review-codex-20260518-234945.md.
+    mapping(address => bool) public prototypeOverride;
+
     /// @notice Ordered list of vaults included in the weight vector.
     address[] private _weightVaultList;
 
@@ -91,6 +114,15 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param oldCap Previous cap (0 = uncapped).
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
+
+    /// @notice Emitted when the prototype-eligibility override for `vault` is
+    ///         toggled. `allowed = true` permits the prototype vault to be
+    ///         weighted and to receive deposits; `false` (the default)
+    ///         blocks router inclusion.
+    /// @param vault    Vault address whose override flag changed.
+    /// @param oldValue Previous override value.
+    /// @param newValue New override value.
+    event PrototypeOverrideSet(address indexed vault, bool oldValue, bool newValue);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -140,6 +172,17 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         interact with such vaults.
     /// @param vault The vault address whose `asset()` call reverted.
     error VaultAssetUnreadable(address vault);
+
+    /// @notice A vault self-declares as a prototype (via `isPrototype()
+    ///         returns true`) and has no explicit `prototypeOverride[vault]
+    ///         = true`. Prototype basket vaults price NAV from Uniswap V3
+    ///         `slot0`, which is manipulable inside a single block. They
+    ///         MUST NOT receive router-routed USDC in production until TWAP
+    ///         hardening is complete. Devnet / test deployments may opt in
+    ///         by calling `setPrototypeOverride(vault, true)`. See issue
+    ///         #427 and docs/code-reviews/review-codex-20260518-234945.md.
+    /// @param vault The prototype vault address that was rejected.
+    error VaultIsPrototype(address vault);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -208,6 +251,25 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         if (vault == address(0)) revert ZeroAddress();
         emit VaultCapSet(vault, vaultCap[vault], cap);
         vaultCap[vault] = cap;
+    }
+
+    /// @notice Explicitly opt `vault` in (`allowed = true`) or out
+    ///         (`allowed = false`) of router eligibility despite the vault
+    ///         self-declaring as a prototype via `isPrototype() == true`.
+    ///         The default is `false` for every address — a fresh
+    ///         production deployment cannot accidentally weight a
+    ///         slot0-priced basket vault. Intended for devnet / test
+    ///         deployments, and for the post-TWAP-hardening transition
+    ///         where governance has audited the prototype and accepts the
+    ///         remaining risk. Restricted to `ADMIN_ROLE`.
+    /// @param vault   Vault address to mark as router-eligible despite
+    ///                prototype status.
+    /// @param allowed New override value. `true` lifts the prototype gate
+    ///                for this single vault; `false` re-engages it.
+    function setPrototypeOverride(address vault, bool allowed) external onlyRole(ADMIN_ROLE) {
+        if (vault == address(0)) revert ZeroAddress();
+        emit PrototypeOverrideSet(vault, prototypeOverride[vault], allowed);
+        prototypeOverride[vault] = allowed;
     }
 
     // ─── Preview ─────────────────────────────────────────────────────────────
@@ -402,10 +464,19 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         // Short-circuit so the view returns false instead of reverting.
         if (vault.code.length == 0) return false;
         try IERC4626(vault).asset() returns (address vaultAsset) {
-            return vaultAsset == address(usdc);
+            if (vaultAsset != address(usdc)) return false;
         } catch {
             return false;
         }
+        // Prototype gate: a vault that self-declares `isPrototype() == true`
+        // is router-ineligible unless an explicit per-vault override is
+        // set. Vaults that do not implement `isPrototype()` are treated as
+        // non-prototype (the call reverts and we fall through). See issue
+        // #427.
+        if (_isPrototype(vault) && !prototypeOverride[vault]) {
+            return false;
+        }
+        return true;
     }
 
     /// @dev Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
@@ -423,6 +494,26 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             }
         } catch {
             revert VaultAssetUnreadable(vault);
+        }
+        // Prototype gate: refuse vaults that self-declare prototype status
+        // unless governance has explicitly opted them in. This is the
+        // production-readiness gate for slot0-priced basket vaults — see
+        // issue #427 and docs/code-reviews/review-codex-20260518-234945.md.
+        if (_isPrototype(vault) && !prototypeOverride[vault]) {
+            revert VaultIsPrototype(vault);
+        }
+    }
+
+    /// @dev Try the optional `isPrototype()` view. Returns `true` only when
+    ///      the vault explicitly self-declares as a prototype. Vaults that
+    ///      do not implement the view (the call reverts) are treated as
+    ///      non-prototype so that the eligibility gate is opt-in from the
+    ///      vault side — non-BasketVault ERC-4626 strategies are unaffected.
+    function _isPrototype(address vault) internal view returns (bool) {
+        try IPrototypeAware(vault).isPrototype() returns (bool flag) {
+            return flag;
+        } catch {
+            return false;
         }
     }
 }

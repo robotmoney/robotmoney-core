@@ -131,6 +131,40 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @notice Subclasses declare the maximum number of assets in the basket.
     function maxAssets() public view virtual returns (uint256);
 
+    // ─── Production-readiness gate ────────────────────────────────────
+    //
+    // BasketVault prices NAV and swap minimums from Uniswap V3 `slot0`, which
+    // is manipulable inside a single block by a flash-loaned swap. Until that
+    // pricing is replaced by a Uniswap V3 TWAP via `observe()` plus the
+    // associated liquidity and observation-cardinality constraints, every
+    // BasketVault subclass MUST be considered a prototype and MUST NOT be
+    // wired into a production router weight vector.
+    //
+    // `isPrototype()` is the on-chain marker used by `PortfolioRouter` to
+    // block accidental inclusion in production router eligibility (see
+    // `PortfolioRouter._requireRouterEligible` and the prototype override
+    // surface). The flag is intentionally exposed at the abstract base so
+    // that every concrete subclass (BasketVault, AgentTokenVault,
+    // ProtocolAssetVault, ...) inherits the same gate and cannot silently
+    // forget to declare its prototype status.
+    //
+    // TWAP hardening is tracked as a prerequisite for production router
+    // eligibility — see docs/code-reviews/review-codex-20260518-234945.md
+    // and issue #427. Devnet or explicitly-overridden deployments may still
+    // route into these vaults via `PortfolioRouter.setPrototypeOverride`.
+
+    /// @notice True iff this contract is a prototype that has not completed
+    ///         oracle / production-readiness hardening. Always `true` for
+    ///         every concrete `BasketVault` subclass until slot0 pricing is
+    ///         replaced by a TWAP. Read by `PortfolioRouter` to refuse
+    ///         production router eligibility absent an explicit override.
+    /// @dev Marked `virtual` so a post-hardening subclass can override and
+    ///      return `false` after audit + TWAP migration, but this base
+    ///      contract intentionally keeps the gate closed by default.
+    function isPrototype() public pure virtual returns (bool) {
+        return true;
+    }
+
     // ─── ERC-4626 share scale ─────────────────────────────────────────
 
     function decimals() public pure override(ERC4626) returns (uint8) {

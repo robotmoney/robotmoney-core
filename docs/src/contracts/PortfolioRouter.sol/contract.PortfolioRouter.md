@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5f3c3bfe955810832b34a58296a18cb976126c6d/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75c9d821b281975c99c1bcf5090a766acfe071b0/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -77,6 +77,24 @@ mapping(address => uint256) public vaultCap
 ```
 
 
+### prototypeOverride
+Per-vault override that allows a prototype vault (one that
+returns `true` from `isPrototype()`) to be included in the
+router weight vector and receive deposits. False by default —
+a fresh deployment cannot accidentally route real USDC into a
+slot0-priced prototype basket vault. Intended for devnet /
+test deployments that intentionally exercise prototype
+vaults, and for the eventual case where governance has
+completed TWAP hardening but the contract still declares
+itself a prototype. See issue #427 and
+docs/code-reviews/review-codex-20260518-234945.md.
+
+
+```solidity
+mapping(address => bool) public prototypeOverride
+```
+
+
 ### _weightVaultList
 Ordered list of vaults included in the weight vector.
 
@@ -151,6 +169,30 @@ Restricted to `ADMIN_ROLE`.
 ```solidity
 function setVaultCap(address vault, uint256 cap) external onlyRole(ADMIN_ROLE);
 ```
+
+### setPrototypeOverride
+
+Explicitly opt `vault` in (`allowed = true`) or out
+(`allowed = false`) of router eligibility despite the vault
+self-declaring as a prototype via `isPrototype() == true`.
+The default is `false` for every address — a fresh
+production deployment cannot accidentally weight a
+slot0-priced basket vault. Intended for devnet / test
+deployments, and for the post-TWAP-hardening transition
+where governance has audited the prototype and accepts the
+remaining risk. Restricted to `ADMIN_ROLE`.
+
+
+```solidity
+function setPrototypeOverride(address vault, bool allowed) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|  Vault address to mark as router-eligible despite prototype status.|
+|`allowed`|`bool`|New override value. `true` lifts the prototype gate for this single vault; `false` re-engages it.|
+
 
 ### previewDeposit
 
@@ -285,6 +327,19 @@ router-eligibility. See review-codex-20260518-234945.md §2.
 function _requireRouterEligible(address vault) internal view;
 ```
 
+### _isPrototype
+
+Try the optional `isPrototype()` view. Returns `true` only when
+the vault explicitly self-declares as a prototype. Vaults that
+do not implement the view (the call reverts) are treated as
+non-prototype so that the eligibility gate is opt-in from the
+vault side — non-BasketVault ERC-4626 strategies are unaffected.
+
+
+```solidity
+function _isPrototype(address vault) internal view returns (bool);
+```
+
 ## Events
 ### RouterDeposit
 Emitted once per successful `deposit()` call, per vault leg.
@@ -355,6 +410,25 @@ event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 |`vault`|`address`| Vault address.|
 |`oldCap`|`uint256`|Previous cap (0 = uncapped).|
 |`newCap`|`uint256`|New cap (0 = uncapped).|
+
+### PrototypeOverrideSet
+Emitted when the prototype-eligibility override for `vault` is
+toggled. `allowed = true` permits the prototype vault to be
+weighted and to receive deposits; `false` (the default)
+blocks router inclusion.
+
+
+```solidity
+event PrototypeOverrideSet(address indexed vault, bool oldValue, bool newValue);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|   Vault address whose override flag changed.|
+|`oldValue`|`bool`|Previous override value.|
+|`newValue`|`bool`|New override value.|
 
 ## Errors
 ### ZeroAddress
@@ -478,6 +552,27 @@ error VaultAssetUnreadable(address vault);
 |Name|Type|Description|
 |----|----|-----------|
 |`vault`|`address`|The vault address whose `asset()` call reverted.|
+
+### VaultIsPrototype
+A vault self-declares as a prototype (via `isPrototype()
+returns true`) and has no explicit `prototypeOverride[vault]
+= true`. Prototype basket vaults price NAV from Uniswap V3
+`slot0`, which is manipulable inside a single block. They
+MUST NOT receive router-routed USDC in production until TWAP
+hardening is complete. Devnet / test deployments may opt in
+by calling `setPrototypeOverride(vault, true)`. See issue
+#427 and docs/code-reviews/review-codex-20260518-234945.md.
+
+
+```solidity
+error VaultIsPrototype(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|The prototype vault address that was rejected.|
 
 ## Structs
 ### LegPreview
