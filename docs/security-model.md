@@ -60,6 +60,7 @@ go through explicit approval.
 | Storage collision via upgradeable proxies | All contracts must be direct non-proxy deployments. Upgradeable proxy patterns are prohibited. |
 | Self-destruct / `SELFDESTRUCT` ejection | No `selfdestruct` or `CREATE2`-replace pattern may be present in any contract. Post-Cancun semantics reduce this risk but the prohibition stands. |
 | Delegatecall to attacker-controlled target | `delegatecall` is prohibited in vault and adapter contracts. Any future use must be reviewed explicitly and justified in the PR. |
+| Adapter codehash allowlist bypass via delegatecall proxy | Approved RobotMoneyVault strategy adapters must be direct (non-proxy) deployments whose runtime bytecode contains no `DELEGATECALL` opcode (`0xF4`). This is enforced at deploy time by `AdapterBytecodeGuard.requireNoDelegatecall` in `contracts/script/Deploy.s.sol::_approveAdapter` and regression-tested in `contracts/test/AdapterDelegatecallGuard.t.sol` against every currently approved adapter (Aave V3, Compound V3, Morpho, Passthrough). Any future proxy-pattern adapter must instead pin both proxy and implementation codehashes in the allowlist, and the policy update must ship in the same PR. |
 | Uninitialized storage / proxy initializer | Contracts must use constructors only. Initializer patterns are prohibited. |
 | Recursive self-liquidation (Euler-class) | No lending or liquidation logic may be present in the vault. This constraint must be re-evaluated if the product shape changes. |
 

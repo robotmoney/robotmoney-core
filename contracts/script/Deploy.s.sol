@@ -11,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
@@ -246,7 +247,13 @@ contract Deploy is Script {
         }
     }
 
+    /// @dev Approves `adapter_` on `vault_` after asserting the no-proxy
+    ///      invariant: the adapter's runtime bytecode must not contain a
+    ///      `DELEGATECALL` opcode. This prevents a future proxy-backed
+    ///      adapter from bypassing the codehash allowlist by hot-swapping
+    ///      its implementation. See docs/security-model.md and issue #448.
     function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal {
+        AdapterBytecodeGuard.requireNoDelegatecall(adapter_);
         vault_.setAdapterAllowed(adapter_, true);
         vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
     }

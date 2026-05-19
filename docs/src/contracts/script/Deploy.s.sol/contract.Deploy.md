@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/86758bec5fa35d059fcb1a3f4a708912cfd4039d/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60eddc5d5c695082281a4a0584160a58dfe2e50e/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -233,6 +233,12 @@ function _approveAndRegisterAdapters(Deployed memory d) internal;
 ```
 
 ### _approveAdapter
+
+Approves `adapter_` on `vault_` after asserting the no-proxy
+invariant: the adapter's runtime bytecode must not contain a
+`DELEGATECALL` opcode. This prevents a future proxy-backed
+adapter from bypassing the codehash allowlist by hot-swapping
+its implementation. See docs/security-model.md and issue #448.
 
 
 ```solidity
