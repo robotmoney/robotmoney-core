@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1686ff77ba5066a3c4d82be95b93a7c6c4df50f3/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf6bd8ce521d7632792ea4ac955c7bf3ebf05be4/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -356,7 +356,13 @@ function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant;
 
 Explicit high-risk emergency unwind for tokens whose guard permits overrides.
 
-Emits before each zero-minimum swap so off-chain operators can distinguish override use.
+Emits before each swap so off-chain operators can distinguish override use.
+Even on the override path, swap outputs are bounded by an upper-loss
+cap derived from the admin-configured `minUsdcOut` reference floor:
+`appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
+Swaps whose realized USDC output is below `appliedFloor` revert with
+`EmergencyUnwindLossCapExceeded`, preventing sandwich/manipulation
+from realizing catastrophic loss even when override is enabled.
 
 
 ```solidity
@@ -419,14 +425,27 @@ function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 
 ### setEmergencyUnwindGuard
 
-Configure per-token minimum USDC output and optional high-risk override access.
+Configure per-token minimum USDC output, optional high-risk override
+access, and the upper-loss cap that bounds override-path slippage.
 
 
 ```solidity
-function setEmergencyUnwindGuard(address token, uint256 minUsdcOut, bool overrideAllowed)
-    external
-    onlyRole(ADMIN_ROLE);
+function setEmergencyUnwindGuard(
+    address token,
+    uint256 minUsdcOut,
+    bool overrideAllowed,
+    uint256 maxLossBps
+) external onlyRole(ADMIN_ROLE);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|           Active basket asset to configure.|
+|`minUsdcOut`|`uint256`|      Admin-set reference floor used as the upper-loss reference on the override path and as the hard minimum on the non-override path.|
+|`overrideAllowed`|`bool`| Whether the override path may be invoked at all.|
+|`maxLossBps`|`uint256`|      Maximum acceptable loss in basis points versus `minUsdcOut` when the override path executes a swap. Must be <= MAX_BPS. A value of `MAX_BPS` (10_000) reproduces the legacy zero-floor behaviour. ADMIN_ROLE is timelock-gated via the existing ADMIN_ROLE pattern (see `docs/security-model.md`).|
+
 
 ### assetCount
 
@@ -468,6 +487,20 @@ function _activeAssetForToken(address token) internal view returns (AssetInfo me
 
 ```solidity
 function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal;
+```
+
+### _emergencyUnwindAssetWithCap
+
+Override-path swap helper. Passes `appliedFloor` as the router-level
+`amountOutMinimum` and additionally enforces the cap with a typed
+`EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
+a stable error surface regardless of the underlying router's
+slippage revert format.
+
+
+```solidity
+function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
+    internal;
 ```
 
 ## Events
@@ -545,15 +578,28 @@ event EmergencyTokenRecovered(address indexed token, address indexed to, uint256
 
 ```solidity
 event EmergencyUnwindGuardSet(
-    address indexed token, uint256 oldMinUsdcOut, uint256 newMinUsdcOut, bool overrideAllowed
+    address indexed token,
+    uint256 oldMinUsdcOut,
+    uint256 newMinUsdcOut,
+    bool overrideAllowed,
+    uint256 maxLossBps
 );
 ```
 
 ### EmergencyUnwindOverrideUsed
+Emitted whenever the override path is exercised. `appliedFloor` is the
+`amountOutMinimum` actually passed to the router after the upper-loss
+cap was applied, so off-chain operators can audit how much loss
+versus `minUsdcOut` the EMERGENCY_ROLE accepted on this swap.
+
 
 ```solidity
 event EmergencyUnwindOverrideUsed(
-    address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+    address indexed token,
+    uint256 amountIn,
+    uint256 minUsdcOut,
+    uint256 appliedFloor,
+    address indexed caller
 );
 ```
 
@@ -642,6 +688,17 @@ error PoolTokenMismatch();
 error AssetInBasket();
 ```
 
+### EmergencyUnwindLossCapExceeded
+Raised when a router swap on the override path returns less USDC than
+the upper-loss cap permits. The cap is configured per-token via
+`setEmergencyUnwindGuard` and bounds the realized loss versus the
+admin-set reference floor `minUsdcOut`.
+
+
+```solidity
+error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+```
+
 ## Structs
 ### AssetInfo
 
@@ -660,6 +717,12 @@ struct AssetInfo {
 struct EmergencyUnwindGuard {
     uint256 minUsdcOut;
     bool overrideAllowed;
+    // Maximum acceptable loss (in basis points) versus `minUsdcOut` when the
+    // override path is used. The override floor is computed as
+    // `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`. A `maxLossBps` of
+    // `MAX_BPS` reproduces the legacy zero-floor behaviour; a value of `0`
+    // forbids any loss versus the reference floor.
+    uint256 maxLossBps;
 }
 ```
 

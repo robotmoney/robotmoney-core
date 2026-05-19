@@ -48,6 +48,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     struct EmergencyUnwindGuard {
         uint256 minUsdcOut;
         bool overrideAllowed;
+        // Maximum acceptable loss (in basis points) versus `minUsdcOut` when the
+        // override path is used. The override floor is computed as
+        // `minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`. A `maxLossBps` of
+        // `MAX_BPS` reproduces the legacy zero-floor behaviour; a value of `0`
+        // forbids any loss versus the reference floor.
+        uint256 maxLossBps;
     }
 
     AssetInfo[] public assets;
@@ -85,10 +91,22 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event Shutdown();
     event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
     event EmergencyUnwindGuardSet(
-        address indexed token, uint256 oldMinUsdcOut, uint256 newMinUsdcOut, bool overrideAllowed
+        address indexed token,
+        uint256 oldMinUsdcOut,
+        uint256 newMinUsdcOut,
+        bool overrideAllowed,
+        uint256 maxLossBps
     );
+    /// @dev Emitted whenever the override path is exercised. `appliedFloor` is the
+    ///      `amountOutMinimum` actually passed to the router after the upper-loss
+    ///      cap was applied, so off-chain operators can audit how much loss
+    ///      versus `minUsdcOut` the EMERGENCY_ROLE accepted on this swap.
     event EmergencyUnwindOverrideUsed(
-        address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+        address indexed token,
+        uint256 amountIn,
+        uint256 minUsdcOut,
+        uint256 appliedFloor,
+        address indexed caller
     );
 
     // ─── Errors ───────────────────────────────────────────────────────
@@ -107,6 +125,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error EmergencyUnwindOverrideDisabled();
     error PoolTokenMismatch();
     error AssetInBasket();
+    /// @dev Raised when a router swap on the override path returns less USDC than
+    ///      the upper-loss cap permits. The cap is configured per-token via
+    ///      `setEmergencyUnwindGuard` and bounds the realized loss versus the
+    ///      admin-set reference floor `minUsdcOut`.
+    error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -452,7 +475,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     }
 
     /// @notice Explicit high-risk emergency unwind for tokens whose guard permits overrides.
-    /// @dev Emits before each zero-minimum swap so off-chain operators can distinguish override use.
+    /// @dev Emits before each swap so off-chain operators can distinguish override use.
+    ///      Even on the override path, swap outputs are bounded by an upper-loss
+    ///      cap derived from the admin-configured `minUsdcOut` reference floor:
+    ///      `appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
+    ///      Swaps whose realized USDC output is below `appliedFloor` revert with
+    ///      `EmergencyUnwindLossCapExceeded`, preventing sandwich/manipulation
+    ///      from realizing catastrophic loss even when override is enabled.
     function emergencyUnwindWithOverride(address[] calldata tokens)
         external
         onlyRole(EMERGENCY_ROLE)
@@ -466,8 +495,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             AssetInfo memory assetInfo = _activeAssetForToken(tokens[i]);
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
-            emit EmergencyUnwindOverrideUsed(assetInfo.token, bal, guard.minUsdcOut, msg.sender);
-            _emergencyUnwindAsset(assetInfo, 0);
+            uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
+            emit EmergencyUnwindOverrideUsed(
+                assetInfo.token, bal, guard.minUsdcOut, appliedFloor, msg.sender
+            );
+            _emergencyUnwindAssetWithCap(assetInfo, appliedFloor);
         }
     }
 
@@ -520,16 +552,33 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         maxSlippageBps = newBps;
     }
 
-    /// @notice Configure per-token minimum USDC output and optional high-risk override access.
-    function setEmergencyUnwindGuard(address token, uint256 minUsdcOut, bool overrideAllowed)
-        external
-        onlyRole(ADMIN_ROLE)
-    {
+    /// @notice Configure per-token minimum USDC output, optional high-risk override
+    ///         access, and the upper-loss cap that bounds override-path slippage.
+    /// @param token            Active basket asset to configure.
+    /// @param minUsdcOut       Admin-set reference floor used as the upper-loss
+    ///                         reference on the override path and as the hard
+    ///                         minimum on the non-override path.
+    /// @param overrideAllowed  Whether the override path may be invoked at all.
+    /// @param maxLossBps       Maximum acceptable loss in basis points versus
+    ///                         `minUsdcOut` when the override path executes a
+    ///                         swap. Must be <= MAX_BPS. A value of `MAX_BPS`
+    ///                         (10_000) reproduces the legacy zero-floor
+    ///                         behaviour. ADMIN_ROLE is timelock-gated via
+    ///                         the existing ADMIN_ROLE pattern (see
+    ///                         `docs/security-model.md`).
+    function setEmergencyUnwindGuard(
+        address token,
+        uint256 minUsdcOut,
+        bool overrideAllowed,
+        uint256 maxLossBps
+    ) external onlyRole(ADMIN_ROLE) {
+        if (maxLossBps > MAX_BPS) revert InvalidParam();
         _activeAssetForToken(token);
         uint256 oldMin = emergencyUnwindGuard[token].minUsdcOut;
-        emergencyUnwindGuard[token] =
-            EmergencyUnwindGuard({minUsdcOut: minUsdcOut, overrideAllowed: overrideAllowed});
-        emit EmergencyUnwindGuardSet(token, oldMin, minUsdcOut, overrideAllowed);
+        emergencyUnwindGuard[token] = EmergencyUnwindGuard({
+            minUsdcOut: minUsdcOut, overrideAllowed: overrideAllowed, maxLossBps: maxLossBps
+        });
+        emit EmergencyUnwindGuardSet(token, oldMin, minUsdcOut, overrideAllowed, maxLossBps);
     }
 
     // ─── Views ────────────────────────────────────────────────────────
@@ -580,4 +629,40 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         );
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
+
+    /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
+    ///      `amountOutMinimum` and additionally enforces the cap with a typed
+    ///      `EmergencyUnwindLossCapExceeded` revert so off-chain consumers see
+    ///      a stable error surface regardless of the underlying router's
+    ///      slippage revert format.
+    // slither-disable-start reentrancy-balance
+    // The caller (`emergencyUnwindWithOverride`) holds the contract-level
+    // `nonReentrant` guard, so the pre-call `balanceOf` read cannot be observed
+    // by a reentrant call before the swap completes. The post-call comparison
+    // against `appliedFloor` uses the router's freshly-returned `received`
+    // amount, not the stale `bal`, so the "stale balance used after the call"
+    // pattern flagged by slither is a false positive here.
+    function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 appliedFloor)
+        internal
+    {
+        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
+        if (bal == 0) return;
+        IERC20(assetInfo.token).safeIncreaseAllowance(address(SWAP_ROUTER), bal);
+        uint256 received = SWAP_ROUTER.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: assetInfo.token,
+                tokenOut: address(_USDC),
+                fee: assetInfo.swapFee,
+                recipient: address(this),
+                amountIn: bal,
+                amountOutMinimum: appliedFloor,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        if (received < appliedFloor) {
+            revert EmergencyUnwindLossCapExceeded(assetInfo.token, received, appliedFloor);
+        }
+        emit Swapped(assetInfo.token, address(_USDC), bal, received);
+    }
+    // slither-disable-end reentrancy-balance
 }

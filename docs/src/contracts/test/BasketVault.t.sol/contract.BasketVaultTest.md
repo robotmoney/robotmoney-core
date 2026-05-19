@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1686ff77ba5066a3c4d82be95b93a7c6c4df50f3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf6bd8ce521d7632792ea4ac955c7bf3ebf05be4/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -120,6 +120,34 @@ function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
 function test_rescueTokens_succeedsForNonBasketAsset() public;
 ```
 
+### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap
+
+
+```solidity
+function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public;
+```
+
+### test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap
+
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap() public;
+```
+
+### test_setEmergencyUnwindGuard_requiresAdminRole
+
+
+```solidity
+function test_setEmergencyUnwindGuard_requiresAdminRole() public;
+```
+
+### test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps
+
+
+```solidity
+function test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps() public;
+```
+
 ### test_pauseAndShutdownEmergencyControlsRemainFunctional
 
 
@@ -132,7 +160,11 @@ function test_pauseAndShutdownEmergencyControlsRemainFunctional() public;
 
 ```solidity
 event EmergencyUnwindOverrideUsed(
-    address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+    address indexed token,
+    uint256 amountIn,
+    uint256 minUsdcOut,
+    uint256 appliedFloor,
+    address indexed caller
 );
 ```
 

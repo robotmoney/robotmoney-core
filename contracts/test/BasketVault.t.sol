@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/security-model.md; docs/technical/security-hardening-seams.md
 // Covers: issue #428 — guarded emergency unwind minimums and explicit override events
+//         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -72,7 +73,11 @@ contract BasketVaultTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
 
     event EmergencyUnwindOverrideUsed(
-        address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+        address indexed token,
+        uint256 amountIn,
+        uint256 minUsdcOut,
+        uint256 appliedFloor,
+        address indexed caller
     );
 
     TestERC20 internal usdc;
@@ -103,7 +108,7 @@ contract BasketVaultTest is Test {
         router.setAmountOut(800 * ONE_USDC);
 
         vm.prank(admin);
-        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, false);
+        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, false, 0);
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -127,7 +132,7 @@ contract BasketVaultTest is Test {
         router.setAmountOut(amountOut);
 
         vm.prank(admin);
-        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, false);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, false, 0);
 
         vm.prank(admin);
         vault.emergencyUnwind();
@@ -144,14 +149,17 @@ contract BasketVaultTest is Test {
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
 
+        // maxLossBps = MAX_BPS reproduces the legacy zero-floor override semantics.
         vm.prank(admin);
-        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, true);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, true, 10_000);
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
 
         vm.expectEmit(true, false, false, true, address(vault));
-        emit EmergencyUnwindOverrideUsed(address(basketToken), tokenAmount, 900 * ONE_USDC, admin);
+        emit EmergencyUnwindOverrideUsed(
+            address(basketToken), tokenAmount, 900 * ONE_USDC, 0, admin
+        );
 
         vm.prank(admin);
         vault.emergencyUnwindWithOverride(tokens);
@@ -195,6 +203,96 @@ contract BasketVaultTest is Test {
 
         assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
+    }
+
+    function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public {
+        // issue #446: an admin-configured upper-loss cap must bound override slippage.
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 minUsdcOut = 900 * ONE_USDC;
+        // maxLossBps = 1000 (10%) -> appliedFloor = 900 * 0.9 = 810 USDC.
+        uint256 maxLossBps = 1_000;
+        uint256 appliedFloor = minUsdcOut * (10_000 - maxLossBps) / 10_000;
+        // Router only returns 800 USDC — below the 810 cap.
+        uint256 routerOut = 800 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, true, maxLossBps);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        // The router enforces appliedFloor as amountOutMinimum and reverts first,
+        // surfacing the slippage bound at the router layer. This is the
+        // upper-loss cap enforcement path.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockSwapRouter.TooLittleReceived.selector, routerOut, appliedFloor
+            )
+        );
+        vm.prank(admin);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertEq(
+            basketToken.balanceOf(address(vault)),
+            tokenAmount,
+            "cap violation keeps basket asset in vault"
+        );
+    }
+
+    function test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap() public {
+        // issue #446: when realized output meets the cap, override path still works
+        // and still emits EmergencyUnwindOverrideUsed for off-chain visibility.
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 minUsdcOut = 900 * ONE_USDC;
+        uint256 maxLossBps = 1_000; // 10% cap -> appliedFloor = 810 USDC
+        uint256 appliedFloor = minUsdcOut * (10_000 - maxLossBps) / 10_000;
+        uint256 routerOut = 820 * ONE_USDC; // above 810 floor
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, true, maxLossBps);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit EmergencyUnwindOverrideUsed(
+            address(basketToken), tokenAmount, minUsdcOut, appliedFloor, admin
+        );
+
+        vm.prank(admin);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertEq(
+            usdc.balanceOf(address(vault)),
+            routerOut,
+            "override succeeds when realized output meets the cap"
+        );
+    }
+
+    function test_setEmergencyUnwindGuard_requiresAdminRole() public {
+        // issue #446 acceptance: cap setter is ADMIN_ROLE-gated; an unauthorized
+        // caller reverts with AccessControlUnauthorizedAccount.
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, adminRole
+            )
+        );
+        vm.prank(stranger);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, true, 1_000);
+    }
+
+    function test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps() public {
+        // issue #446: maxLossBps must not exceed MAX_BPS (100%).
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.InvalidParam.selector);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, true, 10_001);
     }
 
     function test_pauseAndShutdownEmergencyControlsRemainFunctional() public {
