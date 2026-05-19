@@ -63,5 +63,9 @@ COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/vite.config.ts ./vite.config.ts
 COPY --from=builder /build/package.json ./package.json
 COPY --from=builder /build/node_modules ./node_modules
+# vite.config.ts imports ./src/lib/buildEnvValidation (issue #431). The
+# import must resolve when `vite preview` loads the config at runtime,
+# even though the validator itself is a no-op for `command === "serve"`.
+COPY --from=builder /build/src/lib/buildEnvValidation.ts ./src/lib/buildEnvValidation.ts
 EXPOSE 5173
 CMD ["bun", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
