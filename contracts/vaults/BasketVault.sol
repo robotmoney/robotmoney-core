@@ -45,6 +45,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         bool active;
     }
 
+    struct EmergencyUnwindGuard {
+        uint256 minUsdcOut;
+        bool overrideAllowed;
+    }
+
     AssetInfo[] public assets;
 
     // ─── Immutables ───────────────────────────────────────────────────
@@ -60,6 +65,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     address public feeRecipient;
     uint256 public maxSlippageBps;
     bool public shutdown;
+    mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
 
     // ─── Events ───────────────────────────────────────────────────────
 
@@ -78,6 +84,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
     event Shutdown();
     event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
+    event EmergencyUnwindGuardSet(
+        address indexed token, uint256 oldMinUsdcOut, uint256 newMinUsdcOut, bool overrideAllowed
+    );
+    event EmergencyUnwindOverrideUsed(
+        address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+    );
 
     // ─── Errors ───────────────────────────────────────────────────────
 
@@ -92,6 +104,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error AssetStillHeld();
     error NoActiveAssets();
     error CannotRescueUsdc();
+    error EmergencyUnwindOverrideDisabled();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -426,29 +439,34 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         _unpause();
     }
 
-    /// @notice Pause and attempt to swap all basket assets back to USDC. Restricted to EMERGENCY_ROLE.
+    /// @notice Pause and swap all basket assets back to USDC using configured minimum outputs.
+    /// @dev Reverts when any router leg cannot satisfy its per-token guard.
     function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pause();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
-            uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
+            _emergencyUnwindAsset(assets[i], emergencyUnwindGuard[assets[i].token].minUsdcOut);
+        }
+    }
+
+    /// @notice Explicit high-risk emergency unwind for tokens whose guard permits overrides.
+    /// @dev Emits before each zero-minimum swap so off-chain operators can distinguish override use.
+    function emergencyUnwindWithOverride(address[] calldata tokens)
+        external
+        onlyRole(EMERGENCY_ROLE)
+        nonReentrant
+    {
+        _pause();
+        uint256 len = tokens.length;
+        for (uint256 i = 0; i < len; i++) {
+            EmergencyUnwindGuard memory guard = emergencyUnwindGuard[tokens[i]];
+            if (!guard.overrideAllowed) revert EmergencyUnwindOverrideDisabled();
+            AssetInfo memory assetInfo = _activeAssetForToken(tokens[i]);
+            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
-            try SWAP_ROUTER.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: assets[i].token,
-                    tokenOut: address(_USDC),
-                    fee: assets[i].swapFee,
-                    recipient: address(this),
-                    amountIn: bal,
-                    amountOutMinimum: 0, // emergency: accept any amount
-                    sqrtPriceLimitX96: 0
-                })
-            ) returns (
-                uint256 received
-            ) {
-                emit Swapped(assets[i].token, address(_USDC), bal, received);
-            } catch {}
+            emit EmergencyUnwindOverrideUsed(assetInfo.token, bal, guard.minUsdcOut, msg.sender);
+            _emergencyUnwindAsset(assetInfo, 0);
         }
     }
 
@@ -501,6 +519,18 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         maxSlippageBps = newBps;
     }
 
+    /// @notice Configure per-token minimum USDC output and optional high-risk override access.
+    function setEmergencyUnwindGuard(address token, uint256 minUsdcOut, bool overrideAllowed)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        _activeAssetForToken(token);
+        uint256 oldMin = emergencyUnwindGuard[token].minUsdcOut;
+        emergencyUnwindGuard[token] =
+            EmergencyUnwindGuard({minUsdcOut: minUsdcOut, overrideAllowed: overrideAllowed});
+        emit EmergencyUnwindGuardSet(token, oldMin, minUsdcOut, overrideAllowed);
+    }
+
     // ─── Views ────────────────────────────────────────────────────────
 
     function assetCount() external view returns (uint256) {
@@ -522,5 +552,31 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         for (uint256 i = 0; i < len; i++) {
             if (assets[i].active) count++;
         }
+    }
+
+    function _activeAssetForToken(address token) internal view returns (AssetInfo memory) {
+        uint256 len = assets.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (assets[i].active && assets[i].token == token) return assets[i];
+        }
+        revert AssetNotFound();
+    }
+
+    function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
+        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
+        if (bal == 0) return;
+        IERC20(assetInfo.token).safeIncreaseAllowance(address(SWAP_ROUTER), bal);
+        uint256 received = SWAP_ROUTER.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: assetInfo.token,
+                tokenOut: address(_USDC),
+                fee: assetInfo.swapFee,
+                recipient: address(this),
+                amountIn: bal,
+                amountOutMinimum: minUsdcOut,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
 }

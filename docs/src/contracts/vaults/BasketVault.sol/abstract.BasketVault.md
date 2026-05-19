@@ -114,6 +114,13 @@ bool public shutdown
 ```
 
 
+### emergencyUnwindGuard
+
+```solidity
+mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard
+```
+
+
 ## Functions
 ### constructor
 
@@ -336,11 +343,27 @@ function unpause() external onlyRole(ADMIN_ROLE);
 
 ### emergencyUnwind
 
-Pause and attempt to swap all basket assets back to USDC. Restricted to EMERGENCY_ROLE.
+Pause and swap all basket assets back to USDC using configured minimum outputs.
+
+Reverts when any router leg cannot satisfy its per-token guard.
 
 
 ```solidity
 function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant;
+```
+
+### emergencyUnwindWithOverride
+
+Explicit high-risk emergency unwind for tokens whose guard permits overrides.
+
+Emits before each zero-minimum swap so off-chain operators can distinguish override use.
+
+
+```solidity
+function emergencyUnwindWithOverride(address[] calldata tokens)
+    external
+    onlyRole(EMERGENCY_ROLE)
+    nonReentrant;
 ```
 
 ### shutdownVault
@@ -394,6 +417,17 @@ function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 ```
 
+### setEmergencyUnwindGuard
+
+Configure per-token minimum USDC output and optional high-risk override access.
+
+
+```solidity
+function setEmergencyUnwindGuard(address token, uint256 minUsdcOut, bool overrideAllowed)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+
 ### assetCount
 
 
@@ -420,6 +454,20 @@ function isShutdown() external view returns (bool);
 
 ```solidity
 function _activeAssetCount() internal view returns (uint256 count);
+```
+
+### _activeAssetForToken
+
+
+```solidity
+function _activeAssetForToken(address token) internal view returns (AssetInfo memory);
+```
+
+### _emergencyUnwindAsset
+
+
+```solidity
+function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal;
 ```
 
 ## Events
@@ -493,6 +541,22 @@ event Shutdown();
 event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
 ```
 
+### EmergencyUnwindGuardSet
+
+```solidity
+event EmergencyUnwindGuardSet(
+    address indexed token, uint256 oldMinUsdcOut, uint256 newMinUsdcOut, bool overrideAllowed
+);
+```
+
+### EmergencyUnwindOverrideUsed
+
+```solidity
+event EmergencyUnwindOverrideUsed(
+    address indexed token, uint256 amountIn, uint256 minUsdcOut, address indexed caller
+);
+```
+
 ## Errors
 ### TVLCapExceeded
 
@@ -560,6 +624,12 @@ error NoActiveAssets();
 error CannotRescueUsdc();
 ```
 
+### EmergencyUnwindOverrideDisabled
+
+```solidity
+error EmergencyUnwindOverrideDisabled();
+```
+
 ## Structs
 ### AssetInfo
 
@@ -569,6 +639,15 @@ struct AssetInfo {
     address pool; // Uniswap V3 pool pairing token with USDC
     uint24 swapFee; // Uniswap V3 fee tier for exactInputSingle swaps
     bool active;
+}
+```
+
+### EmergencyUnwindGuard
+
+```solidity
+struct EmergencyUnwindGuard {
+    uint256 minUsdcOut;
+    bool overrideAllowed;
 }
 ```
 

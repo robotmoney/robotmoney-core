@@ -77,6 +77,7 @@ attestation.
 | `ADMIN_ROLE` self-grant escalation | Mitigated | `ADMIN_ROLE` is its own admin by design; the trust assumption is that the multisig honors its own quorum (`smart-contracts.md` §3.4) |
 | Pause-key abuse (denial of deposit) | Mitigated | Documented residual risk: pause halts deposits but cannot move funds. Pause role separable from admin role (`architecture.md` §15) |
 | Emergency-role abuse to drain | Mitigated | `EMERGENCY_ROLE` returns funds to the vault, not to an attacker-chosen address; `emergencyWithdraw` uses `try/catch` per adapter |
+| Basket emergency unwind sandwich / low-output execution | Mitigated | `BasketVault.emergencyUnwind()` uses the admin-configured `emergencyUnwindGuard[token].minUsdcOut` as the router minimum for each active basket asset. Operators should set guards from a current simulation before incident execution. A distressed high-loss exit must use `emergencyUnwindWithOverride(tokens)` for tokens with `overrideAllowed=true`; that path remains `EMERGENCY_ROLE`-gated and emits `EmergencyUnwindOverrideUsed` before the zero-minimum swap. |
 | Fee parameter manipulation above ceiling | Mitigated | `MAX_EXIT_FEE_BPS = 100` is `immutable`; `setExitFeeBps` reverts above this |
 | Rebalance-throttle removal | Mitigated | `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` are immutable floors/ceilings |
 | Fee-recipient swap to attacker address | Inherited | `setFeeRecipient` is admin-gated; trust collapses to multisig integrity |
