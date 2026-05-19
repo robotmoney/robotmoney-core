@@ -16,7 +16,7 @@
  *   - When `registryAddress` and `routerAddress` are non-zero, a
  *     DestinationSelector is rendered above the deposit form.
  *   - Selecting "Portfolio Router" switches the deposit section to
- *     RouterDepositSection (multi-vault, all-or-revert).
+ *     RouterDepositTab (multi-vault, all-or-revert).
  *   - Selecting a specific vault uses the original single-vault flow.
  *   - Withdraw always targets the primary vault (unchanged from #257).
  *
@@ -46,7 +46,7 @@ import { erc20Abi, vaultAbi } from "../lib/abi";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { DestinationSelector, ROUTER_DESTINATION, type Destination } from "./DestinationSelector";
-import { RouterDepositSection } from "./RouterDepositSection";
+import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
@@ -327,7 +327,7 @@ export function DepositWithdrawTab(props: Props) {
 
       {/* Router deposit path */}
       {destination === ROUTER_DESTINATION && routerCtx ? (
-        <RouterDepositSection
+        <RouterDepositTab
           routerAddress={props.routerAddress as Address}
           usdcAddress={props.usdcAddress}
           ctx={routerCtx}

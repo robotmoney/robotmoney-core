@@ -44,7 +44,7 @@ export interface RouterProviderProps {
 
 /**
  * Mount this provider once near the root alongside VaultRegistryProvider.
- * Only needed when the Portfolio Router feature flag is enabled.
+ * Only needed when a Portfolio Router address is configured.
  */
 export function RouterProvider({ routerAddress, children }: RouterProviderProps) {
   const {

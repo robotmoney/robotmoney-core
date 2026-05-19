@@ -3,8 +3,10 @@
 
 Canonical source: config/feature-flags.json
 
-Reads the registry JSON and verifies that every system surface (Solidity,
-TypeScript, Rust) declares exactly the same flag IDs and names.
+Reads the registry JSON and verifies that every remaining cross-system surface
+(Solidity, Rust) declares exactly the same flag IDs and names. The dapp
+TypeScript bitmap mirror was removed in issue #433; when absent, this script
+skips that former surface instead of requiring dapp runtime gates to exist.
 
 Exits 0 when all surfaces are consistent; exits 1 with a diff on any mismatch.
 
@@ -102,22 +104,28 @@ def main() -> int:
                 f"[Solidity] Undeclared constant '{name}' (not in registry)"
             )
 
-    # Check TypeScript.
-    ts = extract_typescript_constants(TYPESCRIPT_PATH)
-    for name, expected_id in registry_by_name.items():
-        if name not in ts:
-            errors.append(
-                f"[TypeScript] Missing constant for flag '{name}' (id={expected_id})"
-            )
-        elif ts[name] != expected_id:
-            errors.append(
-                f"[TypeScript] Flag '{name}': expected id={expected_id}, got id={ts[name]}"
-            )
-    for name in ts:
-        if name not in registry_by_name:
-            errors.append(
-                f"[TypeScript] Undeclared constant '{name}' (not in registry)"
-            )
+    checked_systems = 2
+
+    # Check TypeScript only if the dapp-side bitmap mirror exists. Issue #433
+    # intentionally removed clients/dapp/src/feature-flags.ts so portfolio UI
+    # surfaces are no longer gated by VITE_FEATURE_FLAGS.
+    if TYPESCRIPT_PATH.exists():
+        checked_systems += 1
+        ts = extract_typescript_constants(TYPESCRIPT_PATH)
+        for name, expected_id in registry_by_name.items():
+            if name not in ts:
+                errors.append(
+                    f"[TypeScript] Missing constant for flag '{name}' (id={expected_id})"
+                )
+            elif ts[name] != expected_id:
+                errors.append(
+                    f"[TypeScript] Flag '{name}': expected id={expected_id}, got id={ts[name]}"
+                )
+        for name in ts:
+            if name not in registry_by_name:
+                errors.append(
+                    f"[TypeScript] Undeclared constant '{name}' (not in registry)"
+                )
 
     # Check Rust.
     rust = extract_rust_constants(RUST_PATH)
@@ -144,7 +152,7 @@ def main() -> int:
 
     print(
         f"Feature flag consistency check passed "
-        f"({len(registry)} flags × 3 systems)"
+        f"({len(registry)} flags × {checked_systems} systems)"
     )
     return 0
 

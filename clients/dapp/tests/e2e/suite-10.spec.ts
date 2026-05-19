@@ -207,20 +207,9 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
 
   test("RouterView renders without wallet — shows weights or empty state", async ({ page }) => {
     await page.goto(dappUrl);
-    // RouterView lives in the "router-governance" tab which is only present
-    // when PORTFOLIO_ROUTER_ENABLED (bit 1 of VITE_FEATURE_FLAGS) is set.
-    // Skip gracefully when the flag is off so the smoke-test devnet build
-    // (which does not set VITE_FEATURE_FLAGS) does not block the suite.
+    // RouterView lives in the unflagged "router-governance" tab.
     const routerTab = page.getByTestId("tab-router-governance");
-    const routerTabVisible = await routerTab.isVisible().catch(() => false);
-    if (!routerTabVisible) {
-      test.skip(
-        true,
-        "tab-router-governance not present — PORTFOLIO_ROUTER_ENABLED flag is off in this " +
-          "dapp build. Set VITE_FEATURE_FLAGS to include bit 1 to activate this test.",
-      );
-      return;
-    }
+    await expect(routerTab).toBeVisible({ timeout: 30_000 });
     await routerTab.click();
     await page.getByTestId("tabpanel-router-governance").waitFor({ state: "visible" });
     const routerView = page.getByTestId("router-view");

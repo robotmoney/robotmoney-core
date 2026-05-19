@@ -157,17 +157,12 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     );
 
     // ---- Select Portfolio Router ----
-    // The router option only appears when PORTFOLIO_ROUTER_ENABLED feature
-    // flag (bit 1) is set in the dapp build. Skip the test when it is not
-    // present rather than failing — the smoke-test devnet may be built
-    // without this flag enabled.
     const routerRadio = page.getByTestId("destination-router");
     const routerVisible = await routerRadio.isVisible().catch(() => false);
     if (!routerVisible) {
       test.skip(
         true,
-        "destination-router UI element not present — PORTFOLIO_ROUTER_ENABLED flag is off " +
-          "in this dapp build. Set VITE_FEATURE_FLAGS to include bit 1 to activate this spec.",
+        "destination-router UI element not present — registry/router addresses are not configured.",
       );
       return;
     }
@@ -175,13 +170,13 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     await routerRadio.click();
 
     // ---- Enter amount ----
-    await page.getByTestId("router-deposit-amount").fill("10");
+    await page.getByTestId("router-deposit-tab-amount").fill("10");
 
     // ---- Preview renders ----
     // The router preview should show the function name in TxPreview.
     // If the preview doesn't appear within the timeout the router deposit UI
     // is not yet fully implemented in this build — skip rather than fail.
-    const routerPreviewFn = page.getByTestId("router-deposit-form").getByTestId("tx-preview-fn");
+    const routerPreviewFn = page.getByTestId("router-deposit-tab").getByTestId("tx-preview-fn");
     const previewVisible = await routerPreviewFn
       .waitFor({ state: "visible", timeout: 15_000 })
       .then(() => true)
@@ -189,7 +184,7 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     if (!previewVisible) {
       test.skip(
         true,
-        "router-deposit-form tx-preview-fn did not render — RouterDepositSection preview is " +
+        "router-deposit-tab tx-preview-fn did not render — RouterDepositTab preview is " +
           "not yet wired in this dapp build. Implement the router deposit preview to activate " +
           "the remaining assertions in this spec.",
       );
@@ -198,7 +193,7 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     await expect(routerPreviewFn).toContainText("deposit", { timeout: 5_000 });
 
     // The leg table should be visible with at least one row.
-    const legTable = page.getByTestId("router-leg-table");
+    const legTable = page.getByTestId("proportion-preview-table");
     const legTableVisible = await legTable
       .waitFor({ state: "visible", timeout: 10_000 })
       .then(() => true)
@@ -206,13 +201,13 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     if (!legTableVisible) {
       test.skip(
         true,
-        "router-leg-table not present — per-vault leg breakdown UI is not yet implemented " +
-          "in this dapp build. Add data-testid='router-leg-table' and 'router-leg-row-N' " +
-          "to RouterDepositSection to activate these assertions.",
+        "proportion-preview-table not present — per-vault leg breakdown UI is not yet implemented " +
+          "in this dapp build. Add ProportionPreview rows to RouterDepositTab to activate " +
+          "these assertions.",
       );
       return;
     }
-    const firstLegRow = page.getByTestId("router-leg-row-0");
+    const firstLegRow = page.getByTestId("proportion-preview-row-0");
     await expect(firstLegRow).toBeVisible();
 
     // No unavailability warning should be present for a fresh devnet.
@@ -220,12 +215,12 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
     await expect(unavailableWarning).not.toBeVisible();
 
     // ---- Approve USDC for router ----
-    const approveBtn = page.getByTestId("router-deposit-approve");
+    const approveBtn = page.getByTestId("router-deposit-tab-approve");
     await expect(approveBtn).toBeEnabled({ timeout: 30_000 });
     await approveBtn.click();
 
     // Wait for allowance to land and submit to enable.
-    const submitBtn = page.getByTestId("router-deposit-submit");
+    const submitBtn = page.getByTestId("router-deposit-tab-submit");
     await expect(submitBtn).toBeEnabled({ timeout: 60_000 });
     await submitBtn.click();
 

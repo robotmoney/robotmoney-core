@@ -43,12 +43,6 @@ import { resolveExplorerApiUrl } from "./lib/explorerApi";
 import { initErrorCapture } from "./lib/error-capture";
 import { VaultRegistryProvider } from "./lib/VaultRegistryContext";
 import { RouterProvider } from "./lib/RouterContext";
-import {
-  MULTI_VAULT_ENABLED,
-  PORTFOLIO_ROUTER_ENABLED,
-  isEnabled,
-  parseFlagBitmap,
-} from "./feature-flags";
 
 // Install global error capture before React renders so startup errors are
 // included in the /debug feed.
@@ -72,10 +66,6 @@ const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Addres
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
-// Cross-system feature flag bitmap (config/feature-flags.json, issue #389).
-const featureFlagBitmap = parseFlagBitmap(env);
-const multiVaultEnabled = isEnabled(MULTI_VAULT_ENABLED, featureFlagBitmap);
-const portfolioRouterEnabled = isEnabled(PORTFOLIO_ROUTER_ENABLED, featureFlagBitmap);
 
 function App() {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
@@ -138,10 +128,7 @@ function App() {
       <main className="dapp-shell">
         <div className="landing-overview">
           <ProtocolStats apiUrl={explorerApiUrl} />
-          {/* MULTI_VAULT_ENABLED (flag 0) gates the multi-vault card grid.
-              Without the flag the operator's single vault is shown via
-              the VaultDetail route. config/feature-flags.json, issue #389. */}
-          {multiVaultEnabled && <VaultCards apiUrl={explorerApiUrl} />}
+          <VaultCards apiUrl={explorerApiUrl} />
         </div>
 
         <Tabs
@@ -166,9 +153,7 @@ function App() {
                 />
               ),
             },
-            // PORTFOLIO_ROUTER_ENABLED (flag 1) gates the Router Governance tab.
-            // config/feature-flags.json, issue #389.
-            portfolioRouterEnabled && {
+            {
               id: "router-governance",
               label: "Router Governance",
               content: (
@@ -209,7 +194,7 @@ function App() {
                 </div>
               ),
             },
-          ].filter(Boolean as unknown as <T>(v: T | false) => v is T)}
+          ]}
         />
       </main>
     </>
@@ -219,9 +204,9 @@ function App() {
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element missing from index.html");
 
-// Wrap App with VaultRegistryProvider and RouterProvider when the relevant
-// feature flags and contract addresses are configured. Both providers are
-// no-ops when their address is missing (e.g. single-vault deployments).
+// Wrap App with VaultRegistryProvider and RouterProvider when contract
+// addresses are configured. Both providers are no-ops when their address is
+// missing (e.g. single-vault deployments).
 // docs/technical/multi-vault-dapp-decisions.md §4.1.
 const appWithProviders = registry ? (
   <VaultRegistryProvider registryAddress={registry}>

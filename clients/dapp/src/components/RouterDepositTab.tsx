@@ -1,7 +1,7 @@
 /**
  * RouterDepositTab — multi-vault deposit via PortfolioRouter (issue #417).
  *
- * Renamed/extended from RouterDepositSection (issue #320) to add:
+ * Replaces the issue #320 router deposit entrypoint and adds:
  *   - Per-leg preview shows destination vaults, weights, estimated receipts
  *     per leg, and unavailable-leg warnings (AC §6).
  *   - Submit disabled when `activeVaults()` result differs from the preview

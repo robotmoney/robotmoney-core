@@ -6,7 +6,7 @@
  * which the parent resolves and passes in as the `legs` prop.
  *
  * Consumed by:
- *   - RouterDepositSection (deposit/withdraw page) — shows the split before
+ *   - RouterDepositTab (deposit/withdraw page) — shows the split before
  *     the user signs the router deposit tx.
  *   - RouterView / portfolio explorer — can show hypothetical split for the
  *     current weight vector without a pending tx.
