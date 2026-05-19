@@ -27,7 +27,7 @@ use crate::network_env::NetworkEnv;
 use crate::policy::{Preflight, PreflightInputs, PreflightReport};
 use crate::rpc::RpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::{AgentSigner, SignerBackendKind};
+use crate::signer::{backend_is_production_grade, AgentSigner, SignerBackendKind};
 
 const EXIT_OK: i32 = 0;
 const EXIT_PREFLIGHT_FAIL: i32 = 2;
@@ -48,6 +48,8 @@ pub struct SelfCheckOutput {
     pub network_env: NetworkEnv,
     pub gateway: String,
     pub software_fallback_allowed: bool,
+    pub selected_backend_production_ready: bool,
+    pub selected_backend_operator_message: &'static str,
     pub key_exportable: bool,
     pub device_bound: bool,
     pub timestamp: u64,
@@ -261,6 +263,8 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         network_env,
         gateway: cfg.gateway_address.clone(),
         software_fallback_allowed: cfg.signer.allow_software_fallback,
+        selected_backend_production_ready: backend_is_production_grade(backend),
+        selected_backend_operator_message: backend_operator_message(backend),
         // The MVP only ships the software backend; capability flags below
         // mirror v0 §9.2/§9.3 — software keys are exportable, not device-bound.
         key_exportable: matches!(backend, SignerBackendKind::Software),
@@ -299,6 +303,7 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
+        RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
         RmpcError::ErrConfig(_) => "ErrConfig",
         RmpcError::ErrIo(_) => "ErrIo",
         RmpcError::ErrTomlParse(_) => "ErrTomlParse",
@@ -313,6 +318,17 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
         RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
         RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
+    }
+}
+
+fn backend_operator_message(backend: SignerBackendKind) -> &'static str {
+    match backend {
+        SignerBackendKind::Software => {
+            "software keystore is non-production; use an HSM/KMS/device-bound signer for Base mainnet writes"
+        }
+        SignerBackendKind::Hsm | SignerBackendKind::Kms => {
+            "production-grade signer backend selected"
+        }
     }
 }
 
@@ -360,6 +376,10 @@ mod tests {
             network_env: NetworkEnv::from_chain_id(31337),
             gateway: "0x0001".into(),
             software_fallback_allowed: true,
+            selected_backend_production_ready: false,
+            selected_backend_operator_message: backend_operator_message(
+                SignerBackendKind::Software,
+            ),
             key_exportable: true,
             device_bound: false,
             timestamp: 0,
@@ -384,6 +404,10 @@ mod tests {
             network_env: NetworkEnv::from_chain_id(8453),
             gateway: "0x0001".into(),
             software_fallback_allowed: true,
+            selected_backend_production_ready: false,
+            selected_backend_operator_message: backend_operator_message(
+                SignerBackendKind::Software,
+            ),
             key_exportable: true,
             device_bound: false,
             timestamp: 0,

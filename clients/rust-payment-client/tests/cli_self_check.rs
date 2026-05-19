@@ -58,6 +58,11 @@ async fn self_check_happy_path_emits_v92_report_and_exits_zero() {
         format!("{GATEWAY:#x}")
     );
     assert_eq!(v["software_fallback_allowed"], true);
+    assert_eq!(v["selected_backend_production_ready"], false);
+    assert!(v["selected_backend_operator_message"]
+        .as_str()
+        .unwrap()
+        .contains("non-production"));
     assert_eq!(v["key_exportable"], true);
     assert_eq!(v["device_bound"], false);
     assert!(v["timestamp"].is_number());

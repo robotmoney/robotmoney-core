@@ -44,7 +44,7 @@ use crate::nonce::AgentLock;
 use crate::policy::{Preflight, PreflightInputs};
 use crate::rpc::RpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
-use crate::signer::AgentSigner;
+use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
     broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
 };
@@ -180,6 +180,24 @@ pub fn run(args: Args) -> i32 {
         Err(_) => 0,
     };
     let deadline = now.saturating_add(deadline_secs);
+
+    if let Err(err) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software)
+    {
+        log::error!("rmpc deposit: {err}");
+        emit_refusal(
+            &DepositFailure {
+                status: "refused",
+                error: error_name(&err).to_string(),
+                message: Some(format!("{err}")),
+                agent: None,
+                order_id: Some(format!("{order_id:#x}")),
+                tx_hash: None,
+                checks: None,
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
 
     // Decrypt keystore.
     let passphrase = match std::env::var(PASSPHRASE_ENV_VAR) {
@@ -678,6 +696,7 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
+        RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
         RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
         RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
         RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",

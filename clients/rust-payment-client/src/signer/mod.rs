@@ -22,6 +22,9 @@
 use alloy_primitives::{Address, Signature as AlloySignature};
 use thiserror::Error;
 
+use crate::errors::{Result as RmpcResult, RmpcError};
+use crate::network_env::NetworkEnv;
+
 pub mod software;
 
 /// Backend kinds the daemon may report to operators (see `rmpc self-check`).
@@ -94,6 +97,25 @@ pub trait AgentSigner: Send + Sync {
     fn sign_eip1559_hash(&self, hash: &[u8; 32]) -> Result<AlloySignature, SignerError>;
 }
 
+/// Returns whether a signer backend is acceptable for production writes.
+pub const fn backend_is_production_grade(kind: SignerBackendKind) -> bool {
+    matches!(kind, SignerBackendKind::Hsm | SignerBackendKind::Kms)
+}
+
+/// Refuse non-production signers before write commands decrypt a software
+/// keystore or build a transaction for production Base.
+pub fn require_production_grade_for_write(
+    chain_id: u64,
+    backend: SignerBackendKind,
+) -> RmpcResult<()> {
+    if NetworkEnv::from_chain_id(chain_id).is_production() && !backend_is_production_grade(backend)
+    {
+        Err(RmpcError::ErrProductionSignerRequired)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +129,27 @@ mod tests {
     fn backend_kind_serializes_kebab_case() {
         let s = serde_json::to_string(&SignerBackendKind::Software).unwrap();
         assert_eq!(s, "\"software\"");
+    }
+
+    #[test]
+    fn production_base_refuses_software_signer_for_writes() {
+        let err = require_production_grade_for_write(8453, SignerBackendKind::Software)
+            .expect_err("software signer must be refused on Base mainnet");
+        assert!(matches!(err, RmpcError::ErrProductionSignerRequired));
+        assert!(format!("{err}").contains("HSM/KMS"));
+    }
+
+    #[test]
+    fn devnet_allows_software_signer_for_writes() {
+        require_production_grade_for_write(31337, SignerBackendKind::Software)
+            .expect("local devnet software signer remains available");
+    }
+
+    #[test]
+    fn production_base_allows_reserved_production_grade_backends() {
+        require_production_grade_for_write(8453, SignerBackendKind::Hsm)
+            .expect("HSM is production grade");
+        require_production_grade_for_write(8453, SignerBackendKind::Kms)
+            .expect("KMS is production grade");
     }
 }

@@ -32,6 +32,8 @@ describe("exportRmpcConfig", () => {
 
     // Must parse as valid TOML
     const parsed = parse(toml) as Record<string, unknown>;
+    expect(toml).toContain("UNSAFE FOR PRODUCTION");
+    expect(toml).toContain("HSM/KMS/device-bound signer");
 
     // All required top-level fields must be present and correct
     expect(parsed.chain_id).toBe(31337);

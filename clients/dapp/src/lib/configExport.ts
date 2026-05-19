@@ -15,6 +15,10 @@
  * Required [signer] sub-table fields (encrypted_keystore path):
  *   allow_software_fallback = true
  *   keystore_path
+ *
+ * Encrypted-keystore exports are explicitly non-production. `rmpc` refuses
+ * software signing for Base mainnet write commands; production operators
+ * should use an HSM/KMS/device-bound backend when those fields are available.
  */
 
 export type SignerKind = "encrypted_keystore" | "hardware" | "kms";
@@ -69,7 +73,11 @@ export function exportRmpcConfig(inputs: RmpcExportInputs): string {
 
 function buildSignerLines(signer: SignerSpec): string[] {
   if (signer.kind === "encrypted_keystore") {
-    const lines = [`allow_software_fallback = true`];
+    const lines = [
+      `# UNSAFE FOR PRODUCTION: software keystore is for devnet/test use only.`,
+      `# Base mainnet write commands require an HSM/KMS/device-bound signer.`,
+      `allow_software_fallback = true`,
+    ];
     if (signer.keystore_path !== undefined) {
       lines.push(`keystore_path = ${tomlStr(signer.keystore_path)}`);
     }

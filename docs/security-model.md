@@ -169,7 +169,7 @@ here to avoid drift.
 | Client host compromise | Mitigated | Narrow signer API; known calldata only; on-chain caps are the backstop |
 | Local state rollback (cache deleted) | Mitigated | Idempotency and window caps are on-chain |
 | Malicious or stale RPC | Mitigated | Chain-id and code-hash checks; multi-RPC comparison flagged as future work |
-| Software-key extraction | Mitigated | HSM/KMS/Secure Enclave/TPM preferred; software is explicit opt-in |
+| Software-key extraction | Mitigated | HSM/KMS/Secure Enclave/TPM required for Base mainnet write commands; software keystores are explicit non-production fallback for devnet/test workflows only |
 | Pause abuse via agent role | Mitigated | Agent role cannot pause |
 | Fixed-window boundary burst | Mitigated | Documented cap-sizing rule; rolling window flagged as future |
 | Replay of signed transaction across chains | Mitigated | Chain-id check in `rmpc`; EIP-155 signing |

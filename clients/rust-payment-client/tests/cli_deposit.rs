@@ -235,6 +235,34 @@ async fn deposit_happy_path_emits_payment_id_and_exits_zero() {
     assert!(v["effective_gas_price"].is_string());
 }
 
+#[test]
+fn deposit_base_mainnet_refuses_software_signer_before_signing() {
+    let fix = Fixture::build("http://127.0.0.1:1", 8453);
+
+    let out = rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .args([
+            "deposit",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--amount",
+            "1000",
+            "--order-id",
+            &format!("{ORDER_ID:#x}"),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).expect("stdout is JSON");
+    assert_eq!(v["status"], "refused");
+    assert_eq!(v["error"], "ErrProductionSignerRequired");
+    assert!(v["message"].as_str().unwrap().contains("HSM/KMS"));
+}
+
 #[tokio::test]
 async fn deposit_chain_id_mismatch_refuses_with_named_error() {
     let mut server = mockito::Server::new_async().await;
