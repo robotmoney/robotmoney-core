@@ -123,6 +123,7 @@ safe edit order before any implementation begins.
 - [ ] `unpause()`: require `ADMIN_ROLE` not `EMERGENCY_ROLE` — mirror gateway asymmetry
 - [ ] Fork regression tests for vault accounting attack paths
 - [ ] ERC-4626 property-based conformance tests for all vault contracts
+- [ ] Complete test pyramid for timelocked multisig enforcement (#414 remediation) — real vault/gateway Forge tests, rmpc CLI integration test, dead TimelockPanel resolved (#420)
 
 ### Backend and dapp hardening
 Goal: Fix indexer SQL injection surface, explorer-API CORS gap, and two dapp

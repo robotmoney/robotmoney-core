@@ -188,7 +188,42 @@ the product promise changes. Adapter liquidity failures, upstream venue
 pauses, and withdrawal shortfalls are therefore first-order risks, not
 background implementation details.
 
-### 4.5 Fees, Revenue, and Buybacks
+### 4.5 Protocol Admin Authority
+
+All five protocol contracts (`RobotMoneyVault`, `RobotMoneyGateway`,
+`VaultRegistry`, `PortfolioRouter`, `RouterGovernance`) use OpenZeppelin
+`AccessControl` with an `ADMIN_ROLE` that governs privileged operations:
+adapter add/remove, cap and fee changes, vault registration and
+deregistration, pause-role grants, governance parameter changes, and
+`ADMIN_ROLE` membership changes.
+
+On-chain enforcement requirement: `ADMIN_ROLE` on all five contracts
+must be held by a deployed `TimelockController`. The existing Safe
+multisig (`0x88bA…75A0`) holds `PROPOSER_ROLE` and CANCELLER_ROLE on
+the controller. EXECUTOR_ROLE should be open (`address(0)`) so any
+address can execute an already-authorized operation after the delay; if
+execution is restricted, the executor must also be a Safe with threshold
+≥ 2 and the liveness tradeoff must be documented. No EOA may hold
+`ADMIN_ROLE` directly in production. All high-risk admin operations must
+pass through the schedule → delay → execute flow. The minimum delay is
+configurable per operation class.
+
+The `TimelockController` address, proposer set, executor policy, min
+delay, canceller set, and pending operation hashes must be observable
+on-chain and surfaced by `rmpc get-timelock` and the dapp timelocked
+proposals panel.
+
+This constraint does not apply to depositor-owned agent policies, which
+remain under sole depositor authority. Router-weight votes and post-vote
+weight execution use the `RouterGovernance` module's own voting period
+and execution delay. RouterGovernance administration, including voting
+power assignment and cadence/quorum parameter changes, remains a
+protocol-admin operation and must route through the admin timelock in
+production.
+
+See `docs/security-model.md` §4 and issue #414.
+
+### 4.6 Fees, Revenue, and Buybacks
 
 The PRD defines three fee classes per vault or Portfolio Router path:
 management fee, swap-fee share, and exit fee. The current deployed
@@ -233,7 +268,7 @@ explorer indexer for historical activity and aggregate metrics.
 **Account scope** — an address is required. Shows the state of a
 specific depositor or agent address: receipt token balances across all
 vaults, USDC value of each position, combined portfolio value, agent
-policy details, gateway window usage, and full transaction history.
+policy details, gateway cap usage, and full transaction history.
 Sources: live chain reads for balances, receipt supply, and policy
 state; explorer indexer for history and aggregated fee data.
 
@@ -318,8 +353,8 @@ agent withdrawals across single-vault and Portfolio Router paths:
 - the agent cannot raise caps or expand destinations;
 - the agent cannot add vaults, change mandates, alter router weights, or
   bypass disabled vaults;
-- the gateway enforces amount, expiry, window, destination, idempotency,
-  pause, receiver, and recipient constraints on-chain;
+- the gateway enforces amount, expiry, window usage, destination,
+  idempotency, pause, receiver, and recipient constraints on-chain;
 - the client must read registry, vault status, router weights, policy,
   allowance, balance, and projected cap usage before signing.
 
@@ -567,6 +602,10 @@ this architecture:
   safety decisions.
 - Software-backed credentials are development or low-value fallbacks and
   must be explicit in config and UI.
+- `ADMIN_ROLE` on all protocol contracts must be held by the deployed
+  `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
+  directly. All high-risk admin operations must pass through the
+  schedule → delay → execute flow. See §4.5.
 
 ## 9. Vendor Selections
 
@@ -593,6 +632,7 @@ this architecture:
 | Protocol-asset and agent-token vault execution | These vaults need swaps, oracles, slippage bounds, liquidity rules, and asset-selection criteria. | Require separate ADRs before implementation; exclude from router until synchronous redemption and pricing are proven. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
+| On-chain admin timelock | Resolved: required. `docs/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
 | Production JSON-RPC provider | Safety-critical reads depend on provider correctness and availability. | Support configured primary plus documented fallback; defer multi-RPC consensus until a specific risk justifies it. |
 | Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
 | Dapp hosting and CSP | Security model flags XSS/build compromise as unresolved. | Require static hosting with strict CSP, pinned dependencies, and release provenance before public mainnet use. |
