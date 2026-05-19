@@ -192,15 +192,18 @@ impl<'a> Preflight<'a> {
             )));
         }
 
-        // 8w. agentWithdrawWindowGross + shares <= maxWithdrawPerWindow
-        let window_id = now / WINDOW_SECONDS;
+        // 8w. effectiveWithdrawWindowGross + shares <= maxWithdrawPerWindow.
+        //     Issue #449 — the on-chain cap is now enforced on a strict
+        //     rolling window, so the preflight reads the rolling gross
+        //     (zero when the agent's anchor has aged past WINDOW_SECONDS)
+        //     instead of the per-calendar-window mapping.
         let window_gross = self
-            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address, window_id)
+            .call_view_agent_withdraw_window_gross(gateway_addr, inputs.signer_address)
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxWithdrawPerWindow {
             return Err(RmpcError::ErrConfig(format!(
-                "withdrawWindowGross {} + shares {} exceeds maxWithdrawPerWindow {}",
+                "rollingWithdrawGross {} + shares {} exceeds maxWithdrawPerWindow {}",
                 window_gross, inputs.amount, agent.maxWithdrawPerWindow,
             )));
         }
@@ -437,19 +440,18 @@ impl<'a> Preflight<'a> {
         Ok(decoded._0)
     }
 
-    /// Read `agentWithdrawWindowGross(agent, windowId)` from the gateway.
-    /// Used by the withdrawal-specific preflight path (issue #371).
+    /// Read the agent's rolling-window withdrawal gross from the gateway
+    /// via `effectiveWithdrawWindowGross(agent)`. Issue #449 replaced the
+    /// fixed `agentWithdrawWindowGross(agent, windowId)` mapping with a
+    /// rolling-window accumulator anchored on the agent's first withdrawal
+    /// of each window — the view returns the cumulative shares redeemed
+    /// against the current rolling cap (zero when the anchor has aged out).
     async fn call_view_agent_withdraw_window_gross(
         &self,
         gateway: Address,
         agent: Address,
-        window_id: u64,
     ) -> Result<U256> {
-        let data = RobotMoneyGateway::agentWithdrawWindowGrossCall {
-            _0: agent,
-            _1: window_id,
-        }
-        .abi_encode();
+        let data = RobotMoneyGateway::effectiveWithdrawWindowGrossCall { agent }.abi_encode();
         let out = self
             .rpc
             .eth_call(
@@ -462,9 +464,9 @@ impl<'a> Preflight<'a> {
             )
             .await?;
         let decoded =
-            RobotMoneyGateway::agentWithdrawWindowGrossCall::abi_decode_returns(&out, true)
+            RobotMoneyGateway::effectiveWithdrawWindowGrossCall::abi_decode_returns(&out, true)
                 .map_err(|e| {
-                    RmpcError::ErrRpcDecode(format!("agentWithdrawWindowGross decode: {e}"))
+                    RmpcError::ErrRpcDecode(format!("effectiveWithdrawWindowGross decode: {e}"))
                 })?;
         Ok(decoded._0)
     }

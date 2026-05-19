@@ -574,7 +574,8 @@ async fn balance_too_low_refuses() {
 
 /// Wire up happy-path mocks for `run_withdraw_gateway`. Uses
 /// `enc_agents_full` so deposit caps and withdrawal caps can differ.
-/// `agentWithdrawWindowGross` is stubbed to `withdraw_window_gross`.
+/// `effectiveWithdrawWindowGross` is stubbed to `withdraw_window_gross`
+/// (issue #449 — rolling-window cap accounting).
 async fn install_withdraw_gateway_mocks(
     server: &mut mockito::ServerGuard,
     cfg: &Config,
@@ -654,11 +655,11 @@ async fn install_withdraw_gateway_mocks(
         .expect_at_least(0)
         .create_async()
         .await;
-    // agentWithdrawWindowGross()
+    // effectiveWithdrawWindowGross() — issue #449
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentWithdrawWindowGrossCall,
+            RobotMoneyGateway::effectiveWithdrawWindowGrossCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(withdraw_window_gross)))

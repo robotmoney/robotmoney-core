@@ -126,7 +126,8 @@ sol! {
         function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
             external returns (bytes32 paymentId, uint256 sharesMinted);
 
-        function agentWithdrawWindowGross(address agent, uint64 windowId)
+        // Issue #449: rolling-window withdrawal accounting.
+        function effectiveWithdrawWindowGross(address agent)
             external view returns (uint256);
     }
 }

@@ -129,8 +129,26 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         agent has an independent allowance per window.
     mapping(address => mapping(uint64 => uint256)) public agentWindowGross;
 
-    /// @notice Per-agent windowed withdrawal gross (shares redeemed). Independent per agent per window.
-    mapping(address => mapping(uint64 => uint256)) public agentWithdrawWindowGross;
+    /// @notice Per-agent rolling-window withdrawal accounting (issue #449).
+    ///         The withdrawal cap is enforced as a strict rolling window of
+    ///         length `WINDOW_SECONDS`: at any time `t`, the cumulative shares
+    ///         redeemed in the half-open interval `(windowStart, t]` may not
+    ///         exceed `policy.maxWithdrawPerWindow`. `windowStart` is anchored
+    ///         to the agent's first withdrawal in each rolling window and
+    ///         advances to `block.timestamp` only after a full `WINDOW_SECONDS`
+    ///         has elapsed with no further withdrawal — eliminating the
+    ///         fixed-window boundary burst that allowed ~2× per-window draw
+    ///         at calendar-aligned window edges.
+    /// @param windowStart Unix-seconds anchor of the agent's current rolling window.
+    ///                    Zero when the agent has never withdrawn.
+    /// @param gross       Cumulative shares redeemed since `windowStart`.
+    struct WithdrawWindow {
+        uint64 windowStart;
+        uint256 gross;
+    }
+
+    /// @notice Per-agent rolling withdrawal window state. See `WithdrawWindow`.
+    mapping(address => WithdrawWindow) public agentWithdrawWindow;
 
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
@@ -186,6 +204,33 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @inheritdoc IGateway
     function paused() external view returns (bool) {
         return _paused;
+    }
+
+    /// @inheritdoc IGateway
+    function effectiveWithdrawWindowGross(address agent) external view returns (uint256) {
+        WithdrawWindow memory ww = agentWithdrawWindow[agent];
+        if (ww.windowStart == 0) return 0;
+        if (block.timestamp >= uint256(ww.windowStart) + WINDOW_SECONDS) return 0;
+        return ww.gross;
+    }
+
+    /// @dev Apply a `shares` redemption against the agent's rolling-window
+    ///      withdrawal budget (#449). Reverts with `WithdrawWindowCapExceeded`
+    ///      when the projected cumulative draw would breach `cap`. On success
+    ///      writes the updated `WithdrawWindow` to storage. Extracted from
+    ///      `withdraw` to keep the entrypoint within EVM stack-depth limits.
+    function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal {
+        WithdrawWindow storage ww = agentWithdrawWindow[agent];
+        uint64 anchor = ww.windowStart;
+        uint256 priorGross = ww.gross;
+        if (anchor == 0 || block.timestamp >= uint256(anchor) + WINDOW_SECONDS) {
+            anchor = uint64(block.timestamp);
+            priorGross = 0;
+        }
+        uint256 projected = priorGross + shares;
+        if (projected > cap) revert WithdrawWindowCapExceeded();
+        ww.windowStart = anchor;
+        ww.gross = projected;
     }
 
     // -------------------------------------------------------------------
@@ -608,12 +653,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             }
         }
 
-        // 6. windowId
+        // 6. windowId — informational only (echoed in event). The on-chain
+        //    cap is enforced on a strict rolling window (#449), not on this
+        //    calendar-aligned id.
         uint64 windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
-        // 7. window cap
-        uint256 windowSoFar = agentWithdrawWindowGross[msg.sender][windowId];
-        if (windowSoFar + shares > p.maxWithdrawPerWindow) revert WithdrawWindowCapExceeded();
+        // 7. rolling-window cap (issue #449).
+        //    Anchored on the agent's first withdrawal of each rolling window.
+        //    The anchor advances to `block.timestamp` only when a full
+        //    WINDOW_SECONDS has elapsed since the last anchor — so cumulative
+        //    redemptions in any WINDOW_SECONDS-wide interval are bounded by
+        //    `maxWithdrawPerWindow`. Eliminates the fixed-window boundary
+        //    burst.
+        _accrueRollingWithdraw(msg.sender, shares, p.maxWithdrawPerWindow);
 
         // 8. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
         paymentId = keccak256(
@@ -621,8 +673,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
-        // 9. EFFECTS: write state before any external call (CEI pattern).
-        agentWithdrawWindowGross[msg.sender][windowId] = windowSoFar + shares;
+        // 9. EFFECTS: paymentId reservation. (Rolling-window state was
+        //    written in `_accrueRollingWithdraw` above.)
         usedPaymentIds[paymentId] = true;
 
         // slither-disable-start reentrancy-balance

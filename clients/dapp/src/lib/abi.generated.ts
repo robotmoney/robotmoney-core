@@ -162,22 +162,22 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
-    name: "agentWithdrawWindowGross",
+    name: "agentWithdrawWindow",
     inputs: [
       {
         name: "",
         type: "address",
         internalType: "address",
       },
-      {
-        name: "",
-        type: "uint64",
-        internalType: "uint64",
-      },
     ],
     outputs: [
       {
-        name: "",
+        name: "windowStart",
+        type: "uint64",
+        internalType: "uint64",
+      },
+      {
+        name: "gross",
         type: "uint256",
         internalType: "uint256",
       },
@@ -390,6 +390,25 @@ export const gatewayAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "effectiveWithdrawWindowGross",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",

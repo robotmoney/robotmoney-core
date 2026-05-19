@@ -1069,12 +1069,11 @@ contract GatewayWithdrawTest is Test {
         assertEq(usdc.balanceOf(agent), 0, "agent must not receive USDC");
         assertEq(usdc.balanceOf(address(gateway)), 0, "gateway must not hold USDC");
 
-        // Window gross updated.
+        // Rolling-window gross updated (#449).
         assertEq(
-            gateway.agentWithdrawWindowGross(agent, expectedWindowId),
-            shares,
-            "window gross updated"
+            gateway.effectiveWithdrawWindowGross(agent), shares, "rolling window gross updated"
         );
+        expectedWindowId; // silence unused-variable warning; event field still emitted
         // PaymentId consumed.
         assertTrue(gateway.usedPaymentIds(paymentId), "paymentId must be marked used");
     }
@@ -1178,6 +1177,188 @@ contract GatewayWithdrawTest is Test {
         vm.prank(agent);
         gateway.withdraw(
             keccak256("o4"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i4")
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Reverts: rolling-window boundary burst (#449)
+    //
+    // Pre-#449, an agent could drain `maxWithdrawPerWindow` at the end of
+    // calendar window N and then another full `maxWithdrawPerWindow` at the
+    // first second of window N+1 — a ~2x burst inside a few seconds. With
+    // the rolling-window accounting introduced by #449, the second draw
+    // must revert because <WINDOW_SECONDS has elapsed since the anchor.
+    // -------------------------------------------------------------------
+    function test_withdraw_rollingWindow_blocksBoundaryBurst() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // Window cap equals the per-payment cap so a single max withdrawal
+        // consumes the rolling budget.
+        p.maxWithdrawPerWindow = MAX_WITHDRAW_PER_PAYMENT;
+        _authorize(p);
+
+        uint256 shares = MAX_WITHDRAW_PER_PAYMENT;
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+
+        // Warp to one second before the next calendar window boundary so the
+        // first withdrawal lands in window N.
+        uint256 currentWindow = block.timestamp / windowSeconds;
+        uint256 nextBoundary = (currentWindow + 1) * windowSeconds;
+        vm.warp(nextBoundary - 1);
+
+        _mintSharesAndApprove(shares);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-pre-boundary"),
+            shares,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-pre-boundary")
+        );
+
+        // Cross the calendar window boundary by two seconds; fixed-window
+        // accounting would now allow another full cap. Rolling accounting
+        // must reject it.
+        vm.warp(nextBoundary + 1);
+        _mintSharesAndApprove(shares);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
+        gateway.withdraw(
+            keccak256("o-post-boundary"),
+            shares,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-post-boundary")
+        );
+
+        // After a full WINDOW_SECONDS has elapsed since the anchor, the
+        // rolling window resets and a fresh cap is available again.
+        vm.warp(nextBoundary - 1 + windowSeconds);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-after-rolling"),
+            shares,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-after-rolling")
+        );
+    }
+
+    // View helper `effectiveWithdrawWindowGross` returns 0 for an agent that
+    // has never withdrawn (windowStart == 0 branch).
+    function test_effectiveWithdrawWindowGross_zeroForUntouchedAgent() public view {
+        assertEq(
+            gateway.effectiveWithdrawWindowGross(agent),
+            0,
+            "untouched agent must report zero rolling-window gross"
+        );
+    }
+
+    // View helper `effectiveWithdrawWindowGross` returns 0 after the rolling
+    // window has fully expired (expired-anchor branch).
+    function test_effectiveWithdrawWindowGross_zeroAfterWindowExpires() public {
+        _authorize(_defaultPolicy());
+        uint256 shares = MAX_WITHDRAW_PER_PAYMENT;
+        _mintSharesAndApprove(shares);
+
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-expire"),
+            shares,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-expire")
+        );
+        assertEq(
+            gateway.effectiveWithdrawWindowGross(agent),
+            shares,
+            "in-window gross must reflect the draw"
+        );
+
+        // Advance past WINDOW_SECONDS — the rolling window is now expired
+        // and the view must report zero usage.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        assertEq(
+            gateway.effectiveWithdrawWindowGross(agent),
+            0,
+            "expired rolling window must report zero gross"
+        );
+    }
+
+    // Inside a single rolling window, any withdrawal pattern up to the cap
+    // must continue to succeed (#449 acceptance criterion).
+    function test_withdraw_rollingWindow_intraWindowPatternStillSucceeds() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.maxWithdrawPerWindow = 3 * MAX_WITHDRAW_PER_PAYMENT;
+        _authorize(p);
+
+        uint256 shares = MAX_WITHDRAW_PER_PAYMENT;
+
+        // Three sub-cap withdrawals spaced out within WINDOW_SECONDS all
+        // succeed up to the configured cap.
+        for (uint256 i = 0; i < 3; i++) {
+            _mintSharesAndApprove(shares);
+            vm.prank(agent);
+            gateway.withdraw(
+                keccak256(abi.encode("intra", i)),
+                shares,
+                address(vault),
+                uint64(block.timestamp + 60),
+                keccak256(abi.encode("intra-i", i))
+            );
+            // Advance a few seconds — still within the rolling window.
+            vm.warp(block.timestamp + 60);
+        }
+
+        // The next share over the cap, still inside the rolling window,
+        // must revert.
+        _mintSharesAndApprove(1);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
+        gateway.withdraw(
+            keccak256("intra-overflow"),
+            1,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("intra-overflow-i")
+        );
+    }
+
+    // A new policy issued by the depositor after expiry must NOT reset the
+    // rolling window mid-flight — the cap is enforced against the agent's
+    // historical withdrawal anchor, not against per-policy state.
+    // After a full WINDOW_SECONDS however, a fresh budget is naturally
+    // available.
+    function test_withdraw_rollingWindow_policyRefreshDoesNotResetMidWindow() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.maxWithdrawPerWindow = MAX_WITHDRAW_PER_PAYMENT;
+        _authorize(p);
+
+        uint256 shares = MAX_WITHDRAW_PER_PAYMENT;
+        _mintSharesAndApprove(shares);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-1"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-1")
+        );
+
+        // Mid-window: depositor re-issues policy (e.g. bumps validUntil).
+        // Rolling state must persist; another full draw must still revert.
+        IGateway.AgentPolicy memory p2 = p;
+        p2.validUntil = uint64(block.timestamp + 365 days);
+        vm.prank(depositor);
+        gateway.setPolicy(agent, p2);
+
+        _mintSharesAndApprove(shares);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
+        gateway.withdraw(
+            keccak256("o-2"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-2")
+        );
+
+        // After a full window elapses, the rolling budget refreshes.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-3"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-3")
         );
     }
 

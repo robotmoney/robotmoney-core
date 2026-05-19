@@ -14,7 +14,8 @@
 //!    c. gateway paused
 //!    d. agent policy active + not expired
 //!    e. shares <= agent maxWithdrawPerPayment (withdrawal-specific cap)
-//!    f. agentWithdrawWindowGross + shares <= maxWithdrawPerWindow
+//!    f. effectiveWithdrawWindowGross + shares <= maxWithdrawPerWindow
+//!    (issue #449: rolling-window cap; preserves loss-budget at boundaries)
 //!    g. vault.paused() == false
 //!    h. vault.allowance(agent, gateway) >= shares
 //!    i. vault.balanceOf(agent) >= shares
@@ -324,9 +325,9 @@ pub fn run(args: Args) -> i32 {
     // Run the withdrawal-specific gateway preflight (chain id, code hash,
     // gateway paused, agent active+expiry, withdrawal window cap).
     // Unlike the deposit path this checks maxWithdrawPerPayment,
-    // maxWithdrawPerWindow, and agentWithdrawWindowGross — not the deposit
-    // caps — so valid withdrawals are not refused and out-of-policy
-    // withdrawals are caught before signing (issue #371).
+    // maxWithdrawPerWindow, and effectiveWithdrawWindowGross — not the
+    // deposit caps — so valid withdrawals are not refused and out-of-policy
+    // withdrawals are caught before signing (issue #371, #449).
     let preflight_result = rt.block_on(async {
         let pf = Preflight::new(&rpc, &cfg);
         pf.run_withdraw_gateway(PreflightInputs {

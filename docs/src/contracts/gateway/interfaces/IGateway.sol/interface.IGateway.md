@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60eddc5d5c695082281a4a0584160a58dfe2e50e/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9261c12d1be5f94820a0955546db76c69aef496d/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -275,6 +275,33 @@ function agentOwner(address agent) external view returns (address);
 |Name|Type|Description|
 |----|----|-----------|
 |`<none>`|`address`|The depositor EOA that authorized `agent`, or zero if none.|
+
+
+### effectiveWithdrawWindowGross
+
+Cumulative vault shares the agent has redeemed in the current
+rolling withdrawal window. Returns zero when the agent has
+either never withdrawn or the last anchor lies more than
+`WINDOW_SECONDS` in the past. Use this — not the raw
+`agentWithdrawWindow` storage tuple — to project whether the
+next withdrawal would breach `maxWithdrawPerWindow` (issue
+#449).
+
+
+```solidity
+function effectiveWithdrawWindowGross(address agent) external view returns (uint256);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address to look up.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`<none>`|`uint256`|The agent's cumulative rolling-window withdrawal gross.|
 
 
 ## Events

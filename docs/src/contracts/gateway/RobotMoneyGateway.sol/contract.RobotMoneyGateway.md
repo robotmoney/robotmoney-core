@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60eddc5d5c695082281a4a0584160a58dfe2e50e/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9261c12d1be5f94820a0955546db76c69aef496d/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -97,12 +97,12 @@ mapping(address => mapping(uint64 => uint256)) public agentWindowGross
 ```
 
 
-### agentWithdrawWindowGross
-Per-agent windowed withdrawal gross (shares redeemed). Independent per agent per window.
+### agentWithdrawWindow
+Per-agent rolling withdrawal window state. See `WithdrawWindow`.
 
 
 ```solidity
-mapping(address => mapping(uint64 => uint256)) public agentWithdrawWindowGross
+mapping(address => WithdrawWindow) public agentWithdrawWindow
 ```
 
 
@@ -176,6 +176,46 @@ Whether the gateway is currently paused.
 
 ```solidity
 function paused() external view returns (bool);
+```
+
+### effectiveWithdrawWindowGross
+
+Cumulative vault shares the agent has redeemed in the current
+rolling withdrawal window. Returns zero when the agent has
+either never withdrawn or the last anchor lies more than
+`WINDOW_SECONDS` in the past. Use this — not the raw
+`agentWithdrawWindow` storage tuple — to project whether the
+next withdrawal would breach `maxWithdrawPerWindow` (issue
+#449).
+
+
+```solidity
+function effectiveWithdrawWindowGross(address agent) external view returns (uint256);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address to look up.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`<none>`|`uint256`|The agent's cumulative rolling-window withdrawal gross.|
+
+
+### _accrueRollingWithdraw
+
+Apply a `shares` redemption against the agent's rolling-window
+withdrawal budget (#449). Reverts with `WithdrawWindowCapExceeded`
+when the projected cumulative draw would breach `cap`. On success
+writes the updated `WithdrawWindow` to storage. Extracted from
+`withdraw` to keep the entrypoint within EVM stack-depth limits.
+
+
+```solidity
+function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal;
 ```
 
 ### authorizeAgent
@@ -641,6 +681,33 @@ error UnexpectedAssetsReceived();
 ```
 
 ## Structs
+### WithdrawWindow
+Per-agent rolling-window withdrawal accounting (issue #449).
+The withdrawal cap is enforced as a strict rolling window of
+length `WINDOW_SECONDS`: at any time `t`, the cumulative shares
+redeemed in the half-open interval `(windowStart, t]` may not
+exceed `policy.maxWithdrawPerWindow`. `windowStart` is anchored
+to the agent's first withdrawal in each rolling window and
+advances to `block.timestamp` only after a full `WINDOW_SECONDS`
+has elapsed with no further withdrawal — eliminating the
+fixed-window boundary burst that allowed ~2× per-window draw
+at calendar-aligned window edges.
+
+
+```solidity
+struct WithdrawWindow {
+    uint64 windowStart;
+    uint256 gross;
+}
+```
+
+**Properties**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`windowStart`|`uint64`|Unix-seconds anchor of the agent's current rolling window. Zero when the agent has never withdrawn.|
+|`gross`|`uint256`|      Cumulative shares redeemed since `windowStart`.|
+
 ### DepositArgs
 Internal args struct to avoid stack-too-deep in `depositTo`.
 
