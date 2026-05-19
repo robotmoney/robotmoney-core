@@ -170,6 +170,33 @@ contract BasketVaultTest is Test {
         vault.emergencyUnwindWithOverride(tokens);
     }
 
+    function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public {
+        TestERC20 otherToken = new TestERC20();
+        MockPool badPool = new MockPool(address(otherToken), address(usdc), uint160(1 << 96));
+        TestERC20 newAsset = new TestERC20();
+
+        vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(badPool), 500);
+    }
+
+    function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public {
+        vm.expectRevert(BasketVault.AssetInBasket.selector);
+        vm.prank(admin);
+        vault.rescueTokens(address(basketToken), admin);
+    }
+
+    function test_rescueTokens_succeedsForNonBasketAsset() public {
+        TestERC20 stray = new TestERC20();
+        stray.mint(address(vault), 5 * ONE_USDC);
+
+        vm.prank(admin);
+        vault.rescueTokens(address(stray), admin);
+
+        assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
+        assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
+    }
+
     function test_pauseAndShutdownEmergencyControlsRemainFunctional() public {
         vm.prank(admin);
         vault.pause();

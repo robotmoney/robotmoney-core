@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75c9d821b281975c99c1bcf5090a766acfe071b0/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1686ff77ba5066a3c4d82be95b93a7c6c4df50f3/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -628,6 +628,18 @@ error CannotRescueUsdc();
 
 ```solidity
 error EmergencyUnwindOverrideDisabled();
+```
+
+### PoolTokenMismatch
+
+```solidity
+error PoolTokenMismatch();
+```
+
+### AssetInBasket
+
+```solidity
+error AssetInBasket();
 ```
 
 ## Structs

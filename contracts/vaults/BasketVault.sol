@@ -105,6 +105,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error NoActiveAssets();
     error CannotRescueUsdc();
     error EmergencyUnwindOverrideDisabled();
+    error PoolTokenMismatch();
+    error AssetInBasket();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -413,10 +415,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // Verify pool actually pairs this token with USDC.
         address t0 = IUniswapV3Pool(pool_).token0();
         address t1 = IUniswapV3Pool(pool_).token1();
-        require(
-            (t0 == token_ && t1 == address(_USDC)) || (t1 == token_ && t0 == address(_USDC)),
-            "pool/token mismatch"
-        );
+        if (!((t0 == token_ && t1 == address(_USDC)) || (t1 == token_ && t0 == address(_USDC)))) {
+            revert PoolTokenMismatch();
+        }
         assets.push(AssetInfo({token: token_, pool: pool_, swapFee: swapFee_, active: true}));
         emit AssetAdded(assets.length - 1, token_, pool_, swapFee_);
     }
@@ -482,7 +483,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
-            require(token != assets[i].token, "cannot rescue basket asset");
+            if (token == assets[i].token) revert AssetInBasket();
         }
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);

@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cffa2d3b719f19a6f36b2cb626fcbb0af0ae79d5/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1686ff77ba5066a3c4d82be95b93a7c6c4df50f3/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -97,6 +97,27 @@ function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public;
 
 ```solidity
 function test_emergencyUnwindWithOverride_requiresEmergencyRole() public;
+```
+
+### test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc
+
+
+```solidity
+function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public;
+```
+
+### test_rescueTokens_revertsWhenTokenIsActiveBasketAsset
+
+
+```solidity
+function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
+```
+
+### test_rescueTokens_succeedsForNonBasketAsset
+
+
+```solidity
+function test_rescueTokens_succeedsForNonBasketAsset() public;
 ```
 
 ### test_pauseAndShutdownEmergencyControlsRemainFunctional
