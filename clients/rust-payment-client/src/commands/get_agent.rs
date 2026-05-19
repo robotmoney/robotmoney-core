@@ -1,5 +1,6 @@
 //! Canonical: docs/implementation-plan.md §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
+//! Security: docs/code-reviews/review-codex-20260518-234945.md §5 (agent-key compromise blast radius)
 //!
 //! `rmpc get-agent --agent 0x…` — direct on-chain read of an agent's
 //! authorization record on the gateway, plus the current window's
@@ -8,16 +9,24 @@
 //! Sub-reads (all `eth_call`, pinned to one block):
 //!
 //! - `agents(address)` → `(active, validUntil, maxPerPayment,
-//!   maxPerWindow, shareReceiver)` — the canonical authorization tuple.
+//!   maxPerWindow, shareReceiver, assetRecipient, maxWithdrawPerPayment,
+//!   maxWithdrawPerWindow)` — the canonical authorization tuple. The
+//!   withdrawal fields surface the agent-compromise blast radius
+//!   identified in finding #5 of the 2026-05-18 coin-theft review.
 //! - `eth_getBlockByNumber(blockNumber).timestamp` → used to compute
 //!   `window_id = timestamp / WINDOW_SECONDS`, so the answer is
 //!   reproducible against the pinned block (not the daemon's wall
 //!   clock — see ADR §3.4).
 //! - `agentWindowGross(agent, windowId)` → cumulative deposit value the
 //!   agent has put through the current window.
+//! - `vault.allowance(agent, gateway)` → outstanding share allowance the
+//!   agent has granted the gateway. Together with the policy withdrawal
+//!   caps, this defines the maximum value an attacker who compromises
+//!   the agent key can steal via `withdraw()` (issue #429).
 //!
 //! Output is the §9 envelope with `data: AgentData`. `maxPerPayment`,
-//! `maxPerWindow`, and `window_gross` are `DecimalU256` so they
+//! `maxPerWindow`, `max_withdraw_per_payment`, `max_withdraw_per_window`,
+//! `share_allowance`, and `window_gross` are `DecimalU256` so they
 //! serialize as JSON strings.
 //!
 //! Exit codes: 0 (envelope, possibly partial), 3 (pre-read setup fail).
@@ -30,7 +39,7 @@ use alloy_sol_types::SolCall;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::gateway::RobotMoneyGateway;
+use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::policy::WINDOW_SECONDS;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
@@ -56,6 +65,28 @@ pub struct AgentData {
     pub max_per_window: DecimalU256,
     /// `agents(agent).shareReceiver` — lowercase 0x-hex.
     pub share_receiver: String,
+    /// `agents(agent).assetRecipient` — lowercase 0x-hex. The USDC
+    /// recipient when the agent calls `withdraw()`. Zero address
+    /// signals withdrawals are disabled (issue #429).
+    pub asset_recipient: String,
+    /// `agents(agent).maxWithdrawPerPayment` — `uint256` decimal string.
+    /// A non-zero value means the policy allows agent-initiated
+    /// withdrawals; this is the per-call share cap.
+    pub max_withdraw_per_payment: DecimalU256,
+    /// `agents(agent).maxWithdrawPerWindow` — `uint256` decimal string.
+    /// Per-window share cap; sets the agent-compromise blast radius
+    /// for the current window.
+    pub max_withdraw_per_window: DecimalU256,
+    /// Derived: `maxWithdrawPerPayment > 0`. Operators MUST treat
+    /// `true` as a security-relevant signal — an agent-key compromise
+    /// can redeem shares up to the per-window cap while this is set.
+    pub withdrawals_enabled: bool,
+    /// `vault.allowance(agent, gateway)` — outstanding share allowance
+    /// the agent has granted the gateway. Combined with
+    /// `max_withdraw_per_payment`/`max_withdraw_per_window` this is
+    /// the bound on what a compromised agent can withdraw without
+    /// further on-chain action by the depositor (issue #429).
+    pub share_allowance: DecimalU256,
     /// Window id at the pinned block: `block_timestamp / WINDOW_SECONDS`.
     pub window_id: u64,
     /// `agentWindowGross(agent, window_id)` — `uint256` decimal string.
@@ -84,6 +115,13 @@ pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
+    let vault_addr = match Address::from_str(&cfg.vault_address) {
+        Ok(a) => a,
+        Err(e) => {
+            log::error!("rmpc get-agent: vault_address parse error: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -108,7 +146,7 @@ pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
         network_env.human_label(),
         cfg.chain_id
     );
-    let env = match rt.block_on(read_agent(&rpc, gateway_addr, agent)) {
+    let env = match rt.block_on(read_agent(&rpc, gateway_addr, vault_addr, agent)) {
         Ok(e) => e,
         Err(e) => {
             log::error!("rmpc get-agent: pre-read setup failed: {e}");
@@ -122,6 +160,7 @@ pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
 async fn read_agent(
     rpc: &RpcClient,
     gateway: Address,
+    vault: Address,
     agent: Address,
 ) -> crate::errors::Result<Envelope<AgentData>> {
     let chain_id = rpc.chain_id().await?;
@@ -134,7 +173,10 @@ async fn read_agent(
     };
     let mut b = PartialBuilder::new(chain_id, block_number, data);
 
-    // agents() tuple
+    // agents() tuple — now an 8-field record including the withdrawal
+    // policy fields (assetRecipient + maxWithdrawPerPayment +
+    // maxWithdrawPerWindow). Issue #429: surface this so operators
+    // can see withdrawal-enabled policies in `rmpc get-agent`.
     match call_agents(rpc, gateway, &block_tag, agent).await {
         Ok(t) => {
             b.data_mut().active = t.active;
@@ -142,8 +184,26 @@ async fn read_agent(
             b.data_mut().max_per_payment = DecimalU256(t.max_per_payment);
             b.data_mut().max_per_window = DecimalU256(t.max_per_window);
             b.data_mut().share_receiver = format!("{:#x}", t.share_receiver);
+            b.data_mut().asset_recipient = format!("{:#x}", t.asset_recipient);
+            b.data_mut().max_withdraw_per_payment = DecimalU256(t.max_withdraw_per_payment);
+            b.data_mut().max_withdraw_per_window = DecimalU256(t.max_withdraw_per_window);
+            // `withdrawals_enabled` mirrors the on-chain gateway guard
+            // (`if (p.maxWithdrawPerPayment == 0) revert
+            // WithdrawalNotEnabled()`). Derived rather than stored so
+            // it can never drift from the canonical field.
+            b.data_mut().withdrawals_enabled = !t.max_withdraw_per_payment.is_zero();
         }
         Err(e) => b.record_err("agents", e),
+    }
+
+    // share allowance(agent, gateway) on the pinned vault. Read even
+    // when withdrawals are disabled — a leftover non-zero allowance
+    // with a future re-enable is still part of the blast radius
+    // operators need to see (issue #429: "revoke stale gateway share
+    // allowances").
+    match call_share_allowance(rpc, vault, &block_tag, agent, gateway).await {
+        Ok(v) => b.data_mut().share_allowance = DecimalU256(v),
+        Err(e) => b.record_err("share_allowance", e),
     }
 
     // window id from chain timestamp
@@ -176,6 +236,9 @@ struct AgentTuple {
     max_per_payment: U256,
     max_per_window: U256,
     share_receiver: Address,
+    asset_recipient: Address,
+    max_withdraw_per_payment: U256,
+    max_withdraw_per_window: U256,
 }
 
 async fn call_agents(
@@ -204,7 +267,39 @@ async fn call_agents(
         max_per_payment: r.maxPerPayment,
         max_per_window: r.maxPerWindow,
         share_receiver: r.shareReceiver,
+        asset_recipient: r.assetRecipient,
+        max_withdraw_per_payment: r.maxWithdrawPerPayment,
+        max_withdraw_per_window: r.maxWithdrawPerWindow,
     })
+}
+
+/// `vault.allowance(agent, gateway)` — the outstanding share allowance
+/// the agent has granted the gateway. Issue #429: surfacing this
+/// quantifies the agent-compromise blast radius for the withdrawal
+/// path (a stolen agent key can redeem up to
+/// `min(share_allowance, max_withdraw_per_window)` shares).
+async fn call_share_allowance(
+    rpc: &RpcClient,
+    vault: Address,
+    block_tag: &str,
+    owner: Address,
+    spender: Address,
+) -> std::result::Result<U256, String> {
+    let data = Erc20::allowanceCall { owner, spender }.abi_encode();
+    let out = rpc
+        .eth_call(
+            &CallRequest {
+                to: vault,
+                from: None,
+                data: data.into(),
+            },
+            Some(block_tag),
+        )
+        .await
+        .map_err(|e| format!("eth_call failed: {e}"))?;
+    let r = Erc20::allowanceCall::abi_decode_returns(&out, true)
+        .map_err(|e| format!("abi decode: {e}"))?;
+    Ok(r._0)
 }
 
 async fn call_window_gross(

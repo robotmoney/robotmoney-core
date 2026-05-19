@@ -107,6 +107,33 @@ pub fn enc_agents(
     max_per_window: U256,
     share_receiver: Address,
 ) -> String {
+    enc_agents_with_withdrawal(
+        active,
+        valid_until,
+        max_per_payment,
+        max_per_window,
+        share_receiver,
+        Address::ZERO,
+        U256::ZERO,
+        U256::ZERO,
+    )
+}
+
+/// `enc_agents` with the withdrawal fields exposed. Used by tests that
+/// exercise the agent-key compromise blast radius surfacing introduced
+/// in issue #429 (asset_recipient, maxWithdrawPerPayment,
+/// maxWithdrawPerWindow non-zero).
+#[allow(dead_code, clippy::too_many_arguments)]
+pub fn enc_agents_with_withdrawal(
+    active: bool,
+    valid_until: u64,
+    max_per_payment: U256,
+    max_per_window: U256,
+    share_receiver: Address,
+    asset_recipient: Address,
+    max_withdraw_per_payment: U256,
+    max_withdraw_per_window: U256,
+) -> String {
     let mut blob = Vec::with_capacity(32 * 8);
     let mut w = [0u8; 32];
     w[31] = if active { 1 } else { 0 };
@@ -119,12 +146,11 @@ pub fn enc_agents(
     let mut w = [0u8; 32];
     w[12..].copy_from_slice(share_receiver.as_slice());
     blob.extend_from_slice(&w);
-    // assetRecipient = zero (withdrawal disabled)
-    blob.extend_from_slice(&[0u8; 32]);
-    // maxWithdrawPerPayment = 0
-    blob.extend_from_slice(&[0u8; 32]);
-    // maxWithdrawPerWindow = 0
-    blob.extend_from_slice(&[0u8; 32]);
+    let mut w = [0u8; 32];
+    w[12..].copy_from_slice(asset_recipient.as_slice());
+    blob.extend_from_slice(&w);
+    blob.extend_from_slice(&max_withdraw_per_payment.to_be_bytes::<32>());
+    blob.extend_from_slice(&max_withdraw_per_window.to_be_bytes::<32>());
     format!("0x{}", ahex::encode(blob))
 }
 

@@ -16,7 +16,17 @@
  * withdrawal-specific fields `assetRecipient` and `allowedSourceVaults`
  * required by the account layer scope in issue #319.
  *
+ * Allowance-hygiene surfacing (issue #429): each entry can carry a
+ * `shareAllowance` (the agent's outstanding vault.allowance to the
+ * gateway) and a `withdrawalsEnabled` flag. The panel renders an
+ * inline warning when withdrawals are enabled and a "revoke" affordance
+ * (via an optional callback) when the allowance is stale (non-zero
+ * while withdrawals are disabled). The callback contract is
+ * intentionally narrow — the panel does not assume a transport; the
+ * caller turns the click into an on-chain `approve(gateway, 0)` tx.
+ *
  * docs/architecture.md §5.3.
+ * Security: docs/code-reviews/review-codex-20260518-234945.md §5.
  */
 import type { Address } from "viem";
 
@@ -38,6 +48,32 @@ export interface AgentPolicyEntry {
    * Null/empty when not set.
    */
   readonly allowedSourceVaults?: readonly string[];
+  /**
+   * Issue #429: `maxWithdrawPerPayment > 0` on the agent policy. The
+   * panel renders a high-visibility warning when this is true so the
+   * depositor sees the agent-key compromise blast radius.
+   */
+  readonly withdrawalsEnabled?: boolean;
+  /**
+   * Per-window withdrawal cap, decimal string. Surfaced under the
+   * warning so the user can compare it with their share balance.
+   */
+  readonly maxWithdrawPerWindow?: string;
+  /**
+   * Outstanding `vault.allowance(agent, gateway)`, decimal string.
+   * Used together with `withdrawalsEnabled` to flag stale allowances
+   * (issue #429: scope item "revoke stale gateway share allowances").
+   */
+  readonly shareAllowance?: string;
+}
+
+/**
+ * Stable predicate for "agent has a leftover gateway share allowance
+ * but withdrawals are not enabled on the policy". The flag is the hook
+ * the revoke-allowance affordance hangs off (issue #429).
+ */
+export function isStaleShareAllowance(policy: AgentPolicyEntry): boolean {
+  return policy.withdrawalsEnabled === false && (policy.shareAllowance ?? "0") !== "0";
 }
 
 export interface AgentPoliciesPanelProps {
@@ -49,6 +85,15 @@ export interface AgentPoliciesPanelProps {
   readonly loading?: boolean;
   /** Non-null when the caller failed to load policies. */
   readonly error?: string;
+  /**
+   * Optional callback invoked when the user clicks "Revoke share
+   * allowance" on a stale-allowance entry. Issue #429: the caller is
+   * responsible for translating this into an on-chain
+   * `vault.approve(gateway, 0)` transaction; the panel stays pure.
+   * When omitted, the button still renders but is non-interactive —
+   * the warning text alone is the documented mitigation path.
+   */
+  readonly onRevokeShareAllowance?: (agent: Address) => void;
 }
 
 export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
@@ -82,6 +127,46 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                       <span data-testid="agent-policy-status-revoked">(revoked)</span>
                     )}
                   </summary>
+                  {policy.withdrawalsEnabled === true && (
+                    <p
+                      data-testid="agent-policy-withdrawal-warning"
+                      role="alert"
+                      style={{ color: "var(--rm-warning, #b34700)", fontWeight: 600 }}
+                    >
+                      WARNING: withdrawals enabled. An agent-key compromise can redeem up to{" "}
+                      <code data-testid="agent-policy-withdrawal-warning-cap">
+                        {policy.maxWithdrawPerWindow ?? "(unknown cap)"}
+                      </code>{" "}
+                      shares per window to <code>{policy.assetRecipient ?? "(unset)"}</code>. Keep
+                      assetRecipient under your sole control and revoke unused gateway share
+                      allowance below.
+                    </p>
+                  )}
+                  {isStaleShareAllowance(policy) && (
+                    <div data-testid="agent-policy-stale-allowance" role="alert">
+                      <p>
+                        Stale gateway share allowance:{" "}
+                        <code data-testid="agent-policy-stale-allowance-amount">
+                          {policy.shareAllowance}
+                        </code>{" "}
+                        shares. Withdrawals are disabled, but this allowance lets a future
+                        re-authorization or compromised admin path move shares without further
+                        approval. Revoke when unused.
+                      </p>
+                      <button
+                        type="button"
+                        data-testid="agent-policy-revoke-allowance"
+                        onClick={
+                          props.onRevokeShareAllowance
+                            ? () => props.onRevokeShareAllowance?.(policy.agent)
+                            : undefined
+                        }
+                        disabled={!props.onRevokeShareAllowance}
+                      >
+                        Revoke share allowance
+                      </button>
+                    </div>
+                  )}
                   <dl data-testid="agent-policy-fields">
                     {policy.validUntil !== undefined && (
                       <>
@@ -112,6 +197,20 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                       <>
                         <dt>Asset recipient (withdrawal)</dt>
                         <dd data-testid="agent-policy-asset-recipient">{policy.assetRecipient}</dd>
+                      </>
+                    )}
+                    {policy.maxWithdrawPerWindow !== undefined && (
+                      <>
+                        <dt>Max withdrawal per window (shares)</dt>
+                        <dd data-testid="agent-policy-max-withdraw-per-window">
+                          {policy.maxWithdrawPerWindow}
+                        </dd>
+                      </>
+                    )}
+                    {policy.shareAllowance !== undefined && (
+                      <>
+                        <dt>Gateway share allowance</dt>
+                        <dd data-testid="agent-policy-share-allowance">{policy.shareAllowance}</dd>
                       </>
                     )}
                     {policy.allowedSourceVaults !== undefined &&

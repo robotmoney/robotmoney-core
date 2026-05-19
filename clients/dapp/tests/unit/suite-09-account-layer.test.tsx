@@ -470,4 +470,105 @@ describe("AgentPoliciesPanel", () => {
     const { getByTestId } = render(<AgentPoliciesPanel ownerAddress={WATCHED} policies={[]} />);
     expect(getByTestId("agent-policies-owner").textContent).toContain(WATCHED);
   });
+
+  // Issue #429: withdrawal-enabled warning + stale-allowance hygiene.
+  // Drives the dapp test_plan bullet "user can identify and revoke an
+  // unnecessary gateway share allowance" and the regression bullet
+  // "deposit-only policies do not show withdrawal exposure as enabled".
+  describe("withdrawal-exposure surfacing (issue #429)", () => {
+    it("renders a high-visibility warning when withdrawals are enabled", () => {
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: true,
+          maxWithdrawPerWindow: "10000",
+          assetRecipient: "0xdeadbeef00000000000000000000000000000001",
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      const warn = getByTestId("agent-policy-withdrawal-warning");
+      expect(warn.textContent).toMatch(/WARNING/);
+      expect(warn.textContent).toMatch(/withdrawals enabled/i);
+      expect(getByTestId("agent-policy-withdrawal-warning-cap").textContent).toContain("10000");
+      expect(warn.textContent).toContain("0xdeadbeef00000000000000000000000000000001");
+    });
+
+    it("does NOT render the withdrawal warning for deposit-only policies", () => {
+      // Regression: a deposit-only policy with maxWithdrawPerWindow set
+      // (but withdrawalsEnabled = false) must not advertise exposure.
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: false,
+          maxWithdrawPerWindow: "0",
+        },
+      ];
+      const { queryByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      expect(queryByTestId("agent-policy-withdrawal-warning")).toBeNull();
+      expect(queryByTestId("agent-policy-stale-allowance")).toBeNull();
+    });
+
+    it("flags a stale share allowance and renders a revoke affordance", () => {
+      const onRevoke = vi.fn();
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: false,
+          shareAllowance: "12345",
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel
+          ownerAddress={WATCHED}
+          policies={policies}
+          onRevokeShareAllowance={onRevoke}
+        />,
+      );
+      const block = getByTestId("agent-policy-stale-allowance");
+      expect(block).toBeTruthy();
+      expect(getByTestId("agent-policy-stale-allowance-amount").textContent).toContain("12345");
+      const btn = getByTestId("agent-policy-revoke-allowance") as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+      btn.click();
+      expect(onRevoke).toHaveBeenCalledWith(AGENT_1);
+    });
+
+    it("renders the revoke button disabled when no callback is provided", () => {
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: false,
+          shareAllowance: "1",
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      const btn = getByTestId("agent-policy-revoke-allowance") as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it("does not flag stale allowance when shareAllowance is zero", () => {
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: false,
+          shareAllowance: "0",
+        },
+      ];
+      const { queryByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      expect(queryByTestId("agent-policy-stale-allowance")).toBeNull();
+    });
+  });
 });

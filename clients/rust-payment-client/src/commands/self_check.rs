@@ -1,5 +1,6 @@
 //! Canonical: docs/implementation-plan.md §4.8 — CLI surface (self-check subcommand)
 //! (See also: docs/architecture.md §8 — Signer Backends)
+//! Security: docs/code-reviews/review-codex-20260518-234945.md §5 (agent-key compromise blast radius)
 //!
 //! `rmpc self-check` — read-only backend report (v0 §9.2 + preflight snapshot).
 //!
@@ -7,6 +8,14 @@
 //! full preflight against `eth_chainId`, gateway code-hash, paused, agent
 //! policy, allowance, and balance with `amount = 0`, and emits a single
 //! JSON document on stdout.
+//!
+//! The output also carries a `withdrawal_exposure` block (issue #429)
+//! that reports whether the agent's policy permits withdrawals, what
+//! the per-payment and per-window share caps are, the configured
+//! `assetRecipient`, and the outstanding `vault.allowance(agent,
+//! gateway)`. Operators use this to size the agent-key compromise
+//! blast radius and to decide whether stale share allowances should
+//! be revoked.
 //!
 //! Exit codes:
 //! - 0 — every preflight rule passed.
@@ -18,14 +27,17 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::U256;
+use alloy_primitives::{Address, U256};
+use alloy_sol_types::SolCall;
 use serde::Serialize;
+use std::str::FromStr;
 
 use crate::config::Config;
 use crate::errors::RmpcError;
+use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::policy::{Preflight, PreflightInputs, PreflightReport};
-use crate::rpc::RpcClient;
+use crate::rpc::{CallRequest, RpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{backend_is_production_grade, AgentSigner, SignerBackendKind};
 
@@ -54,6 +66,10 @@ pub struct SelfCheckOutput {
     pub device_bound: bool,
     pub timestamp: u64,
     pub checks: ChecksOutput,
+    /// Agent-compromise blast radius for the withdrawal path (issue
+    /// #429). Always emitted, even when withdrawals are disabled, so
+    /// the field shape is stable for downstream tooling.
+    pub withdrawal_exposure: WithdrawalExposure,
     pub ok: bool,
     /// Variant name of the [`RmpcError`] that caused the refusal, when
     /// `ok == false`. Operator tooling matches on this string.
@@ -133,6 +149,128 @@ impl ChecksOutput {
     }
 }
 
+/// Agent-key compromise blast radius for the withdrawal path. Mirrors
+/// finding #5 of the 2026-05-18 coin-theft review: even with agent
+/// policy caps, a stolen agent key can redeem shares up to
+/// `min(share_allowance, max_withdraw_per_window)` to `asset_recipient`.
+///
+/// Decimal strings are used for any `uint256` so JavaScript callers do
+/// not lose precision (same contract as `ChecksOutput`).
+#[derive(Debug, Serialize)]
+pub struct WithdrawalExposure {
+    /// Derived from `maxWithdrawPerPayment > 0`. The gateway's
+    /// `withdraw()` reverts with `WithdrawalNotEnabled` when this is
+    /// false (`contracts/gateway/RobotMoneyGateway.sol:582`).
+    pub withdrawals_enabled: bool,
+    /// `agents(self).assetRecipient` — USDC recipient on withdrawal.
+    /// Zero address while withdrawals are disabled.
+    pub asset_recipient: String,
+    /// `agents(self).maxWithdrawPerPayment`, decimal string.
+    pub max_withdraw_per_payment: String,
+    /// `agents(self).maxWithdrawPerWindow`, decimal string.
+    pub max_withdraw_per_window: String,
+    /// `vault.allowance(self, gateway)`, decimal string. Read even
+    /// when withdrawals are disabled — a leftover non-zero allowance
+    /// is a hygiene issue that operators should revoke (issue #429
+    /// scope: "stale gateway share allowances").
+    pub share_allowance: String,
+    /// `true` when `withdrawals_enabled = false` and
+    /// `share_allowance > 0`. A stale allowance does nothing until
+    /// withdrawals are re-enabled, but the residual approval is part
+    /// of the blast radius for any future re-authorization.
+    pub stale_share_allowance: bool,
+}
+
+impl WithdrawalExposure {
+    /// Fallback used when the on-chain read could not complete — keeps
+    /// the JSON shape stable but flags everything as unknown.
+    pub(crate) fn unknown() -> Self {
+        Self {
+            withdrawals_enabled: false,
+            asset_recipient: "0x0000000000000000000000000000000000000000".into(),
+            max_withdraw_per_payment: "0".into(),
+            max_withdraw_per_window: "0".into(),
+            share_allowance: "0".into(),
+            stale_share_allowance: false,
+        }
+    }
+}
+
+/// Read the gateway agent policy + outstanding vault share allowance to
+/// produce a [`WithdrawalExposure`] block. Errors fall back to
+/// `WithdrawalExposure::unknown()` because self-check must not refuse
+/// just because the withdrawal-surfacing read failed.
+async fn read_withdrawal_exposure(
+    rpc: &RpcClient,
+    cfg: &Config,
+    agent: Address,
+) -> WithdrawalExposure {
+    let gateway = match Address::from_str(&cfg.gateway_address) {
+        Ok(a) => a,
+        Err(_) => return WithdrawalExposure::unknown(),
+    };
+    let vault = match Address::from_str(&cfg.vault_address) {
+        Ok(a) => a,
+        Err(_) => return WithdrawalExposure::unknown(),
+    };
+
+    let agents_data = RobotMoneyGateway::agentsCall { _0: agent }.abi_encode();
+    let agents_out = match rpc
+        .eth_call(
+            &CallRequest {
+                to: gateway,
+                from: None,
+                data: agents_data.into(),
+            },
+            None,
+        )
+        .await
+    {
+        Ok(b) => b,
+        Err(_) => return WithdrawalExposure::unknown(),
+    };
+    let agents_ret = match RobotMoneyGateway::agentsCall::abi_decode_returns(&agents_out, true) {
+        Ok(r) => r,
+        Err(_) => return WithdrawalExposure::unknown(),
+    };
+
+    let allowance_data = Erc20::allowanceCall {
+        owner: agent,
+        spender: gateway,
+    }
+    .abi_encode();
+    let share_allowance = match rpc
+        .eth_call(
+            &CallRequest {
+                to: vault,
+                from: None,
+                data: allowance_data.into(),
+            },
+            None,
+        )
+        .await
+        .and_then(|out| {
+            Erc20::allowanceCall::abi_decode_returns(&out, true)
+                .map(|r| r._0)
+                .map_err(|e| RmpcError::ErrRpcDecode(format!("allowance decode: {e}")))
+        }) {
+        Ok(v) => v,
+        Err(_) => U256::ZERO,
+    };
+
+    let withdrawals_enabled = !agents_ret.maxWithdrawPerPayment.is_zero();
+    let stale_share_allowance = !withdrawals_enabled && !share_allowance.is_zero();
+
+    WithdrawalExposure {
+        withdrawals_enabled,
+        asset_recipient: format!("{:#x}", agents_ret.assetRecipient),
+        max_withdraw_per_payment: agents_ret.maxWithdrawPerPayment.to_string(),
+        max_withdraw_per_window: agents_ret.maxWithdrawPerWindow.to_string(),
+        share_allowance: share_allowance.to_string(),
+        stale_share_allowance,
+    }
+}
+
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
 pub fn run(config_path: &Path, pretty: bool) -> i32 {
     let cfg = match Config::from_path(config_path) {
@@ -199,6 +337,14 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         })
         .await
     });
+
+    // Withdrawal-exposure read is independent of the preflight outcome:
+    // surfacing the agent-key compromise blast radius is the whole
+    // point of issue #429, and we want it even when the deposit-side
+    // preflight refused (e.g. ErrAllowanceInsufficient on the USDC
+    // approval). Errors here downgrade to `unknown()` rather than
+    // failing the command.
+    let withdrawal_exposure = rt.block_on(read_withdrawal_exposure(&rpc, &cfg, agent_address));
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -271,6 +417,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         device_bound: false,
         timestamp,
         checks,
+        withdrawal_exposure,
         ok,
         error,
     };
@@ -384,6 +531,7 @@ mod tests {
             device_bound: false,
             timestamp: 0,
             checks: ChecksOutput::unknown(),
+            withdrawal_exposure: WithdrawalExposure::unknown(),
             ok: false,
             error: None,
         };
@@ -412,6 +560,7 @@ mod tests {
             device_bound: false,
             timestamp: 0,
             checks: ChecksOutput::unknown(),
+            withdrawal_exposure: WithdrawalExposure::unknown(),
             ok: false,
             error: None,
         };

@@ -4,6 +4,19 @@
  * tx renders target, function, decoded args, role/policy effect, risk
  * class, and raw calldata. Decoder failure is a HARD refusal; callers
  * must never fall back to raw-calldata signing.
+ *
+ * Withdrawal-enabled policy surfacing (issue #429 / security review
+ * `docs/code-reviews/review-codex-20260518-234945.md` §5): a non-zero
+ * `maxWithdrawPerPayment` on an `authorizeAgent`/`setPolicy` tx means
+ * an agent-key compromise can redeem shares to `assetRecipient` up to
+ * the per-window cap. The preview surfaces this explicitly:
+ *   - args include the withdrawal caps and `assetRecipient`
+ *   - `effect` carries a one-line risk callout when withdrawals are
+ *     enabled
+ *   - the risk classifier upgrades withdrawal-enabled policies to
+ *     "high"
+ * so the user cannot sign a withdrawal-enabled policy without seeing
+ * what it permits.
  */
 import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector } from "viem";
 import type { Address, Hex } from "viem";
@@ -96,6 +109,17 @@ export interface PreviewContext {
  */
 const HIGH_CAP_THRESHOLD = 1_000_000_000n; // 1,000 USDC in 6dp
 
+/**
+ * True when the agent policy permits agent-initiated withdrawals. The
+ * gateway treats `maxWithdrawPerPayment > 0` as the canonical
+ * "withdrawals enabled" flag (`contracts/gateway/RobotMoneyGateway.sol`
+ * `WithdrawalNotEnabled` guard). Issue #429: surfacing this is the
+ * hinge for the high-risk classification and the user-facing warning.
+ */
+export function isWithdrawalEnabled(policy: AgentPolicy): boolean {
+  return policy.maxWithdrawPerPayment > 0n;
+}
+
 export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClass {
   if (!ctx.gatewayCodeHashVerified) return "unsafe";
   switch (action.kind) {
@@ -105,6 +129,11 @@ export function classifyRisk(action: AdminAction, ctx: PreviewContext): RiskClas
     case "revokeAgent":
       return "low";
     case "authorizeAgent":
+      // Issue #429: any withdrawal-enabled policy is "high" risk —
+      // a stolen agent key can redeem shares to `assetRecipient`
+      // within the policy caps. This overrides the deposit-cap
+      // threshold so even a modest withdrawal cap still surfaces.
+      if (isWithdrawalEnabled(action.policy)) return "high";
       return action.policy.maxPerWindow > HIGH_CAP_THRESHOLD ? "high" : "medium";
     case "grantRole":
       // Granting any admin-tier role is "high" per ADR §3.3 risk table
@@ -186,7 +215,46 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
             gloss: `shares -> ${shorten(action.policy.shareReceiver)}`,
           },
         ];
-        effect = `Address ${shorten(action.agent)} will hold AGENT_ROLE; this lets it call deposit() within policy caps until ${new Date(Number(action.policy.validUntil) * 1000).toISOString()}.`;
+        // Issue #429: surface withdrawal-policy fields and the
+        // assetRecipient destination explicitly. These are decoded
+        // from the same calldata as the deposit caps and form the
+        // agent-key compromise blast radius on the withdraw path.
+        const withdrawalsEnabled = isWithdrawalEnabled(action.policy);
+        args.push(
+          {
+            name: "policy.assetRecipient",
+            raw: action.policy.assetRecipient,
+            gloss: withdrawalsEnabled
+              ? `withdrawn USDC -> ${shorten(action.policy.assetRecipient)} (WARNING: agent can move funds here on key compromise)`
+              : "withdrawals DISABLED (assetRecipient unused)",
+          },
+          {
+            name: "policy.maxWithdrawPerPayment",
+            raw: action.policy.maxWithdrawPerPayment.toString(),
+            gloss: withdrawalsEnabled
+              ? `${formatShares(action.policy.maxWithdrawPerPayment)} per withdrawal`
+              : "withdrawals DISABLED (no per-call cap)",
+          },
+          {
+            name: "policy.maxWithdrawPerWindow",
+            raw: action.policy.maxWithdrawPerWindow.toString(),
+            gloss: withdrawalsEnabled
+              ? `${formatShares(action.policy.maxWithdrawPerWindow)} per window (max stolen on agent-key compromise)`
+              : "withdrawals DISABLED (no per-window cap)",
+          },
+        );
+        const expiryIso = new Date(Number(action.policy.validUntil) * 1000).toISOString();
+        if (withdrawalsEnabled) {
+          // WARNING is load-bearing — the test asserts it appears
+          // verbatim in the effect copy so a regression in this
+          // string is caught at CI time. See security review §5.
+          effect =
+            `Address ${shorten(action.agent)} will hold AGENT_ROLE and can call deposit() AND withdraw() within policy caps until ${expiryIso}. ` +
+            `WARNING: withdrawals enabled — up to ${formatShares(action.policy.maxWithdrawPerWindow)} per window can be redeemed by this agent to ${shorten(action.policy.assetRecipient)} (assetRecipient). ` +
+            "If the agent key is compromised, an attacker can drain shares up to the per-window cap. Keep assetRecipient under your sole control and revoke gateway share allowance when unused.";
+        } else {
+          effect = `Address ${shorten(action.agent)} will hold AGENT_ROLE; this lets it call deposit() within policy caps until ${expiryIso}. Withdrawals DISABLED (maxWithdrawPerPayment = 0).`;
+        }
         break;
       }
       case "revokeAgent":
@@ -324,4 +392,16 @@ function formatUsdc(raw: bigint): string {
   const whole = raw / 1_000_000n;
   const frac = raw % 1_000_000n;
   return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
+}
+
+/**
+ * Format an ERC-4626 share amount for display. Shares are reported in
+ * the vault's smallest unit (18 decimals for OZ defaults, but the
+ * gateway never inspects decimals — we render the raw integer so the
+ * value matches what the on-chain calldata carries). Issue #429: used
+ * in withdrawal-cap glosses where unit precision matters less than the
+ * order of magnitude.
+ */
+function formatShares(raw: bigint): string {
+  return `${raw.toString()} shares`;
 }
