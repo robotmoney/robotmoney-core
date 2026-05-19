@@ -130,6 +130,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-foundry-
 
+      - name: Self-test freshness comparator (issue #450)
+        # Confirms the drift comparator fires for added/removed/changed
+        # generated files BEFORE running the real check. Without this, a silent
+        # regression in the comparator could let stale docs ship undetected.
+        run: python3 .github/scripts/check_generated_contract_docs_freshness.py --self-test
+
       - name: Check generated contract docs freshness
         run: python3 .github/scripts/check_generated_contract_docs_freshness.py
 

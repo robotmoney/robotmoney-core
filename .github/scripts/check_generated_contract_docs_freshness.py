@@ -27,6 +27,7 @@ PREREQUISITES
 
 from __future__ import annotations
 
+import argparse
 import difflib
 import re
 import shutil
@@ -85,7 +86,101 @@ def snapshot_tree(base: Path) -> dict[str, str]:
     return result
 
 
+def compare_trees(
+    committed: dict[str, str], fresh: dict[str, str]
+) -> tuple[set[str], set[str], list[str]]:
+    """Return (added, removed, changed) drift sets between two snapshots.
+
+    ``added``   = files in ``fresh`` but not ``committed`` (regenerator
+                  produced a new doc file the tree never committed — e.g. a
+                  newly added .sol contract whose docs were not regenerated).
+    ``removed`` = files in ``committed`` but not ``fresh`` (a contract was
+                  deleted but its doc page was not).
+    ``changed`` = files present in both whose normalized content differs
+                  (e.g. an added public function or NatSpec edit).
+    """
+    committed_keys = set(committed)
+    fresh_keys = set(fresh)
+    added = fresh_keys - committed_keys
+    removed = committed_keys - fresh_keys
+    changed: list[str] = []
+    for key in committed_keys & fresh_keys:
+        if committed[key] != fresh[key]:
+            changed.append(key)
+    return added, removed, changed
+
+
+def self_test() -> int:
+    """Confirm the drift comparator fires for added/removed/changed files.
+
+    This is the codified version of issue #450's dry-run acceptance: it
+    guarantees that if a future PR introduces a new public Solidity surface
+    without regenerating ``docs/src/contracts/``, the freshness gate will
+    detect the drift. Three synthetic scenarios are checked — added file,
+    removed file, and content-changed file (the case that fires when a new
+    ``function`` line appears in a contract's NatSpec output).
+    """
+    base = {"a.md": "alpha\n", "b.md": "beta\n"}
+
+    # Scenario 1: regenerated output has a brand-new doc file.
+    added, removed, changed = compare_trees(base, {**base, "c.md": "gamma\n"})
+    assert added == {"c.md"} and not removed and not changed, (
+        f"self-test added-file scenario failed: {added=} {removed=} {changed=}"
+    )
+
+    # Scenario 2: regenerated output is missing a doc file the tree committed.
+    added, removed, changed = compare_trees(base, {"a.md": "alpha\n"})
+    assert removed == {"b.md"} and not added and not changed, (
+        f"self-test removed-file scenario failed: {added=} {removed=} {changed=}"
+    )
+
+    # Scenario 3: a file's content differs (the "added public function" case).
+    added, removed, changed = compare_trees(
+        base, {"a.md": "alpha\nnew function\n", "b.md": "beta\n"}
+    )
+    assert changed == ["a.md"] and not added and not removed, (
+        f"self-test changed-file scenario failed: {added=} {removed=} {changed=}"
+    )
+
+    # Scenario 4: identical trees must not report drift.
+    added, removed, changed = compare_trees(base, dict(base))
+    assert not (added or removed or changed), (
+        f"self-test no-drift scenario falsely reported: {added=} {removed=} {changed=}"
+    )
+
+    # Scenario 5: [Git Source] SHA normalization must not be flagged as drift.
+    sha_a = (
+        "[Git Source](https://github.com/org/repo/blob/"
+        "0123456789abcdef0123456789abcdef01234567/contracts/Foo.sol)\n"
+    )
+    sha_b = (
+        "[Git Source](https://github.com/org/repo/blob/"
+        "fedcba9876543210fedcba9876543210fedcba98/contracts/Foo.sol)\n"
+    )
+    assert normalize(sha_a) == normalize(sha_b), (
+        "self-test sha-normalization failed — comparator would flag every PR"
+    )
+
+    print("OK: freshness-check self-test passed (4 drift scenarios + SHA norm).")
+    return 0
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help=(
+            "Run unit-level sanity checks on the drift comparator instead of "
+            "invoking forge doc. Used by CI to confirm the gate would fire on "
+            "added/removed/changed generated files (issue #450)."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
+
     root = repo_root()
     generated_path = root / GENERATED_DIR
 
@@ -143,19 +238,11 @@ def main() -> int:
         fresh = snapshot_tree(regenerated_dir)
 
     # Compare.
-    committed_keys = set(committed)
-    fresh_keys = set(fresh)
-
-    added = fresh_keys - committed_keys
-    removed = committed_keys - fresh_keys
-    changed: list[str] = []
-    for key in committed_keys & fresh_keys:
-        if committed[key] != fresh[key]:
-            changed.append(key)
+    added, removed, changed = compare_trees(committed, fresh)
 
     if not (added or removed or changed):
         print(
-            f"OK: docs/src/contracts/ is fresh ({len(fresh_keys)} files match "
+            f"OK: docs/src/contracts/ is fresh ({len(fresh)} files match "
             "`forge doc` output)."
         )
         return 0
