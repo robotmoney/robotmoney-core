@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9261c12d1be5f94820a0955546db76c69aef496d/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e7a2933e057a3f91470ea3808b683595abe0b3d0/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -155,6 +155,69 @@ function test_setEmergencyUnwindGuard_rejectsMaxLossBpsAboveMaxBps() public;
 function test_pauseAndShutdownEmergencyControlsRemainFunctional() public;
 ```
 
+### test_totalAssets_usesTwapTickNotSlot0
+
+
+```solidity
+function test_totalAssets_usesTwapTickNotSlot0() public;
+```
+
+### test_totalAssets_revertsOnSpotPriceManipulationUsingSlot0
+
+
+```solidity
+function test_totalAssets_revertsOnSpotPriceManipulationUsingSlot0() public;
+```
+
+### test_setTwapWindow_requiresAdminRole
+
+
+```solidity
+function test_setTwapWindow_requiresAdminRole() public;
+```
+
+### test_setTwapWindow_rejectsBelowMinimum
+
+
+```solidity
+function test_setTwapWindow_rejectsBelowMinimum() public;
+```
+
+### test_setTwapWindow_rejectsAboveMaximum
+
+
+```solidity
+function test_setTwapWindow_rejectsAboveMaximum() public;
+```
+
+### test_setTwapWindow_acceptsBoundary
+
+
+```solidity
+function test_setTwapWindow_acceptsBoundary() public;
+```
+
+### test_effectiveTwapWindow_fallsBackToDefault
+
+
+```solidity
+function test_effectiveTwapWindow_fallsBackToDefault() public view;
+```
+
+### test_emergencyUnwindMinimum_derivedFromTwapNotSlot0
+
+
+```solidity
+function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public;
+```
+
+### test_setTwapWindow_emitsEvent
+
+
+```solidity
+function test_setTwapWindow_emitsEvent() public;
+```
+
 ## Events
 ### EmergencyUnwindOverrideUsed
 
@@ -166,5 +229,11 @@ event EmergencyUnwindOverrideUsed(
     uint256 appliedFloor,
     address indexed caller
 );
+```
+
+### TwapWindowUpdated
+
+```solidity
+event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 ```
 

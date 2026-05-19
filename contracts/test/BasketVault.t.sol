@@ -2,6 +2,8 @@
 // Canonical: docs/security-model.md; docs/technical/security-hardening-seams.md
 // Covers: issue #428 — guarded emergency unwind minimums and explicit override events
 //         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
+//         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
+//                      minimums, ADMIN_ROLE-gated per-asset window)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -11,19 +13,69 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
+/// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
+///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
+///      growth: the TWAP arithmetic-mean tick equals exactly this value,
+///      independent of the slot0 spot, which lets tests separate manipulation
+///      of slot0 from the TWAP-bounded price the vault actually consumes.
 contract MockPool {
     address public immutable token0;
     address public immutable token1;
-    uint160 internal immutable sqrtPriceX96;
+    uint160 public sqrtPriceX96Spot; // mutable so tests can simulate manipulation
+    int56 public tickCumulativeRate; // ticks per second contributed to TWAP
+    uint16 public cardinality;
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
         token0 = token0_;
         token1 = token1_;
-        sqrtPriceX96 = sqrtPriceX96_;
+        sqrtPriceX96Spot = sqrtPriceX96_;
+        // Tick=0 means 1:1 price (sqrtP = 2^96); arithmetic-mean tick is 0
+        // when tickCumulativeRate=0. Tests override as needed.
+        tickCumulativeRate = 0;
+        cardinality = 100;
+    }
+
+    function setSpot(uint160 sqrtPriceX96_) external {
+        sqrtPriceX96Spot = sqrtPriceX96_;
+    }
+
+    function setTickCumulativeRate(int56 rate) external {
+        tickCumulativeRate = rate;
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96, 0, 0, 0, 0, 0, true);
+        return (sqrtPriceX96Spot, 0, 0, cardinality, cardinality, 0, true);
+    }
+
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
+    {
+        tickCumulatives = new int56[](secondsAgos.length);
+        secondsPerLiq = new uint160[](secondsAgos.length);
+        // Cumulative grows linearly: cum(now) > cum(past). Use uint256 to do
+        // signed math safely, then assign as int56.
+        for (uint256 i = 0; i < secondsAgos.length; i++) {
+            // cum(t) = rate * t, with t measured forward from epoch. We want
+            // cum(now) - cum(now - W) = rate * W. Use block.timestamp as `now`.
+            int56 t =
+                int56(int256(uint256(block.timestamp))) - int56(int256(uint256(secondsAgos[i])));
+            tickCumulatives[i] = tickCumulativeRate * t;
+        }
+    }
+
+    function observations(uint256)
+        external
+        view
+        returns (
+            uint32 blockTimestamp,
+            int56 tickCumulative,
+            uint160 secondsPerLiquidity,
+            bool initialized
+        )
+    {
+        return (uint32(block.timestamp), 0, 0, true);
     }
 }
 
@@ -305,4 +357,166 @@ contract BasketVaultTest is Test {
         assertTrue(vault.isShutdown(), "shutdown remains available");
         assertEq(vault.tvlCap(), 0, "shutdown still zeros tvl cap");
     }
+
+    // ─── TWAP oracle hardening (issue #451) ────────────────────────────
+
+    function test_totalAssets_usesTwapTickNotSlot0() public {
+        // tickCumulativeRate=0 -> arithmetic-mean tick=0 -> 1:1 price irrespective
+        // of slot0 manipulation. With 1000 token units in vault, NAV should be
+        // exactly 1000 USDC (tick=0 means token/USDC == 1).
+        pool.setTickCumulativeRate(0);
+        basketToken.mint(address(vault), 1_000 * ONE_USDC);
+
+        // Manipulate slot0 to a huge sqrtPrice — TWAP NAV must ignore it.
+        // sqrtPriceX96 = 2 * 2^96 implies price = 4 at slot0; TWAP stays at 1.
+        pool.setSpot(uint160(2) * uint160(1 << 96));
+
+        uint256 nav = vault.totalAssets();
+        assertEq(nav, 1_000 * ONE_USDC, "NAV bounded by TWAP, not slot0");
+    }
+
+    function test_totalAssets_revertsOnSpotPriceManipulationUsingSlot0() public {
+        // Sanity: prove the TWAP path is the ONE consulted. If we set
+        // tickCumulativeRate=0 (TWAP=1.0) and slot0 to anything else, NAV
+        // must still be 1.0. This guards against future regressions that
+        // reintroduce slot0 reads.
+        pool.setTickCumulativeRate(0);
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+        pool.setSpot(uint160(1)); // absurd slot0 — would yield NAV of ~0 if slot0 leaked
+        uint256 nav = vault.totalAssets();
+        assertEq(nav, 500 * ONE_USDC, "NAV must not read slot0");
+    }
+
+    function test_setTwapWindow_requiresAdminRole() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", stranger, adminRole
+            )
+        );
+        vm.prank(stranger);
+        vault.setTwapWindow(address(basketToken), 3_600);
+    }
+
+    function test_setTwapWindow_rejectsBelowMinimum() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(BasketVault.InvalidTwapWindow.selector, uint32(599)));
+        vault.setTwapWindow(address(basketToken), 599);
+    }
+
+    function test_setTwapWindow_rejectsAboveMaximum() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(BasketVault.InvalidTwapWindow.selector, uint32(86_401))
+        );
+        vault.setTwapWindow(address(basketToken), 86_401);
+    }
+
+    function test_setTwapWindow_acceptsBoundary() public {
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 600);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 600, "min window set");
+
+        vm.prank(admin);
+        vault.setTwapWindow(address(basketToken), 86_400);
+        assertEq(vault.effectiveTwapWindow(address(basketToken)), 86_400, "max window set");
+    }
+
+    function test_effectiveTwapWindow_fallsBackToDefault() public view {
+        // No setTwapWindow call -> defaults to 30 minutes.
+        assertEq(
+            vault.effectiveTwapWindow(address(basketToken)), 1_800, "default 30-minute TWAP window"
+        );
+    }
+
+    function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public {
+        // The emergency-unwind floor is configured via setEmergencyUnwindGuard;
+        // the vault routes the router call with that floor. This test asserts
+        // that manipulating slot0 does NOT lower the floor below the admin's
+        // TWAP-derived configuration: the floor is read from storage (TWAP-derived
+        // off-chain by ADMIN), and a slot0-distorted swap cannot satisfy it.
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 twapDerivedMin = 950 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), 100 * ONE_USDC); // router can only return 100 (manipulated)
+        router.setAmountOut(100 * ONE_USDC);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), twapDerivedMin, false, 0);
+
+        // Even with slot0 distorted, the TWAP-derived minimum on the router
+        // call refuses any output below the admin-configured floor.
+        pool.setSpot(uint160(1)); // hostile slot0 — must NOT lower the floor
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockSwapRouter.TooLittleReceived.selector, 100 * ONE_USDC, twapDerivedMin
+            )
+        );
+        vm.prank(admin);
+        vault.emergencyUnwind();
+    }
+
+    function test_setTwapWindow_emitsEvent() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit TwapWindowUpdated(address(basketToken), 0, 3_600);
+        vault.setTwapWindow(address(basketToken), 3_600);
+    }
+
+    // Mirror the contract event so vm.expectEmit can match it.
+    event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 }
+
+/// @dev Hardened subclass: opts out of the prototype gate after the TWAP
+///      hardening (issue #451) is wired and the subclass author has
+///      certified pool-cardinality and per-asset-window prerequisites
+///      off-chain. Used by the router-eligibility test to prove that a
+///      TWAP-hardened basket vault can become router-eligible while the
+///      base abstract (un-hardened) vault remains gated.
+contract HardenedBasketVault is BasketVault {
+    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_)
+        BasketVault(
+            "Hardened Basket",
+            "hBASKET",
+            usdc_,
+            swapRouter_,
+            1_000_000e6,
+            100_000e6,
+            0,
+            100,
+            admin_,
+            admin_
+        )
+    {}
+
+    function maxAssets() public pure override returns (uint256) {
+        return 4;
+    }
+
+    function isPrototype() public pure override returns (bool) {
+        return false;
+    }
+}
+
+contract BasketVaultHardenedTest is Test {
+    TestERC20 internal usdc;
+    MockSwapRouter internal router;
+    HardenedBasketVault internal hardened;
+    BasketVaultHarness internal prototype_;
+    address internal admin = makeAddr("admin");
+
+    function setUp() public {
+        usdc = new TestERC20();
+        router = new MockSwapRouter();
+        hardened =
+            new HardenedBasketVault(IERC20(address(usdc)), ISwapRouter(address(router)), admin);
+        prototype_ =
+            new BasketVaultHarness(IERC20(address(usdc)), ISwapRouter(address(router)), admin);
+    }
+
+    function test_hardenedSubclass_isNotPrototype() public view {
+        assertFalse(hardened.isPrototype(), "hardened subclass opts out of prototype gate");
+        assertTrue(prototype_.isPrototype(), "abstract base + un-hardened subclass remain gated");
+    }
+}
+

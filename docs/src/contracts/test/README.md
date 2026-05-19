@@ -11,6 +11,8 @@
 - [MockSwapRouter](BasketVault.t.sol/contract.MockSwapRouter.md)
 - [BasketVaultHarness](BasketVault.t.sol/contract.BasketVaultHarness.md)
 - [BasketVaultTest](BasketVault.t.sol/contract.BasketVaultTest.md)
+- [HardenedBasketVault](BasketVault.t.sol/contract.HardenedBasketVault.md)
+- [BasketVaultHardenedTest](BasketVault.t.sol/contract.BasketVaultHardenedTest.md)
 - [DeployTest](Deploy.t.sol/contract.DeployTest.md)
 - [MockVaultForRouter](DeployPortfolioRouter.t.sol/contract.MockVaultForRouter.md)
 - [DeployPortfolioRouterTest](DeployPortfolioRouter.t.sol/contract.DeployPortfolioRouterTest.md)

@@ -111,6 +111,45 @@ go through explicit approval.
 | Dead-market pricing without circuit breaker (YieldBlox-class) | Accepted as an upstream venue risk for Compound v3 and Aave v3. A monitoring alert must exist for each venue going offline. |
 | Cross-chain oracle desync | Not applicable while the product is deployed on a single chain. Must be re-evaluated before any multi-chain expansion. |
 
+### 5.1 BasketVault TWAP configuration (issue #451)
+
+`BasketVault` is the first contract in the codebase to consume a DEX price
+source. The manipulation-resistance posture is:
+
+- **Price source.** Uniswap V3 `IUniswapV3Pool.observe()` returning the
+  cumulative tick over the configured per-asset window. The arithmetic-mean
+  tick is converted to `sqrtPriceX96` via the minimal `TickMath` port in
+  `contracts/lib/TickMath.sol` and then to a USDC quote using the existing
+  ratio math. `slot0()` is never read on hot paths.
+- **Minimum window.** `MIN_TWAP_WINDOW = 600 s` (10 minutes). Floors any
+  ADMIN_ROLE write so a single setter call cannot collapse the oracle to
+  near-spot pricing.
+- **Maximum window.** `MAX_TWAP_WINDOW = 86_400 s` (24 h). Caps observation
+  buffer pressure and keeps NAV responsive on slow-moving assets.
+- **Default window.** `DEFAULT_TWAP_WINDOW = 1_800 s` (30 minutes) applied
+  on first read for any asset whose `twapWindow` has not been set.
+- **Cardinality requirement.** ADMIN_ROLE must verify off-chain that the
+  pool's observation cardinality covers the configured window across
+  expected block intervals (call
+  `pool.increaseObservationCardinalityNext(...)` if not). Insufficient
+  cardinality causes the pool's `observe()` to revert (`"OLD"`), which
+  fails NAV and emergency-unwind reads closed — preferred to silently
+  reading a manipulable short window.
+- **Circuit breaker.** `pause()` (EMERGENCY_ROLE) suspends deposits and
+  withdrawals; `shutdownVault()` zeroes the TVL cap. Both remain available
+  if a TWAP-derived NAV starts looking anomalous.
+- **Single-source disclosure.** BasketVault currently relies on a single
+  Uniswap V3 pool per asset. The TWAP window is the documented
+  manipulation-resistance control; production deployments that require a
+  second source must wrap the vault behind an adapter that cross-checks
+  the TWAP against an independent oracle (Chainlink, etc.) before
+  overriding `isPrototype()`.
+- **Production gate.** `BasketVault.isPrototype()` still defaults to
+  `true`. The `PortfolioRouter` prototype gate (#427) remains the canonical
+  block on router eligibility for un-hardened subclasses. A subclass may
+  override `isPrototype()` to `false` only after asserting the above
+  prerequisites for every active asset.
+
 ---
 
 ## 6. Smart contract — cross-chain & bridges

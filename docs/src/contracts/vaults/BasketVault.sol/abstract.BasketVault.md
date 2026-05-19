@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9261c12d1be5f94820a0955546db76c69aef496d/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e7a2933e057a3f91470ea3808b683595abe0b3d0/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -10,7 +10,8 @@ BasketVault
 Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 Deposits are split equally across active basket assets via Uniswap V3
 single-hop swaps. Withdrawals swap each asset back to USDC proportionally.
-NAV is denominated in USDC using Uniswap V3 slot0 spot price.
+NAV is denominated in USDC using a Uniswap V3 TWAP (time-weighted
+arithmetic-mean tick) over a per-asset, admin-configurable window.
 Subclasses set the vault name/symbol, max basket size, and default slippage.
 
 
@@ -47,6 +48,37 @@ uint256 public constant MAX_SLIPPAGE_BPS = 500
 
 ```solidity
 uint256 public constant MAX_BPS = 10_000
+```
+
+
+### MIN_TWAP_WINDOW
+Minimum permitted TWAP window in seconds. Floors the admin's
+configuration so a single ADMIN_ROLE write cannot collapse the
+oracle to near-spot pricing.
+
+
+```solidity
+uint32 public constant MIN_TWAP_WINDOW = 600
+```
+
+
+### MAX_TWAP_WINDOW
+Maximum permitted TWAP window. Caps observation buffer pressure
+and keeps NAV responsive on slow-moving assets.
+
+
+```solidity
+uint32 public constant MAX_TWAP_WINDOW = 86_400
+```
+
+
+### DEFAULT_TWAP_WINDOW
+Default TWAP window applied when an asset is added before
+ADMIN_ROLE has set an explicit per-asset window.
+
+
+```solidity
+uint32 public constant DEFAULT_TWAP_WINDOW = 1_800
 ```
 
 
@@ -121,6 +153,18 @@ mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard
 ```
 
 
+### twapWindow
+Per-asset TWAP window in seconds. `0` falls back to
+`DEFAULT_TWAP_WINDOW` so newly registered assets are
+immediately manipulation-resistant; ADMIN_ROLE may raise the
+window per asset within `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
+
+
+```solidity
+mapping(address => uint32) public twapWindow
+```
+
+
 ## Functions
 ### constructor
 
@@ -152,14 +196,16 @@ function maxAssets() public view virtual returns (uint256);
 ### isPrototype
 
 True iff this contract is a prototype that has not completed
-oracle / production-readiness hardening. Always `true` for
-every concrete `BasketVault` subclass until slot0 pricing is
-replaced by a TWAP. Read by `PortfolioRouter` to refuse
-production router eligibility absent an explicit override.
+oracle / production-readiness hardening. Defaults to `true`
+at the abstract base; a TWAP-configured, audited subclass may
+override and return `false`. Read by `PortfolioRouter` to
+refuse production router eligibility absent an explicit
+override.
 
-Marked `virtual` so a post-hardening subclass can override and
-return `false` after audit + TWAP migration, but this base
-contract intentionally keeps the gate closed by default.
+Marked `virtual` so a hardened subclass may opt into production
+router weight after asserting pool-cardinality and per-asset
+TWAP-window prerequisites are satisfied off-chain. The base
+contract intentionally keeps the gate closed.
 
 
 ```solidity
@@ -182,7 +228,7 @@ function _decimalsOffset() internal pure override returns (uint8);
 
 ### totalAssets
 
-USDC value of all held assets (idle USDC + spot-priced basket assets).
+USDC value of all held assets (idle USDC + TWAP-priced basket assets).
 
 
 ```solidity
@@ -261,39 +307,57 @@ function _sellProportional(uint256 shares, uint256 supplyBefore)
     returns (uint256 usdcOut);
 ```
 
-### _spotUsdcValue
+### _twapUsdcValue
 
-Returns the USDC value of `tokenAmount` tokens, priced via Uniswap V3 slot0.
-PROTOTYPE: slot0 is manipulable. Replace with a TWAP via observe() before production.
+Returns the USDC value of `tokenAmount` tokens, priced via the
+Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
 
 
 ```solidity
-function _spotUsdcValue(address pool, address token, uint256 tokenAmount)
+function _twapUsdcValue(address pool, address token, uint256 tokenAmount)
     internal
     view
     returns (uint256);
 ```
 
-### _spotTokenValue
+### _twapTokenValue
 
-Returns the estimated token amount for `usdcAmount` USDC, priced via slot0.
+Returns the estimated token amount for `usdcAmount` USDC, priced
+via the Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
 
 
 ```solidity
-function _spotTokenValue(address pool, address token, uint256 usdcAmount)
+function _twapTokenValue(address pool, address token, uint256 usdcAmount)
     internal
     view
     returns (uint256);
 ```
 
-### _quote
+### effectiveTwapWindow
 
-Overflow-safe spot quote using Uniswap V3 pool slot0 sqrtPriceX96.
-Mirrors the OracleLibrary getQuoteAtTick ratio math without TickMath dependency.
+TWAP-derived window for `token`. Returns the configured
+per-asset window or `DEFAULT_TWAP_WINDOW` when unset.
+
+Exposed as a view so off-chain monitors and tests can sanity-check
+the effective window without reading the raw mapping fallback.
 
 
 ```solidity
-function _quote(address pool, address tokenIn, address tokenOut, uint256 amountIn)
+function effectiveTwapWindow(address token) public view returns (uint32);
+```
+
+### _twapQuote
+
+Compute the time-weighted-average sqrtPriceX96 for `pool` over the
+per-asset window and forward to the shared sqrtPriceX96 ratio math.
+The non-USDC asset's window governs the read: when quoting
+USDC->token (deposit minimums), the token's window is consulted;
+when quoting token->USDC (NAV, withdrawal minimums) the same
+window applies.
+
+
+```solidity
+function _twapQuote(address pool, address tokenIn, address tokenOut, uint256 amountIn)
     internal
     view
     returns (uint256 amountOut);
@@ -445,6 +509,28 @@ function setEmergencyUnwindGuard(
 |`minUsdcOut`|`uint256`|      Admin-set reference floor used as the upper-loss reference on the override path and as the hard minimum on the non-override path.|
 |`overrideAllowed`|`bool`| Whether the override path may be invoked at all.|
 |`maxLossBps`|`uint256`|      Maximum acceptable loss in basis points versus `minUsdcOut` when the override path executes a swap. Must be <= MAX_BPS. A value of `MAX_BPS` (10_000) reproduces the legacy zero-floor behaviour. ADMIN_ROLE is timelock-gated via the existing ADMIN_ROLE pattern (see `docs/security-model.md`).|
+
+
+### setTwapWindow
+
+Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
+
+The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
+ADMIN_ROLE is expected to verify off-chain that the pool's
+observation cardinality is large enough to satisfy the requested
+window; otherwise NAV / unwind reads will revert with the pool's
+`"OLD"` error.
+
+
+```solidity
+function setTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|  Active basket asset to configure.|
+|`window`|`uint32`| TWAP window in seconds (10 min ≤ window ≤ 24 h).|
 
 
 ### assetCount
@@ -603,6 +689,16 @@ event EmergencyUnwindOverrideUsed(
 );
 ```
 
+### TwapWindowUpdated
+Emitted when ADMIN_ROLE updates the TWAP window for an asset.
+Off-chain monitors can use the delta between `oldWindow` and
+`newWindow` to detect governance shortening the oracle window.
+
+
+```solidity
+event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
+```
+
 ## Errors
 ### TVLCapExceeded
 
@@ -697,6 +793,17 @@ admin-set reference floor `minUsdcOut`.
 
 ```solidity
 error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+```
+
+### InvalidTwapWindow
+Raised when ADMIN_ROLE attempts to set a TWAP window outside the
+`[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]` range. Surfaces a typed error
+rather than a generic `InvalidParam` so off-chain governance
+tooling can pin-point the failure mode.
+
+
+```solidity
+error InvalidTwapWindow(uint32 window);
 ```
 
 ## Structs

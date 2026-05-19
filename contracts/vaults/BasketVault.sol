@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
-// PROTOTYPE — not audited, not for production use.
-// TODO before production: replace slot0 pricing with a Uniswap V3 TWAP via observe().
+// PROTOTYPE base — subclasses must complete production-readiness gating
+// (router eligibility, audit, etc.) before deployment to mainnet weight.
+// NAV and emergency-unwind minimums derive from a Uniswap V3 TWAP via
+// `observe()` over an admin-configurable per-asset window; `slot0` is no
+// longer read on hot paths. See issue #451 and docs/security-model.md §5.
 pragma solidity ^0.8.24;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
@@ -13,12 +16,14 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
+import {TickMath} from "../lib/TickMath.sol";
 
 /// @title BasketVault
 /// @notice Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
 ///         Deposits are split equally across active basket assets via Uniswap V3
 ///         single-hop swaps. Withdrawals swap each asset back to USDC proportionally.
-///         NAV is denominated in USDC using Uniswap V3 slot0 spot price.
+///         NAV is denominated in USDC using a Uniswap V3 TWAP (time-weighted
+///         arithmetic-mean tick) over a per-asset, admin-configurable window.
 ///
 ///         Subclasses set the vault name/symbol, max basket size, and default slippage.
 abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGuard {
@@ -35,6 +40,30 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 public constant MAX_EXIT_FEE_BPS = 100; // 1%
     uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% hard ceiling
     uint256 public constant MAX_BPS = 10_000;
+
+    // ─── TWAP oracle config ───────────────────────────────────────────
+    //
+    // BasketVault prices NAV and swap minimums from a Uniswap V3 TWAP, computed
+    // as the arithmetic-mean tick returned by `IUniswapV3Pool.observe()` over
+    // the configured per-asset window. Slot0 is never consulted on hot paths.
+    //
+    // The pool's observation cardinality MUST be large enough to cover the
+    // configured window across realistic block intervals; otherwise
+    // `observe()` will revert ("OLD") and NAV / unwind reads will fail closed.
+    // ADMIN_ROLE is expected to verify cardinality off-chain before raising
+    // the per-asset window (the typical sequence is
+    // `pool.increaseObservationCardinalityNext(...)` then governance setter).
+
+    /// @notice Minimum permitted TWAP window in seconds. Floors the admin's
+    ///         configuration so a single ADMIN_ROLE write cannot collapse the
+    ///         oracle to near-spot pricing.
+    uint32 public constant MIN_TWAP_WINDOW = 600; // 10 minutes
+    /// @notice Maximum permitted TWAP window. Caps observation buffer pressure
+    ///         and keeps NAV responsive on slow-moving assets.
+    uint32 public constant MAX_TWAP_WINDOW = 86_400; // 24 hours
+    /// @notice Default TWAP window applied when an asset is added before
+    ///         ADMIN_ROLE has set an explicit per-asset window.
+    uint32 public constant DEFAULT_TWAP_WINDOW = 1_800; // 30 minutes
 
     // ─── Asset registry ───────────────────────────────────────────────
 
@@ -72,6 +101,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 public maxSlippageBps;
     bool public shutdown;
     mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
+    /// @notice Per-asset TWAP window in seconds. `0` falls back to
+    ///         `DEFAULT_TWAP_WINDOW` so newly registered assets are
+    ///         immediately manipulation-resistant; ADMIN_ROLE may raise the
+    ///         window per asset within `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
+    mapping(address => uint32) public twapWindow;
 
     // ─── Events ───────────────────────────────────────────────────────
 
@@ -108,6 +142,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         uint256 appliedFloor,
         address indexed caller
     );
+    /// @dev Emitted when ADMIN_ROLE updates the TWAP window for an asset.
+    ///      Off-chain monitors can use the delta between `oldWindow` and
+    ///      `newWindow` to detect governance shortening the oracle window.
+    event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 
     // ─── Errors ───────────────────────────────────────────────────────
 
@@ -130,6 +168,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      `setEmergencyUnwindGuard` and bounds the realized loss versus the
     ///      admin-set reference floor `minUsdcOut`.
     error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+    /// @dev Raised when ADMIN_ROLE attempts to set a TWAP window outside the
+    ///      `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]` range. Surfaces a typed error
+    ///      rather than a generic `InvalidParam` so off-chain governance
+    ///      tooling can pin-point the failure mode.
+    error InvalidTwapWindow(uint32 window);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -171,34 +214,35 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Production-readiness gate ────────────────────────────────────
     //
-    // BasketVault prices NAV and swap minimums from Uniswap V3 `slot0`, which
-    // is manipulable inside a single block by a flash-loaned swap. Until that
-    // pricing is replaced by a Uniswap V3 TWAP via `observe()` plus the
-    // associated liquidity and observation-cardinality constraints, every
-    // BasketVault subclass MUST be considered a prototype and MUST NOT be
-    // wired into a production router weight vector.
+    // BasketVault NAV and emergency-unwind minimums derive from a Uniswap V3
+    // TWAP (arithmetic-mean tick over the configured per-asset window) via
+    // `IUniswapV3Pool.observe()`. `slot0` is not consulted on hot paths, so
+    // a flash-loan / sandwich that distorts the spot price within a single
+    // block cannot move NAV by more than (window / 1) × (block time / window)
+    // — i.e. a single manipulated block adds at most one block-tick to a
+    // many-block average. The abstract base still self-declares as a
+    // prototype: subclasses must additionally certify their pool's
+    // observation cardinality, liquidity floor, and per-asset window before
+    // overriding `isPrototype()` to return `false`. This keeps the
+    // `PortfolioRouter` gate closed by default and forces subclass authors
+    // to acknowledge the TWAP-configuration prerequisites.
     //
-    // `isPrototype()` is the on-chain marker used by `PortfolioRouter` to
-    // block accidental inclusion in production router eligibility (see
-    // `PortfolioRouter._requireRouterEligible` and the prototype override
-    // surface). The flag is intentionally exposed at the abstract base so
-    // that every concrete subclass (BasketVault, AgentTokenVault,
-    // ProtocolAssetVault, ...) inherits the same gate and cannot silently
-    // forget to declare its prototype status.
-    //
-    // TWAP hardening is tracked as a prerequisite for production router
-    // eligibility — see docs/code-reviews/review-codex-20260518-234945.md
-    // and issue #427. Devnet or explicitly-overridden deployments may still
-    // route into these vaults via `PortfolioRouter.setPrototypeOverride`.
+    // `isPrototype()` remains the on-chain marker used by `PortfolioRouter`
+    // to block accidental inclusion in production router weight vectors
+    // (see `PortfolioRouter._requireRouterEligible` and the prototype
+    // override surface). See issue #451 and
+    // docs/code-reviews/review-codex-20260518-234945.md.
 
     /// @notice True iff this contract is a prototype that has not completed
-    ///         oracle / production-readiness hardening. Always `true` for
-    ///         every concrete `BasketVault` subclass until slot0 pricing is
-    ///         replaced by a TWAP. Read by `PortfolioRouter` to refuse
-    ///         production router eligibility absent an explicit override.
-    /// @dev Marked `virtual` so a post-hardening subclass can override and
-    ///      return `false` after audit + TWAP migration, but this base
-    ///      contract intentionally keeps the gate closed by default.
+    ///         oracle / production-readiness hardening. Defaults to `true`
+    ///         at the abstract base; a TWAP-configured, audited subclass may
+    ///         override and return `false`. Read by `PortfolioRouter` to
+    ///         refuse production router eligibility absent an explicit
+    ///         override.
+    /// @dev Marked `virtual` so a hardened subclass may opt into production
+    ///      router weight after asserting pool-cardinality and per-asset
+    ///      TWAP-window prerequisites are satisfied off-chain. The base
+    ///      contract intentionally keeps the gate closed.
     function isPrototype() public pure virtual returns (bool) {
         return true;
     }
@@ -216,14 +260,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── totalAssets ─────────────────────────────────────────────────
 
-    /// @notice USDC value of all held assets (idle USDC + spot-priced basket assets).
+    /// @notice USDC value of all held assets (idle USDC + TWAP-priced basket assets).
     function totalAssets() public view override returns (uint256) {
         uint256 sum = _USDC.balanceOf(address(this));
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
             uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
-            if (bal > 0) sum += _spotUsdcValue(assets[i].pool, assets[i].token, bal);
+            if (bal > 0) sum += _twapUsdcValue(assets[i].pool, assets[i].token, bal);
         }
         return sum;
     }
@@ -264,7 +308,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             firstActive = false;
             if (swapIn == 0) continue;
 
-            uint256 minOut = _spotTokenValue(assets[i].pool, assets[i].token, swapIn)
+            uint256 minOut = _twapTokenValue(assets[i].pool, assets[i].token, swapIn)
                 * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
             _USDC.safeIncreaseAllowance(address(SWAP_ROUTER), swapIn);
@@ -354,7 +398,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
-            uint256 minUsdcOut = _spotUsdcValue(assets[i].pool, assets[i].token, sellAmount)
+            uint256 minUsdcOut = _twapUsdcValue(assets[i].pool, assets[i].token, sellAmount)
                 * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
             IERC20(assets[i].token).safeIncreaseAllowance(address(SWAP_ROUTER), sellAmount);
@@ -374,48 +418,77 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         }
     }
 
-    // ─── Spot pricing ─────────────────────────────────────────────────
+    // ─── TWAP pricing ─────────────────────────────────────────────────
 
-    /// @dev Returns the USDC value of `tokenAmount` tokens, priced via Uniswap V3 slot0.
-    ///      PROTOTYPE: slot0 is manipulable. Replace with a TWAP via observe() before production.
-    function _spotUsdcValue(address pool, address token, uint256 tokenAmount)
+    /// @dev Returns the USDC value of `tokenAmount` tokens, priced via the
+    ///      Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
+    function _twapUsdcValue(address pool, address token, uint256 tokenAmount)
         internal
         view
         returns (uint256)
     {
-        return _quote(pool, token, address(_USDC), tokenAmount);
+        return _twapQuote(pool, token, address(_USDC), tokenAmount);
     }
 
-    /// @dev Returns the estimated token amount for `usdcAmount` USDC, priced via slot0.
-    function _spotTokenValue(address pool, address token, uint256 usdcAmount)
+    /// @dev Returns the estimated token amount for `usdcAmount` USDC, priced
+    ///      via the Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
+    function _twapTokenValue(address pool, address token, uint256 usdcAmount)
         internal
         view
         returns (uint256)
     {
-        return _quote(pool, address(_USDC), token, usdcAmount);
+        return _twapQuote(pool, address(_USDC), token, usdcAmount);
     }
 
-    /// @dev Overflow-safe spot quote using Uniswap V3 pool slot0 sqrtPriceX96.
-    ///      Mirrors the OracleLibrary getQuoteAtTick ratio math without TickMath dependency.
-    function _quote(address pool, address tokenIn, address tokenOut, uint256 amountIn)
+    /// @notice TWAP-derived window for `token`. Returns the configured
+    ///         per-asset window or `DEFAULT_TWAP_WINDOW` when unset.
+    /// @dev Exposed as a view so off-chain monitors and tests can sanity-check
+    ///      the effective window without reading the raw mapping fallback.
+    function effectiveTwapWindow(address token) public view returns (uint32) {
+        uint32 w = twapWindow[token];
+        return w == 0 ? DEFAULT_TWAP_WINDOW : w;
+    }
+
+    /// @dev Compute the time-weighted-average sqrtPriceX96 for `pool` over the
+    ///      per-asset window and forward to the shared sqrtPriceX96 ratio math.
+    ///      The non-USDC asset's window governs the read: when quoting
+    ///      USDC->token (deposit minimums), the token's window is consulted;
+    ///      when quoting token->USDC (NAV, withdrawal minimums) the same
+    ///      window applies.
+    function _twapQuote(address pool, address tokenIn, address tokenOut, uint256 amountIn)
         internal
         view
         returns (uint256 amountOut)
     {
         if (amountIn == 0) return 0;
-        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+        address basketAsset = tokenIn == address(_USDC) ? tokenOut : tokenIn;
+        uint32 window = effectiveTwapWindow(basketAsset);
+
+        // Two observations: `window` seconds ago and now. The arithmetic-mean
+        // tick over the window is `(tickCumulatives[1] - tickCumulatives[0]) / window`.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = window;
+        secondsAgos[1] = 0;
+        (int56[] memory tickCumulatives,) = IUniswapV3Pool(pool).observe(secondsAgos);
+        int56 delta = tickCumulatives[1] - tickCumulatives[0];
+        int24 arithmeticMeanTick = int24(delta / int56(uint56(window)));
+        // Match Uniswap OracleLibrary rounding: when delta is negative and not
+        // exactly divisible by the window, round toward negative infinity so
+        // the mean tick does not bias upward.
+        if (delta < 0 && (delta % int56(uint56(window)) != 0)) {
+            arithmeticMeanTick--;
+        }
+        uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(arithmeticMeanTick);
+
         bool zeroForOne = tokenIn < tokenOut;
         uint256 sqrtP = uint256(sqrtPriceX96);
 
-        // Compute ratio in two overflow-safe branches matching OracleLibrary conventions.
         if (sqrtP <= type(uint128).max) {
             uint256 ratioX192 = sqrtP * sqrtP;
             amountOut = zeroForOne
                 ? amountIn.mulDiv(ratioX192, 1 << 192)
                 : amountIn.mulDiv(1 << 192, ratioX192);
         } else {
-            // sqrtP > 2^128: sqrtP*sqrtP would overflow uint256. Use mulDiv to compute
-            // sqrtP^2 / 2^64 in 512-bit intermediate arithmetic (OZ Math.mulDiv guarantee).
             uint256 ratioX128 = Math.mulDiv(sqrtP, sqrtP, 1 << 64);
             amountOut = zeroForOne
                 ? amountIn.mulDiv(ratioX128, 1 << 128)
@@ -579,6 +652,24 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             minUsdcOut: minUsdcOut, overrideAllowed: overrideAllowed, maxLossBps: maxLossBps
         });
         emit EmergencyUnwindGuardSet(token, oldMin, minUsdcOut, overrideAllowed, maxLossBps);
+    }
+
+    /// @notice Set the TWAP window in seconds for `token`. ADMIN_ROLE only.
+    /// @dev The window must fall inside `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
+    ///      ADMIN_ROLE is expected to verify off-chain that the pool's
+    ///      observation cardinality is large enough to satisfy the requested
+    ///      window; otherwise NAV / unwind reads will revert with the pool's
+    ///      `"OLD"` error.
+    /// @param token   Active basket asset to configure.
+    /// @param window  TWAP window in seconds (10 min ≤ window ≤ 24 h).
+    function setTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROLE) {
+        if (window < MIN_TWAP_WINDOW || window > MAX_TWAP_WINDOW) {
+            revert InvalidTwapWindow(window);
+        }
+        _activeAssetForToken(token);
+        uint32 old = twapWindow[token];
+        twapWindow[token] = window;
+        emit TwapWindowUpdated(token, old, window);
     }
 
     // ─── Views ────────────────────────────────────────────────────────

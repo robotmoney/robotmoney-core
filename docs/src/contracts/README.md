@@ -4,6 +4,7 @@
 - [adapters](/contracts/adapters)
 - [gateway](/contracts/gateway)
 - [interfaces](/contracts/interfaces)
+- [lib](/contracts/lib)
 - [script](/contracts/script)
 - [test](/contracts/test)
 - [vaults](/contracts/vaults)
