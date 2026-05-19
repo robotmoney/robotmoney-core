@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a5a47e547c37f81b19c12c190aa53e37abb6b688/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -223,6 +223,20 @@ function runInProcessWith(
 
 ```solidity
 function _readEnvParams() internal view returns (Params memory p);
+```
+
+### _approveAndRegisterAdapters
+
+
+```solidity
+function _approveAndRegisterAdapters(Deployed memory d) internal;
+```
+
+### _approveAdapter
+
+
+```solidity
+function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 ```
 
 ### _doDeploy

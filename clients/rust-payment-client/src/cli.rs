@@ -40,10 +40,10 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the deposit tx envelope. Default 350_000 — the
-        /// happy-path deposit is ~150k; the cushion covers cold-storage
-        /// vault writes on first interaction.
-        #[arg(long = "gas-limit", default_value_t = 350_000)]
+        /// Gas limit for the deposit tx envelope. Default 750_000 — the
+        /// vault path can perform cold ERC-4626, adapter allowlist, and
+        /// strategy-allocation writes on first interaction.
+        #[arg(long = "gas-limit", default_value_t = 750_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
         /// When set, this beats both the TOML `max_fee_per_gas_cap`

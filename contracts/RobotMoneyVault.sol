@@ -60,6 +60,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
     /// @notice Ordered registry of all strategy adapters (active and inactive).
     AdapterInfo[] public adapters;
+    /// @notice Exact adapter instances approved by vault governance to receive this vault's USDC.
+    mapping(address adapter => bool allowed) public adapterAllowed;
+    /// @notice Runtime bytecode hashes approved by vault governance for adapter onboarding.
+    mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed;
 
     // ─── Configurable params ──────────────────────────────────────────
 
@@ -100,6 +104,14 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @param adapter Address of the registered adapter contract.
     /// @param capBps  Maximum allocation cap in basis points.
     event AdapterAdded(uint256 indexed index, address indexed adapter, uint16 capBps);
+    /// @notice Emitted when governance approves or revokes an exact adapter instance.
+    /// @param adapter Adapter address whose eligibility changed.
+    /// @param allowed True when the adapter may be onboarded and receive allocations.
+    event AdapterAllowedSet(address indexed adapter, bool allowed);
+    /// @notice Emitted when governance approves or revokes an adapter runtime code hash.
+    /// @param codeHash Runtime bytecode hash whose eligibility changed.
+    /// @param allowed  True when adapters with this runtime bytecode may be onboarded.
+    event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
     /// @notice Emitted when an adapter is deactivated (normal removal).
     /// @param index   Registry index of the removed adapter.
     /// @param adapter Address of the deactivated adapter contract.
@@ -222,6 +234,26 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     error DepositsPaused();
     /// @notice Withdrawal attempted while withdrawals are paused.
     error WithdrawalsPaused();
+    /// @notice Adapter address has not been approved by vault governance.
+    /// @param adapter Adapter address that failed the address allowlist check.
+    error AdapterNotAllowed(address adapter);
+    /// @notice Adapter runtime bytecode hash has not been approved by vault governance.
+    /// @param adapter  Adapter address that failed the code-hash allowlist check.
+    /// @param codeHash Runtime bytecode hash observed on the adapter.
+    error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
+    /// @notice Adapter does not expose the expected `USDC()` or `VAULT()` compatibility views.
+    /// @param adapter Adapter address that could not be compatibility-checked.
+    error AdapterCompatibilityCheckFailed(address adapter);
+    /// @notice Adapter reports a USDC token that differs from this vault's ERC-4626 asset.
+    /// @param adapter  Adapter address that reported the wrong asset.
+    /// @param expected This vault's ERC-4626 asset.
+    /// @param actual   Asset reported by the adapter's `USDC()` view.
+    error AdapterAssetMismatch(address adapter, address expected, address actual);
+    /// @notice Adapter reports an owning vault other than this vault.
+    /// @param adapter  Adapter address that reported the wrong vault.
+    /// @param expected This vault address.
+    /// @param actual   Vault reported by the adapter's `VAULT()` view.
+    error AdapterVaultMismatch(address adapter, address expected, address actual);
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -380,6 +412,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     function _allocateTo(uint256 i, uint256 amount) internal {
+        _requireAdapterEligible(address(adapters[i].adapter));
         IERC20(asset()).safeTransfer(address(adapters[i].adapter), amount);
         adapters[i].adapter.deploy(amount);
         emit Allocated(i, address(adapters[i].adapter), amount);
@@ -495,10 +528,32 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (adapter_ == address(0)) revert ZeroAddress();
         if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
         if (_activeAdapterCount() >= MAX_ADAPTERS) revert MaxAdaptersReached();
+        _requireAdapterEligible(adapter_);
         adapters.push(
             AdapterInfo({adapter: IStrategyAdapter(adapter_), capBps: capBps_, active: true})
         );
         emit AdapterAdded(adapters.length - 1, adapter_, capBps_);
+    }
+
+    /// @notice Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
+    /// @param adapter_ Adapter address whose eligibility should change.
+    /// @param allowed_ True to allow onboarding/allocation, false to revoke future allocations.
+    function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE) {
+        if (adapter_ == address(0)) revert ZeroAddress();
+        adapterAllowed[adapter_] = allowed_;
+        emit AdapterAllowedSet(adapter_, allowed_);
+    }
+
+    /// @notice Approve or revoke an adapter runtime bytecode hash. Restricted to `ADMIN_ROLE`.
+    /// @param codeHash_ Runtime bytecode hash whose eligibility should change.
+    /// @param allowed_  True to allow onboarding/allocation, false to revoke future allocations.
+    function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (codeHash_ == bytes32(0)) revert InvalidParam();
+        adapterCodeHashAllowed[codeHash_] = allowed_;
+        emit AdapterCodeHashAllowedSet(codeHash_, allowed_);
     }
 
     /// @notice Deactivate an adapter. The adapter must hold zero assets. Restricted to `ADMIN_ROLE`.
@@ -764,6 +819,33 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (withdrawalsPaused != paused_) {
             withdrawalsPaused = paused_;
             emit WithdrawalsPausedChanged(paused_);
+        }
+    }
+
+    function _requireAdapterEligible(address adapter_) internal view {
+        if (!adapterAllowed[adapter_]) revert AdapterNotAllowed(adapter_);
+        bytes32 codeHash = adapter_.codehash;
+        if (!adapterCodeHashAllowed[codeHash]) {
+            revert AdapterCodeHashNotAllowed(adapter_, codeHash);
+        }
+        _requireAdapterCompatible(adapter_);
+    }
+
+    function _requireAdapterCompatible(address adapter_) internal view {
+        (bool usdcOk, bytes memory usdcData) =
+            adapter_.staticcall(abi.encodeWithSignature("USDC()"));
+        if (!usdcOk || usdcData.length != 32) revert AdapterCompatibilityCheckFailed(adapter_);
+        address reportedAsset = abi.decode(usdcData, (address));
+        if (reportedAsset != asset()) {
+            revert AdapterAssetMismatch(adapter_, asset(), reportedAsset);
+        }
+
+        (bool vaultOk, bytes memory vaultData) =
+            adapter_.staticcall(abi.encodeWithSignature("VAULT()"));
+        if (!vaultOk || vaultData.length != 32) revert AdapterCompatibilityCheckFailed(adapter_);
+        address reportedVault = abi.decode(vaultData, (address));
+        if (reportedVault != address(this)) {
+            revert AdapterVaultMismatch(adapter_, address(this), reportedVault);
         }
     }
 

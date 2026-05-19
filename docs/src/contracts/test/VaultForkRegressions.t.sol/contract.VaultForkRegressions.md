@@ -1,5 +1,5 @@
 # VaultForkRegressions
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/test/VaultForkRegressions.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a5a47e547c37f81b19c12c190aa53e37abb6b688/contracts/test/VaultForkRegressions.t.sol)
 
 **Inherits:**
 Test
@@ -190,6 +190,13 @@ Approves the vault from alice and attacker.
 
 ```solidity
 function _deployVaultWithAdapter(address adapter_) internal returns (RobotMoneyVault vault_);
+```
+
+### _allowAdapter
+
+
+```solidity
+function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal;
 ```
 
 ### _assertDonationAttackFails

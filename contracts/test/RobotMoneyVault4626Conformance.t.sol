@@ -39,6 +39,8 @@ contract RobotMoneyVault4626Conformance is ERC4626Test {
         );
 
         PassthroughAdapter adapter = new PassthroughAdapter(address(underlying), address(vault));
+        vault.setAdapterAllowed(address(adapter), true);
+        vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vault.addAdapter(address(adapter), 10000); // 100% cap
 
         _underlying_ = address(underlying);

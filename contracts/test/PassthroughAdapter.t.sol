@@ -48,6 +48,10 @@ contract PassthroughAdapterTest is Test {
         // Deploy adapter and wire into vault
         adapter = new PassthroughAdapter(address(usdc), address(vault));
         vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), true);
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
+        vm.prank(admin);
         vault.addAdapter(address(adapter), 10_000); // 100% cap
 
         // Fund user

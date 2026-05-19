@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a5a47e547c37f81b19c12c190aa53e37abb6b688/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -100,6 +100,24 @@ Ordered registry of all strategy adapters (active and inactive).
 
 ```solidity
 AdapterInfo[] public adapters
+```
+
+
+### adapterAllowed
+Exact adapter instances approved by vault governance to receive this vault's USDC.
+
+
+```solidity
+mapping(address adapter => bool allowed) public adapterAllowed
+```
+
+
+### adapterCodeHashAllowed
+Runtime bytecode hashes approved by vault governance for adapter onboarding.
+
+
+```solidity
+mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed
 ```
 
 
@@ -374,6 +392,40 @@ function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_RO
 |`capBps_`|`uint16`| Maximum allocation cap in basis points (1–10 000).|
 
 
+### setAdapterAllowed
+
+Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
+
+
+```solidity
+function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter_`|`address`|Adapter address whose eligibility should change.|
+|`allowed_`|`bool`|True to allow onboarding/allocation, false to revoke future allocations.|
+
+
+### setAdapterCodeHashAllowed
+
+Approve or revoke an adapter runtime bytecode hash. Restricted to `ADMIN_ROLE`.
+
+
+```solidity
+function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`codeHash_`|`bytes32`|Runtime bytecode hash whose eligibility should change.|
+|`allowed_`|`bool`| True to allow onboarding/allocation, false to revoke future allocations.|
+
+
 ### removeAdapter
 
 Deactivate an adapter. The adapter must hold zero assets. Restricted to `ADMIN_ROLE`.
@@ -636,6 +688,20 @@ Set `withdrawalsPaused` and emit an event if the state changes.
 function _setWithdrawalsPaused(bool paused_) internal;
 ```
 
+### _requireAdapterEligible
+
+
+```solidity
+function _requireAdapterEligible(address adapter_) internal view;
+```
+
+### _requireAdapterCompatible
+
+
+```solidity
+function _requireAdapterCompatible(address adapter_) internal view;
+```
+
 ### _targetBpsFor
 
 
@@ -788,6 +854,36 @@ event AdapterAdded(uint256 indexed index, address indexed adapter, uint16 capBps
 |`index`|`uint256`|  Registry index of the new adapter.|
 |`adapter`|`address`|Address of the registered adapter contract.|
 |`capBps`|`uint16`| Maximum allocation cap in basis points.|
+
+### AdapterAllowedSet
+Emitted when governance approves or revokes an exact adapter instance.
+
+
+```solidity
+event AdapterAllowedSet(address indexed adapter, bool allowed);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`|Adapter address whose eligibility changed.|
+|`allowed`|`bool`|True when the adapter may be onboarded and receive allocations.|
+
+### AdapterCodeHashAllowedSet
+Emitted when governance approves or revokes an adapter runtime code hash.
+
+
+```solidity
+event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`codeHash`|`bytes32`|Runtime bytecode hash whose eligibility changed.|
+|`allowed`|`bool`| True when adapters with this runtime bytecode may be onboarded.|
 
 ### AdapterRemoved
 Emitted when an adapter is deactivated (normal removal).
@@ -1209,6 +1305,81 @@ Withdrawal attempted while withdrawals are paused.
 ```solidity
 error WithdrawalsPaused();
 ```
+
+### AdapterNotAllowed
+Adapter address has not been approved by vault governance.
+
+
+```solidity
+error AdapterNotAllowed(address adapter);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`|Adapter address that failed the address allowlist check.|
+
+### AdapterCodeHashNotAllowed
+Adapter runtime bytecode hash has not been approved by vault governance.
+
+
+```solidity
+error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`| Adapter address that failed the code-hash allowlist check.|
+|`codeHash`|`bytes32`|Runtime bytecode hash observed on the adapter.|
+
+### AdapterCompatibilityCheckFailed
+Adapter does not expose the expected `USDC()` or `VAULT()` compatibility views.
+
+
+```solidity
+error AdapterCompatibilityCheckFailed(address adapter);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`|Adapter address that could not be compatibility-checked.|
+
+### AdapterAssetMismatch
+Adapter reports a USDC token that differs from this vault's ERC-4626 asset.
+
+
+```solidity
+error AdapterAssetMismatch(address adapter, address expected, address actual);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`| Adapter address that reported the wrong asset.|
+|`expected`|`address`|This vault's ERC-4626 asset.|
+|`actual`|`address`|  Asset reported by the adapter's `USDC()` view.|
+
+### AdapterVaultMismatch
+Adapter reports an owning vault other than this vault.
+
+
+```solidity
+error AdapterVaultMismatch(address adapter, address expected, address actual);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter`|`address`| Adapter address that reported the wrong vault.|
+|`expected`|`address`|This vault address.|
+|`actual`|`address`|  Vault reported by the adapter's `VAULT()` view.|
 
 ## Structs
 ### AdapterInfo

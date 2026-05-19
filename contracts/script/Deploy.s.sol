@@ -143,14 +143,7 @@ contract Deploy is Script {
         // runs the deploy script with the admin private key), so msg.sender on
         // the addAdapter calls is d.admin which holds ADMIN_ROLE.  No vm.prank
         // is required — and vm.prank is prohibited inside startBroadcast.
-        if (d.passthroughMode) {
-            // Passthrough mode: single adapter covers 100% of capacity.
-            d.vault.addAdapter(address(d.aaveAdapter), 10_000);
-        } else {
-            d.vault.addAdapter(address(d.aaveAdapter), 3_334);
-            d.vault.addAdapter(address(d.compoundAdapter), 3_333);
-            d.vault.addAdapter(address(d.morphoAdapter), 3_333);
-        }
+        _approveAndRegisterAdapters(d);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -165,13 +158,7 @@ contract Deploy is Script {
         // In-process (no broadcast): addAdapter requires ADMIN_ROLE which is
         // held by d.admin. Use vm.prank to call it as d.admin.
         vm.startPrank(d.admin);
-        if (d.passthroughMode) {
-            d.vault.addAdapter(address(d.aaveAdapter), 10_000);
-        } else {
-            d.vault.addAdapter(address(d.aaveAdapter), 3_334);
-            d.vault.addAdapter(address(d.compoundAdapter), 3_333);
-            d.vault.addAdapter(address(d.morphoAdapter), 3_333);
-        }
+        _approveAndRegisterAdapters(d);
         vm.stopPrank();
     }
 
@@ -207,13 +194,7 @@ contract Deploy is Script {
         // In-process (no broadcast): addAdapter requires ADMIN_ROLE which is
         // held by d.admin. Use vm.prank to call it as d.admin.
         vm.startPrank(d.admin);
-        if (d.passthroughMode) {
-            d.vault.addAdapter(address(d.aaveAdapter), 10_000);
-        } else {
-            d.vault.addAdapter(address(d.aaveAdapter), 3_334);
-            d.vault.addAdapter(address(d.compoundAdapter), 3_333);
-            d.vault.addAdapter(address(d.morphoAdapter), 3_333);
-        }
+        _approveAndRegisterAdapters(d);
         vm.stopPrank();
     }
 
@@ -249,6 +230,25 @@ contract Deploy is Script {
         p.maxWithdrawPerWindow =
             _envOrDefault("AGENT_MAX_WITHDRAW_PER_WINDOW", DEFAULT_MAX_WITHDRAW_PER_WINDOW);
         p.usdcAddress = vm.envAddress("USDC_ADDRESS");
+    }
+
+    function _approveAndRegisterAdapters(Deployed memory d) internal {
+        if (d.passthroughMode) {
+            _approveAdapter(d.vault, address(d.aaveAdapter));
+            d.vault.addAdapter(address(d.aaveAdapter), 10_000);
+        } else {
+            _approveAdapter(d.vault, address(d.aaveAdapter));
+            _approveAdapter(d.vault, address(d.compoundAdapter));
+            _approveAdapter(d.vault, address(d.morphoAdapter));
+            d.vault.addAdapter(address(d.aaveAdapter), 3_334);
+            d.vault.addAdapter(address(d.compoundAdapter), 3_333);
+            d.vault.addAdapter(address(d.morphoAdapter), 3_333);
+        }
+    }
+
+    function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal {
+        vault_.setAdapterAllowed(adapter_, true);
+        vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
     }
 
     function _doDeploy(Params memory p) internal returns (Deployed memory d) {

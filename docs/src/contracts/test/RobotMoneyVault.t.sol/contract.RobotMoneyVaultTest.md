@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a5a47e547c37f81b19c12c190aa53e37abb6b688/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -104,6 +104,76 @@ address internal attacker = makeAddr("attacker")
 
 ```solidity
 function setUp() public;
+```
+
+### _allowAdapter
+
+
+```solidity
+function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal;
+```
+
+### test_addAdapter_revertsWhenAdapterAddressNotAllowed
+
+
+```solidity
+function test_addAdapter_revertsWhenAdapterAddressNotAllowed() public;
+```
+
+### test_addAdapter_revertsWhenAdapterCodeHashNotAllowed
+
+
+```solidity
+function test_addAdapter_revertsWhenAdapterCodeHashNotAllowed() public;
+```
+
+### test_addAdapter_revertsWhenAdapterAssetMismatchesVault
+
+
+```solidity
+function test_addAdapter_revertsWhenAdapterAssetMismatchesVault() public;
+```
+
+### test_addAdapter_revertsWhenAdapterVaultMismatchesVault
+
+
+```solidity
+function test_addAdapter_revertsWhenAdapterVaultMismatchesVault() public;
+```
+
+### test_approvedProductionAndDevnetAdapterTypesCanBeAdded
+
+
+```solidity
+function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public;
+```
+
+### test_depositCannotAllocateToAdapterAfterApprovalRevoked
+
+
+```solidity
+function test_depositCannotAllocateToAdapterAfterApprovalRevoked() public;
+```
+
+### test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked
+
+
+```solidity
+function test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked() public;
+```
+
+### test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked
+
+
+```solidity
+function test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked() public;
+```
+
+### test_emergencyWithdrawStillWorksAfterApprovalRevoked
+
+
+```solidity
+function test_emergencyWithdrawStillWorksAfterApprovalRevoked() public;
 ```
 
 ### test_decimalsOffset_is18

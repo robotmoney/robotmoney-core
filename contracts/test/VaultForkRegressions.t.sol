@@ -127,6 +127,7 @@ contract VaultForkRegressions is Test {
             admin
         );
 
+        _allowAdapter(vault_, adapter_);
         vm.prank(admin);
         vault_.addAdapter(adapter_, 10_000); // 100% cap
 
@@ -134,6 +135,13 @@ contract VaultForkRegressions is Test {
         usdc.approve(address(vault_), type(uint256).max);
         vm.prank(attacker);
         usdc.approve(address(vault_), type(uint256).max);
+    }
+
+    function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal {
+        vm.prank(admin);
+        vault_.setAdapterAllowed(adapter_, true);
+        vm.prank(admin);
+        vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
     }
 
     // ─── Donation-attack helper ────────────────────────────────────────────────
@@ -199,14 +207,13 @@ contract VaultForkRegressions is Test {
     function test_fork_aave_donationAttack_victimSharesFair() public {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
-        AaveV3Adapter adapter = new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(0));
-        // Redeploy with the real vault address once we have it.
         RobotMoneyVault vault_ = new RobotMoneyVault(
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
 
+        _allowAdapter(vault_, address(aaveAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(aaveAdapter), 10_000);
 
@@ -233,6 +240,7 @@ contract VaultForkRegressions is Test {
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
 
+        _allowAdapter(vault_, address(morphoAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(morphoAdapter), 10_000);
 
@@ -260,6 +268,7 @@ contract VaultForkRegressions is Test {
         CompoundV3Adapter compoundAdapter =
             new CompoundV3Adapter(COMPOUND_COMET, BASE_USDC, address(vault_));
 
+        _allowAdapter(vault_, address(compoundAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(compoundAdapter), 10_000);
 
@@ -288,6 +297,7 @@ contract VaultForkRegressions is Test {
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
+        _allowAdapter(vault_, address(aaveAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(aaveAdapter), 10_000);
 
@@ -331,6 +341,7 @@ contract VaultForkRegressions is Test {
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(tightVault));
+        _allowAdapter(tightVault, address(aaveAdapter));
         vm.prank(admin);
         tightVault.addAdapter(address(aaveAdapter), 10_000);
 
@@ -373,6 +384,7 @@ contract VaultForkRegressions is Test {
         // 50% cap: half of any deposit will be unroutable on first call.
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
+        _allowAdapter(vault_, address(aaveAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(aaveAdapter), 5000); // 50%
 
@@ -422,6 +434,7 @@ contract VaultForkRegressions is Test {
             IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
+        _allowAdapter(vault_, address(morphoAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(morphoAdapter), 10_000);
 
@@ -474,6 +487,7 @@ contract VaultForkRegressions is Test {
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
+        _allowAdapter(vault_, address(aaveAdapter));
         vm.prank(admin);
         vault_.addAdapter(address(aaveAdapter), 10_000);
 

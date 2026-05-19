@@ -87,9 +87,19 @@ RobotMoneyVault
 | `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
 | `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
 | `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
+| `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved for onboarding and future allocation |
+| `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
 | `shutdown` | `false` | `shutdownVault` (EMERGENCY) | **Irreversible** — once true, `deposit` always reverts |
 | `maxRebalanceBpsPerCall` | 2500 (25%) | `setMaxRebalanceBpsPerCall` (ADMIN) | Throttle per `rebalance()` call |
 | `minRebalanceInterval` | 12 hours | `setMinRebalanceInterval` (ADMIN) | Minimum time between rebalances |
+
+Adapter onboarding is now a two-step Safe-governed process: governance first
+approves both the exact adapter address and its runtime `codehash`, then calls
+`addAdapter`. `addAdapter` also verifies the adapter reports this vault's USDC
+asset through `USDC()` and this vault address through `VAULT()`. Deposit,
+keeper rebalance, and admin rebalance allocation paths re-check eligibility
+before USDC leaves the vault; emergency withdrawal and force removal remain
+available for already-active adapters after approval is revoked.
 
 ### 3.5 Adapter routing — deposit
 
@@ -208,6 +218,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 |---|---|
 | Admin abuse | AccessControl with `ADMIN_ROLE` self-admined; production admin is a Safe multisig. `MAX_EXIT_FEE_BPS = 100` is an immutable ceiling — admin cannot set fees above 1% |
 | Emergency misuse | `EMERGENCY_ROLE` is separate from `ADMIN_ROLE` and initially held by the same Safe multisig (both granted in constructor). Both roles can be revoked |
+| Malicious adapter onboarding | `addAdapter` requires Safe-governed address approval, runtime `codehash` approval, and adapter `USDC()` / `VAULT()` compatibility checks. Allocation paths re-check the address allowlist before transferring USDC |
 | Adapter loss | `forceRemoveAdapter` accepts loss explicitly; `emergencyWithdraw` uses `try/catch` so a broken adapter doesn't block others |
 | Reentrancy | `nonReentrant` on `_deposit`, `_withdraw`, `rebalance`, `adminRebalance`, `emergencyWithdraw`, `emergencyWithdrawAdapter` |
 | Upgradeability | None — all four contracts are direct, non-proxy deployments. No upgrade path exists |

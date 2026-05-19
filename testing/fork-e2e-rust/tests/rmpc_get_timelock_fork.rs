@@ -70,8 +70,7 @@ fn workspace_root() -> PathBuf {
 fn rmpc_bin() -> &'static PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
     BIN.get_or_init(|| {
-        let manifest =
-            workspace_root().join("clients/rust-payment-client/Cargo.toml");
+        let manifest = workspace_root().join("clients/rust-payment-client/Cargo.toml");
         let status = Command::new(env!("CARGO"))
             .args([
                 "build",
@@ -118,8 +117,8 @@ fn timelock_initcode(min_delay: u64, proposer: Address, executor: Address) -> By
         .and_then(|v| v.as_str())
         .unwrap_or_else(|| panic!("TimelockController.json missing bytecode.object"));
     let hex = hex_with_prefix.trim_start_matches("0x");
-    let mut code =
-        hex::decode(hex).unwrap_or_else(|e| panic!("TimelockController bytecode not valid hex: {e}"));
+    let mut code = hex::decode(hex)
+        .unwrap_or_else(|e| panic!("TimelockController bytecode not valid hex: {e}"));
 
     // ABI-encode constructor args:
     //   (uint256 minDelay, address[] proposers, address[] executors, address admin)

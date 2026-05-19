@@ -9,6 +9,10 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
+import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
+import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
+import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
@@ -141,6 +145,10 @@ contract RobotMoneyVaultTest is Test {
         // Wire up a simple mock adapter.
         adapter = new MockAdapter(address(usdc), address(vault));
         vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), true);
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
+        vm.prank(admin);
         vault.addAdapter(address(adapter), 10_000); // 100% cap
 
         // Give participants USDC.
@@ -157,6 +165,179 @@ contract RobotMoneyVaultTest is Test {
         usdc.approve(address(vault), type(uint256).max);
         vm.prank(attacker);
         usdc.approve(address(adapter), type(uint256).max);
+    }
+
+    function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal {
+        vm.prank(admin);
+        vault_.setAdapterAllowed(adapter_, true);
+        vm.prank(admin);
+        vault_.setAdapterCodeHashAllowed(adapter_.codehash, true);
+    }
+
+    // ─── Adapter eligibility ─────────────────────────────────────────────────
+
+    function test_addAdapter_revertsWhenAdapterAddressNotAllowed() public {
+        MockAdapter unapproved = new MockAdapter(address(usdc), address(vault));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(unapproved))
+        );
+        vault.addAdapter(address(unapproved), 10_000);
+    }
+
+    function test_addAdapter_revertsWhenAdapterCodeHashNotAllowed() public {
+        PassthroughAdapter unapproved = new PassthroughAdapter(address(usdc), address(vault));
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(unapproved), true);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterCodeHashNotAllowed.selector,
+                address(unapproved),
+                address(unapproved).codehash
+            )
+        );
+        vault.addAdapter(address(unapproved), 10_000);
+    }
+
+    function test_addAdapter_revertsWhenAdapterAssetMismatchesVault() public {
+        TestUSDC wrongUsdc = new TestUSDC();
+        MockAdapter wrongAssetAdapter = new MockAdapter(address(wrongUsdc), address(vault));
+        _allowAdapter(vault, address(wrongAssetAdapter));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterAssetMismatch.selector,
+                address(wrongAssetAdapter),
+                address(usdc),
+                address(wrongUsdc)
+            )
+        );
+        vault.addAdapter(address(wrongAssetAdapter), 10_000);
+    }
+
+    function test_addAdapter_revertsWhenAdapterVaultMismatchesVault() public {
+        address wrongVault = makeAddr("wrongVault");
+        MockAdapter wrongVaultAdapter = new MockAdapter(address(usdc), wrongVault);
+        _allowAdapter(vault, address(wrongVaultAdapter));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.AdapterVaultMismatch.selector,
+                address(wrongVaultAdapter),
+                address(vault),
+                wrongVault
+            )
+        );
+        vault.addAdapter(address(wrongVaultAdapter), 10_000);
+    }
+
+    function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public {
+        VaultHarness typedVault = new VaultHarness(
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+        );
+        address pool = makeAddr("aavePool");
+        address aToken = makeAddr("aToken");
+        address comet = makeAddr("compoundComet");
+        address morphoVault = makeAddr("morphoVault");
+
+        AaveV3Adapter aave = new AaveV3Adapter(pool, address(usdc), aToken, address(typedVault));
+        CompoundV3Adapter compound =
+            new CompoundV3Adapter(comet, address(usdc), address(typedVault));
+        MorphoAdapter morpho = new MorphoAdapter(morphoVault, address(usdc), address(typedVault));
+        PassthroughAdapter passthrough = new PassthroughAdapter(address(usdc), address(typedVault));
+
+        _allowAdapter(typedVault, address(aave));
+        _allowAdapter(typedVault, address(compound));
+        _allowAdapter(typedVault, address(morpho));
+        _allowAdapter(typedVault, address(passthrough));
+
+        vm.startPrank(admin);
+        typedVault.addAdapter(address(aave), 2_500);
+        typedVault.addAdapter(address(compound), 2_500);
+        typedVault.addAdapter(address(morpho), 2_500);
+        typedVault.addAdapter(address(passthrough), 2_500);
+        vm.stopPrank();
+
+        assertEq(typedVault.adapterCount(), 4, "all approved adapter types should be added");
+        assertEq(typedVault.activeAdapterCount(), 4, "all approved adapter types should be active");
+    }
+
+    function test_depositCannotAllocateToAdapterAfterApprovalRevoked() public {
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+
+        uint256 beforeAdapter = usdc.balanceOf(address(adapter));
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(adapter))
+        );
+        vault.deposit(amount, alice);
+
+        assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
+        assertEq(usdc.balanceOf(address(vault)), 0, "deposit transfer must roll back");
+    }
+
+    function test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked() public {
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+        usdc.mint(address(vault), amount);
+
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+
+        uint256 beforeAdapter = usdc.balanceOf(address(adapter));
+        vm.warp(block.timestamp + vault.minRebalanceInterval());
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(adapter))
+        );
+        vault.rebalance();
+
+        assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
+    }
+
+    function test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked() public {
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+        usdc.mint(address(vault), amount);
+
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+
+        uint256[] memory targets = new uint256[](vault.adapterCount());
+        targets[0] = amount * 2;
+        uint256 beforeAdapter = usdc.balanceOf(address(adapter));
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(adapter))
+        );
+        vault.adminRebalance(targets);
+
+        assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
+    }
+
+    function test_emergencyWithdrawStillWorksAfterApprovalRevoked() public {
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+
+        vm.prank(admin);
+        vault.emergencyWithdrawAdapter(0);
+
+        assertEq(usdc.balanceOf(address(adapter)), 0, "adapter should be drained");
+        assertEq(usdc.balanceOf(address(vault)), amount, "vault should receive adapter USDC");
     }
 
     // ─── Decimals offset ────────────────────────────────────────────────────
@@ -433,6 +614,7 @@ contract RobotMoneyVaultTest is Test {
             admin
         );
         MockAdapter tightAdapter = new MockAdapter(address(usdc), address(tightVault));
+        _allowAdapter(tightVault, address(tightAdapter));
         vm.prank(admin);
         tightVault.addAdapter(address(tightAdapter), 10_000);
 
@@ -470,6 +652,7 @@ contract RobotMoneyVaultTest is Test {
             IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
         );
         MockAdapter capAdapter = new MockAdapter(address(usdc), address(capVault));
+        _allowAdapter(capVault, address(capAdapter));
         vm.prank(admin);
         capVault.addAdapter(address(capAdapter), 5000); // 50% cap
 
