@@ -85,11 +85,12 @@ def abi_to_ts(abi):
     """Render a JSON ABI array as a TypeScript as const literal."""
     return json.dumps(abi, indent=2)
 
-gateway_abi  = load_abi(f"{out_dir}/RobotMoneyGateway.sol/RobotMoneyGateway.json")
-erc20_abi    = load_abi(f"{out_dir}/TestERC20.sol/TestERC20.json")
-vault_abi    = load_abi(f"{out_dir}/MockVault.sol/MockVault.json")
-registry_abi = load_abi(f"{out_dir}/VaultRegistry.sol/VaultRegistry.json")
-router_abi   = load_abi(f"{out_dir}/PortfolioRouter.sol/PortfolioRouter.json")
+gateway_abi      = load_abi(f"{out_dir}/RobotMoneyGateway.sol/RobotMoneyGateway.json")
+erc20_abi        = load_abi(f"{out_dir}/TestERC20.sol/TestERC20.json")
+vault_abi        = load_abi(f"{out_dir}/MockVault.sol/MockVault.json")
+robot_vault_abi  = load_abi(f"{out_dir}/RobotMoneyVault.sol/RobotMoneyVault.json")
+registry_abi     = load_abi(f"{out_dir}/VaultRegistry.sol/VaultRegistry.json")
+router_abi       = load_abi(f"{out_dir}/PortfolioRouter.sol/PortfolioRouter.json")
 
 content = f"""\
 // THIS FILE IS AUTO-GENERATED — DO NOT EDIT BY HAND.
@@ -112,6 +113,16 @@ export const erc20AbiGenerated = {abi_to_ts(erc20_abi)} as const;
  * Full MockVault ABI — generated from Foundry artifact.
  */
 export const vaultAbiGenerated = {abi_to_ts(vault_abi)} as const;
+
+/**
+ * Full RobotMoneyVault ABI — generated from Foundry artifact.
+ *
+ * Includes the adapter allowlist governance surface (setAdapterAllowed,
+ * setAdapterCodeHashAllowed, AdapterAllowedSet, AdapterCodeHashAllowedSet).
+ * Dapp admin panels drive the on-chain guard through this typed binding.
+ * Canonical: docs/security-model.md, issue #444.
+ */
+export const robotMoneyVaultAbiGenerated = {abi_to_ts(robot_vault_abi)} as const;
 
 /**
  * Full VaultRegistry ABI — generated from Foundry artifact.
