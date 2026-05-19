@@ -76,6 +76,20 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         docs/code-reviews/review-codex-20260518-234945.md.
     mapping(address => bool) public prototypeOverride;
 
+    /// @notice Per-vault attestation that `vault` is intentionally
+    ///         non-prototype despite NOT implementing the
+    ///         `IPrototypeAware.isPrototype()` introspection view.
+    ///         Without this attestation, a vault that omits the interface
+    ///         would silently bypass the prototype gate because the
+    ///         `isPrototype()` call would revert and be treated as
+    ///         non-prototype. By requiring an explicit ADMIN_ROLE
+    ///         attestation, governance opts a legacy or third-party vault
+    ///         into router eligibility instead of relying on silent trust.
+    ///         False by default for every address. See issue #447 and
+    ///         the 2026-05-19 audit report (MEDIUM finding on silent
+    ///         IPrototypeAware fall-through).
+    mapping(address => bool) public nonPrototypeAttested;
+
     /// @notice Ordered list of vaults included in the weight vector.
     address[] private _weightVaultList;
 
@@ -123,6 +137,16 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param oldValue Previous override value.
     /// @param newValue New override value.
     event PrototypeOverrideSet(address indexed vault, bool oldValue, bool newValue);
+
+    /// @notice Emitted when the non-prototype attestation flag for `vault`
+    ///         is toggled. `attested = true` opts a vault that does not
+    ///         implement `IPrototypeAware.isPrototype()` into router
+    ///         eligibility; `false` (the default) blocks router inclusion
+    ///         until governance explicitly attests the vault as non-prototype.
+    /// @param vault    Vault address whose attestation flag changed.
+    /// @param oldValue Previous attestation value.
+    /// @param newValue New attestation value.
+    event NonPrototypeAttestedSet(address indexed vault, bool oldValue, bool newValue);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -183,6 +207,21 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         #427 and docs/code-reviews/review-codex-20260518-234945.md.
     /// @param vault The prototype vault address that was rejected.
     error VaultIsPrototype(address vault);
+
+    /// @notice A vault does not implement the `IPrototypeAware.isPrototype()`
+    ///         introspection view and has no explicit
+    ///         `nonPrototypeAttested[vault] = true` attestation. Without the
+    ///         interface, the prototype gate cannot self-verify the vault's
+    ///         pricing model; without the attestation, governance has not
+    ///         explicitly opted the vault into router eligibility. The
+    ///         router refuses to weight or deposit into such vaults so that
+    ///         omitting `IPrototypeAware` (intentionally or accidentally)
+    ///         cannot silently bypass the prototype gate. ADMIN_ROLE can
+    ///         attest the vault via `setNonPrototypeAttested(vault, true)`.
+    ///         See issue #447 and audit-report.md (2026-05-19, MEDIUM).
+    /// @param vault The vault address that lacks IPrototypeAware and
+    ///              attestation.
+    error VaultEligibilityNotAttested(address vault);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -270,6 +309,31 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         if (vault == address(0)) revert ZeroAddress();
         emit PrototypeOverrideSet(vault, prototypeOverride[vault], allowed);
         prototypeOverride[vault] = allowed;
+    }
+
+    /// @notice Attest (`attested = true`) or revoke (`attested = false`) the
+    ///         non-prototype eligibility of `vault`. Required for any vault
+    ///         that does NOT implement `IPrototypeAware.isPrototype()` —
+    ///         without this attestation the router refuses to weight or
+    ///         deposit into the vault, even though the (missing) interface
+    ///         call would have silently returned false. This closes the
+    ///         silent-trust fall-through reported as MEDIUM in the
+    ///         2026-05-19 audit (see issue #447). Vaults that DO implement
+    ///         `IPrototypeAware` do not need this attestation; their
+    ///         self-declaration via `isPrototype()` is sufficient (subject
+    ///         to the existing prototype-override gate). The default value
+    ///         is `false` for every address — a fresh production deployment
+    ///         cannot accidentally route USDC into a vault whose pricing
+    ///         model the router cannot introspect. Restricted to
+    ///         `ADMIN_ROLE`.
+    /// @param vault    Vault address to attest as non-prototype.
+    /// @param attested New attestation value. `true` opts the vault into
+    ///                 router eligibility; `false` revokes the attestation
+    ///                 and re-engages the gate.
+    function setNonPrototypeAttested(address vault, bool attested) external onlyRole(ADMIN_ROLE) {
+        if (vault == address(0)) revert ZeroAddress();
+        emit NonPrototypeAttestedSet(vault, nonPrototypeAttested[vault], attested);
+        nonPrototypeAttested[vault] = attested;
     }
 
     // ─── Preview ─────────────────────────────────────────────────────────────
@@ -468,13 +532,23 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         } catch {
             return false;
         }
-        // Prototype gate: a vault that self-declares `isPrototype() == true`
-        // is router-ineligible unless an explicit per-vault override is
-        // set. Vaults that do not implement `isPrototype()` are treated as
-        // non-prototype (the call reverts and we fall through). See issue
-        // #427.
-        if (_isPrototype(vault) && !prototypeOverride[vault]) {
-            return false;
+        // Prototype gate (issue #427): a vault that self-declares
+        // `isPrototype() == true` is router-ineligible unless an explicit
+        // per-vault override is set.
+        // Attestation gate (issue #447): a vault that does NOT implement
+        // `IPrototypeAware.isPrototype()` is router-ineligible unless
+        // governance has explicitly attested it as non-prototype via
+        // `nonPrototypeAttested[vault] = true`. This closes the silent
+        // fall-through where omitting the interface bypassed the gate.
+        (bool implementsInterface, bool prototypeFlag) = _probePrototype(vault);
+        if (implementsInterface) {
+            if (prototypeFlag && !prototypeOverride[vault]) {
+                return false;
+            }
+        } else {
+            if (!nonPrototypeAttested[vault]) {
+                return false;
+            }
         }
         return true;
     }
@@ -495,25 +569,46 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         } catch {
             revert VaultAssetUnreadable(vault);
         }
-        // Prototype gate: refuse vaults that self-declare prototype status
-        // unless governance has explicitly opted them in. This is the
-        // production-readiness gate for slot0-priced basket vaults — see
-        // issue #427 and docs/code-reviews/review-codex-20260518-234945.md.
-        if (_isPrototype(vault) && !prototypeOverride[vault]) {
-            revert VaultIsPrototype(vault);
+        // Prototype gate (issue #427): refuse vaults that self-declare
+        // prototype status unless governance has explicitly opted them in.
+        // Attestation gate (issue #447): a vault that does NOT implement
+        // `IPrototypeAware.isPrototype()` would silently fall through the
+        // gate because the call reverts and is treated as non-prototype.
+        // Require an explicit ADMIN_ROLE attestation to close the
+        // silent-trust gap reported as MEDIUM in the 2026-05-19 audit.
+        (bool implementsInterface, bool prototypeFlag) = _probePrototype(vault);
+        if (implementsInterface) {
+            if (prototypeFlag && !prototypeOverride[vault]) {
+                revert VaultIsPrototype(vault);
+            }
+        } else {
+            if (!nonPrototypeAttested[vault]) {
+                revert VaultEligibilityNotAttested(vault);
+            }
         }
     }
 
-    /// @dev Try the optional `isPrototype()` view. Returns `true` only when
-    ///      the vault explicitly self-declares as a prototype. Vaults that
-    ///      do not implement the view (the call reverts) are treated as
-    ///      non-prototype so that the eligibility gate is opt-in from the
-    ///      vault side — non-BasketVault ERC-4626 strategies are unaffected.
-    function _isPrototype(address vault) internal view returns (bool) {
+    /// @dev Probe the optional `IPrototypeAware.isPrototype()` view and
+    ///      report both whether the interface is implemented and (if so)
+    ///      the declared flag. Distinguishing "interface absent" from
+    ///      "interface present and returns false" is what closes the
+    ///      silent-trust fall-through from issue #447: callers can require
+    ///      an explicit attestation for the absent case instead of
+    ///      treating the revert as a non-prototype declaration.
+    /// @param vault Vault address to probe.
+    /// @return implementsInterface True iff `isPrototype()` returned a bool
+    ///         without reverting.
+    /// @return prototypeFlag       The returned bool (only meaningful when
+    ///         `implementsInterface` is true).
+    function _probePrototype(address vault)
+        internal
+        view
+        returns (bool implementsInterface, bool prototypeFlag)
+    {
         try IPrototypeAware(vault).isPrototype() returns (bool flag) {
-            return flag;
+            return (true, flag);
         } catch {
-            return false;
+            return (false, false);
         }
     }
 }

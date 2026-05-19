@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf6bd8ce521d7632792ea4ac955c7bf3ebf05be4/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/86758bec5fa35d059fcb1a3f4a708912cfd4039d/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -92,6 +92,26 @@ docs/code-reviews/review-codex-20260518-234945.md.
 
 ```solidity
 mapping(address => bool) public prototypeOverride
+```
+
+
+### nonPrototypeAttested
+Per-vault attestation that `vault` is intentionally
+non-prototype despite NOT implementing the
+`IPrototypeAware.isPrototype()` introspection view.
+Without this attestation, a vault that omits the interface
+would silently bypass the prototype gate because the
+`isPrototype()` call would revert and be treated as
+non-prototype. By requiring an explicit ADMIN_ROLE
+attestation, governance opts a legacy or third-party vault
+into router eligibility instead of relying on silent trust.
+False by default for every address. See issue #447 and
+the 2026-05-19 audit report (MEDIUM finding on silent
+IPrototypeAware fall-through).
+
+
+```solidity
+mapping(address => bool) public nonPrototypeAttested
 ```
 
 
@@ -192,6 +212,36 @@ function setPrototypeOverride(address vault, bool allowed) external onlyRole(ADM
 |----|----|-----------|
 |`vault`|`address`|  Vault address to mark as router-eligible despite prototype status.|
 |`allowed`|`bool`|New override value. `true` lifts the prototype gate for this single vault; `false` re-engages it.|
+
+
+### setNonPrototypeAttested
+
+Attest (`attested = true`) or revoke (`attested = false`) the
+non-prototype eligibility of `vault`. Required for any vault
+that does NOT implement `IPrototypeAware.isPrototype()` —
+without this attestation the router refuses to weight or
+deposit into the vault, even though the (missing) interface
+call would have silently returned false. This closes the
+silent-trust fall-through reported as MEDIUM in the
+2026-05-19 audit (see issue #447). Vaults that DO implement
+`IPrototypeAware` do not need this attestation; their
+self-declaration via `isPrototype()` is sufficient (subject
+to the existing prototype-override gate). The default value
+is `false` for every address — a fresh production deployment
+cannot accidentally route USDC into a vault whose pricing
+model the router cannot introspect. Restricted to
+`ADMIN_ROLE`.
+
+
+```solidity
+function setNonPrototypeAttested(address vault, bool attested) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|   Vault address to attest as non-prototype.|
+|`attested`|`bool`|New attestation value. `true` opts the vault into router eligibility; `false` revokes the attestation and re-engages the gate.|
 
 
 ### previewDeposit
@@ -327,18 +377,36 @@ router-eligibility. See review-codex-20260518-234945.md §2.
 function _requireRouterEligible(address vault) internal view;
 ```
 
-### _isPrototype
+### _probePrototype
 
-Try the optional `isPrototype()` view. Returns `true` only when
-the vault explicitly self-declares as a prototype. Vaults that
-do not implement the view (the call reverts) are treated as
-non-prototype so that the eligibility gate is opt-in from the
-vault side — non-BasketVault ERC-4626 strategies are unaffected.
+Probe the optional `IPrototypeAware.isPrototype()` view and
+report both whether the interface is implemented and (if so)
+the declared flag. Distinguishing "interface absent" from
+"interface present and returns false" is what closes the
+silent-trust fall-through from issue #447: callers can require
+an explicit attestation for the absent case instead of
+treating the revert as a non-prototype declaration.
 
 
 ```solidity
-function _isPrototype(address vault) internal view returns (bool);
+function _probePrototype(address vault)
+    internal
+    view
+    returns (bool implementsInterface, bool prototypeFlag);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Vault address to probe.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`implementsInterface`|`bool`|True iff `isPrototype()` returned a bool without reverting.|
+|`prototypeFlag`|`bool`|      The returned bool (only meaningful when `implementsInterface` is true).|
+
 
 ## Events
 ### RouterDeposit
@@ -429,6 +497,26 @@ event PrototypeOverrideSet(address indexed vault, bool oldValue, bool newValue);
 |`vault`|`address`|   Vault address whose override flag changed.|
 |`oldValue`|`bool`|Previous override value.|
 |`newValue`|`bool`|New override value.|
+
+### NonPrototypeAttestedSet
+Emitted when the non-prototype attestation flag for `vault`
+is toggled. `attested = true` opts a vault that does not
+implement `IPrototypeAware.isPrototype()` into router
+eligibility; `false` (the default) blocks router inclusion
+until governance explicitly attests the vault as non-prototype.
+
+
+```solidity
+event NonPrototypeAttestedSet(address indexed vault, bool oldValue, bool newValue);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|   Vault address whose attestation flag changed.|
+|`oldValue`|`bool`|Previous attestation value.|
+|`newValue`|`bool`|New attestation value.|
 
 ## Errors
 ### ZeroAddress
@@ -573,6 +661,30 @@ error VaultIsPrototype(address vault);
 |Name|Type|Description|
 |----|----|-----------|
 |`vault`|`address`|The prototype vault address that was rejected.|
+
+### VaultEligibilityNotAttested
+A vault does not implement the `IPrototypeAware.isPrototype()`
+introspection view and has no explicit
+`nonPrototypeAttested[vault] = true` attestation. Without the
+interface, the prototype gate cannot self-verify the vault's
+pricing model; without the attestation, governance has not
+explicitly opted the vault into router eligibility. The
+router refuses to weight or deposit into such vaults so that
+omitting `IPrototypeAware` (intentionally or accidentally)
+cannot silently bypass the prototype gate. ADMIN_ROLE can
+attest the vault via `setNonPrototypeAttested(vault, true)`.
+See issue #447 and audit-report.md (2026-05-19, MEDIUM).
+
+
+```solidity
+error VaultEligibilityNotAttested(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|The vault address that lacks IPrototypeAware and attestation.|
 
 ## Structs
 ### LegPreview

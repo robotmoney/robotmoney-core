@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf6bd8ce521d7632792ea4ac955c7bf3ebf05be4/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/86758bec5fa35d059fcb1a3f4a708912cfd4039d/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -608,6 +608,101 @@ cannot silently remove the warning that anchors the gate.
 
 ```solidity
 function test_docs_warningPresentForPrototypeBasketVaults() public view;
+```
+
+### test_setWeights_revertsIfVaultNotAttested
+
+AC#1 + Test plan #1: a vault that does not implement
+`IPrototypeAware` and is not attested as non-prototype is
+rejected from setWeights with `VaultEligibilityNotAttested`.
+
+
+```solidity
+function test_setWeights_revertsIfVaultNotAttested() public;
+```
+
+### test_setWeights_succeedsAfterAttestation
+
+AC#1 + Test plan #2: ADMIN_ROLE attests the vault, then
+setWeights succeeds for the same vault.
+
+
+```solidity
+function test_setWeights_succeedsAfterAttestation() public;
+```
+
+### test_deposit_revertsIfAttestationRevoked
+
+AC#4 + Test plan #3: revoking the attestation re-engages the
+gate at deposit time as defence-in-depth — even though the
+vault was weighted while attested, a later revocation
+prevents new deposits from routing through it.
+
+
+```solidity
+function test_deposit_revertsIfAttestationRevoked() public;
+```
+
+### test_setNonPrototypeAttested_revertsForUnauthorized
+
+AC#2 + Test plan #4: `setNonPrototypeAttested` is admin-gated.
+An unauthorized caller reverts with
+AccessControlUnauthorizedAccount (OpenZeppelin v5).
+
+
+```solidity
+function test_setNonPrototypeAttested_revertsForUnauthorized() public;
+```
+
+### test_setNonPrototypeAttested_revertsOnZeroAddress
+
+`setNonPrototypeAttested` rejects address(0).
+
+
+```solidity
+function test_setNonPrototypeAttested_revertsOnZeroAddress() public;
+```
+
+### test_setNonPrototypeAttested_emitsEvent
+
+`setNonPrototypeAttested` emits the audit event with old/new.
+
+
+```solidity
+function test_setNonPrototypeAttested_emitsEvent() public;
+```
+
+### test_isRouterEligible_falseForUnattestedVault
+
+`isRouterEligible` returns false for an unattested
+non-IPrototypeAware vault, mirroring the gate enforced at
+setWeights / deposit time.
+
+
+```solidity
+function test_isRouterEligible_falseForUnattestedVault() public;
+```
+
+### test_isRouterEligible_trueAfterAttestation
+
+`isRouterEligible` returns true once the vault is attested.
+
+
+```solidity
+function test_isRouterEligible_trueAfterAttestation() public;
+```
+
+### test_isRouterEligible_trueForNonPrototypeIPrototypeAware
+
+A vault that DOES implement `IPrototypeAware` and returns
+`false` from `isPrototype()` does NOT require attestation —
+the on-chain self-declaration is sufficient. Guards against
+a regression that would force every IPrototypeAware vault
+to also be attested.
+
+
+```solidity
+function test_isRouterEligible_trueForNonPrototypeIPrototypeAware() public;
 ```
 
 ### test_basketVaultSubclass_declaresPrototype

@@ -100,6 +100,14 @@ contract DeployPortfolioRouter is Script {
 
         d.router = new PortfolioRouter(usdc_, registry_, admin_);
 
+        // Issue #447 attestation gate: RobotMoneyVault does not implement
+        // `IPrototypeAware.isPrototype()`, so the router would reject it
+        // from setWeights with `VaultEligibilityNotAttested` unless we
+        // explicitly attest it here. The attestation makes the trust
+        // decision auditable on-chain instead of relying on the silent
+        // try/catch fall-through that the audit flagged as MEDIUM.
+        d.router.setNonPrototypeAttested(vault_, true);
+
         // Set initial weights: 10 000 bps (100%) to RobotMoneyVault.
         address[] memory vaults = new address[](1);
         vaults[0] = vault_;

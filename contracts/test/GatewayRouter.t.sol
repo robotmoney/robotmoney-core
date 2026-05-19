@@ -130,8 +130,14 @@ contract GatewayRouterTest is Test {
         uint256[] memory bps = new uint256[](2);
         bps[0] = 6000;
         bps[1] = 4000;
-        vm.prank(admin);
+        // Issue #447: RouterMockVault does not implement IPrototypeAware,
+        // so the router requires explicit non-prototype attestation before
+        // it will accept these vaults into the weight vector.
+        vm.startPrank(admin);
+        router.setNonPrototypeAttested(address(vaultA), true);
+        router.setNonPrototypeAttested(address(vaultB), true);
         router.setWeights(vaults, bps);
+        vm.stopPrank();
 
         // Deploy gateway with router support
         gateway = new RobotMoneyGateway(
@@ -806,8 +812,11 @@ contract GatewayRouterTest is Test {
         fvaults[0] = address(fotVaultA);
         uint256[] memory fbps = new uint256[](1);
         fbps[0] = 10_000;
-        vm.prank(admin);
+        // Issue #447: attest the non-IPrototypeAware mock vault.
+        vm.startPrank(admin);
+        fotRouter.setNonPrototypeAttested(address(fotVaultA), true);
         fotRouter.setWeights(fvaults, fbps);
+        vm.stopPrank();
 
         RobotMoneyGateway fotGateway = new RobotMoneyGateway(
             IERC20(address(fotUsdc)), IERC4626(address(fotVault)), admin, pauser, address(fotRouter)

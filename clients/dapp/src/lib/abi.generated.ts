@@ -5281,6 +5281,25 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "nonPrototypeAttested",
+    inputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -5408,6 +5427,24 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "setNonPrototypeAttested",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "attested",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "setPrototypeOverride",
     inputs: [
       {
@@ -5523,6 +5560,31 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "event",
+    name: "NonPrototypeAttestedSet",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "oldValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+      {
+        name: "newValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+    ],
+    anonymous: false,
   },
   {
     type: "event",
@@ -5849,6 +5911,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "VaultCapExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "VaultEligibilityNotAttested",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

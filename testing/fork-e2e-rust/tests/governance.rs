@@ -97,6 +97,7 @@ sol! {
     interface IPortfolioRouter {
         function setWeights(address[] calldata vaults, uint256[] calldata bps) external;
         function getWeights() external view returns (address[] memory vaults, uint256[] memory bps);
+        function setNonPrototypeAttested(address vault, bool attested) external;
         function ADMIN_ROLE() external view returns (bytes32);
         function grantRole(bytes32 role, address account) external;
     }
@@ -239,6 +240,24 @@ fn register_vault(
         .expect("registerVault");
 }
 
+/// Attest `vault` as a non-prototype on the router so `setWeights` accepts it.
+/// Required for vaults that do not implement `IPrototypeAware` (issue #447):
+/// `PortfolioRouter._requireRouterEligible` reverts with
+/// `VaultEligibilityNotAttested` until the ADMIN_ROLE caller opts the vault in.
+fn attest_non_prototype(admin: &rmpc_fork_e2e::Account<'_>, router: Address, vault: Address) {
+    admin
+        .send(
+            router,
+            &IPortfolioRouter::setNonPrototypeAttestedCall {
+                vault,
+                attested: true,
+            },
+            U256::ZERO,
+            200_000,
+        )
+        .expect("setNonPrototypeAttested(true)");
+}
+
 /// Grant ADMIN_ROLE on the PortfolioRouter to `governance` so it can call
 /// `setWeights`.
 fn grant_router_admin(deployer: &rmpc_fork_e2e::Account<'_>, router: Address, governance: Address) {
@@ -341,6 +360,12 @@ fn governance_propose_vote_execute() {
     // Register vaults in the registry.
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
     register_vault(&deployer, registry, vault_b, usdc, "Vault B");
+
+    // MockVault does not implement IPrototypeAware; attest both as
+    // non-prototype so the router's eligibility gate (issue #447) accepts
+    // them in setWeights.
+    attest_non_prototype(&deployer, router, vault_a);
+    attest_non_prototype(&deployer, router, vault_b);
 
     // Set an initial 100% weight on vault_a (router needs weights before governance
     // can propose a change — the deployer holds ADMIN_ROLE on the router initially).
@@ -534,6 +559,10 @@ fn governance_quorum_not_reached() {
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
     register_vault(&deployer, registry, vault_b, usdc, "Vault B");
 
+    // Issue #447: attest non-IPrototypeAware MockVaults so setWeights accepts them.
+    attest_non_prototype(&deployer, router, vault_a);
+    attest_non_prototype(&deployer, router, vault_b);
+
     // Set initial weights (100% vault_a).
     deployer
         .send(
@@ -684,6 +713,10 @@ fn governance_execute_before_delay_reverts() {
 
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
     register_vault(&deployer, registry, vault_b, usdc, "Vault B");
+
+    // Issue #447: attest non-IPrototypeAware MockVaults so setWeights accepts them.
+    attest_non_prototype(&deployer, router, vault_a);
+    attest_non_prototype(&deployer, router, vault_b);
 
     deployer
         .send(

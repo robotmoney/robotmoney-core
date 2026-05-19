@@ -121,8 +121,14 @@ contract RouterGovernanceTest is Test {
 
         // Grant governance contract ADMIN_ROLE on the router so it can call setWeights.
         bytes32 adminRole = router.ADMIN_ROLE();
-        vm.prank(routerAdmin);
+        vm.startPrank(routerAdmin);
         router.grantRole(adminRole, address(gov));
+        // Issue #447: MockGovVault does not implement IPrototypeAware, so
+        // attest both vaults as non-prototype before governance can weight
+        // them.
+        router.setNonPrototypeAttested(address(vaultA), true);
+        router.setNonPrototypeAttested(address(vaultB), true);
+        vm.stopPrank();
 
         // Assign voting power via govAdmin.
         vm.startPrank(govAdmin);
