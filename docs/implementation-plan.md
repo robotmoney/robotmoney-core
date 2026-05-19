@@ -115,6 +115,7 @@ Three findings touch vault storage and must be serialized; a dev-scout maps the
 safe edit order before any implementation begins.
 
 - [ ] dev-scout: map contract security hardening seams and serialization order
+  (`docs/technical/security-hardening-seams.md`)
 - [ ] CEI fix: reorder effects before interactions in gateway `deposit()` and add `ReentrancyGuard`
 - [ ] Decimals offset: choose safe ERC-4626 decimals offset to prevent first-depositor inflation
 - [ ] MorphoAdapter: verify actual withdrawn amount in `withdraw()`
