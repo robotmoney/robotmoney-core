@@ -10,9 +10,15 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @notice Minimal ERC-4626-shaped mock vault for router weight tests.
-///         Only implements the subset required by PortfolioRouter.setWeights
-///         (which calls registry.getVault to validate, not the vault itself).
-contract MockVaultForRouter {}
+///         Implements `asset()` because PortfolioRouter.setWeights validates
+///         router eligibility by checking `IERC4626(vault).asset() == usdc`.
+contract MockVaultForRouter {
+    address public immutable asset;
+
+    constructor(address asset_) {
+        asset = asset_;
+    }
+}
 
 /// @dev Exercises DeployPortfolioRouter in-process and asserts post-deploy
 ///      invariants the smoke-test and downstream tooling rely on.
@@ -23,12 +29,16 @@ contract DeployPortfolioRouterTest is Test {
     VaultRegistry internal registry;
 
     address internal admin = makeAddr("admin");
-    address internal vault = makeAddr("vault");
+    address internal vault;
 
     function setUp() public {
         script = new DeployPortfolioRouter();
         registryScript = new DeployVaultRegistry();
         usdc = new TestERC20();
+
+        // Deploy a USDC-backed mock vault so PortfolioRouter.setWeights can
+        // validate router eligibility via `IERC4626(vault).asset()`.
+        vault = address(new MockVaultForRouter(address(usdc)));
 
         // Deploy a real VaultRegistry and register the vault so setWeights
         // can validate via registry.getVault.

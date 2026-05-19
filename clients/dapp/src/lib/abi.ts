@@ -412,6 +412,18 @@ export const routerAbi = [
     inputs: [],
     outputs: [{ name: "vaults", type: "address[]" }],
   },
+  // Router-eligibility view (issue #426): true if the vault's ERC-4626
+  // `asset()` equals the router's USDC. Distinct from VaultRegistry status —
+  // registry status describes lifecycle (Active/Paused/Retired) while router
+  // eligibility describes asset compatibility with the router's deposit flow.
+  // Clients should treat a vault as depositable only if both signals agree.
+  {
+    type: "function",
+    name: "isRouterEligible",
+    stateMutability: "view",
+    inputs: [{ name: "vault", type: "address" }],
+    outputs: [{ name: "eligible", type: "bool" }],
+  },
 ] as const;
 
 export type RouterActionName = "deposit";

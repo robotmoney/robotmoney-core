@@ -2858,6 +2858,25 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "isRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "eligible",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -3332,6 +3351,33 @@ export const routerAbiGenerated = [
     type: "error",
     name: "SlippageExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "VaultAssetMismatch",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "vaultAsset",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "VaultAssetUnreadable",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

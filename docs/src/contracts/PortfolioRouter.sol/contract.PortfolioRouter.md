@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5f3c3bfe955810832b34a58296a18cb976126c6d/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -247,6 +247,44 @@ function getWeights() external view returns (address[] memory vaults, uint256[] 
 |`bps`|`uint256[]`|    Parallel weight array in basis points.|
 
 
+### isRouterEligible
+
+Return true if `vault` is router-eligible: it exposes an
+ERC-4626 `asset()` view and that asset equals the router's USDC.
+This is intentionally distinct from VaultRegistry status —
+registry status describes lifecycle (Active/Paused/Retired)
+while router eligibility describes asset compatibility with the
+router's deposit flow. Clients (dapp, rmpc) read both to
+present accurate state.
+
+
+```solidity
+function isRouterEligible(address vault) external view returns (bool eligible);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of the vault to check.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`eligible`|`bool`|True if the vault's ERC-4626 asset equals the router's USDC; false if the asset differs or `asset()` reverts.|
+
+
+### _requireRouterEligible
+
+Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
+`usdc`. Used by `setWeights` and `_depositTo` to enforce
+router-eligibility. See review-codex-20260518-234945.md §2.
+
+
+```solidity
+function _requireRouterEligible(address vault) internal view;
+```
+
 ## Events
 ### RouterDeposit
 Emitted once per successful `deposit()` call, per vault leg.
@@ -405,6 +443,41 @@ error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 |----|----|-----------|
 |`vault`|`address`| The vault address that is not Active.|
 |`status`|`VaultRegistry.VaultStatus`|The current non-Active status of the vault.|
+
+### VaultAssetMismatch
+A vault's ERC-4626 `asset()` does not match the router's USDC.
+Router refuses to weight or deposit into vaults whose underlying
+asset is anything other than the configured router USDC. This is
+the router-eligibility guard described in issue #426 / the
+coin-theft path audit (review-codex-20260518-234945.md §2).
+
+
+```solidity
+error VaultAssetMismatch(address vault, address vaultAsset);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|      The router-ineligible vault address.|
+|`vaultAsset`|`address`| The vault's reported `asset()` address.|
+
+### VaultAssetUnreadable
+A vault did not expose a callable ERC-4626 `asset()` view, so
+router eligibility cannot be verified. The router refuses to
+interact with such vaults.
+
+
+```solidity
+error VaultAssetUnreadable(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|The vault address whose `asset()` call reverted.|
 
 ## Structs
 ### LegPreview

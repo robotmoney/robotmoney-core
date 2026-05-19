@@ -442,41 +442,19 @@ fn router_deposit_happy_path() {
 
 // ── Scenario 2: unavailable leg reverts ──────────────────────────────────────
 
-/// router_unavailable_leg_reverts — when one vault's deposit() reverts,
-/// the entire router.deposit() call reverts (all-or-revert).
+/// router_unavailable_leg_reverts — when one leg becomes unavailable, the
+/// entire router.deposit() call reverts (all-or-revert).
 ///
-/// Strategy: we deploy one normal MockVault and one that we configure to
-/// fail (by setting the registry vault status to Paused). Since PortfolioRouter
-/// does not skip paused vaults during deposit execution (that's only a
-/// previewDeposit concern), we need to use a vault whose `deposit()` itself
-/// reverts. We reuse the MockVault bytecode but store a "failable" version
-/// whose `setFailOnDeposit` flag is set, simulated by deploying the test
-/// contract from PortfolioRouter.t.sol's MockRouterVault (which has
-/// `setFailOnDeposit`).
+/// Strategy: deploy two USDC-backed MockVaults, weight them 50/50, then pause
+/// vault_b in the VaultRegistry. PortfolioRouter._depositTo re-reads registry
+/// status per leg and reverts with `VaultNotActive` if any weighted vault is
+/// not Active. This proves all-or-revert under the registry-status guard.
 ///
-/// Since the fork e2e cannot run Solidity test contracts easily, we use a
-/// simpler approach: configure the PortfolioRouter with a vault address
-/// that has no code (a bare EOA). Any call to `deposit()` on an EOA
-/// returns 0x, which Solidity decodes as a zero-length bytes return for an
-/// `address`-returning function — but IERC4626.deposit returns `uint256`,
-/// which will decode incorrectly or revert due to insufficient data.
-///
-/// Actually, the cleanest approach is to deploy a vault and then pause it via
-/// the VaultRegistry, and separately have a router that DOES skip non-Active
-/// vaults. But our PortfolioRouter doesn't skip — it always calls deposit.
-///
-/// So we use a dead address (BEEF) as a vault in the weight list.
-/// `IERC4626.deposit(legAmount, receiver)` called on address(0xBEEF) with
-/// no code will return `0x` — decoding a `uint256` from `0x` produces a
-/// revert in Solidity ABI decoding.
-///
-/// Update: the cleanest e2e approach per the issue specification is:
-/// "pausing one vault causes the full deposit to revert". The
-/// PortfolioRouter doesn't check VaultRegistry status in `deposit()` —
-/// it only checks in `previewDeposit()`. So to make the vault "unavailable",
-/// we use a no-code address as one of the weight-vector vaults. Calling
-/// `deposit()` on a no-code address will revert because the ABI-decoded
-/// return is empty.
+/// Note: this test previously used an EOA as one leg, but issue #426 added a
+/// `_requireRouterEligible` check that rejects code-less vaults at
+/// `setWeights` (no `asset()` view). The pause-after-weighting path is the
+/// correct e2e shape now — eligibility is enforced at config time and lifecycle
+/// status is enforced at deposit time.
 #[test]
 fn router_unavailable_leg_reverts() {
     skip_if_no_fork!();
@@ -493,29 +471,23 @@ fn router_unavailable_leg_reverts() {
 
     let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
-    // Deploy a normal vault (vault_a) and a registry.
+    // Deploy two USDC-backed vaults and the registry/router.
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
+    let vault_b = deploy_mock_vault(&deployer, usdc);
     let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
 
-    // Register vault_a normally.
+    // Register both vaults.
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
+    register_vault(&deployer, registry, vault_b, usdc, "Vault B");
 
-    // Register vault_a again and set its status to Paused so it appears
-    // in the registry. Then we need a vault whose deposit() itself reverts.
-    // We use an EOA (a funded-only address with no bytecode) as vault_b.
-    // The registry allows registering any address.
-    let zero_vault: Address = "0x0000000000000000000000000000000000000042"
-        .parse()
-        .unwrap();
-    register_vault(&deployer, registry, zero_vault, usdc, "Dead Vault");
-
-    // Set 50/50 weights between vault_a and the dead vault.
+    // Set 50/50 weights between vault_a and vault_b. Both are Active and
+    // router-eligible, so setWeights succeeds.
     deployer
         .send(
             router,
             &IPortfolioRouter::setWeightsCall {
-                vaults: vec![vault_a, zero_vault],
+                vaults: vec![vault_a, vault_b],
                 bps: vec![U256::from(5000u64), U256::from(5000u64)],
             },
             U256::ZERO,
@@ -523,12 +495,25 @@ fn router_unavailable_leg_reverts() {
         )
         .expect("setWeights");
 
+    // Pause vault_b in the registry — this makes the leg unavailable at
+    // deposit time without changing router eligibility (registry status and
+    // router eligibility are distinct signals; see issue #426).
+    deployer
+        .send(
+            registry,
+            &IVaultRegistry::setVaultStatusCall {
+                vault: vault_b,
+                newStatus: IVaultRegistry::VaultStatus::Paused,
+            },
+            U256::ZERO,
+            200_000,
+        )
+        .expect("setVaultStatus(Paused)");
+
     // Approve router.
     approve_usdc(&deployer, usdc, router, deposit_amount);
 
-    // Attempt deposit — should revert because zero_vault has no code and
-    // `IERC4626.deposit()` on it returns empty bytes, causing ABI decode to fail.
-    // We expect a revert — check that send returns the Reverted error.
+    // Attempt deposit — must revert because vault_b is Paused.
     let result = deployer.send(
         router,
         &IPortfolioRouter::depositCall {
@@ -540,7 +525,7 @@ fn router_unavailable_leg_reverts() {
     );
     assert!(
         result.is_err(),
-        "router.deposit must revert when a leg vault has no code; got Ok"
+        "router.deposit must revert when a weighted vault is paused; got Ok"
     );
     match result.unwrap_err() {
         rmpc_fork_e2e::HarnessError::Reverted(_) => {

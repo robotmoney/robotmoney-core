@@ -545,6 +545,170 @@ contract PortfolioRouterTest is Test {
         router.deposit(amount, new uint256[](0));
     }
 
+    // ─── Router-eligibility: asset compatibility ─────────────────────────────
+
+    /// @notice Registered vault whose ERC-4626 `asset()` is not router USDC
+    ///         cannot be added to the weight vector.
+    function test_setWeights_revertsIfVaultAssetMismatch() public {
+        // A mock "vault" denominated in a non-USDC asset is registered.
+        MockUSDC otherAsset = new MockUSDC();
+        MockRouterVault badVault = new MockRouterVault(address(otherAsset));
+        VaultRegistry.VaultMetadata memory badMeta = VaultRegistry.VaultMetadata({
+            name: "Bad Vault", asset: address(otherAsset), registeredAt: 0
+        });
+        vm.prank(admin);
+        registry.registerVault(address(badVault), badMeta);
+
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(badVault);
+        bps[0] = 10_000;
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultAssetMismatch.selector, address(badVault), address(otherAsset)
+            )
+        );
+        router.setWeights(vaults, bps);
+    }
+
+    /// @notice A registered EOA-style "vault" (no code, asset() reverts) cannot
+    ///         be added to the weight vector. This protects against an
+    ///         attacker registering an arbitrary address with crafted metadata
+    ///         and being able to weight it.
+    function test_setWeights_revertsIfVaultAssetUnreadable() public {
+        address fakeVault = makeAddr("fakeVault");
+        VaultRegistry.VaultMetadata memory fakeMeta = VaultRegistry.VaultMetadata({
+            name: "Fake Vault", asset: address(usdc), registeredAt: 0
+        });
+        vm.prank(admin);
+        registry.registerVault(fakeVault, fakeMeta);
+
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = fakeVault;
+        bps[0] = 10_000;
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.VaultAssetUnreadable.selector, fakeVault)
+        );
+        router.setWeights(vaults, bps);
+    }
+
+    /// @notice A malicious ERC-4626-shaped vault whose underlying asset is not
+    ///         router USDC cannot receive USDC via PortfolioRouter.deposit even
+    ///         if it were somehow present in the weight vector. The
+    ///         setWeights guard normally blocks this; this test installs the
+    ///         bad vault via direct storage manipulation (foundry `store`) on
+    ///         a fresh router so we can prove the deposit-time check rejects
+    ///         it as defence in depth.
+    function test_deposit_revertsIfVaultAssetMismatchAtRuntime() public {
+        // Construct an eligible-at-config-time vault, then swap it for an
+        // ineligible one between setWeights and deposit by replacing its
+        // bytecode. We use `vm.etch` to overwrite the eligible vault's code
+        // with a vault that returns a different asset().
+        _setEqualWeights();
+
+        // Build a non-USDC-backed vault and copy its bytecode over vaultA.
+        MockUSDC otherAsset = new MockUSDC();
+        MockRouterVault attackerVault = new MockRouterVault(address(otherAsset));
+        vm.etch(address(vaultA), address(attackerVault).code);
+        // The asset slot on MockRouterVault is the first storage slot
+        // (immutable in source — but bytecode hard-codes it). Since
+        // `assetToken` is immutable, the swapped code now returns the
+        // attacker's asset address through asset(). Verify:
+        assertEq(MockRouterVault(address(vaultA)).asset(), address(otherAsset));
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultAssetMismatch.selector, address(vaultA), address(otherAsset)
+            )
+        );
+        router.deposit(amount, new uint256[](0));
+    }
+
+    /// @notice `depositFor` also enforces router eligibility at runtime.
+    function test_depositFor_revertsIfVaultAssetMismatch() public {
+        _setEqualWeights();
+
+        MockUSDC otherAsset = new MockUSDC();
+        MockRouterVault attackerVault = new MockRouterVault(address(otherAsset));
+        vm.etch(address(vaultB), address(attackerVault).code);
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultAssetMismatch.selector, address(vaultB), address(otherAsset)
+            )
+        );
+        router.depositFor(depositor, amount, new uint256[](0));
+    }
+
+    /// @notice Eligible vaults retain their normal deposit behaviour — the
+    ///         eligibility guard does not affect the happy path.
+    function test_deposit_eligibleVaults_succeed() public {
+        _setEqualWeights();
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        assertEq(shares[0], 500 * ONE_USDC);
+        assertEq(shares[1], 500 * ONE_USDC);
+    }
+
+    // ─── Router-eligibility: read surface ────────────────────────────────────
+
+    /// @notice `isRouterEligible` returns true for a USDC-backed ERC-4626 vault.
+    function test_isRouterEligible_trueForUSDCVault() public view {
+        assertTrue(router.isRouterEligible(address(vaultA)));
+        assertTrue(router.isRouterEligible(address(vaultB)));
+    }
+
+    /// @notice `isRouterEligible` returns false for a non-USDC-backed vault.
+    function test_isRouterEligible_falseForNonUSDCVault() public {
+        MockUSDC otherAsset = new MockUSDC();
+        MockRouterVault badVault = new MockRouterVault(address(otherAsset));
+        assertFalse(router.isRouterEligible(address(badVault)));
+    }
+
+    /// @notice `isRouterEligible` returns false for an EOA (no asset() view).
+    function test_isRouterEligible_falseForEOA() public {
+        assertFalse(router.isRouterEligible(makeAddr("eoa")));
+    }
+
+    /// @notice `isRouterEligible` returns false for address(0).
+    function test_isRouterEligible_falseForZeroAddress() public view {
+        assertFalse(router.isRouterEligible(address(0)));
+    }
+
+    /// @notice Router eligibility is distinct from registry status — a vault
+    ///         that is Paused in the registry is still router-eligible from
+    ///         an asset-compatibility standpoint. Clients must read both
+    ///         signals to compose accurate UI state.
+    function test_isRouterEligible_independentOfRegistryStatus() public {
+        // Pause vaultA in the registry. Router eligibility should not change.
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        assertTrue(router.isRouterEligible(address(vaultA)));
+
+        // Retire as well.
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
+        assertTrue(router.isRouterEligible(address(vaultA)));
+    }
+
     // ─── Fuzz: weight sum must equal 10000 ───────────────────────────────────
 
     /// @notice Any single-vault weight that is not 10000 must revert.

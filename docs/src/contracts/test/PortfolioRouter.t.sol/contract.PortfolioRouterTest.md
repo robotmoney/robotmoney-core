@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/31a8dcee8651b68de6fb5481acf7c895437acde1/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5f3c3bfe955810832b34a58296a18cb976126c6d/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -329,6 +329,110 @@ deposits.
 
 ```solidity
 function test_deposit_revertsIfRegistryVaultIsRetired() public;
+```
+
+### test_setWeights_revertsIfVaultAssetMismatch
+
+Registered vault whose ERC-4626 `asset()` is not router USDC
+cannot be added to the weight vector.
+
+
+```solidity
+function test_setWeights_revertsIfVaultAssetMismatch() public;
+```
+
+### test_setWeights_revertsIfVaultAssetUnreadable
+
+A registered EOA-style "vault" (no code, asset() reverts) cannot
+be added to the weight vector. This protects against an
+attacker registering an arbitrary address with crafted metadata
+and being able to weight it.
+
+
+```solidity
+function test_setWeights_revertsIfVaultAssetUnreadable() public;
+```
+
+### test_deposit_revertsIfVaultAssetMismatchAtRuntime
+
+A malicious ERC-4626-shaped vault whose underlying asset is not
+router USDC cannot receive USDC via PortfolioRouter.deposit even
+if it were somehow present in the weight vector. The
+setWeights guard normally blocks this; this test installs the
+bad vault via direct storage manipulation (foundry `store`) on
+a fresh router so we can prove the deposit-time check rejects
+it as defence in depth.
+
+
+```solidity
+function test_deposit_revertsIfVaultAssetMismatchAtRuntime() public;
+```
+
+### test_depositFor_revertsIfVaultAssetMismatch
+
+`depositFor` also enforces router eligibility at runtime.
+
+
+```solidity
+function test_depositFor_revertsIfVaultAssetMismatch() public;
+```
+
+### test_deposit_eligibleVaults_succeed
+
+Eligible vaults retain their normal deposit behaviour — the
+eligibility guard does not affect the happy path.
+
+
+```solidity
+function test_deposit_eligibleVaults_succeed() public;
+```
+
+### test_isRouterEligible_trueForUSDCVault
+
+`isRouterEligible` returns true for a USDC-backed ERC-4626 vault.
+
+
+```solidity
+function test_isRouterEligible_trueForUSDCVault() public view;
+```
+
+### test_isRouterEligible_falseForNonUSDCVault
+
+`isRouterEligible` returns false for a non-USDC-backed vault.
+
+
+```solidity
+function test_isRouterEligible_falseForNonUSDCVault() public;
+```
+
+### test_isRouterEligible_falseForEOA
+
+`isRouterEligible` returns false for an EOA (no asset() view).
+
+
+```solidity
+function test_isRouterEligible_falseForEOA() public;
+```
+
+### test_isRouterEligible_falseForZeroAddress
+
+`isRouterEligible` returns false for address(0).
+
+
+```solidity
+function test_isRouterEligible_falseForZeroAddress() public view;
+```
+
+### test_isRouterEligible_independentOfRegistryStatus
+
+Router eligibility is distinct from registry status — a vault
+that is Paused in the registry is still router-eligible from
+an asset-compatibility standpoint. Clients must read both
+signals to compose accurate UI state.
+
+
+```solidity
+function test_isRouterEligible_independentOfRegistryStatus() public;
 ```
 
 ### testFuzz_setWeights_singleVaultInvalidSum

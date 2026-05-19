@@ -126,6 +126,21 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param status The current non-Active status of the vault.
     error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 
+    /// @notice A vault's ERC-4626 `asset()` does not match the router's USDC.
+    ///         Router refuses to weight or deposit into vaults whose underlying
+    ///         asset is anything other than the configured router USDC. This is
+    ///         the router-eligibility guard described in issue #426 / the
+    ///         coin-theft path audit (review-codex-20260518-234945.md §2).
+    /// @param vault       The router-ineligible vault address.
+    /// @param vaultAsset  The vault's reported `asset()` address.
+    error VaultAssetMismatch(address vault, address vaultAsset);
+
+    /// @notice A vault did not expose a callable ERC-4626 `asset()` view, so
+    ///         router eligibility cannot be verified. The router refuses to
+    ///         interact with such vaults.
+    /// @param vault The vault address whose `asset()` call reverted.
+    error VaultAssetUnreadable(address vault);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
@@ -160,6 +175,11 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             if (vaults[i] == address(0)) revert ZeroAddress();
             // Verify vault is registered — getVault reverts with NotRegistered if not.
             registry.getVault(vaults[i]);
+            // Router-eligibility guard: the vault's ERC-4626 asset() must equal
+            // the router's USDC. A registered but ineligible vault (wrong asset,
+            // non-4626, or unreadable asset()) cannot be set as an active
+            // weighted route. See review-codex-20260518-234945.md §2.
+            _requireRouterEligible(vaults[i]);
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
@@ -333,6 +353,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             // Per-vault cap check.
             if (vaultCap[vault] != 0 && legAmount > vaultCap[vault]) revert VaultCapExceeded();
 
+            // Defence in depth: re-validate router eligibility at deposit time
+            // so a vault that became ineligible after weighting (e.g. upgrade
+            // changing its `asset()`) cannot receive USDC. setWeights enforces
+            // this at configuration time; this re-check guards the runtime path.
+            _requireRouterEligible(vault);
+
             // Approve vault to pull legAmount USDC.
             usdc.forceApprove(vault, legAmount);
 
@@ -356,5 +382,47 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @return bps     Parallel weight array in basis points.
     function getWeights() external view returns (address[] memory vaults, uint256[] memory bps) {
         return (_weightVaultList, _weightBps);
+    }
+
+    // ─── Router-eligibility surface ──────────────────────────────────────────
+
+    /// @notice Return true if `vault` is router-eligible: it exposes an
+    ///         ERC-4626 `asset()` view and that asset equals the router's USDC.
+    ///         This is intentionally distinct from VaultRegistry status —
+    ///         registry status describes lifecycle (Active/Paused/Retired)
+    ///         while router eligibility describes asset compatibility with the
+    ///         router's deposit flow. Clients (dapp, rmpc) read both to
+    ///         present accurate state.
+    /// @param vault Address of the vault to check.
+    /// @return eligible True if the vault's ERC-4626 asset equals the router's
+    ///                  USDC; false if the asset differs or `asset()` reverts.
+    function isRouterEligible(address vault) external view returns (bool eligible) {
+        if (vault == address(0)) return false;
+        // An EOA has no code; calling asset() on it would decode-revert.
+        // Short-circuit so the view returns false instead of reverting.
+        if (vault.code.length == 0) return false;
+        try IERC4626(vault).asset() returns (address vaultAsset) {
+            return vaultAsset == address(usdc);
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
+    ///      `usdc`. Used by `setWeights` and `_depositTo` to enforce
+    ///      router-eligibility. See review-codex-20260518-234945.md §2.
+    function _requireRouterEligible(address vault) internal view {
+        // No code at the target — the asset() call would revert without data
+        // and bypass the try/catch ABI-decode path on some configurations.
+        // Detect explicitly and surface a distinct error so registrations of
+        // EOA-style "vaults" fail loudly.
+        if (vault.code.length == 0) revert VaultAssetUnreadable(vault);
+        try IERC4626(vault).asset() returns (address vaultAsset) {
+            if (vaultAsset != address(usdc)) {
+                revert VaultAssetMismatch(vault, vaultAsset);
+            }
+        } catch {
+            revert VaultAssetUnreadable(vault);
+        }
     }
 }
