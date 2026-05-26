@@ -185,6 +185,63 @@ actually changed — a silent gateway no-op would also pass.
 
 ---
 
+## G12 — Suite-11b did not actually exercise the agent onboarding workflow
+
+**Status:** Closed by issue #469.
+
+**Gap description:** Suite-11b's "Generate agent EOA + fund" step ran
+`rmpc-keystore-import -- --generate` and parsed `jq -r '.address'`, but
+`rmpc-keystore-import` has no `--generate` flag, requires
+`$RMPC_IMPORT_PRIVKEY_HEX` (never set in that step), treats argv[1] as
+the output keystore path, and prints a bare address (not JSON). Even if
+the step had succeeded, the generated key was never authorized:
+`contracts/script/Deploy.s.sol` called `gateway.authorizeAgent` on a
+pre-baked Anvil account (`AGENT_ADDRESS`), while the generated keystore
+was funded via `anvil_setBalance` and orphaned. No assertion read
+`gateway.agentOwner` or `hasRole(AGENT_ROLE)` for the generated key.
+The deposit succeeded only because it rode on the pre-baked
+pre-authorized account, giving false confidence that the
+create-key → authorize → deposit path worked.
+
+**Closure: five assertable steps, one identity end-to-end.**
+
+The suite-11b deposit job now proves the entire onboarding workflow
+against the same freshly-generated key, one assertable step at a time:
+
+| # | Step | Assertion |
+|---|---|---|
+| 1 | Plugin installability | Covered by suite-11a (referenced as the gate). |
+| 2 | OpenCode skill invocation | `opencode run` exits 0 and emits a transcript. |
+| 3 | rmpc built and configured | `cargo build --release ... --bin rmpc` and a generated `config.toml` pinning the devnet chain id, RPC, gateway/vault/USDC addresses, gateway runtime hash, and the freshly-generated keystore path. |
+| 4 | Fresh keypair + keystore | `cast wallet new --json` produces a secp256k1 keypair; the private key is fed via `RMPC_IMPORT_PRIVKEY_HEX` + `RMPC_KEYSTORE_PASSPHRASE` into `rmpc-keystore-import <output-path>`. Step fails unless the keystore file exists, the printed address matches `^0x[0-9a-fA-F]{40}$`, and the keystore-derived address equals the cast-wallet address. |
+| 5 | On-chain authorization | `AGENT_ADDRESS` env points at the generated key, so `Deploy.s.sol` calls `gateway.authorizeAgent(generatedKey, policy)` with `msg.sender = ADMIN_ADDRESS = PARENT_ADDRESS`. A dedicated step then runs `cast call gateway "agentOwner(address)(address)" $AGENT_ADDRESS` and `cast call gateway "hasRole(bytes32,address)(bool)" $AGENT_ROLE $AGENT_ADDRESS` BEFORE the deposit and fails the job if either check is wrong. |
+| 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; `.github/scripts/assert_headless_deposit_sender.py` parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
+| 7 | On-chain vault delta | `.github/scripts/assert_headless_deposit_delta.py` confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
+
+**Closure references:**
+
+- Workflow: `.github/workflows/suite-11b-opencode-headless.yml` — deposit
+  job now generates the keypair with `cast wallet new --json`, passes the
+  private key to `rmpc-keystore-import` through `RMPC_IMPORT_PRIVKEY_HEX`,
+  captures the printed address from stdout, sets `AGENT_ADDRESS` for the
+  forge deploy, asserts authorization on-chain via `cast call` BEFORE the
+  deposit, writes a `config.toml` wiring `keystore_path` to the generated
+  keystore, and asserts the deposit transaction's `from` field equals the
+  generated key.
+- Assertion script: `.github/scripts/assert_headless_deposit_sender.py`
+  pins the deposit-sender invariant.
+- Negative control: `.github/scripts/tests/negative_control_keystore_generate_flag.sh`
+  invokes the binary with the historical broken argv shape
+  (`-- --generate`, no env), asserts exit ≠ 0, asserts stderr references
+  `RMPC_IMPORT_PRIVKEY_HEX`, and asserts the stdout is not JSON
+  parseable as `.address` — proving the old broken form cannot silently
+  return.
+- Pre-deposit fast-fail: the authorization assertion runs before any
+  capture/deposit step, so skipping `authorizeAgent` (or pointing it at
+  a different key) fails the job immediately.
+
+---
+
 ## Adding new gaps
 
 Add rows above this line following the `G<N>` numbering. Each gap entry must

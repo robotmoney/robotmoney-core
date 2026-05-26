@@ -127,16 +127,25 @@ jobs:
             sleep 1
           done
 
+      # Issue #469: derive ADMIN/PAUSER/SHARE_RECEIVER from Anvil's funded
+      # accounts, but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
+      # The agent EOA is generated fresh in a later step and that generated
+      # address is what Deploy.s.sol authorizes — this is the proof that the
+      # entire onboarding path (key generation -> authorizeAgent -> deposit)
+      # works against a single identity.
       - name: Derive deploy addresses from Anvil accounts
         run: |
           set -euo pipefail
           ACCOUNTS=$(cast rpc eth_accounts --rpc-url http://127.0.0.1:8545)
           echo "ADMIN_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[0]')" >> $GITHUB_ENV
           echo "PAUSER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[1]')" >> $GITHUB_ENV
-          echo "AGENT_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[2]')" >> $GITHUB_ENV
           echo "SHARE_RECEIVER_ADDRESS=$(echo "$ACCOUNTS" | jq -r '.[3]')" >> $GITHUB_ENV
           PRIVKEY=$(cast wallet private-key --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
           echo "ANVIL_PRIVKEY=$PRIVKEY" >> $GITHUB_ENV
+          # ADMIN_ADDRESS is the deployer EOA; remember it as the parent
+          # (msg.sender at authorizeAgent) for the later authorization assert.
+          ADMIN=$(echo "$ACCOUNTS" | jq -r '.[0]')
+          echo "PARENT_ADDRESS=$ADMIN" >> $GITHUB_ENV
 
       - name: Deploy mock USDC
         run: |
@@ -146,36 +155,159 @@ jobs:
           USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
-      - name: Deploy contracts on devnet
-        run: |
-          mkdir -p deployments
-          forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
-
-      - name: Generate agent EOA + fund
+      # Issue #469: this step replaces the broken keystore-import
+      # invocation that previously lived in this workflow (it passed the
+      # literal string "--generate" as argv[1] expecting an unsupported
+      # flag, and never set RMPC_IMPORT_PRIVKEY_HEX). There is no such
+      # flag on rmpc-keystore-import — argv[1] is the OUTPUT keystore
+      # path, the private key must be provided via
+      # $RMPC_IMPORT_PRIVKEY_HEX, the passphrase via
+      # $RMPC_KEYSTORE_PASSPHRASE, and on success the binary prints a bare
+      # address (NOT JSON) to stdout. The supported flow is:
+      #   1. Generate a secp256k1 keypair (we use `cast wallet new --json`).
+      #   2. Export the private key under RMPC_IMPORT_PRIVKEY_HEX and a
+      #      passphrase under RMPC_KEYSTORE_PASSPHRASE.
+      #   3. Run rmpc-keystore-import with the desired keystore path as
+      #      argv[1] and capture the printed address from stdout.
+      #   4. Persist the captured address as AGENT_ADDRESS so Deploy.s.sol
+      #      authorizes THIS key (not a pre-baked Anvil account).
+      # A non-empty 0x[0-9a-fA-F]{40} address and an existing keystore file
+      # are both required; either being missing fails the step.
+      - name: Generate fresh agent keypair and keystore
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          cargo run --release --manifest-path clients/rust-payment-client/Cargo.toml \
-            --bin rmpc-keystore-import -- --generate > "${RUNNER_TEMP}/robotmoney-opencode/agent.json"
-          AGENT=$(jq -r '.address' "${RUNNER_TEMP}/robotmoney-opencode/agent.json")
-          cast rpc anvil_setBalance "$AGENT" "0xDE0B6B3A7640000" --rpc-url http://127.0.0.1:8545
+          WALLET=$(cast wallet new --json)
+          AGENT_PRIVKEY=$(echo "$WALLET" | jq -r '.[0].private_key')
+          AGENT_ADDR_FROM_CAST=$(echo "$WALLET" | jq -r '.[0].address')
+          # Sanity: shape-check the address before doing any chain work.
+          if ! [[ "$AGENT_ADDR_FROM_CAST" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+            echo "FAIL: cast wallet new produced malformed address: $AGENT_ADDR_FROM_CAST" >&2
+            exit 1
+          fi
+          KEYSTORE="${RUNNER_TEMP}/robotmoney-opencode/agent-keystore.enc"
+          # Strip 0x for the import-helper env var.
+          export RMPC_IMPORT_PRIVKEY_HEX="${AGENT_PRIVKEY#0x}"
+          export RMPC_KEYSTORE_PASSPHRASE="suite-11b-headless-passphrase"
+          AGENT_ADDR_FROM_KEYSTORE=$(cargo run --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --bin rmpc-keystore-import -- "$KEYSTORE")
+          unset RMPC_IMPORT_PRIVKEY_HEX
+          # Both the keystore file and the printed address are required.
+          if [ ! -s "$KEYSTORE" ]; then
+            echo "FAIL: keystore not written at $KEYSTORE" >&2
+            exit 1
+          fi
+          if ! [[ "$AGENT_ADDR_FROM_KEYSTORE" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+            echo "FAIL: rmpc-keystore-import did not print a 0x-prefixed 40-hex address (got: $AGENT_ADDR_FROM_KEYSTORE)" >&2
+            exit 1
+          fi
+          # The keystore address must match the cast-wallet address —
+          # otherwise we'd authorize one key and sign with another.
+          if [ "${AGENT_ADDR_FROM_KEYSTORE,,}" != "${AGENT_ADDR_FROM_CAST,,}" ]; then
+            echo "FAIL: keystore address $AGENT_ADDR_FROM_KEYSTORE != cast address $AGENT_ADDR_FROM_CAST" >&2
+            exit 1
+          fi
+          echo "AGENT_ADDRESS=$AGENT_ADDR_FROM_KEYSTORE" >> $GITHUB_ENV
+          echo "AGENT_KEYSTORE_PATH=$KEYSTORE" >> $GITHUB_ENV
+          echo "RMPC_KEYSTORE_PASSPHRASE=$RMPC_KEYSTORE_PASSPHRASE" >> $GITHUB_ENV
+          # Fund the freshly-generated agent EOA so it can pay gas for the
+          # deposit. anvil_setBalance is the standard Anvil-only fast path.
+          cast rpc anvil_setBalance "$AGENT_ADDR_FROM_KEYSTORE" "0xDE0B6B3A7640000" \
+            --rpc-url http://127.0.0.1:8545
+
+      - name: Deploy contracts on devnet (authorizes generated agent)
+        run: |
+          mkdir -p deployments
+          # Deploy.s.sol reads AGENT_ADDRESS from env and calls
+          # gateway.authorizeAgent(AGENT_ADDRESS, policy) under msg.sender =
+          # broadcaster (= ADMIN_ADDRESS = PARENT_ADDRESS). After this step
+          # the generated key is the AGENT_ROLE holder for the gateway.
+          forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
+
+      # Issue #469 acceptance criterion: assert ON-CHAIN that
+      # gateway.authorizeAgent has actually been called for the
+      # freshly-generated key, BEFORE any deposit is attempted. Reads
+      # agentOwner(generatedKey) and hasRole(AGENT_ROLE, generatedKey)
+      # directly from the gateway with `cast call`. Either check missing
+      # fails the job — proving the create-key -> authorize path is real.
+      - name: Assert generated agent is authorized on-chain
+        run: |
+          set -euo pipefail
+          DEPLOYMENT_JSON="deployments/$(cast chain-id --rpc-url http://127.0.0.1:8545).json"
+          if [ ! -f "$DEPLOYMENT_JSON" ]; then
+            echo "FAIL: deployment JSON not found at $DEPLOYMENT_JSON" >&2
+            exit 1
+          fi
+          GATEWAY=$(jq -r '.gateway' "$DEPLOYMENT_JSON")
+          echo "GATEWAY_ADDRESS=$GATEWAY" >> $GITHUB_ENV
+          VAULT=$(jq -r '.vault' "$DEPLOYMENT_JSON")
+          echo "VAULT_ADDRESS=$VAULT" >> $GITHUB_ENV
+          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$DEPLOYMENT_JSON")
+          echo "GATEWAY_RUNTIME_HASH=$GATEWAY_RUNTIME_HASH" >> $GITHUB_ENV
+
+          # 1. agentOwner(generatedKey) must equal the authorizing parent EOA.
+          OWNER_RAW=$(cast call "$GATEWAY" "agentOwner(address)(address)" "$AGENT_ADDRESS" \
+            --rpc-url http://127.0.0.1:8545)
+          OWNER="${OWNER_RAW,,}"
+          PARENT="${PARENT_ADDRESS,,}"
+          if [ "$OWNER" != "$PARENT" ]; then
+            echo "FAIL: agentOwner($AGENT_ADDRESS) = $OWNER_RAW, expected $PARENT_ADDRESS" >&2
+            exit 1
+          fi
+          # 2. hasRole(AGENT_ROLE, generatedKey) must be true. AGENT_ROLE is
+          #    keccak256("AGENT_ROLE") = 0xa9c1...; query the constant from
+          #    the deployed gateway to stay drift-proof.
+          AGENT_ROLE=$(cast call "$GATEWAY" "AGENT_ROLE()(bytes32)" \
+            --rpc-url http://127.0.0.1:8545)
+          HAS_ROLE=$(cast call "$GATEWAY" "hasRole(bytes32,address)(bool)" \
+            "$AGENT_ROLE" "$AGENT_ADDRESS" --rpc-url http://127.0.0.1:8545)
+          if [ "$HAS_ROLE" != "true" ]; then
+            echo "FAIL: hasRole(AGENT_ROLE, $AGENT_ADDRESS) = $HAS_ROLE" >&2
+            exit 1
+          fi
+          echo "OK: generated agent $AGENT_ADDRESS is owned by $PARENT_ADDRESS and holds AGENT_ROLE"
+
+      # The opencode skill requires a config.toml that pins chain id, RPC,
+      # gateway/vault/USDC addresses, the gateway runtime-hash, and the
+      # keystore path. Build it now so the generated key's keystore is the
+      # signer for the headless deposit — i.e. step 4/5/deposit share one
+      # identity (the freshly-authorized agent).
+      - name: Write rmpc config.toml pointing at generated keystore
+        run: |
+          set -euo pipefail
+          CONFIG="${RUNNER_TEMP}/robotmoney-opencode/config.toml"
+          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
+          cat > "$CONFIG" <<EOF
+          chain_id              = $CHAIN_ID
+          rpc_url               = "http://127.0.0.1:8545"
+          gateway_address       = "$GATEWAY_ADDRESS"
+          usdc_address          = "$USDC_ADDRESS"
+          vault_address         = "$VAULT_ADDRESS"
+          gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
+
+          [signer]
+          allow_software_fallback = true
+          keystore_path           = "$AGENT_KEYSTORE_PATH"
+          EOF
+          echo "RMPC_CONFIG=$CONFIG" >> $GITHUB_ENV
 
       - name: Capture pre-deposit vault state
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          ./clients/rust-payment-client/target/release/rmpc get-vault --pretty \
+          ./target/release/rmpc get-vault --config "$RMPC_CONFIG" --pretty \
             > "${RUNNER_TEMP}/robotmoney-opencode/vault-pre.json"
 
       - name: Headless deposit run
         run: |
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          opencode run "deposit 1 USDC to the vault" --format json --plugin "$PWD/plugins/robotmoney-cli" | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
+          opencode run "deposit 1 USDC to the vault using config $RMPC_CONFIG" --format json --plugin "$PWD/plugins/robotmoney-cli" | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
 
       - name: Capture post-deposit vault state
         run: |
           set -euo pipefail
-          ./clients/rust-payment-client/target/release/rmpc get-vault --pretty \
+          ./target/release/rmpc get-vault --config "$RMPC_CONFIG" --pretty \
             > "${RUNNER_TEMP}/robotmoney-opencode/vault-post.json"
 
       - name: Assert deposit transcript
@@ -189,6 +321,18 @@ jobs:
             --transcript "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json" \
             --vault-pre "${RUNNER_TEMP}/robotmoney-opencode/vault-pre.json" \
             --vault-post "${RUNNER_TEMP}/robotmoney-opencode/vault-post.json"
+
+      # Issue #469 acceptance criterion: the on-chain sender of the deposit
+      # transaction must equal the generated key, proving steps 4/5/deposit
+      # share one identity. Extract tx_hash from the transcript, fetch the
+      # transaction with `cast tx`, and compare `from` to AGENT_ADDRESS.
+      - name: Assert deposit was signed by generated agent
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/assert_headless_deposit_sender.py \
+            --transcript "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json" \
+            --expected-sender "$AGENT_ADDRESS" \
+            --rpc-url http://127.0.0.1:8545
 
       - name: Upload deposit transcript
         if: always()
