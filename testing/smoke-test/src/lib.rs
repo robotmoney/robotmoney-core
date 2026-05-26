@@ -88,6 +88,15 @@ pub fn agent_address() -> Address {
     derive_address(&AGENT_PRIVATE_KEY)
 }
 
+/// Demo router weight (bps) for the primary RobotMoneyVault after demo seeding
+/// (issue #465). Largest share so the original vault keeps the bulk of TVL.
+pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 5_000;
+/// Demo router weight (bps) for the first extra RobotMoneyVault stand-in.
+pub const DEMO_WEIGHT_EXTRA1_BPS: u64 = 3_000;
+/// Demo router weight (bps) for the second extra RobotMoneyVault stand-in.
+/// Sum of all three must equal `BPS_DENOMINATOR` (10 000).
+pub const DEMO_WEIGHT_EXTRA2_BPS: u64 = 2_000;
+
 // -- Error type -------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
@@ -184,6 +193,32 @@ struct RmTokenDeploymentJson {
     chain_id: u64,
 }
 
+/// Typed view over the demo-extra-vaults deployment JSON produced by
+/// DeployDemoExtraVaults.s.sol (issue #465). Surfaces the two additional
+/// `RobotMoneyVault` instances seeded into the demo so smoke-test assertions
+/// and downstream tooling can resolve every active vault, not just the
+/// primary one. The basket vaults `ProtocolAssetVault` and `AgentTokenVault`
+/// remain ADR-blocked (see `docs/technical/basket-vault-gap-report.md`); the
+/// demo registers two passthrough-backed stand-ins so the multi-vault router
+/// story is testable today.
+#[derive(Debug, Deserialize)]
+struct DemoExtraVaultsDeploymentJson {
+    vault1: String,
+    vault2: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    adapter1: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    adapter2: String,
+    weight_primary_bps: u64,
+    weight_extra1_bps: u64,
+    weight_extra2_bps: u64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct ComposePsEntry {
     #[serde(rename = "Name")]
@@ -212,6 +247,11 @@ pub struct Fixture {
     router_deployment: RouterDeploymentJson,
     governance_deployment: GovernanceDeploymentJson,
     rm_token_deployment: RmTokenDeploymentJson,
+    /// Demo-only extra vaults registered alongside the primary RobotMoneyVault
+    /// (issue #465). Two passthrough-backed `RobotMoneyVault` stand-ins that
+    /// let the smoke-test exercise multi-vault router weights without
+    /// depending on the still-ADR-blocked basket vaults.
+    demo_extra_vaults: DemoExtraVaultsDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -848,6 +888,44 @@ impl Fixture {
 
         let rm_token_deployment = read_rm_token_deployment(&rm_token_out)?;
 
+        // Deploy demo-only extra vaults and reset the router weight vector to a
+        // three-way split (issue #465). Two additional RobotMoneyVault
+        // instances are registered via DeployDemoExtraVaults.s.sol; the basket
+        // vaults ProtocolAssetVault/AgentTokenVault remain ADR-blocked (see
+        // `docs/technical/basket-vault-gap-report.md`) so we ship passthrough-
+        // backed stand-ins. The weight split mirrors the dapp's Router
+        // Governance demo (5000/3000/2000 bps).
+        let extra_vaults_out = tmp.path().join("demo-extra-vaults.json");
+        run_forge_deploy_demo_extra_vaults(
+            &repo_root,
+            &rpc_url,
+            &extra_vaults_out,
+            &registry_deployment.registry,
+            &router_deployment.router,
+            &deployment.vault,
+            &deployment.usdc,
+            DEMO_WEIGHT_PRIMARY_BPS,
+            DEMO_WEIGHT_EXTRA1_BPS,
+            DEMO_WEIGHT_EXTRA2_BPS,
+        )
+        .inspect_err(|err| {
+            logging::error(
+                "smoke-test",
+                format!("forge deploy demo extra vaults failed: {err}"),
+            );
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "demo extra vaults deployment failure",
+                200,
+            );
+            cleanup();
+        })?;
+
+        let demo_extra_vaults = read_demo_extra_vaults_deployment(&extra_vaults_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -888,6 +966,7 @@ impl Fixture {
             router_deployment,
             governance_deployment,
             rm_token_deployment,
+            demo_extra_vaults,
             repo_root,
         };
 
@@ -1029,6 +1108,49 @@ impl Fixture {
     pub fn rm_token_hex(&self) -> &str {
         &self.rm_token_deployment.rm_token
     }
+
+    /// First demo-only extra `RobotMoneyVault` registered alongside the
+    /// primary vault (issue #465). Passthrough-backed stand-in for the
+    /// still-ADR-blocked basket vaults — see
+    /// `docs/technical/basket-vault-gap-report.md`.
+    pub fn demo_extra_vault1(&self) -> Address {
+        parse_addr(&self.demo_extra_vaults.vault1)
+    }
+    /// Raw string form of the first demo-only extra vault.
+    pub fn demo_extra_vault1_hex(&self) -> &str {
+        &self.demo_extra_vaults.vault1
+    }
+    /// Second demo-only extra `RobotMoneyVault` registered alongside the
+    /// primary vault (issue #465).
+    pub fn demo_extra_vault2(&self) -> Address {
+        parse_addr(&self.demo_extra_vaults.vault2)
+    }
+    /// Raw string form of the second demo-only extra vault.
+    pub fn demo_extra_vault2_hex(&self) -> &str {
+        &self.demo_extra_vaults.vault2
+    }
+    /// Convenience accessor returning all three registered vaults in router-
+    /// weight order (primary, extra1, extra2). Use in smoke tests that assert
+    /// `listVaults()` / `getWeights()` shape after demo seeding.
+    pub fn all_demo_vaults(&self) -> [Address; 3] {
+        [
+            self.vault(),
+            self.demo_extra_vault1(),
+            self.demo_extra_vault2(),
+        ]
+    }
+    /// Router weight (bps) assigned to the primary vault after demo seeding.
+    pub fn demo_weight_primary_bps(&self) -> u64 {
+        self.demo_extra_vaults.weight_primary_bps
+    }
+    /// Router weight (bps) assigned to the first demo extra vault.
+    pub fn demo_weight_extra1_bps(&self) -> u64 {
+        self.demo_extra_vaults.weight_extra1_bps
+    }
+    /// Router weight (bps) assigned to the second demo extra vault.
+    pub fn demo_weight_extra2_bps(&self) -> u64 {
+        self.demo_extra_vaults.weight_extra2_bps
+    }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
     pub fn tempdir(&self) -> &Path {
@@ -1166,6 +1288,68 @@ impl Fixture {
         )
     }
 
+    /// Seed `count` deterministic simulated-depositor EOAs by funding each
+    /// with `per_user_usdc` USDC and a small amount of ETH (for gas), then
+    /// having each EOA route a USDC deposit through `PortfolioRouter` so the
+    /// resulting share balances spread across all three demo vaults
+    /// (issue #465).
+    ///
+    /// Returns the list of `(depositor_address, deposit_tx_hash)` pairs. The
+    /// keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed
+    /// is reproducible across runs and keys never collide with the harness
+    /// EOAs (deployer / pauser / agent / share-receiver / USDC holder).
+    ///
+    /// Each depositor approves the router for exactly `per_user_usdc`, then
+    /// calls `deposit(uint256,uint256[])` with an empty `minSharesPerLeg`
+    /// (slippage protection skipped — this is a deterministic demo seed, not
+    /// a production deposit). Router math splits the USDC across the active
+    /// weight vector and mints shares for each vault back to msg.sender, so
+    /// summing the depositors' per-vault `balanceOf` equals each vault's
+    /// `totalAssets` by construction.
+    pub fn seed_demo_depositors(
+        &self,
+        count: u32,
+        per_user_usdc: u128,
+    ) -> Result<Vec<(Address, String)>, HarnessError> {
+        let mut out = Vec::with_capacity(count as usize);
+        let router_hex = format!("{:#x}", self.router());
+        for i in 0..count {
+            let (pk_hex, depositor) = demo_depositor_key(i);
+
+            // 1. Fund gas (small — single approve + single deposit). 0.05 ETH
+            //    is comfortably above the worst-case deposit cost.
+            fund_eth_from_deployer(
+                &self.rpc_url,
+                &format!("{depositor:#x}"),
+                "50000000000000000",
+            )?;
+
+            // 2. Fund USDC via the canonical harness ERC-20 transfer.
+            self.fund_usdc(depositor, per_user_usdc)?;
+
+            // 3. Approve the router for the full deposit amount.
+            self.cast_send(
+                &pk_hex,
+                self.usdc(),
+                "approve(address,uint256)",
+                &[&router_hex, &per_user_usdc.to_string()],
+            )?;
+
+            // 4. Route the deposit. Empty `minSharesPerLeg` skips slippage
+            //    guard — fine for the demo seed against passthrough adapters
+            //    where shares are exact and deterministic.
+            let tx = self.cast_send(
+                &pk_hex,
+                self.router(),
+                "deposit(uint256,uint256[])",
+                &[&per_user_usdc.to_string(), "[]"],
+            )?;
+
+            out.push((depositor, tx));
+        }
+        Ok(out)
+    }
+
     /// Fund `recipient` with `amount` RM tokens by signing a real
     /// `transfer(address,uint256)` from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`].
     ///
@@ -1259,6 +1443,32 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
     let pubkey = vk.to_encoded_point(false);
     let hash = keccak256(&pubkey.as_bytes()[1..]);
     Address::from_slice(&hash[12..])
+}
+
+/// Derive a deterministic simulated-depositor key for the demo seeding flow
+/// (issue #465). Seed is `keccak256("rm-demo-depositor-v1\0" || index)` so
+/// the resulting key is reproducible across runs and cannot collide with the
+/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC
+/// holder). Returns `(0x-prefixed hex private key, derived address)`.
+fn demo_depositor_key(index: u32) -> (String, Address) {
+    let mut seed = Vec::with_capacity(64);
+    seed.extend_from_slice(b"rm-demo-depositor-v1\0");
+    seed.extend_from_slice(&index.to_be_bytes());
+    let mut pk = keccak256(&seed).0;
+    // secp256k1 keys must be in (0, n-1); the chance of `keccak256 >= n` is
+    // ~2^-127. If it ever happens (or the all-zero edge case), perturb by
+    // hashing again. This loop is bounded; in practice it executes once.
+    loop {
+        if pk != [0u8; 32] {
+            // Try to construct a SigningKey to confirm validity.
+            use k256::ecdsa::SigningKey;
+            if SigningKey::from_bytes((&pk).into()).is_ok() {
+                let addr = derive_address(&pk);
+                return (format!("0x{}", hex::encode(pk)), addr);
+            }
+        }
+        pk = keccak256(pk).0;
+    }
 }
 
 fn parse_addr(s: &str) -> Address {
@@ -1857,6 +2067,66 @@ fn run_forge_deploy_rm_token(
 }
 
 fn read_rm_token_deployment(path: &Path) -> Result<RmTokenDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
+/// Deploy the demo-only extra `RobotMoneyVault` stand-ins via
+/// `DeployDemoExtraVaults.s.sol` (issue #465). The script registers the new
+/// vaults in `VaultRegistry`, attests them on `PortfolioRouter`, and resets
+/// the router weight vector to a three-way split. `wPrimary + wExtra1 +
+/// wExtra2` must equal 10 000 — the script asserts this on-chain.
+#[allow(clippy::too_many_arguments)]
+fn run_forge_deploy_demo_extra_vaults(
+    repo_root: &Path,
+    rpc_url: &str,
+    out: &Path,
+    registry_address: &str,
+    router_address: &str,
+    primary_vault: &str,
+    usdc_address: &str,
+    w_primary: u64,
+    w_extra1: u64,
+    w_extra2: u64,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployDemoExtraVaults.s.sol:DeployDemoExtraVaults",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    .env("REGISTRY_ADDRESS", registry_address)
+    .env("ROUTER_ADDRESS", router_address)
+    .env("PRIMARY_VAULT", primary_vault)
+    .env("USDC_ADDRESS", usdc_address)
+    .env("WEIGHT_PRIMARY_BPS", w_primary.to_string())
+    .env("WEIGHT_EXTRA1_BPS", w_extra1.to_string())
+    .env("WEIGHT_EXTRA2_BPS", w_extra2.to_string())
+    .env("DEPLOYMENT_OUT", out)
+    .current_dir(repo_root);
+    let output = cmd.output()?;
+    logging::log_command_output("forge-demo-extra-vaults", &output);
+    if !output.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployDemoExtraVaults exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_demo_extra_vaults_deployment(
+    path: &Path,
+) -> Result<DemoExtraVaultsDeploymentJson, HarnessError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
     serde_json::from_str(&raw)

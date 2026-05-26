@@ -24,6 +24,7 @@
   - [❱ script](contracts/script/README.md)
     - [AdapterBytecodeGuard](contracts/script/AdapterBytecodeGuard.sol/library.AdapterBytecodeGuard.md)
     - [Deploy](contracts/script/Deploy.s.sol/contract.Deploy.md)
+    - [DeployDemoExtraVaults](contracts/script/DeployDemoExtraVaults.s.sol/contract.DeployDemoExtraVaults.md)
     - [DeployPortfolioRouter](contracts/script/DeployPortfolioRouter.s.sol/contract.DeployPortfolioRouter.md)
     - [DeployRmToken](contracts/script/DeployRmToken.s.sol/contract.DeployRmToken.md)
     - [DeployRouterGovernance](contracts/script/DeployRouterGovernance.s.sol/contract.DeployRouterGovernance.md)
