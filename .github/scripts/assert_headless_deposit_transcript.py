@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -270,6 +271,118 @@ def assert_final_report_refused(report_path: Path, expected_reason: str) -> list
     return failures
 
 
+# ── Plugin-provenance assertion (issue #461) ──────────────────────────────────
+
+
+PLUGIN_DIR_NAME = "plugins/robotmoney-cli"
+
+# Path fragments that identify ambient/global opencode plugin installs.
+# These are the locations opencode and bun use by convention; any plugin
+# resolved from one of these is by definition NOT the in-repo manifest.
+AMBIENT_PLUGIN_PATTERNS: list[str] = [
+    "/.config/opencode/",
+    "/.opencode/",
+    "/.local/share/opencode/",
+    "/usr/local/lib/opencode/",
+    "/usr/lib/opencode/",
+    "/node_modules/",
+    "/.bun/install/global/",
+]
+
+
+def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
+    """Walk a parsed JSON event and collect every string value that mentions
+    ``plugins/robotmoney-cli`` (the in-repo plugin manifest directory).
+
+    OpenCode's NDJSON schema is not formally versioned, so we accept any field
+    name. The fixture and CI integration expect a session/startup-style event
+    such as ``{"type": "session.created", "plugin_paths": ["..."]}`` or a
+    dedicated ``{"type": "plugin.loaded", "path": "..."}`` event; either form
+    satisfies provenance as long as one collected string resolves to
+    ``$GITHUB_WORKSPACE/plugins/robotmoney-cli``.
+    """
+    if isinstance(obj, str):
+        if PLUGIN_DIR_NAME in obj:
+            paths.append(obj)
+        return
+    if isinstance(obj, dict):
+        for value in obj.values():
+            _collect_plugin_paths(value, paths)
+        return
+    if isinstance(obj, list):
+        for value in obj:
+            _collect_plugin_paths(value, paths)
+
+
+def assert_plugin_provenance(events: list[dict]) -> list[str]:
+    """Assert that the transcript carries a plugin-load event whose resolved
+    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-cli``.
+
+    Outside CI ``GITHUB_WORKSPACE`` may be unset; in that case we accept any
+    absolute path whose trailing segment is ``plugins/robotmoney-cli``. This
+    keeps developer-machine reruns workable while still rejecting ambient
+    plugin paths in CI (where ``GITHUB_WORKSPACE`` is always populated).
+    """
+    failures: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    expected = (
+        f"{workspace.rstrip('/')}/{PLUGIN_DIR_NAME}" if workspace else None
+    )
+
+    found: list[str] = []
+    for ev in events:
+        _collect_plugin_paths(ev, found)
+
+    if not found:
+        failures.append(
+            "FAIL (P): no event references the in-repo plugin path "
+            f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
+            '--plugin "$PWD/plugins/robotmoney-cli" so CI exercises the '
+            "manifest at plugins/robotmoney-cli/plugin.json instead of an "
+            "ambient/global opencode plugin."
+        )
+        return failures
+
+    # Always reject any path that lives in an ambient/global plugin location,
+    # even when GITHUB_WORKSPACE is set — defence in depth.
+    for path in found:
+        for pattern in AMBIENT_PLUGIN_PATTERNS:
+            if pattern in path:
+                failures.append(
+                    f"FAIL (P): plugin path {path!r} matches ambient/global "
+                    f"opencode plugin location {pattern!r}. The opencode "
+                    "session must load the plugin from the in-repo "
+                    f"{PLUGIN_DIR_NAME} directory via "
+                    '--plugin "$PWD/plugins/robotmoney-cli", not from a '
+                    "global install."
+                )
+                break
+
+    if expected is not None:
+        matched = [p for p in found if p.rstrip("/").endswith(expected)]
+        if not matched:
+            failures.append(
+                "FAIL (P): plugin path(s) "
+                f"{found!r} do not resolve to $GITHUB_WORKSPACE/"
+                f"{PLUGIN_DIR_NAME} (= {expected!r}). The opencode session "
+                "loaded the plugin from somewhere other than the repo "
+                "checkout (ambient/global), so this run did not exercise "
+                "the in-repo manifest."
+            )
+    else:
+        # No GITHUB_WORKSPACE — at minimum require an absolute path that is
+        # not in an ambient location (already enforced above).
+        if not any(p.startswith("/") and p.rstrip("/").endswith(PLUGIN_DIR_NAME) for p in found):
+            failures.append(
+                "FAIL (P): plugin path(s) "
+                f"{found!r} are not absolute paths ending in "
+                f"{PLUGIN_DIR_NAME}. CI must pass --plugin with an "
+                "absolute path."
+            )
+
+    return failures
+
+
 # ── Shared assertion ───────────────────────────────────────────────────────────
 
 
@@ -334,6 +447,7 @@ def main() -> int:
                 Path(args.final_report), args.expect_refusal
             )
         failures += assert_no_forbidden_hosts(events)
+        failures += assert_plugin_provenance(events)
 
         if failures:
             for msg in failures:
@@ -347,6 +461,7 @@ def main() -> int:
                 f"and contains {args.expect_refusal!r}."
             )
         print("OK: no forbidden explorer/dapp hosts in transcript.")
+        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
 
     else:
         # ── Happy-path mode (issue #137) ───────────────────────────────────────
@@ -355,6 +470,7 @@ def main() -> int:
         if args.final_report is not None:
             failures += assert_final_report_deposited(Path(args.final_report))
         failures += assert_no_forbidden_hosts(events)
+        failures += assert_plugin_provenance(events)
 
         if failures:
             for msg in failures:
@@ -369,6 +485,7 @@ def main() -> int:
         if args.final_report is not None:
             print("OK: final-report.json outcome=deposited, tx_hash is non-null hex.")
         print("OK: no forbidden explorer/dapp hosts in transcript.")
+        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
 
     return 0
 

@@ -23,6 +23,7 @@ exits 0 on pass, non-zero on any assertion failure.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -159,6 +160,98 @@ def assert_get_gateway(events: list[dict]) -> list[str]:
     return failures
 
 
+PLUGIN_DIR_NAME = "plugins/robotmoney-cli"
+
+# Path fragments that identify ambient/global opencode plugin installs.
+AMBIENT_PLUGIN_PATTERNS: list[str] = [
+    "/.config/opencode/",
+    "/.opencode/",
+    "/.local/share/opencode/",
+    "/usr/local/lib/opencode/",
+    "/usr/lib/opencode/",
+    "/node_modules/",
+    "/.bun/install/global/",
+]
+
+
+def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
+    """Walk a parsed JSON event and collect every string value that mentions
+    ``plugins/robotmoney-cli`` (the in-repo plugin manifest directory).
+
+    OpenCode's NDJSON schema is not formally versioned; we accept any field
+    name and match by substring. See the deposit asserter for the matching
+    rationale (issue #461).
+    """
+    if isinstance(obj, str):
+        if PLUGIN_DIR_NAME in obj:
+            paths.append(obj)
+        return
+    if isinstance(obj, dict):
+        for value in obj.values():
+            _collect_plugin_paths(value, paths)
+        return
+    if isinstance(obj, list):
+        for value in obj:
+            _collect_plugin_paths(value, paths)
+
+
+def assert_plugin_provenance(events: list[dict]) -> list[str]:
+    """Assert that the transcript carries a plugin-load event whose resolved
+    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-cli`` (issue #461).
+    """
+    failures: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    expected = (
+        f"{workspace.rstrip('/')}/{PLUGIN_DIR_NAME}" if workspace else None
+    )
+
+    found: list[str] = []
+    for ev in events:
+        _collect_plugin_paths(ev, found)
+
+    if not found:
+        failures.append(
+            "FAIL (P): no event references the in-repo plugin path "
+            f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
+            '--plugin "$PWD/plugins/robotmoney-cli" so CI exercises the '
+            "manifest at plugins/robotmoney-cli/plugin.json instead of an "
+            "ambient/global opencode plugin."
+        )
+        return failures
+
+    for path in found:
+        for pattern in AMBIENT_PLUGIN_PATTERNS:
+            if pattern in path:
+                failures.append(
+                    f"FAIL (P): plugin path {path!r} matches ambient/global "
+                    f"opencode plugin location {pattern!r}. The opencode "
+                    "session must load the plugin from the in-repo "
+                    f"{PLUGIN_DIR_NAME} directory via "
+                    '--plugin "$PWD/plugins/robotmoney-cli".'
+                )
+                break
+
+    if expected is not None:
+        matched = [p for p in found if p.rstrip("/").endswith(expected)]
+        if not matched:
+            failures.append(
+                "FAIL (P): plugin path(s) "
+                f"{found!r} do not resolve to $GITHUB_WORKSPACE/"
+                f"{PLUGIN_DIR_NAME} (= {expected!r}). The opencode session "
+                "loaded the plugin from somewhere other than the repo "
+                "checkout (ambient/global)."
+            )
+    else:
+        if not any(p.startswith("/") and p.rstrip("/").endswith(PLUGIN_DIR_NAME) for p in found):
+            failures.append(
+                "FAIL (P): plugin path(s) "
+                f"{found!r} are not absolute paths ending in "
+                f"{PLUGIN_DIR_NAME}."
+            )
+
+    return failures
+
+
 def assert_no_forbidden_hosts(events: list[dict]) -> list[str]:
     failures: list[str] = []
     full_transcript = json.dumps(events)
@@ -222,6 +315,7 @@ def main() -> int:
     failures += assert_get_vault(events)
     failures += assert_get_gateway(events)
     failures += assert_no_forbidden_hosts(events)
+    failures += assert_plugin_provenance(events)
 
     if failures:
         for msg in failures:
@@ -231,6 +325,7 @@ def main() -> int:
     print("OK: rmpc get-vault called with exit 0, valid JSON envelope.")
     print("OK: rmpc get-gateway called with exit 0, partial: true.")
     print("OK: no forbidden explorer/dapp hosts in transcript.")
+    print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
     return 0
 
 

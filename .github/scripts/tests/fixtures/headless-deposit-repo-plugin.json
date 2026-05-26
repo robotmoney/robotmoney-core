@@ -1,0 +1,8 @@
+{"type": "session.created", "id": "sess-1", "plugin_paths": ["/workspace/plugins/robotmoney-cli"]}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-vault", "exit_code": 0, "stdout": "{\"chain_id\":31337,\"block_number\":1,\"source\":\"json_rpc\"}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-agent", "exit_code": 0, "stdout": "{\"agent\":\"0x0\"}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-balance", "exit_code": 0, "stdout": "{\"balance\":\"1000000\"}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-allowance", "exit_code": 0, "stdout": "{\"allowance\":\"1000000\"}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc self-check", "exit_code": 0, "stdout": "{\"ok\":true}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc deposit --amount 1", "exit_code": 0, "stdout": "{\"tx_hash\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"amount\":\"1000000\"}"}
+{"type": "session.end"}

@@ -149,6 +149,42 @@ For each case, the job:
 
 ---
 
+## G11 — Suite-11b did not exercise the in-repo plugin manifest or prove on-chain deposit delta
+
+**Status:** Closed by issue #461.
+
+**Gap description:** The suite-11b deposit and read jobs invoked
+`opencode run` without `--plugin "$PWD/plugins/robotmoney-cli"`, so the
+agent loaded whatever plugin opencode resolved from the runner's ambient
+state. A broken `plugins/robotmoney-cli/plugin.json` or `SKILL.md` would
+pass green. Separately, the deposit step recorded a `tx_hash` but no
+follow-up `rmpc get-vault` read proved that the vault total assets had
+actually changed — a silent gateway no-op would also pass.
+
+**Closure:**
+
+- Workflow: `.github/workflows/suite-11b-opencode-headless.yml` — both
+  `opencode run` invocations now pass
+  `--plugin "$PWD/plugins/robotmoney-cli"`. The deposit job captures
+  pre- and post-deposit `rmpc get-vault` snapshots and a new
+  `Assert deposit on-chain delta` step asserts `post - pre` equals the
+  deposit amount reported in the transcript.
+- Assertion scripts: `.github/scripts/assert_headless_deposit_transcript.py`
+  and `.github/scripts/assert_headless_read_transcript.py` now require a
+  transcript event whose resolved plugin path equals
+  `$GITHUB_WORKSPACE/plugins/robotmoney-cli`, and reject any path matching
+  an ambient/global opencode plugin location.
+- Round-trip script: `.github/scripts/assert_headless_deposit_delta.py`.
+- Pytest module: `.github/scripts/tests/test_transcript_asserter_provenance.py`
+  pins both positive and negative branches of the provenance check.
+- Negative control: `.github/scripts/tests/negative_control_drop_plugin_flag.sh`
+  proves the workflow-lint one-liner catches a regression that strips
+  the `--plugin` flag.
+- Registry: `~/.agents/lucky-tensor/robotmoney-skills/agent-ensure-feature.md`
+  carries the `opencode plugin provenance` entry with the verify command.
+
+---
+
 ## Adding new gaps
 
 Add rows above this line following the `G<N>` numbering. Each gap entry must

@@ -1,0 +1,4 @@
+{"type": "session.created", "id": "sess-1", "plugin_paths": ["/home/runner/.config/opencode/plugins/robotmoney-cli"]}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-vault", "exit_code": 0, "stdout": "{\"chain_id\":31337,\"block_number\":1,\"source\":\"json_rpc\"}"}
+{"type": "tool.result", "name": "shell", "command": "rmpc get-gateway", "exit_code": 0, "stdout": "{\"chain_id\":31337,\"partial\":true}"}
+{"type": "session.end"}
