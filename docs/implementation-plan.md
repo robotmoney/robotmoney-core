@@ -278,6 +278,18 @@ basket-vault ADRs.
 - [ ] Fixture surfaces basket vault addresses once devnet-deployed
 - [ ] Fork e2e: multi-vault round-trip including basket vaults
 
+### Phase: Demo seeding
+Goal: Wire a presentable end-to-end demo on top of the smoke-test devnet:
+seeded vaults with simulated depositors, multi-vault router weights, wallet
+balance display, RM token bundled into the dapp env, and a Base ETH gas
+faucet drip. Tracked by issue #472 (scout) and the downstream feature
+issues below.
+
+- [x] dev-scout: demo-seeding seam map — `docs/technical/demo-seeding-seams.md` (issue #472)
+- [ ] dapp: show wallet balances for USDC, ETH, RM, and vault receipts on the main page (issue #463)
+- [ ] demo: seed all three vaults, simulated depositors, and multi-vault router weights (issue #465)
+- [ ] dapp: wire RM token address into the dapp bundle + add Base ETH gas faucet drip (issue #466)
+
 ### Phase: Basket vault production path
 Goal: Resolve open ADRs blocking basket-vault router eligibility.
 
