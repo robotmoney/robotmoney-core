@@ -228,6 +228,23 @@ export const erc20Abi = [
     ],
     outputs: [{ name: "", type: "uint256" }],
   },
+  // `decimals` + `symbol` are needed by the main-page balances panel (issue
+  // #463) to render USDC/RM and per-vault receipt-token balances using each
+  // token's own decimal places and ticker label.
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    type: "function",
+    name: "symbol",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
 ] as const;
 
 /**

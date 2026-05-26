@@ -144,4 +144,33 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     );
     console.log("devnet-e2e: AGENT_ROLE confirmed on-chain.");
   });
+
+  // Issue #463 — the main-page balances panel must be visible after wallet
+  // connect on devnet and surface USDC, ETH, and RM rows. The smoke-test
+  // fixture seeds the admin EOA with USDC and RM, so non-zero balances are
+  // expected; however the AC only requires that the panel renders with the
+  // correct symbols, so we assert presence and symbols rather than exact
+  // values (devnet seed amounts are not stable across runs).
+  test("(C) main-page balances panel shows USDC/ETH/RM rows after wallet connect", async ({
+    page,
+  }) => {
+    await injectWallet(page, {
+      privateKey: endpoints.admin_private_key as Hex,
+      rpcUrl: endpoints.rpc_url,
+      chainId: endpoints.chain_id,
+    });
+    await page.goto(endpoints.dapp_url);
+    await connectInjectedWallet(page);
+    await dismissOnboardingIfPresent(page);
+
+    await expect(page.getByTestId("balances-panel")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("balances-panel-row-usdc")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("balances-panel-row-eth")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("balances-panel-row-usdc-symbol")).toHaveText("USDC", {
+      timeout: 30_000,
+    });
+    // The dapp build under test is the devnet build which exports
+    // VITE_RM_TOKEN_ADDRESS, so the RM row is expected to render.
+    await expect(page.getByTestId("balances-panel-row-rm")).toBeVisible({ timeout: 30_000 });
+  });
 });

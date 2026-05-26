@@ -37,6 +37,7 @@ import { ProtocolStats } from "./components/ProtocolStats";
 import { AboutModal } from "./components/AboutModal";
 import { DebugPage } from "./components/DebugPage";
 import { VaultCards } from "./components/VaultCards";
+import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
 import { GovernancePanel } from "./components/GovernancePanel";
 import { makeConfig } from "./lib/wagmi";
@@ -131,6 +132,7 @@ function App() {
         <div className="landing-overview">
           <ProtocolStats apiUrl={explorerApiUrl} />
           <VaultCards apiUrl={explorerApiUrl} />
+          <BalancesPanel gatewayAddress={gateway} rmTokenAddress={rmToken} />
         </div>
 
         <Tabs

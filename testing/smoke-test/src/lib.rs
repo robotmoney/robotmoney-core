@@ -2249,6 +2249,11 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS",
                 fixture.governance_hex().to_string(),
             ),
+            // Issue #463: surface the RM token address so the main-page
+            // balances panel renders the RM row against the harness-deployed
+            // RmToken (otherwise the dapp build falls back to the zero
+            // address and the RM row never appears on devnet).
+            ("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex().to_string()),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
             ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
@@ -2330,6 +2335,14 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS".into(),
                 fixture.governance_hex().to_string(),
             ),
+            // Issue #463: surface the RM token address so the main-page
+            // balances panel renders the RM row against the harness-deployed
+            // RmToken (otherwise the dapp build falls back to the zero
+            // address and the RM row never appears on devnet).
+            (
+                "VITE_RM_TOKEN_ADDRESS".into(),
+                fixture.rm_token_hex().to_string(),
+            ),
             ("INDEXER_GATEWAY".into(), gateway_hex.to_string()),
             ("INDEXER_VAULT".into(), vault_hex.to_string()),
             (
@@ -2377,6 +2390,10 @@ impl DappStack {
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
             // Issue #364: thread governance address into the dapp build.
             .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
+            // Issue #463: thread RM token address into the dapp build so the
+            // main-page balances panel renders the RM row on devnet (the
+            // compose default of zero address hides the wallet's RM balance).
+            .env("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex())
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
             .env("INDEXER_REGISTRY", fixture.registry_hex())
