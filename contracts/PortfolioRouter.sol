@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.2 — Portfolio Router
-// (See also: docs/prd.md §5 — Multi-vault product direction)
+// (See also: docs/prd.md §5 — Core Workflows (Router deposit flows))
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";

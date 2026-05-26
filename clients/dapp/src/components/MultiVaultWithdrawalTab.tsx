@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.2 — Portfolio Router
+
 /**
  * MultiVaultWithdrawalTab — withdraw from any registered vault (issue #417).
  *

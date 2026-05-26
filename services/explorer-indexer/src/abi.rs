@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //! ABI surfaces the indexer decodes — IGateway, RobotMoneyVault, and
 //! VaultRegistry events plus the ERC-4626 / vault state reads.  Mirrors
 //! the contract sources in `contracts/gateway/interfaces/IGateway.sol`,

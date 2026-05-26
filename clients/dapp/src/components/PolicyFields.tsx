@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 import type { Dispatch, SetStateAction } from "react";
 
 type Props = Readonly<{

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * Build-time validation that prevents the dapp from bundling the testnet
  * faucet private key into a production-like build (issue #431).

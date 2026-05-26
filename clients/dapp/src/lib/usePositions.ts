@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * React hook — fetches the connected user's vault positions from
  * GET /v1/accounts/:address/positions (issue #321).

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — third-party ABI surface (Uniswap V3 swap router) consumed by basket-vault rebalancing
 pragma solidity ^0.8.24;
 
 /// @notice Minimal Uniswap V3 SwapRouter02 interface.

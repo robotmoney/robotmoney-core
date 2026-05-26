@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * VerificationBanner — gateway bytecode hash verification status.
  * Rendered at the app shell so the refusal banner is visible before

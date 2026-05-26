@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * wagmi/viem client setup. The dapp uses the browser-injected EIP-1193
  * provider (MetaMask, hardware bridges, etc.) as its only wallet

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 /**
  * Gateway bytecode hash verifier (pure — no wagmi/viem side effects).
  *

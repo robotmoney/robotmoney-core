@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * GovernancePanel — issue #322 / #364 / docs/architecture.md §5.3
  *

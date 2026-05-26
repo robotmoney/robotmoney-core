@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (faucet UX)
+
 /**
  * useFaucetBalances — wagmi hook layer for the FaucetTab. Encapsulates
  * the USDC `balanceOf` reads (harness preflight + recipient read-back)

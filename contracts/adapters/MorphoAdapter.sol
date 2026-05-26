@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/prd.md §5.2 — Bucket A (stable yield, multi-venue)
+// Canonical: docs/architecture.md §4.3 — Vault Adapters (Morpho Gauntlet venue)
+// (See also: docs/prd.md §11.1 — Stable Yield Vault)
 pragma solidity ^0.8.24;
 
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";

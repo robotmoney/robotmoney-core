@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * AccountLayerView — issue #319, account layer.
  *

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 /**
  * AgentsPanel — gates the full per-user agent management surface.
  *

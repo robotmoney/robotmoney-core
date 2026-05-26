@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §6.2 — Custody (see also §6.3 Role Separation)
+
 import { useState, type FormEvent } from "react";
 import { useAccount, useSimulateContract, useWriteContract } from "wagmi";
 import { isAddress, type Address } from "viem";

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §7.1 — Previews
+
 /**
  * TxPreview component — renders the structured preview block defined
  * in docs/technical/dapp-credential-decisions.md §3.3.

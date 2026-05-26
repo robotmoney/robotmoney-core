@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 /**
  * React hook — fetch gateway bytecode and derive a VerificationState.
  *

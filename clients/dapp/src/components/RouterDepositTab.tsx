@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.2 — Portfolio Router
+
 /**
  * RouterDepositTab — multi-vault deposit via PortfolioRouter (issue #417).
  *

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.2 — Portfolio Router
+
 /**
  * RouterContext — shared router data-fetching seam (issue #417).
  *

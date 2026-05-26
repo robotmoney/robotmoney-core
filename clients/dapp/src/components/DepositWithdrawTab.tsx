@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * DepositWithdrawTab — wires the ERC-4626 vault entrypoints into the
  * dapp (issue #257, extended in issue #321 for multi-vault withdrawal).

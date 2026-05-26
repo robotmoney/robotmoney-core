@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * VaultCards — landing-page summary cards for the registered vault set.
  */

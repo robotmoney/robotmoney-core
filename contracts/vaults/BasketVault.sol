@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/architecture.md §4.1 — Vault Family (basket vault base)
+// (See also: docs/technical/basket-vault-gap-report.md — router-eligibility checklist)
 // PROTOTYPE base — subclasses must complete production-readiness gating
 // (router eligibility, audit, etc.) before deployment to mainnet weight.
 // NAV and emergency-unwind minimums derive from a Uniswap V3 TWAP via

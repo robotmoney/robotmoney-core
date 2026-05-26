@@ -1,3 +1,4 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 // Structured error responses. Every failure path returns a small JSON body
 // `{ "error": "<code>", "message": "<human>" }` plus the right HTTP status.
 // No raw SQL errors are leaked to clients (security boundary §11).

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * HistoryPane — issue #88 / docs/implementation-plan.md §12.
  *

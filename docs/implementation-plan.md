@@ -2,9 +2,11 @@
 
 > Companion to `docs/architecture.md` and `docs/prd.md`. This plan covers the
 > full initiative from foundational infrastructure through production readiness.
-> As of May 2026, the application and infrastructure are ~90% complete; the
-> remaining work is concentrated in security hardening, release infrastructure,
-> full-stack integration, and onboarding documentation.
+> As of 2026-05-22, the product layer (Vault registry, Portfolio Router,
+> Router-weight governance MVP, Gateway agent withdrawal, multi-vault explorer
+> and dapp) is shipped on `dev`. The remaining work is concentrated in: a
+> handful of backend/CI gaps, the multi-vault devnet default-adapter switch,
+> onboarding docs, and the basket-vault production-path ADRs.
 >
 > **Relationship to the product.** Robot Money is a multi-vault ERC-4626 yield
 > system (stable-yield, protocol-asset, agent-token vaults) with a
@@ -103,77 +105,75 @@ Status: **Complete.** OpenClaw config and CI demo path (suite-12) are complete.
 
 ### Architectural correctness
 Goal: Fix the gateway authority model so each depositor is the sole authority
-over her own agent. The current code incorrectly gates agent binding on an admin
-role, violating the depositor-sole-authority invariant specified throughout the
-product and security docs.
+over her own agent.
 
-- [ ] Remove admin-gated operator-to-agent binding; depositor sole authority over her own agent
+- [x] Remove admin-gated operator-to-agent binding; depositor sole authority over her own agent — `RobotMoneyGateway.authorizeAgent` sets `agentOwner[agent] = msg.sender` without role gate
 
 ### Contract security hardening
 Goal: Fix all Solidity-level security findings from the 2026-05-08 code review.
-Three findings touch vault storage and must be serialized; a dev-scout maps the
-safe edit order before any implementation begins.
 
-- [ ] dev-scout: map contract security hardening seams and serialization order
-  (`docs/technical/security-hardening-seams.md`)
-- [ ] CEI fix: reorder effects before interactions in gateway `deposit()` and add `ReentrancyGuard`
-- [ ] Decimals offset: choose safe ERC-4626 decimals offset to prevent first-depositor inflation
-- [ ] MorphoAdapter: verify actual withdrawn amount in `withdraw()`
-- [ ] `totalAssets()`: include idle vault USDC balance in accounting
-- [ ] `unpause()`: require `ADMIN_ROLE` not `EMERGENCY_ROLE` — mirror gateway asymmetry
-- [ ] Fork regression tests for vault accounting attack paths
-- [ ] ERC-4626 property-based conformance tests for all vault contracts
-- [ ] Complete test pyramid for timelocked multisig enforcement (#414 remediation) — real vault/gateway Forge tests, rmpc CLI integration test, dead TimelockPanel resolved (#420)
+Status: **Complete.** All findings remediated.
+
+- [x] dev-scout: map contract security hardening seams and serialization order — `docs/technical/security-hardening-seams.md`
+- [x] CEI fix: gateway `deposit()` reordered and `ReentrancyGuard` applied
+- [x] Decimals offset: `RobotMoneyVault._decimalsOffset()` returns 18 (virtual shares)
+- [x] MorphoAdapter: `withdraw()` verifies actual delivered USDC via balance-delta
+- [x] `totalAssets()`: includes idle vault USDC balance
+- [x] `unpause()`: requires `ADMIN_ROLE`
+- [x] Fork regression tests — `contracts/test/VaultForkRegressions.t.sol`
+- [x] ERC-4626 property-based conformance tests — `contracts/test/RobotMoneyVault4626Conformance.t.sol`
+- [x] Test pyramid for timelocked multisig enforcement — `contracts/test/DeployTimelock.t.sol`, dead TimelockPanel removed (#420)
 
 ### Backend and dapp hardening
-Goal: Fix indexer SQL injection surface, explorer-API CORS gap, and two dapp
-security gaps. Contract security findings and backend fixes are independent and
-can run concurrently after their respective scout gates.
+Goal: Fix indexer SQL surface, explorer-API CORS gap, and dapp security gaps.
 
 See also: `docs/technical/dapp-browser-keygen-review.md` (browser-keygen security ADR — in-browser keygen path withdrawn; see §3.1 of `docs/technical/dapp-credential-decisions.md`).
 
-- [ ] dev-scout: map backend hardening seams
+- [ ] dev-scout: map backend hardening seams — partially absorbed into `docs/technical/security-hardening-seams.md`; no dedicated backend scout doc
 - [ ] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion
-- [ ] Explorer API: add CORS configuration for cross-origin dapp access
-- [ ] Dapp: verify gateway bytecode hash before admin writes
-- [ ] Dapp: fix exported config so it is directly loadable by `rmpc`
+- [x] Explorer API: CORS via `EXPLORER_API_ALLOW_ORIGINS` env (`clients/explorer-api/src/main.rs`)
+- [x] Dapp: verify gateway bytecode hash before admin writes (`clients/dapp/src/lib/gatewayVerifier.ts`)
+- [x] Dapp: exported config directly loadable by `rmpc` (`clients/dapp/src/lib/configExport.ts`)
 
 ### Full-stack integration
 Goal: Complete and harden the smoke-test + devnet stack so the full application
 can be started and verified in one command, using real contracts.
 
-- [ ] Wire `RobotMoneyVault` + `PassthroughAdapter` into smoke-test devnet (replace `MockVault`)
-- [ ] Resolve missing devnet contract addresses, chain ID, and RPC endpoint in bootstrap config
-- [ ] Smoke-test: randomize ports and use Bun for dapp build/runtime
-- [ ] Smoke-test: fork devnet from Base mainnet with genesis-time USDC balance grant
-- [ ] Smoke-test: `--full-stack` flag to boot dapp, explorer-API, and indexer alongside devnet
-- [ ] Smoke-test: unified structured logs with rotation for all spawned services
-- [ ] Smoke-test: detect compose collision and poll chain health during startup
-- [ ] Fork e2e: resolve USDC transparent-proxy admin collision so `rmpc` tests pass without spoofing `from`
-- [ ] Dapp: wire Deposit/Withdraw tab to vault ABI with full-stack e2e coverage
-- [ ] Dapp: testnet/devnet USDC faucet UX (onboarding seed + admin faucet tab)
-- [ ] Dapp: Playwright E2E against full-stack Geth+Lighthouse devnet
-- [ ] Dapp: RTL unit tests for refactored admin tabs
+Status: **Substantially complete.** The smoke-test stack boots end-to-end on
+demand; remaining items are the default-adapter switch (see Multi-vault devnet
+below for the canonical N1 item) and a not-yet-confirmed Bun dapp toolchain.
+
+- [ ] Smoke-test: confirm Bun is used for dapp build/runtime (port randomization shipped via `ChainPorts::allocate()`)
+- [x] Resolve missing devnet contract addresses, chain ID, RPC endpoint in bootstrap config (`testing/smoke-test/src/lib.rs` Fixture)
+- [x] Smoke-test: fork devnet from Base mainnet with genesis-time USDC balance grant (`testing/smoke-test/src/genesis_alloc.rs`)
+- [x] Smoke-test: `--full-stack` flag boots dapp, explorer-API, indexer alongside devnet
+- [x] Smoke-test: unified structured logs with rotation (`testing/smoke-test/src/logging.rs`)
+- [x] Smoke-test: compose collision detection and chain health polling
+- [x] Fork e2e: USDC transparent-proxy admin collision resolved via `set_storage_at`
+- [x] Dapp: Deposit/Withdraw tab wired to vault ABI with full-stack e2e coverage
+- [x] Dapp: testnet/devnet USDC faucet UX (`FaucetTab.tsx`, `FaucetTabView.tsx`)
+- [x] Dapp: Playwright E2E against full-stack Geth+Lighthouse devnet
+- [x] Dapp: RTL unit tests for refactored admin tabs (`clients/dapp/tests/unit/admin/`)
 
 ### Operator and agent safety
 Goal: Surface network environment in the CLI, standardize logging, upload CI
 artifacts, and close remaining CI wiring gaps.
 
-- [ ] `rmpc`: surface network environment in CLI logs and agent skill feedback
-- [ ] Logging: standardize Rust logging facade across the workspace
-- [ ] CI: always upload e2e artifacts as run evidence (screenshots + agent logs)
-- [ ] CI: wire opencode-refusal job to existing `testing/doctests` test
+- [x] `rmpc`: network environment surfaced in CLI logs (`commands/status.rs` via `NetworkEnv::from_chain_id()`)
+- [x] Logging: standardized Rust logging facade (`clients/rust-payment-client/src/logging.rs`)
+- [x] CI: e2e artifacts uploaded (`suite-10-dapp-e2e.yml`)
+- [x] CI: opencode-refusal job wired to `testing/doctests` (`suite-11b-opencode-headless.yml`)
 - [ ] CI: slim suite-05 by migrating duplicate tests into suite-06
 
 ### Release infrastructure
 Goal: Ship `rmpc` binary releases, a dapp Docker image, and reliable CI
 triggers so operators can install from published artifacts.
 
-- [ ] CI: `rmpc` binary release workflow
-- [ ] CI: publish dapp Docker image to GHCR with operator `docker-compose`
-- [ ] CI: run all suites unconditionally on push to `dev`
-- [ ] CI: `workflow_dispatch` inputs (tag + commit hash) on release workflows
-- [ ] Remove deprecated Anvil demo suite (`demo.sh` + suite-15)
+- [x] CI: `rmpc` binary release workflow (`.github/workflows/release-rmpc.yml`)
+- [x] CI: dapp Docker image published to GHCR (`.github/workflows/release-dapp.yml`)
+- [ ] CI: run all suites unconditionally on push to `dev` — suite-01-02 and others still gated by `paths:` filters
+- [x] CI: `workflow_dispatch` inputs (tag, commit, dry_run) on release workflows
+- [ ] Remove deprecated Anvil demo suite (`demo.sh` + suite-15) — confirm whether suite-15 (regime-classifier) is the same artifact slated for removal
 - [ ] Audit suite-05 (Anvil mainnet-fork) for necessity vs. suite-06 duplication
 
 ### Docs and onboarding
@@ -181,7 +181,7 @@ Goal: Publish security review, streamline agent-vendor onboarding, document
 devnet configuration, and offer a tunnel-based hosted devnet demo path.
 
 - [ ] Publish 2026-05-09 security review document
-- [ ] Create `BOOTSTRAP.md` and simplify `README` to a single agent-onboarding pointer
+- [x] Create `BOOTSTRAP.md` and simplify `README` to a single agent-onboarding pointer
 - [ ] Add agent-vendor bootstrap prompts (OpenCode, OpenClaw, Claude Code)
 - [ ] Tunnel hosted devnet demo + wallet-routed dapp reads
 
@@ -198,128 +198,91 @@ and agent-token) require separate ADRs before production integration and are
 scouted in the final phase.
 
 ### Phase: Vault registry
-Goal: Deploy an on-chain vault registry so all downstream surfaces — Portfolio
-Router, dapp protocol layer, `rmpc`, and explorer indexer — share a single
-authoritative list of active vaults with their mandates, statuses, caps, risk
-labels, fee schedules, and receipt token addresses. The registry emits events
-the indexer can track.
+Status: **Complete.**
 
-- [ ] dev-scout: map vault registry contract seams, event schema, and indexer integration points
-- [ ] `VaultRegistry.sol` — on-chain registry with `registerVault`, `setVaultStatus`, `getVault`, and `listVaults` read surface; emits `VaultRegistered` and `VaultStatusChanged` events
-- [ ] Deploy script: populate registry with `RobotMoneyVault` on devnet and Base fork
-- [ ] Explorer indexer: ingest `VaultRegistered` / `VaultStatusChanged` events; extend `vaults` table
-- [ ] Explorer API: `GET /v1/vaults` — list all registered vaults with indexed TVL, status, fee, and receipt token
-- [ ] `rmpc get-vaults` — protocol-scope read: all registered vaults, name, risk label, status, TVL, caps, exit fee, receipt token
-- [ ] `rmpc get-vault <address>` — single-vault detail: adapter breakdown, rebalance state, historical TVL from explorer
-- [ ] Fork e2e: registry register → list → status-change round-trip
+- [x] dev-scout: vault registry seams — `docs/technical/security-hardening-seams.md`
+- [x] `VaultRegistry.sol` with `registerVault`, `setVaultStatus`, `getVault`, `listVaults`, and `VaultRegistered`/`VaultStatusChanged` events
+- [x] Deploy script — `contracts/script/DeployVaultRegistry.s.sol`
+- [x] Explorer indexer ingests registry events; `vaults` table extended
+- [x] Explorer API `GET /v1/vaults`
+- [x] `rmpc get-vaults`
+- [x] `rmpc get-vault <address>`
+- [x] Fork e2e — `testing/fork-e2e-rust/tests/registry.rs`
 
 ### Phase: Portfolio Router contract
-Goal: Ship the Portfolio Router — the outer allocation contract that accepts
-USDC and splits deposits across active vaults by RM-governed weights, with
-all-or-revert semantics and a preview surface before signing. This is the
-defining product differentiator and a prerequisite for multi-vault deposits,
-governance execution, and the full dapp action layer.
+Status: **Complete.**
 
-- [ ] dev-scout: map Portfolio Router contract seams, preview call signatures, cap enforcement across legs, and weight execution path
-- [ ] `PortfolioRouter.sol` — accepts USDC, reads active vault list from registry, splits deposit by weight bps; all-or-revert; enforces router cap and per-vault cap; emits `RouterDeposit` with per-leg detail
-- [ ] `PortfolioRouter.sol` preview surface — `previewDeposit(amount)` returns per-vault estimated receipts, fees, weights, and `unavailable` flag per leg
-- [ ] Gateway: extend allowed destinations to include the Portfolio Router; enforce the same deposit policy checks for router-routed agent deposits
-- [ ] Deploy script: deploy router with initial weights pointing at `RobotMoneyVault`; register with gateway as an allowed destination
-- [ ] Fork e2e: router deposit happy path, unavailable-leg revert, cap enforcement, and per-leg event assertions
+- [x] dev-scout — `docs/technical/portfolio-router-decisions.md`
+- [x] `PortfolioRouter.sol` — weight-based USDC split, all-or-revert, caps, `RouterDeposit` event
+- [x] `previewDeposit(amount)` preview surface with per-leg detail
+- [x] Gateway extended to allow router destination
+- [x] Deploy script — `contracts/script/DeployPortfolioRouter.s.sol`
+- [x] Fork e2e — `testing/fork-e2e-rust/tests/router.rs`
 
 ### Phase: Router-weight governance
-Goal: Give RM-token holders on-chain control over Portfolio Router target
-weights. Ship a narrow governance contract: proposal creation, voting, quorum
-and cadence enforcement, execution delay, and weight application. Keep scope
-minimal — this module controls router weights only and cannot govern vault
-internals, agent permissions, or protocol admin operations.
+Status: **Complete (MVP).** Per PR #391, `RouterGovernance` is currently an
+admin-weighted MVP mock; full RM-token-weighted voting is deferred until token
+launch (out of scope per Non-goals).
 
-- [ ] dev-scout: map governance contract design, quorum/cadence/execution parameters, and integration with Portfolio Router weight update
-- [ ] `RouterGovernance.sol` — weight-vote contract: propose new weight bps vector, accept RM-token votes weighted by balance, enforce quorum threshold and voting cadence, apply weights to router after execution delay; emits `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`
-- [ ] `RouterGovernance.sol` read surface — `activeProposal()`, `voteTallies()`, `currentWeights()`, `cadenceParams()` for `rmpc` and dapp reads
-- [ ] Explorer indexer: ingest governance events; add `governance_proposals` and `governance_votes` tables
-- [ ] Explorer API: `GET /v1/router/weights`, `GET /v1/governance/proposals`, `GET /v1/governance/proposals/:id` with vote tallies and execution state
-- [ ] `rmpc get-router` — Portfolio Router state: active vault addresses, current weight bps per vault, pending proposal if any, router cap
-- [ ] `rmpc get-governance` — governance state: active proposal, vote tallies, cadence, quorum threshold, execution delay, last applied weights
-- [ ] Fork e2e: propose → vote past quorum → execute → assert router weights updated
+- [x] dev-scout — `docs/technical/governance-decisions.md`
+- [x] `RouterGovernance.sol` proposal/vote/quorum/execution-delay (admin-weighted MVP)
+- [x] Read surface — `activeProposal()`, `voteTallies()`, `currentWeights()`
+- [x] Explorer indexer ingests governance events; `governance_proposals` and `governance_votes` tables
+- [x] Explorer API `GET /v1/router/weights`, `GET /v1/governance/proposals`
+- [x] `rmpc get-router`
+- [x] `rmpc get-governance`
+- [x] Fork e2e — `testing/fork-e2e-rust/tests/governance.rs`
 
 ### Phase: Gateway agent withdrawal
-Goal: Close the agent-withdrawal gap. The gateway currently gates only agent
-deposits; the architecture specifies the same permission boundary for agent
-withdrawals. Add a `withdraw` verb to the gateway contract and a corresponding
-`rmpc withdraw` command so agents can redeem vault receipts under a
-depositor-owned policy without being able to redirect proceeds.
+Status: **Complete.**
 
-- [ ] dev-scout: map gateway withdrawal seams, receipt-allowance model, policy field additions (asset recipient, allowed source vault), and rmpc signing path
-- [ ] `RobotMoneyGateway.sol`: add `withdraw(bytes32 orderId, uint256 shares, address sourceVault, uint64 deadline, bytes32 idempotencyKey)` — verifies receipt owner, receipt allowance, receipt balance, allowed source, max amount, min net assets out, policy-configured asset recipient, pause, and window cap; calls vault `redeem`; sends USDC to configured recipient only; emits `AgentWithdrawal`
-- [ ] `AgentPolicy`: extend with `assetRecipient` (where USDC proceeds go), `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, and `allowedSourceVaults`
-- [ ] `authorizeAgent` / `setPolicy`: surface new withdrawal fields; dapp config export updated
-- [ ] `rmpc withdraw` command — preflight reads (receipt balance, allowance, vault state, policy, cap usage), build and sign `gateway.withdraw` calldata, broadcast, emit result JSON
-- [ ] Fork e2e: agent withdrawal happy path, recipient-redirect blocked, receipt-allowance check, window cap
+- [x] dev-scout — `docs/technical/gateway-withdrawal-decisions.md`
+- [x] `RobotMoneyGateway.withdraw(orderId, shares, sourceVault, deadline, idempotencyKey)`
+- [x] `AgentPolicy` extended with `assetRecipient`, `maxWithdrawPerPayment`, `maxWithdrawPerWindow`, `allowedSourceVaults`
+- [x] `authorizeAgent` / `setPolicy` surface withdrawal fields; dapp config export updated
+- [x] `rmpc withdraw` command
+- [x] Fork e2e — `testing/fork-e2e-rust/tests/withdrawal.rs`
 
 ### Phase: Multi-vault explorer
-Goal: Extend the explorer indexer schema and API to cover all registered
-vaults, Portfolio Router state, governance events, and account positions across
-vaults. The dapp protocol and account layers depend on this data.
+Status: **Substantially complete.**
 
-- [ ] dev-scout: map schema migration seams across `vault_snapshots`, `agent_deposits`, and new tables; confirm no single-vault assumptions in indexer poll loop
-- [ ] Schema migration: generalize `vault_snapshots` to be keyed by `(chain_id, vault_address)`; add `router_weight_snapshots`, `governance_proposals`, `governance_votes` tables; add `account_positions` materialized or query view
-- [ ] Indexer: poll all registered vaults from the registry; index `RouterDeposit` and `RouterWithdrawal` events alongside direct vault events; index governance proposal and vote events
-- [ ] Explorer API: `GET /v1/vaults/:address` — single vault with adapter allocation history, TVL over time, and event log
-- [ ] Explorer API: `GET /v1/router/state` — current weights, weight change history, governance proposal log
-- [ ] Explorer API: `GET /v1/stats` — aggregate TVL across all active vaults, unique depositor count, global activity feed
-- [ ] Explorer API: `GET /v1/accounts/:address/positions` — receipt token balances and USDC values per vault for an address
-- [ ] Explorer API: `GET /v1/accounts/:address/history` — chronological event log across all vaults for an address
-- [ ] Fork e2e: multi-vault indexer ingestion and API query round-trip
+- [x] Schema migration: per-vault `vault_snapshots`, `router_weight_snapshots`, `governance_proposals`, `governance_votes`
+- [x] Indexer polls all registered vaults; ingests router and governance events
+- [x] Explorer API `GET /v1/vaults/:address`
+- [x] Explorer API `GET /v1/router/state`
+- [ ] Explorer API `GET /v1/stats` — aggregate TVL / depositor count / global activity feed not yet exposed
+- [x] Explorer API `GET /v1/accounts/:address/positions`
+- [x] Explorer API `GET /v1/accounts/:address/history`
+- [x] Fork e2e — multi-vault indexer + API round-trip
 
 ### Phase: Multi-vault dapp
-Goal: Upgrade the dapp from a single-vault tool to the full three-layer
-product surface specified in `docs/architecture.md` §5.3: a protocol layer
-(no wallet required), an account layer (watched address or connected wallet),
-and an action layer with vault-selector deposits, Portfolio Router deposits,
-multi-vault withdrawals, and governance voting.
+Status: **Substantially complete.** All three layers (protocol / account /
+action) are wired with the components named in `docs/architecture.md` §5.3.
 
-- [ ] dev-scout: map dapp component seams — identify shared state (vault registry reads, router weights, governance state), hot files (App.tsx, abi.ts), and the correct split between live-chain reads (safety-critical) and explorer reads (display only)
-- [ ] Protocol layer — vault registry view: list all registered vaults with name, risk label, TVL, APY estimate, exit fee, deposit cap headroom, and status; derived from chain reads and explorer API
-- [ ] Protocol layer — vault detail view: single-vault breakdown with adapter allocations, TVL, rebalance state, fee schedule, caps, receipt token, and historical charts
-- [ ] Protocol layer — Portfolio Router view: active vaults, current target weights, pending governance proposal, historical weight changes
-- [ ] Protocol layer — protocol stats: total TVL across active vaults, unique depositor count, recent global activity feed
-- [ ] Account layer — portfolio position view: receipt token balances across all registered vaults, USDC value of each position using live share price, composite portfolio total; works for watched address (no wallet required) and connected wallet
-- [ ] Account layer — transaction history: chronological deposit, withdrawal, fee, and governance vote events sourced from explorer indexer
-- [ ] Account layer — agent policies panel: all active policies the address owns with allowed destinations, caps, window usage, receivers, and expiry
-- [ ] Action layer — vault-selector deposit: pick direct vault or Portfolio Router path, enter amount, preview (destination weights, estimated receipts, fees, net amount, unavailable legs), sign
-- [ ] Action layer — withdrawal: pick position, enter amount or shares, preview (source vault or router path, estimated USDC, fee, net amount), sign
-- [ ] Action layer — governance voting: review active weight proposal, cast vote, view execution state
-- [ ] Dapp Playwright E2E: multi-vault deposit and withdrawal flows against full-stack devnet with router and governance contracts deployed
+- [x] Protocol layer — vault registry view, vault detail view, router view, protocol stats (`VaultList.tsx`, `VaultCards.tsx`, `RouterView.tsx`)
+- [x] Account layer — portfolio positions, transaction history, agent policies (`AccountLayerView.tsx`)
+- [x] Action layer — vault-selector deposit, withdrawal, governance voting (`DestinationSelector.tsx`, `GovernancePanel.tsx`)
+- [x] Playwright multi-vault E2E
 
 ### Phase: Multi-vault devnet
-Goal: Boot the smoke-test devnet with all production-ready vaults deployed,
-real adapters wired into the stable-yield vault, and the VaultRegistry and
-PortfolioRouter configured across all active vaults. The fork already
-provides live Aave V3, Compound V3, and Morpho Gauntlet addresses; the
-PassthroughAdapter stand-in is a devnet artifact with no further justification.
-ProtocolAssetVault and AgentTokenVault enter the devnet only after their basket
-vault ADRs are resolved (see phase below).
+Goal: Boot the smoke-test devnet with real adapters and all production-ready
+vaults registered. The PassthroughAdapter remains the default in smoke-test
+until N1 lands; ProtocolAssetVault and AgentTokenVault remain blocked on
+basket-vault ADRs.
 
-- [ ] `Deploy.s.sol`: replace `PassthroughAdapter` with real AaveV3, Compound V3, and Morpho adapters wired to their live Base mainnet addresses; remove PassthroughAdapter from the smoke-test deploy path
-- [ ] Smoke-test `Fixture`: surface all adapter addresses in the endpoint summary alongside vault, gateway, and registry addresses
-- [ ] Deploy scripts: register `RobotMoneyVault` (with real adapters) in `VaultRegistry` and set initial router weights in `PortfolioRouter` pointing at the live vault
-- [ ] Fork e2e: smoke-test deposit and withdrawal round-trip against the real adapter stack (Aave, Compound, Morpho) in the Geth+Lighthouse devnet
-- [ ] Deploy scripts: add `ProtocolAssetVault` and `AgentTokenVault` to the devnet deploy sequence once basket vault ADRs are resolved; register each with `VaultRegistry`; set router weights across all three vaults
-- [ ] Smoke-test `Fixture`: surface all basket vault addresses and per-vault adapter breakdown in the endpoint summary once basket vaults are devnet-deployed
-- [ ] Fork e2e: multi-vault deposit, per-vault withdrawal, and VaultRegistry list round-trip in the Geth+Lighthouse devnet
+- [ ] `Deploy.s.sol`: make real AaveV3 / Compound V3 / Morpho adapters the default smoke-test path; remove PassthroughAdapter from the smoke-test deploy
+- [x] Smoke-test `Fixture` surfaces all adapter addresses
+- [x] `RobotMoneyVault` registered in `VaultRegistry`; initial router weights set
+- [x] Fork e2e: deposit/withdrawal round-trip against real adapter stack (Aave/Compound/Morpho)
+- [ ] Deploy scripts: add `ProtocolAssetVault` + `AgentTokenVault` once basket ADRs resolved
+- [ ] Fixture surfaces basket vault addresses once devnet-deployed
+- [ ] Fork e2e: multi-vault round-trip including basket vaults
 
 ### Phase: Basket vault production path
-Goal: Scout the production requirements for the protocol-asset vault
-(wETH/cbBTC/wSOL) and agent-token vault so they can eventually be onboarded
-into the Portfolio Router. Both are prototype contracts today. Neither may
-enter the router until synchronous redemption is proven, TWAP pricing
-replaces slot0, a rebalancing model is specified, and the agent-token
-shortlist governance mechanism is resolved. This phase is scout-only; no
-production deployment without a resolved ADR for each open question.
+Goal: Resolve open ADRs blocking basket-vault router eligibility.
 
-- [ ] dev-scout: audit `ProtocolAssetVault.sol` and `AgentTokenVault.sol` against the router-eligibility checklist (synchronous redemption guarantee, TWAP oracle, rebalancing model, slippage bounds, shortlist governance); produce a gap report and draft ADR for each vault
-- [ ] TWAP oracle: replace slot0 pricing in both basket vaults with a time-weighted average price source; assert manipulation resistance under the scout's recommended window
-- [ ] Rebalancing model: specify and implement `rebalance()` admin function with cost disclosure, equal-weight target, and slippage guard; write ADR resolving trigger authority, cost bearer, and displacement rules
-- [ ] Agent-token shortlist governance: resolve shortlist ownership (admin-curated vs. RM-token inclusion vote vs. bribery mechanism) per `docs/prd.md` §1.3; implement the resolved mechanism
-- [ ] Router eligibility: register both vaults with the vault registry and Portfolio Router once all ADRs are resolved and audited
+- [x] dev-scout audit + gap report — `docs/technical/basket-vault-gap-report.md`
+- [ ] TWAP oracle in both basket vaults (BasketVault TWAP hardening shipped in #459; confirm coverage across ProtocolAssetVault + AgentTokenVault)
+- [ ] Rebalancing model ADR + `rebalance()` implementation
+- [ ] Agent-token shortlist governance — mechanism per `docs/prd.md` §1.3
+- [ ] Router eligibility: register both basket vaults once ADRs resolved + audited

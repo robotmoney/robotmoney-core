@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //! `indexer` — long-running poll loop. Wraps `run_once` in a tokio
 //! interval; press Ctrl-C to stop. For one-shot bounded ingestion
 //! (e.g. CI), use `--once` and `--end-block`.

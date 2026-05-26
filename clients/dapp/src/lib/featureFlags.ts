@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * Feature flags for the human dapp.
  *

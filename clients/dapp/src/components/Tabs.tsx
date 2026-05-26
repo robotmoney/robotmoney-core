@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 import { useState, type ReactNode } from "react";
 
 export interface TabDef {

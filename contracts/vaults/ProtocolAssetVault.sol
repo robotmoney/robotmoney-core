@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+// Canonical: docs/architecture.md §4.1 — Vault Family (protocol-asset basket)
+// (See also: docs/technical/basket-vault-gap-report.md)
 // PROTOTYPE — not audited, not for production use.
 pragma solidity ^0.8.24;
 

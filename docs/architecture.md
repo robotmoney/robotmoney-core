@@ -121,15 +121,24 @@ vault is independently observable and independently pausable. Retiring a
 vault stops new deposits while preserving redemption rights wherever
 possible.
 
-The current deployed source-backed vault is `RobotMoneyVault`, an
-ERC-4626 USDC vault with rmUSDC shares, OpenZeppelin access control,
-pause support, reentrancy protection, caps, an exit fee ceiling, adapter
-routing, rebalance controls, and emergency shutdown. It is a direct
-non-proxy deployment on Base.
+The current production-deployed source-backed vault is
+`RobotMoneyVault`, an ERC-4626 USDC vault with rmUSDC shares,
+OpenZeppelin access control, pause support, reentrancy protection,
+caps, an exit fee ceiling, adapter routing, rebalance controls, and
+emergency shutdown. It is a direct non-proxy deployment on Base.
 
-Future vault categories include protocol-asset, agent-token, and
-thematic/RWA vaults. Those categories need separate execution, oracle,
-liquidity, legal, and disclosure architecture before production use.
+The source tree also contains the basket-vault family — an abstract
+`BasketVault` base with Uniswap V3 TWAP NAV pricing and slippage
+controls, plus concrete `ProtocolAssetVault` (wETH/cbBTC/wSOL exposure)
+and `AgentTokenVault` (admin-curated agent-economy tokens) subclasses.
+These are prototypes (`isPrototype()` returns `true` at the base) and
+remain excluded from production Portfolio Router weights until each
+subclass certifies pool cardinality, per-asset TWAP windows, and an
+intra-vault rebalancing model (PRD §3.15).
+
+Future vault categories include thematic/RWA vaults. Those need
+separate execution, oracle, liquidity, legal, and disclosure
+architecture before production use.
 
 ### 4.2 Portfolio Router
 
@@ -150,10 +159,15 @@ Router requirements:
 - router state, weights, governance execution, and history are publicly
   observable.
 
-The current source tree does not contain a production Portfolio Router
-contract. Any implementation plan derived from this architecture should
-treat the router as a first-class missing contract surface, not as an
-adapter extension or explorer-only concept.
+The source tree contains `contracts/PortfolioRouter.sol`, a dedicated
+router contract that backs the requirements above. It integrates with
+`VaultRegistry` for eligibility, enforces a prototype gate via
+`IPrototypeAware.isPrototype()` with an admin-controlled
+`prototypeOverride` and a separate non-prototype attestation flag,
+applies per-vault withdrawal caps over a fixed window, and depends on
+`RouterGovernance` for weight execution. It is not yet on the
+production mainnet deployment manifest; the contract surface is in
+place, audit and mainnet onboarding remain implementation-plan work.
 
 ### 4.3 Vault Adapters
 

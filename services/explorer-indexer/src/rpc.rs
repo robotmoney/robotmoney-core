@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+//!
 //! Minimal async JSON-RPC client. Only the methods the indexer needs:
 //! `eth_blockNumber`, `eth_chainId`, `eth_getBlockByNumber` (with and
 //! without txs), `eth_getLogs`, `eth_call`. Mirrors the blocking

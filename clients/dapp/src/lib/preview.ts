@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §7.1 — Previews
+
 /**
  * Calldata-preview pipeline. Implements the fixed shape required by
  * docs/technical/dapp-credential-decisions.md §3.3 — every admin/policy

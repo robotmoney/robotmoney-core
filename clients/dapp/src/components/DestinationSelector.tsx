@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * DestinationSelector — lets the depositor pick a deposit destination
  * (issue #320). Two options are offered:

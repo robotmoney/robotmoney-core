@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * ReceiptValueDisplay — shared display component for receipt-token to USD
  * value conversion.

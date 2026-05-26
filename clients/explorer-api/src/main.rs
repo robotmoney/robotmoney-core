@@ -1,3 +1,4 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 // Explorer API binary entry point.
 //
 // Required environment variables:

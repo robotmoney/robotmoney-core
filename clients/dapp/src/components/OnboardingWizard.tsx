@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * OnboardingWizard — first-run flow for wallets that have never authorized
  * an agent on this gateway. Three steps:

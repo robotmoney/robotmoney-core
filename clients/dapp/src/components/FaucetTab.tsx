@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (faucet UX)
+
 /**
  * FaucetTab — testnet/devnet-only admin tab that drips a fixed
  * `FAUCET_DRIP_AMOUNT_USDC` (100 USDC) into the wallet selected from a

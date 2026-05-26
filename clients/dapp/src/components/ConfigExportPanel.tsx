@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * Config export panel — renders the TOML and offers a download link.
  *

@@ -358,10 +358,14 @@ remaining adapters before reverting.
 | Status | Prototype — not audited, not Router-eligible |
 
 Deposits swap USDC into basket assets; withdrawals swap back. NAV is
-denominated in USDC. Swap slippage means actual withdrawal proceeds may
-differ from the preview by up to the configured slippage bound.
-This vault requires a TWAP oracle replacing the current slot0 pricing and
-a resolved rebalancing model (§3.15) before it is Router-eligible.
+denominated in USDC and priced from a Uniswap V3 TWAP over an
+admin-configured per-asset window; `slot0` is not consulted on hot
+paths. Swap slippage means actual withdrawal proceeds may differ from
+the preview by up to the configured slippage bound. Router eligibility
+remains blocked by the unresolved intra-vault rebalancing model
+(§3.15); concrete subclasses must additionally certify pool
+cardinality and per-asset window prerequisites before opting out of
+prototype status.
 
 ### 11.3 Agent Token Vault
 
@@ -379,8 +383,9 @@ a resolved rebalancing model (§3.15) before it is Router-eligible.
 
 Shortlist curation is admin-controlled in the prototype. The production
 model (bribery-based or RM-token inclusion vote) is unresolved (§1.3,
-§1.4, §3.15). This vault is not Router-eligible until shortlist
-governance, TWAP pricing, and the rebalancing model are specified.
+§1.4, §3.15). TWAP pricing is shipped via the basket-vault base.
+Router eligibility remains blocked by unresolved shortlist governance
+and the intra-vault rebalancing model.
 
 ### 11.4 RWA / Thematic Vault
 

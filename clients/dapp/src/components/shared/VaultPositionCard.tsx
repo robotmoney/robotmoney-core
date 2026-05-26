@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * VaultPositionCard — shared display component for a single vault position.
  *

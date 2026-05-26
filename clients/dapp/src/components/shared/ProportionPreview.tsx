@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * ProportionPreview — shared display component for router deposit split.
  *

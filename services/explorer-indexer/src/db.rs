@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+//! (See also: docs/technical/explorer-schema-decisions.md)
 //! sqlx-Postgres pool wrapper plus all DML the indexer issues.
 //!
 //! Every write is keyed on the composite PKs from

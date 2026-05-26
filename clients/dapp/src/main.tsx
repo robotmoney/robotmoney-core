@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (Vite entry point)
+
 /**
  * Entry point. Reads runtime config from `import.meta.env` and bootstraps
  * the wagmi provider. Renders the brand nav, the public landing header,

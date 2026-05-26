@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 /**
  * AgentPoliciesPanel — issue #319, account layer.
  *

@@ -1,3 +1,5 @@
+// Canonical: none — hand-maintained ABI surface; mirrors contracts/
+
 /**
  * Minimal ABI excerpt for the depositor-owned agent-policy actions
  * (issue #269 — each depositor is the sole authority over her own

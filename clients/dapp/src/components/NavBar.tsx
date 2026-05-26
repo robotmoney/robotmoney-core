@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 interface NavBarProps {
   readonly aboutOpen: boolean;
   readonly onToggleAbout: () => void;

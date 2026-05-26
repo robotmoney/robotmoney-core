@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/prd.md §5.2 — Bucket A (vault adapter abstraction)
+// Canonical: docs/architecture.md §4.3 — Vault Adapters
 pragma solidity ^0.8.24;
 
 /// @notice Minimal interface every Robot Money strategy adapter must implement.

@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * Chain-ID classifier for the testnet/devnet USDC faucet UX (issue #261).
  *

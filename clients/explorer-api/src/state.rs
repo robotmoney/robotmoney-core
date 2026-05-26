@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+// (See also: docs/technical/explorer-schema-decisions.md §4)
 // Shared HTTP-handler state.
 //
 // Chain scoping contract (docs/technical/explorer-schema-decisions.md §4):

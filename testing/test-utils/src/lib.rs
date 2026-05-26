@@ -1,3 +1,4 @@
+// Canonical: none — shared test helper crate
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;

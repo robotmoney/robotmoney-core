@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+//! (See also: config/feature-flags.json)
 //! Cross-system feature flag registry — Rust surface.
 //! Canonical source: config/feature-flags.json
 //! Implements: issue #389

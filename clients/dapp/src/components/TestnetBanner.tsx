@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * TestnetBanner — permanent top-of-app banner declaring that the dapp
  * is pointed at the RobotMoney testnet (a historical Base snapshot).

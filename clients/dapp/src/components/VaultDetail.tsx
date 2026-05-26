@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * VaultDetail — reads GET /v1/vaults/:address and renders a single vault.
  *

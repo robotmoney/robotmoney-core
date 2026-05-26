@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 import { useAccount, useSimulateContract, useWriteContract } from "wagmi";
 import { isAddress, type Address } from "viem";
 import { gatewayAbi } from "../lib/abi";

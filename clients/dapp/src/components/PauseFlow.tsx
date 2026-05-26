@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §6.2 — Custody (see also §6.3 Role Separation)
+
 /**
  * PauseFlow — pause/unpause UI surface for issue #82.
  *

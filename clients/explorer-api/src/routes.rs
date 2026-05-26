@@ -1,3 +1,4 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 // HTTP route table.
 //
 // Endpoints are exactly the §11 list plus the vault registry additions (issue #296),

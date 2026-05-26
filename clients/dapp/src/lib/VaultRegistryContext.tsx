@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * VaultRegistryContext — shared registry data-fetching seam (issue #417).
  *

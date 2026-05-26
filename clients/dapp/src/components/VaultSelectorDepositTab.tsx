@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * VaultSelectorDepositTab — direct vault deposit with live preview (issue #417).
  *

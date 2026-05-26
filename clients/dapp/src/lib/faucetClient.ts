@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (faucet UX)
+
 /**
  * Faucet client — drips canonical USDC into a recipient address on the
  * smoke-test full-stack devnet by signing a plain ERC-20

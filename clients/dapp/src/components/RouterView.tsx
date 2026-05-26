@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.2 — Portfolio Router
+
 /**
  * RouterView — reads GET /v1/router/weights and GET /v1/governance/proposals.
  *

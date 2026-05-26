@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * ProtocolStats — reads GET /v1/stats and renders the protocol stats bar.
  *

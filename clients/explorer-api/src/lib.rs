@@ -1,3 +1,4 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 // Robot Money explorer HTTP API.
 //
 // Canonical docs:

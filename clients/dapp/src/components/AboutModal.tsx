@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * AboutModal — lightweight informational overlay shown to general users.
  * Displays app version, git commit SHA, environment class, and a link to

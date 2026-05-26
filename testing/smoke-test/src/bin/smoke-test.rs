@@ -1,3 +1,5 @@
+//! Canonical: docs/architecture.md §3 — Technology Stack
+//! (See also: docs/implementation-plan.md — Full-stack integration phase)
 //! CLI entry point: `cargo r smoke-test`
 //!
 //! Boots the full Geth+Lighthouse devnet with deployed contracts and

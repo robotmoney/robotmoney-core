@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /** Factory for the My Account tab list. Not a component — returns TabDef[]. */
 import type { Dispatch, SetStateAction } from "react";
 import type { Address } from "viem";

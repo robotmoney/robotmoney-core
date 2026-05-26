@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// Canonical: none — third-party ABI surface (Uniswap V3 pool) consumed by basket-vault TWAP
 pragma solidity ^0.8.24;
 
 /// @notice Minimal Uniswap V3 Pool interface used for slot0 pricing and

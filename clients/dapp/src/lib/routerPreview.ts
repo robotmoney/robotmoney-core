@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.2 — Portfolio Router
+
 /**
  * Router deposit preview pipeline (issue #320).
  *

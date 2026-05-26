@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * Single agent-bootstrap prompt rendered by OnboardingWizard step 1.
  *

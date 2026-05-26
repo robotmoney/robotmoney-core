@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+
 /**
  * Thin client wrapper around the phase-5 explorer API
  * (`clients/explorer-api/src/routes.rs`). The dapp calls this only from

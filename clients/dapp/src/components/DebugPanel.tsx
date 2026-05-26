@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * DebugPanel — advanced observability drawer for chain, contract, wallet,
  * account, and runtime diagnostics.

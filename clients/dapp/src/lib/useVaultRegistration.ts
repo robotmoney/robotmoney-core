@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * useAgentRegistration — decides whether a connected wallet should bypass
  * the onboarding wizard. A wallet is "registered" when it satisfies

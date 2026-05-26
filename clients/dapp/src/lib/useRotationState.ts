@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * useRotationState — owns the agent-rotation flow state machine.
  *

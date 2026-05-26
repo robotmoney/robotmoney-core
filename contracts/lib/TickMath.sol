@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// Canonical: none — vendored from Uniswap V3 core (`TickMath.sol`); algorithmic
+// math used by docs/architecture.md §4.1 BasketVault TWAP pricing.
 pragma solidity ^0.8.24;
 
 /// @title TickMath

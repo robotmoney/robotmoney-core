@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 import type { FormEvent } from "react";
 import { useAccount } from "wagmi";
 import type { Address } from "viem";

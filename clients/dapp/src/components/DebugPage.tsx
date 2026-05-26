@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * DebugPage — full-page developer diagnostics route mounted at /debug.
  * Shows build info (version, SHA, env), a live scrolling feed of intercepted

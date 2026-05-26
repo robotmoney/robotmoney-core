@@ -1,5 +1,5 @@
+//! Canonical: docs/walkthroughs/opencode-readonly-fork.md — OpenCode walkthrough doc-parity
 //! Helpers for the OpenCode walkthrough doc-parity tests.
-//! Canonical doc: `docs/walkthroughs/opencode-readonly-fork.md`
 
 use std::path::PathBuf;
 use std::process::Command;

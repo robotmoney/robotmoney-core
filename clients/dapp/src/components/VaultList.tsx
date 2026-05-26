@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * VaultList — reads GET /v1/vaults and renders all registered vaults.
  *

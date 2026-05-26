@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * WatchedAddressInput — issue #319, account layer.
  *

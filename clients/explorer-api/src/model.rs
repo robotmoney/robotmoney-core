@@ -1,3 +1,4 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 // Wire types for HTTP responses.
 //
 // All `uint256` values are serialized as decimal strings (per

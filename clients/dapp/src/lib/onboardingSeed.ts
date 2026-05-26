@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (faucet UX)
+
 /**
  * Onboarding seed — drip a fixed `FAUCET_DRIP_AMOUNT_USDC` (100 USDC)
  * into a newly-onboarded account on testnet/devnet builds only. Issue

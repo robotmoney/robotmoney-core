@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §3 — Technology Stack
+
 /**
  * Force the wallet's stored RPC URL for `targetChainId` to match the
  * one this bundle was built with. Calling `wallet_addEthereumChain`

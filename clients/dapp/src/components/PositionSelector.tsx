@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * PositionSelector — lists the connected user's non-zero vault receipt
  * balances fetched from GET /v1/accounts/:address/positions and lets the

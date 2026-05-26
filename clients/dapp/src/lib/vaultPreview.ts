@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §4.1 — Vault Family
+
 /**
  * Vault calldata-preview pipeline. Mirrors the gateway-side `buildPreview`
  * in `preview.ts` but targets the ERC-4626 vault entrypoints used by the

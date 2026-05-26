@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp
+
 /**
  * StatusHeader — public product context for the dapp landing surface.
  *

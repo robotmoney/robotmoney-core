@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+
 /**
  * `rmpc` config export — flat TOML that `Config::from_str` loads directly.
  *

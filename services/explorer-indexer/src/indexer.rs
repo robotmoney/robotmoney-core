@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //! Indexer orchestration. The hot path is `run_once`: one tick of the
 //! poll loop, factored out so integration tests can drive it directly
 //! without a long-running daemon.

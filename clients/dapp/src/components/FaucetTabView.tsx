@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.3 — Human Dapp (faucet UX)
+
 /**
  * FaucetTabView — pure render layer of the testnet/devnet faucet (issue
  * #261, extended in #365 for RM token drip). All data flows in via props;

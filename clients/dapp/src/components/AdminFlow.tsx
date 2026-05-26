@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §6.2 — Custody (see also §6.3 Role Separation)
+
 /**
  * AdminFlow — orchestrates the wallet-scoped My Account tabs.
  */

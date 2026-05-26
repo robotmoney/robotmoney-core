@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §3 — Technology Stack
 //! CLI entry point: `smoke-test-fork-manifest-validate`
 //!
 //! Validates `testing/ethereum-testnet/config/fork-block.json` against every

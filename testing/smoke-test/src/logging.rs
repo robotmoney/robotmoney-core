@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §3 — Technology Stack
 //! Rotating structured log sink for the smoke-test harness.
 //!
 //! The harness logs its own lifecycle events and the stdout/stderr of the

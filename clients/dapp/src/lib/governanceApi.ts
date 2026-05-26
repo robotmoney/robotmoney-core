@@ -1,3 +1,5 @@
+// Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
+
 /**
  * Governance API client — wraps GET /v1/governance/proposals and
  * GET /v1/governance/proposals/:id from the explorer-api service.

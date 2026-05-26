@@ -1,3 +1,4 @@
+//! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //! CLI entry point: `smoke-test-genesis-ingester`
 //!
 //! Ingests a Base-mainnet Anvil state snapshot into a geth-genesis-compatible
