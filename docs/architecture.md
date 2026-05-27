@@ -469,6 +469,23 @@ applicable, gross amount, fees, net amount, receipt owner, recipient,
 slippage/quote bounds where relevant, and whether execution is
 all-or-revert or an explicitly previewed partial fill.
 
+**Faucet UX (testnet/devnet only)**
+
+A testnet/devnet-only Faucet tab lets operators provision fresh accounts
+end-to-end without backend cheats. It drips canonical USDC, RM governance
+tokens, and native Base ETH for gas. Each drip is a real signed transfer
+from the smoke-test harness holder EOA — the same EOA that receives the
+USDC, RM initial supply, and 1000 ETH at genesis — broadcast through the
+user's injected EIP-1193 provider. No anvil cheats, no impersonation.
+The tab is hidden on mainnet (chain-ID classifier) and additionally
+fails closed when the build-time harness key is absent. The deployed
+RmToken address is threaded into the dapp build via
+`VITE_RM_TOKEN_ADDRESS` at every smoke-test env-injection site (issue
+#466) so the RM balance read and RM drip point at the real contract
+instead of the compose `0x0` fallback. After a single faucet flow
+(Get Base ETH → Get RM tokens), a fresh account can immediately submit
+a governance vote.
+
 ### 5.4 Explorer Indexer and API
 
 The explorer stack exists for public history, dashboards, and display. It

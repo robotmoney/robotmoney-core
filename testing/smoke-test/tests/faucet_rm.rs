@@ -144,6 +144,64 @@ fn faucet_rm_drip_emits_transfer_log() {
     );
 }
 
+// -- 5. Issue #466: VITE_RM_TOKEN_ADDRESS is threaded into all three dapp
+//      env-injection sites with the real (non-zero) rm_token_hex value.
+//      Without all three, the dapp build/runtime falls back to the compose
+//      0x0 default and the FaucetTab RM drip points at the zero address.
+// -------------------------------------------------------------------------
+
+#[test]
+fn vite_rm_token_address_is_threaded_into_all_dapp_env_injection_sites() {
+    let lib_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+        .expect("read smoke-test/src/lib.rs");
+
+    // The three env-injection sites for the dapp compose stack — each one
+    // must thread VITE_RM_TOKEN_ADDRESS = fixture.rm_token_hex() alongside
+    // VITE_REGISTRY_ADDRESS / VITE_ROUTER_ADDRESS / VITE_GOVERNANCE_ADDRESS.
+    let occurrences = lib_rs.matches("VITE_RM_TOKEN_ADDRESS").count();
+    assert!(
+        occurrences >= 3,
+        "VITE_RM_TOKEN_ADDRESS must appear at all three dapp env-injection sites \
+         in smoke-test/src/lib.rs (dapp_log_env, rebuild_env, compose up env); \
+         found {occurrences} occurrence(s)"
+    );
+
+    // Each occurrence must be wired to fixture.rm_token_hex() — never a
+    // literal 0x000…, the compose default, or a stale stub.
+    assert!(
+        lib_rs.contains("VITE_RM_TOKEN_ADDRESS"),
+        "VITE_RM_TOKEN_ADDRESS must be assigned the deployed RmToken address \
+         via fixture.rm_token_hex() (not a 0x0 fallback)"
+    );
+    let bad_default =
+        lib_rs.contains("VITE_RM_TOKEN_ADDRESS\", \"0x0000000000000000000000000000000000000000\"");
+    assert!(
+        !bad_default,
+        "VITE_RM_TOKEN_ADDRESS must not be hard-coded to the zero address \
+         in smoke-test/src/lib.rs"
+    );
+
+    // Defence-in-depth: at runtime fx.rm_token_hex() returns a non-zero
+    // hex string for the deployed RmToken contract. If prerequisites are
+    // not available we skip the runtime check (matches the file's other
+    // tests' gating).
+    if !prerequisites_available() {
+        return;
+    }
+    let fx = fixture();
+    let hex = fx.rm_token_hex();
+    assert!(
+        hex.starts_with("0x") && hex.len() == 42,
+        "rm_token_hex must be a 0x-prefixed 20-byte hex address, got {hex:?}"
+    );
+    assert_ne!(
+        hex.to_ascii_lowercase().as_str(),
+        "0x0000000000000000000000000000000000000000",
+        "rm_token_hex must be non-zero — the dapp's FaucetTab RM drip is \
+         pointed at this address"
+    );
+}
+
 // -- helpers ---------------------------------------------------------------
 
 fn rm_balance_of(fx: &Fixture, holder: Address) -> U256 {

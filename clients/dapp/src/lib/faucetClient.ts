@@ -37,7 +37,11 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { erc20Abi } from "./abi";
-import { FAUCET_DRIP_AMOUNT_RM, FAUCET_DRIP_AMOUNT_USDC } from "./chainClassifier";
+import {
+  FAUCET_DRIP_AMOUNT_ETH,
+  FAUCET_DRIP_AMOUNT_RM,
+  FAUCET_DRIP_AMOUNT_USDC,
+} from "./chainClassifier";
 
 /**
  * Minimal EIP-1193 surface viem's `custom()` actually consumes. We avoid
@@ -159,5 +163,44 @@ export function encodeDripRmCalldata(recipient: Address): Hex {
     abi: erc20Abi,
     functionName: "transfer",
     args: [recipient, FAUCET_DRIP_AMOUNT_RM],
+  });
+}
+
+export interface DripEthArgs {
+  /** Recipient EOA — the new account in onboarding or the wallet selected in the Faucet tab. */
+  readonly recipient: Address;
+  /** The user's injected EIP-1193 provider — used only as a broadcast transport. */
+  readonly provider: Eip1193Like;
+  /** Build-time-inlined harness private key. Must come from `readHarnessPrivateKey`. */
+  readonly harnessPrivateKey: Hex;
+  /** Smoke-test devnet chain ID, e.g. 918453. */
+  readonly chainId: number;
+}
+
+/**
+ * Sign and broadcast a native value transfer of `FAUCET_DRIP_AMOUNT_ETH`
+ * from the harness holder EOA to `recipient` (issue #466). Provisions
+ * fresh governance-test accounts with gas so they can broadcast votes
+ * without operator intervention. Returns the transaction hash. Throws
+ * viem's native error verbatim on failure — the FaucetTab surfaces
+ * `shortMessage` directly per react-guide §Errors & async.
+ *
+ * Same architectural pattern as `dripUsdc` / `dripRmToken`: signs with the
+ * in-bundle harness key (devnet/testnet builds only), broadcasts through
+ * the user's injected EIP-1193 provider. No `anvil_*` cheats, no
+ * impersonation — matches `Fixture::fund_eth_from_harness` on the Rust
+ * side, where the harness holder receives 1000 ETH at genesis via
+ * `DEFAULT_HARNESS_ETH_WEI`.
+ */
+export async function dripEth(args: DripEthArgs): Promise<Hex> {
+  const account = privateKeyToAccount(args.harnessPrivateKey);
+  const client = createWalletClient({
+    account,
+    transport: custom(args.provider),
+  });
+  return client.sendTransaction({
+    chain: null,
+    to: args.recipient,
+    value: FAUCET_DRIP_AMOUNT_ETH,
   });
 }

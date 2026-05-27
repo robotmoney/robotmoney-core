@@ -27,8 +27,10 @@ import { type Address, type Hex, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { useFaucetBalances } from "../lib/useFaucetBalances";
 import {
+  dripEth,
   dripUsdc,
   dripRmToken,
+  type DripEthArgs,
   type DripUsdcArgs,
   type DripRmTokenArgs,
 } from "../lib/faucetClient";
@@ -59,6 +61,12 @@ type Props = Readonly<{
    * `lib/faucetClient.ts`; the e2e harness substitutes its own forwarder.
    */
   dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
+  /**
+   * Injected Base ETH drip handler (issue #466). Production calls `dripEth`
+   * from `lib/faucetClient.ts`; the e2e harness substitutes its own
+   * forwarder.
+   */
+  dripEth?: (args: DripEthArgs) => Promise<Hex>;
 }>;
 
 export function FaucetTab(props: Props) {
@@ -96,6 +104,8 @@ export function FaucetTab(props: Props) {
       rmTokenAddress={props.rmTokenAddress}
       harnessRmBalance={balances.harnessRm.data}
       dripRm={props.dripRm ?? dripRmToken}
+      harnessEthBalance={balances.harnessEth.data}
+      dripEth={props.dripEth ?? dripEth}
     />
   );
 }

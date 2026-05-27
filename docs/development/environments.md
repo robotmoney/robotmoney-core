@@ -246,6 +246,8 @@ Dapp overlay (`docker-compose.dapp.yaml`) requires:
 | `POSTGRES_DB` | `explorer` | Postgres database name |
 | `VITE_ENV_CLASS` | `fork` | One of: `fork` \| `devnet` \| `testnet` \| `mainnet`. Set to `devnet` for this mode. |
 | `VITE_GATEWAY_EXPECTED_CODE_HASH` | _(empty)_ | Keccak-256 of deployed gateway bytecode. The dapp refuses admin writes until this matches. Set from `deployments/devnet.json` field `gateway_runtime_hash`. |
+| `VITE_RM_TOKEN_ADDRESS` | `0x0000000000000000000000000000000000000000` | Deployed RmToken ERC-20 address (issue #466). The smoke-test threads `Fixture::rm_token_hex()` here so the FaucetTab's RM balance read and RM drip point at the real token. Mainnet builds leave this at the zero-address default to keep the RM drip surface inert. |
+| `VITE_FAUCET_DRIP_ETH_WEI` | `10000000000000000` (0.01 ETH) | Native Base ETH gas drip amount for the Faucet tab's "Get Base ETH" button (issue #466). Documented for parity with `FAUCET_DRIP_AMOUNT_ETH` in `clients/dapp/src/lib/chainClassifier.ts`. |
 
 Additional optional dapp vars are documented in `clients/dapp/.env.example`.
 

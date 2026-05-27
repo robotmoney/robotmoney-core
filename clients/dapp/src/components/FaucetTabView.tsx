@@ -19,12 +19,14 @@
 import { useState, type FormEvent } from "react";
 import { type Address, type Hex, getAddress, isAddress } from "viem";
 import {
+  FAUCET_DRIP_AMOUNT_ETH,
+  FAUCET_DRIP_AMOUNT_ETH_LABEL,
   FAUCET_DRIP_AMOUNT_LABEL,
   FAUCET_DRIP_AMOUNT_RM,
   FAUCET_DRIP_AMOUNT_RM_LABEL,
   FAUCET_DRIP_AMOUNT_USDC,
 } from "../lib/chainClassifier";
-import type { DripRmTokenArgs, DripUsdcArgs } from "../lib/faucetClient";
+import type { DripEthArgs, DripRmTokenArgs, DripUsdcArgs } from "../lib/faucetClient";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
 
 type DripStatus =
@@ -50,12 +52,23 @@ export type Props = Readonly<{
   harnessRmBalance?: bigint;
   /** Injected RM drip handler. */
   dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
+  /**
+   * Harness native ETH balance for the Get Base ETH preflight gate (issue
+   * #466). The button is disabled until this is `>= FAUCET_DRIP_AMOUNT_ETH`.
+   */
+  harnessEthBalance?: bigint;
+  /**
+   * Injected Base ETH drip handler. Production calls `dripEth` from
+   * `lib/faucetClient.ts`; the e2e harness substitutes its own forwarder.
+   */
+  dripEth?: (args: DripEthArgs) => Promise<Hex>;
 }>;
 
 export function FaucetTabView(props: Props) {
   const [selected, setSelected] = useState<string>(props.walletAddresses[0] ?? "");
   const [status, setStatus] = useState<DripStatus>({ kind: "idle" });
   const [rmStatus, setRmStatus] = useState<DripStatus>({ kind: "idle" });
+  const [ethStatus, setEthStatus] = useState<DripStatus>({ kind: "idle" });
 
   if (props.harnessPrivateKey === null) {
     return (
@@ -78,6 +91,11 @@ export function FaucetTabView(props: Props) {
     props.harnessRmBalance !== undefined && props.harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM;
   const canDripRm =
     validRecipient && harnessRmFunded && rmStatus.kind !== "pending" && !!props.rmTokenAddress;
+
+  const harnessEthFunded =
+    props.harnessEthBalance !== undefined && props.harnessEthBalance >= FAUCET_DRIP_AMOUNT_ETH;
+  const canDripEth =
+    validRecipient && harnessEthFunded && ethStatus.kind !== "pending" && !!props.dripEth;
 
   const onDrip = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -111,6 +129,39 @@ export function FaucetTabView(props: Props) {
               ? err.message
               : String(err);
         setStatus({ kind: "error", message });
+      });
+  };
+
+  const onDripEth = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!canDripEth || !props.dripEth) return;
+    const provider = getInjectedProvider();
+    if (!provider) {
+      setEthStatus({
+        kind: "error",
+        message: "No injected wallet provider (window.ethereum is undefined).",
+      });
+      return;
+    }
+    setEthStatus({ kind: "pending" });
+    void props
+      .dripEth({
+        recipient: getAddress(selected),
+        provider,
+        harnessPrivateKey: props.harnessPrivateKey as Hex,
+        chainId: props.chainId,
+      })
+      .then((hash) => {
+        setEthStatus({ kind: "success", hash });
+      })
+      .catch((err: unknown) => {
+        const message =
+          typeof err === "object" && err !== null && "shortMessage" in err
+            ? String((err as { shortMessage: unknown }).shortMessage)
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        setEthStatus({ kind: "error", message });
       });
   };
 
@@ -210,6 +261,38 @@ export function FaucetTabView(props: Props) {
           Recipient balance now: {props.recipientBalance.toString()} (base units)
         </p>
       )}
+
+      {props.dripEth ? (
+        <form onSubmit={onDripEth} style={{ marginTop: "1rem" }}>
+          <p>
+            Get <strong>{FAUCET_DRIP_AMOUNT_ETH_LABEL}</strong> of native Base ETH for gas so a
+            fresh account can broadcast governance votes.
+          </p>
+          <button
+            type="submit"
+            data-testid="faucet-eth-drip-button"
+            disabled={!canDripEth}
+            data-harness-eth-funded={harnessEthFunded ? "true" : "false"}
+          >
+            Get Base ETH
+          </button>
+          {ethStatus.kind === "pending" && (
+            <p data-testid="faucet-eth-drip-pending" className="hint">
+              Signing and broadcasting Base ETH drip…
+            </p>
+          )}
+          {ethStatus.kind === "success" && (
+            <p data-testid="faucet-eth-drip-success" className="hint">
+              Base ETH drip sent — tx <code>{ethStatus.hash}</code>
+            </p>
+          )}
+          {ethStatus.kind === "error" && (
+            <p data-testid="faucet-eth-drip-error" className="unsafe-banner">
+              <strong>Base ETH drip failed:</strong> {ethStatus.message}
+            </p>
+          )}
+        </form>
+      ) : null}
 
       {props.rmTokenAddress ? (
         <form onSubmit={onDripRm} style={{ marginTop: "1rem" }}>

@@ -1365,6 +1365,53 @@ impl Fixture {
             &[&format!("{recipient:#x}"), &amount.to_string()],
         )
     }
+
+    /// Fund `recipient` with `value_wei` native ETH by signing a plain value
+    /// transfer from [`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`] (issue #466).
+    ///
+    /// Mirrors the dapp's `dripEth` faucet client: the holder EOA receives
+    /// 1000 ETH at genesis via `genesis_alloc::DEFAULT_HARNESS_ETH_WEI`, so
+    /// a vanilla value transfer signed by the holder's key matches the
+    /// production faucet code path exactly — no Anvil cheats, no deployer
+    /// impersonation. Returns the transaction hash.
+    pub fn fund_eth_from_harness(
+        &self,
+        recipient: Address,
+        value_wei: &str,
+    ) -> Result<String, HarnessError> {
+        let to_hex = format!("{recipient:#x}");
+        logging::debug(
+            "rpc",
+            format!("eth_sendRawTransaction via cast send value={value_wei} -> {to_hex}"),
+        );
+        let out = Command::new("cast")
+            .args([
+                "send",
+                "--rpc-url",
+                &self.rpc_url,
+                "--private-key",
+                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+                "--value",
+                value_wei,
+                &to_hex,
+                "--json",
+            ])
+            .output()?;
+        logging::log_command_output("cast", &out);
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "fund_eth_from_harness failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .map_err(|e| HarnessError::other(format!("fund_eth_from_harness json: {e}")))?;
+        Ok(v.get("transactionHash")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
 }
 
 impl Drop for Fixture {
@@ -2519,10 +2566,10 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS",
                 fixture.governance_hex().to_string(),
             ),
-            // Issue #463: surface the RM token address so the main-page
-            // balances panel renders the RM row against the harness-deployed
-            // RmToken (otherwise the dapp build falls back to the zero
-            // address and the RM row never appears on devnet).
+            // Issues #463/#466: surface the deployed RmToken address so the
+            // main-page balances panel renders the RM row and the Faucet tab's
+            // RM drip + balance reads point at the real ERC-20 contract
+            // instead of falling back to the compose 0x0 default.
             ("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex().to_string()),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
@@ -2605,10 +2652,10 @@ impl DappStack {
                 "VITE_GOVERNANCE_ADDRESS".into(),
                 fixture.governance_hex().to_string(),
             ),
-            // Issue #463: surface the RM token address so the main-page
-            // balances panel renders the RM row against the harness-deployed
-            // RmToken (otherwise the dapp build falls back to the zero
-            // address and the RM row never appears on devnet).
+            // Issues #463/#466: surface the deployed RmToken address so the
+            // main-page balances panel renders the RM row and the Faucet tab's
+            // RM drip + balance reads point at the real ERC-20 contract
+            // instead of falling back to the compose 0x0 default.
             (
                 "VITE_RM_TOKEN_ADDRESS".into(),
                 fixture.rm_token_hex().to_string(),
@@ -2660,9 +2707,10 @@ impl DappStack {
             .env("VITE_ROUTER_ADDRESS", fixture.router_hex())
             // Issue #364: thread governance address into the dapp build.
             .env("VITE_GOVERNANCE_ADDRESS", fixture.governance_hex())
-            // Issue #463: thread RM token address into the dapp build so the
-            // main-page balances panel renders the RM row on devnet (the
-            // compose default of zero address hides the wallet's RM balance).
+            // Issues #463/#466: thread RmToken address into the dapp build
+            // so the main-page balances panel renders the RM row and the RM
+            // drip points at the real ERC-20 contract instead of the compose
+            // 0x0 default.
             .env("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex())
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)

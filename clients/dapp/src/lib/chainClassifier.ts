@@ -70,3 +70,18 @@ export const FAUCET_DRIP_AMOUNT_RM: bigint = 100_000_000_000_000_000_000n;
  * Human-readable form of the RM drip amount for UI rendering only.
  */
 export const FAUCET_DRIP_AMOUNT_RM_LABEL = "100 RM";
+
+/**
+ * Native Base ETH gas drip amount for the Faucet tab (issue #466). Sized to
+ * cover a handful of governance-vote transactions on devnet without
+ * draining the harness holder's genesis ETH allocation; 0.01 ETH leaves
+ * comfortable headroom against the 1000-ETH genesis grant
+ * (`DEFAULT_HARNESS_ETH_WEI`). Single source of truth for the Get Base
+ * ETH button — FaucetTab and FaucetTabView both read this constant.
+ */
+export const FAUCET_DRIP_AMOUNT_ETH: bigint = 10_000_000_000_000_000n; // 0.01 ETH
+
+/**
+ * Human-readable form of the Base ETH drip amount for UI rendering only.
+ */
+export const FAUCET_DRIP_AMOUNT_ETH_LABEL = "0.01 ETH";

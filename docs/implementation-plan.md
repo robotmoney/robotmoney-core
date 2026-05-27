@@ -152,6 +152,7 @@ below for the canonical N1 item) and a not-yet-confirmed Bun dapp toolchain.
 - [x] Fork e2e: USDC transparent-proxy admin collision resolved via `set_storage_at`
 - [x] Dapp: Deposit/Withdraw tab wired to vault ABI with full-stack e2e coverage
 - [x] Dapp: testnet/devnet USDC faucet UX (`FaucetTab.tsx`, `FaucetTabView.tsx`)
+- [x] Dapp: testnet/devnet RM-token + native Base ETH faucet UX wired through `Fixture::rm_token_hex()` and `Fixture::fund_eth_from_harness` (issue #466 — `FaucetTabView`/`faucetClient.dripEth`, smoke-test threads `VITE_RM_TOKEN_ADDRESS` at all three dapp env-injection sites)
 - [x] Dapp: Playwright E2E against full-stack Geth+Lighthouse devnet
 - [x] Dapp: RTL unit tests for refactored admin tabs (`clients/dapp/tests/unit/admin/`)
 

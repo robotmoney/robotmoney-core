@@ -22,8 +22,12 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { Hex } from "viem";
 import { FaucetTabView } from "../../src/components/FaucetTabView";
-import { FAUCET_DRIP_AMOUNT_RM, FAUCET_DRIP_AMOUNT_USDC } from "../../src/lib/chainClassifier";
-import type { DripRmTokenArgs, DripUsdcArgs } from "../../src/lib/faucetClient";
+import {
+  FAUCET_DRIP_AMOUNT_ETH,
+  FAUCET_DRIP_AMOUNT_RM,
+  FAUCET_DRIP_AMOUNT_USDC,
+} from "../../src/lib/chainClassifier";
+import type { DripEthArgs, DripRmTokenArgs, DripUsdcArgs } from "../../src/lib/faucetClient";
 
 const USDC = "0x4444444444444444444444444444444444444444" as const;
 const RM_TOKEN = "0x5555555555555555555555555555555555555555" as const;
@@ -42,6 +46,8 @@ interface RenderOpts {
   rmTokenAddress?: typeof RM_TOKEN;
   harnessRmBalance?: bigint;
   dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
+  harnessEthBalance?: bigint;
+  dripEth?: (args: DripEthArgs) => Promise<Hex>;
 }
 
 function renderView(opts: RenderOpts = {}) {
@@ -62,6 +68,8 @@ function renderView(opts: RenderOpts = {}) {
       rmTokenAddress={opts.rmTokenAddress}
       harnessRmBalance={opts.harnessRmBalance}
       dripRm={opts.dripRm}
+      harnessEthBalance={opts.harnessEthBalance}
+      dripEth={opts.dripEth}
     />,
   );
   return { ...utils, drip, refetch };
@@ -184,5 +192,69 @@ describe("FaucetTabView", () => {
     expect(callArg.rmTokenAddress).toBe(RM_TOKEN);
     expect(callArg.recipient.toLowerCase()).toBe(WALLET_B);
     delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  // -- Base ETH drip (issue #466) -------------------------------------------
+
+  it("does NOT render the Get Base ETH button when dripEth is undefined", () => {
+    renderView({ harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n });
+    expect(screen.queryByTestId("faucet-eth-drip-button")).toBeNull();
+  });
+
+  it("renders the Get Base ETH button when dripEth is provided", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth: vi.fn(async (): Promise<Hex> => "0xeeee" as Hex),
+    });
+    expect(screen.getByTestId("faucet-eth-drip-button")).toBeInTheDocument();
+  });
+
+  it("disables the Get Base ETH button when harness ETH balance is below the drip amount", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH - 1n,
+      dripEth: vi.fn(async (): Promise<Hex> => "0xeeee" as Hex),
+    });
+    expect(screen.getByTestId("faucet-eth-drip-button")).toBeDisabled();
+  });
+
+  it("enables the Get Base ETH button once harness ETH balance covers the drip", () => {
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth: vi.fn(async (): Promise<Hex> => "0xeeee" as Hex),
+    });
+    expect(screen.getByTestId("faucet-eth-drip-button")).not.toBeDisabled();
+  });
+
+  it("calls dripEth with the selected recipient on button click", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = {
+      request: vi.fn(),
+    };
+    const dripEth = vi.fn(async (): Promise<Hex> => "0xeeee" as Hex);
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth,
+    });
+    fireEvent.change(screen.getByTestId("faucet-wallet-select"), { target: { value: WALLET_B } });
+    fireEvent.click(screen.getByTestId("faucet-eth-drip-button"));
+    await screen.findByTestId("faucet-eth-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(dripEth).toHaveBeenCalledTimes(1);
+    const callArg = (dripEth as ReturnType<typeof vi.fn>).mock.calls[0][0] as DripEthArgs;
+    expect(callArg.recipient.toLowerCase()).toBe(WALLET_B);
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("does NOT render the Get Base ETH button when the harness key is missing", () => {
+    renderView({
+      harnessPrivateKey: null,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth: vi.fn(async (): Promise<Hex> => "0xeeee" as Hex),
+    });
+    expect(screen.queryByTestId("faucet-eth-drip-button")).toBeNull();
+    expect(screen.getByTestId("faucet-unavailable")).toBeInTheDocument();
   });
 });

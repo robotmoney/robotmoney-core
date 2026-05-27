@@ -14,7 +14,7 @@
  * the strict equivalent — the transfer would revert otherwise, and we
  * never surface the signing prompt without a positive preflight.
  */
-import { useReadContract } from "wagmi";
+import { useBalance, useReadContract } from "wagmi";
 import type { Address } from "viem";
 import { isAddress } from "viem";
 import { erc20Abi } from "./abi";
@@ -40,6 +40,12 @@ export interface UseFaucetBalancesResult {
   readonly recipient: FaucetBalanceQuery;
   /** Harness RM token balance. Only populated when `rmTokenAddress` is provided. */
   readonly harnessRm: FaucetBalanceQuery;
+  /**
+   * Harness native ETH balance (issue #466). Powers the preflight gate for
+   * the Get Base ETH button — disabled until the harness holds enough ETH
+   * to cover the drip plus gas.
+   */
+  readonly harnessEth: FaucetBalanceQuery;
 }
 
 export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalancesResult {
@@ -82,6 +88,15 @@ export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalance
     },
   });
 
+  const harnessEthQuery = useBalance({
+    address: args.harnessAddress ?? undefined,
+    chainId: args.chainId,
+    query: {
+      enabled: args.harnessAddress !== null,
+      retry: 0,
+    },
+  });
+
   return {
     harness: {
       data: harnessQuery.data as bigint | undefined,
@@ -100,6 +115,12 @@ export function useFaucetBalances(args: UseFaucetBalancesArgs): UseFaucetBalance
       isPending: harnessRmQuery.isPending,
       error: harnessRmQuery.error,
       refetch: harnessRmQuery.refetch,
+    },
+    harnessEth: {
+      data: harnessEthQuery.data?.value,
+      isPending: harnessEthQuery.isPending,
+      error: harnessEthQuery.error,
+      refetch: harnessEthQuery.refetch,
     },
   };
 }
