@@ -214,6 +214,14 @@ struct DemoExtraVaultsDeploymentJson {
     weight_primary_bps: u64,
     weight_extra1_bps: u64,
     weight_extra2_bps: u64,
+    /// RWA/Thematic placeholder registered alongside the three router vaults
+    /// (issue #479). Registered non-Active (Paused) and never router-eligible,
+    /// it rounds the deployed set out to the four PRD §11 categories without
+    /// entering the router weight vector. `#[serde(default)]` keeps the typed
+    /// view backward-compatible with any older deployment JSON lacking the
+    /// field.
+    #[serde(default)]
+    rwa_vault: String,
     #[serde(default)]
     #[allow(dead_code)]
     chain_id: u64,
@@ -1129,15 +1137,29 @@ impl Fixture {
     pub fn demo_extra_vault2_hex(&self) -> &str {
         &self.demo_extra_vaults.vault2
     }
-    /// Convenience accessor returning all three registered vaults in router-
-    /// weight order (primary, extra1, extra2). Use in smoke tests that assert
-    /// `listVaults()` / `getWeights()` shape after demo seeding.
+    /// Convenience accessor returning the three Active, router-eligible
+    /// vaults in router-weight order (primary, extra1, extra2). Use in smoke
+    /// tests that assert `getWeights()` shape or deposit via the router after
+    /// demo seeding. Excludes the RWA/Thematic placeholder, which is non-Active
+    /// and never weighted — see [`Fixture::rwa_vault`].
     pub fn all_demo_vaults(&self) -> [Address; 3] {
         [
             self.vault(),
             self.demo_extra_vault1(),
             self.demo_extra_vault2(),
         ]
+    }
+    /// RWA/Thematic placeholder registered by `DeployDemoExtraVaults.s.sol`
+    /// (issue #479, PRD §11.4). Registered non-Active (Paused) and never
+    /// router-eligible: it makes the deployed vault set match the four PRD §11
+    /// categories without ever receiving router flow. Smoke tests assert it is
+    /// present in `listVaults()` and reports a non-Active status.
+    pub fn rwa_vault(&self) -> Address {
+        parse_addr(&self.demo_extra_vaults.rwa_vault)
+    }
+    /// Raw string form of the RWA/Thematic placeholder address.
+    pub fn rwa_vault_hex(&self) -> &str {
+        &self.demo_extra_vaults.rwa_vault
     }
     /// Router weight (bps) assigned to the primary vault after demo seeding.
     pub fn demo_weight_primary_bps(&self) -> u64 {

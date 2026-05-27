@@ -392,9 +392,20 @@ and the intra-vault rebalancing model.
 
 | Property | Value |
 | --- | --- |
-| Status | Future — not specified |
+| Name | Robot Money RWA / Thematic |
+| Risk label | SPECULATIVE |
+| Status | Future — not specified; registered as a non-Active placeholder |
 
 Flagged for narrative value (SP500 perp via Hyperliquid, commodities).
 Requires separate legal, oracle, liquidation, disclosure, and redemption
 work before inclusion in Portfolio Router allocations (a business/launch
 decision tracked outside this repository).
+
+To keep the deployed vault set aligned with this four-category catalog, the
+RWA/Thematic vault is registered in `VaultRegistry` as a non-Active
+placeholder that is never Router-eligible. It is therefore visible everywhere
+the registry is read — the public allocation surface and the dapp render it as
+a Future / coming-soon entry — while the Portfolio Router skips it entirely
+(it is not in the weight vector and `isRouterEligible` returns false). The
+non-Active state is on-chain registry state, not a code variant, consistent
+with the single-production-codebase principle.

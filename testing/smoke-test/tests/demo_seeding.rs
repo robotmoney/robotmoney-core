@@ -1,14 +1,17 @@
-//! Smoke-test: demo seeding of three vaults, simulated depositors, and a
-//! non-degenerate router weight split (issue #465).
+//! Smoke-test: demo seeding of the four-vault catalog, simulated depositors,
+//! and a non-degenerate router weight split (issues #465, #479).
 //!
-//! Asserts the smoke-test devnet boots in the post-#465 shape:
-//!   1. `VaultRegistry.listVaults()` returns three Active vaults — the
-//!      primary `RobotMoneyVault` plus the two `DeployDemoExtraVaults`
-//!      stand-ins.
+//! Asserts the smoke-test devnet boots in the four-vault shape:
+//!   1. `VaultRegistry.listVaults()` returns four vaults — the primary
+//!      `RobotMoneyVault`, the two `DeployDemoExtraVaults` stand-ins (all
+//!      three Active), plus the RWA/Thematic placeholder (issue #479), which
+//!      is registered non-Active (Paused) and never router-eligible so the
+//!      deployed set matches the four PRD §11 categories.
 //!   2. `PortfolioRouter.getWeights()` returns the three demo weights
-//!      (5000/3000/2000 bps) summing to exactly 10 000.
-//!   3. After `Fixture::seed_demo_depositors`, each vault reports non-zero
-//!      `totalAssets` and the sum of the simulated depositors' share
+//!      (5000/3000/2000 bps) summing to exactly 10 000 — the RWA placeholder
+//!      is never weighted.
+//!   3. After `Fixture::seed_demo_depositors`, each Active vault reports
+//!      non-zero `totalAssets` and the sum of the simulated depositors' share
 //!      balances on each vault equals that vault's `totalAssets`.
 //!
 //! The basket vaults `ProtocolAssetVault` and `AgentTokenVault` remain
@@ -164,10 +167,38 @@ fn decode_address_array_and_uint_array(hex: &str) -> (Vec<Address>, Vec<u128>) {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-/// AC1: VaultRegistry.listVaults() returns three Active vaults.
+/// Read a registered vault's `VaultStatus` via `getVault(address)`.
+///
+/// `VaultRegistry.getVault(address)` returns `(VaultMetadata metadata,
+/// VaultStatus status)`. The outer tuple ABI layout is:
+///   bytes  0..32  — offset to dynamic `metadata` (holds a string, encoded
+///                   out-of-line)
+///   bytes 32..64  — `status` as a uint8 zero-padded to 32 bytes
+/// We only need the status word; pulling the second head slot is the most
+/// direct decode and avoids walking the metadata bytes. Status encodes as
+/// 0=Active, 1=Paused, 2=Retired.
+fn vault_status(fx: &Fixture, vault: Address) -> u128 {
+    // getVault(address) selector: 0x0eb9af38
+    let data = format!(
+        "0x0eb9af38000000000000000000000000{}",
+        format!("{vault:#x}").trim_start_matches("0x")
+    );
+    let raw = eth_call_raw(fx.rpc_url(), fx.registry(), &data);
+    let s = raw.trim_start_matches("0x");
+    assert!(
+        s.len() >= 128,
+        "getVault({vault:#x}) return too short: {raw}"
+    );
+    let status_word = &s[64..128];
+    u128::from_str_radix(status_word, 16)
+        .unwrap_or_else(|e| panic!("status word {status_word:?} not hex: {e}"))
+}
+
+/// AC1 (issues #465, #479): VaultRegistry.listVaults() returns four vaults —
+/// three Active router vaults plus the non-Active RWA/Thematic placeholder.
 #[test]
-fn registry_lists_three_active_vaults() {
-    if skip_if_no_prereqs("registry_lists_three_active_vaults") {
+fn registry_lists_four_vaults_with_rwa_placeholder() {
+    if skip_if_no_prereqs("registry_lists_four_vaults_with_rwa_placeholder") {
         return;
     }
     let fx = fixture();
@@ -177,45 +208,43 @@ fn registry_lists_three_active_vaults() {
     let vaults = decode_address_array(&raw);
     assert_eq!(
         vaults.len(),
-        3,
-        "expected 3 registered vaults after demo seeding, got {} ({:?})",
+        4,
+        "expected 4 registered vaults after demo seeding (3 Active + RWA placeholder), got {} ({:?})",
         vaults.len(),
         vaults
     );
 
-    let expected = fx.all_demo_vaults();
-    for v in expected {
+    // The three Active router vaults must be present and report Active.
+    let active = fx.all_demo_vaults();
+    for v in active {
         assert!(
             vaults.contains(&v),
-            "expected vault {v:#x} in registry, got {vaults:?}"
+            "expected Active vault {v:#x} in registry, got {vaults:?}"
         );
-    }
-
-    // Confirm each is Active. VaultRegistry.getVault(address) returns
-    // (VaultMetadata metadata, VaultStatus status). The outer tuple ABI
-    // layout is:
-    //   bytes  0..32  — offset to dynamic `metadata` (VaultMetadata holds a
-    //                   string so it's encoded out-of-line)
-    //   bytes 32..64  — `status` as a uint8 zero-padded to 32 bytes
-    // We only need the status word; pulling the second head slot is the
-    // most direct decode and avoids walking the metadata bytes.
-    for v in expected {
-        // getVault(address) selector: 0x0eb9af38
-        let data = format!(
-            "0x0eb9af38000000000000000000000000{}",
-            format!("{v:#x}").trim_start_matches("0x")
-        );
-        let raw = eth_call_raw(fx.rpc_url(), fx.registry(), &data);
-        let s = raw.trim_start_matches("0x");
-        assert!(s.len() >= 128, "getVault({v:#x}) return too short: {raw}");
-        let status_word = &s[64..128];
-        let status = u128::from_str_radix(status_word, 16)
-            .unwrap_or_else(|e| panic!("status word {status_word:?} not hex: {e}"));
+        let status = vault_status(fx, v);
         assert_eq!(
             status, 0,
             "vault {v:#x} should be Active (status=0); got status={status}"
         );
     }
+
+    // The RWA/Thematic placeholder must be present and report a non-Active
+    // status (Paused=1). Its inactive state is on-chain registry state, the
+    // same signal the dapp reads to render a Future / Coming-soon tile.
+    let rwa = fx.rwa_vault();
+    assert!(
+        vaults.contains(&rwa),
+        "expected RWA placeholder {rwa:#x} in registry, got {vaults:?}"
+    );
+    let rwa_status = vault_status(fx, rwa);
+    assert_ne!(
+        rwa_status, 0,
+        "RWA placeholder {rwa:#x} must be non-Active; got status={rwa_status}"
+    );
+    assert_eq!(
+        rwa_status, 1,
+        "RWA placeholder {rwa:#x} should be Paused (status=1); got status={rwa_status}"
+    );
 }
 
 /// AC3: Router weights cover all three vaults, each > 0, summing to 10 000.

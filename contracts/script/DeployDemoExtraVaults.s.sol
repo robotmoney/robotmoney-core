@@ -16,8 +16,9 @@ import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 
 /// @title DeployDemoExtraVaults
 /// @notice Demo-only deploy script that registers two additional ERC-4626
-///         vaults in `VaultRegistry` and re-sets the router weight vector to
-///         a non-degenerate three-way split.
+///         vaults plus a non-Active RWA/Thematic placeholder in
+///         `VaultRegistry` and re-sets the router weight vector to a
+///         non-degenerate three-way split.
 ///
 ///         Why this exists: the production basket vaults `ProtocolAssetVault`
 ///         and `AgentTokenVault` remain ADR-blocked (see
@@ -29,6 +30,19 @@ import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 ///         wired to `PassthroughAdapter` — the same adapter the smoke-test
 ///         devnet already uses for the primary vault. They are demo-only
 ///         stand-ins; no mainnet build runs this script.
+///
+///         Four-vault PRD conformance (issue #479): PRD §11 names four vault
+///         categories — Stable Yield, Protocol Asset, Agent Token, and
+///         RWA/Thematic. PRD §11.4 marks RWA/Thematic as Future / not
+///         specified. To make the deployed vault set match the four-vault
+///         catalog, this script also registers a single RWA/Thematic
+///         placeholder. It is registered then set to a non-Active status
+///         (Paused) and is never marked router-eligible, so `PortfolioRouter`
+///         skips it (it is not in the weight vector) and the dapp renders it
+///         as a Future / Coming-soon tile whose inactive state is read from
+///         on-chain status, not a hard-coded flag. This is registry state, not
+///         a code variant — single-production-codebase
+///         (`docs/development/single-production-codebase.md`).
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the new vaults and
@@ -50,6 +64,9 @@ import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 ///                                (default: "Robot Money Demo Vault A")
 ///           VAULT2_NAME        — registry name for the second extra vault
 ///                                (default: "Robot Money Demo Vault B")
+///           RWA_VAULT_NAME     — registry name for the RWA/Thematic
+///                                placeholder
+///                                (default: "Robot Money RWA / Thematic")
 ///           DEPLOYMENT_OUT     — output JSON path
 ///                                (default: "deployments/demo-extra-vaults-<chain_id>.json")
 contract DeployDemoExtraVaults is Script {
@@ -64,12 +81,18 @@ contract DeployDemoExtraVaults is Script {
         uint256 weightPrimaryBps;
         uint256 weightExtra1Bps;
         uint256 weightExtra2Bps;
+        /// @dev RWA/Thematic placeholder (issue #479). Registered non-Active
+        ///      (Paused) and never router-eligible; not in the weight vector.
+        address rwaVault;
     }
 
     /// @notice Default human-readable name for the first extra demo vault.
     string public constant DEFAULT_VAULT1_NAME = "Robot Money Demo Vault A";
     /// @notice Default human-readable name for the second extra demo vault.
     string public constant DEFAULT_VAULT2_NAME = "Robot Money Demo Vault B";
+    /// @notice Default human-readable name for the RWA/Thematic placeholder
+    ///         (issue #479, PRD §11.4). Future / not-specified vault category.
+    string public constant DEFAULT_RWA_NAME = "Robot Money RWA / Thematic";
 
     /// @notice TVL cap mirrored from Deploy.s.sol (10M USDC) — demo vaults
     ///         carry the same caps as the primary so the harness can fund any
@@ -91,6 +114,7 @@ contract DeployDemoExtraVaults is Script {
         uint256 wExtra2;
         string name1;
         string name2;
+        string rwaName;
     }
 
     /// @notice Forge broadcast entrypoint. Deploys two extra demo vaults +
@@ -118,6 +142,7 @@ contract DeployDemoExtraVaults is Script {
         p.wExtra2 = vm.envUint("WEIGHT_EXTRA2_BPS");
         p.name1 = _envStringOrDefault("VAULT1_NAME", DEFAULT_VAULT1_NAME);
         p.name2 = _envStringOrDefault("VAULT2_NAME", DEFAULT_VAULT2_NAME);
+        p.rwaName = _envStringOrDefault("RWA_VAULT_NAME", DEFAULT_RWA_NAME);
 
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
         require(p.registry != address(0), "REGISTRY_ADDRESS=0");
@@ -157,6 +182,18 @@ contract DeployDemoExtraVaults is Script {
         // 4. Reset the router weight vector to the three-way split.
         _setThreeWayWeights(router, p.primaryVault, address(vault1), address(vault2), p);
 
+        // 5. Register the RWA/Thematic placeholder (issue #479). It rounds the
+        //    deployed set out to the four PRD §11 categories. It is registered
+        //    then immediately set to a non-Active status (Paused) and is never
+        //    marked router-eligible (the registry default), so:
+        //      - PortfolioRouter never weights or deposits into it (it is not
+        //        in the weight vector and isRouterEligible() == false);
+        //      - the dapp renders it as a Future / Coming-soon tile, reading
+        //        its inactive state from on-chain status rather than a flag.
+        //    No adapter is wired: the placeholder takes no deposits, so a bare
+        //    RobotMoneyVault registry entry is sufficient.
+        address rwaVault = _registerRwaPlaceholder(registry, p);
+
         d = Deployed({
             vault1: address(vault1),
             vault2: address(vault2),
@@ -164,8 +201,27 @@ contract DeployDemoExtraVaults is Script {
             adapter2: address(adapter2),
             weightPrimaryBps: p.wPrimary,
             weightExtra1Bps: p.wExtra1,
-            weightExtra2Bps: p.wExtra2
+            weightExtra2Bps: p.wExtra2,
+            rwaVault: rwaVault
         });
+    }
+
+    /// @dev Deploy a bare RobotMoneyVault, register it, and set it to a
+    ///      non-Active status so the Router skips it and the dapp marks it
+    ///      Future. Router eligibility is left at the registry default
+    ///      (`false`) — the placeholder is never opted in. Idempotent only at
+    ///      registration; a re-run deploys a fresh vault address (demo seed
+    ///      runs once against a fresh fork).
+    function _registerRwaPlaceholder(VaultRegistry registry, Params memory p)
+        internal
+        returns (address rwaVault)
+    {
+        RobotMoneyVault rwa = _deployVault(p);
+        rwaVault = address(rwa);
+        registry.registerVault(
+            rwaVault, VaultRegistry.VaultMetadata({name: p.rwaName, asset: p.usdc, registeredAt: 0})
+        );
+        registry.setVaultStatus(rwaVault, VaultRegistry.VaultStatus.Paused);
     }
 
     function _deployVault(Params memory p) internal returns (RobotMoneyVault) {
@@ -255,6 +311,7 @@ contract DeployDemoExtraVaults is Script {
         console2.log("DeployDemoExtraVaults complete");
         console2.log("  vault1  :", d.vault1);
         console2.log("  vault2  :", d.vault2);
+        console2.log("  rwaVault:", d.rwaVault);
         console2.log("  wPrimary:", d.weightPrimaryBps);
         console2.log("  wExtra1 :", d.weightExtra1Bps);
         console2.log("  wExtra2 :", d.weightExtra2Bps);
@@ -276,6 +333,7 @@ contract DeployDemoExtraVaults is Script {
         vm.serializeAddress(obj, "vault2", d.vault2);
         vm.serializeAddress(obj, "adapter1", d.adapter1);
         vm.serializeAddress(obj, "adapter2", d.adapter2);
+        vm.serializeAddress(obj, "rwa_vault", d.rwaVault);
         vm.serializeUint(obj, "weight_primary_bps", d.weightPrimaryBps);
         vm.serializeUint(obj, "weight_extra1_bps", d.weightExtra1Bps);
         string memory json = vm.serializeUint(obj, "weight_extra2_bps", d.weightExtra2Bps);

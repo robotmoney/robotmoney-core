@@ -78,6 +78,9 @@ jobs:
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
 
+      - name: Four-vault reference invariant (issue #479)
+        run: python3 .github/scripts/check_four_vault_references.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest

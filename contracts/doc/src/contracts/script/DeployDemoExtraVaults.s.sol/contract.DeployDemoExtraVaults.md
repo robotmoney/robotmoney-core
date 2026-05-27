@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/4abca778fbff27a7ffb15e9efc3710db004e89f7/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -8,8 +8,9 @@ Script
 DeployDemoExtraVaults
 
 Demo-only deploy script that registers two additional ERC-4626
-vaults in `VaultRegistry` and re-sets the router weight vector to
-a non-degenerate three-way split.
+vaults plus a non-Active RWA/Thematic placeholder in
+`VaultRegistry` and re-sets the router weight vector to a
+non-degenerate three-way split.
 Why this exists: the production basket vaults `ProtocolAssetVault`
 and `AgentTokenVault` remain ADR-blocked (see
 `docs/technical/basket-vault-gap-report.md` — they lack TWAP
@@ -20,6 +21,18 @@ weights) the demo registers two extra `RobotMoneyVault` instances
 wired to `PassthroughAdapter` — the same adapter the smoke-test
 devnet already uses for the primary vault. They are demo-only
 stand-ins; no mainnet build runs this script.
+Four-vault PRD conformance (issue #479): PRD §11 names four vault
+categories — Stable Yield, Protocol Asset, Agent Token, and
+RWA/Thematic. PRD §11.4 marks RWA/Thematic as Future / not
+specified. To make the deployed vault set match the four-vault
+catalog, this script also registers a single RWA/Thematic
+placeholder. It is registered then set to a non-Active status
+(Paused) and is never marked router-eligible, so `PortfolioRouter`
+skips it (it is not in the weight vector) and the dapp renders it
+as a Future / Coming-soon tile whose inactive state is read from
+on-chain status, not a hard-coded flag. This is registry state, not
+a code variant — single-production-codebase
+(`docs/development/single-production-codebase.md`).
 Required env vars:
 ADMIN_ADDRESS      — receives ADMIN_ROLE on the new vaults and
 must already hold ADMIN_ROLE on
@@ -39,6 +52,9 @@ VAULT1_NAME        — registry name for the first extra vault
 (default: "Robot Money Demo Vault A")
 VAULT2_NAME        — registry name for the second extra vault
 (default: "Robot Money Demo Vault B")
+RWA_VAULT_NAME     — registry name for the RWA/Thematic
+placeholder
+(default: "Robot Money RWA / Thematic")
 DEPLOYMENT_OUT     — output JSON path
 (default: "deployments/demo-extra-vaults-<chain_id>.json")
 
@@ -59,6 +75,16 @@ Default human-readable name for the second extra demo vault.
 
 ```solidity
 string public constant DEFAULT_VAULT2_NAME = "Robot Money Demo Vault B"
+```
+
+
+### DEFAULT_RWA_NAME
+Default human-readable name for the RWA/Thematic placeholder
+(issue #479, PRD §11.4). Future / not-specified vault category.
+
+
+```solidity
+string public constant DEFAULT_RWA_NAME = "Robot Money RWA / Thematic"
 ```
 
 
@@ -110,6 +136,22 @@ stack-too-deep limit.
 
 ```solidity
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
+```
+
+### _registerRwaPlaceholder
+
+Deploy a bare RobotMoneyVault, register it, and set it to a
+non-Active status so the Router skips it and the dapp marks it
+Future. Router eligibility is left at the registry default
+(`false`) — the placeholder is never opted in. Idempotent only at
+registration; a re-run deploys a fresh vault address (demo seed
+runs once against a fresh fork).
+
+
+```solidity
+function _registerRwaPlaceholder(VaultRegistry registry, Params memory p)
+    internal
+    returns (address rwaVault);
 ```
 
 ### _deployVault
@@ -205,6 +247,9 @@ struct Deployed {
     uint256 weightPrimaryBps;
     uint256 weightExtra1Bps;
     uint256 weightExtra2Bps;
+    /// @dev RWA/Thematic placeholder (issue #479). Registered non-Active
+    ///      (Paused) and never router-eligible; not in the weight vector.
+    address rwaVault;
 }
 ```
 
@@ -225,6 +270,7 @@ struct Params {
     uint256 wExtra2;
     string name1;
     string name2;
+    string rwaName;
 }
 ```
 
