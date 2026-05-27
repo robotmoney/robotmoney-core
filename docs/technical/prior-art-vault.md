@@ -66,6 +66,20 @@ Index Coop, or Reserve Protocol have materialized. The standard is worth
 monitoring but carries meaningful ecosystem-adoption risk relative to
 established standards like ERC-4626.
 
+ERC-7575 standard note (multi-asset ERC-4626 vaults): a separate multi-asset
+proposal — ERC-7575, "Multi-Asset ERC-4626 Vaults" — externalizes the ERC-20
+share token from the ERC-4626 implementation so that one share token can have
+multiple vault entry points / underlying assets (e.g. an LP-position vault).
+Created December 2023 by authors spanning multiple teams (Jeroen Offerijns,
+Alina Sinelnikova, Vikram Arun, Joey Santoro, Farhaan Ali; Centrifuge/RWA
+lineage). As of May 2026 it remains **Draft** — better-authored than ERC-7621
+but the same maturity tier. It is not relevant to Robot Money: its defining
+feature is a single share token spanning multiple assets, which is precisely
+the outer share token Robot Money deliberately chose not to issue at the
+Portfolio Router layer (see §3.5). Adopting ERC-7575 would cut against a
+settled design decision rather than fill a gap. Worth monitoring only if an
+outer composite-claim model is ever reconsidered.
+
 **Zyfi** is not a yield vault — it is a gas abstraction layer. Its `Vault`
 contract holds developer-deposited ETH for transaction sponsorship. The
 `Paymaster` contract intercepts zkSync Type 113 transactions, collects ERC-20
@@ -372,6 +386,8 @@ current architecture supports either path by replacing a custom adapter with an
 - Alvara Protocol: https://www.alvara.xyz/
 - Alvara ERC-7621 guide: https://alvaraprotocol.medium.com/a-definitive-guide-to-the-erc-7621-token-standard-000e25d196f9
 - Alvara docs: https://docs.alvara.xyz/token-and-tokenomics
+- ERC-7575 (Multi-Asset ERC-4626 Vaults): https://eips.ethereum.org/EIPS/eip-7575
+- ERC-7575 canonical source: https://github.com/ethereum/ERCs/blob/master/ERCS/erc-7575.md
 - Zyfi documentation: https://docs.zyfi.org
 - Zyfi paymaster flow: https://docs.zyfi.org/introduction/paymaster-flow
 - Zyfi sponsored paymaster: https://docs.zyfi.org/integration-guide/paymasters-integration/sponsored-paymaster
