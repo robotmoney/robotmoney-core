@@ -4788,6 +4788,25 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "isRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "eligible",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "listVaults",
     inputs: [],
     outputs: [
@@ -4865,6 +4884,24 @@ export const registryAbiGenerated = [
         name: "account",
         type: "address",
         internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "setRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "eligible",
+        type: "bool",
+        internalType: "bool",
       },
     ],
     outputs: [],
@@ -4991,6 +5028,31 @@ export const registryAbiGenerated = [
         type: "address",
         indexed: true,
         internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RouterEligibilityChanged",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "oldValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
+      },
+      {
+        name: "newValue",
+        type: "bool",
+        indexed: false,
+        internalType: "bool",
       },
     ],
     anonymous: false,
@@ -5300,25 +5362,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
-    name: "nonPrototypeAttested",
-    inputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -5359,25 +5402,6 @@ export const routerAbiGenerated = [
             internalType: "bool",
           },
         ],
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "prototypeOverride",
-    inputs: [
-      {
-        name: "",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "",
-        type: "bool",
-        internalType: "bool",
       },
     ],
     stateMutability: "view",
@@ -5443,42 +5467,6 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "setNonPrototypeAttested",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "attested",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "setPrototypeOverride",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "allowed",
-        type: "bool",
-        internalType: "bool",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -5579,56 +5567,6 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
-  },
-  {
-    type: "event",
-    name: "NonPrototypeAttestedSet",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "oldValue",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-      {
-        name: "newValue",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "PrototypeOverrideSet",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "oldValue",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-      {
-        name: "newValue",
-        type: "bool",
-        indexed: false,
-        internalType: "bool",
-      },
-    ],
-    anonymous: false,
   },
   {
     type: "event",
@@ -5933,28 +5871,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
-    name: "VaultEligibilityNotAttested",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
-    name: "VaultIsPrototype",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "VaultNotActive",
     inputs: [
       {
@@ -5973,6 +5889,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "VaultNotRegistered",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "VaultNotRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

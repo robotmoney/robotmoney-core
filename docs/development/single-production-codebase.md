@@ -47,14 +47,17 @@ being evidence about production. Divergent variants also rot independently, hide
 real integration bugs behind mocks, and quietly accumulate trust assumptions
 nobody reviewed.
 
-The canonical local example is the basket-vault router-eligibility gate. Today,
-production contracts carry an `isPrototype()` / `prototypeOverride` /
-`nonPrototypeAttested` machine, and the test suite adds a `HardenedBasketVault`
-subclass that overrides `isPrototype()` to `false` purely to exercise the
-eligible path. That subclass is a code variant standing in for what should be
-**registry state** an operator sets — so a test proves the behaviour of code
-that never ships. Issue #475 tracks expressing that readiness as configuration
-and deleting the variant.
+The canonical local example is the basket-vault router-eligibility gate.
+Before issue #475 production contracts carried an `isPrototype()` /
+`prototypeOverride` / `nonPrototypeAttested` machine, and the test suite added
+a `HardenedBasketVault` subclass that overrode `isPrototype()` to `false`
+purely to exercise the eligible path. That subclass was a code variant
+standing in for what should be **registry state** an operator sets — so a
+test proved the behaviour of code that never shipped. Issue #475 resolved this
+by replacing the entire stack with a single registry flag,
+`VaultRegistry.isRouterEligible(vault)`, flipped by ADMIN_ROLE through
+`VaultRegistry.setRouterEligible`. The same contracts now ship into every
+environment; only the registry flag's value differs.
 
 ## Prior art and origins
 

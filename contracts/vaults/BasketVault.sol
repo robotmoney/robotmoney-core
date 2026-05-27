@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (basket vault base)
-// (See also: docs/technical/basket-vault-gap-report.md — router-eligibility checklist)
-// PROTOTYPE base — subclasses must complete production-readiness gating
-// (router eligibility, audit, etc.) before deployment to mainnet weight.
+// (See also: docs/technical/basket-vault-gap-report.md — router-eligibility checklist;
+//            docs/development/single-production-codebase.md — router-eligibility is
+//            registry state set by governance, not a per-environment code variant.)
+// Production-readiness for Portfolio Router weighting is expressed as
+// `VaultRegistry.isRouterEligible(vault)` — ADMIN_ROLE flips the flag once
+// audit / oracle hardening is complete. The same contract ships into every
+// environment; only the registry flag's value differs.
 // NAV and emergency-unwind minimums derive from a Uniswap V3 TWAP via
 // `observe()` over an admin-configurable per-asset window; `slot0` is no
 // longer read on hot paths. See issue #451 and docs/technical/security-model.md §5.
@@ -220,34 +224,17 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     // TWAP (arithmetic-mean tick over the configured per-asset window) via
     // `IUniswapV3Pool.observe()`. `slot0` is not consulted on hot paths, so
     // a flash-loan / sandwich that distorts the spot price within a single
-    // block cannot move NAV by more than (window / 1) × (block time / window)
-    // — i.e. a single manipulated block adds at most one block-tick to a
-    // many-block average. The abstract base still self-declares as a
-    // prototype: subclasses must additionally certify their pool's
-    // observation cardinality, liquidity floor, and per-asset window before
-    // overriding `isPrototype()` to return `false`. This keeps the
-    // `PortfolioRouter` gate closed by default and forces subclass authors
-    // to acknowledge the TWAP-configuration prerequisites.
+    // block cannot move NAV by more than (window / 1) × (block time / window).
     //
-    // `isPrototype()` remains the on-chain marker used by `PortfolioRouter`
-    // to block accidental inclusion in production router weight vectors
-    // (see `PortfolioRouter._requireRouterEligible` and the prototype
-    // override surface). See issue #451 and
-    // docs/code-reviews/review-codex-20260518-234945.md.
-
-    /// @notice True iff this contract is a prototype that has not completed
-    ///         oracle / production-readiness hardening. Defaults to `true`
-    ///         at the abstract base; a TWAP-configured, audited subclass may
-    ///         override and return `false`. Read by `PortfolioRouter` to
-    ///         refuse production router eligibility absent an explicit
-    ///         override.
-    /// @dev Marked `virtual` so a hardened subclass may opt into production
-    ///      router weight after asserting pool-cardinality and per-asset
-    ///      TWAP-window prerequisites are satisfied off-chain. The base
-    ///      contract intentionally keeps the gate closed.
-    function isPrototype() public pure virtual returns (bool) {
-        return true;
-    }
+    // Production-readiness for Portfolio Router weighting is *not* expressed
+    // on this contract. It is registry state — VaultRegistry.isRouterEligible(
+    // vault) — set by ADMIN_ROLE on the registry once the subclass author
+    // has certified pool observation cardinality, liquidity floor, and per-
+    // asset TWAP window off-chain. This satisfies the single-production-
+    // codebase principle (docs/development/single-production-codebase.md):
+    // the same contract ships into test, demo, and mainnet; only the
+    // registry flag's value differs across environments. See issue #475 for
+    // the history.
 
     // ─── ERC-4626 share scale ─────────────────────────────────────────
 

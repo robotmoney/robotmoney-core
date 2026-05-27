@@ -146,12 +146,13 @@ contract DeployDemoExtraVaults is Script {
         _registerIfAbsent(registry, address(vault1), p.usdc, p.name1);
         _registerIfAbsent(registry, address(vault2), p.usdc, p.name2);
 
-        // 3. Attest both as non-prototype on the router so setWeights accepts
-        //    them. The primary vault is already attested by
-        //    DeployPortfolioRouter.s.sol (see #447 attestation gate).
+        // 3. Mark both vaults router-eligible in the registry so setWeights
+        //    accepts them. The primary vault is already opted in by
+        //    DeployPortfolioRouter.s.sol (see issue #475 — single registry
+        //    eligibility gate; same contracts every environment).
         PortfolioRouter router = PortfolioRouter(p.router);
-        router.setNonPrototypeAttested(address(vault1), true);
-        router.setNonPrototypeAttested(address(vault2), true);
+        registry.setRouterEligible(address(vault1), true);
+        registry.setRouterEligible(address(vault2), true);
 
         // 4. Reset the router weight vector to the three-way split.
         _setThreeWayWeights(router, p.primaryVault, address(vault1), address(vault2), p);

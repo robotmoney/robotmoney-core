@@ -93,10 +93,12 @@ sol! {
 
         function registerVault(address vault, VaultMetadata calldata metadata) external;
         function setVaultStatus(address vault, VaultStatus newStatus) external;
+        function setRouterEligible(address vault, bool eligible) external;
         function listVaults() external view returns (address[] memory);
         function getVault(address vault)
             external view
             returns (VaultMetadata memory metadata, VaultStatus status);
+        function isRouterEligible(address vault) external view returns (bool);
     }
 
     /// PortfolioRouter interface.
@@ -105,7 +107,6 @@ sol! {
         function setWeights(address[] calldata vaults, uint256[] calldata bps) external;
         function setRouterCap(uint256 cap) external;
         function setVaultCap(address vault, uint256 cap) external;
-        function setNonPrototypeAttested(address vault, bool attested) external;
         function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
             external returns (uint256[] memory sharesPerLeg);
         function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
@@ -287,21 +288,27 @@ fn register_vault(
         .expect("registerVault");
 }
 
-/// Attest a non-`IPrototypeAware` vault as router-eligible. MockVault does not
-/// implement `IPrototypeAware`, so per the issue #447 gate the router requires
-/// an explicit ADMIN_ROLE attestation before `setWeights` will accept it.
-fn attest_non_prototype(admin: &rmpc_fork_e2e::Account<'_>, router: Address, vault_addr: Address) {
+/// Mark `vault_addr` router-eligible in the VaultRegistry. Issue #475: a
+/// registered vault must additionally be opted in via
+/// `VaultRegistry.setRouterEligible` before `PortfolioRouter.setWeights` will
+/// accept it. Same contracts every environment — only the registry flag
+/// differs. See `docs/development/single-production-codebase.md`.
+fn mark_router_eligible(
+    admin: &rmpc_fork_e2e::Account<'_>,
+    registry: Address,
+    vault_addr: Address,
+) {
     admin
         .send(
-            router,
-            &IPortfolioRouter::setNonPrototypeAttestedCall {
+            registry,
+            &IVaultRegistry::setRouterEligibleCall {
                 vault: vault_addr,
-                attested: true,
+                eligible: true,
             },
             U256::ZERO,
             200_000,
         )
-        .expect("setNonPrototypeAttested");
+        .expect("setRouterEligible");
 }
 
 /// Call `USDC.approve(spender, amount)` from `account`.
@@ -378,10 +385,9 @@ fn router_deposit_happy_path() {
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
     register_vault(&deployer, registry, vault_b, usdc, "Vault B");
 
-    // MockVault does not implement IPrototypeAware; attest both vaults so the
-    // router's eligibility gate (issue #447) admits them.
-    attest_non_prototype(&deployer, router, vault_a);
-    attest_non_prototype(&deployer, router, vault_b);
+    // Issue #475: mark both vaults router-eligible via the single registry gate.
+    mark_router_eligible(&deployer, registry, vault_a);
+    mark_router_eligible(&deployer, registry, vault_b);
 
     // Set 60/40 weights.
     let set_weights_call = IPortfolioRouter::setWeightsCall {
@@ -504,9 +510,9 @@ fn router_unavailable_leg_reverts() {
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
     register_vault(&deployer, registry, vault_b, usdc, "Vault B");
 
-    // Attest both MockVaults (no IPrototypeAware) for router eligibility.
-    attest_non_prototype(&deployer, router, vault_a);
-    attest_non_prototype(&deployer, router, vault_b);
+    // Mark both MockVaults router-eligible (issue #475).
+    mark_router_eligible(&deployer, registry, vault_a);
+    mark_router_eligible(&deployer, registry, vault_b);
 
     // Set 50/50 weights between vault_a and vault_b. Both are Active and
     // router-eligible, so setWeights succeeds.
@@ -601,7 +607,7 @@ fn router_cap_exceeded_reverts() {
     let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
 
     register_vault(&deployer, registry, vault_a, usdc, "Vault A");
-    attest_non_prototype(&deployer, router, vault_a);
+    mark_router_eligible(&deployer, registry, vault_a);
 
     // Set single-vault weight vector.
     deployer
@@ -709,7 +715,7 @@ fn agent_gateway_router_deposit() {
 
     // Register vault_a and set 100% weight.
     register_vault(&owner, registry, vault_a, usdc, "Vault A");
-    attest_non_prototype(&owner, router, vault_a);
+    mark_router_eligible(&owner, registry, vault_a);
     owner
         .send(
             router,

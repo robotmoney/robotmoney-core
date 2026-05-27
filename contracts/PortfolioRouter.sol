@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.2 — Portfolio Router
-// (See also: docs/prd.md §5 — Core Workflows (Router deposit flows))
+// (See also: docs/prd.md §5 — Core Workflows (Router deposit flows);
+//            docs/development/single-production-codebase.md — the principle
+//            that drives expressing production-readiness as VaultRegistry
+//            state instead of a per-environment code variant.)
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
@@ -9,17 +12,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {VaultRegistry} from "./VaultRegistry.sol";
-
-/// @dev Minimal introspection interface used to detect vaults that
-///      self-declare prototype status via `isPrototype()`. Implemented by
-///      `contracts/vaults/BasketVault.sol` and inherited by every
-///      `BasketVault` subclass. Defined here as a local interface so
-///      `PortfolioRouter` has no compile-time dependency on the prototype
-///      vaults themselves — any contract that exposes `isPrototype()
-///      returns (bool)` participates in the production-readiness gate.
-interface IPrototypeAware {
-    function isPrototype() external view returns (bool);
-}
 
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
@@ -33,6 +25,13 @@ interface IPrototypeAware {
 ///
 /// `previewDeposit(amount)` returns per-vault estimated receipts, weights,
 /// fees, net amounts, and an unavailable flag per leg without executing.
+///
+/// Router eligibility (whether a vault may be weighted at all) is **registry
+/// state**, not a contract variant: `VaultRegistry.isRouterEligible(vault)`
+/// is the single signal an operator sets. This keeps the same production
+/// contract path live across test, demo, and mainnet — environments differ
+/// only by which vaults the operator has opted in. See
+/// `docs/development/single-production-codebase.md` for the principle.
 ///
 /// Canonical: docs/architecture.md §4.2
 contract PortfolioRouter is AccessControl, ReentrancyGuard {
@@ -53,7 +52,8 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice USDC token used as the deposit asset across all vaults.
     IERC20 public immutable usdc;
 
-    /// @notice VaultRegistry from which vault addresses and status are read.
+    /// @notice VaultRegistry from which vault addresses, lifecycle status, and
+    ///         router-eligibility state are read.
     VaultRegistry public immutable registry;
 
     /// @notice Global ceiling on the total USDC that may flow through a single
@@ -63,32 +63,6 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice Per-vault USDC ceiling for a single `deposit()` leg.
     ///         0 means no cap enforced for that vault.
     mapping(address => uint256) public vaultCap;
-
-    /// @notice Per-vault override that allows a prototype vault (one that
-    ///         returns `true` from `isPrototype()`) to be included in the
-    ///         router weight vector and receive deposits. False by default —
-    ///         a fresh deployment cannot accidentally route real USDC into a
-    ///         slot0-priced prototype basket vault. Intended for devnet /
-    ///         test deployments that intentionally exercise prototype
-    ///         vaults, and for the eventual case where governance has
-    ///         completed TWAP hardening but the contract still declares
-    ///         itself a prototype. See issue #427 and
-    ///         docs/code-reviews/review-codex-20260518-234945.md.
-    mapping(address => bool) public prototypeOverride;
-
-    /// @notice Per-vault attestation that `vault` is intentionally
-    ///         non-prototype despite NOT implementing the
-    ///         `IPrototypeAware.isPrototype()` introspection view.
-    ///         Without this attestation, a vault that omits the interface
-    ///         would silently bypass the prototype gate because the
-    ///         `isPrototype()` call would revert and be treated as
-    ///         non-prototype. By requiring an explicit ADMIN_ROLE
-    ///         attestation, governance opts a legacy or third-party vault
-    ///         into router eligibility instead of relying on silent trust.
-    ///         False by default for every address. See issue #447 and
-    ///         the 2026-05-19 audit report (MEDIUM finding on silent
-    ///         IPrototypeAware fall-through).
-    mapping(address => bool) public nonPrototypeAttested;
 
     /// @notice Ordered list of vaults included in the weight vector.
     address[] private _weightVaultList;
@@ -129,25 +103,6 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 
-    /// @notice Emitted when the prototype-eligibility override for `vault` is
-    ///         toggled. `allowed = true` permits the prototype vault to be
-    ///         weighted and to receive deposits; `false` (the default)
-    ///         blocks router inclusion.
-    /// @param vault    Vault address whose override flag changed.
-    /// @param oldValue Previous override value.
-    /// @param newValue New override value.
-    event PrototypeOverrideSet(address indexed vault, bool oldValue, bool newValue);
-
-    /// @notice Emitted when the non-prototype attestation flag for `vault`
-    ///         is toggled. `attested = true` opts a vault that does not
-    ///         implement `IPrototypeAware.isPrototype()` into router
-    ///         eligibility; `false` (the default) blocks router inclusion
-    ///         until governance explicitly attests the vault as non-prototype.
-    /// @param vault    Vault address whose attestation flag changed.
-    /// @param oldValue Previous attestation value.
-    /// @param newValue New attestation value.
-    event NonPrototypeAttestedSet(address indexed vault, bool oldValue, bool newValue);
-
     // ─── Errors ──────────────────────────────────────────────────────────────
 
     /// @notice Address argument is `address(0)`.
@@ -184,9 +139,7 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
 
     /// @notice A vault's ERC-4626 `asset()` does not match the router's USDC.
     ///         Router refuses to weight or deposit into vaults whose underlying
-    ///         asset is anything other than the configured router USDC. This is
-    ///         the router-eligibility guard described in issue #426 / the
-    ///         coin-theft path audit (review-codex-20260518-234945.md §2).
+    ///         asset is anything other than the configured router USDC.
     /// @param vault       The router-ineligible vault address.
     /// @param vaultAsset  The vault's reported `asset()` address.
     error VaultAssetMismatch(address vault, address vaultAsset);
@@ -197,31 +150,16 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param vault The vault address whose `asset()` call reverted.
     error VaultAssetUnreadable(address vault);
 
-    /// @notice A vault self-declares as a prototype (via `isPrototype()
-    ///         returns true`) and has no explicit `prototypeOverride[vault]
-    ///         = true`. Prototype basket vaults price NAV from Uniswap V3
-    ///         `slot0`, which is manipulable inside a single block. They
-    ///         MUST NOT receive router-routed USDC in production until TWAP
-    ///         hardening is complete. Devnet / test deployments may opt in
-    ///         by calling `setPrototypeOverride(vault, true)`. See issue
-    ///         #427 and docs/code-reviews/review-codex-20260518-234945.md.
-    /// @param vault The prototype vault address that was rejected.
-    error VaultIsPrototype(address vault);
-
-    /// @notice A vault does not implement the `IPrototypeAware.isPrototype()`
-    ///         introspection view and has no explicit
-    ///         `nonPrototypeAttested[vault] = true` attestation. Without the
-    ///         interface, the prototype gate cannot self-verify the vault's
-    ///         pricing model; without the attestation, governance has not
-    ///         explicitly opted the vault into router eligibility. The
-    ///         router refuses to weight or deposit into such vaults so that
-    ///         omitting `IPrototypeAware` (intentionally or accidentally)
-    ///         cannot silently bypass the prototype gate. ADMIN_ROLE can
-    ///         attest the vault via `setNonPrototypeAttested(vault, true)`.
-    ///         See issue #447 and audit-report.md (2026-05-19, MEDIUM).
-    /// @param vault The vault address that lacks IPrototypeAware and
-    ///              attestation.
-    error VaultEligibilityNotAttested(address vault);
+    /// @notice A vault has not been marked router-eligible in the
+    ///         VaultRegistry (`isRouterEligible(vault) == false`).
+    ///         Production-readiness is registry state set by ADMIN_ROLE on
+    ///         the registry — environments differ only by which vaults the
+    ///         operator has opted in. A fresh registration is gated by
+    ///         default until governance audits the vault and calls
+    ///         `VaultRegistry.setRouterEligible(vault, true)`.
+    ///         See `docs/development/single-production-codebase.md`.
+    /// @param vault The vault address that lacks the eligibility flag.
+    error VaultNotRouterEligible(address vault);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -242,7 +180,8 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     // ─── Admin: weight management ────────────────────────────────────────────
 
     /// @notice Set the vault weight vector. All vaults must be registered in the
-    ///         VaultRegistry. The bps values must sum to exactly BPS_DENOMINATOR.
+    ///         VaultRegistry and must be marked router-eligible there. The bps
+    ///         values must sum to exactly BPS_DENOMINATOR.
     ///         Restricted to `ADMIN_ROLE`.
     /// @param vaults  Ordered list of vault addresses.
     /// @param bps     Parallel weight array in basis points (must sum to 10 000).
@@ -257,10 +196,8 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             if (vaults[i] == address(0)) revert ZeroAddress();
             // Verify vault is registered — getVault reverts with NotRegistered if not.
             registry.getVault(vaults[i]);
-            // Router-eligibility guard: the vault's ERC-4626 asset() must equal
-            // the router's USDC. A registered but ineligible vault (wrong asset,
-            // non-4626, or unreadable asset()) cannot be set as an active
-            // weighted route. See review-codex-20260518-234945.md §2.
+            // Router-eligibility guard: asset compatibility AND the registry
+            // eligibility flag must be set. See _requireRouterEligible.
             _requireRouterEligible(vaults[i]);
             total += bps[i];
         }
@@ -290,50 +227,6 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         if (vault == address(0)) revert ZeroAddress();
         emit VaultCapSet(vault, vaultCap[vault], cap);
         vaultCap[vault] = cap;
-    }
-
-    /// @notice Explicitly opt `vault` in (`allowed = true`) or out
-    ///         (`allowed = false`) of router eligibility despite the vault
-    ///         self-declaring as a prototype via `isPrototype() == true`.
-    ///         The default is `false` for every address — a fresh
-    ///         production deployment cannot accidentally weight a
-    ///         slot0-priced basket vault. Intended for devnet / test
-    ///         deployments, and for the post-TWAP-hardening transition
-    ///         where governance has audited the prototype and accepts the
-    ///         remaining risk. Restricted to `ADMIN_ROLE`.
-    /// @param vault   Vault address to mark as router-eligible despite
-    ///                prototype status.
-    /// @param allowed New override value. `true` lifts the prototype gate
-    ///                for this single vault; `false` re-engages it.
-    function setPrototypeOverride(address vault, bool allowed) external onlyRole(ADMIN_ROLE) {
-        if (vault == address(0)) revert ZeroAddress();
-        emit PrototypeOverrideSet(vault, prototypeOverride[vault], allowed);
-        prototypeOverride[vault] = allowed;
-    }
-
-    /// @notice Attest (`attested = true`) or revoke (`attested = false`) the
-    ///         non-prototype eligibility of `vault`. Required for any vault
-    ///         that does NOT implement `IPrototypeAware.isPrototype()` —
-    ///         without this attestation the router refuses to weight or
-    ///         deposit into the vault, even though the (missing) interface
-    ///         call would have silently returned false. This closes the
-    ///         silent-trust fall-through reported as MEDIUM in the
-    ///         2026-05-19 audit (see issue #447). Vaults that DO implement
-    ///         `IPrototypeAware` do not need this attestation; their
-    ///         self-declaration via `isPrototype()` is sufficient (subject
-    ///         to the existing prototype-override gate). The default value
-    ///         is `false` for every address — a fresh production deployment
-    ///         cannot accidentally route USDC into a vault whose pricing
-    ///         model the router cannot introspect. Restricted to
-    ///         `ADMIN_ROLE`.
-    /// @param vault    Vault address to attest as non-prototype.
-    /// @param attested New attestation value. `true` opts the vault into
-    ///                 router eligibility; `false` revokes the attestation
-    ///                 and re-engages the gate.
-    function setNonPrototypeAttested(address vault, bool attested) external onlyRole(ADMIN_ROLE) {
-        if (vault == address(0)) revert ZeroAddress();
-        emit NonPrototypeAttestedSet(vault, nonPrototypeAttested[vault], attested);
-        nonPrototypeAttested[vault] = attested;
     }
 
     // ─── Preview ─────────────────────────────────────────────────────────────
@@ -480,9 +373,10 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             if (vaultCap[vault] != 0 && legAmount > vaultCap[vault]) revert VaultCapExceeded();
 
             // Defence in depth: re-validate router eligibility at deposit time
-            // so a vault that became ineligible after weighting (e.g. upgrade
-            // changing its `asset()`) cannot receive USDC. setWeights enforces
-            // this at configuration time; this re-check guards the runtime path.
+            // so a vault that became ineligible after weighting (e.g. registry
+            // flag revoked or upgrade changing its `asset()`) cannot receive
+            // USDC. setWeights enforces this at configuration time; this
+            // re-check guards the runtime path.
             _requireRouterEligible(vault);
 
             // Approve vault to pull legAmount USDC.
@@ -513,15 +407,14 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     // ─── Router-eligibility surface ──────────────────────────────────────────
 
     /// @notice Return true if `vault` is router-eligible: it exposes an
-    ///         ERC-4626 `asset()` view and that asset equals the router's USDC.
-    ///         This is intentionally distinct from VaultRegistry status —
-    ///         registry status describes lifecycle (Active/Paused/Retired)
-    ///         while router eligibility describes asset compatibility with the
-    ///         router's deposit flow. Clients (dapp, rmpc) read both to
-    ///         present accurate state.
+    ///         ERC-4626 `asset()` view equal to the router's USDC AND the
+    ///         VaultRegistry has marked the vault as router-eligible.
+    ///         This view is intentionally distinct from VaultRegistry
+    ///         lifecycle status (Active/Paused/Retired); clients (dapp,
+    ///         rmpc) read both signals to compose accurate UI state.
     /// @param vault Address of the vault to check.
-    /// @return eligible True if the vault's ERC-4626 asset equals the router's
-    ///                  USDC; false if the asset differs or `asset()` reverts.
+    /// @return eligible True iff the vault's ERC-4626 asset equals the router's
+    ///                  USDC and the registry eligibility flag is set.
     function isRouterEligible(address vault) external view returns (bool eligible) {
         if (vault == address(0)) return false;
         // An EOA has no code; calling asset() on it would decode-revert.
@@ -532,30 +425,17 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         } catch {
             return false;
         }
-        // Prototype gate (issue #427): a vault that self-declares
-        // `isPrototype() == true` is router-ineligible unless an explicit
-        // per-vault override is set.
-        // Attestation gate (issue #447): a vault that does NOT implement
-        // `IPrototypeAware.isPrototype()` is router-ineligible unless
-        // governance has explicitly attested it as non-prototype via
-        // `nonPrototypeAttested[vault] = true`. This closes the silent
-        // fall-through where omitting the interface bypassed the gate.
-        (bool implementsInterface, bool prototypeFlag) = _probePrototype(vault);
-        if (implementsInterface) {
-            if (prototypeFlag && !prototypeOverride[vault]) {
-                return false;
-            }
-        } else {
-            if (!nonPrototypeAttested[vault]) {
-                return false;
-            }
-        }
-        return true;
+        // Registry-backed production-readiness gate (issue #475): the single
+        // source of truth for router eligibility is the registry flag set by
+        // ADMIN_ROLE on `VaultRegistry.setRouterEligible`. Same contracts in
+        // every environment; only the flag's value differs.
+        return registry.isRouterEligible(vault);
     }
 
     /// @dev Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
-    ///      `usdc`. Used by `setWeights` and `_depositTo` to enforce
-    ///      router-eligibility. See review-codex-20260518-234945.md §2.
+    ///      `usdc` AND the VaultRegistry has marked the vault as
+    ///      router-eligible. Used by `setWeights` and `_depositTo` to enforce
+    ///      router-eligibility at both configuration and runtime.
     function _requireRouterEligible(address vault) internal view {
         // No code at the target — the asset() call would revert without data
         // and bypass the try/catch ABI-decode path on some configurations.
@@ -569,46 +449,11 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         } catch {
             revert VaultAssetUnreadable(vault);
         }
-        // Prototype gate (issue #427): refuse vaults that self-declare
-        // prototype status unless governance has explicitly opted them in.
-        // Attestation gate (issue #447): a vault that does NOT implement
-        // `IPrototypeAware.isPrototype()` would silently fall through the
-        // gate because the call reverts and is treated as non-prototype.
-        // Require an explicit ADMIN_ROLE attestation to close the
-        // silent-trust gap reported as MEDIUM in the 2026-05-19 audit.
-        (bool implementsInterface, bool prototypeFlag) = _probePrototype(vault);
-        if (implementsInterface) {
-            if (prototypeFlag && !prototypeOverride[vault]) {
-                revert VaultIsPrototype(vault);
-            }
-        } else {
-            if (!nonPrototypeAttested[vault]) {
-                revert VaultEligibilityNotAttested(vault);
-            }
-        }
-    }
-
-    /// @dev Probe the optional `IPrototypeAware.isPrototype()` view and
-    ///      report both whether the interface is implemented and (if so)
-    ///      the declared flag. Distinguishing "interface absent" from
-    ///      "interface present and returns false" is what closes the
-    ///      silent-trust fall-through from issue #447: callers can require
-    ///      an explicit attestation for the absent case instead of
-    ///      treating the revert as a non-prototype declaration.
-    /// @param vault Vault address to probe.
-    /// @return implementsInterface True iff `isPrototype()` returned a bool
-    ///         without reverting.
-    /// @return prototypeFlag       The returned bool (only meaningful when
-    ///         `implementsInterface` is true).
-    function _probePrototype(address vault)
-        internal
-        view
-        returns (bool implementsInterface, bool prototypeFlag)
-    {
-        try IPrototypeAware(vault).isPrototype() returns (bool flag) {
-            return (true, flag);
-        } catch {
-            return (false, false);
+        // Single registry-backed eligibility gate (issue #475). No
+        // per-environment subclass or code variant: the flag is set by
+        // governance on the production registry.
+        if (!registry.isRouterEligible(vault)) {
+            revert VaultNotRouterEligible(vault);
         }
     }
 }

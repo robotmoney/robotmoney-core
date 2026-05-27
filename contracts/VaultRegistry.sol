@@ -58,6 +58,22 @@ contract VaultRegistry is AccessControl {
     /// @dev Quick existence check to avoid scanning `_vaults` on duplicate-register guard.
     mapping(address => bool) private _registered;
 
+    /// @notice Per-vault router-eligibility flag. False by default. Toggled by
+    ///         `ADMIN_ROLE` via `setRouterEligible` to express that a registered
+    ///         vault has cleared production-readiness gating (audit, oracle
+    ///         hardening, etc.) and may be weighted by `PortfolioRouter`.
+    ///
+    ///         Router eligibility is registry **state** — it is the single,
+    ///         operator-set signal `PortfolioRouter` consults to decide whether
+    ///         a vault can enter the weight vector and receive USDC. Expressing
+    ///         readiness as state (not as a code variant such as a
+    ///         test/demo-only subclass that overrides a hard-coded flag) is the
+    ///         single-production-codebase principle in
+    ///         `docs/development/single-production-codebase.md`: the same
+    ///         contracts deploy unchanged into every environment; environments
+    ///         differ only by configuration and seeded state.
+    mapping(address => bool) private _routerEligible;
+
     // ─── Events ──────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new vault is registered.
@@ -73,6 +89,14 @@ contract VaultRegistry is AccessControl {
     event VaultStatusChanged(
         address indexed vault, VaultStatus indexed newStatus, uint256 timestamp
     );
+
+    /// @notice Emitted when the router-eligibility flag for `vault` changes.
+    ///         `PortfolioRouter` reads this flag (via `isRouterEligible`) to
+    ///         decide whether the vault may be weighted and receive USDC.
+    /// @param vault    Address of the vault whose flag changed.
+    /// @param oldValue Previous eligibility value.
+    /// @param newValue New eligibility value.
+    event RouterEligibilityChanged(address indexed vault, bool oldValue, bool newValue);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -128,6 +152,27 @@ contract VaultRegistry is AccessControl {
         emit VaultStatusChanged(vault, newStatus, block.timestamp);
     }
 
+    /// @notice Mark `vault` as router-eligible (`eligible = true`) or
+    ///         ineligible (`eligible = false`). `PortfolioRouter` refuses to
+    ///         weight or deposit into a vault whose flag is `false` — the
+    ///         default for every freshly registered vault. ADMIN_ROLE flips
+    ///         the flag once production-readiness gating (audit, oracle
+    ///         hardening, etc.) is complete.
+    ///
+    ///         This is the single, registry-backed expression of
+    ///         production-readiness called for by the
+    ///         single-production-codebase principle
+    ///         (`docs/development/single-production-codebase.md`). The same
+    ///         contracts ship into test, demo, and production environments;
+    ///         only this flag's value differs.
+    /// @param vault    Address of an already-registered vault.
+    /// @param eligible New router-eligibility value.
+    function setRouterEligible(address vault, bool eligible) external onlyRole(ADMIN_ROLE) {
+        if (!_registered[vault]) revert NotRegistered();
+        emit RouterEligibilityChanged(vault, _routerEligible[vault], eligible);
+        _routerEligible[vault] = eligible;
+    }
+
     // ─── Read surface ────────────────────────────────────────────────────────
 
     /// @notice Return full metadata and current status for a registered vault.
@@ -152,5 +197,15 @@ contract VaultRegistry is AccessControl {
     /// @notice Number of registered vaults. Always equals `listVaults().length`.
     function vaultCount() external view returns (uint256) {
         return _vaults.length;
+    }
+
+    /// @notice Return the current router-eligibility flag for `vault`.
+    ///         Returns `false` for unregistered vaults and for registered
+    ///         vaults that have not been opted in by `setRouterEligible`.
+    /// @param vault Address of the vault to query.
+    /// @return eligible True iff governance has marked the vault as
+    ///                  router-eligible.
+    function isRouterEligible(address vault) external view returns (bool eligible) {
+        return _routerEligible[vault];
     }
 }

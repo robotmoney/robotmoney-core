@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/09526bad1d1fc83318c95c5e3ae875b62d6bb960/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -191,25 +191,6 @@ Subclasses declare the maximum number of assets in the basket.
 
 ```solidity
 function maxAssets() public view virtual returns (uint256);
-```
-
-### isPrototype
-
-True iff this contract is a prototype that has not completed
-oracle / production-readiness hardening. Defaults to `true`
-at the abstract base; a TWAP-configured, audited subclass may
-override and return `false`. Read by `PortfolioRouter` to
-refuse production router eligibility absent an explicit
-override.
-
-Marked `virtual` so a hardened subclass may opt into production
-router weight after asserting pool-cardinality and per-asset
-TWAP-window prerequisites are satisfied off-chain. The base
-contract intentionally keeps the gate closed.
-
-
-```solidity
-function isPrototype() public pure virtual returns (bool);
 ```
 
 ### decimals

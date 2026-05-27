@@ -123,11 +123,13 @@ contract RouterGovernanceTest is Test {
         bytes32 adminRole = router.ADMIN_ROLE();
         vm.startPrank(routerAdmin);
         router.grantRole(adminRole, address(gov));
-        // Issue #447: MockGovVault does not implement IPrototypeAware, so
-        // attest both vaults as non-prototype before governance can weight
-        // them.
-        router.setNonPrototypeAttested(address(vaultA), true);
-        router.setNonPrototypeAttested(address(vaultB), true);
+        vm.stopPrank();
+        // Issue #475: production-readiness is registry state. Mark both
+        // vaults router-eligible in the registry so governance can weight
+        // them through the single production code path.
+        vm.startPrank(registryAdmin);
+        registry.setRouterEligible(address(vaultA), true);
+        registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
 
         // Assign voting power via govAdmin.

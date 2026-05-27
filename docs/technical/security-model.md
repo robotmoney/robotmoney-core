@@ -142,13 +142,20 @@ source. The manipulation-resistance posture is:
   Uniswap V3 pool per asset. The TWAP window is the documented
   manipulation-resistance control; production deployments that require a
   second source must wrap the vault behind an adapter that cross-checks
-  the TWAP against an independent oracle (Chainlink, etc.) before
-  overriding `isPrototype()`.
-- **Production gate.** `BasketVault.isPrototype()` still defaults to
-  `true`. The `PortfolioRouter` prototype gate (#427) remains the canonical
-  block on router eligibility for un-hardened subclasses. A subclass may
-  override `isPrototype()` to `false` only after asserting the above
-  prerequisites for every active asset.
+  the TWAP against an independent oracle (Chainlink, etc.) before being
+  marked router-eligible in the registry.
+- **Production gate.** Router eligibility for any vault (basket-vault
+  or otherwise) is registry state:
+  `VaultRegistry.isRouterEligible(vault)`, flipped by ADMIN_ROLE via
+  `setRouterEligible`. `PortfolioRouter` refuses to weight or deposit
+  into a vault whose flag is false. Basket vaults stay false by default
+  — ADMIN_ROLE only flips them eligible after asserting the above
+  prerequisites (TWAP window, observation cardinality, liquidity floor)
+  for every active asset. The single registry flag replaced the
+  in-contract `isPrototype()` / `prototypeOverride` /
+  `nonPrototypeAttested` machinery in issue #475 so the same contract
+  ships into every environment; only the flag's value differs. See
+  `docs/development/single-production-codebase.md`.
 
 ---
 

@@ -123,3 +123,33 @@ jobs:
             exit 1
           fi
           echo "Dependency audit passed."
+
+      - name: Single production codebase — no environment-substituting variants (issue #475)
+        # Enforces docs/development/single-production-codebase.md: production
+        # contracts under contracts/ (excluding contracts/test/ and
+        # contracts/script/) must not declare an isPrototype() function or
+        # the prototypeOverride / nonPrototypeAttested / IPrototypeAware /
+        # VaultIsPrototype / VaultEligibilityNotAttested machinery that
+        # issue #475 replaced with the single VaultRegistry.isRouterEligible
+        # flag. Tests configure router eligibility via the production
+        # surface (VaultRegistry.setRouterEligible); a HardenedBasketVault
+        # style readiness-flipping subclass under contracts/test/ is also
+        # forbidden.
+        run: |
+          set -euo pipefail
+          PROD_BAD=$(grep -RInE 'isPrototype\(|prototypeOverride|nonPrototypeAttested|IPrototypeAware|VaultIsPrototype|VaultEligibilityNotAttested' \
+              contracts --include='*.sol' \
+              --exclude-dir=test --exclude-dir=script || true)
+          if [ -n "$PROD_BAD" ]; then
+            echo "::error::Production contracts must not declare isPrototype()/prototypeOverride/nonPrototypeAttested/IPrototypeAware (issue #475 — use VaultRegistry.setRouterEligible)." >&2
+            echo "$PROD_BAD" >&2
+            exit 1
+          fi
+          TEST_BAD=$(grep -RInE 'HardenedBasketVault|MockPrototypeVault|DeclaresPrototype' \
+              contracts/test --include='*.sol' || true)
+          if [ -n "$TEST_BAD" ]; then
+            echo "::error::Readiness-flipping test subclasses (HardenedBasketVault et al.) are forbidden (issue #475 — drive eligibility through VaultRegistry.setRouterEligible)." >&2
+            echo "$TEST_BAD" >&2
+            exit 1
+          fi
+          echo "Single-production-codebase grep gate passed."

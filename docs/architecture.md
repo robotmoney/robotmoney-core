@@ -131,10 +131,15 @@ The source tree also contains the basket-vault family — an abstract
 `BasketVault` base with Uniswap V3 TWAP NAV pricing and slippage
 controls, plus concrete `ProtocolAssetVault` (wETH/cbBTC/wSOL exposure)
 and `AgentTokenVault` (admin-curated agent-economy tokens) subclasses.
-These are prototypes (`isPrototype()` returns `true` at the base) and
-remain excluded from production Portfolio Router weights until each
-subclass certifies pool cardinality, per-asset TWAP windows, and an
-intra-vault rebalancing model (`docs/development/open-questions.md` §3.15).
+Router eligibility for any vault — basket-vault or otherwise — is
+registry state expressed by `VaultRegistry.isRouterEligible(vault)`,
+set by ADMIN_ROLE via `setRouterEligible`. Basket vaults stay
+ineligible by default; ADMIN_ROLE flips the flag once the subclass
+certifies pool cardinality, per-asset TWAP windows, and an intra-vault
+rebalancing model (`docs/development/open-questions.md` §3.15). The
+same contracts ship into test, demo, and mainnet — only the registry
+flag's value differs across environments. See
+`docs/development/single-production-codebase.md` for the principle.
 
 Future vault categories include thematic/RWA vaults. Those need
 separate execution, oracle, liquidity, legal, and disclosure
@@ -161,13 +166,18 @@ Router requirements:
 
 The source tree contains `contracts/PortfolioRouter.sol`, a dedicated
 router contract that backs the requirements above. It integrates with
-`VaultRegistry` for eligibility, enforces a prototype gate via
-`IPrototypeAware.isPrototype()` with an admin-controlled
-`prototypeOverride` and a separate non-prototype attestation flag,
-applies per-vault withdrawal caps over a fixed window, and depends on
-`RouterGovernance` for weight execution. It is not yet on the
-production mainnet deployment manifest; the contract surface is in
-place, audit and mainnet onboarding remain implementation-plan work.
+`VaultRegistry` for eligibility — both lifecycle status
+(Active/Paused/Retired) and the registry-backed router-eligibility
+flag (`VaultRegistry.isRouterEligible(vault)`) that expresses
+production-readiness as state set by ADMIN_ROLE. The router applies
+per-vault withdrawal caps over a fixed window and depends on
+`RouterGovernance` for weight execution. The single registry flag
+replaces the previous in-contract `isPrototype()` /
+`prototypeOverride` / `nonPrototypeAttested` machinery (issue #475) so
+the same contracts ship into every environment with no per-environment
+code variant. The router is not yet on the production mainnet
+deployment manifest; the contract surface is in place, audit and
+mainnet onboarding remain implementation-plan work.
 
 ### 4.3 Vault Adapters
 
@@ -606,6 +616,33 @@ API surfaces must map known failures to stable product reason codes such
 as `paused`, `vault_disabled`, `cap_exceeded`, `expired_policy`,
 `insufficient_allowance`, `insufficient_balance`, `unavailable_leg`,
 `fee_cap_exceeded`, and `slippage_bound_exceeded`.
+
+## 7.3 Single Production Codebase
+
+There is one production codebase. The same compiled artifacts deploy
+unchanged into every environment — local devnet, fork tests, demo, and
+mainnet. Environments differ only by **deployment configuration** and
+**seeded application data**. No environment-substituting code variants
+are permitted: no test-only subclasses that alter readiness, no
+build-time branches, no `if (env == "test")` logic, no spoofed users
+or state.
+
+Production-readiness for a vault — whether the Portfolio Router may
+weight it and route USDC into it — is expressed as **registry state**:
+`VaultRegistry.isRouterEligible(vault)`, flipped by ADMIN_ROLE via
+`VaultRegistry.setRouterEligible(vault, eligible)`. There is no
+on-vault `isPrototype()` flag, no `prototypeOverride`, no
+`nonPrototypeAttested`, and no hardened test subclass; the single
+registry flag replaces all of them (issue #475). The same contract
+ships into every environment; only the registry flag's value differs.
+
+The `rmpc` rule (one client, no env-specific behavior, never spoof
+users) is the same principle applied to the daemon. The detailed
+rationale, historical lineage (configuration management, Continuous
+Delivery, Twelve-Factor App, immutable infrastructure, mainnet-fork
+testing), and the operator checklist live in
+`docs/development/single-production-codebase.md`; the environment
+modes it governs live in `docs/development/environments.md`.
 
 ## 8. Security Constraints
 

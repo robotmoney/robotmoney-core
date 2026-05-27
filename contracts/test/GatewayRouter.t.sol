@@ -130,12 +130,12 @@ contract GatewayRouterTest is Test {
         uint256[] memory bps = new uint256[](2);
         bps[0] = 6000;
         bps[1] = 4000;
-        // Issue #447: RouterMockVault does not implement IPrototypeAware,
-        // so the router requires explicit non-prototype attestation before
-        // it will accept these vaults into the weight vector.
+        // Issue #475: production-readiness is registry state. Mark both
+        // vaults router-eligible in the registry so setWeights accepts
+        // them through the single production code path.
         vm.startPrank(admin);
-        router.setNonPrototypeAttested(address(vaultA), true);
-        router.setNonPrototypeAttested(address(vaultB), true);
+        registry.setRouterEligible(address(vaultA), true);
+        registry.setRouterEligible(address(vaultB), true);
         router.setWeights(vaults, bps);
         vm.stopPrank();
 
@@ -812,9 +812,10 @@ contract GatewayRouterTest is Test {
         fvaults[0] = address(fotVaultA);
         uint256[] memory fbps = new uint256[](1);
         fbps[0] = 10_000;
-        // Issue #447: attest the non-IPrototypeAware mock vault.
+        // Issue #475: mark the mock vault router-eligible via the single
+        // registry-backed gate.
         vm.startPrank(admin);
-        fotRouter.setNonPrototypeAttested(address(fotVaultA), true);
+        fotRegistry.setRouterEligible(address(fotVaultA), true);
         fotRouter.setWeights(fvaults, fbps);
         vm.stopPrank();
 

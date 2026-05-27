@@ -69,53 +69,6 @@ contract MockRouterVault is ERC20 {
     }
 }
 
-/// @notice Stand-in for a prototype basket vault: USDC-backed ERC-4626 that
-///         self-declares prototype status via `isPrototype() == true`.
-///         Used to exercise the `PortfolioRouter` prototype gate without
-///         pulling the heavyweight BasketVault dependency into the router
-///         unit tests. The shape (asset(), previewDeposit(), deposit(),
-///         isPrototype()) is the same surface the real BasketVault exposes.
-contract MockPrototypeVault is ERC20 {
-    using SafeERC20 for IERC20;
-
-    IERC20 public immutable assetToken;
-    bool public prototypeFlag;
-
-    constructor(address asset_, bool initialPrototype) ERC20("Prototype Vault", "PVS") {
-        assetToken = IERC20(asset_);
-        prototypeFlag = initialPrototype;
-    }
-
-    function decimals() public pure override returns (uint8) {
-        return 6;
-    }
-
-    function asset() external view returns (address) {
-        return address(assetToken);
-    }
-
-    function previewDeposit(uint256 assets) external pure returns (uint256) {
-        return assets;
-    }
-
-    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
-        assetToken.safeTransferFrom(msg.sender, address(this), assets);
-        shares = assets;
-        _mint(receiver, shares);
-    }
-
-    /// @notice Mirrors `BasketVault.isPrototype()` introspection.
-    function isPrototype() external view returns (bool) {
-        return prototypeFlag;
-    }
-
-    /// @notice Test hook so a single fixture can flip between
-    ///         prototype-declared and not-declared without redeploying.
-    function setPrototypeFlag(bool value) external {
-        prototypeFlag = value;
-    }
-}
-
 // ─── PortfolioRouterTest ──────────────────────────────────────────────────────
 
 contract PortfolioRouterTest is Test {
@@ -157,15 +110,13 @@ contract PortfolioRouterTest is Test {
         vm.startPrank(admin);
         registry.registerVault(address(vaultA), metaA);
         registry.registerVault(address(vaultB), metaB);
-        // Issue #447: MockRouterVault does not implement
-        // `IPrototypeAware.isPrototype()`, so the router rejects it from
-        // setWeights/_depositTo unless explicitly attested. Attest the
-        // shared fixtures here so the existing tests keep exercising the
-        // production weighting flow. vaultC is left un-attested; tests
-        // that bring it into the weight vector handle attestation locally.
-        router.setNonPrototypeAttested(address(vaultA), true);
-        router.setNonPrototypeAttested(address(vaultB), true);
-        router.setNonPrototypeAttested(address(vaultC), true);
+        // Issue #475: production-readiness is registry state. Mark the
+        // shared fixtures router-eligible so the existing tests keep
+        // exercising the production weighting flow. vaultC is intentionally
+        // left ineligible until a test registers it; tests that bring it
+        // into the weight vector flip the flag locally.
+        registry.setRouterEligible(address(vaultA), true);
+        registry.setRouterEligible(address(vaultB), true);
         vm.stopPrank();
     }
 
@@ -820,6 +771,7 @@ contract PortfolioRouterTest is Test {
         // Weights [3334, 3333, 3333] — three vaults, intentionally uneven.
         vm.startPrank(admin);
         registry.registerVault(address(vaultC), metaC);
+        registry.setRouterEligible(address(vaultC), true);
         address[] memory vaults = new address[](3);
         uint256[] memory bps = new uint256[](3);
         vaults[0] = address(vaultA);
@@ -873,412 +825,165 @@ contract PortfolioRouterTest is Test {
         assertEq(shares[0] + shares[1], amount, "shares do not sum to deposited amount");
     }
 
-    // ─── Prototype gate (issue #427) ─────────────────────────────────────────
+    // ─── Router-eligibility gate (issue #475) ────────────────────────────────
     //
-    // BasketVault and AgentTokenVault price NAV from Uniswap V3 slot0, which
-    // is manipulable inside a single block. They self-declare prototype
-    // status via `isPrototype()`. PortfolioRouter must refuse to weight or
-    // deposit into such vaults unless governance explicitly opts them in
-    // via `setPrototypeOverride`. The following tests pin down all four
-    // acceptance criteria in issue #427.
+    // Production-readiness for Portfolio Router weighting is registry state:
+    // `VaultRegistry.isRouterEligible(vault)` is the single signal an operator
+    // sets. `PortfolioRouter` refuses to weight or deposit into a vault whose
+    // registry eligibility flag is false. The same contracts ship into every
+    // environment; only the registry flag's value differs. See
+    // `docs/development/single-production-codebase.md` and the removal of
+    // the historical `isPrototype()` / `prototypeOverride` /
+    // `nonPrototypeAttested` machinery in issue #475.
 
-    /// @notice Helper: register a prototype-declared vault in the registry so
-    ///         setWeights can reach the eligibility gate.
-    function _registerPrototype(address vault) internal {
+    /// @notice Helper: register a vault in the registry without marking it
+    ///         router-eligible. Used to exercise the eligibility gate from
+    ///         the un-opted-in default state.
+    function _registerIneligible(address vault) internal {
         VaultRegistry.VaultMetadata memory meta =
-            VaultRegistry.VaultMetadata({name: "Proto", asset: address(usdc), registeredAt: 0});
+            VaultRegistry.VaultMetadata({name: "Pending", asset: address(usdc), registeredAt: 0});
         vm.prank(admin);
         registry.registerVault(vault, meta);
     }
 
-    /// @notice AC#1 + Test plan #2: production-like router configuration
-    ///         cannot include a vault that self-declares prototype status
-    ///         without an explicit eligibility override. The default
-    ///         override value is false for every address, so a fresh
+    /// @notice AC#4 (test-plan: fail-closed): a registered vault that has NOT
+    ///         been marked router-eligible in the registry is rejected by
+    ///         setWeights with `VaultNotRouterEligible`. The default
+    ///         eligibility value is false for every registration, so a fresh
     ///         deployment is gated by construction.
-    function test_setWeights_revertsIfVaultIsPrototype() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        _registerPrototype(address(proto));
+    function test_setWeights_revertsIfVaultNotRouterEligible() public {
+        // Fresh vault — USDC-backed but never marked eligible.
+        MockRouterVault pending = new MockRouterVault(address(usdc));
+        _registerIneligible(address(pending));
 
-        address[] memory vaults = new address[](2);
-        uint256[] memory bps = new uint256[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(proto);
-        bps[0] = 5000;
-        bps[1] = 5000;
+        // Sanity: registry flag defaults to false.
+        assertFalse(registry.isRouterEligible(address(pending)));
 
-        // Sanity: override defaults to false.
-        assertFalse(router.prototypeOverride(address(proto)));
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(pending);
+        bps[0] = 10_000;
 
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultIsPrototype.selector, address(proto))
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotRouterEligible.selector, address(pending)
+            )
         );
         router.setWeights(vaults, bps);
     }
 
-    /// @notice AC#1: a prototype vault with an explicit override CAN be
-    ///         weighted. Devnet / test deployments use this path.
-    function test_setWeights_allowsPrototypeWithOverride() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        _registerPrototype(address(proto));
+    /// @notice AC#3 (test-plan: configuration-only success): a vault becomes
+    ///         router-eligible via a single registry call — no subclass, no
+    ///         code override — and a USDC deposit through PortfolioRouter
+    ///         succeeds end-to-end. This is the production weighting flow
+    ///         that test, demo, and mainnet all share.
+    function test_setWeights_succeedsAfterRegistryOptIn() public {
+        MockRouterVault pending = new MockRouterVault(address(usdc));
+        _registerIneligible(address(pending));
 
+        // Flip the single registry-backed eligibility flag.
         vm.prank(admin);
-        router.setPrototypeOverride(address(proto), true);
+        registry.setRouterEligible(address(pending), true);
 
-        address[] memory vaults = new address[](2);
-        uint256[] memory bps = new uint256[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(proto);
-        bps[0] = 5000;
-        bps[1] = 5000;
-
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(pending);
+        bps[0] = 10_000;
         vm.prank(admin);
         router.setWeights(vaults, bps);
 
         (address[] memory storedVaults,) = router.getWeights();
-        assertEq(storedVaults.length, 2);
-        assertEq(storedVaults[1], address(proto));
-    }
+        assertEq(storedVaults.length, 1);
+        assertEq(storedVaults[0], address(pending));
 
-    /// @notice AC#4 + Test plan #1: the prototype gate also fires at deposit
-    ///         time as defence-in-depth, so a vault that flipped its
-    ///         `isPrototype()` to true after weighting cannot receive USDC.
-    function test_deposit_revertsIfVaultBecomesPrototypeAtRuntime() public {
-        // Deploy as non-prototype so it passes setWeights, then flip it.
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), false);
-        _registerPrototype(address(proto));
-
-        address[] memory vaults = new address[](2);
-        uint256[] memory bps = new uint256[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(proto);
-        bps[0] = 5000;
-        bps[1] = 5000;
-        vm.prank(admin);
-        router.setWeights(vaults, bps);
-
-        // Now flip — simulates a malicious or buggy upgrade declaring
-        // prototype status after the fact.
-        proto.setPrototypeFlag(true);
-
-        uint256 amount = 100 * ONE_USDC;
-        _fundAndApprove(depositor, amount);
-        vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultIsPrototype.selector, address(proto))
-        );
-        router.deposit(amount, new uint256[](0));
-    }
-
-    /// @notice AC#3 + Test plan #3: an overridden prototype vault accepts
-    ///         deposits end-to-end. This is the devnet/test fixture path
-    ///         that must keep working alongside the production gate.
-    function test_deposit_succeedsForOverriddenPrototype() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        _registerPrototype(address(proto));
-
-        vm.startPrank(admin);
-        router.setPrototypeOverride(address(proto), true);
-        address[] memory vaults = new address[](2);
-        uint256[] memory bps = new uint256[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(proto);
-        bps[0] = 5000;
-        bps[1] = 5000;
-        router.setWeights(vaults, bps);
-        vm.stopPrank();
-
+        // Deposit through the production router flow succeeds.
         uint256 amount = 100 * ONE_USDC;
         _fundAndApprove(depositor, amount);
         vm.prank(depositor);
         uint256[] memory shares = router.deposit(amount, new uint256[](0));
 
-        assertEq(shares.length, 2);
-        assertGt(shares[1], 0, "prototype leg should receive shares");
+        assertEq(shares.length, 1);
+        assertEq(shares[0], amount, "1:1 mock vault must mint amount shares");
+        assertEq(pending.balanceOf(depositor), amount, "shares minted to depositor");
         assertEq(usdc.balanceOf(address(router)), 0, "router holds dust");
     }
 
-    /// @notice `isRouterEligible` returns false for a prototype-declared
-    ///         vault unless an override is set, regardless of asset match.
-    function test_isRouterEligible_falseForPrototypeWithoutOverride() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        assertFalse(router.isRouterEligible(address(proto)));
-    }
-
-    /// @notice `isRouterEligible` returns true for a prototype-declared
-    ///         vault once governance opts it in via override.
-    function test_isRouterEligible_trueForPrototypeWithOverride() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        vm.prank(admin);
-        router.setPrototypeOverride(address(proto), true);
-        assertTrue(router.isRouterEligible(address(proto)));
-    }
-
-    /// @notice Non-prototype USDC vaults are unaffected by the new gate —
-    ///         this guards against false positives that would break the
-    ///         existing router weighting flow for production-ready vaults.
-    function test_isRouterEligible_unaffectedForNonPrototypeVault() public view {
-        // vaultA does not implement isPrototype(); the gate must treat it as
-        // non-prototype and keep returning true.
-        assertTrue(router.isRouterEligible(address(vaultA)));
-    }
-
-    /// @notice `setPrototypeOverride` is admin-gated.
-    function test_setPrototypeOverride_revertsForUnauthorized() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        vm.prank(stranger);
-        vm.expectRevert();
-        router.setPrototypeOverride(address(proto), true);
-    }
-
-    /// @notice `setPrototypeOverride` rejects address(0).
-    function test_setPrototypeOverride_revertsOnZeroAddress() public {
-        vm.prank(admin);
-        vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        router.setPrototypeOverride(address(0), true);
-    }
-
-    /// @notice `setPrototypeOverride` emits the audit event with old/new.
-    function test_setPrototypeOverride_emitsEvent() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        vm.expectEmit(true, false, false, true, address(router));
-        emit PortfolioRouter.PrototypeOverrideSet(address(proto), false, true);
-        vm.prank(admin);
-        router.setPrototypeOverride(address(proto), true);
-
-        // Toggling back also emits with the correct previous value.
-        vm.expectEmit(true, false, false, true, address(router));
-        emit PortfolioRouter.PrototypeOverrideSet(address(proto), true, false);
-        vm.prank(admin);
-        router.setPrototypeOverride(address(proto), false);
-    }
-
-    /// @notice Toggling an override OFF re-engages the gate: a previously
-    ///         allowed prototype vault can no longer be re-weighted.
-    function test_setPrototypeOverride_toggleOffReengagesGate() public {
-        MockPrototypeVault proto = new MockPrototypeVault(address(usdc), true);
-        _registerPrototype(address(proto));
-
-        vm.startPrank(admin);
-        router.setPrototypeOverride(address(proto), true);
-        // Initially passes.
-        address[] memory vaults = new address[](2);
-        uint256[] memory bps = new uint256[](2);
-        vaults[0] = address(vaultA);
-        vaults[1] = address(proto);
-        bps[0] = 5000;
-        bps[1] = 5000;
-        router.setWeights(vaults, bps);
-
-        // Toggle off.
-        router.setPrototypeOverride(address(proto), false);
-
-        // setWeights now reverts.
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultIsPrototype.selector, address(proto))
-        );
-        router.setWeights(vaults, bps);
-        vm.stopPrank();
-    }
-
-    /// @notice Test plan #4 (issue #427): the canonical code-review doc keeps
-    ///         the production-readiness warning for BasketVault slot0
-    ///         pricing. Acts as a docs-grep regression so a future edit
-    ///         cannot silently remove the warning that anchors the gate.
-    function test_docs_warningPresentForPrototypeBasketVaults() public view {
-        string memory body = vm.readFile("./docs/code-reviews/review-codex-20260518-234945.md");
-        // Sentinel string lives in §3 remediation status of the canonical
-        // doc. If a doc edit removes the warning, this test fails and
-        // forces the editor to either re-introduce the warning or
-        // explicitly retire the prototype gate.
-        bytes memory needle = bytes("PROTOTYPE_TWAP_BLOCKER");
-        bytes memory haystack = bytes(body);
-        bool found = false;
-        if (haystack.length >= needle.length) {
-            for (uint256 i = 0; i <= haystack.length - needle.length; i++) {
-                bool match_ = true;
-                for (uint256 j = 0; j < needle.length; j++) {
-                    if (haystack[i + j] != needle[j]) {
-                        match_ = false;
-                        break;
-                    }
-                }
-                if (match_) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        assertTrue(found, "canonical doc lost PROTOTYPE_TWAP_BLOCKER warning");
-    }
-
-    // ─── Non-prototype attestation gate (issue #447) ─────────────────────────
-    //
-    // Vaults that do NOT implement `IPrototypeAware.isPrototype()` would
-    // silently fall through the prototype gate because the try/catch
-    // treats the missing-interface revert as "not a prototype". Issue
-    // #447 closes that silent-trust gap by requiring an explicit
-    // ADMIN_ROLE attestation (`nonPrototypeAttested[vault] = true`)
-    // before the router will weight or deposit into such a vault.
-    // The following tests pin down all four acceptance criteria.
-
-    /// @notice AC#1 + Test plan #1: a vault that does not implement
-    ///         `IPrototypeAware` and is not attested as non-prototype is
-    ///         rejected from setWeights with `VaultEligibilityNotAttested`.
-    function test_setWeights_revertsIfVaultNotAttested() public {
-        // Fresh vault — implements ERC-4626 surface but NOT isPrototype().
-        MockRouterVault unattested = new MockRouterVault(address(usdc));
-        VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
-            name: "Unattested", asset: address(usdc), registeredAt: 0
-        });
-        vm.prank(admin);
-        registry.registerVault(address(unattested), meta);
-
-        // Sanity: attestation defaults to false.
-        assertFalse(router.nonPrototypeAttested(address(unattested)));
-
-        address[] memory vaults = new address[](1);
-        uint256[] memory bps = new uint256[](1);
-        vaults[0] = address(unattested);
-        bps[0] = 10_000;
-
-        vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultEligibilityNotAttested.selector, address(unattested)
-            )
-        );
-        router.setWeights(vaults, bps);
-    }
-
-    /// @notice AC#1 + Test plan #2: ADMIN_ROLE attests the vault, then
-    ///         setWeights succeeds for the same vault.
-    function test_setWeights_succeedsAfterAttestation() public {
-        MockRouterVault unattested = new MockRouterVault(address(usdc));
-        VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
-            name: "Unattested", asset: address(usdc), registeredAt: 0
-        });
-        vm.startPrank(admin);
-        registry.registerVault(address(unattested), meta);
-        router.setNonPrototypeAttested(address(unattested), true);
-
-        address[] memory vaults = new address[](1);
-        uint256[] memory bps = new uint256[](1);
-        vaults[0] = address(unattested);
-        bps[0] = 10_000;
-        router.setWeights(vaults, bps);
-        vm.stopPrank();
-
-        (address[] memory storedVaults,) = router.getWeights();
-        assertEq(storedVaults.length, 1);
-        assertEq(storedVaults[0], address(unattested));
-    }
-
-    /// @notice AC#4 + Test plan #3: revoking the attestation re-engages the
-    ///         gate at deposit time as defence-in-depth — even though the
-    ///         vault was weighted while attested, a later revocation
-    ///         prevents new deposits from routing through it.
-    function test_deposit_revertsIfAttestationRevoked() public {
-        // vaultA is already attested in setUp; weight it then revoke.
+    /// @notice Defence-in-depth: revoking the registry eligibility flag after
+    ///         a vault has been weighted prevents subsequent deposits from
+    ///         routing through it.
+    function test_deposit_revertsIfRegistryEligibilityRevoked() public {
+        // vaultA is marked eligible in setUp; weight it then revoke.
         _setEqualWeights();
 
         vm.prank(admin);
-        router.setNonPrototypeAttested(address(vaultA), false);
+        registry.setRouterEligible(address(vaultA), false);
 
         uint256 amount = 100 * ONE_USDC;
         _fundAndApprove(depositor, amount);
         vm.prank(depositor);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultEligibilityNotAttested.selector, address(vaultA)
-            )
+            abi.encodeWithSelector(PortfolioRouter.VaultNotRouterEligible.selector, address(vaultA))
         );
         router.deposit(amount, new uint256[](0));
     }
 
-    /// @notice AC#2 + Test plan #4: `setNonPrototypeAttested` is admin-gated.
-    ///         An unauthorized caller reverts with
-    ///         AccessControlUnauthorizedAccount (OpenZeppelin v5).
-    function test_setNonPrototypeAttested_revertsForUnauthorized() public {
+    /// @notice `VaultRegistry.setRouterEligible` is admin-gated.
+    function test_setRouterEligible_revertsForUnauthorized() public {
         MockRouterVault v = new MockRouterVault(address(usdc));
-        bytes32 adminRole = router.ADMIN_ROLE();
+        _registerIneligible(address(v));
+        bytes32 adminRole = registry.ADMIN_ROLE();
         vm.prank(stranger);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, adminRole
             )
         );
-        router.setNonPrototypeAttested(address(v), true);
+        registry.setRouterEligible(address(v), true);
     }
 
-    /// @notice `setNonPrototypeAttested` rejects address(0).
-    function test_setNonPrototypeAttested_revertsOnZeroAddress() public {
+    /// @notice `VaultRegistry.setRouterEligible` rejects unregistered vaults
+    ///         — the flag cannot be set on an address that was never
+    ///         registered.
+    function test_setRouterEligible_revertsIfNotRegistered() public {
+        address unknown = makeAddr("unknownVault");
         vm.prank(admin);
-        vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        router.setNonPrototypeAttested(address(0), true);
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
+        registry.setRouterEligible(unknown, true);
     }
 
-    /// @notice `setNonPrototypeAttested` emits the audit event with old/new.
-    function test_setNonPrototypeAttested_emitsEvent() public {
+    /// @notice `VaultRegistry.setRouterEligible` emits the audit event with
+    ///         old/new values so a registry indexer can track every flip.
+    function test_setRouterEligible_emitsEvent() public {
         MockRouterVault v = new MockRouterVault(address(usdc));
-        vm.expectEmit(true, false, false, true, address(router));
-        emit PortfolioRouter.NonPrototypeAttestedSet(address(v), false, true);
+        _registerIneligible(address(v));
+
+        vm.expectEmit(true, false, false, true, address(registry));
+        emit VaultRegistry.RouterEligibilityChanged(address(v), false, true);
         vm.prank(admin);
-        router.setNonPrototypeAttested(address(v), true);
+        registry.setRouterEligible(address(v), true);
 
         // Toggling back also emits with the correct previous value.
-        vm.expectEmit(true, false, false, true, address(router));
-        emit PortfolioRouter.NonPrototypeAttestedSet(address(v), true, false);
+        vm.expectEmit(true, false, false, true, address(registry));
+        emit VaultRegistry.RouterEligibilityChanged(address(v), true, false);
         vm.prank(admin);
-        router.setNonPrototypeAttested(address(v), false);
+        registry.setRouterEligible(address(v), false);
     }
 
-    /// @notice `isRouterEligible` returns false for an unattested
-    ///         non-IPrototypeAware vault, mirroring the gate enforced at
-    ///         setWeights / deposit time.
-    function test_isRouterEligible_falseForUnattestedVault() public {
-        MockRouterVault unattested = new MockRouterVault(address(usdc));
-        assertFalse(router.isRouterEligible(address(unattested)));
-    }
+    /// @notice `PortfolioRouter.isRouterEligible` mirrors the gate enforced
+    ///         at setWeights / deposit time: false for a registered but
+    ///         un-opted-in vault, true once the registry flag is flipped.
+    function test_isRouterEligible_followsRegistryFlag() public {
+        MockRouterVault v = new MockRouterVault(address(usdc));
+        _registerIneligible(address(v));
+        assertFalse(router.isRouterEligible(address(v)), "default false");
 
-    /// @notice `isRouterEligible` returns true once the vault is attested.
-    function test_isRouterEligible_trueAfterAttestation() public {
-        MockRouterVault unattested = new MockRouterVault(address(usdc));
         vm.prank(admin);
-        router.setNonPrototypeAttested(address(unattested), true);
-        assertTrue(router.isRouterEligible(address(unattested)));
-    }
+        registry.setRouterEligible(address(v), true);
+        assertTrue(router.isRouterEligible(address(v)), "true after opt-in");
 
-    /// @notice A vault that DOES implement `IPrototypeAware` and returns
-    ///         `false` from `isPrototype()` does NOT require attestation —
-    ///         the on-chain self-declaration is sufficient. Guards against
-    ///         a regression that would force every IPrototypeAware vault
-    ///         to also be attested.
-    function test_isRouterEligible_trueForNonPrototypeIPrototypeAware() public {
-        MockPrototypeVault declared = new MockPrototypeVault(address(usdc), false);
-        assertTrue(router.isRouterEligible(address(declared)));
-    }
-
-    /// @notice AC#4: BasketVault concretely returns `isPrototype() == true`
-    ///         from the abstract base, so every subclass inherits the gate.
-    ///         This is a static/regression check that the marker is wired
-    ///         on the real production contract path, not just the mock.
-    function test_basketVaultSubclass_declaresPrototype() public {
-        // Use a minimal subclass declared inline so the test does not depend
-        // on AgentTokenVault / ProtocolAssetVault constructor wiring.
-        DeclaresPrototype declarer = new DeclaresPrototype();
-        assertTrue(declarer.isPrototype(), "BasketVault.isPrototype default must be true");
-    }
-}
-
-/// @notice Smallest possible contract that re-exports the same `isPrototype()`
-///         signature `BasketVault` ships with, so the router gate can be
-///         exercised against a true/false declaration without dragging in
-///         the full BasketVault deployment surface (Uniswap router, USDC
-///         immutable, AccessControl, etc.).
-contract DeclaresPrototype {
-    function isPrototype() external pure returns (bool) {
-        return true;
+        vm.prank(admin);
+        registry.setRouterEligible(address(v), false);
+        assertFalse(router.isRouterEligible(address(v)), "false after revoke");
     }
 }

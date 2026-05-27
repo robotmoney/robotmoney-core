@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/09526bad1d1fc83318c95c5e3ae875b62d6bb960/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -475,245 +475,92 @@ balance is always zero after a successful deposit.
 function testFuzz_deposit_routerBalanceAlwaysZero(uint256 amount, uint256 bpsA) public;
 ```
 
-### _registerPrototype
+### _registerIneligible
 
-Helper: register a prototype-declared vault in the registry so
-setWeights can reach the eligibility gate.
+Helper: register a vault in the registry without marking it
+router-eligible. Used to exercise the eligibility gate from
+the un-opted-in default state.
 
 
 ```solidity
-function _registerPrototype(address vault) internal;
+function _registerIneligible(address vault) internal;
 ```
 
-### test_setWeights_revertsIfVaultIsPrototype
+### test_setWeights_revertsIfVaultNotRouterEligible
 
-AC#1 + Test plan #2: production-like router configuration
-cannot include a vault that self-declares prototype status
-without an explicit eligibility override. The default
-override value is false for every address, so a fresh
+AC#4 (test-plan: fail-closed): a registered vault that has NOT
+been marked router-eligible in the registry is rejected by
+setWeights with `VaultNotRouterEligible`. The default
+eligibility value is false for every registration, so a fresh
 deployment is gated by construction.
 
 
 ```solidity
-function test_setWeights_revertsIfVaultIsPrototype() public;
+function test_setWeights_revertsIfVaultNotRouterEligible() public;
 ```
 
-### test_setWeights_allowsPrototypeWithOverride
+### test_setWeights_succeedsAfterRegistryOptIn
 
-AC#1: a prototype vault with an explicit override CAN be
-weighted. Devnet / test deployments use this path.
+AC#3 (test-plan: configuration-only success): a vault becomes
+router-eligible via a single registry call — no subclass, no
+code override — and a USDC deposit through PortfolioRouter
+succeeds end-to-end. This is the production weighting flow
+that test, demo, and mainnet all share.
 
 
 ```solidity
-function test_setWeights_allowsPrototypeWithOverride() public;
+function test_setWeights_succeedsAfterRegistryOptIn() public;
 ```
 
-### test_deposit_revertsIfVaultBecomesPrototypeAtRuntime
+### test_deposit_revertsIfRegistryEligibilityRevoked
 
-AC#4 + Test plan #1: the prototype gate also fires at deposit
-time as defence-in-depth, so a vault that flipped its
-`isPrototype()` to true after weighting cannot receive USDC.
+Defence-in-depth: revoking the registry eligibility flag after
+a vault has been weighted prevents subsequent deposits from
+routing through it.
 
 
 ```solidity
-function test_deposit_revertsIfVaultBecomesPrototypeAtRuntime() public;
+function test_deposit_revertsIfRegistryEligibilityRevoked() public;
 ```
 
-### test_deposit_succeedsForOverriddenPrototype
+### test_setRouterEligible_revertsForUnauthorized
 
-AC#3 + Test plan #3: an overridden prototype vault accepts
-deposits end-to-end. This is the devnet/test fixture path
-that must keep working alongside the production gate.
+`VaultRegistry.setRouterEligible` is admin-gated.
 
 
 ```solidity
-function test_deposit_succeedsForOverriddenPrototype() public;
+function test_setRouterEligible_revertsForUnauthorized() public;
 ```
 
-### test_isRouterEligible_falseForPrototypeWithoutOverride
+### test_setRouterEligible_revertsIfNotRegistered
 
-`isRouterEligible` returns false for a prototype-declared
-vault unless an override is set, regardless of asset match.
+`VaultRegistry.setRouterEligible` rejects unregistered vaults
+— the flag cannot be set on an address that was never
+registered.
 
 
 ```solidity
-function test_isRouterEligible_falseForPrototypeWithoutOverride() public;
+function test_setRouterEligible_revertsIfNotRegistered() public;
 ```
 
-### test_isRouterEligible_trueForPrototypeWithOverride
+### test_setRouterEligible_emitsEvent
 
-`isRouterEligible` returns true for a prototype-declared
-vault once governance opts it in via override.
+`VaultRegistry.setRouterEligible` emits the audit event with
+old/new values so a registry indexer can track every flip.
 
 
 ```solidity
-function test_isRouterEligible_trueForPrototypeWithOverride() public;
+function test_setRouterEligible_emitsEvent() public;
 ```
 
-### test_isRouterEligible_unaffectedForNonPrototypeVault
+### test_isRouterEligible_followsRegistryFlag
 
-Non-prototype USDC vaults are unaffected by the new gate —
-this guards against false positives that would break the
-existing router weighting flow for production-ready vaults.
+`PortfolioRouter.isRouterEligible` mirrors the gate enforced
+at setWeights / deposit time: false for a registered but
+un-opted-in vault, true once the registry flag is flipped.
 
 
 ```solidity
-function test_isRouterEligible_unaffectedForNonPrototypeVault() public view;
-```
-
-### test_setPrototypeOverride_revertsForUnauthorized
-
-`setPrototypeOverride` is admin-gated.
-
-
-```solidity
-function test_setPrototypeOverride_revertsForUnauthorized() public;
-```
-
-### test_setPrototypeOverride_revertsOnZeroAddress
-
-`setPrototypeOverride` rejects address(0).
-
-
-```solidity
-function test_setPrototypeOverride_revertsOnZeroAddress() public;
-```
-
-### test_setPrototypeOverride_emitsEvent
-
-`setPrototypeOverride` emits the audit event with old/new.
-
-
-```solidity
-function test_setPrototypeOverride_emitsEvent() public;
-```
-
-### test_setPrototypeOverride_toggleOffReengagesGate
-
-Toggling an override OFF re-engages the gate: a previously
-allowed prototype vault can no longer be re-weighted.
-
-
-```solidity
-function test_setPrototypeOverride_toggleOffReengagesGate() public;
-```
-
-### test_docs_warningPresentForPrototypeBasketVaults
-
-Test plan #4 (issue #427): the canonical code-review doc keeps
-the production-readiness warning for BasketVault slot0
-pricing. Acts as a docs-grep regression so a future edit
-cannot silently remove the warning that anchors the gate.
-
-
-```solidity
-function test_docs_warningPresentForPrototypeBasketVaults() public view;
-```
-
-### test_setWeights_revertsIfVaultNotAttested
-
-AC#1 + Test plan #1: a vault that does not implement
-`IPrototypeAware` and is not attested as non-prototype is
-rejected from setWeights with `VaultEligibilityNotAttested`.
-
-
-```solidity
-function test_setWeights_revertsIfVaultNotAttested() public;
-```
-
-### test_setWeights_succeedsAfterAttestation
-
-AC#1 + Test plan #2: ADMIN_ROLE attests the vault, then
-setWeights succeeds for the same vault.
-
-
-```solidity
-function test_setWeights_succeedsAfterAttestation() public;
-```
-
-### test_deposit_revertsIfAttestationRevoked
-
-AC#4 + Test plan #3: revoking the attestation re-engages the
-gate at deposit time as defence-in-depth — even though the
-vault was weighted while attested, a later revocation
-prevents new deposits from routing through it.
-
-
-```solidity
-function test_deposit_revertsIfAttestationRevoked() public;
-```
-
-### test_setNonPrototypeAttested_revertsForUnauthorized
-
-AC#2 + Test plan #4: `setNonPrototypeAttested` is admin-gated.
-An unauthorized caller reverts with
-AccessControlUnauthorizedAccount (OpenZeppelin v5).
-
-
-```solidity
-function test_setNonPrototypeAttested_revertsForUnauthorized() public;
-```
-
-### test_setNonPrototypeAttested_revertsOnZeroAddress
-
-`setNonPrototypeAttested` rejects address(0).
-
-
-```solidity
-function test_setNonPrototypeAttested_revertsOnZeroAddress() public;
-```
-
-### test_setNonPrototypeAttested_emitsEvent
-
-`setNonPrototypeAttested` emits the audit event with old/new.
-
-
-```solidity
-function test_setNonPrototypeAttested_emitsEvent() public;
-```
-
-### test_isRouterEligible_falseForUnattestedVault
-
-`isRouterEligible` returns false for an unattested
-non-IPrototypeAware vault, mirroring the gate enforced at
-setWeights / deposit time.
-
-
-```solidity
-function test_isRouterEligible_falseForUnattestedVault() public;
-```
-
-### test_isRouterEligible_trueAfterAttestation
-
-`isRouterEligible` returns true once the vault is attested.
-
-
-```solidity
-function test_isRouterEligible_trueAfterAttestation() public;
-```
-
-### test_isRouterEligible_trueForNonPrototypeIPrototypeAware
-
-A vault that DOES implement `IPrototypeAware` and returns
-`false` from `isPrototype()` does NOT require attestation —
-the on-chain self-declaration is sufficient. Guards against
-a regression that would force every IPrototypeAware vault
-to also be attested.
-
-
-```solidity
-function test_isRouterEligible_trueForNonPrototypeIPrototypeAware() public;
-```
-
-### test_basketVaultSubclass_declaresPrototype
-
-AC#4: BasketVault concretely returns `isPrototype() == true`
-from the abstract base, so every subclass inherits the gate.
-This is a static/regression check that the marker is wired
-on the real production contract path, not just the mock.
-
-
-```solidity
-function test_basketVaultSubclass_declaresPrototype() public;
+function test_isRouterEligible_followsRegistryFlag() public;
 ```
 
