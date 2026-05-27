@@ -4,7 +4,7 @@
  * wagmi/viem client setup. The dapp uses the browser-injected EIP-1193
  * provider (MetaMask, hardware bridges, etc.) as its only wallet
  * connector AND as its read transport for the foundry/devnet chain —
- * see `docs/security/dapp-topology.md` §2 ("No dapp-owned RPC"). All
+ * see `docs/technical/dapp-topology.md` §2 ("No dapp-owned RPC"). All
  * traffic for the chain the user is interacting with traverses an
  * endpoint the user chose, not one this bundle was built with.
  * Test harnesses inject `window.ethereum` themselves before the page
@@ -18,7 +18,7 @@ import { defineChain } from "viem";
 // Robot Money devnet (Geth+Lighthouse fork). Real prod-shaped chain id;
 // not the same as foundry/anvil (31337). The dapp never makes its own
 // HTTP requests to this URL — reads dispatch through the wallet
-// provider per §2 of docs/security/dapp-topology.md. The URL only
+// provider per §2 of docs/technical/dapp-topology.md. The URL only
 // exists so `wallet_addEthereumChain` (triggered by Connect Wallet)
 // can prefill the network entry in the user's wallet. The user can
 // always override before accepting.

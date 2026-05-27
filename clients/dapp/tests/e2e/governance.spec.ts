@@ -29,7 +29,7 @@
  * message rather than failing hard. This allows the CI suite to remain
  * green while the feature is fully integrated.
  *
- * Canonical: issue #322, docs/testing/smoke-test-design.md.
+ * Canonical: issue #322, docs/development/smoke-test-design.md.
  */
 
 import { test, expect } from "@playwright/test";

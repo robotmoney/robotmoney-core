@@ -10,7 +10,7 @@ publish = false
 #   "could not determine which binary to run".
 default-run = "smoke-test"
 
-# Canonical: docs/testing/smoke-test-design.md
+# Canonical: docs/development/smoke-test-design.md
 # Implements: issue #146
 
 [lib]

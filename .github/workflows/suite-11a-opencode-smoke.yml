@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §11 (opencode-smoke)
+# Canonical: docs/development/ci-suites.md §11 (opencode-smoke)
 #
 # WHY THIS SUITE EXISTS
 # OpenCode runs agent sessions with real tools. The plugin manifest (plugin.json,
@@ -45,7 +45,8 @@ on:
     paths:
       - "plugins/robotmoney-cli/**"
       - "clients/rust-payment-client/**"
-      - "docs/walkthroughs/**"
+      - "docs/development/openclaw-config.md"
+      - "docs/development/opencode-readonly-fork.md"
       - ".github/workflows/suite-11a-opencode-smoke.yml"
   workflow_dispatch:
 

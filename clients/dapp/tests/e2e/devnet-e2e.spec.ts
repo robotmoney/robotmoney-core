@@ -13,7 +13,7 @@
  *   (B) Calling authorizeAgent through the dapp's prod injected()
  *       connector mines on real Geth and sets AGENT_ROLE on-chain.
  *
- * Canonical: docs/testing/smoke-test-design.md, issue #245.
+ * Canonical: docs/development/smoke-test-design.md, issue #245.
  */
 
 import { test, expect } from "@playwright/test";

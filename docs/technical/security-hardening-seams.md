@@ -5,7 +5,7 @@
 > no allowlist, eligibility, unwind, dapp, or signer behaviour changes are
 > introduced here.
 >
-> Canonical inputs: `docs/security-model.md`, `docs/architecture.md`, and
+> Canonical inputs: `docs/technical/security-model.md`, `docs/architecture.md`, and
 > `docs/implementation-plan.md`.
 
 ## 1. Status

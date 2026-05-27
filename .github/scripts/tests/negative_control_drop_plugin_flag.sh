@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/testing/headless-opencode-tests.md (issue #461).
+# Canonical: docs/development/headless-opencode-tests.md (issue #461).
 #
 # Negative control: prove the workflow-lint one-liner from issue #461
 # catches a regression where someone drops --plugin "$PWD/plugins/robotmoney-cli"

@@ -6,7 +6,7 @@
  * AdapterCodeHashAllowedSet so dapp admin panels can drive the new governance
  * surface through wagmi/viem typed clients.
  *
- * Canonical: docs/security-model.md (adapter allowlist guard),
+ * Canonical: docs/technical/security-model.md (adapter allowlist guard),
  * contracts/RobotMoneyVault.sol.
  *
  * Selectors and topic hashes below are the exact values produced by

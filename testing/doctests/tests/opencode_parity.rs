@@ -1,4 +1,4 @@
-//! Canonical: docs/walkthroughs/opencode-readonly-fork.md (issue #53).
+//! Canonical: docs/development/opencode-readonly-fork.md (issue #53).
 //!
 //! Mirror of `clients/rust-payment-client/tests/skill_docs_parity.rs`
 //! (issue #52, PR #72), narrowed to the OpenCode walkthrough doc.

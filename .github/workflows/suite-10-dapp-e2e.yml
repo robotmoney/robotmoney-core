@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §10
+# Canonical: docs/development/ci-suites.md §10
 #
 # WHY THIS SUITE EXISTS
 # The dApp's primary user-facing flows — connect wallet, render verified state,
@@ -12,7 +12,7 @@
 # Playwright globalSetup. There is no "fast" local-dev variant — the dapp
 # bundle is built bit-identically to a production deployment, with the
 # gateway runtime code hash pinned at build time. The principle:
-# **no test-only code lands in production**. See docs/testing/smoke-test-design.md.
+# **no test-only code lands in production**. See docs/development/smoke-test-design.md.
 #
 # WHY PLAYWRIGHT REPORT IS UPLOADED ON FAILURE
 # Screenshots + traces are needed to diagnose flaky browser-side failures.

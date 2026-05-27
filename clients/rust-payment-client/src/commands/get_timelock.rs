@@ -1,4 +1,4 @@
-//! Canonical: docs/security-model.md §4 — Timelock bypass → Mitigated
+//! Canonical: docs/technical/security-model.md §4 — Timelock bypass → Mitigated
 //! Implements: issue #414 — on-chain timelocked multisig enforcement
 //!
 //! `rmpc get-timelock` — direct on-chain read of TimelockController state.

@@ -120,7 +120,7 @@ export const vaultAbiGenerated = {abi_to_ts(vault_abi)} as const;
  * Includes the adapter allowlist governance surface (setAdapterAllowed,
  * setAdapterCodeHashAllowed, AdapterAllowedSet, AdapterCodeHashAllowedSet).
  * Dapp admin panels drive the on-chain guard through this typed binding.
- * Canonical: docs/security-model.md, issue #444.
+ * Canonical: docs/technical/security-model.md, issue #444.
  */
 export const robotMoneyVaultAbiGenerated = {abi_to_ts(robot_vault_abi)} as const;
 

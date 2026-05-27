@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/walkthroughs/openclaw-config.md
+# Canonical: docs/development/openclaw-config.md
 # Implements: implementation-plan §10 (OpenClaw installation).
 # Issue:      #114.
 #

@@ -4,10 +4,10 @@
 Two invariants are enforced:
 
 1. Script-path check: every `bash <path>` call inside a fenced code block in
-   docs/environments.md must point to a file that exists in the repository.
+   docs/development/environments.md must point to a file that exists in the repository.
 
 2. Env-var coverage check: every environment-variable name that appears in the
-   Required-env-vars tables of docs/environments.md must have a corresponding
+   Required-env-vars tables of docs/development/environments.md must have a corresponding
    definition in at least one of the canonical config sources:
    - clients/dapp/.env.example
    - testing/ethereum-testnet/config/docker-compose.dapp.yaml
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ENVIRONMENTS_MD = REPO_ROOT / "docs" / "environments.md"
+ENVIRONMENTS_MD = REPO_ROOT / "docs" / "development" / "environments.md"
 DAPP_ENV_EXAMPLE = REPO_ROOT / "clients" / "dapp" / ".env.example"
 DAPP_COMPOSE = REPO_ROOT / "testing" / "ethereum-testnet" / "config" / "docker-compose.dapp.yaml"
 
@@ -157,7 +157,7 @@ def main() -> int:
         for err in all_errors:
             print(f"ERROR: {err}", file=sys.stderr)
         print(
-            "\ndocs/environments.md integrity check failed.\n"
+            "\ndocs/development/environments.md integrity check failed.\n"
             "- For script paths: ensure the bash script exists at the listed path.\n"
             "- For env vars: add the var to clients/dapp/.env.example or\n"
             "  testing/ethereum-testnet/config/docker-compose.dapp.yaml,\n"
@@ -167,7 +167,7 @@ def main() -> int:
         )
         return 1
 
-    print("docs/environments.md: all script paths and env-var coverage checks passed.")
+    print("docs/development/environments.md: all script paths and env-var coverage checks passed.")
     return 0
 
 

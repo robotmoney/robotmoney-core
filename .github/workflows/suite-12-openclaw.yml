@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §12
+# Canonical: docs/development/ci-suites.md §12
 #
 # WHY THIS SUITE EXISTS
 # OpenClaw is the Claude-native client. Unlike OpenCode, it has a different runtime
@@ -49,7 +49,7 @@ on:
     paths:
       - "testing/openclaw-config/**"
       - "plugins/robotmoney-cli/**"
-      - "docs/walkthroughs/openclaw-config.md"
+      - "docs/development/openclaw-config.md"
       - ".github/workflows/suite-12-openclaw.yml"
   workflow_dispatch:
 

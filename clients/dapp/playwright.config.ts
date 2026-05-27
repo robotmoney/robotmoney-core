@@ -8,7 +8,7 @@
  * bundle that is bit-identical to a production deployment, with no
  * test-only env flags compiled into the dapp source.
  *
- * Canonical: docs/testing/smoke-test-design.md.
+ * Canonical: docs/development/smoke-test-design.md.
  */
 import { defineConfig } from "@playwright/test";
 

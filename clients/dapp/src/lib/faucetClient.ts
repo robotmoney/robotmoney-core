@@ -21,7 +21,7 @@
  * fires for the indexer.
  *
  * Read-side (`balanceOf`) routes through the user's wallet provider via
- * wagmi's `useReadContract` — per docs/security/dapp-topology.md §2 the
+ * wagmi's `useReadContract` — per docs/technical/dapp-topology.md §2 the
  * dapp never opens its own HTTP RPC. Only the *write* uses a viem
  * wallet client bound to the harness key, with `transport: custom(...)`
  * delegating the actual broadcast through the user's wallet provider.

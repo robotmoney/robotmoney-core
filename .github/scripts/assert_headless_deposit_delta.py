@@ -2,7 +2,7 @@
 """Assert that the on-chain vault balance delta matches the deposit amount
 reported in the opencode headless transcript (issue #461).
 
-Canonical: docs/testing/headless-opencode-tests.md.
+Canonical: docs/development/headless-opencode-tests.md.
 
 This is the round-trip check that ties the agent transcript to actual
 on-chain state. The deposit transcript step records ``tx_hash`` but says

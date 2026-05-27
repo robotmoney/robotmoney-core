@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §14
+# Canonical: docs/development/ci-suites.md §14
 #
 # WHY THIS SUITE EXISTS
 # The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.

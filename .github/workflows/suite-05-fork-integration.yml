@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §5
+# Canonical: docs/development/ci-suites.md §5
 #
 # WHY THIS SUITE EXISTS
 # The Rust client (rmpc) contains protocol adapter code that must correctly encode

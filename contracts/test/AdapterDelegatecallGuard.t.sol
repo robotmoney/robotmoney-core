@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/security-model.md §2 — adapter-allowlist no-proxy invariant.
+// Canonical: docs/technical/security-model.md §2 — adapter-allowlist no-proxy invariant.
 // Issue: #448 — guard RobotMoneyVault adapter codehash check against
 //                delegatecall-proxy adapters.
 pragma solidity ^0.8.24;

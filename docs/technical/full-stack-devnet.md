@@ -44,7 +44,7 @@ It defines:
   in genesis to grant a clean-history harness EOA a large balance of
   each test-relevant token (USDC at minimum), and (b) deploys Robot
   Money contracts via `forge script`. See
-  `docs/testing/smoke-test-design.md` for the genesis-time balance
+  `docs/development/smoke-test-design.md` for the genesis-time balance
   grant faucet design and the rationale for not impersonating a real
   Base whale.
 

@@ -15,7 +15,7 @@
  * "No weights set yet" if PortfolioRouter events have not been indexed by
  * the time the test runs — this is acceptable per the issue scope.
  *
- * Canonical: docs/testing/smoke-test-design.md, issue #318.
+ * Canonical: docs/development/smoke-test-design.md, issue #318.
  */
 
 import { test, expect } from "@playwright/test";

@@ -87,7 +87,7 @@ call-sites above. **This is the canonical landing seam for #466.**
 
 ## 3. Dapp balance/data path today
 
-Per `docs/security/dapp-topology.md` §2 the dapp opens **no HTTP RPC of
+Per `docs/technical/dapp-topology.md` §2 the dapp opens **no HTTP RPC of
 its own**. Two read-classes:
 
 - **Live-chain reads** — via wagmi `useReadContract` → user's wallet
@@ -259,7 +259,7 @@ Every file path referenced above exists in the tree as of this commit:
 - `clients/dapp/src/components/AgentsPanel.tsx`
 - `clients/dapp/.env.example`
 - `docs/technical/basket-vault-gap-report.md`
-- `docs/security/dapp-topology.md`
+- `docs/technical/dapp-topology.md`
 
 A reviewer can run `git ls-files` against any of the above to confirm
 existence.

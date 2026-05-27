@@ -29,8 +29,8 @@
  *
  * Canonical:
  *   - docs/code-reviews/review-codex-20260518-234945.md §7
- *   - docs/security/dapp-topology.md
- *   - docs/testing/smoke-test-design.md (faucet harness origin)
+ *   - docs/technical/dapp-topology.md
+ *   - docs/development/smoke-test-design.md (faucet harness origin)
  */
 
 /** Environment-class tag accepted by the dapp. Mirrors `VITE_ENV_CLASS`. */

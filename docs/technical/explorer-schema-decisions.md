@@ -29,7 +29,7 @@ Companion ADR: `docs/technical/rmpc-read-output-contract.md` §3.3 and §5 alrea
 4. **Idempotency-key shape.** §11 lists four fields but does not say which combination is the primary key per table, how non-event rows (state snapshots) key themselves, or how the indexer detects "already ingested".
 5. **Ingestion model.** §11 names both "JSON-RPC logs and selected state" and "rmpc outputs" as input sources. Which is canonical? Are rmpc outputs ingested directly, or re-derived from chain on the indexer side?
 
-A binding constraint applies: per `docs/security-model.md` and §11's own "Boundaries" subsection, **the explorer is never the source of truth for signing or safety decisions**. Every decision below is anchored to that constraint plus the §11 acceptance criteria (clearly distinguish indexed data from live chain reads; mark stale data with block number and indexed-at time; Phase 6 dapp can use the API for display while sensitive actions still go through `rmpc`).
+A binding constraint applies: per `docs/technical/security-model.md` and §11's own "Boundaries" subsection, **the explorer is never the source of truth for signing or safety decisions**. Every decision below is anchored to that constraint plus the §11 acceptance criteria (clearly distinguish indexed data from live chain reads; mark stale data with block number and indexed-at time; Phase 6 dapp can use the API for display while sensitive actions still go through `rmpc`).
 
 A second binding constraint from user memory applies: **no fast-feedback optimization in the test harness**. The indexer's local-dev story should not invent a faster substitute for the production stack just to shave seconds off contributor iteration.
 
@@ -186,7 +186,7 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 - `docs/implementation-plan.md` §12 — Phase 6 Human Dapp (downstream consumer).
 - `docs/technical/rmpc-read-output-contract.md` — §3.3 (`source: "json_rpc"` lock) and §5 (future `Source::Indexer` variant).
 - `docs/technical/fork-e2e-decisions.md` — §3.2 fork-block env-var pattern (reused by indexer integration tests).
-- `docs/security-model.md` — explorer-is-not-source-of-truth boundary.
+- `docs/technical/security-model.md` — explorer-is-not-source-of-truth boundary.
 - `contracts/gateway/interfaces/IGateway.sol` — `AgentAuthorized`, `AgentRevoked`, `AgentDeposit`, `Paused`, `Unpaused` events (the watched event set in §3.5).
 - `contracts/RobotMoneyVault.sol` — `Allocated`, `Pulled`, `Rebalanced`, `ExitFeeCharged`, `EmergencyWithdraw*` events.
 - Issue #56 — this scout.

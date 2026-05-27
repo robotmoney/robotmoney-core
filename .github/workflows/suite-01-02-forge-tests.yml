@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §1–2
+# Canonical: docs/development/ci-suites.md §1–2
 #
 # WHY THIS SUITE EXISTS
 # RobotMoneyGateway is the trust boundary for all user funds. Any regression in its

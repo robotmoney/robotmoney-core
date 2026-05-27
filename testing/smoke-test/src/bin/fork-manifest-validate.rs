@@ -5,7 +5,7 @@
 //! rule encoded in `smoke_test::fork_manifest`. Used as a CI guard so an
 //! invalid manifest is caught before any devnet boot is attempted.
 //!
-//! Canonical: docs/testing/smoke-test-design.md (Devnet section).
+//! Canonical: docs/development/smoke-test-design.md (Devnet section).
 //! Implements: issue #255 acceptance criteria — manifest validator CI gate.
 //!
 //! Usage:

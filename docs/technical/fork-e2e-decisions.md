@@ -104,7 +104,7 @@ If a future PR wants a single-line cross-link, the right place is at the end of 
 - `docs/implementation-plan.md` §8 — Phase 2 — Forked Smart-Contract E2E (constraints this ADR resolves).
 - `docs/implementation-plan.md` §5 — Phase 1 e2e plan (precedent for the Rust integration-test pattern).
 - `docs/technical/smart-contracts.md` §2 — Base-mainnet deployed addresses (justifies §3.1 chain choice).
-- `docs/testing-strategy-ethereum.md` — Geth+Lighthouse devnet doc (Phase 1 stack; Phase 2 does not use it).
+- `docs/development/testing-strategy-ethereum.md` — Geth+Lighthouse devnet doc (Phase 1 stack; Phase 2 does not use it).
 - Issue #37 — drop Anvil flavor, consolidate on Geth+Lighthouse (accepted, see §3.6).
 - Issue #47 — this scout.
 - User memory: "No fast-feedback optimization in test harness" (binding constraint cited throughout).

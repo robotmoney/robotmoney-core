@@ -346,8 +346,8 @@ current architecture supports either path by replacing a custom adapter with an
 |---|---|---|
 | Multi-asset basket vaults | Planned (protocol-asset, agent-token); not yet Router-eligible — pending TWAP oracle and rebalancing model | Enzyme (multi-asset), Alvara (basket) |
 | TWAP oracle for basket vaults | Required before Router eligibility; current prototype uses manipulable `slot0` pricing | Enzyme (Chainlink), Alvara (1inch DEX aggregator) |
-| Intra-vault rebalancing for baskets | TBD — trigger, target weights, and cost/slippage model are unresolved (PRD §3.15) | Alvara (single-tx atomic rebalance), Enzyme (manager-triggered) |
-| Agent-token shortlist governance | TBD — bribery model vs. RM-token inclusion vote unresolved (PRD §1.3) | Alvara (veALVA incentive vote), Enzyme (Asset Manager role) |
+| Intra-vault rebalancing for baskets | TBD — trigger, target weights, and cost/slippage model are unresolved (`docs/development/open-questions.md` §3.15) | Alvara (single-tx atomic rebalance), Enzyme (manager-triggered) |
+| Agent-token shortlist governance | TBD — bribery model vs. RM-token inclusion vote unresolved (`docs/development/open-questions.md` §1.3) | Alvara (veALVA incentive vote), Enzyme (Asset Manager role) |
 | Router weight governance | Deployed as admin-weighted MVP mock; token-holder voting is a future goal | Alvara (veALVA epoch vote), Enzyme (Enzyme Council) |
 | Performance/management fees | Deferred to future phase requiring separate ADR | Enzyme (full fee suite), Alvara (mgmt fee built-in) |
 | DEX-tradeable LP shares | Not a design goal; per-vault receipts only | Alvara (DEX LP), some Enzyme funds |
@@ -355,7 +355,7 @@ current architecture supports either path by replacing a custom adapter with an
 | Share lock period | None; synchronous redemption guaranteed | Veda (all shares locked after deposit) |
 | Gas abstraction | Not in scope | Zyfi (full paymaster service) |
 | Permissionless vault creation | Not in scope; vaults are protocol-registered | Alvara (permissionless basket launch) |
-| Build-vs-buy for stable-yield strategies | Custom adapters in-house; Giza/Zyfai named as alternatives — decision deferred (PRD §3.13) | Giza, Zyfai (managed Base aggregators) |
+| Build-vs-buy for stable-yield strategies | Custom adapters in-house (decided, issue #470); Giza/Zyfai named as alternatives if revisited per strategy | Giza, Zyfai (managed Base aggregators) |
 | Agent-first access control | First-class via gateway; no comparable in this set | None in this comparison |
 | Admin timelock | Required by architecture for all five protocol contracts | None documented at same strictness |
 

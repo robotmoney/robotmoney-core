@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/walkthroughs/openclaw-config.md §Mainnet gate
+# Canonical: docs/development/openclaw-config.md §Mainnet gate
 # Issue: #114.
 #
 # Asserts the OpenClaw harness refuses to run with RMPC_NETWORK=mainnet

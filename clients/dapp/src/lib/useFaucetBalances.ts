@@ -4,12 +4,12 @@
  * useFaucetBalances — wagmi hook layer for the FaucetTab. Encapsulates
  * the USDC `balanceOf` reads (harness preflight + recipient read-back)
  * and optionally the RM token harness balance (issue #365) so the FaucetTab
- * component itself stays render-only per docs/guides/react-guide.md §Layout
+ * component itself stays render-only per docs/development/react-guide.md §Layout
  * ("components/*.tsx render only, no fetching primitives").
  *
  * Issue #261 ties the drip button's enabled state to a "simulate before
  * write" preflight. A real `simulateContract` would require the dapp to
- * open its own HTTP RPC, which docs/security/dapp-topology.md §2 bans;
+ * open its own HTTP RPC, which docs/technical/dapp-topology.md §2 bans;
  * `balanceOf(harness) >= amount` routed through the user's wallet is
  * the strict equivalent — the transfer would revert otherwise, and we
  * never surface the signing prompt without a positive preflight.

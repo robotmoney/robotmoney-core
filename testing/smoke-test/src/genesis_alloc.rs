@@ -1,4 +1,4 @@
-//! Canonical: docs/testing/smoke-test-design.md (Devnet + USDC faucet sections).
+//! Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections).
 //! Implements: issue #255 — genesis alloc builder for the Geth+Lighthouse devnet.
 //!
 //! This module ingests a Base-mainnet state snapshot (the Anvil `--dump-state`
@@ -29,7 +29,7 @@
 //! layers a committed seed file (`testing/fixtures/fork-state/usdc-storage-seed.json`)
 //! onto the proxy account and registers the FiatTokenV2_2 implementation
 //! contract so the proxy's delegatecall resolves. See
-//! `docs/testing/smoke-test-design.md` for the capture procedure.
+//! `docs/development/smoke-test-design.md` for the capture procedure.
 
 use std::collections::BTreeMap;
 use std::path::Path;

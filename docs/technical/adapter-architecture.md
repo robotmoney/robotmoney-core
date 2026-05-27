@@ -3,7 +3,7 @@
 This document describes the vault adapter layer implemented by
 `RobotMoneyVault`. It is about the current single-vault strategy
 adapter system, not the Portfolio Router. Product vocabulary is defined
-in `docs/definitions.md`.
+in `docs/technical/definitions.md`.
 
 ## 1. Purpose
 

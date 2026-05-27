@@ -1,4 +1,4 @@
-//! Canonical: docs/security-model.md §4 — Timelock bypass → Mitigated
+//! Canonical: docs/technical/security-model.md §4 — Timelock bypass → Mitigated
 //! Implements: issue #422 — rmpc get-timelock integration test (AC: `rmpc get-timelock`
 //! against a devnet where a real Safe proxy holds PROPOSER_ROLE returns the correct
 //! address and delay).

@@ -18,7 +18,7 @@
  * window.ethereum layer and asserts the Faucet tab is absent and the
  * seed never runs — proving the chain-ID gate holds end-to-end.
  *
- * Canonical: issue #261, docs/testing/smoke-test-design.md.
+ * Canonical: issue #261, docs/development/smoke-test-design.md.
  */
 
 import { test, expect } from "@playwright/test";

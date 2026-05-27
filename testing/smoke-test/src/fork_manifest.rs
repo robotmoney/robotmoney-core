@@ -1,4 +1,4 @@
-//! Canonical: docs/testing/smoke-test-design.md (Devnet + USDC faucet sections).
+//! Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections).
 //! Implements: issue #255 — fork-block manifest validator.
 //!
 //! The fork-block manifest lives at `testing/ethereum-testnet/config/fork-block.json`
@@ -16,7 +16,7 @@
 //!   address.
 //! - `harness_usdc_holder` is a valid address AND does not overlap with any
 //!   entry in `ingested_addresses` — this preserves the "clean history"
-//!   property documented in `docs/testing/smoke-test-design.md`.
+//!   property documented in `docs/development/smoke-test-design.md`.
 //! - `harness_usdc_grant_units` parses as a positive `u128` (USDC has 6
 //!   decimals, so realistic grants fit comfortably).
 //!
@@ -371,7 +371,7 @@ mod tests {
     /// Both harnesses test the same Robot Money contracts against the same
     /// USDC / DEX state; diverging fork blocks would make scenario
     /// reproducibility cross-harness impossible. See
-    /// docs/testing/smoke-test-design.md (Devnet section).
+    /// docs/development/smoke-test-design.md (Devnet section).
     #[test]
     fn fork_block_aligns_with_anvil_fixture_current() {
         let repo = crate::locate_repo_root().expect("locate repo root");

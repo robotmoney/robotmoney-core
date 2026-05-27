@@ -1,5 +1,5 @@
 /*
- * Enforces rules from docs/guides/react-guide.md.
+ * Enforces rules from docs/development/react-guide.md.
  * Any rule below maps to a section there; do not loosen without updating both.
  */
 module.exports = {

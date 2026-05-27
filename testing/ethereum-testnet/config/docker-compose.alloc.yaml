@@ -2,7 +2,7 @@
 # JSON (produced by `smoke-test-genesis-ingester`) into the `setup` container
 # so generate.sh can merge it into the EL genesis.json before geth init.
 #
-# Canonical: docs/testing/smoke-test-design.md (Devnet section).
+# Canonical: docs/development/smoke-test-design.md (Devnet section).
 # Implements: issue #255 — wire the genesis ingester into the setup pipeline.
 #
 # Usage:

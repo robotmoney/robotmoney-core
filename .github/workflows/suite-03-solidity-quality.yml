@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §3
+# Canonical: docs/development/ci-suites.md §3
 #
 # WHY THIS SUITE EXISTS
 # The unit/invariant suite (suite 1–2) validates behaviour; this suite validates

@@ -1,4 +1,4 @@
-//! Canonical: docs/walkthroughs/opencode-readonly-fork.md (issue #53),
+//! Canonical: docs/development/opencode-readonly-fork.md (issue #53),
 //! step 3 (operator config template).
 //!
 //! Asserts that the `rmpc-fork.toml.template` shipped under
@@ -56,7 +56,7 @@ fn walkthrough_doc_quotes_the_template_body() {
         assert!(
             doc.contains(needle),
             "walkthrough doc missing canonical line: {needle} \
-             (drift between docs/walkthroughs/opencode-readonly-fork.md and \
+             (drift between docs/development/opencode-readonly-fork.md and \
              testing/opencode-walkthrough/fixtures/rmpc-fork.toml.template)"
         );
     }

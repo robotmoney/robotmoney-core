@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/security-model.md — ERC-4626 Inflation Attack Mitigation
+// Canonical: docs/technical/security-model.md — ERC-4626 Inflation Attack Mitigation
 // Covers: issue #209 — fork regressions for vault accounting attack paths
 // Related: issue #160 (decimals offset), #161 (idle USDC), #163 (MorphoAdapter shortfall)
 pragma solidity ^0.8.24;

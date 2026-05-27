@@ -16,7 +16,7 @@
  *   - globalTeardown kills the child process; the binary's Drop runs
  *     `docker compose down` on both compose stacks.
  *
- * Canonical: docs/testing/smoke-test-design.md, issue #245.
+ * Canonical: docs/development/smoke-test-design.md, issue #245.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";

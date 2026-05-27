@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §6
+# Canonical: docs/development/ci-suites.md §6
 #
 # WHY THIS SUITE EXISTS
 # rmpc's core logic (calldata encoding, preflight checks, nonce management, fee guards)

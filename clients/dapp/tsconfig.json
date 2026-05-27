@@ -1,4 +1,4 @@
-// Strictness here enforces docs/guides/react-guide.md §Types.
+// Strictness here enforces docs/development/react-guide.md §Types.
 // Do not loosen strict, noUnusedLocals, noUnusedParameters, or noFallthroughCasesInSwitch.
 {
   "compilerOptions": {

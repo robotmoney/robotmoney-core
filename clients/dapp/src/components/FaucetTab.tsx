@@ -20,7 +20,7 @@
  * This wrapper owns the wagmi `useReadContract` calls; the inner
  * `FaucetTabView` is render-only and is what tests render directly,
  * keeping component tests free of a wagmi/QueryClient fixture per
- * docs/guides/react-guide.md §Layout.
+ * docs/development/react-guide.md §Layout.
  */
 import { useMemo } from "react";
 import { type Address, type Hex, isAddress } from "viem";

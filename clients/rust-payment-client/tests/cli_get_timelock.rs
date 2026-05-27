@@ -1,4 +1,4 @@
-//! Canonical: docs/security-model.md §4 — Timelock bypass → Mitigated
+//! Canonical: docs/technical/security-model.md §4 — Timelock bypass → Mitigated
 //! Implements: issue #420 — complete test pyramid for on-chain timelocked multisig
 //!
 //! Integration tests for `rmpc get-timelock` (issue #414 / #420).

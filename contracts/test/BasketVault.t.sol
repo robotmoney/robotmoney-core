@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/security-model.md; docs/technical/security-hardening-seams.md
+// Canonical: docs/technical/security-model.md; docs/technical/security-hardening-seams.md
 // Covers: issue #428 — guarded emergency unwind minimums and explicit override events
 //         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw

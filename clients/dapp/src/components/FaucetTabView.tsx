@@ -11,7 +11,7 @@
  * The USDC button-disabled logic encodes the "simulate before write" gate:
  * the user can only submit once `harnessBalance >= FAUCET_DRIP_AMOUNT_USDC`,
  * which is the strict equivalent of a simulateContract preflight given
- * the dapp's no-RPC topology (see docs/security/dapp-topology.md §2).
+ * the dapp's no-RPC topology (see docs/technical/dapp-topology.md §2).
  *
  * The RM button is additionally gated on `rmTokenAddress` being provided and
  * `harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM` (issue #365 AC).

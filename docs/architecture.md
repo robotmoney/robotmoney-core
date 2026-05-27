@@ -1,6 +1,6 @@
 # Robot Money Architecture
 
-> Canonical sources: `docs/prd.md`, `docs/definitions.md`,
+> Canonical sources: `docs/prd.md`, `docs/technical/definitions.md`,
 > `docs/technical/adapter-architecture.md`,
 > `docs/technical/smart-contracts.md`, and accepted ADRs under
 > `docs/technical/`. This document describes how Robot Money is built.
@@ -103,13 +103,13 @@ an open decision.
 | Explorer indexer | Rust poller, JSON-RPC canonical, Postgres storage | Derives events and snapshots from chain, never from `rmpc` output. | `services/explorer-indexer/Cargo.toml`; `docs/technical/explorer-schema-decisions.md` §3.5 |
 | Database | Postgres for explorer/indexer environments | One DB engine for indexed data; no SQLite path. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | Queue / async processing | None in the current architecture | Indexing is poll-based; there is no message queue commitment. | `docs/technical/explorer-schema-decisions.md` §3.2 |
-| Auth / identity | Wallet signatures, gateway-enforced agent policies, and on-chain roles | The gateway is the permissions and agent-safety layer; depositors authorize their own agents; protocol roles are narrow and separated. | `docs/prd.md` §3, §5, §9; `docs/security-model.md` §10 |
+| Auth / identity | Wallet signatures, gateway-enforced agent policies, and on-chain roles | The gateway is the permissions and agent-safety layer; depositors authorize their own agents; protocol roles are narrow and separated. | `docs/prd.md` §3, §5, §9; `docs/technical/security-model.md` §10 |
 | File / object storage | Local config, audit logs, build artifacts; no product object store | Current flows use TOML config export and local audit artifacts, not an object-storage service. | `docs/technical/dapp-credential-decisions.md` §3.4 |
 | Email / notifications | Unspecified | No canonical doc selects an email or notification provider. | Open decision |
 | Payment processing | On-chain USDC only | Fiat on/off ramps are out of scope. | `docs/prd.md` §8 |
 | Observability | On-chain events, direct JSON-RPC reads, explorer indexer/API, structured `rmpc` JSON | Every state change must be observable; safety-critical reads stay live-chain. | `docs/prd.md` §2, §5, §7; `docs/technical/explorer-schema-decisions.md` §3.5 |
-| Infrastructure / hosting | Base, JSON-RPC providers, Docker devnet, CI-managed services | Production hosting is not fully specified; tests use Base forks and local Geth/Lighthouse devnet. | `docs/testing-strategy-ethereum.md`; `docs/testing/smoke-test-design.md` |
-| CI/CD | GitHub Actions quality gates for contracts, Rust, dapp, fork tests, docs validators | Test suites are documented as separate CI gates. | `docs/testing/ci-suites.md` |
+| Infrastructure / hosting | Base, JSON-RPC providers, Docker devnet, CI-managed services | Production hosting is not fully specified; tests use Base forks and local Geth/Lighthouse devnet. | `docs/development/testing-strategy-ethereum.md`; `docs/development/smoke-test-design.md` |
+| CI/CD | GitHub Actions quality gates for contracts, Rust, dapp, fork tests, docs validators | Test suites are documented as separate CI gates. | `docs/development/ci-suites.md` |
 
 ## 4. On-Chain Architecture
 
@@ -134,7 +134,7 @@ and `AgentTokenVault` (admin-curated agent-economy tokens) subclasses.
 These are prototypes (`isPrototype()` returns `true` at the base) and
 remain excluded from production Portfolio Router weights until each
 subclass certifies pool cardinality, per-asset TWAP windows, and an
-intra-vault rebalancing model (PRD §3.15).
+intra-vault rebalancing model (`docs/development/open-questions.md` §3.15).
 
 Future vault categories include thematic/RWA vaults. Those need
 separate execution, oracle, liquidity, legal, and disclosure
@@ -235,7 +235,7 @@ power assignment and cadence/quorum parameter changes, remains a
 protocol-admin operation and must route through the admin timelock in
 production.
 
-See `docs/security-model.md` §4 and issue #414.
+See `docs/technical/security-model.md` §4 and issue #414.
 
 ### 4.6 Fees, Revenue, and Buybacks
 
@@ -634,7 +634,7 @@ this architecture:
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
 | HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | `docs/implementation-plan.md` §0 |
-| GitHub Actions | CI/CD | Existing documented CI environment. | `docs/testing/ci-suites.md` |
+| GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 
 ## 10. Open Decisions
 
@@ -646,7 +646,7 @@ this architecture:
 | Protocol-asset and agent-token vault execution | These vaults need swaps, oracles, slippage bounds, liquidity rules, and asset-selection criteria. | Require separate ADRs before implementation; exclude from router until synchronous redemption and pricing are proven. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
-| On-chain admin timelock | Resolved: required. `docs/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
+| On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
 | Production JSON-RPC provider | Safety-critical reads depend on provider correctness and availability. | Support configured primary plus documented fallback; defer multi-RPC consensus until a specific risk justifies it. |
 | Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
 | Dapp hosting and CSP | Security model flags XSS/build compromise as unresolved. | Require static hosting with strict CSP, pinned dependencies, and release provenance before public mainnet use. |
@@ -657,14 +657,14 @@ this architecture:
 | Source doc | Rules applied | Rules not applicable |
 | --- | --- | --- |
 | `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, and out-of-scope boundaries. | Implementation sequencing. |
-| `docs/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
+| `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
 | `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation. | Future vault categories and Portfolio Router. |
-| `docs/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
+| `docs/technical/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
 | `docs/technical/rmpc-read-output-contract.md` | Stable JSON envelope, JSON-RPC source lock, partial-read contract, decimal-string integer serialization. | Per-command flag spelling and future indexer source variant. |
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |
 | `docs/technical/dapp-credential-decisions.md` | Dapp credential boundary, wallet-signing previews, config export, unsafe software credential marker. | Frontend framework choice was later resolved by the existing dapp package. |
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
-| `docs/testing-strategy-ethereum.md`, `docs/testing/*` | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
+| `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
 | `docs/implementation-plan.md` | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |

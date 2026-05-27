@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Freshness check for generated contract NatSpec docs (docs/src/contracts/).
+"""Freshness check for generated contract NatSpec docs (contracts/doc/src/contracts/).
 
 Generated contract docs are produced by `forge doc` from NatSpec comments in
-contracts/**/*.sol. They live under docs/src/contracts/ and must never be
+contracts/**/*.sol. They live under contracts/doc/src/contracts/ and must never be
 edited by hand — only regenerated.
 
 This script:
-  1. Runs `forge doc` (writing to docs/) in a temp working copy.
-  2. Diffs docs/src/contracts/ between the committed tree and the freshly
+  1. Runs `forge doc` (writing to contracts/doc/) in a temp working copy.
+  2. Diffs contracts/doc/src/contracts/ between the committed tree and the freshly
      generated output.
   3. Exits 1 if any diff is found, printing the diff for diagnosis.
-  4. Exits 0 if the committed docs/src/contracts/ exactly matches `forge doc`
+  4. Exits 0 if the committed contracts/doc/src/contracts/ exactly matches `forge doc`
      output.
 
 WHY THIS EXISTS
@@ -37,7 +37,7 @@ import tempfile
 from pathlib import Path
 
 
-GENERATED_DIR = Path("docs/src/contracts")
+GENERATED_DIR = Path("contracts/doc/src/contracts")
 
 # forge doc embeds the current HEAD SHA in [Git Source] lines, e.g.:
 #   [Git Source](https://github.com/org/repo/blob/<sha>/contracts/Foo.sol)
@@ -115,7 +115,7 @@ def self_test() -> int:
 
     This is the codified version of issue #450's dry-run acceptance: it
     guarantees that if a future PR introduces a new public Solidity surface
-    without regenerating ``docs/src/contracts/``, the freshness gate will
+    without regenerating ``contracts/doc/src/contracts/``, the freshness gate will
     detect the drift. Three synthetic scenarios are checked — added file,
     removed file, and content-changed file (the case that fires when a new
     ``function`` line appears in a contract's NatSpec output).
@@ -242,13 +242,13 @@ def main() -> int:
 
     if not (added or removed or changed):
         print(
-            f"OK: docs/src/contracts/ is fresh ({len(fresh)} files match "
+            f"OK: contracts/doc/src/contracts/ is fresh ({len(fresh)} files match "
             "`forge doc` output)."
         )
         return 0
 
     # Report drift.
-    print("FAIL: docs/src/contracts/ is stale relative to `forge doc` output.")
+    print("FAIL: contracts/doc/src/contracts/ is stale relative to `forge doc` output.")
     print("Run `forge doc` from the repo root and commit the result.\n")
 
     if added:

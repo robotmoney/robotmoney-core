@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §8
+# Canonical: docs/development/ci-suites.md §8
 #
 # WHY THIS SUITE EXISTS
 # The explorer indexer is the read path for the dApp's deposit history. Silent

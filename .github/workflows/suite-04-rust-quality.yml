@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §4
+# Canonical: docs/development/ci-suites.md §4
 #
 # WHY THIS SUITE EXISTS
 # clippy -D warnings is the project's primary defence against silent logic errors in Rust

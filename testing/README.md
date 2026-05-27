@@ -4,7 +4,7 @@ This file maps every test suite root to its owner domain, run command, CI
 workflow, required services/secrets, and the product promise it covers.
 
 For the full CI pipeline design — job dependency graphs, step-by-step details,
-and the environment key — see [docs/testing/ci-suites.md](../docs/testing/ci-suites.md).
+and the environment key — see [docs/development/ci-suites.md](../docs/development/ci-suites.md).
 
 ---
 
@@ -31,7 +31,7 @@ and the environment key — see [docs/testing/ci-suites.md](../docs/testing/ci-s
 **CI workflow:** [`.github/workflows/suite-01-02-forge-tests.yml`](../.github/workflows/suite-01-02-forge-tests.yml)  
 **Environment:** `anvil` (in-process; no Docker)  
 **Required services/secrets:** none  
-**docs/testing/ci-suites.md reference:** [Suites 1–2](../docs/testing/ci-suites.md#12-smart-contract-unit-tests-invariant-tests-and-coverage-gate)
+**docs/development/ci-suites.md reference:** [Suites 1–2](../docs/development/ci-suites.md#12-smart-contract-unit-tests-invariant-tests-and-coverage-gate)
 
 **Run commands:**
 ```bash
@@ -59,7 +59,7 @@ A branch-coverage gate on `RobotMoneyGateway` is enforced by `check_gateway_cove
 **CI workflow:** [`.github/workflows/suite-05-fork-integration.yml`](../.github/workflows/suite-05-fork-integration.yml)  
 **Environment:** `fork` — Anvil forked from a pinned Base mainnet block  
 **Required services/secrets:** `RMPC_FORK_RPC_URL` (Base mainnet RPC endpoint with archive access). Tests skip loudly when the secret is absent.  
-**docs/testing/ci-suites.md reference:** [Suite 5](../docs/testing/ci-suites.md#5-fork-integration-tests-protocol-adapters)
+**docs/development/ci-suites.md reference:** [Suite 5](../docs/development/ci-suites.md#5-fork-integration-tests-protocol-adapters)
 
 **Run commands:**
 ```bash
@@ -94,7 +94,7 @@ surfaces against real deployed state (not fresh devnet contracts).
 **CI workflow:** [`.github/workflows/suite-14-smoke-test.yml`](../.github/workflows/suite-14-smoke-test.yml)  
 **Environment:** `devnet` — real Geth + Lighthouse Docker Compose stack  
 **Required services/secrets:** Docker available on the runner  
-**docs/testing/ci-suites.md reference:** [Suite 14](../docs/testing/ci-suites.md#14-smoke-test-library)
+**docs/development/ci-suites.md reference:** [Suite 14](../docs/development/ci-suites.md#14-smoke-test-library)
 
 **Run commands:**
 ```bash
@@ -122,7 +122,7 @@ suites before they pay their own boot cost.
 **CI workflow:** [`.github/workflows/suite-07-rmpc-integration.yml`](../.github/workflows/suite-07-rmpc-integration.yml)  
 **Environment:** `devnet` — Geth + Lighthouse Docker Compose stack; also an in-process nonce-race stress test (no chain)  
 **Required services/secrets:** Docker available on the runner  
-**docs/testing/ci-suites.md reference:** [Suite 7](../docs/testing/ci-suites.md#7-rust-client-integration-tests)
+**docs/development/ci-suites.md reference:** [Suite 7](../docs/development/ci-suites.md#7-rust-client-integration-tests)
 
 **Run commands:**
 ```bash
@@ -148,7 +148,7 @@ Skill-doc parity and dApp TOML round-trip are also checked here.
 **CI workflow:** [`.github/workflows/suite-07-rmpc-integration.yml`](../.github/workflows/suite-07-rmpc-integration.yml)  
 **Environment:** `devnet` — Geth + Lighthouse Docker Compose stack  
 **Required services/secrets:** Docker available on the runner  
-**docs/testing/ci-suites.md reference:** [Suite 7](../docs/testing/ci-suites.md#7-rust-client-integration-tests)
+**docs/development/ci-suites.md reference:** [Suite 7](../docs/development/ci-suites.md#7-rust-client-integration-tests)
 
 **Run commands:**
 ```bash
@@ -169,7 +169,7 @@ validator connectivity) work correctly against a live devnet chain.
 **CI workflow:** [`.github/workflows/suite-04-rust-quality.yml`](../.github/workflows/suite-04-rust-quality.yml)  
 **Environment:** `none` — pure compilation and unit execution; no chain  
 **Required services/secrets:** none  
-**docs/testing/ci-suites.md reference:** [Suite 4](../docs/testing/ci-suites.md#4-rust-quality-gate)
+**docs/development/ci-suites.md reference:** [Suite 4](../docs/development/ci-suites.md#4-rust-quality-gate)
 
 **Run commands:**
 ```bash
@@ -192,7 +192,7 @@ that drift from the implementation are caught before they mislead contributors.
 **CI workflow:** [`.github/workflows/suite-10-dapp-e2e.yml`](../.github/workflows/suite-10-dapp-e2e.yml)  
 **Environment:** `devnet` — smoke-test full stack booted by Playwright's `globalSetup`  
 **Required services/secrets:** Docker available on the runner; `VITE_GATEWAY_EXPECTED_CODE_HASH` pinned at build time  
-**docs/testing/ci-suites.md reference:** [Suite 10](../docs/testing/ci-suites.md#10-dapp-e2e-tests)
+**docs/development/ci-suites.md reference:** [Suite 10](../docs/development/ci-suites.md#10-dapp-e2e-tests)
 
 **Run commands:**
 ```bash
@@ -221,7 +221,7 @@ code in `src/`. Gateway code-hash verification runs the production path.
 **CI workflow:** [`.github/workflows/suite-08-explorer-indexer.yml`](../.github/workflows/suite-08-explorer-indexer.yml)  
 **Environment:** `devnet` for reorg/finality tests; Postgres testcontainer + Anvil for fast unit tests  
 **Required services/secrets:** Docker available on the runner (Postgres testcontainer started by the test itself)  
-**docs/testing/ci-suites.md reference:** [Suite 8](../docs/testing/ci-suites.md#8-explorer-indexer-tests)
+**docs/development/ci-suites.md reference:** [Suite 8](../docs/development/ci-suites.md#8-explorer-indexer-tests)
 
 **Run commands:**
 ```bash
@@ -255,5 +255,5 @@ removed) against real Geth+Lighthouse fork-choice.
 | `fork` | Anvil forked from a pinned mainnet block via `RMPC_FORK_RPC_URL`. Skips loudly when the secret is absent. |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
-See [docs/testing/ci-suites.md](../docs/testing/ci-suites.md) for the full
+See [docs/development/ci-suites.md](../docs/development/ci-suites.md) for the full
 environment description and per-suite job dependency graphs.

@@ -6,7 +6,7 @@
  * Calls the injected EIP-1193 provider (`window.ethereum`) directly for
  * `eth_getCode` so that wallet-side errors surface verbatim, not as
  * cryptic viem retry-circuit-breaker wrappers. Reads still traverse the
- * user's wallet RPC per `docs/security/dapp-topology.md` §2.
+ * user's wallet RPC per `docs/technical/dapp-topology.md` §2.
  *
  * Auto-retries with exponential backoff (up to 4 attempts spread over
  * ~30 seconds), because MetaMask's per-chain RPC circuit breaker can

@@ -5,7 +5,7 @@
 //! contracts deployed with code, EOAs funded, on-chain pokes round-
 //! tripping. A failure here means every devnet-backed suite (8, 9,
 //! 11–13) will also fail, so this suite runs first as an early-exit
-//! gate (see docs/testing/ci-suites.md §15).
+//! gate (see docs/development/ci-suites.md §15).
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release -- --test-threads=1 --nocapture

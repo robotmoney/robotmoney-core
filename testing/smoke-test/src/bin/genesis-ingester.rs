@@ -7,7 +7,7 @@
 //! EOAs with ETH for gas and patches USDC storage so `HARNESS_USDC_HOLDER`
 //! receives a clean-history balance grant.
 //!
-//! Canonical: docs/testing/smoke-test-design.md (Devnet + USDC faucet sections).
+//! Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections).
 //! Implements: issue #255 — genesis ingester.
 //!
 //! Usage:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/walkthroughs/openclaw-config.md
+# Canonical: docs/development/openclaw-config.md
 # Issue: #114.
 #
 # Structural validator for the OpenClaw walkthrough doc:
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=testing/openclaw-config/_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
 
-DOC="${REPO_ROOT}/docs/walkthroughs/openclaw-config.md"
+DOC="${REPO_ROOT}/docs/development/openclaw-config.md"
 HARNESS_SRC="${REPO_ROOT}/testing/openclaw-config/openclaw_harness.sh"
 
 if [[ ! -f "$DOC" ]]; then

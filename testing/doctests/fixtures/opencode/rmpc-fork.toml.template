@@ -1,5 +1,5 @@
 # Read-only fork inspection config for the OpenCode walkthrough.
-# Canonical: docs/walkthroughs/opencode-readonly-fork.md
+# Canonical: docs/development/opencode-readonly-fork.md
 #
 # This file is fork-only. Pointing it at mainnet would still refuse all
 # writes (no signer key is loaded), but operators must never edit a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/testing/smoke-test-design.md (Devnet section).
+# Canonical: docs/development/smoke-test-design.md (Devnet section).
 # Implements: issue #255 — CI guard around the fork-block manifest.
 #
 # Validates testing/ethereum-testnet/config/fork-block.json against the

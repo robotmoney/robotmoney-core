@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §7
+# Canonical: docs/development/ci-suites.md §7
 #
 # WHY THIS SUITE EXISTS
 # rmpc must work end-to-end against a real consensus layer (Geth + Lighthouse), not just

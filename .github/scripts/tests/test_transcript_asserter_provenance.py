@@ -1,6 +1,6 @@
 """Plugin-provenance unit tests for the headless opencode asserter scripts.
 
-Canonical: docs/testing/headless-opencode-tests.md (issue #461).
+Canonical: docs/development/headless-opencode-tests.md (issue #461).
 
 These tests pin the positive and negative branches of the new plugin-path
 provenance check in both ``assert_headless_deposit_transcript.py`` and

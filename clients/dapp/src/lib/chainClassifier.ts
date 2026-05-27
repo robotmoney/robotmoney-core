@@ -20,7 +20,7 @@
  * worse than hiding it.
  *
  * Canonical: docs/prd.md (faucet must never appear on mainnet),
- * docs/testing/smoke-test-design.md (chain-id 918453).
+ * docs/development/smoke-test-design.md (chain-id 918453).
  */
 
 /** Mainnet chain IDs the dapp will ever encounter. Keep this list small. */
@@ -29,7 +29,7 @@ export const MAINNET_CHAIN_IDS: ReadonlyArray<number> = [
   8453, // Base mainnet
 ];
 
-/** Smoke-test full-stack devnet (see docs/testing/smoke-test-design.md). */
+/** Smoke-test full-stack devnet (see docs/development/smoke-test-design.md). */
 export const ROBOT_MONEY_DEVNET_CHAIN_ID = 918453;
 
 export type ChainClass = "mainnet" | "testnet";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/security-model.md §2 — "Delegatecall to attacker-controlled target"
+// Canonical: docs/technical/security-model.md §2 — "Delegatecall to attacker-controlled target"
 //            and the adapter-allowlist no-proxy invariant for approved adapters.
 // Issue: #448 — guard RobotMoneyVault adapter codehash check against
 //                delegatecall-proxy adapters.

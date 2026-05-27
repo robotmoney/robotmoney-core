@@ -38,7 +38,7 @@ bun install
 bun run dev                           # http://127.0.0.1:5173
 bun run test                          # Vitest unit tests
 # Playwright E2E boots a real Geth+Lighthouse devnet via globalSetup —
-# requires Docker + Foundry on PATH. See docs/testing/smoke-test-design.md.
+# requires Docker + Foundry on PATH. See docs/development/smoke-test-design.md.
 bunx playwright install --with-deps chromium && bun run test:e2e
 ```
 

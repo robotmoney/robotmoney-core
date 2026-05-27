@@ -16,7 +16,7 @@
 ## 1. Status
 
 Accepted. Authored 2026-05-15 against `docs/architecture.md` §2.3, §4.2, §10
-and `docs/prd.md` §"Allocation Governance", §3.9 on branch
+and `docs/prd.md` §"Allocation Governance"; `docs/development/open-questions.md` §3.9 on branch
 `chore/305-dev-scout-map-router-weight-governance-contract-`.
 
 ---
@@ -40,7 +40,7 @@ enforcement, quorum, delay, or execution path."
 - The governance proposal lifecycle is: Draft → Open for voting → Approved or
   Rejected → Executed or Expired.
 
-`docs/prd.md` §3.9 confirms that quorum threshold and fallback rules are TBD.
+`docs/development/open-questions.md` §3.9 confirms that quorum threshold and fallback rules are TBD.
 
 `contracts/PortfolioRouter.sol` is already deployed. Its `setWeights(address[],
 uint256[])` function is the only mechanism that updates the weight vector; it
@@ -76,10 +76,10 @@ The quorum is a participation floor, not a supermajority: a proposal that
 reaches 5 % participation passes if "yes" votes exceed "no" votes. A proposal
 that reaches 5 % with more "no" than "yes" votes is Rejected.
 
-**Rationale.** `docs/prd.md` §3.9 references the "5 % quorum" as the
+**Rationale.** `docs/development/open-questions.md` §3.9 references the "5 % quorum" as the
 whitepaper's parameter. No other threshold is specified in any canonical doc.
 The 5 % figure is chosen as the closest resolved number in the product record.
-The cliff problem (PRD §3.9) is noted in §5 below.
+The cliff problem (`docs/development/open-questions.md` §3.9) is noted in §5 below.
 
 **Fallback.** If no proposal reaches quorum and the current weights become stale
 (no proposal executed in more than `cadenceWindow * 3` blocks), the protocol
@@ -98,8 +98,8 @@ Expired) and at least 7 days have elapsed since the previous proposal's
 creation timestamp. The 7-day window is stored as a `cadenceWindow` immutable
 in `RouterGovernance.sol`.
 
-**Rationale.** `docs/prd.md` §1.4 references "weekly allocation"; the
-whitepaper (referenced in PRD §1.4) describes "monthly votes." A 7-day minimum
+**Rationale.** `docs/development/open-questions.md` §1.4 references "weekly allocation"; the
+whitepaper (referenced in `docs/development/open-questions.md` §1.4) describes "monthly votes." A 7-day minimum
 cadence allows weekly weight updates if the community participates actively,
 while preventing spam proposals. The cadence is enforced by the contract, not by
 a keeper, so no off-chain oracle is required.
@@ -129,7 +129,7 @@ gate, no delegation mechanism is specified for this phase.
 - `RM.totalSupply()` — ERC-20 standard; must return the total supply at the
   snapshot block to calculate the 5 % quorum denominator.
 
-**No tiers.** `docs/prd.md` §1.6 records the TBD status of
+**No tiers.** `docs/development/open-questions.md` §1.5 records the open status of
 Observer/Participant/Analyst/Strategist tiers. No tier system or CFO Feed
 activity gate is specified for router-weight voting.
 
@@ -307,7 +307,7 @@ correctness, not for `createProposal()` or the proposal state machine.
 
 ### 6.2 Quorum cliff / governance whiplash (design risk)
 
-**Risk.** `docs/prd.md` §3.9 flags that a hard 5 % quorum cliff causes
+**Risk.** `docs/development/open-questions.md` §3.9 flags that a hard 5 % quorum cliff causes
 governance whiplash: just-below-5 % participation falls back to the existing
 weights, just-above-5 % applies the voted weights, with no smooth transition.
 

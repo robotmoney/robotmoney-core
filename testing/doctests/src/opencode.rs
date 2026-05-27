@@ -1,4 +1,4 @@
-//! Canonical: docs/walkthroughs/opencode-readonly-fork.md — OpenCode walkthrough doc-parity
+//! Canonical: docs/development/opencode-readonly-fork.md — OpenCode walkthrough doc-parity
 //! Helpers for the OpenCode walkthrough doc-parity tests.
 
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ fn repo_root() -> PathBuf {
 
 /// Path to the walkthrough doc this module validates.
 pub fn walkthrough_md() -> PathBuf {
-    repo_root().join("docs/walkthroughs/opencode-readonly-fork.md")
+    repo_root().join("docs/development/opencode-readonly-fork.md")
 }
 
 /// Path to the TOML config template shipped with the walkthrough.

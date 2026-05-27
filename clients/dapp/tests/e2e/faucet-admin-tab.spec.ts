@@ -12,7 +12,7 @@
  * EOA, and polls `USDC.balanceOf(admin)` until it has increased by
  * exactly `FAUCET_DRIP_AMOUNT_USDC`.
  *
- * Canonical: issue #261, docs/testing/smoke-test-design.md.
+ * Canonical: issue #261, docs/development/smoke-test-design.md.
  */
 
 import { test, expect } from "@playwright/test";

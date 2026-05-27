@@ -14,7 +14,7 @@
  *     rows (AC §4).
  *
  * Render the pure `BalancesPanelView` directly — no wagmi/QueryClient
- * fixture needed, per docs/guides/react-guide.md §Layout.
+ * fixture needed, per docs/development/react-guide.md §Layout.
  */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";

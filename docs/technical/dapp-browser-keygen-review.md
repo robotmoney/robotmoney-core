@@ -28,7 +28,7 @@ Companion ADRs:
   fork-mode flow** and names this security review as the gate. Every
   decision below tightens or operationalizes a clause from §3.1, §3.2,
   or §3.4 of that document.
-- `docs/security-model.md` — establishes the role-separation invariant
+- `docs/technical/security-model.md` — establishes the role-separation invariant
   and the per-attack assessment table this ADR's threat model extends.
 - `docs/technical/rmpc-read-output-contract.md` §3 — fixes the rmpc
   config schema the export step in §4 below produces.
@@ -101,7 +101,7 @@ test cases.
 - **Cross-process touch.** The browser-extension wallet (MetaMask,
   Rabby, etc.) is **never** offered the agent's private key. The
   agent registration tx is signed by the **human admin** wallet (per
-  the role-separation invariant in `docs/security-model.md`); the
+  the role-separation invariant in `docs/technical/security-model.md`); the
   agent's private key is only used later inside the operator's signer
   backend, never inside the dapp.
 - **Memory dump exposure.** Documented as accepted residual risk: a
@@ -366,7 +366,7 @@ is filed) on any of:
 - A change to `docs/technical/dapp-credential-decisions.md` §3.1, §3.2,
   or §3.4 — the parent constraints this ADR depends on.
 - A change to the role-separation invariant in
-  `docs/security-model.md`, or to the rmpc software-signer behavior
+  `docs/technical/security-model.md`, or to the rmpc software-signer behavior
   documented in `docs/technical/rmpc-read-output-contract.md` §3.
 - Any incident report — internal or external — describing a
   browser-side key extraction in a comparable dapp (MetaMask Snaps,

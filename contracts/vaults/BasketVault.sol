@@ -5,7 +5,7 @@
 // (router eligibility, audit, etc.) before deployment to mainnet weight.
 // NAV and emergency-unwind minimums derive from a Uniswap V3 TWAP via
 // `observe()` over an admin-configurable per-asset window; `slot0` is no
-// longer read on hot paths. See issue #451 and docs/security-model.md §5.
+// longer read on hot paths. See issue #451 and docs/technical/security-model.md §5.
 pragma solidity ^0.8.24;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
@@ -640,7 +640,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///                         (10_000) reproduces the legacy zero-floor
     ///                         behaviour. ADMIN_ROLE is timelock-gated via
     ///                         the existing ADMIN_ROLE pattern (see
-    ///                         `docs/security-model.md`).
+    ///                         `docs/technical/security-model.md`).
     function setEmergencyUnwindGuard(
         address token,
         uint256 minUsdcOut,

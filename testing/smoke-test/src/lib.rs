@@ -1,4 +1,4 @@
-//! Canonical: docs/testing/smoke-test-design.md
+//! Canonical: docs/development/smoke-test-design.md
 //!
 //! Devnet fixture library for Robot Money integration tests.
 //!
@@ -59,7 +59,7 @@ pub const SHARE_RECEIVER_ADDRESS_HEX: &str = "0x1CBd3b2770909D4e10f157cABC84C726
 
 /// Harness USDC holder — the clean-history EOA that receives a genesis-time
 /// USDC balance grant on the smoke-test devnet. See
-/// `docs/testing/smoke-test-design.md` (USDC faucet section) and issue #255.
+/// `docs/development/smoke-test-design.md` (USDC faucet section) and issue #255.
 ///
 /// This key MUST NOT be used on any real chain. It is test-only by
 /// construction. The genesis ingester writes
@@ -2674,7 +2674,7 @@ impl DappStack {
             )
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see
-            // docs/security/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
+            // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
             // passed as a *UX hint*: the dapp's Connect Wallet button uses
             // it to call `wallet_addEthereumChain` so MetaMask prefills the
             // RPC URL when prompting the user to add chain 918453. The

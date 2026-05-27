@@ -16,7 +16,7 @@
  *   - Clicking calls the injected dripRm handler with the right rmTokenAddress.
  *
  * Render the pure FaucetTabView directly — no wagmi/QueryClient fixture
- * needed, per docs/guides/react-guide.md §Layout.
+ * needed, per docs/development/react-guide.md §Layout.
  */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";

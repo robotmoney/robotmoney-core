@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (agent-token basket)
-// (See also: docs/technical/basket-vault-gap-report.md; docs/prd.md §1.3 — shortlist governance)
+// (See also: docs/technical/basket-vault-gap-report.md; docs/development/open-questions.md §1.3 — shortlist governance)
 // PROTOTYPE — not audited, not for production use.
 pragma solidity ^0.8.24;
 
@@ -14,7 +14,7 @@ import {BasketVault} from "./BasketVault.sol";
 ///
 ///         The shortlist is admin-controlled for this prototype. In production this
 ///         will be replaced by on-chain RM-token governance or a bribery mechanism
-///         (see docs/prd.md open questions §1.3, §1.4, §3.2).
+///         (see docs/development/open-questions.md §1.3, §1.4, §3.2).
 ///
 ///         Depositors receive rmAGENT shares. Basket contents change only when
 ///         admin adds or removes assets. Existing positions are unaffected until

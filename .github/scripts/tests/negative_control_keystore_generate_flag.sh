@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/testing/headless-opencode-tests.md (issue #469).
+# Canonical: docs/development/headless-opencode-tests.md (issue #469).
 #
 # Negative control: prove the broken
 #     rmpc-keystore-import -- --generate

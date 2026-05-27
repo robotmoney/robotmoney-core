@@ -44,7 +44,7 @@ struct Cli {
     /// Requires `--full-stack`.
     ///
     /// Demo affordance only — bakes hoster-controlled URLs into the bundle
-    /// and is explicitly out of scope for `docs/security/dapp-topology.md`.
+    /// and is explicitly out of scope for `docs/technical/dapp-topology.md`.
     /// Not a production hosting pattern.
     #[arg(long, default_value_t = false)]
     tunnel: bool,

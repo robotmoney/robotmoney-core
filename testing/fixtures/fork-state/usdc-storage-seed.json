@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical Base USDC (FiatTokenProxy + FiatTokenV2_2 impl) storage seed for the smoke-test devnet genesis. Captured from Base mainnet at block 45743443 via cast storage. The genesis alloc builder layers these slots onto the proxy and registers the implementation contract so delegatecalls from the proxy resolve. See docs/testing/smoke-test-design.md.",
+  "_comment": "Canonical Base USDC (FiatTokenProxy + FiatTokenV2_2 impl) storage seed for the smoke-test devnet genesis. Captured from Base mainnet at block 45743443 via cast storage. The genesis alloc builder layers these slots onto the proxy and registers the implementation contract so delegatecalls from the proxy resolve. See docs/development/smoke-test-design.md.",
   "fork_block": 45743443,
   "chain": "base",
   "captured_at": "2026-05-11",

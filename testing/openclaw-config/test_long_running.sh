@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/walkthroughs/openclaw-config.md §Long-running task
+# Canonical: docs/development/openclaw-config.md §Long-running task
 # Issue: #114.
 #
 # Bounded long-running monitor test:

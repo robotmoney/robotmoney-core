@@ -1,4 +1,4 @@
-# Canonical: docs/testing/ci-suites.md §11 (opencode-headless)
+# Canonical: docs/development/ci-suites.md §11 (opencode-headless)
 #
 # WHY THIS SUITE EXISTS
 # The headless deposit and read tests are the only end-to-end proof that an AI agent,

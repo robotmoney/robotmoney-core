@@ -2,7 +2,7 @@
 
 Paste the prompt below into a fresh session of your agent runtime, then come back to the Robot Money dapp once the agent prints its public address.
 
-> **Environment reference:** for a full map of environment modes (local devnet, fork e2e, full-stack staging, mainnet read-only), startup commands, required env vars, and CI suites, see [`docs/environments.md`](docs/environments.md).
+> **Environment reference:** for a full map of environment modes (local devnet, fork e2e, full-stack staging, mainnet read-only), startup commands, required env vars, and CI suites, see [`docs/development/environments.md`](docs/development/environments.md).
 
 > Agent, install Robot Money per the instructions in this file.
 
@@ -93,7 +93,7 @@ If your operator provides a different hosted devnet endpoint, replace
 ### Profile B — Base mainnet anvil fork (chain ID 8453)
 
 For the read-only OpenCode walkthrough against a local anvil fork of Base
-mainnet, use the template in `docs/walkthroughs/opencode-readonly-fork.md`
+mainnet, use the template in `docs/development/opencode-readonly-fork.md`
 §Step 3 instead. That profile hardcodes `chain_id = 8453` and uses placeholder
 addresses intentionally — the walkthrough is read-only and expects degraded
 (`partial: true`) responses.

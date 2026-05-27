@@ -4,7 +4,7 @@
  * BalancesPanel — wagmi data-fetching wrapper for the main-page wallet
  * balances panel (issue #463). Owns the `useAccount`, `useBalance`, and
  * `useReadContracts` calls so the inner `BalancesPanelView` stays
- * render-only per docs/guides/react-guide.md §Layout.
+ * render-only per docs/development/react-guide.md §Layout.
  *
  * Sources:
  *   - USDC balance / decimals / symbol via ERC-20 `balanceOf`, `decimals`,

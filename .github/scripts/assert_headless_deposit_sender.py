@@ -2,7 +2,7 @@
 """Assert that the headless deposit transaction was signed by the
 freshly-generated agent EOA (issue #469).
 
-Canonical: docs/testing/headless-opencode-tests.md (G12).
+Canonical: docs/development/headless-opencode-tests.md (G12).
 
 Issue #469 acceptance criterion: the deposit's on-chain ``from`` address
 must equal the generated key. Without this script, the suite passes even

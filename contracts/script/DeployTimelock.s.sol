@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/security-model.md §4 — Access control & admin (Timelock bypass → Mitigated)
+// Canonical: docs/technical/security-model.md §4 — Access control & admin (Timelock bypass → Mitigated)
 // Implements: issue #414, issue #422
 pragma solidity ^0.8.24;
 

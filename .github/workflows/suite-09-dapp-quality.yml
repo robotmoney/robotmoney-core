@@ -1,5 +1,5 @@
-# Canonical: docs/testing/ci-suites.md §9
-# Enforces: docs/guides/react-guide.md (lint + fmt + tsc + vitest + build gates each PR).
+# Canonical: docs/development/ci-suites.md §9
+# Enforces: docs/development/react-guide.md (lint + fmt + tsc + vitest + build gates each PR).
 #
 # WHY THIS SUITE EXISTS
 # The dApp handles key generation in the browser. A type error in the keygen path or a

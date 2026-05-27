@@ -3,7 +3,7 @@
 **Date:** 2026-05-09  
 **Reviewer:** Codex (GPT-5), acting as an external blockchain-security CTO  
 **Scope:** Full codebase pass with emphasis on `contracts/`, `clients/rust-payment-client/`, `clients/dapp/`, `services/explorer-indexer/`, and `clients/explorer-api/`  
-**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/security-model.md`, `docs/implementation-plan.md`
+**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/technical/security-model.md`, `docs/implementation-plan.md`
 
 ---
 
@@ -14,7 +14,7 @@
 3. Reviewed critical Rust client paths: config loading, preflight, signing, nonce locking, deposit submission, and dapp-config round-trip tests.
 4. Reviewed the admin dapp transaction-preview and config-export paths.
 5. Reviewed explorer indexer/API state-ingestion, reorg, snapshot, and response-error surfaces.
-6. Compared findings against existing `docs/security-model.md` rows to distinguish implementation bugs from already-acknowledged residual risk.
+6. Compared findings against existing `docs/technical/security-model.md` rows to distinguish implementation bugs from already-acknowledged residual risk.
 
 This was a static review. I did not run a full test suite or mainnet-fork exploit harness.
 

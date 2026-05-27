@@ -4,7 +4,7 @@
 **Date:** 2026-05-15  
 **Vaults audited:** `ProtocolAssetVault` (rmPROTO), `AgentTokenVault` (rmAGENT)  
 **Prototype source:** `contracts/vaults/BasketVault.sol`, `contracts/vaults/ProtocolAssetVault.sol`, `contracts/vaults/AgentTokenVault.sol`  
-**Canonical docs:** `docs/prd.md` §11.2, §11.3, §3.15; `docs/architecture.md` §4.1, §4.4, §8, §10
+**Canonical docs:** `docs/prd.md` §11.2, §11.3; `docs/development/open-questions.md` §3.15; `docs/architecture.md` §4.1, §4.4, §8, §10
 
 ---
 
@@ -41,7 +41,7 @@ and §8:
 For `AgentTokenVault` only:
 
 9. Shortlist governance mechanism resolved (admin-curated prototype is
-   not production-ready per `docs/prd.md` §1.3, §1.4, §3.15).
+   not production-ready per `docs/development/open-questions.md` §1.3, §1.4, §3.15).
 
 ---
 
@@ -79,7 +79,7 @@ For `AgentTokenVault` only:
 | | |
 |---|---|
 | **What the prototype does** | New deposits are routed equally across active assets at deposit time. No `rebalance()` function exists. When assets are added or removed via `addAsset`/`removeAsset`, existing depositors' proportional holdings are not adjusted. |
-| **What is missing** | A specified rebalancing model covering trigger (admin-initiated, keeper, or depositor-self-service), target weights (equal-weight or governed vector), cost disclosure (slippage preview before execution), and impact on existing shareholders. `docs/prd.md` §3.15 documents all three open sub-questions and explicitly states this must be resolved before the agent-token vault can meet the transparent-performance requirement. The same gap applies to ProtocolAssetVault once new assets are added over time. |
+| **What is missing** | A specified rebalancing model covering trigger (admin-initiated, keeper, or depositor-self-service), target weights (equal-weight or governed vector), cost disclosure (slippage preview before execution), and impact on existing shareholders. `docs/development/open-questions.md` §3.15 documents all three open sub-questions and explicitly states this must be resolved before the agent-token vault can meet the transparent-performance requirement. The same gap applies to ProtocolAssetVault once new assets are added over time. |
 | **Gap rating** | **Gap — blocks eligibility** |
 | **ADR required** | Yes. See ADR outline: Rebalancing Model Decision (Appendix B). |
 
@@ -159,7 +159,7 @@ ERC-4626 deviation is larger in the worst case.
 | | |
 |---|---|
 | **What the prototype does** | Token shortlist management is handled entirely by `ADMIN_ROLE` via `addAsset` and `removeAsset` (inherited from `BasketVault`). `AgentTokenVault.shortlist()` exposes the current list as a view for off-chain display. |
-| **What is missing** | A production shortlist governance mechanism. `docs/prd.md` §1.3 and §1.4 note that the three candidate models — (a) protocol-agent curation, (b) RM-token inclusion vote, (c) bribery mechanism — are all unresolved. The PRD explicitly records `Best current answer: TBD` for shortlist ownership and inclusion mechanics. `docs/prd.md` §11.3 states: "This vault is not Router-eligible until shortlist governance, TWAP pricing, and the rebalancing model are specified." Without an on-chain governance mechanism the shortlist is a single-admin write, which violates the transparent-performance requirement (`docs/prd.md` §2) and introduces a trust assumption the product has not accepted. |
+| **What is missing** | A production shortlist governance mechanism. `docs/development/open-questions.md` §1.3 and §1.4 note that the three candidate models — (a) protocol-agent curation, (b) RM-token inclusion vote, (c) bribery mechanism — are all unresolved. The PRD explicitly records `Best current answer: TBD` for shortlist ownership and inclusion mechanics. `docs/prd.md` §11.3 states: "This vault is not Router-eligible until shortlist governance, TWAP pricing, and the rebalancing model are specified." Without an on-chain governance mechanism the shortlist is a single-admin write, which violates the transparent-performance requirement (`docs/prd.md` §2) and introduces a trust assumption the product has not accepted. |
 | **Gap rating** | **Gap — blocks eligibility** |
 | **ADR required** | Yes. See ADR outline: Shortlist Governance Mechanism (Appendix C). |
 
@@ -314,7 +314,7 @@ creates drift that violates the equal-weight mandate over time. `docs/prd.md`
 shortlist, and through what on-chain process?
 
 **Context:** The prototype gives full shortlist authority to `ADMIN_ROLE`
-(a single multisig or EOA). `docs/prd.md` §1.3 and §1.4 document three
+(a single multisig or EOA). `docs/development/open-questions.md` §1.3 and §1.4 document three
 competing models and record the product answer as TBD. The bribery-based flow
 described by the product owner ("AIs try to bribe in their own assets to
 vaults") has no specified on-chain mechanic.
@@ -324,7 +324,7 @@ vaults") has no specified on-chain mechanic.
 | Option | Summary | Risk |
 |---|---|---|
 | A. Admin multisig (prototype, current) | N-of-M multisig controls `addAsset`/`removeAsset`. No further governance. | Trust-centralized; violates transparent-performance requirement for router-eligible vault. Acceptable for prototype; not for production. |
-| B. RM-token inclusion vote | `$RM` holders propose and vote on shortlist changes via an on-chain governance module. Quorum, delay, and execution path required. | Requires a voting contract and token-vote mechanics not yet specified (see `docs/prd.md` §3.9). Adds significant implementation scope. |
+| B. RM-token inclusion vote | `$RM` holders propose and vote on shortlist changes via an on-chain governance module. Quorum, delay, and execution path required. | Requires a voting contract and token-vote mechanics not yet specified (see `docs/development/open-questions.md` §3.9). Adds significant implementation scope. |
 | C. Bribery/incentive mechanism | Agent-economy token projects pay a fee in `$RM` or USDC to nominate tokens; RM holders vote on ranked inclusion. | Most complex; requires fee-collection, bribery-escrow, and ranked-vote logic. Explicitly flagged as future spec work. |
 | D. Protocol-agent curation with timelock | Protocol agent (off-chain agent) proposes shortlist changes; changes are queued behind an on-chain timelock allowing RM holders to veto before execution. | Balances automation with community oversight; timelock duration is a free parameter. Adds agent-failure risk. |
 

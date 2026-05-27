@@ -251,7 +251,7 @@ contract Deploy is Script {
     ///      invariant: the adapter's runtime bytecode must not contain a
     ///      `DELEGATECALL` opcode. This prevents a future proxy-backed
     ///      adapter from bypassing the codehash allowlist by hot-swapping
-    ///      its implementation. See docs/security-model.md and issue #448.
+    ///      its implementation. See docs/technical/security-model.md and issue #448.
     function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal {
         AdapterBytecodeGuard.requireNoDelegatecall(adapter_);
         vault_.setAdapterAllowed(adapter_, true);

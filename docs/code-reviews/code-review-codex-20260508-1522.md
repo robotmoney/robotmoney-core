@@ -3,7 +3,7 @@
 **Date:** 2026-05-08  
 **Reviewer:** Claude (claude-sonnet-4-6)  
 **Scope:** Full codebase — `contracts/`, `clients/rust-payment-client/`, `services/explorer-indexer/`, `clients/dapp/`  
-**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/security-model.md`
+**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/technical/security-model.md`
 
 ---
 
@@ -16,7 +16,7 @@
 5. Read the explorer API: `routes.rs`, `model.rs`, `error.rs`, `state.rs`, `main.rs`.
 6. Read the dapp: all components (`AdminFlow`, `PauseFlow`, `TxPreview`, `ConfigExportPanel`, `HistoryPane`) and all lib modules (`abi.ts`, `preview.ts`, `explorerApi.ts`, `featureFlags.ts`, `wagmi.ts`).
 7. Read the test harness: `testing/ethereum-testnet/e2e-rust/src/lib.rs`.
-8. Cross-referenced every finding against the team's own `docs/security-model.md` to distinguish "known gap" from "unknown gap" and to avoid re-annotating what is already triaged.
+8. Cross-referenced every finding against the team's own `docs/technical/security-model.md` to distinguish "known gap" from "unknown gap" and to avoid re-annotating what is already triaged.
 
 The review is constructive and focused on correctness, not completion. Findings are ordered by blast radius.
 
@@ -65,7 +65,7 @@ This does not require a flash loan; the attacker only needs capital for the init
 
 #### Team's Current Status
 
-`docs/security-model.md §3` marks this "Unaddressed" and calls it the top-priority triage item. This review confirms that assessment and adds the concrete cross-protocol donation path, which was not described in the triage note.
+`docs/technical/security-model.md §3` marks this "Unaddressed" and calls it the top-priority triage item. This review confirms that assessment and adds the concrete cross-protocol donation path, which was not described in the triage note.
 
 #### Recommendation
 

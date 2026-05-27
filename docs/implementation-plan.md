@@ -296,5 +296,5 @@ Goal: Resolve open ADRs blocking basket-vault router eligibility.
 - [x] dev-scout audit + gap report — `docs/technical/basket-vault-gap-report.md`
 - [ ] TWAP oracle in both basket vaults (BasketVault TWAP hardening shipped in #459; confirm coverage across ProtocolAssetVault + AgentTokenVault)
 - [ ] Rebalancing model ADR + `rebalance()` implementation
-- [ ] Agent-token shortlist governance — mechanism per `docs/prd.md` §1.3
+- [ ] Agent-token shortlist governance — mechanism per `docs/development/open-questions.md` §1.3
 - [ ] Router eligibility: register both basket vaults once ADRs resolved + audited

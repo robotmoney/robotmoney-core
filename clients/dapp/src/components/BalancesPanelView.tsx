@@ -18,7 +18,7 @@
  * of any balance rows.
  *
  * Unit tests render this component directly with stub data and no
- * wagmi/QueryClient fixture per docs/guides/react-guide.md §Layout.
+ * wagmi/QueryClient fixture per docs/development/react-guide.md §Layout.
  */
 import { formatUnits } from "viem";
 import type { Address } from "viem";
