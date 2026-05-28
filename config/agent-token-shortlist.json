@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical MVP AgentTokenVault shortlist (ADR-0001). Six equal-weight, Base-only agent-economy tokens curated by ADMIN_ROLE. Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployAgentTokenVault.s.sol) selects `mainnet` vs `devnet` by chain id. PEAQ is intentionally excluded (not native to Base). Each entry pairs the token with the Uniswap V3 USDC pool used for swaps/NAV; `pool` and `swapFee` must be populated before a mainnet deploy. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
+  "tokens": [
+    "JUNO",
+    "ROBOTMONEY",
+    "BANKR",
+    "ZYFAI",
+    "GIZA",
+    "DEUS"
+  ],
+  "mainnet": {
+    "chain_id": 8453,
+    "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "shortlist": [
+      {
+        "symbol": "JUNO",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: confirm Base mainnet JUNO token + USDC V3 pool before mainnet deploy"
+      },
+      {
+        "symbol": "ROBOTMONEY",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: wire deployed RmToken address (clients/dapp VITE_RM_TOKEN_ADDRESS) + USDC V3 pool"
+      },
+      {
+        "symbol": "BANKR",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: confirm Base mainnet BANKR token + USDC V3 pool before mainnet deploy"
+      },
+      {
+        "symbol": "ZYFAI",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: confirm Base mainnet ZYFAI token + USDC V3 pool before mainnet deploy"
+      },
+      {
+        "symbol": "GIZA",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: confirm Base mainnet GIZA token + USDC V3 pool before mainnet deploy"
+      },
+      {
+        "symbol": "DEUS",
+        "token": "0x0000000000000000000000000000000000000000",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "note": "TODO: confirm Base mainnet DEUS token + USDC V3 pool before mainnet deploy"
+      }
+    ]
+  },
+  "devnet": {
+    "description": "Stand-in ERC20 + Uniswap V3 pool addresses for devnet/test deploys, keyed by chain id. The deploy script reads DEVNET_AGENT_TOKEN_* / DEVNET_AGENT_POOL_* env overrides when present (the smoke-test harness mints stand-in ERC20s and pools at deploy time and threads the addresses here), so this map only holds the override-key contract; actual addresses are injected per run.",
+    "override_env_prefix": {
+      "token": "DEVNET_AGENT_TOKEN_",
+      "pool": "DEVNET_AGENT_POOL_",
+      "swapFee": "DEVNET_AGENT_FEE_"
+    },
+    "default_swap_fee": 10000
+  }
+}

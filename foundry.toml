@@ -22,6 +22,9 @@ fs_permissions = [
     # Read-only access to docs/ so foundry regression tests can grep for
     # canonical production-readiness warnings (issue #427).
     { access = "read", path = "./docs" },
+    # Read-only access to config/ so DeployAgentTokenVault.s.sol can read the
+    # canonical MVP shortlist (config/agent-token-shortlist.json, ADR-0001).
+    { access = "read", path = "./config" },
 ]
 
 [fmt]

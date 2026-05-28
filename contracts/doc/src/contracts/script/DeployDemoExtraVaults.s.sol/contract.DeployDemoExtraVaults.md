@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d92dd042a375c2969be12630e370cd3c51b44d4e/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/c43fbb392825b11d010cdb5df06c784303c7dcd7/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -11,16 +11,25 @@ Demo-only deploy script that registers two additional ERC-4626
 vaults plus a non-Active RWA/Thematic placeholder in
 `VaultRegistry` and re-sets the router weight vector to a
 non-degenerate three-way split.
-Why this exists: the production basket vaults `ProtocolAssetVault`
-and `AgentTokenVault` remain ADR-blocked (see
-`docs/technical/basket-vault-gap-report.md` — they lack TWAP
-hardening and slippage-bounded `previewRedeem`), so the demo cannot
-seed them today. To still exercise the multi-vault router story end
-to end (Portfolio Explorer, /v1/vaults TVL, Router Governance
-weights) the demo registers two extra `RobotMoneyVault` instances
-wired to `PassthroughAdapter` — the same adapter the smoke-test
-devnet already uses for the primary vault. They are demo-only
-stand-ins; no mainnet build runs this script.
+Why this exists: to exercise the multi-vault router story end to end
+(Portfolio Explorer, /v1/vaults TVL, Router Governance weights) the
+demo registers two extra `RobotMoneyVault` instances wired to
+`PassthroughAdapter` — the same adapter the smoke-test devnet
+already uses for the primary vault. They are demo-only stand-ins;
+no mainnet build runs this script.
+AgentTokenVault shortlist (docs/adr/ADR-0001-mvp-agent-token-shortlist.md,
+accepted): the shortlist-side block is resolved — this script now
+also deploys a real `AgentTokenVault` and seeds it with the
+canonical MVP six-token shortlist (JUNO, ROBOTMONEY, BANKR, ZYFAI,
+GIZA, DEUS, equal-weight) using devnet stand-in ERC20s + stub V3
+pools, then registers it in `VaultRegistry` so the dapp Portfolio
+Explorer surfaces it via `AgentTokenVault.shortlist()`.
+AgentTokenVault stays PROTOTYPE-labeled and is NOT marked
+router-eligible: that remains blocked independently by the
+basket-vault gap report
+(`docs/technical/basket-vault-gap-report.md` — TWAP hardening and
+slippage-bounded `previewRedeem`). `ProtocolAssetVault` likewise
+stays unseeded by this script for the same gap.
 Four-vault PRD conformance (issue #479): PRD §11 names four vault
 categories — Stable Yield, Protocol Asset, Agent Token, and
 RWA/Thematic. PRD §11.4 marks RWA/Thematic as Future / not
@@ -60,6 +69,16 @@ DEPLOYMENT_OUT     — output JSON path
 
 
 ## Constants
+### DEMO_AGENT_SWAP_FEE
+Default swap fee tier for demo stand-in pools (agent tokens are
+illiquid; matches AgentTokenVault's 3% default-slippage stance).
+
+
+```solidity
+uint24 internal constant DEMO_AGENT_SWAP_FEE = 10_000
+```
+
+
 ### DEFAULT_VAULT1_NAME
 Default human-readable name for the first extra demo vault.
 
@@ -105,6 +124,27 @@ Per-deposit cap mirrored from Deploy.s.sol (1M USDC).
 
 ```solidity
 uint256 public constant DEMO_PER_DEPOSIT_CAP = 1_000_000 * 1e6
+```
+
+
+### DEFAULT_SWAP_ROUTER
+Base mainnet Uniswap V3 SwapRouter02 — default AgentTokenVault
+swap router when SWAP_ROUTER is unset (mirrors AgentTokenVault).
+
+
+```solidity
+address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481
+```
+
+
+## State Variables
+### AGENT_SYMBOLS
+Canonical MVP AgentTokenVault shortlist symbols, in deploy order
+(docs/adr/ADR-0001-mvp-agent-token-shortlist.md). PEAQ excluded.
+
+
+```solidity
+string[6] internal AGENT_SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"]
 ```
 
 
@@ -171,6 +211,22 @@ runs once against a fresh fork).
 function _registerRwaPlaceholder(VaultRegistry registry, Params memory p)
     internal
     returns (address rwaVault);
+```
+
+### _seedAgentTokenVault
+
+Deploy a real `AgentTokenVault`, fill it with the six MVP shortlist
+tokens (devnet stand-in ERC20s paired against USDC via stub V3
+pools, equal-weight by construction in `BasketVault._routeDeposit`),
+and register it in `VaultRegistry`. The vault is intentionally left
+router-ineligible — basket-vault gap (TWAP, previewRedeem) blocks
+that independently of the now-resolved shortlist question.
+
+
+```solidity
+function _seedAgentTokenVault(Params memory p, VaultRegistry registry)
+    internal
+    returns (address agentVault, address[] memory tokens);
 ```
 
 ### _deployVault
@@ -256,6 +312,16 @@ function _envStringOrDefault(string memory key, string memory fallback_)
     returns (string memory);
 ```
 
+### _envAddressOrDefault
+
+
+```solidity
+function _envAddressOrDefault(string memory key, address fallback_)
+    internal
+    view
+    returns (address);
+```
+
 ### _logResult
 
 
@@ -287,6 +353,10 @@ struct Deployed {
     /// @dev RWA/Thematic placeholder (issue #479). Registered non-Active
     ///      (Paused) and never router-eligible; not in the weight vector.
     address rwaVault;
+    // AgentTokenVault seeded with the canonical MVP six-token shortlist
+    // (ADR-0001). Registered in VaultRegistry but NOT router-eligible.
+    address agentTokenVault;
+    address[] agentTokens;
 }
 ```
 
@@ -302,6 +372,10 @@ struct Params {
     address router;
     address primaryVault;
     address usdc;
+    // Uniswap V3 SwapRouter02 for AgentTokenVault. On devnet no swaps run
+    // during seed (only addAsset + register), so a non-functional address
+    // is acceptable; defaults to the Base mainnet SwapRouter02.
+    address swapRouter;
     uint256 wPrimary;
     uint256 wExtra1;
     uint256 wExtra2;

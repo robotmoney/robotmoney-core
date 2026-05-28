@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.1 — Vault Family (agent-token basket)
-// (See also: docs/technical/basket-vault-gap-report.md; docs/development/open-questions.md §1.3 — shortlist governance)
+// (See also: docs/technical/basket-vault-gap-report.md; docs/adr/ADR-0001-mvp-agent-token-shortlist.md
+//  — accepted MVP shortlist ownership: admin-curated six-token equal-weight basket.
+//  ADR-0001 resolves the shortlist-side question previously tracked as
+//  docs/development/open-questions.md §1.3; the production token-holder /
+//  bribery model is deferred past MVP there.)
 // PROTOTYPE — not audited, not for production use.
 pragma solidity ^0.8.24;
 
@@ -12,8 +16,13 @@ import {BasketVault} from "./BasketVault.sol";
 /// @notice PROTOTYPE ERC-4626 USDC vault holding a basket of agent-economy tokens
 ///         curated by ADMIN_ROLE. Swaps in/out via Uniswap V3.
 ///
-///         The shortlist is admin-controlled for this prototype. In production this
-///         will be replaced by on-chain RM-token governance or a bribery mechanism
+///         The shortlist is admin-controlled for this prototype. The canonical
+///         MVP shortlist (six Base-only tokens, equal-weight) is fixed by
+///         docs/adr/ADR-0001-mvp-agent-token-shortlist.md and seeded from
+///         config/agent-token-shortlist.json via
+///         contracts/script/DeployAgentTokenVault.s.sol — no token address is
+///         hardcoded here. The production ownership model (on-chain RM-token
+///         inclusion vote or bribery mechanism) is deferred past MVP
 ///         (see docs/development/open-questions.md §1.3, §1.4, §3.2).
 ///
 ///         Depositors receive rmAGENT shares. Basket contents change only when

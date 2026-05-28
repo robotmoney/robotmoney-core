@@ -81,6 +81,7 @@ contract DeployDemoExtraVaultsTest is Test {
             router: address(router),
             primaryVault: address(primaryVault),
             usdc: address(usdc),
+            swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,
             wPrimary: W_PRIMARY,
             wExtra1: W_EXTRA1,
             wExtra2: W_EXTRA2,

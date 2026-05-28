@@ -1,5 +1,5 @@
 # AgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/vaults/AgentTokenVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/c43fbb392825b11d010cdb5df06c784303c7dcd7/contracts/vaults/AgentTokenVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -9,8 +9,13 @@ AgentTokenVault
 
 PROTOTYPE ERC-4626 USDC vault holding a basket of agent-economy tokens
 curated by ADMIN_ROLE. Swaps in/out via Uniswap V3.
-The shortlist is admin-controlled for this prototype. In production this
-will be replaced by on-chain RM-token governance or a bribery mechanism
+The shortlist is admin-controlled for this prototype. The canonical
+MVP shortlist (six Base-only tokens, equal-weight) is fixed by
+docs/adr/ADR-0001-mvp-agent-token-shortlist.md and seeded from
+config/agent-token-shortlist.json via
+contracts/script/DeployAgentTokenVault.s.sol — no token address is
+hardcoded here. The production ownership model (on-chain RM-token
+inclusion vote or bribery mechanism) is deferred past MVP
 (see docs/development/open-questions.md §1.3, §1.4, §3.2).
 Depositors receive rmAGENT shares. Basket contents change only when
 admin adds or removes assets. Existing positions are unaffected until

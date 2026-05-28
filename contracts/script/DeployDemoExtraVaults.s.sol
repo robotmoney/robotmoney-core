@@ -8,11 +8,37 @@ import {console2} from "forge-std/console2.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
+import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+
+/// @notice Demo-only stand-in ERC20 for the AgentTokenVault shortlist. The
+///         devnet has no real agent-token liquidity; this fills the basket so
+///         `AgentTokenVault.shortlist()` returns the six MVP tokens for the
+///         dapp. Never deployed on mainnet (DeployDemoExtraVaults is demo-only).
+contract DemoAgentToken is ERC20 {
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
+}
+
+/// @notice Minimal Uniswap V3 pool stub exposing only `token0()`/`token1()`,
+///         the two reads `BasketVault.addAsset` uses to verify a pool pairs the
+///         shortlist token with USDC. Demo-only; no swap/observe liquidity.
+contract DemoUsdcPool {
+    address public immutable token0;
+    address public immutable token1;
+
+    constructor(address tokenA, address tokenB) {
+        // Order is irrelevant to addAsset's check; store as given.
+        token0 = tokenA;
+        token1 = tokenB;
+    }
+}
 
 /// @title DeployDemoExtraVaults
 /// @notice Demo-only deploy script that registers two additional ERC-4626
@@ -20,16 +46,26 @@ import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 ///         `VaultRegistry` and re-sets the router weight vector to a
 ///         non-degenerate three-way split.
 ///
-///         Why this exists: the production basket vaults `ProtocolAssetVault`
-///         and `AgentTokenVault` remain ADR-blocked (see
-///         `docs/technical/basket-vault-gap-report.md` — they lack TWAP
-///         hardening and slippage-bounded `previewRedeem`), so the demo cannot
-///         seed them today. To still exercise the multi-vault router story end
-///         to end (Portfolio Explorer, /v1/vaults TVL, Router Governance
-///         weights) the demo registers two extra `RobotMoneyVault` instances
-///         wired to `PassthroughAdapter` — the same adapter the smoke-test
-///         devnet already uses for the primary vault. They are demo-only
-///         stand-ins; no mainnet build runs this script.
+///         Why this exists: to exercise the multi-vault router story end to end
+///         (Portfolio Explorer, /v1/vaults TVL, Router Governance weights) the
+///         demo registers two extra `RobotMoneyVault` instances wired to
+///         `PassthroughAdapter` — the same adapter the smoke-test devnet
+///         already uses for the primary vault. They are demo-only stand-ins;
+///         no mainnet build runs this script.
+///
+///         AgentTokenVault shortlist (docs/adr/ADR-0001-mvp-agent-token-shortlist.md,
+///         accepted): the shortlist-side block is resolved — this script now
+///         also deploys a real `AgentTokenVault` and seeds it with the
+///         canonical MVP six-token shortlist (JUNO, ROBOTMONEY, BANKR, ZYFAI,
+///         GIZA, DEUS, equal-weight) using devnet stand-in ERC20s + stub V3
+///         pools, then registers it in `VaultRegistry` so the dapp Portfolio
+///         Explorer surfaces it via `AgentTokenVault.shortlist()`.
+///         AgentTokenVault stays PROTOTYPE-labeled and is NOT marked
+///         router-eligible: that remains blocked independently by the
+///         basket-vault gap report
+///         (`docs/technical/basket-vault-gap-report.md` — TWAP hardening and
+///         slippage-bounded `previewRedeem`). `ProtocolAssetVault` likewise
+///         stays unseeded by this script for the same gap.
 ///
 ///         Four-vault PRD conformance (issue #479): PRD §11 names four vault
 ///         categories — Stable Yield, Protocol Asset, Agent Token, and
@@ -84,7 +120,18 @@ contract DeployDemoExtraVaults is Script {
         /// @dev RWA/Thematic placeholder (issue #479). Registered non-Active
         ///      (Paused) and never router-eligible; not in the weight vector.
         address rwaVault;
+        // AgentTokenVault seeded with the canonical MVP six-token shortlist
+        // (ADR-0001). Registered in VaultRegistry but NOT router-eligible.
+        address agentTokenVault;
+        address[] agentTokens;
     }
+
+    /// @notice Canonical MVP AgentTokenVault shortlist symbols, in deploy order
+    ///         (docs/adr/ADR-0001-mvp-agent-token-shortlist.md). PEAQ excluded.
+    string[6] internal AGENT_SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    /// @notice Default swap fee tier for demo stand-in pools (agent tokens are
+    ///         illiquid; matches AgentTokenVault's 3% default-slippage stance).
+    uint24 internal constant DEMO_AGENT_SWAP_FEE = 10_000;
 
     /// @notice Default human-readable name for the first extra demo vault.
     string public constant DEFAULT_VAULT1_NAME = "Robot Money Demo Vault A";
@@ -109,6 +156,10 @@ contract DeployDemoExtraVaults is Script {
         address router;
         address primaryVault;
         address usdc;
+        // Uniswap V3 SwapRouter02 for AgentTokenVault. On devnet no swaps run
+        // during seed (only addAsset + register), so a non-functional address
+        // is acceptable; defaults to the Base mainnet SwapRouter02.
+        address swapRouter;
         uint256 wPrimary;
         uint256 wExtra1;
         uint256 wExtra2;
@@ -116,6 +167,10 @@ contract DeployDemoExtraVaults is Script {
         string name2;
         string rwaName;
     }
+
+    /// @notice Base mainnet Uniswap V3 SwapRouter02 — default AgentTokenVault
+    ///         swap router when SWAP_ROUTER is unset (mirrors AgentTokenVault).
+    address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
 
     /// @notice Forge broadcast entrypoint. Deploys two extra demo vaults +
     ///         passthrough adapters, registers them, attests them on the
@@ -149,6 +204,7 @@ contract DeployDemoExtraVaults is Script {
         p.router = vm.envAddress("ROUTER_ADDRESS");
         p.primaryVault = vm.envAddress("PRIMARY_VAULT");
         p.usdc = vm.envAddress("USDC_ADDRESS");
+        p.swapRouter = _envAddressOrDefault("SWAP_ROUTER", DEFAULT_SWAP_ROUTER);
         p.wPrimary = vm.envUint("WEIGHT_PRIMARY_BPS");
         p.wExtra1 = vm.envUint("WEIGHT_EXTRA1_BPS");
         p.wExtra2 = vm.envUint("WEIGHT_EXTRA2_BPS");
@@ -218,6 +274,10 @@ contract DeployDemoExtraVaults is Script {
         //    RobotMoneyVault registry entry is sufficient.
         address rwaVault = _registerRwaPlaceholder(registry, p);
 
+        // 6. Deploy + seed AgentTokenVault with the canonical MVP six-token
+        //    shortlist (ADR-0001). Registered for display, NOT router-eligible.
+        (address agentVault, address[] memory agentTokens) = _seedAgentTokenVault(p, registry);
+
         d = Deployed({
             vault1: address(vault1),
             vault2: address(vault2),
@@ -226,7 +286,9 @@ contract DeployDemoExtraVaults is Script {
             weightPrimaryBps: p.wPrimary,
             weightExtra1Bps: p.wExtra1,
             weightExtra2Bps: p.wExtra2,
-            rwaVault: rwaVault
+            rwaVault: rwaVault,
+            agentTokenVault: agentVault,
+            agentTokens: agentTokens
         });
     }
 
@@ -246,6 +308,43 @@ contract DeployDemoExtraVaults is Script {
             rwaVault, VaultRegistry.VaultMetadata({name: p.rwaName, asset: p.usdc, registeredAt: 0})
         );
         registry.setVaultStatus(rwaVault, VaultRegistry.VaultStatus.Paused);
+    }
+
+    /// @dev Deploy a real `AgentTokenVault`, fill it with the six MVP shortlist
+    ///      tokens (devnet stand-in ERC20s paired against USDC via stub V3
+    ///      pools, equal-weight by construction in `BasketVault._routeDeposit`),
+    ///      and register it in `VaultRegistry`. The vault is intentionally left
+    ///      router-ineligible — basket-vault gap (TWAP, previewRedeem) blocks
+    ///      that independently of the now-resolved shortlist question.
+    function _seedAgentTokenVault(Params memory p, VaultRegistry registry)
+        internal
+        returns (address agentVault, address[] memory tokens)
+    {
+        AgentTokenVault vault = new AgentTokenVault(
+            IERC20(p.usdc),
+            ISwapRouter(p.swapRouter),
+            DEMO_TVL_CAP,
+            DEMO_PER_DEPOSIT_CAP,
+            0, // exitFeeBps
+            p.admin, // feeRecipient (fees are 0)
+            p.admin // admin (broadcaster holds ADMIN_ROLE)
+        );
+
+        tokens = new address[](AGENT_SYMBOLS.length);
+        for (uint256 i = 0; i < AGENT_SYMBOLS.length; i++) {
+            DemoAgentToken token = new DemoAgentToken(
+                string.concat("Demo Agent ", AGENT_SYMBOLS[i]), AGENT_SYMBOLS[i]
+            );
+            DemoUsdcPool pool = new DemoUsdcPool(address(token), p.usdc);
+            vault.addAsset(address(token), address(pool), DEMO_AGENT_SWAP_FEE);
+            tokens[i] = address(token);
+        }
+
+        _registerIfAbsent(registry, address(vault), p.usdc, "Robot Money Agent Tokens");
+        // Deliberately NOT calling registry.setRouterEligible(vault, true):
+        // AgentTokenVault remains router-ineligible until the basket-vault gap
+        // closes (docs/technical/basket-vault-gap-report.md).
+        agentVault = address(vault);
     }
 
     function _deployVault(Params memory p) internal returns (RobotMoneyVault) {
@@ -353,14 +452,29 @@ contract DeployDemoExtraVaults is Script {
         }
     }
 
+    function _envAddressOrDefault(string memory key, address fallback_)
+        internal
+        view
+        returns (address)
+    {
+        try vm.envAddress(key) returns (address v) {
+            if (v != address(0)) return v;
+            return fallback_;
+        } catch {
+            return fallback_;
+        }
+    }
+
     function _logResult(Deployed memory d) internal view {
         console2.log("DeployDemoExtraVaults complete");
-        console2.log("  vault1  :", d.vault1);
-        console2.log("  vault2  :", d.vault2);
-        console2.log("  rwaVault:", d.rwaVault);
-        console2.log("  wPrimary:", d.weightPrimaryBps);
-        console2.log("  wExtra1 :", d.weightExtra1Bps);
-        console2.log("  wExtra2 :", d.weightExtra2Bps);
+        console2.log("  vault1     :", d.vault1);
+        console2.log("  vault2     :", d.vault2);
+        console2.log("  rwaVault   :", d.rwaVault);
+        console2.log("  agentVault :", d.agentTokenVault);
+        console2.log("  agentTokens:", d.agentTokens.length);
+        console2.log("  wPrimary   :", d.weightPrimaryBps);
+        console2.log("  wExtra1    :", d.weightExtra1Bps);
+        console2.log("  wExtra2    :", d.weightExtra2Bps);
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
@@ -380,6 +494,8 @@ contract DeployDemoExtraVaults is Script {
         vm.serializeAddress(obj, "adapter1", d.adapter1);
         vm.serializeAddress(obj, "adapter2", d.adapter2);
         vm.serializeAddress(obj, "rwa_vault", d.rwaVault);
+        vm.serializeAddress(obj, "agent_token_vault", d.agentTokenVault);
+        vm.serializeAddress(obj, "agent_tokens", d.agentTokens);
         vm.serializeUint(obj, "weight_primary_bps", d.weightPrimaryBps);
         vm.serializeUint(obj, "weight_extra1_bps", d.weightExtra1Bps);
         string memory json = vm.serializeUint(obj, "weight_extra2_bps", d.weightExtra2Bps);
