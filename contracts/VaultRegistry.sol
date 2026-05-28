@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.2, §10 — Vault Registry
-// (See also: docs/prd.md §11 — Vault Catalog)
+// (See also: docs/prd.md §11 — Vault Catalog;
+//            docs/adr/ADR-0002-router-default-weights-on-chain.md — the
+//            router-eligible count and stale-defaultWeights-length guard)
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+
+/// @dev Minimal view the registry needs from `PortfolioRouter` to keep the
+///      default weight vector's length consistent with router eligibility.
+///      Declared as an interface (not an import) to avoid a circular
+///      compile-time dependency between the two contracts.
+interface IRouterDefaultWeights {
+    /// @notice Number of legs in the router's default weight vector.
+    function defaultWeightsLength() external view returns (uint256);
+}
 
 /// @title VaultRegistry
 /// @notice On-chain registry of authorised Robot Money vaults.
@@ -74,6 +85,20 @@ contract VaultRegistry is AccessControl {
     ///         differ only by configuration and seeded state.
     mapping(address => bool) private _routerEligible;
 
+    /// @notice Count of vaults currently marked router-eligible. Mirrors the
+    ///         number of `true` entries in `_routerEligible`. The
+    ///         `PortfolioRouter` default weight vector must span exactly this
+    ///         many legs (see `setRouterEligible`). ADR-0002.
+    uint256 public routerEligibleCount;
+
+    /// @notice Optional `PortfolioRouter` whose default weight vector length is
+    ///         kept consistent with `routerEligibleCount`. When set (non-zero)
+    ///         and the router already carries a non-empty default vector,
+    ///         `setRouterEligible` reverts on any change that would leave that
+    ///         vector with a stale length. Set once by ADMIN_ROLE after both
+    ///         contracts are deployed. ADR-0002.
+    IRouterDefaultWeights public router;
+
     // ─── Events ──────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a new vault is registered.
@@ -98,6 +123,11 @@ contract VaultRegistry is AccessControl {
     /// @param newValue New eligibility value.
     event RouterEligibilityChanged(address indexed vault, bool oldValue, bool newValue);
 
+    /// @notice Emitted when the linked `PortfolioRouter` reference is set.
+    /// @param oldRouter Previous router address (0 = unset).
+    /// @param newRouter New router address (0 = unset).
+    event RouterSet(address indexed oldRouter, address indexed newRouter);
+
     // ─── Errors ──────────────────────────────────────────────────────────────
 
     /// @notice Vault address argument is `address(0)`.
@@ -109,6 +139,14 @@ contract VaultRegistry is AccessControl {
     /// @notice Vault address is not registered; `getVault` and `setVaultStatus`
     ///         revert with this error when the address is unknown.
     error NotRegistered();
+
+    /// @notice A `setRouterEligible` change would leave the linked router's
+    ///         non-empty default weight vector with a length that no longer
+    ///         matches `routerEligibleCount`. Re-set `defaultWeights` to the new
+    ///         eligible set first (or clear it), then change eligibility.
+    /// @param expectedLength New router-eligible count after the change.
+    /// @param defaultLength  Current default weight vector length.
+    error StaleDefaultWeightsLength(uint256 expectedLength, uint256 defaultLength);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -169,8 +207,40 @@ contract VaultRegistry is AccessControl {
     /// @param eligible New router-eligibility value.
     function setRouterEligible(address vault, bool eligible) external onlyRole(ADMIN_ROLE) {
         if (!_registered[vault]) revert NotRegistered();
-        emit RouterEligibilityChanged(vault, _routerEligible[vault], eligible);
+        bool old = _routerEligible[vault];
+        if (old == eligible) {
+            // No-op: count and any default vector stay consistent. Still emit
+            // for observability symmetry.
+            emit RouterEligibilityChanged(vault, old, eligible);
+            return;
+        }
+
+        uint256 newCount = eligible ? routerEligibleCount + 1 : routerEligibleCount - 1;
+
+        // Block stale-length state: if a router is linked and already carries a
+        // non-empty default weight vector, that vector must be re-set to span
+        // the new eligible set before (or atomically with) this change. The
+        // empty default (length 0) is exempt — it means "no default configured
+        // yet", which is always consistent. ADR-0002.
+        if (address(router) != address(0)) {
+            uint256 defaultLength = router.defaultWeightsLength();
+            if (defaultLength != 0 && defaultLength != newCount) {
+                revert StaleDefaultWeightsLength(newCount, defaultLength);
+            }
+        }
+
+        routerEligibleCount = newCount;
+        emit RouterEligibilityChanged(vault, old, eligible);
         _routerEligible[vault] = eligible;
+    }
+
+    /// @notice Link the `PortfolioRouter` whose default weight vector length is
+    ///         kept consistent with `routerEligibleCount`. Pass `address(0)` to
+    ///         unlink. Restricted to `ADMIN_ROLE`. ADR-0002.
+    /// @param newRouter Address of the `PortfolioRouter` (or 0 to unlink).
+    function setRouter(address newRouter) external onlyRole(ADMIN_ROLE) {
+        emit RouterSet(address(router), newRouter);
+        router = IRouterDefaultWeights(newRouter);
     }
 
     // ─── Read surface ────────────────────────────────────────────────────────

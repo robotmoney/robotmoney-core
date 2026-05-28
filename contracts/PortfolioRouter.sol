@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §4.2 — Portfolio Router
-// (See also: docs/prd.md §5 — Core Workflows (Router deposit flows);
+// (See also: docs/adr/ADR-0002-router-default-weights-on-chain.md — on-chain
+//            defaultWeights fallback for below-quorum router behaviour;
+//            docs/prd.md §5 — Core Workflows (Router deposit flows);
 //            docs/development/single-production-codebase.md — the principle
 //            that drives expressing production-readiness as VaultRegistry
 //            state instead of a per-environment code variant.)
@@ -64,12 +66,31 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         0 means no cap enforced for that vault.
     mapping(address => uint256) public vaultCap;
 
-    /// @notice Ordered list of vaults included in the weight vector.
+    /// @notice Ordered list of vaults included in the voted (active) weight
+    ///         vector. Set by governance on a successful proposal execution
+    ///         via `setWeights`. Empty until the first vote passes.
     address[] private _weightVaultList;
 
     /// @notice Weight in basis points for each vault in `_weightVaultList`.
     ///         Parallel array — must always sum to BPS_DENOMINATOR.
     uint256[] private _weightBps;
+
+    /// @notice True when the voted weight vector is in effect. False means the
+    ///         router falls back to `defaultWeights` (the on-chain below-quorum
+    ///         fallback). Set true by `setWeights`, set false by
+    ///         `clearVotedWeights`. See ADR-0002.
+    bool public votedWeightsActive;
+
+    /// @notice Ordered list of vaults included in the default (fallback) weight
+    ///         vector. Used by `previewDeposit`/`deposit` whenever the voted
+    ///         vector is not active — i.e. no proposal has ever passed or
+    ///         governance has reverted to the default after a failed quorum.
+    ///         Admin-settable; survives proposal execution unchanged. ADR-0002.
+    address[] private _defaultWeightVaultList;
+
+    /// @notice Weight in basis points for each vault in `_defaultWeightVaultList`.
+    ///         Parallel array — must always sum to BPS_DENOMINATOR.
+    uint256[] private _defaultWeightBps;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -87,10 +108,20 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         uint256 weightBps
     );
 
-    /// @notice Emitted when the weight vector is updated.
+    /// @notice Emitted when the voted weight vector is updated.
     /// @param vaults  New ordered list of vault addresses.
     /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
     event WeightsSet(address[] vaults, uint256[] bps);
+
+    /// @notice Emitted when the default (below-quorum fallback) weight vector
+    ///         is updated by ADMIN_ROLE.
+    /// @param vaults  New ordered list of vault addresses.
+    /// @param bps     Parallel weight array (must sum to BPS_DENOMINATOR).
+    event DefaultWeightsSet(address[] vaults, uint256[] bps);
+
+    /// @notice Emitted when the voted weight vector is cleared and the router
+    ///         reverts to the default weight vector.
+    event VotedWeightsCleared();
 
     /// @notice Emitted when the global router cap is updated.
     /// @param oldCap Previous value (0 = uncapped).
@@ -129,7 +160,9 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice Single-vault leg amount exceeds that vault's per-vault cap.
     error VaultCapExceeded();
 
-    /// @notice No weight vector has been set; cannot deposit.
+    /// @notice No weight vector has been set; cannot deposit. Raised when the
+    ///         voted vector is inactive AND no default weight vector has been
+    ///         configured, so there is no effective allocation to route by.
     error NoWeightsSet();
 
     /// @notice A vault's registry status is not Active; deposit is blocked.
@@ -211,7 +244,65 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             _weightBps.push(bps[i]);
         }
 
+        // A passed vote overrides the default vector. `defaultWeights` itself
+        // is left untouched so it remains the post-vote fallback. ADR-0002.
+        votedWeightsActive = true;
+
         emit WeightsSet(vaults, bps);
+    }
+
+    /// @notice Set the default (below-quorum fallback) weight vector. Used by
+    ///         `previewDeposit`/`deposit` whenever the voted vector is not
+    ///         active — when no proposal has ever passed, or governance has
+    ///         reverted to the default after a proposal failed quorum. This
+    ///         vector survives proposal execution unchanged. ADR-0002.
+    ///
+    ///         All vaults must be registered AND router-eligible, the bps must
+    ///         sum to BPS_DENOMINATOR, and the length must equal the registry's
+    ///         router-eligible vault count so the default can never go stale
+    ///         relative to eligibility. Restricted to `ADMIN_ROLE` (reached via
+    ///         the Safe -> Timelock -> ADMIN_ROLE path).
+    /// @param vaults  Ordered list of vault addresses.
+    /// @param bps     Parallel weight array in basis points (must sum to 10 000).
+    function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (vaults.length != bps.length) revert LengthMismatch();
+        // The default vector must span exactly the router-eligible vault set so
+        // it can never carry a stale length relative to eligibility (the same
+        // invariant VaultRegistry.setRouterEligible enforces from its side).
+        if (vaults.length != registry.routerEligibleCount()) revert LengthMismatch();
+
+        uint256 total;
+        for (uint256 i = 0; i < vaults.length; i++) {
+            if (vaults[i] == address(0)) revert ZeroAddress();
+            registry.getVault(vaults[i]);
+            _requireRouterEligible(vaults[i]);
+            total += bps[i];
+        }
+        if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
+
+        delete _defaultWeightVaultList;
+        delete _defaultWeightBps;
+
+        for (uint256 i = 0; i < vaults.length; i++) {
+            _defaultWeightVaultList.push(vaults[i]);
+            _defaultWeightBps.push(bps[i]);
+        }
+
+        emit DefaultWeightsSet(vaults, bps);
+    }
+
+    /// @notice Clear the voted weight vector and revert routing to
+    ///         `defaultWeights`. Intended for governance to fall back to the
+    ///         default after the most recent proposal failed quorum. Restricted
+    ///         to `ADMIN_ROLE`. ADR-0002.
+    function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
+        delete _weightVaultList;
+        delete _weightBps;
+        votedWeightsActive = false;
+        emit VotedWeightsCleared();
     }
 
     /// @notice Update the global router cap. 0 means uncapped.
@@ -251,15 +342,16 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param amount  Total USDC to preview.
     /// @return legs   One entry per vault in the current weight vector.
     function previewDeposit(uint256 amount) external view returns (LegPreview[] memory legs) {
-        uint256 n = _weightVaultList.length;
+        (address[] storage vaultList, uint256[] storage bpsList) = _effectiveWeights();
+        uint256 n = vaultList.length;
         legs = new LegPreview[](n);
 
         for (uint256 i = 0; i < n; i++) {
-            address vault = _weightVaultList[i];
-            uint256 legAmount = (amount * _weightBps[i]) / BPS_DENOMINATOR;
+            address vault = vaultList[i];
+            uint256 legAmount = (amount * bpsList[i]) / BPS_DENOMINATOR;
 
             legs[i].vault = vault;
-            legs[i].weightBps = _weightBps[i];
+            legs[i].weightBps = bpsList[i];
             legs[i].legAmount = legAmount;
 
             // Check vault status from registry.
@@ -329,7 +421,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         internal
         returns (uint256[] memory sharesPerLeg)
     {
-        if (_weightVaultList.length == 0) revert NoWeightsSet();
+        // Route by the effective weight vector: the voted vector when active,
+        // otherwise the default (below-quorum fallback) vector. Snapshot into
+        // memory so the storage pointers do not stay live across the whole
+        // body (keeps locals under the stack limit). ADR-0002.
+        (address[] memory vaultList, uint256[] memory bpsList) = _effectiveWeightsMemory();
+        if (vaultList.length == 0) revert NoWeightsSet();
 
         // Global router cap check.
         if (routerCap != 0 && amount > routerCap) revert RouterCapExceeded();
@@ -337,7 +434,7 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         // Collect USDC from caller into this contract.
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
-        uint256 n = _weightVaultList.length;
+        uint256 n = vaultList.length;
         sharesPerLeg = new uint256[](n);
 
         // Validate minSharesPerLeg length if provided.
@@ -350,7 +447,7 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         uint256[] memory legAmounts = new uint256[](n);
         uint256 allocated;
         for (uint256 i = 0; i < n; i++) {
-            legAmounts[i] = (amount * _weightBps[i]) / BPS_DENOMINATOR;
+            legAmounts[i] = (amount * bpsList[i]) / BPS_DENOMINATOR;
             allocated += legAmounts[i];
         }
         // Assign rounding remainder to the final leg so the router holds zero
@@ -359,8 +456,25 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             legAmounts[n - 1] += amount - allocated;
         }
 
-        for (uint256 i = 0; i < n; i++) {
-            address vault = _weightVaultList[i];
+        // Execute legs in a separate frame so its locals do not pile onto this
+        // function's stack (Solidity stack-too-deep guard).
+        _executeLegs(receiver, vaultList, bpsList, legAmounts, minSharesPerLeg, sharesPerLeg);
+    }
+
+    /// @dev Execute one vault leg per entry: enforce Active status, per-vault
+    ///      cap, runtime router-eligibility, approve and deposit, then check
+    ///      the slippage floor. All-or-revert. Writes minted shares into
+    ///      `sharesPerLeg`.
+    function _executeLegs(
+        address receiver,
+        address[] memory vaultList,
+        uint256[] memory bpsList,
+        uint256[] memory legAmounts,
+        uint256[] calldata minSharesPerLeg,
+        uint256[] memory sharesPerLeg
+    ) internal {
+        for (uint256 i = 0; i < vaultList.length; i++) {
+            address vault = vaultList[i];
             uint256 legAmount = legAmounts[i];
 
             // Registry status check — revert unless this vault is Active.
@@ -391,17 +505,77 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
                 revert SlippageExceeded();
             }
 
-            emit RouterDeposit(receiver, vault, legAmount, sharesReceived, _weightBps[i]);
+            emit RouterDeposit(receiver, vault, legAmount, sharesReceived, bpsList[i]);
         }
     }
 
     // ─── Read surface ────────────────────────────────────────────────────────
 
-    /// @notice Return the current weight vector (vault list and bps).
+    /// @notice Return the voted (active) weight vector (vault list and bps).
+    ///         This is the raw voted vector and is empty until a proposal has
+    ///         passed; use `getEffectiveWeights` for the vector the router
+    ///         actually routes by.
     /// @return vaults  Ordered vault addresses.
     /// @return bps     Parallel weight array in basis points.
     function getWeights() external view returns (address[] memory vaults, uint256[] memory bps) {
         return (_weightVaultList, _weightBps);
+    }
+
+    /// @notice Return the default (below-quorum fallback) weight vector.
+    /// @return vaults  Ordered vault addresses.
+    /// @return bps     Parallel weight array in basis points.
+    function getDefaultWeights()
+        external
+        view
+        returns (address[] memory vaults, uint256[] memory bps)
+    {
+        return (_defaultWeightVaultList, _defaultWeightBps);
+    }
+
+    /// @notice Return the effective weight vector the router actually routes
+    ///         by: the voted vector when active, otherwise the default vector.
+    ///         This is the single source of truth the public allocation surface
+    ///         (robotmoney.net/allocation) renders. ADR-0002.
+    /// @return vaults  Ordered vault addresses.
+    /// @return bps     Parallel weight array in basis points.
+    function getEffectiveWeights()
+        external
+        view
+        returns (address[] memory vaults, uint256[] memory bps)
+    {
+        (address[] storage vaultList, uint256[] storage bpsList) = _effectiveWeights();
+        return (vaultList, bpsList);
+    }
+
+    /// @notice Number of legs in the default weight vector. Read by
+    ///         `VaultRegistry.setRouterEligible` to block eligibility changes
+    ///         that would leave the default with a stale length. ADR-0002.
+    function defaultWeightsLength() external view returns (uint256) {
+        return _defaultWeightVaultList.length;
+    }
+
+    /// @dev Return the storage vectors the router routes by: the voted vector
+    ///      when `votedWeightsActive`, otherwise the default vector.
+    function _effectiveWeights()
+        internal
+        view
+        returns (address[] storage vaults, uint256[] storage bps)
+    {
+        if (votedWeightsActive) {
+            return (_weightVaultList, _weightBps);
+        }
+        return (_defaultWeightVaultList, _defaultWeightBps);
+    }
+
+    /// @dev Memory copy of `_effectiveWeights`, used on the deposit path so the
+    ///      storage pointers do not stay live across the whole function body.
+    function _effectiveWeightsMemory()
+        internal
+        view
+        returns (address[] memory vaults, uint256[] memory bps)
+    {
+        (address[] storage vaultList, uint256[] storage bpsList) = _effectiveWeights();
+        return (vaultList, bpsList);
     }
 
     // ─── Router-eligibility surface ──────────────────────────────────────────

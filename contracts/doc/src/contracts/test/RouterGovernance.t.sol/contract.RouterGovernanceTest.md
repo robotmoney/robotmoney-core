@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -421,5 +421,57 @@ function test_hasVoted_tracksVoterState() public;
 
 ```solidity
 function test_fullGovernanceRoundTrip() public;
+```
+
+### _defaultVectors
+
+Build a valid default 70/30 vector over the two eligible vaults.
+
+
+```solidity
+function _defaultVectors()
+    internal
+    view
+    returns (address[] memory vaults, uint256[] memory bps);
+```
+
+### test_setDefaultWeights_admin_only
+
+setDefaultWeights is gated by ADMIN_ROLE on governance; a
+non-admin caller reverts, and the admin path forwards to the
+router and updates `getDefaultWeights`.
+
+
+```solidity
+function test_setDefaultWeights_admin_only() public;
+```
+
+### test_setDefaultWeights_rejects_bad_sum
+
+A default vector whose bps do not sum to 10 000 reverts.
+
+
+```solidity
+function test_setDefaultWeights_rejects_bad_sum() public;
+```
+
+### test_setDefaultWeights_rejects_length_mismatch
+
+A default vector whose length does not match the registry's
+router-eligible vault count reverts.
+
+
+```solidity
+function test_setDefaultWeights_rejects_length_mismatch() public;
+```
+
+### test_clearVotedWeights_revertsToDefault
+
+clearVotedWeights forwards to the router and reverts routing to
+the default vector while leaving defaultWeights untouched.
+
+
+```solidity
+function test_clearVotedWeights_revertsToDefault() public;
 ```
 

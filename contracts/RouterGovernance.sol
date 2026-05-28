@@ -217,6 +217,36 @@ contract RouterGovernance is AccessControl {
         emit VotingPowerSet(voter, old, power);
     }
 
+    // ─── Admin: default (below-quorum fallback) weights ────────────────────────
+
+    /// @notice Set the router's default (below-quorum fallback) weight vector,
+    ///         forwarding to `PortfolioRouter.setDefaultWeights`. This is the
+    ///         on-chain vector the router routes by — and the public allocation
+    ///         surface renders — whenever no proposal is active or the most
+    ///         recent proposal failed quorum. A passed vote overrides it; the
+    ///         default itself stays put as the post-vote fallback. Restricted to
+    ///         ADMIN_ROLE (Safe -> Timelock -> ADMIN_ROLE). ADR-0002.
+    ///
+    ///         The router enforces: ADMIN_ROLE on the router (this contract must
+    ///         hold it), bps sum == BPS_DENOMINATOR, and length == the
+    ///         registry's router-eligible vault count.
+    /// @param vaults Ordered vault address list.
+    /// @param bps    Parallel weight array (must sum to BPS_DENOMINATOR).
+    function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        router.setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice Clear the router's voted weight vector and revert routing to the
+    ///         default vector. Intended for governance to fall back to the
+    ///         default after the most recent proposal failed quorum. Restricted
+    ///         to ADMIN_ROLE. ADR-0002.
+    function clearVotedWeights() external onlyRole(ADMIN_ROLE) {
+        router.clearVotedWeights();
+    }
+
     // ─── Governance: propose ─────────────────────────────────────────────────
 
     /// @notice Submit a new weight proposal. Restricted to ADMIN_ROLE.

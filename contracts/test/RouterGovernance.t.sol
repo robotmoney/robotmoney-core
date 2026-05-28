@@ -579,4 +579,103 @@ contract RouterGovernanceTest is Test {
         // State is now Executed.
         assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Executed));
     }
+
+    // ─── setDefaultWeights() — ADR-0002 ────────────────────────────────────────
+
+    /// @dev Build a valid default 70/30 vector over the two eligible vaults.
+    function _defaultVectors()
+        internal
+        view
+        returns (address[] memory vaults, uint256[] memory bps)
+    {
+        vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps = new uint256[](2);
+        bps[0] = 7_000;
+        bps[1] = 3_000;
+    }
+
+    /// @notice setDefaultWeights is gated by ADMIN_ROLE on governance; a
+    ///         non-admin caller reverts, and the admin path forwards to the
+    ///         router and updates `getDefaultWeights`.
+    function test_setDefaultWeights_admin_only() public {
+        (address[] memory vaults, uint256[] memory bps) = _defaultVectors();
+
+        // Non-admin reverts (AccessControl).
+        vm.prank(stranger);
+        vm.expectRevert();
+        gov.setDefaultWeights(vaults, bps);
+
+        // Admin path forwards to the router.
+        vm.prank(govAdmin);
+        gov.setDefaultWeights(vaults, bps);
+
+        (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
+        assertEq(dV.length, 2);
+        assertEq(dV[0], address(vaultA));
+        assertEq(dV[1], address(vaultB));
+        assertEq(dB[0], 7_000);
+        assertEq(dB[1], 3_000);
+    }
+
+    /// @notice A default vector whose bps do not sum to 10 000 reverts.
+    function test_setDefaultWeights_rejects_bad_sum() public {
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 7_000;
+        bps[1] = 2_000; // sums to 9 000
+
+        vm.prank(govAdmin);
+        vm.expectRevert(PortfolioRouter.InvalidWeightSum.selector);
+        gov.setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice A default vector whose length does not match the registry's
+    ///         router-eligible vault count reverts.
+    function test_setDefaultWeights_rejects_length_mismatch() public {
+        // Only one leg, but two vaults are router-eligible.
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vaultA);
+        uint256[] memory bps = new uint256[](1);
+        bps[0] = 10_000;
+
+        vm.prank(govAdmin);
+        vm.expectRevert(PortfolioRouter.LengthMismatch.selector);
+        gov.setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice clearVotedWeights forwards to the router and reverts routing to
+    ///         the default vector while leaving defaultWeights untouched.
+    function test_clearVotedWeights_revertsToDefault() public {
+        // Seed a default vector.
+        (address[] memory vaults, uint256[] memory bps) = _defaultVectors();
+        vm.prank(govAdmin);
+        gov.setDefaultWeights(vaults, bps);
+
+        // Pass a proposal so the voted vector is active.
+        uint256 pid = _proposeValid();
+        vm.prank(alice);
+        gov.vote(pid);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+        gov.execute(pid);
+        assertTrue(router.votedWeightsActive());
+
+        // Non-admin cannot clear.
+        vm.prank(stranger);
+        vm.expectRevert();
+        gov.clearVotedWeights();
+
+        // Admin clears -> back to default.
+        vm.prank(govAdmin);
+        gov.clearVotedWeights();
+        assertFalse(router.votedWeightsActive());
+
+        (address[] memory eV, uint256[] memory eB) = router.getEffectiveWeights();
+        assertEq(eV.length, 2);
+        assertEq(eB[0], 7_000);
+        assertEq(eB[1], 3_000);
+    }
 }

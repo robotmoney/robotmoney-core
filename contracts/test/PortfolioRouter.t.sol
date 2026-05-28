@@ -1055,4 +1055,103 @@ contract PortfolioRouterTest is Test {
         assertFalse(registry.isRouterEligible(address(rwa)), "RWA must be router-ineligible");
         assertFalse(router.isRouterEligible(address(rwa)), "router view agrees: ineligible");
     }
+
+    // ─── defaultWeights fallback — ADR-0002 ────────────────────────────────────
+
+    /// @dev Set a default 60/40 vector over the two eligible vaults.
+    function _setDefaultWeights() internal {
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+        vm.prank(admin);
+        router.setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice setDefaultWeights rejects a length that does not match the
+    ///         registry's router-eligible vault count.
+    function test_setDefaultWeights_revertsIfLengthMismatch() public {
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(vaultA);
+        bps[0] = 10_000;
+        vm.prank(admin);
+        vm.expectRevert(PortfolioRouter.LengthMismatch.selector);
+        router.setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice With no proposal ever passed (voted vector inactive), the router
+    ///         previews and routes by the default weight vector. ADR-0002.
+    function test_previewDeposit_uses_defaultWeights_when_no_proposal() public {
+        _setDefaultWeights();
+        assertFalse(router.votedWeightsActive(), "voted vector must be inactive");
+
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
+        assertEq(legs.length, 2);
+        assertEq(legs[0].vault, address(vaultA));
+        assertEq(legs[0].weightBps, 6_000);
+        assertEq(legs[0].legAmount, 600e6);
+        assertEq(legs[1].weightBps, 4_000);
+        assertEq(legs[1].legAmount, 400e6);
+
+        // Effective weights echo the default vector.
+        (address[] memory eV, uint256[] memory eB) = router.getEffectiveWeights();
+        assertEq(eV.length, 2);
+        assertEq(eB[0], 6_000);
+        assertEq(eB[1], 4_000);
+
+        // A real deposit splits by the default vector too.
+        _fundAndApprove(depositor, 1_000e6);
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(1_000e6, new uint256[](0));
+        assertEq(shares[0], 600e6);
+        assertEq(shares[1], 400e6);
+    }
+
+    /// @notice After the voted vector is cleared (simulating a fall-back to
+    ///         default after the most recent proposal failed quorum), the
+    ///         router previews by the default vector again. ADR-0002.
+    function test_previewDeposit_uses_defaultWeights_after_failed_quorum() public {
+        _setDefaultWeights();
+
+        // A prior proposal had passed and set a 50/50 voted vector...
+        _setEqualWeights();
+        assertTrue(router.votedWeightsActive());
+
+        // ...then governance reverts to default after a failed-quorum window.
+        vm.prank(admin);
+        router.clearVotedWeights();
+        assertFalse(router.votedWeightsActive());
+
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
+        assertEq(legs[0].weightBps, 6_000);
+        assertEq(legs[1].weightBps, 4_000);
+    }
+
+    /// @notice A passed vote overrides the default; defaultWeights storage is
+    ///         unchanged; clearing the voted vector reverts to default. ADR-0002.
+    function test_voted_weights_override_defaults_then_revert_to_defaults() public {
+        _setDefaultWeights();
+
+        // Vote passes -> voted 50/50 overrides the default.
+        _setEqualWeights();
+        assertTrue(router.votedWeightsActive());
+        (, uint256[] memory effBps) = router.getEffectiveWeights();
+        assertEq(effBps[0], 5_000);
+        assertEq(effBps[1], 5_000);
+
+        // defaultWeights storage is untouched by the vote.
+        (, uint256[] memory defBps) = router.getDefaultWeights();
+        assertEq(defBps[0], 6_000);
+        assertEq(defBps[1], 4_000);
+
+        // Revert to default.
+        vm.prank(admin);
+        router.clearVotedWeights();
+        (, uint256[] memory backBps) = router.getEffectiveWeights();
+        assertEq(backBps[0], 6_000);
+        assertEq(backBps[1], 4_000);
+    }
 }

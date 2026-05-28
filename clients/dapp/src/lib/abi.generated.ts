@@ -4891,6 +4891,45 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "router",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "contract IRouterDefaultWeights",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "routerEligibleCount",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "setRouter",
+    inputs: [
+      {
+        name: "newRouter",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "setRouterEligible",
     inputs: [
       {
@@ -5059,6 +5098,25 @@ export const registryAbiGenerated = [
   },
   {
     type: "event",
+    name: "RouterSet",
+    inputs: [
+      {
+        name: "oldRouter",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "newRouter",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "VaultRegistered",
     inputs: [
       {
@@ -5140,6 +5198,22 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "StaleDefaultWeightsLength",
+    inputs: [
+      {
+        name: "expectedLength",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "defaultLength",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -5211,6 +5285,26 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "clearVotedWeights",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "defaultWeightsLength",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "deposit",
     inputs: [
       {
@@ -5261,6 +5355,42 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "getDefaultWeights",
+    inputs: [],
+    outputs: [
+      {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "bps",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "getEffectiveWeights",
+    inputs: [],
+    outputs: [
+      {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "bps",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -5470,6 +5600,24 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "setDefaultWeights",
+    inputs: [
+      {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "bps",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "setRouterCap",
     inputs: [
       {
@@ -5567,6 +5715,38 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "votedWeightsActive",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "event",
+    name: "DefaultWeightsSet",
+    inputs: [
+      {
+        name: "vaults",
+        type: "address[]",
+        indexed: false,
+        internalType: "address[]",
+      },
+      {
+        name: "bps",
+        type: "uint256[]",
+        indexed: false,
+        internalType: "uint256[]",
+      },
+    ],
+    anonymous: false,
   },
   {
     type: "event",
@@ -5722,6 +5902,12 @@ export const routerAbiGenerated = [
         internalType: "uint256",
       },
     ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "VotedWeightsCleared",
+    inputs: [],
     anonymous: false,
   },
   {

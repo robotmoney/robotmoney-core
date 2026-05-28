@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/VaultRegistry.sol)
 
 **Inherits:**
 AccessControl
@@ -86,6 +86,32 @@ mapping(address => bool) private _routerEligible
 ```
 
 
+### routerEligibleCount
+Count of vaults currently marked router-eligible. Mirrors the
+number of `true` entries in `_routerEligible`. The
+`PortfolioRouter` default weight vector must span exactly this
+many legs (see `setRouterEligible`). ADR-0002.
+
+
+```solidity
+uint256 public routerEligibleCount
+```
+
+
+### router
+Optional `PortfolioRouter` whose default weight vector length is
+kept consistent with `routerEligibleCount`. When set (non-zero)
+and the router already carries a non-empty default vector,
+`setRouterEligible` reverts on any change that would leave that
+vector with a stale length. Set once by ADMIN_ROLE after both
+contracts are deployed. ADR-0002.
+
+
+```solidity
+IRouterDefaultWeights public router
+```
+
+
 ## Functions
 ### constructor
 
@@ -160,6 +186,23 @@ function setRouterEligible(address vault, bool eligible) external onlyRole(ADMIN
 |----|----|-----------|
 |`vault`|`address`|   Address of an already-registered vault.|
 |`eligible`|`bool`|New router-eligibility value.|
+
+
+### setRouter
+
+Link the `PortfolioRouter` whose default weight vector length is
+kept consistent with `routerEligibleCount`. Pass `address(0)` to
+unlink. Restricted to `ADMIN_ROLE`. ADR-0002.
+
+
+```solidity
+function setRouter(address newRouter) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newRouter`|`address`|Address of the `PortfolioRouter` (or 0 to unlink).|
 
 
 ### getVault
@@ -287,6 +330,21 @@ event RouterEligibilityChanged(address indexed vault, bool oldValue, bool newVal
 |`oldValue`|`bool`|Previous eligibility value.|
 |`newValue`|`bool`|New eligibility value.|
 
+### RouterSet
+Emitted when the linked `PortfolioRouter` reference is set.
+
+
+```solidity
+event RouterSet(address indexed oldRouter, address indexed newRouter);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`oldRouter`|`address`|Previous router address (0 = unset).|
+|`newRouter`|`address`|New router address (0 = unset).|
+
 ## Errors
 ### ZeroAddress
 Vault address argument is `address(0)`.
@@ -312,6 +370,24 @@ revert with this error when the address is unknown.
 ```solidity
 error NotRegistered();
 ```
+
+### StaleDefaultWeightsLength
+A `setRouterEligible` change would leave the linked router's
+non-empty default weight vector with a length that no longer
+matches `routerEligibleCount`. Re-set `defaultWeights` to the new
+eligible set first (or clear it), then change eligibility.
+
+
+```solidity
+error StaleDefaultWeightsLength(uint256 expectedLength, uint256 defaultLength);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`expectedLength`|`uint256`|New router-eligible count after the change.|
+|`defaultLength`|`uint256`| Current default weight vector length.|
 
 ## Structs
 ### VaultMetadata

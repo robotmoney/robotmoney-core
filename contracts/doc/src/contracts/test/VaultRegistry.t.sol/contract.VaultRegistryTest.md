@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -223,5 +223,36 @@ Registers `n` distinct vaults and asserts `listVaults().length == vaultCount()`.
 
 ```solidity
 function testFuzz_listVaultsLength_equalsVaultCount(uint8 n) public;
+```
+
+### test_setRouterEligible_tracksCount
+
+setRouterEligible maintains `routerEligibleCount` as the number
+of vaults currently flagged eligible.
+
+
+```solidity
+function test_setRouterEligible_tracksCount() public;
+```
+
+### test_setRouterEligible_blocks_stale_defaultWeights_length
+
+With a linked router carrying a non-empty default weight vector,
+a setRouterEligible change that would leave that vector with a
+stale length reverts. An empty default vector is exempt, and a
+re-set default that matches the new count is accepted.
+
+
+```solidity
+function test_setRouterEligible_blocks_stale_defaultWeights_length() public;
+```
+
+### test_setRouter_adminOnlyAndEmits
+
+setRouter is gated by ADMIN_ROLE and emits RouterSet.
+
+
+```solidity
+function test_setRouter_adminOnlyAndEmits() public;
 ```
 

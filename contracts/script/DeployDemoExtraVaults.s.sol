@@ -131,6 +131,18 @@ contract DeployDemoExtraVaults is Script {
         _logResult(d);
     }
 
+    /// @notice In-process entrypoint for forge tests. Runs the same deploy +
+    ///         seed body as `run()` but without `vm.startBroadcast`, so the
+    ///         caller (the test contract) is the broadcaster and must already
+    ///         hold ADMIN_ROLE on the registry and router. No deployment JSON
+    ///         is written. Used by `test_demo_seed_populates_defaultWeights`.
+    /// @param p Fully-formed params (no env reads).
+    function runInProcess(Params memory p) external returns (Deployed memory d) {
+        require(p.wPrimary + p.wExtra1 + p.wExtra2 == 10_000, "weights must sum to 10000");
+        require(p.wPrimary > 0 && p.wExtra1 > 0 && p.wExtra2 > 0, "weights must be non-zero");
+        d = _doDeploy(p);
+    }
+
     function _readParams() internal view returns (Params memory p) {
         p.admin = vm.envAddress("ADMIN_ADDRESS");
         p.registry = vm.envAddress("REGISTRY_ADDRESS");
@@ -179,10 +191,22 @@ contract DeployDemoExtraVaults is Script {
         registry.setRouterEligible(address(vault1), true);
         registry.setRouterEligible(address(vault2), true);
 
-        // 4. Reset the router weight vector to the three-way split.
+        // 4. Reset the router voted weight vector to the three-way split (kept
+        //    for the existing AC3 smoke test which reads getWeights()).
         _setThreeWayWeights(router, p.primaryVault, address(vault1), address(vault2), p);
 
-        // 5. Register the RWA/Thematic placeholder (issue #479). It rounds the
+        // 5. Populate the on-chain default (below-quorum fallback) weight vector
+        //    with the same three-way split so the public allocation surface
+        //    (robotmoney.net/allocation) renders out of the box with no
+        //    governance activity. ADR-0002. The default vector length must match
+        //    the registry's router-eligible count, so link the router on the
+        //    registry first (idempotent) — this also arms the stale-length guard.
+        if (address(registry.router()) != p.router) {
+            registry.setRouter(p.router);
+        }
+        _setThreeWayDefaultWeights(router, p.primaryVault, address(vault1), address(vault2), p);
+
+        // 6. Register the RWA/Thematic placeholder (issue #479). It rounds the
         //    deployed set out to the four PRD §11 categories. It is registered
         //    then immediately set to a non-Active status (Paused) and is never
         //    marked router-eligible (the registry default), so:
@@ -260,6 +284,28 @@ contract DeployDemoExtraVaults is Script {
         bps[1] = p.wExtra1;
         bps[2] = p.wExtra2;
         router.setWeights(vaults, bps);
+    }
+
+    /// @dev Populate the router's default (below-quorum fallback) weight vector
+    ///      with the same three-way split. ADR-0002: this is the vector the
+    ///      router routes by — and the allocation surface renders — with no
+    ///      governance activity.
+    function _setThreeWayDefaultWeights(
+        PortfolioRouter router,
+        address primary,
+        address extra1,
+        address extra2,
+        Params memory p
+    ) internal {
+        address[] memory vaults = new address[](3);
+        vaults[0] = primary;
+        vaults[1] = extra1;
+        vaults[2] = extra2;
+        uint256[] memory bps = new uint256[](3);
+        bps[0] = p.wPrimary;
+        bps[1] = p.wExtra1;
+        bps[2] = p.wExtra2;
+        router.setDefaultWeights(vaults, bps);
     }
 
     // ─── Internal ────────────────────────────────────────────────────────────

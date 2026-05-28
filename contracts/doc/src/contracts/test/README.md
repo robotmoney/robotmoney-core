@@ -12,6 +12,7 @@
 - [BasketVaultHarness](BasketVault.t.sol/contract.BasketVaultHarness.md)
 - [BasketVaultTest](BasketVault.t.sol/contract.BasketVaultTest.md)
 - [DeployTest](Deploy.t.sol/contract.DeployTest.md)
+- [DeployDemoExtraVaultsTest](DeployDemoExtraVaults.t.sol/contract.DeployDemoExtraVaultsTest.md)
 - [MockVaultForRouter](DeployPortfolioRouter.t.sol/contract.MockVaultForRouter.md)
 - [DeployPortfolioRouterTest](DeployPortfolioRouter.t.sol/contract.DeployPortfolioRouterTest.md)
 - [DeployTimelockTest](DeployTimelock.t.sol/contract.DeployTimelockTest.md)
@@ -51,4 +52,5 @@
 - [SafeIntegrationTest](SafeIntegration.t.sol/contract.SafeIntegrationTest.md)
 - [_ISafeSetup](SafeIntegration.t.sol/interface._ISafeSetup.md)
 - [VaultForkRegressions](VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
+- [MockDefaultWeightsRouter](VaultRegistry.t.sol/contract.MockDefaultWeightsRouter.md)
 - [VaultRegistryTest](VaultRegistry.t.sol/contract.VaultRegistryTest.md)

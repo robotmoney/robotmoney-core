@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -85,7 +85,9 @@ mapping(address => uint256) public vaultCap
 
 
 ### _weightVaultList
-Ordered list of vaults included in the weight vector.
+Ordered list of vaults included in the voted (active) weight
+vector. Set by governance on a successful proposal execution
+via `setWeights`. Empty until the first vote passes.
 
 
 ```solidity
@@ -100,6 +102,41 @@ Parallel array — must always sum to BPS_DENOMINATOR.
 
 ```solidity
 uint256[] private _weightBps
+```
+
+
+### votedWeightsActive
+True when the voted weight vector is in effect. False means the
+router falls back to `defaultWeights` (the on-chain below-quorum
+fallback). Set true by `setWeights`, set false by
+`clearVotedWeights`. See ADR-0002.
+
+
+```solidity
+bool public votedWeightsActive
+```
+
+
+### _defaultWeightVaultList
+Ordered list of vaults included in the default (fallback) weight
+vector. Used by `previewDeposit`/`deposit` whenever the voted
+vector is not active — i.e. no proposal has ever passed or
+governance has reverted to the default after a failed quorum.
+Admin-settable; survives proposal execution unchanged. ADR-0002.
+
+
+```solidity
+address[] private _defaultWeightVaultList
+```
+
+
+### _defaultWeightBps
+Weight in basis points for each vault in `_defaultWeightVaultList`.
+Parallel array — must always sum to BPS_DENOMINATOR.
+
+
+```solidity
+uint256[] private _defaultWeightBps
 ```
 
 
@@ -139,6 +176,45 @@ function setWeights(address[] calldata vaults, uint256[] calldata bps)
 |`vaults`|`address[]`| Ordered list of vault addresses.|
 |`bps`|`uint256[]`|    Parallel weight array in basis points (must sum to 10 000).|
 
+
+### setDefaultWeights
+
+Set the default (below-quorum fallback) weight vector. Used by
+`previewDeposit`/`deposit` whenever the voted vector is not
+active — when no proposal has ever passed, or governance has
+reverted to the default after a proposal failed quorum. This
+vector survives proposal execution unchanged. ADR-0002.
+All vaults must be registered AND router-eligible, the bps must
+sum to BPS_DENOMINATOR, and the length must equal the registry's
+router-eligible vault count so the default can never go stale
+relative to eligibility. Restricted to `ADMIN_ROLE` (reached via
+the Safe -> Timelock -> ADMIN_ROLE path).
+
+
+```solidity
+function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| Ordered list of vault addresses.|
+|`bps`|`uint256[]`|    Parallel weight array in basis points (must sum to 10 000).|
+
+
+### clearVotedWeights
+
+Clear the voted weight vector and revert routing to
+`defaultWeights`. Intended for governance to fall back to the
+default after the most recent proposal failed quorum. Restricted
+to `ADMIN_ROLE`. ADR-0002.
+
+
+```solidity
+function clearVotedWeights() external onlyRole(ADMIN_ROLE);
+```
 
 ### setRouterCap
 
@@ -239,9 +315,31 @@ function _depositTo(address receiver, uint256 amount, uint256[] calldata minShar
     returns (uint256[] memory sharesPerLeg);
 ```
 
+### _executeLegs
+
+Execute one vault leg per entry: enforce Active status, per-vault
+cap, runtime router-eligibility, approve and deposit, then check
+the slippage floor. All-or-revert. Writes minted shares into
+`sharesPerLeg`.
+
+
+```solidity
+function _executeLegs(
+    address receiver,
+    address[] memory vaultList,
+    uint256[] memory bpsList,
+    uint256[] memory legAmounts,
+    uint256[] calldata minSharesPerLeg,
+    uint256[] memory sharesPerLeg
+) internal;
+```
+
 ### getWeights
 
-Return the current weight vector (vault list and bps).
+Return the voted (active) weight vector (vault list and bps).
+This is the raw voted vector and is empty until a proposal has
+passed; use `getEffectiveWeights` for the vector the router
+actually routes by.
 
 
 ```solidity
@@ -254,6 +352,84 @@ function getWeights() external view returns (address[] memory vaults, uint256[] 
 |`vaults`|`address[]`| Ordered vault addresses.|
 |`bps`|`uint256[]`|    Parallel weight array in basis points.|
 
+
+### getDefaultWeights
+
+Return the default (below-quorum fallback) weight vector.
+
+
+```solidity
+function getDefaultWeights()
+    external
+    view
+    returns (address[] memory vaults, uint256[] memory bps);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| Ordered vault addresses.|
+|`bps`|`uint256[]`|    Parallel weight array in basis points.|
+
+
+### getEffectiveWeights
+
+Return the effective weight vector the router actually routes
+by: the voted vector when active, otherwise the default vector.
+This is the single source of truth the public allocation surface
+(robotmoney.net/allocation) renders. ADR-0002.
+
+
+```solidity
+function getEffectiveWeights()
+    external
+    view
+    returns (address[] memory vaults, uint256[] memory bps);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| Ordered vault addresses.|
+|`bps`|`uint256[]`|    Parallel weight array in basis points.|
+
+
+### defaultWeightsLength
+
+Number of legs in the default weight vector. Read by
+`VaultRegistry.setRouterEligible` to block eligibility changes
+that would leave the default with a stale length. ADR-0002.
+
+
+```solidity
+function defaultWeightsLength() external view returns (uint256);
+```
+
+### _effectiveWeights
+
+Return the storage vectors the router routes by: the voted vector
+when `votedWeightsActive`, otherwise the default vector.
+
+
+```solidity
+function _effectiveWeights()
+    internal
+    view
+    returns (address[] storage vaults, uint256[] storage bps);
+```
+
+### _effectiveWeightsMemory
+
+Memory copy of `_effectiveWeights`, used on the deposit path so the
+storage pointers do not stay live across the whole function body.
+
+
+```solidity
+function _effectiveWeightsMemory()
+    internal
+    view
+    returns (address[] memory vaults, uint256[] memory bps);
+```
 
 ### isRouterEligible
 
@@ -319,7 +495,7 @@ event RouterDeposit(
 |`weightBps`|`uint256`| Weight of this vault in the current weight vector.|
 
 ### WeightsSet
-Emitted when the weight vector is updated.
+Emitted when the voted weight vector is updated.
 
 
 ```solidity
@@ -332,6 +508,31 @@ event WeightsSet(address[] vaults, uint256[] bps);
 |----|----|-----------|
 |`vaults`|`address[]`| New ordered list of vault addresses.|
 |`bps`|`uint256[]`|    Parallel weight array (must sum to BPS_DENOMINATOR).|
+
+### DefaultWeightsSet
+Emitted when the default (below-quorum fallback) weight vector
+is updated by ADMIN_ROLE.
+
+
+```solidity
+event DefaultWeightsSet(address[] vaults, uint256[] bps);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| New ordered list of vault addresses.|
+|`bps`|`uint256[]`|    Parallel weight array (must sum to BPS_DENOMINATOR).|
+
+### VotedWeightsCleared
+Emitted when the voted weight vector is cleared and the router
+reverts to the default weight vector.
+
+
+```solidity
+event VotedWeightsCleared();
+```
 
 ### RouterCapSet
 Emitted when the global router cap is updated.
@@ -430,7 +631,9 @@ error VaultCapExceeded();
 ```
 
 ### NoWeightsSet
-No weight vector has been set; cannot deposit.
+No weight vector has been set; cannot deposit. Raised when the
+voted vector is inactive AND no default weight vector has been
+configured, so there is no effective allocation to route by.
 
 
 ```solidity

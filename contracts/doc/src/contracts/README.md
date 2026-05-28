@@ -13,4 +13,5 @@
 - [RmToken](RmToken.sol/contract.RmToken.md)
 - [RobotMoneyVault](RobotMoneyVault.sol/contract.RobotMoneyVault.md)
 - [RouterGovernance](RouterGovernance.sol/contract.RouterGovernance.md)
+- [IRouterDefaultWeights](VaultRegistry.sol/interface.IRouterDefaultWeights.md)
 - [VaultRegistry](VaultRegistry.sol/contract.VaultRegistry.md)

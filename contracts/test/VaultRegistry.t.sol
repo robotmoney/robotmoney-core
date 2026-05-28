@@ -6,6 +6,18 @@ import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 
+/// @notice Minimal stand-in for `PortfolioRouter` exposing only the
+///         `defaultWeightsLength()` view the registry's stale-length guard
+///         reads. Lets the registry test exercise the guard without pulling in
+///         the full router. ADR-0002.
+contract MockDefaultWeightsRouter {
+    uint256 public defaultWeightsLength;
+
+    function setDefaultWeightsLength(uint256 n) external {
+        defaultWeightsLength = n;
+    }
+}
+
 contract VaultRegistryTest is Test {
     VaultRegistry internal registry;
 
@@ -231,5 +243,88 @@ contract VaultRegistryTest is Test {
         }
 
         assertEq(registry.listVaults().length, registry.vaultCount());
+    }
+
+    // ─── routerEligibleCount + stale-defaultWeights guard — ADR-0002 ───────────
+
+    /// @notice setRouterEligible maintains `routerEligibleCount` as the number
+    ///         of vaults currently flagged eligible.
+    function test_setRouterEligible_tracksCount() public {
+        vm.startPrank(admin);
+        registry.registerVault(vault1, meta1);
+        registry.registerVault(vault2, meta2);
+        assertEq(registry.routerEligibleCount(), 0);
+
+        registry.setRouterEligible(vault1, true);
+        assertEq(registry.routerEligibleCount(), 1);
+        registry.setRouterEligible(vault2, true);
+        assertEq(registry.routerEligibleCount(), 2);
+
+        // No-op (already true) leaves the count unchanged.
+        registry.setRouterEligible(vault2, true);
+        assertEq(registry.routerEligibleCount(), 2);
+
+        registry.setRouterEligible(vault1, false);
+        assertEq(registry.routerEligibleCount(), 1);
+        vm.stopPrank();
+    }
+
+    /// @notice With a linked router carrying a non-empty default weight vector,
+    ///         a setRouterEligible change that would leave that vector with a
+    ///         stale length reverts. An empty default vector is exempt, and a
+    ///         re-set default that matches the new count is accepted.
+    function test_setRouterEligible_blocks_stale_defaultWeights_length() public {
+        MockDefaultWeightsRouter mockRouter = new MockDefaultWeightsRouter();
+
+        vm.startPrank(admin);
+        registry.registerVault(vault1, meta1);
+        registry.registerVault(vault2, meta2);
+        registry.registerVault(vault3, meta1);
+
+        // Two vaults eligible, default vector spans both (length 2).
+        registry.setRouterEligible(vault1, true);
+        registry.setRouterEligible(vault2, true);
+        registry.setRouter(address(mockRouter));
+        mockRouter.setDefaultWeightsLength(2);
+
+        // Adding a third eligible vault would make the default vector stale
+        // (length 2 != new count 3) -> revert.
+        vm.expectRevert(
+            abi.encodeWithSelector(VaultRegistry.StaleDefaultWeightsLength.selector, 3, 2)
+        );
+        registry.setRouterEligible(vault3, true);
+
+        // Removing an eligible vault is likewise blocked (length 2 != count 1).
+        vm.expectRevert(
+            abi.encodeWithSelector(VaultRegistry.StaleDefaultWeightsLength.selector, 1, 2)
+        );
+        registry.setRouterEligible(vault1, false);
+
+        // Re-setting the default vector to span the new set first unblocks the
+        // change (atomic from the operator's perspective: re-set then flip).
+        mockRouter.setDefaultWeightsLength(3);
+        registry.setRouterEligible(vault3, true);
+        assertEq(registry.routerEligibleCount(), 3);
+
+        // An empty default vector (length 0) is always consistent.
+        mockRouter.setDefaultWeightsLength(0);
+        registry.setRouterEligible(vault3, false);
+        assertEq(registry.routerEligibleCount(), 2);
+        vm.stopPrank();
+    }
+
+    /// @notice setRouter is gated by ADMIN_ROLE and emits RouterSet.
+    function test_setRouter_adminOnlyAndEmits() public {
+        MockDefaultWeightsRouter mockRouter = new MockDefaultWeightsRouter();
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        registry.setRouter(address(mockRouter));
+
+        vm.expectEmit(true, true, false, false);
+        emit VaultRegistry.RouterSet(address(0), address(mockRouter));
+        vm.prank(admin);
+        registry.setRouter(address(mockRouter));
+        assertEq(address(registry.router()), address(mockRouter));
     }
 }

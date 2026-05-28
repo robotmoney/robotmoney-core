@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/715cd4b73a878654e7e004c208f153b328046fcf/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e725858583e4c0e5819bd858f896d04ded40bdb7/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -184,6 +184,45 @@ from token holdings. Token-holder voting is a future goal.
 
 ```solidity
 function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE);
+```
+
+### setDefaultWeights
+
+Set the router's default (below-quorum fallback) weight vector,
+forwarding to `PortfolioRouter.setDefaultWeights`. This is the
+on-chain vector the router routes by — and the public allocation
+surface renders — whenever no proposal is active or the most
+recent proposal failed quorum. A passed vote overrides it; the
+default itself stays put as the post-vote fallback. Restricted to
+ADMIN_ROLE (Safe -> Timelock -> ADMIN_ROLE). ADR-0002.
+The router enforces: ADMIN_ROLE on the router (this contract must
+hold it), bps sum == BPS_DENOMINATOR, and length == the
+registry's router-eligible vault count.
+
+
+```solidity
+function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`|Ordered vault address list.|
+|`bps`|`uint256[]`|   Parallel weight array (must sum to BPS_DENOMINATOR).|
+
+
+### clearVotedWeights
+
+Clear the router's voted weight vector and revert routing to the
+default vector. Intended for governance to fall back to the
+default after the most recent proposal failed quorum. Restricted
+to ADMIN_ROLE. ADR-0002.
+
+
+```solidity
+function clearVotedWeights() external onlyRole(ADMIN_ROLE);
 ```
 
 ### propose
