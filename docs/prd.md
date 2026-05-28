@@ -138,7 +138,10 @@ Access expectations:
 
 NOTE: Current governance is admin-weighted MVP (RouterGovernance.sol).
 Voting power is assigned by ADMIN_ROLE; proposal creation is
-ADMIN_ROLE-only. Token-holder voting is a future goal.
+ADMIN_ROLE-only. Token-holder voting is a future goal. Governance is
+flat in the MVP — there is no tier system (Observer / Participant /
+Analyst / Strategist) and no activity gate. Tiering is deferred past
+MVP and is not on the build list.
 
 1. An address with admin-assigned voting power reviews active
    allocation-weight proposals, target weights, timing, and expected
@@ -377,16 +380,20 @@ prototype status.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Exposure | Admin-curated basket of agent-economy tokens via Uniswap V3 swaps |
+| MVP shortlist | JUNO, ROBOTMONEY, BANKR, ZYFAI, GIZA, DEUS (Base-chain only) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
 | Allocation model | Equal-weight across shortlisted tokens at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
 | Status | Prototype — not audited, not Router-eligible |
 
-Shortlist curation is admin-controlled in the prototype. The production
-model (bribery-based or RM-token inclusion vote) is unresolved
-(`docs/development/open-questions.md` §1.3, §1.4, §3.15). TWAP pricing is shipped via the basket-vault base.
-Router eligibility remains blocked by unresolved shortlist governance
-and the intra-vault rebalancing model.
+Shortlist curation is admin-controlled for the MVP, with a fixed
+six-token equal-weighted basket (see ADR-0001). Changes flow through
+the Safe → Timelock → `ADMIN_ROLE` path; there is no token-holder vote
+over shortlist membership in the MVP. The production model
+(bribery-based or RM-token inclusion vote) is deferred past MVP. TWAP
+pricing is shipped via the basket-vault base. Router eligibility
+remains blocked by the unresolved intra-vault rebalancing model
+(`docs/development/open-questions.md` §3.15).
 
 ### 11.4 RWA / Thematic Vault
 

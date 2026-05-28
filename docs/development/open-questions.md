@@ -16,7 +16,7 @@ Unresolved **product and engineering** questions derived from reading the three 
 
 This document tracks only the questions that are **still open and product/engineering-owned**, grouped by topic. Items are tagged with their original `§x.y` identifier, retained as a stable anchor so existing cross-references from other docs still resolve; the identifiers no longer imply order.
 
-> **Out of scope here:** resolved contradictions and their code evidence are tracked outside this document and asserted as facts in the PRD body and `docs/architecture.md` §2–4, §10. This now includes the admin-multisig mechanism (was §3.4): a canonical Safe (≥2-of-N) holds proposer/executor on an OZ `TimelockController` that holds `ADMIN_ROLE` on all five contracts — see `contracts/script/DeployTimelock.s.sol` and `docs/architecture.md` §10; signer identities remain an ops decision. Business, legal, pricing, tokenomics, agent-persona, audit, multi-chain, and other go-to-market/launch decisions are **tracked outside this repository**.
+> **Out of scope here:** resolved contradictions and their code evidence are tracked outside this document and asserted as facts in `docs/prd.md`, `docs/architecture.md` §2–4 and §10, and `docs/adr/`. Business, legal, pricing, tokenomics, agent-persona, audit, multi-chain, and other go-to-market/launch decisions are **tracked outside this repository**.
 
 ---
 
@@ -24,33 +24,21 @@ This document tracks only the questions that are **still open and product/engine
 
 ### 1.A Governance and voting
 
-**Router-weight vote rules (§3.9).** *Resolved.* `contracts/RouterGovernance.sol` has a configurable `votingPeriod` (cadence), `executionDelay`, and `quorumThreshold`; a proposal that fails quorum becomes `Defeated` and cannot execute (`QuorumNotReached`). The default-weight-vector residual is closed by ADR-0002 (`docs/adr/ADR-0002-router-default-weights-on-chain.md`): `PortfolioRouter` now carries an explicit, admin-settable `defaultWeights` vector that the router routes by — and the public allocation surface renders — whenever the voted vector is not in effect (no proposal active, or the most recent proposal failed quorum). A passed vote overrides the default; the default itself stays put as the post-vote fallback. The remaining governance-whiplash smoothing idea (a continuous blend between voted and default weights as quorum scales) is explicitly deferred by ADR-0002 — a future design preference, not a missing mechanism.
-
-**Governance tiers (§1.5).** No tier system exists today; `RouterGovernance` is flat (admin-assigned voting power now, RM-balance-linear later). The source PRD's four tiers (Observer / Participant / Analyst / Strategist) plus a 14-day activity gate are unbuilt. **Open question for the product owner:** do governance tiers and an activity gate matter to the MVP at all, or only to a future agent-token shortlist surface? Until ruled on, treat tiers as out of current scope but undecided as product direction — do not build the four-tier machinery.
-
-**Agent-token shortlist ownership (§1.3).** For the current product the agent-token vault shortlist is admin/protocol-curated (`contracts/vaults/AgentTokenVault.sol`). Unresolved is the long-term model: admin curation vs. `$RM`-token inclusion proposals vs. the designed-in bribery flow (agents lobby/pay `$RM` to push their token into the vault). The source PRD's inclusion-proposal / quorum / displacement / 15-token-cap machinery only applies if a bottom-up model is chosen. **TBD** — out of current router-weight governance scope.
-
-**Shortlist vote mechanic (§1.4).** The implemented vote is bps allocation across active vaults for Portfolio Router weights (resolved). Unresolved is the mechanic for any *future agent-token shortlist* vote: ranked-choice over the shortlist (whitepaper) vs. token-level bps allocation (source PRD). **TBD**, pending the §1.3 ownership decision.
+**Router default-weight vector (§3.9).** Ship an admin-settable on-chain default-weights vector that the Router falls back to below quorum, sized to the live vault set and sourced from chain state per [ADR-0002](../adr/ADR-0002-router-default-weights-on-chain.md). Continuous smoothing / whiplash blending is deferred.
 
 ### 1.B Agent-token vault internals
 
-**Token eligibility / quant-filter methodology (§3.1).** The thresholds are defined ($10M mcap, 90 days, $100K volume, 500 holders) but not the *measurement methodology*: which oracle/aggregator, what averaging window, how disputes are resolved. The PRD mentions "CoinGecko + on-chain" with "consensus required if sources disagree" but does not specify rules. **TBD.** Not needed for the router-weight vote; required before agent-token shortlist governance ships.
+**Trading authority and strategy (§3.2).** Specify trading strategy, position-sizing rules, stop-loss enforcement, and real-time NAV loss reporting *if* an agent component is reintroduced to the agent-token vault. Not live in the MVP shortlist model (admin-curated, equal-weighted, no agent trading); question needs reframing with the product owner before any engineering work.
 
-**Trading authority and strategy (§3.2).** The whitepaper says the agent trades agent-economy tokens using on-chain signals (volume, holder distribution, treasury health, developer activity), but no doc specifies the trading strategy, position-sizing rules, stop-loss enforcement, or how losses are reported in NAV in real time. Trading authority, strategy, position sizing, and reporting remain **TBD** and are out of scope for Portfolio Router weight governance.
+**Intra-vault rebalancing (§3.15).** The working direction is "new-deposits-only" rebalancing — when target weights change, only incremental deposits route at the new weights; existing positions are never sold. Zero swap cost, but per-depositor weight drift relative to the published target.
 
-**Intra-vault rebalancing (§3.15).** Basket vaults (protocol-asset and agent-token) allocate new deposits equally across active assets at deposit time; existing positions are not touched when an asset is added or removed, creating drift. Three sub-questions are open:
-
-- **Who triggers rebalancing?** Admin-initiated (keeper calls a rebalance function), keeper-automated on a cadence, or depositor-self-service.
-- **What is the target?** Equal weight across current active assets, or a governed weight vector (which would require the basket to adopt router-weight-style governance)?
-- **What are the cost and slippage constraints?** A full rebalance requires many swaps in sequence; slippage and fee cost are borne by all shareholders. The product must disclose rebalancing cost before it executes, or defer cost to depositors who trigger it at redemption.
-
-Vault-level rebalancing is distinct from Portfolio Router weight updates, which allocate across vaults rather than within one. **TBD.** The prototype routes only new deposits into equal-weight positions; a `rebalance()` admin function and its cost-disclosure model must be specified before the agent-token vault can meet the PRD's transparent-performance requirement.
+Open residual: which depositor-facing reporting surface does the PRD's transparent-performance requirement demand — (a) target weights, (b) aggregate realized weights across all depositors, or (c) per-depositor effective weights — and is (a) sufficient without (c)?
 
 ### 1.C Vault lifecycle and redemption
 
-**Vault retirement and depositor migration (§3.5).** *Lifecycle resolved.* `contracts/VaultRegistry.sol` has an `Active`/`Paused`/`Retired` status (`setVaultStatus`), and `contracts/PortfolioRouter.sol` excludes non-Active vaults from deposits and previews; the "immutable vault vs. progressive expansion" tension is answered by shipping new exposure as new vaults rather than mutating one. **Open residual:** depositor migration when a vault is retired — retirement is a one-way status and existing depositors can still withdraw, but there is no forced or assisted migration path out of a retiring vault; whether one is needed is unresolved.
+**Depositor migration on vault retirement (§3.5).** Retirement is a one-way status and existing depositors can still withdraw, but there is no forced or assisted migration path out of a retiring vault. Decide whether one is needed.
 
-**Withdrawal under basket-vault drawdown (§3.7).** *Exclusion resolved.* Router eligibility is registry state — `VaultRegistry.isRouterEligible(vault)`, set by ADMIN_ROLE via `setRouterEligible` — and `contracts/PortfolioRouter.sol` excludes ineligible vaults from allocation and previews; basket vaults stay ineligible by default and are gated out this way today (issue #475). **Open residual:** the explicit redemption policy for a basket vault *in drawdown* — forced sale vs. queued withdrawal vs. NAV haircut — must be specified before ADMIN_ROLE marks any basket vault router-eligible.
+**Basket-vault drawdown redemption policy (§3.7).** Specify the redemption policy when a basket vault is in drawdown — forced sale vs. queued withdrawal vs. NAV haircut — before ADMIN_ROLE marks any basket vault router-eligible.
 
 > **Research questions** (open-ended modeling and assurance, not product/engineering decisions) live in `docs/technical/research-questions.md` — currently the inclusion-attack economic bounds (§3.8) and protocol-agent resilience (§3.10).
 
@@ -58,7 +46,7 @@ Vault-level rebalancing is distinct from Portfolio Router weight updates, which 
 
 ## 2. Suggested resolution order
 
-1. **Router-weight vote rules** — close the smoothing / default-weight-vector residual; the core quorum/cadence/threshold/execution path is built (§3.9).
-2. **Portfolio Router implementation details** — contract API, preview semantics, failure behavior, receipt delivery, cap model, vote-to-weight execution.
-3. **Agent-token vault internals** — shortlist ownership and vote mechanic, whether tiers are needed, token eligibility methodology, trading authority, and intra-vault rebalancing, gated by the inclusion-attack modeling in `docs/technical/research-questions.md` §3.8 (§1.3, §1.4, §1.5, §3.1, §3.2, §3.15).
-4. **Vault lifecycle** — depositor migration on retirement and basket-drawdown redemption policy; the status lifecycle and prototype exclusion are built (§3.5, §3.7).
+1. **Router default-weight vector on-chain** — implement the admin-settable fallback per ADR-0002 and close §3.9.
+2. **Intra-vault rebalancing transparency** — pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15.
+3. **Vault lifecycle residuals** — depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7); only the latter blocks marking a basket vault router-eligible.
+4. **Trading authority reframe (§3.2)** — product to reframe before any engineering work.

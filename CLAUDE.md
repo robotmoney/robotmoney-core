@@ -2,11 +2,8 @@
 
 ## Git remotes
 
-- `origin` → `robotmoney/robotmoney-skills` (upstream — read only)
-- `lucky-tensor` → `lucky-tensor/robotmoney-skills` (our fork — push here)
+Both `origin` and `lucky-tensor` point at `lucky-tensor/robotmoney-monorepo`. There is no separate upstream — this repo is not a fork.
 
-**Always push branches and open PRs against the `lucky-tensor` fork.** Never push to `origin` and never open PRs targeting `robotmoney/robotmoney-skills` unless explicitly asked.
-
-- `git push` → use `lucky-tensor` as the remote
-- `gh pr create` → use `--repo lucky-tensor/robotmoney-skills`
-- Default base branch on the fork is `dev` (not `main`)
+- `git push` → either remote works; prefer `lucky-tensor`
+- `gh pr create` → use `--repo lucky-tensor/robotmoney-monorepo`
+- Default base branch is `dev` (not `main`)
