@@ -53,16 +53,17 @@ describe("ProportionPreview", () => {
     expect(getByTestId("proportion-preview-weight-1").textContent).toBe("40.00%");
   });
 
-  it("renders USDC leg amounts", () => {
+  it("renders USDC leg amounts via the centralized formatter", () => {
     const { getByTestId } = render(<ProportionPreview legs={twoLegs} />);
-    // 600000 / 1e6 = 0.600000
-    expect(getByTestId("proportion-preview-usdc-0").textContent).toBe("0.600000");
-    expect(getByTestId("proportion-preview-usdc-1").textContent).toBe("0.400000");
+    // 600000 base units = 0.6 USDC (trailing zeros stripped by centralized formatter)
+    expect(getByTestId("proportion-preview-usdc-0").textContent).toBe("0.6 USDC");
+    expect(getByTestId("proportion-preview-usdc-1").textContent).toBe("0.4 USDC");
   });
 
-  it("renders estimated shares for available legs", () => {
+  it("renders estimated shares for available legs via the centralized formatter", () => {
     const { getByTestId } = render(<ProportionPreview legs={twoLegs} />);
-    expect(getByTestId("proportion-preview-shares-0").textContent).toBe("0.590000");
+    // 590000 base units = 0.59 shares (trailing zeros stripped)
+    expect(getByTestId("proportion-preview-shares-0").textContent).toBe("0.59 shares");
   });
 
   it("shows ⚠ UNAVAILABLE status for unavailable legs", () => {

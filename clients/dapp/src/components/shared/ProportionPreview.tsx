@@ -18,6 +18,7 @@
  * docs/architecture.md §5.3 — shared vault UI library.
  */
 import type { LegPreview } from "../../lib/routerPreview";
+import { formatPercent, formatUsdc, formatShares } from "../../lib/format";
 
 export interface ProportionPreviewProps {
   /**
@@ -25,22 +26,6 @@ export interface ProportionPreviewProps {
    * When empty, a "no legs" placeholder is shown.
    */
   readonly legs: readonly LegPreview[];
-}
-
-function formatPercent(bps: bigint): string {
-  return ((Number(bps) / 10_000) * 100).toFixed(2) + "%";
-}
-
-function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")}`;
-}
-
-function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")}`;
 }
 
 /**

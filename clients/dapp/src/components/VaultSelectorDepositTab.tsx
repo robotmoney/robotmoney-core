@@ -34,6 +34,7 @@ import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { formatUsdc, formatShares } from "../lib/format";
 
 type Props = Readonly<{
   usdcAddress: Address;
@@ -41,19 +42,7 @@ type Props = Readonly<{
   ctx: VaultPreviewContext;
 }>;
 
-/** Format a raw 6-decimal USDC bigint for UI display. */
-function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
-}
-
-/** Format a raw 6-decimal shares bigint for UI display. */
-function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} rmUSDC`;
-}
+// formatUsdc and formatShares are imported from the shared format module above.
 
 export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: Props) {
   const { address, isConnected } = useAccount();
@@ -273,7 +262,7 @@ export function VaultSelectorDepositTab({ usdcAddress, registryAddress, ctx }: P
       {/* Live preview block: estimated receipts, fees, net amount (AC §3) */}
       {typeof previewDepositShares === "bigint" && depositAssets !== null && (
         <p className="hint" data-testid="vault-deposit-preview-shares">
-          Estimated receipt shares: {formatShares(previewDepositShares)}
+          Estimated receipt shares: {formatShares(previewDepositShares, "rmUSDC")}
         </p>
       )}
       {depositAssets !== null && typeof usdcBalance === "bigint" && (

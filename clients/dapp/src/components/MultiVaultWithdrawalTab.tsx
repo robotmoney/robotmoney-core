@@ -35,24 +35,11 @@ import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
+import { formatUsdc, formatShares } from "../lib/format";
 
 type Props = Readonly<{
   ctx: VaultPreviewContext;
 }>;
-
-/** Format a raw 6-decimal USDC bigint for UI display. */
-function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
-}
-
-/** Format a raw 6-decimal shares bigint for UI display. */
-function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} rmUSDC`;
-}
 
 /** Shorten an address for display. */
 function shorten(addr: string): string {
@@ -224,7 +211,7 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
                         setSharesInput("");
                       }}
                     />{" "}
-                    {v.name || shorten(v.vault)} — {formatShares(bal)}
+                    {v.name || shorten(v.vault)} — {formatShares(bal, "rmUSDC")}
                   </label>
                 );
               })}
@@ -258,14 +245,14 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
 
       {selectedVault && (
         <p className="hint" data-testid="multi-vault-selected-balance">
-          Balance: {formatShares(selectedBalance)}
+          Balance: {formatShares(selectedBalance, "rmUSDC")}
         </p>
       )}
 
       {hasInsufficientBalance && (
         <p className="hint" data-testid="multi-vault-insufficient-balance" style={{ color: "red" }}>
-          Insufficient balance: you hold {formatShares(selectedBalance)} but entered{" "}
-          {withdrawShares !== null ? formatShares(withdrawShares) : ""}.
+          Insufficient balance: you hold {formatShares(selectedBalance, "rmUSDC")} but entered{" "}
+          {withdrawShares !== null ? formatShares(withdrawShares, "rmUSDC") : ""}.
         </p>
       )}
 

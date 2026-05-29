@@ -52,6 +52,7 @@ import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
+import { formatUsdc } from "../lib/format";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -89,15 +90,8 @@ export function parseUsdcAmount(input: string): bigint | null {
   return value;
 }
 
-/**
- * Format a raw 6-decimal USDC amount (bigint) for display in the
- * previewRedeem hint. Two decimal places is sufficient for a UI hint.
- */
-function formatUsdcPreview(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
-}
+// formatUsdcPreview is an alias for the centralized formatUsdc.
+const formatUsdcPreview = formatUsdc;
 
 export function DepositWithdrawTab(props: Props) {
   const { address, isConnected } = useAccount();

@@ -139,10 +139,10 @@ function shorten(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+import { formatUsdc as _formatUsdc, formatShares as _formatShares } from "./format";
+
 function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
+  return _formatUsdc(raw);
 }
 
 /**
@@ -152,7 +152,5 @@ function formatUsdc(raw: bigint): string {
  * less than the order of magnitude for the operator sanity check.
  */
 function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} rmUSDC`;
+  return _formatShares(raw, "rmUSDC");
 }

@@ -20,8 +20,8 @@
  * Unit tests render this component directly with stub data and no
  * wagmi/QueryClient fixture per docs/development/react-guide.md §Layout.
  */
-import { formatUnits } from "viem";
 import type { Address } from "viem";
+import { formatUsdc, formatEth, formatTokenBalance } from "../lib/format";
 
 export interface BalancesPanelReceipt {
   readonly vaultAddress: Address;
@@ -52,13 +52,6 @@ export interface BalancesPanelViewProps {
   readonly receipts: ReadonlyArray<BalancesPanelReceipt>;
 }
 
-function formatAmount(raw: bigint | undefined, decimals: number): string {
-  if (raw === undefined) return "…";
-  // Zero balances render as "0" per AC §4 (not omitted, not "0.0").
-  if (raw === 0n) return "0";
-  return formatUnits(raw, decimals);
-}
-
 export function BalancesPanelView(props: BalancesPanelViewProps) {
   if (!props.connected) {
     return (
@@ -84,21 +77,21 @@ export function BalancesPanelView(props: BalancesPanelViewProps) {
         <tbody>
           <tr data-testid="balances-panel-row-usdc">
             <td data-testid="balances-panel-row-usdc-symbol">{props.usdcSymbol}</td>
-            <td data-testid="balances-panel-row-usdc-amount">
-              {formatAmount(props.usdcBalance, props.usdcDecimals)}
-            </td>
+            <td data-testid="balances-panel-row-usdc-amount">{formatUsdc(props.usdcBalance)}</td>
           </tr>
           <tr data-testid="balances-panel-row-eth">
             <td data-testid="balances-panel-row-eth-symbol">{props.ethSymbol}</td>
-            <td data-testid="balances-panel-row-eth-amount">
-              {formatAmount(props.ethBalance, 18)}
-            </td>
+            <td data-testid="balances-panel-row-eth-amount">{formatEth(props.ethBalance)}</td>
           </tr>
           {props.rmAvailable && (
             <tr data-testid="balances-panel-row-rm">
               <td data-testid="balances-panel-row-rm-symbol">{props.rmSymbol ?? "RM"}</td>
               <td data-testid="balances-panel-row-rm-amount">
-                {formatAmount(props.rmBalance, props.rmDecimals ?? 18)}
+                {formatTokenBalance(
+                  props.rmBalance,
+                  props.rmDecimals ?? 18,
+                  props.rmSymbol ?? "RM",
+                )}
               </td>
             </tr>
           )}
@@ -108,7 +101,7 @@ export function BalancesPanelView(props: BalancesPanelViewProps) {
                 {r.symbol}
               </td>
               <td data-testid={`balances-panel-row-receipt-${r.vaultAddress}-amount`}>
-                {formatAmount(r.balance, r.decimals)}
+                {formatTokenBalance(r.balance, r.decimals, r.symbol)}
               </td>
             </tr>
           ))}

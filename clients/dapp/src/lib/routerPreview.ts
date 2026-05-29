@@ -101,9 +101,9 @@ export function buildRouterPreview(
 
   const legSummary = legs
     .map((l) => {
-      const pct = ((Number(l.weightBps) / 10_000) * 100).toFixed(2);
+      const pct = formatPercentFromBps(l.weightBps);
       const tag = l.unavailable ? " [UNAVAILABLE — tx will revert]" : "";
-      return `${shorten(l.vault)} ${pct}% → ~${formatShares(l.estShares)} shares${tag}`;
+      return `${shorten(l.vault)} ${pct} → ~${formatShares(l.estShares)} shares${tag}`;
     })
     .join("; ");
 
@@ -145,16 +145,22 @@ function shorten(addr: string): string {
   return shortenAddr(addr);
 }
 
+import {
+  formatUsdc as _formatUsdc,
+  formatShares as _formatShares,
+  formatPercent as _formatPercent,
+} from "./format";
+
 function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
+  return _formatUsdc(raw);
 }
 
 function formatShares(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} rmUSDC`;
+  return _formatShares(raw, "rmUSDC");
+}
+
+function formatPercentFromBps(bps: bigint): string {
+  return _formatPercent(bps);
 }
 
 /** Normalise an address returned from on-chain reads to checksum form. */

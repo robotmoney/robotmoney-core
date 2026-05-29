@@ -390,10 +390,10 @@ function shorten(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+import { formatUsdc as _formatUsdc } from "./format";
+
 function formatUsdc(raw: bigint): string {
-  const whole = raw / 1_000_000n;
-  const frac = raw % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
+  return _formatUsdc(raw);
 }
 
 /**

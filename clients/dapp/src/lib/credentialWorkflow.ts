@@ -10,6 +10,8 @@
  * see docs/technical/dapp-credential-decisions.md §3.1.
  */
 
+import { formatUsdc } from "./format";
+
 /**
  * Policy parameters the operator sets when registering an agent address.
  * Mirrors the `AgentPolicy` struct in the gateway contract.
@@ -120,13 +122,7 @@ export function composeRegisterPreview(agentAddress: string, policy: AgentPolicy
 }
 
 /**
- * Format a USDC amount (in base units, 6 decimals) as a human-readable string.
- * Example: 1_000_000n → "1.000000 USDC"
- *
- * USDC has 6 decimal places on all supported chains.
+ * Re-export formatUsdc from the shared module so callers that historically
+ * imported it from credentialWorkflow continue to work without changes.
  */
-export function formatUsdc(amount: bigint): string {
-  const whole = amount / 1_000_000n;
-  const frac = amount % 1_000_000n;
-  return `${whole}.${frac.toString().padStart(6, "0")} USDC`;
-}
+export { formatUsdc } from "./format";

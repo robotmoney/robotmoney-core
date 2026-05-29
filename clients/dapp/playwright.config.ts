@@ -23,6 +23,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
+  // Create missing screenshot baselines automatically on first run instead of
+  // failing. Subsequent runs will diff against the committed baseline.
+  updateSnapshots: "missing",
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "test-results",
   reporter: [
     ["list"],

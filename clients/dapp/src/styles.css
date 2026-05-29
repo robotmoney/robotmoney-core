@@ -919,6 +919,72 @@ main.agents-gate {
   flex-direction: column;
   gap: 1.5rem;
 }
+/* -------------------------------------------------------------------------
+ * Shared table primitives (issue #489)
+ *
+ * Every dapp table gets consistent row height, dividers, and sticky header.
+ * Numeric columns (td.num, th.num) are right-aligned; label columns default
+ * to left-align. Apply class="num" to <td> / <th> in numeric columns.
+ * ------------------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+thead {
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+  z-index: 1;
+}
+
+th,
+td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+}
+
+/* Numeric column — apply to <th class="num"> and <td class="num"> */
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* Balances-panel table: keep the second column (balance) right-aligned */
+.balances-panel table td:last-child,
+.balances-panel table th:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* ProportionPreview: weight, USDC leg, and Est. shares columns are numeric */
+[data-testid="proportion-preview-table"] td:nth-child(2),
+[data-testid="proportion-preview-table"] th:nth-child(2),
+[data-testid="proportion-preview-table"] td:nth-child(3),
+[data-testid="proportion-preview-table"] th:nth-child(3),
+[data-testid="proportion-preview-table"] td:nth-child(4),
+[data-testid="proportion-preview-table"] th:nth-child(4) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
 @media (max-width: 760px) {
   .vault-card-grid {
     grid-template-columns: 1fr;

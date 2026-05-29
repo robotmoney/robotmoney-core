@@ -61,20 +61,20 @@ function renderView(opts: RenderOpts = {}) {
 
 describe("BalancesPanelView", () => {
   it("renders USDC, ETH, and RM rows with per-token decimal formatting and symbols", () => {
-    // USDC 6 dp: 1_000_000 → "1"; ETH 18 dp: 1.5e18 → "1.5"; RM 18 dp: 25e18 → "25".
+    // Centralized formatter: 1_000_000 USDC → "1 USDC"; 1.5e18 ETH → "1.5 ETH"; 25e18 RM → "25 RM".
     renderView({
       usdcBalance: 1_000_000n,
       ethBalance: 1_500_000_000_000_000_000n,
       rmBalance: 25_000_000_000_000_000_000n,
     });
     expect(screen.getByTestId("balances-panel-row-usdc-symbol").textContent).toBe("USDC");
-    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1");
+    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1 USDC");
 
     expect(screen.getByTestId("balances-panel-row-eth-symbol").textContent).toBe("ETH");
-    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("1.5");
+    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("1.5 ETH");
 
     expect(screen.getByTestId("balances-panel-row-rm-symbol").textContent).toBe("RM");
-    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("25");
+    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("25 RM");
   });
 
   it("renders one row per registered vault the wallet holds receipt-token shares in", () => {
@@ -92,14 +92,16 @@ describe("BalancesPanelView", () => {
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-symbol`).textContent).toBe(
       "rmUSDC",
     );
+    // Centralized formatter: 5_000_000 (6 decimals) + symbol → "5 rmUSDC"
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-amount`).textContent).toBe(
-      "5",
+      "5 rmUSDC",
     );
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_B}-symbol`).textContent).toBe(
       "rmPROTO",
     );
+    // Centralized formatter: 3e18 (18 decimals) + symbol → "3 rmPROTO"
     expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_B}-amount`).textContent).toBe(
-      "3",
+      "3 rmPROTO",
     );
   });
 
@@ -116,11 +118,12 @@ describe("BalancesPanelView", () => {
     expect(screen.getByTestId("balances-panel-row-rm")).toBeTruthy();
   });
 
-  it("renders zero balances as the literal '0' (not omitted)", () => {
+  it("renders zero balances as the literal '0' with symbol (not omitted)", () => {
+    // Centralized formatter renders zeros with symbol suffix: "0 USDC", "0 ETH", "0 RM".
     renderView({ usdcBalance: 0n, ethBalance: 0n, rmBalance: 0n });
-    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("0");
-    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("0");
-    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("0");
+    expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("0 USDC");
+    expect(screen.getByTestId("balances-panel-row-eth-amount").textContent).toBe("0 ETH");
+    expect(screen.getByTestId("balances-panel-row-rm-amount").textContent).toBe("0 RM");
   });
 
   it("renders a connect prompt instead of balance rows when no wallet is connected", () => {
