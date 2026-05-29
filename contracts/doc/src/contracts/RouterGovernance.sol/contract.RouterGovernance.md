@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf8a75c9169f98b8e30f0ad4e13af73b36f22bc7/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -37,6 +37,26 @@ Basis-points denominator (10 000 = 100%).
 
 ```solidity
 uint256 public constant BPS_DENOMINATOR = 10_000
+```
+
+
+### MIN_QUORUM_THRESHOLD
+Minimum quorum threshold. At least 1 vote must be required for
+quorum so that proposals cannot pass with zero votes cast.
+
+
+```solidity
+uint256 public constant MIN_QUORUM_THRESHOLD = 1
+```
+
+
+### MIN_VOTING_PERIOD
+Minimum voting period in seconds (1 hour). Prevents proposals
+from being created and immediately executed within the same block.
+
+
+```solidity
+uint64 public constant MIN_VOTING_PERIOD = 1 hours
 ```
 
 
@@ -150,6 +170,7 @@ constructor(
 ### setQuorumThreshold
 
 Update the quorum threshold. Restricted to ADMIN_ROLE.
+Reverts with QuorumBelowMinimum if threshold < MIN_QUORUM_THRESHOLD.
 
 
 ```solidity
@@ -159,6 +180,7 @@ function setQuorumThreshold(uint256 threshold) external onlyRole(ADMIN_ROLE);
 ### setVotingPeriod
 
 Update the voting period. Restricted to ADMIN_ROLE.
+Reverts with VotingPeriodBelowMinimum if period < MIN_VOTING_PERIOD.
 
 
 ```solidity
@@ -529,6 +551,22 @@ error ProposalDefeated();
 
 ```solidity
 error ActiveProposalExists();
+```
+
+### QuorumBelowMinimum
+Thrown when quorumThreshold is set below MIN_QUORUM_THRESHOLD.
+
+
+```solidity
+error QuorumBelowMinimum();
+```
+
+### VotingPeriodBelowMinimum
+Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
+
+
+```solidity
+error VotingPeriodBelowMinimum();
 ```
 
 ## Structs

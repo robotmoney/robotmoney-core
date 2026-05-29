@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf8a75c9169f98b8e30f0ad4e13af73b36f22bc7/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -463,6 +463,62 @@ router-eligible vault count reverts.
 
 ```solidity
 function test_setDefaultWeights_rejects_length_mismatch() public;
+```
+
+### test_constructor_revertsOnZeroQuorumThreshold
+
+Deploying with quorumThreshold = 0 must revert.
+
+
+```solidity
+function test_constructor_revertsOnZeroQuorumThreshold() public;
+```
+
+### test_constructor_revertsOnVotingPeriodBelowMin
+
+Deploying with votingPeriod below MIN_VOTING_PERIOD must revert.
+
+
+```solidity
+function test_constructor_revertsOnVotingPeriodBelowMin() public;
+```
+
+### test_constructor_validFloorArgumentsSucceed
+
+Deploying with quorumThreshold = 1 and votingPeriod = MIN_VOTING_PERIOD succeeds.
+
+
+```solidity
+function test_constructor_validFloorArgumentsSucceed() public;
+```
+
+### test_setQuorumThreshold_revertsOnZero
+
+setQuorumThreshold(0) must revert with QuorumBelowMinimum.
+
+
+```solidity
+function test_setQuorumThreshold_revertsOnZero() public;
+```
+
+### test_setVotingPeriod_revertsOnBelowMin
+
+setVotingPeriod(MIN_VOTING_PERIOD - 1) must revert with VotingPeriodBelowMinimum.
+
+
+```solidity
+function test_setVotingPeriod_revertsOnBelowMin() public;
+```
+
+### test_zeroVoteExploitSequenceBlocked
+
+With quorumThreshold=1 and executionDelay=0 a single actor cannot
+execute with 0 votes — execute() must revert because quorum is not
+reached (0 votes < 1 required).
+
+
+```solidity
+function test_zeroVoteExploitSequenceBlocked() public;
 ```
 
 ### test_clearVotedWeights_revertsToDefault

@@ -347,13 +347,13 @@ fn governance_propose_vote_execute() {
     let vault_a = deploy_mock_vault(&deployer, usdc);
     let vault_b = deploy_mock_vault(&deployer, usdc);
 
-    // voting_period = 60 s, execution_delay = 30 s, quorum = 1 (any vote suffices).
+    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 30 s, quorum = 1.
     let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
     let governance = deploy_router_governance(
         &deployer,
         router,
         deployer.address,
-        60,               // votingPeriod
+        3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
         30,               // executionDelay
         U256::from(1u64), // quorumThreshold
     );
@@ -437,8 +437,8 @@ fn governance_propose_vote_execute() {
     assert_eq!(vote_receipt.status, 1, "vote must succeed");
     eprintln!("[governance_propose_vote_execute] vote cast");
 
-    // Advance time past voting period (60 s) + execution delay (30 s).
-    advance_time(&fx, 91);
+    // Advance time past voting period (3600 s) + execution delay (30 s).
+    advance_time(&fx, 3631);
 
     // State must now be Queued (quorum reached, delay elapsed).
     let state_after_time = read_proposal_state(&deployer, governance, proposal_id);
@@ -550,7 +550,7 @@ fn governance_quorum_not_reached() {
         &deployer,
         router,
         deployer.address,
-        60,                  // votingPeriod
+        3600,                // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
         30,                  // executionDelay
         U256::from(1000u64), // quorumThreshold — unreachable
     );
@@ -624,8 +624,8 @@ fn governance_quorum_not_reached() {
 
     eprintln!("[governance_quorum_not_reached] vote cast (insufficient), advancing time...");
 
-    // Advance past the voting period.
-    advance_time(&fx, 61);
+    // Advance past the voting period (3600 s).
+    advance_time(&fx, 3601);
 
     // State must be Defeated (1).
     let state = read_proposal_state(&deployer, governance, proposal_id);
@@ -699,14 +699,14 @@ fn governance_execute_before_delay_reverts() {
 
     let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
 
-    // voting_period = 60 s, execution_delay = 3600 s (1 hour — large to test
-    // that we can't skip it).
+    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 7200 s (2 hours — large
+    // enough to test that we can't skip it even after the voting period ends).
     let governance = deploy_router_governance(
         &deployer,
         router,
         deployer.address,
-        60,               // votingPeriod
-        3600,             // executionDelay — large so we can trigger before it elapses
+        3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
+        7200,             // executionDelay — large so we can trigger before it elapses
         U256::from(1u64), // quorumThreshold
     );
 
@@ -776,8 +776,8 @@ fn governance_execute_before_delay_reverts() {
         "[governance_execute_before_delay_reverts] quorum vote cast, advancing time past voting period only..."
     );
 
-    // Advance past voting period (61 s) but NOT past the execution delay (3600 s).
-    advance_time(&fx, 61);
+    // Advance past voting period (3601 s) but NOT past the execution delay (7200 s).
+    advance_time(&fx, 3601);
 
     // State must be Queued (quorum reached, voting period over, delay not elapsed).
     let state = read_proposal_state(&deployer, governance, proposal_id);

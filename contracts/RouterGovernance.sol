@@ -33,6 +33,14 @@ contract RouterGovernance is AccessControl {
     /// @notice Basis-points denominator (10 000 = 100%).
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
+    /// @notice Minimum quorum threshold. At least 1 vote must be required for
+    ///         quorum so that proposals cannot pass with zero votes cast.
+    uint256 public constant MIN_QUORUM_THRESHOLD = 1;
+
+    /// @notice Minimum voting period in seconds (1 hour). Prevents proposals
+    ///         from being created and immediately executed within the same block.
+    uint64 public constant MIN_VOTING_PERIOD = 1 hours;
+
     // ─── Proposal state ──────────────────────────────────────────────────────
 
     enum ProposalState {
@@ -159,6 +167,10 @@ contract RouterGovernance is AccessControl {
     error AlreadyExecuted();
     error ProposalDefeated();
     error ActiveProposalExists();
+    /// @notice Thrown when quorumThreshold is set below MIN_QUORUM_THRESHOLD.
+    error QuorumBelowMinimum();
+    /// @notice Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
+    error VotingPeriodBelowMinimum();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -177,6 +189,8 @@ contract RouterGovernance is AccessControl {
         if (_router == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
+        if (_quorumThreshold < MIN_QUORUM_THRESHOLD) revert QuorumBelowMinimum();
+        if (_votingPeriod < MIN_VOTING_PERIOD) revert VotingPeriodBelowMinimum();
         router = PortfolioRouter(_router);
         votingPeriod = _votingPeriod;
         executionDelay = _executionDelay;
@@ -188,13 +202,17 @@ contract RouterGovernance is AccessControl {
     // ─── Admin: cadence parameters ────────────────────────────────────────────
 
     /// @notice Update the quorum threshold. Restricted to ADMIN_ROLE.
+    ///         Reverts with QuorumBelowMinimum if threshold < MIN_QUORUM_THRESHOLD.
     function setQuorumThreshold(uint256 threshold) external onlyRole(ADMIN_ROLE) {
+        if (threshold < MIN_QUORUM_THRESHOLD) revert QuorumBelowMinimum();
         emit QuorumThresholdSet(quorumThreshold, threshold);
         quorumThreshold = threshold;
     }
 
     /// @notice Update the voting period. Restricted to ADMIN_ROLE.
+    ///         Reverts with VotingPeriodBelowMinimum if period < MIN_VOTING_PERIOD.
     function setVotingPeriod(uint64 period) external onlyRole(ADMIN_ROLE) {
+        if (period < MIN_VOTING_PERIOD) revert VotingPeriodBelowMinimum();
         emit VotingPeriodSet(votingPeriod, period);
         votingPeriod = period;
     }

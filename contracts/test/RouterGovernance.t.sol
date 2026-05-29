@@ -647,6 +647,96 @@ contract RouterGovernanceTest is Test {
         gov.setDefaultWeights(vaults, bps);
     }
 
+    // ─── Floor validation — constructor ───────────────────────────────────────
+
+    /// @notice Deploying with quorumThreshold = 0 must revert.
+    function test_constructor_revertsOnZeroQuorumThreshold() public {
+        vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
+        new RouterGovernance(address(router), govAdmin, VOTING_PERIOD, EXECUTION_DELAY, 0);
+    }
+
+    /// @notice Deploying with votingPeriod below MIN_VOTING_PERIOD must revert.
+    function test_constructor_revertsOnVotingPeriodBelowMin() public {
+        uint64 tooShort = uint64(gov.MIN_VOTING_PERIOD()) - 1;
+        vm.expectRevert(RouterGovernance.VotingPeriodBelowMinimum.selector);
+        new RouterGovernance(address(router), govAdmin, tooShort, EXECUTION_DELAY, QUORUM_THRESHOLD);
+    }
+
+    /// @notice Deploying with quorumThreshold = 1 and votingPeriod = MIN_VOTING_PERIOD succeeds.
+    function test_constructor_validFloorArgumentsSucceed() public {
+        RouterGovernance freshGov = new RouterGovernance(
+            address(router),
+            govAdmin,
+            uint64(gov.MIN_VOTING_PERIOD()),
+            EXECUTION_DELAY,
+            gov.MIN_QUORUM_THRESHOLD()
+        );
+        assertEq(freshGov.quorumThreshold(), gov.MIN_QUORUM_THRESHOLD());
+        assertEq(freshGov.votingPeriod(), gov.MIN_VOTING_PERIOD());
+    }
+
+    // ─── Floor validation — setters ───────────────────────────────────────────
+
+    /// @notice setQuorumThreshold(0) must revert with QuorumBelowMinimum.
+    function test_setQuorumThreshold_revertsOnZero() public {
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.QuorumBelowMinimum.selector);
+        gov.setQuorumThreshold(0);
+    }
+
+    /// @notice setVotingPeriod(MIN_VOTING_PERIOD - 1) must revert with VotingPeriodBelowMinimum.
+    function test_setVotingPeriod_revertsOnBelowMin() public {
+        uint64 tooShort = uint64(gov.MIN_VOTING_PERIOD()) - 1;
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.VotingPeriodBelowMinimum.selector);
+        gov.setVotingPeriod(tooShort);
+    }
+
+    // ─── Zero-quorum exploit sequence is blocked ──────────────────────────────
+
+    /// @notice With quorumThreshold=1 and executionDelay=0 a single actor cannot
+    ///         execute with 0 votes — execute() must revert because quorum is not
+    ///         reached (0 votes < 1 required).
+    function test_zeroVoteExploitSequenceBlocked() public {
+        // Deploy fresh governance with the minimum floor values.
+        RouterGovernance minGov = new RouterGovernance(
+            address(router),
+            govAdmin,
+            uint64(gov.MIN_VOTING_PERIOD()), // minimum period
+            0, // executionDelay = 0 (unguarded, but that is out of scope)
+            gov.MIN_QUORUM_THRESHOLD() // quorumThreshold = 1
+        );
+
+        // Grant minGov ADMIN_ROLE on the router.
+        vm.startPrank(routerAdmin);
+        router.grantRole(router.ADMIN_ROLE(), address(minGov));
+        vm.stopPrank();
+
+        // Grant voting power via govAdmin on minGov.
+        vm.prank(govAdmin);
+        minGov.setVotingPower(alice, ALICE_POWER);
+
+        // Create a proposal.
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        uint256 pid = minGov.propose(vaults, bps);
+
+        // Warp past the voting period — no votes cast.
+        vm.warp(block.timestamp + gov.MIN_VOTING_PERIOD() + 1);
+
+        // Execute must fail: 0 votes cast < quorumThreshold = 1.
+        vm.expectRevert(RouterGovernance.QuorumNotReached.selector);
+        minGov.execute(pid);
+    }
+
+    // ─── setDefaultWeights() — ADR-0002 ────────────────────────────────────────
+
     /// @notice clearVotedWeights forwards to the router and reverts routing to
     ///         the default vector while leaving defaultWeights untouched.
     function test_clearVotedWeights_revertsToDefault() public {
