@@ -17,8 +17,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @notice Integration test for the demo seed path: after `DeployDemoExtraVaults`
 ///         runs, the router carries a non-empty default (below-quorum fallback)
-///         weight vector spanning the three demo vaults, and `previewDeposit`
-///         routes by that vector with no governance activity. ADR-0002.
+///         weight vector pointing at the primary vault, and `previewDeposit`
+///         routes by it with no governance activity. ADR-0002.
 contract DeployDemoExtraVaultsTest is Test {
     DeployDemoExtraVaults internal script;
     TestERC20 internal usdc;
@@ -29,10 +29,6 @@ contract DeployDemoExtraVaultsTest is Test {
     // The test contract is the broadcaster/admin (mirrors Deploy.t.sol's
     // in-process pattern), so it must hold ADMIN_ROLE on registry + router.
     address internal admin = address(this);
-
-    uint256 constant W_PRIMARY = 5_000;
-    uint256 constant W_EXTRA1 = 3_000;
-    uint256 constant W_EXTRA2 = 2_000;
 
     function setUp() public {
         script = new DeployDemoExtraVaults();
@@ -68,13 +64,11 @@ contract DeployDemoExtraVaultsTest is Test {
     }
 
     /// @notice After the demo seed runs, the router's default weight vector is
-    ///         the non-empty three-way split, and `previewDeposit` with no
-    ///         governance activity (voted vector inactive) routes by it.
+    ///         a single-leg pointing at the primary vault (the only PRD §11
+    ///         router-eligible vault; basket vaults stay gap-blocked), and
+    ///         `previewDeposit` with no governance activity routes the full
+    ///         deposit there.
     function test_demo_seed_populates_defaultWeights() public {
-        // The script is the in-process broadcaster, so it must be admin on the
-        // vaults it deploys + wires (addAdapter etc.). In the real broadcast
-        // flow the broadcaster key IS p.admin; in-process we mirror that by
-        // making the script the admin.
         DeployDemoExtraVaults.Params memory p = DeployDemoExtraVaults.Params({
             admin: address(script),
             registry: address(registry),
@@ -82,46 +76,31 @@ contract DeployDemoExtraVaultsTest is Test {
             primaryVault: address(primaryVault),
             usdc: address(usdc),
             swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,
-            wPrimary: W_PRIMARY,
-            wExtra1: W_EXTRA1,
-            wExtra2: W_EXTRA2,
-            name1: "Robot Money Demo Vault A",
-            name2: "Robot Money Demo Vault B",
             rwaName: "Robot Money RWA / Thematic"
         });
 
-        DeployDemoExtraVaults.Deployed memory d = script.runInProcess(p);
+        script.runInProcess(p);
 
-        // Default vector is non-empty and spans all three demo vaults.
+        // Default vector is a single 10 000 bps leg at the primary vault.
         (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
-        assertEq(dV.length, 3, "default vector must span three vaults");
+        assertEq(dV.length, 1, "default vector must span the primary vault only");
         assertEq(dV[0], address(primaryVault), "leg 0 = primary vault");
-        assertEq(dV[1], d.vault1, "leg 1 = extra vault A");
-        assertEq(dV[2], d.vault2, "leg 2 = extra vault B");
-        assertEq(dB[0], W_PRIMARY);
-        assertEq(dB[1], W_EXTRA1);
-        assertEq(dB[2], W_EXTRA2);
-        uint256 sum = dB[0] + dB[1] + dB[2];
-        assertEq(sum, 10_000, "default weights must sum to 10000 bps");
+        assertEq(dB[0], 10_000, "leg 0 weight must be the full 10000 bps");
 
-        // Registry router-eligible count matches the default vector length, so
-        // the stale-length guard is satisfied.
-        assertEq(registry.routerEligibleCount(), 3);
+        // Registry router-eligible count matches the default vector length so
+        // the stale-length guard is satisfied. Primary is the only eligible.
+        assertEq(registry.routerEligibleCount(), 1);
 
         // Represent the "no governance activity" (below-quorum) state: the
-        // voted vector is not in effect. The demo also seeds a voted vector for
-        // the legacy AC3 smoke test, so clear it to observe the fallback.
+        // voted vector is not in effect. The demo also seeds a voted vector
+        // for the legacy AC3 smoke test, so clear it to observe the fallback.
         router.clearVotedWeights();
         assertFalse(router.votedWeightsActive());
 
-        // previewDeposit now routes by the default vector and is non-empty.
+        // previewDeposit now routes the full deposit to the primary vault.
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
-        assertEq(legs.length, 3, "preview must have three legs");
-        assertEq(legs[0].weightBps, W_PRIMARY);
-        assertEq(legs[1].weightBps, W_EXTRA1);
-        assertEq(legs[2].weightBps, W_EXTRA2);
-        assertEq(legs[0].legAmount, 500e6);
-        assertEq(legs[1].legAmount, 300e6);
-        assertEq(legs[2].legAmount, 200e6);
+        assertEq(legs.length, 1, "preview must have one leg");
+        assertEq(legs[0].weightBps, 10_000);
+        assertEq(legs[0].legAmount, 1_000e6);
     }
 }

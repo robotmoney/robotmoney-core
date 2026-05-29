@@ -1,35 +1,13 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/c43fbb392825b11d010cdb5df06c784303c7dcd7/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
 
 Integration test for the demo seed path: after `DeployDemoExtraVaults`
 runs, the router carries a non-empty default (below-quorum fallback)
-weight vector spanning the three demo vaults, and `previewDeposit`
-routes by that vector with no governance activity. ADR-0002.
-
-
-## Constants
-### W_PRIMARY
-
-```solidity
-uint256 constant W_PRIMARY = 5_000
-```
-
-
-### W_EXTRA1
-
-```solidity
-uint256 constant W_EXTRA1 = 3_000
-```
-
-
-### W_EXTRA2
-
-```solidity
-uint256 constant W_EXTRA2 = 2_000
-```
+weight vector pointing at the primary vault, and `previewDeposit`
+routes by it with no governance activity. ADR-0002.
 
 
 ## State Variables
@@ -86,8 +64,10 @@ function setUp() public;
 ### test_demo_seed_populates_defaultWeights
 
 After the demo seed runs, the router's default weight vector is
-the non-empty three-way split, and `previewDeposit` with no
-governance activity (voted vector inactive) routes by it.
+a single-leg pointing at the primary vault (the only PRD §11
+router-eligible vault; basket vaults stay gap-blocked), and
+`previewDeposit` with no governance activity routes the full
+deposit there.
 
 
 ```solidity

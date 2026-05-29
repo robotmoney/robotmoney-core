@@ -148,7 +148,12 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     detached: false,
   });
 
-  const BOOT_TIMEOUT_MS = 15 * 60 * 1000;
+  // 20 minutes: chain-seed alone takes ~9m on GH-hosted runners after the
+  // #488 batch-deployer perf work (was ~13m pre-fix), and the cold dapp
+  // Docker build needs another ~6m. The previous 15m budget was too tight
+  // once #484 (RWA vault), #485 (Router governance), and #486 (AgentTokenVault
+  // shortlist) added real seed work the dapp depends on.
+  const BOOT_TIMEOUT_MS = 20 * 60 * 1000;
   let raw: Record<string, string>;
   try {
     raw = await waitForEndpoints(smokeTestProc, BOOT_TIMEOUT_MS);

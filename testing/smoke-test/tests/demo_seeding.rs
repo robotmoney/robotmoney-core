@@ -24,8 +24,7 @@
 
 use alloy_primitives::Address;
 use smoke_test::{
-    prerequisites_available, Fixture, DEMO_WEIGHT_EXTRA1_BPS, DEMO_WEIGHT_EXTRA2_BPS,
-    DEMO_WEIGHT_PRIMARY_BPS,
+    prerequisites_available, Fixture, DEMO_WEIGHT_PRIMARY_BPS,
 };
 
 fn skip_if_no_prereqs(name: &str) -> bool {
@@ -258,29 +257,16 @@ fn router_weights_are_three_way_split() {
     // getWeights() selector: 0x22acb867
     let raw = eth_call_raw(fx.rpc_url(), fx.router(), "0x22acb867");
     let (vaults, bps) = decode_address_array_and_uint_array(&raw);
-    assert_eq!(vaults.len(), 3, "expected 3 router weight entries");
-    assert_eq!(bps.len(), 3, "expected 3 router weight bps entries");
+    assert_eq!(vaults.len(), 1, "expected 1 router weight entry (primary)");
+    assert_eq!(bps.len(), 1, "expected 1 router weight bps entry");
 
-    let sum: u128 = bps.iter().sum();
-    assert_eq!(
-        sum, 10_000,
-        "router weights must sum to 10000 bps, got {sum}"
-    );
-    for (i, w) in bps.iter().enumerate() {
-        assert!(
-            *w > 0,
-            "router weight[{i}] for {:#x} must be > 0",
-            vaults[i]
-        );
-    }
-
-    // Order must match the script's primary/extra1/extra2 layout.
+    // Only the primary RobotMoneyVault (PRD §11.1) is router-eligible — the
+    // basket vaults stay gap-blocked per PRD §11.2/§11.3.
     assert_eq!(vaults[0], fx.vault(), "weight[0] must be the primary vault");
-    assert_eq!(bps[0] as u64, DEMO_WEIGHT_PRIMARY_BPS);
-    assert_eq!(vaults[1], fx.demo_extra_vault1());
-    assert_eq!(bps[1] as u64, DEMO_WEIGHT_EXTRA1_BPS);
-    assert_eq!(vaults[2], fx.demo_extra_vault2());
-    assert_eq!(bps[2] as u64, DEMO_WEIGHT_EXTRA2_BPS);
+    assert_eq!(
+        bps[0] as u64, DEMO_WEIGHT_PRIMARY_BPS,
+        "primary vault must carry the full 10000 bps"
+    );
 }
 
 /// AC2: After seeding simulated depositors via the router, each vault reports

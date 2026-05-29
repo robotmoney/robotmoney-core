@@ -88,14 +88,11 @@ pub fn agent_address() -> Address {
     derive_address(&AGENT_PRIVATE_KEY)
 }
 
-/// Demo router weight (bps) for the primary RobotMoneyVault after demo seeding
-/// (issue #465). Largest share so the original vault keeps the bulk of TVL.
-pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 5_000;
-/// Demo router weight (bps) for the first extra RobotMoneyVault stand-in.
-pub const DEMO_WEIGHT_EXTRA1_BPS: u64 = 3_000;
-/// Demo router weight (bps) for the second extra RobotMoneyVault stand-in.
-/// Sum of all three must equal `BPS_DENOMINATOR` (10 000).
-pub const DEMO_WEIGHT_EXTRA2_BPS: u64 = 2_000;
+/// Demo router weight (bps) for the primary RobotMoneyVault (PRD §11.1 Stable
+/// Yield) after demo seeding. The primary vault is the only router-eligible
+/// vault — basket vaults stay gap-blocked per PRD §11.2/§11.3 — so it
+/// carries the full 10 000 bps.
+pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 10_000;
 
 // -- Error type -------------------------------------------------------
 
@@ -194,33 +191,27 @@ struct RmTokenDeploymentJson {
 }
 
 /// Typed view over the demo-extra-vaults deployment JSON produced by
-/// DeployDemoExtraVaults.s.sol (issue #465). Surfaces the two additional
-/// `RobotMoneyVault` instances seeded into the demo so smoke-test assertions
-/// and downstream tooling can resolve every active vault, not just the
-/// primary one. The basket vaults `ProtocolAssetVault` and `AgentTokenVault`
-/// remain ADR-blocked (see `docs/technical/basket-vault-gap-report.md`); the
-/// demo registers two passthrough-backed stand-ins so the multi-vault router
-/// story is testable today.
+/// DeployDemoExtraVaults.s.sol. Surfaces the PRD §11 vault catalog seeded into
+/// the demo so smoke-test assertions and downstream tooling can resolve every
+/// Active vault and the RWA placeholder. The demo seed deploys the canonical
+/// `ProtocolAssetVault` (§11.2) and `AgentTokenVault` (§11.3) with devnet
+/// basket stubs, plus an RWA placeholder (§11.4) registered Paused. All three
+/// extra entries plus the primary `RobotMoneyVault` (§11.1) make up the
+/// four-vault catalog. Router-eligibility is restricted to the primary vault
+/// per PRD §11.2/§11.3 — basket vaults stay gap-blocked.
 #[derive(Debug, Deserialize)]
 struct DemoExtraVaultsDeploymentJson {
-    vault1: String,
-    vault2: String,
+    protocol_vault: String,
     #[serde(default)]
     #[allow(dead_code)]
-    adapter1: String,
+    protocol_tokens: Vec<String>,
+    agent_token_vault: String,
     #[serde(default)]
     #[allow(dead_code)]
-    adapter2: String,
-    weight_primary_bps: u64,
-    weight_extra1_bps: u64,
-    weight_extra2_bps: u64,
-    /// RWA/Thematic placeholder registered alongside the three router vaults
-    /// (issue #479). Registered non-Active (Paused) and never router-eligible,
-    /// it rounds the deployed set out to the four PRD §11 categories without
-    /// entering the router weight vector. `#[serde(default)]` keeps the typed
-    /// view backward-compatible with any older deployment JSON lacking the
-    /// field.
-    #[serde(default)]
+    agent_tokens: Vec<String>,
+    /// RWA/Thematic placeholder (PRD §11.4). Registered non-Active (Paused)
+    /// and never router-eligible — rounds the deployed set to the four PRD §11
+    /// categories without entering the router weight vector.
     rwa_vault: String,
     #[serde(default)]
     #[allow(dead_code)]
@@ -912,9 +903,6 @@ impl Fixture {
             &router_deployment.router,
             &deployment.vault,
             &deployment.usdc,
-            DEMO_WEIGHT_PRIMARY_BPS,
-            DEMO_WEIGHT_EXTRA1_BPS,
-            DEMO_WEIGHT_EXTRA2_BPS,
         )
         .inspect_err(|err| {
             logging::error(
@@ -1117,36 +1105,36 @@ impl Fixture {
         &self.rm_token_deployment.rm_token
     }
 
-    /// First demo-only extra `RobotMoneyVault` registered alongside the
-    /// primary vault (issue #465). Passthrough-backed stand-in for the
-    /// still-ADR-blocked basket vaults — see
-    /// `docs/technical/basket-vault-gap-report.md`.
-    pub fn demo_extra_vault1(&self) -> Address {
-        parse_addr(&self.demo_extra_vaults.vault1)
+    /// `ProtocolAssetVault` (PRD §11.2). Seeded with devnet stand-in basket
+    /// tokens (wETH, cbBTC, wSOL) and made router-eligible by the demo seed
+    /// override — see DeployDemoExtraVaults.s.sol header.
+    pub fn demo_protocol_vault(&self) -> Address {
+        parse_addr(&self.demo_extra_vaults.protocol_vault)
     }
-    /// Raw string form of the first demo-only extra vault.
-    pub fn demo_extra_vault1_hex(&self) -> &str {
-        &self.demo_extra_vaults.vault1
+    /// Raw string form of the ProtocolAssetVault address.
+    pub fn demo_protocol_vault_hex(&self) -> &str {
+        &self.demo_extra_vaults.protocol_vault
     }
-    /// Second demo-only extra `RobotMoneyVault` registered alongside the
-    /// primary vault (issue #465).
-    pub fn demo_extra_vault2(&self) -> Address {
-        parse_addr(&self.demo_extra_vaults.vault2)
+    /// `AgentTokenVault` (PRD §11.3). Seeded with the six MVP shortlist
+    /// symbols and made router-eligible by the demo seed override.
+    pub fn demo_agent_vault(&self) -> Address {
+        parse_addr(&self.demo_extra_vaults.agent_token_vault)
     }
-    /// Raw string form of the second demo-only extra vault.
-    pub fn demo_extra_vault2_hex(&self) -> &str {
-        &self.demo_extra_vaults.vault2
+    /// Raw string form of the AgentTokenVault address.
+    pub fn demo_agent_vault_hex(&self) -> &str {
+        &self.demo_extra_vaults.agent_token_vault
     }
-    /// Convenience accessor returning the three Active, router-eligible
-    /// vaults in router-weight order (primary, extra1, extra2). Use in smoke
-    /// tests that assert `getWeights()` shape or deposit via the router after
-    /// demo seeding. Excludes the RWA/Thematic placeholder, which is non-Active
-    /// and never weighted — see [`Fixture::rwa_vault`].
+    /// Convenience accessor returning every Active vault in the demo set
+    /// (primary, protocol, agent). The primary is the only router-eligible
+    /// vault; the basket vaults are listed for registry-presence and
+    /// dapp-tile assertions but never receive router flow. Excludes the
+    /// RWA/Thematic placeholder, which is non-Active — see
+    /// [`Fixture::rwa_vault`].
     pub fn all_demo_vaults(&self) -> [Address; 3] {
         [
             self.vault(),
-            self.demo_extra_vault1(),
-            self.demo_extra_vault2(),
+            self.demo_protocol_vault(),
+            self.demo_agent_vault(),
         ]
     }
     /// RWA/Thematic placeholder registered by `DeployDemoExtraVaults.s.sol`
@@ -1162,16 +1150,10 @@ impl Fixture {
         &self.demo_extra_vaults.rwa_vault
     }
     /// Router weight (bps) assigned to the primary vault after demo seeding.
+    /// The primary is the only router-eligible vault, so this is always
+    /// 10 000.
     pub fn demo_weight_primary_bps(&self) -> u64 {
-        self.demo_extra_vaults.weight_primary_bps
-    }
-    /// Router weight (bps) assigned to the first demo extra vault.
-    pub fn demo_weight_extra1_bps(&self) -> u64 {
-        self.demo_extra_vaults.weight_extra1_bps
-    }
-    /// Router weight (bps) assigned to the second demo extra vault.
-    pub fn demo_weight_extra2_bps(&self) -> u64 {
-        self.demo_extra_vaults.weight_extra2_bps
+        DEMO_WEIGHT_PRIMARY_BPS
     }
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
@@ -2142,12 +2124,12 @@ fn read_rm_token_deployment(path: &Path) -> Result<RmTokenDeploymentJson, Harnes
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
 }
 
-/// Deploy the demo-only extra `RobotMoneyVault` stand-ins via
-/// `DeployDemoExtraVaults.s.sol` (issue #465). The script registers the new
-/// vaults in `VaultRegistry`, attests them on `PortfolioRouter`, and resets
-/// the router weight vector to a three-way split. `wPrimary + wExtra1 +
-/// wExtra2` must equal 10 000 — the script asserts this on-chain.
-#[allow(clippy::too_many_arguments)]
+/// Deploy the PRD §11 demo vault catalog via `DeployDemoExtraVaults.s.sol`:
+/// ProtocolAssetVault (§11.2) seeded with wETH/cbBTC/wSOL stand-ins,
+/// AgentTokenVault (§11.3) seeded with the six MVP shortlist symbols, and an
+/// RWA/Thematic placeholder (§11.4) registered Paused. Resets the router
+/// weight vector to a single-leg pointing at the primary vault — the basket
+/// vaults stay router-ineligible per PRD §11.2/§11.3.
 fn run_forge_deploy_demo_extra_vaults(
     repo_root: &Path,
     rpc_url: &str,
@@ -2156,9 +2138,6 @@ fn run_forge_deploy_demo_extra_vaults(
     router_address: &str,
     primary_vault: &str,
     usdc_address: &str,
-    w_primary: u64,
-    w_extra1: u64,
-    w_extra2: u64,
 ) -> Result<(), HarnessError> {
     let mut cmd = Command::new("forge");
     cmd.args([
@@ -2175,9 +2154,6 @@ fn run_forge_deploy_demo_extra_vaults(
     .env("ROUTER_ADDRESS", router_address)
     .env("PRIMARY_VAULT", primary_vault)
     .env("USDC_ADDRESS", usdc_address)
-    .env("WEIGHT_PRIMARY_BPS", w_primary.to_string())
-    .env("WEIGHT_EXTRA1_BPS", w_extra1.to_string())
-    .env("WEIGHT_EXTRA2_BPS", w_extra2.to_string())
     .env("DEPLOYMENT_OUT", out)
     .current_dir(repo_root);
     let output = cmd.output()?;
