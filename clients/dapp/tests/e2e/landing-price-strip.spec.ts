@@ -15,6 +15,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadEndpoints } from "./helpers/devnet";
 import { openDapp } from "./helpers/wallet";
 
@@ -31,8 +32,10 @@ interface ExpectedPrices {
 }
 
 function loadExpectedPrices(): ExpectedPrices {
-  // tests/e2e -> repo root is five levels up (clients/dapp/tests/e2e).
-  const repoRoot = path.resolve(__dirname, "../../../..");
+  // tests/e2e -> repo root is four levels up (clients/dapp/tests/e2e).
+  // Use import.meta.url instead of __dirname (ESM context).
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const repoRoot = path.resolve(thisDir, "../../../..");
   const file = path.join(repoRoot, "testing/ethereum-testnet/config/expected-prices.json");
   return JSON.parse(fs.readFileSync(file, "utf8")) as ExpectedPrices;
 }
@@ -88,14 +91,21 @@ test("landing price strip shows block-number freshness chip", async ({ page }) =
   await gotoLanding(page);
   const expected = loadExpectedPrices();
 
-  // The section-level freshness chip eventually reports a numeric block at or
-  // after the pinned fork block (devnet keeps producing blocks past the fork).
-  await expect
-    .poll(
-      async () => parseBlock(await page.getByTestId("landing-price-strip-freshness").textContent()),
-      { timeout: 60_000 },
-    )
-    .toBeGreaterThanOrEqual(expected.fork_block);
+  // The section-level freshness chip eventually reports a positive block
+  // number. When `captured` is true and the devnet is a real archive fork,
+  // the block is also at or after the pinned fork block (the devnet keeps
+  // producing blocks past the fork). When `captured` is false the devnet
+  // starts from its own genesis (pinned: false) so only a positive block
+  // is guaranteed.
+  const blockPredicate = async () =>
+    parseBlock(await page.getByTestId("landing-price-strip-freshness").textContent());
+  if (expected.captured) {
+    await expect
+      .poll(blockPredicate, { timeout: 60_000 })
+      .toBeGreaterThanOrEqual(expected.fork_block);
+  } else {
+    await expect.poll(blockPredicate, { timeout: 60_000 }).toBeGreaterThan(0);
+  }
 
   // Each cell carries its own block chip with the same property.
   for (const id of PAIR_IDS) {
@@ -103,7 +113,11 @@ test("landing price strip shows block-number freshness chip", async ({ page }) =
       await page.getByTestId(`landing-price-cell-${id}-block`).textContent(),
     );
     expect(block).not.toBeNull();
-    expect(block as number).toBeGreaterThanOrEqual(expected.fork_block);
+    if (expected.captured) {
+      expect(block as number).toBeGreaterThanOrEqual(expected.fork_block);
+    } else {
+      expect(block as number).toBeGreaterThan(0);
+    }
   }
 });
 

@@ -284,6 +284,47 @@ not run.
 
 ---
 
+## Playwright endpoint schema (`DevnetEndpoints`)
+
+The smoke-test binary emits a structured `--- endpoint summary ---` block to
+stdout once the full stack is healthy. `devnet-global-setup.ts` parses this
+block and writes it as JSON to a temp file whose path is stored in
+`DEVNET_ENDPOINTS_FILE`. Every Playwright spec loads the file via
+`helpers/devnet.ts:loadEndpoints()`.
+
+The `DevnetEndpoints` interface tracks the fields emitted by the binary:
+
+| Field | Source | Description |
+|---|---|---|
+| `rpc_url` | `Fixture.rpc_url()` | Geth JSON-RPC endpoint (localhost) |
+| `dapp_url` | `DappStack.endpoints.dapp_url` | Dapp frontend URL (localhost) |
+| `explorer_api_url` | `DappStack.endpoints.explorer_api_url` | Explorer API base URL |
+| `chain_id` | `Fixture.chain_id()` | EVM chain id (918453 for devnet) |
+| `gateway_addr` | `Fixture.gateway()` | Gateway contract address |
+| `vault_addr` | `Fixture.vault()` | Primary RobotMoneyVault address |
+| `usdc_addr` | `Fixture.usdc()` | USDC ERC-20 address |
+| `agent_addr` | `Fixture.agent()` | Test agent EOA address |
+| `admin_addr` | `DEPLOYER_ADDRESS_HEX` | Deployer / admin EOA address |
+| `pauser_addr` | `PAUSER_ADDRESS_HEX` | Pauser EOA address |
+| `share_receiver_addr` | `SHARE_RECEIVER_ADDRESS_HEX` | Vault share receiver address |
+| `admin_private_key` | `DEPLOYER_PRIVATE_KEY_HEX` | Admin signing key (test-only) |
+| `pauser_private_key` | `PAUSER_PRIVATE_KEY_HEX` | Pauser signing key (test-only) |
+| `agent_private_key` | `AGENT_PRIVATE_KEY` | Agent signing key (test-only) |
+| `gateway_runtime_hash` | `Fixture.gateway_runtime_hash()` | keccak256(getBytecode(gateway)) |
+| `harness_usdc_holder_addr` | `HARNESS_USDC_HOLDER_ADDRESS_HEX` | Harness USDC holder EOA |
+| `harness_usdc_holder_private_key` | `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` | Holder signing key (test-only) |
+| `registry_addr` | `Fixture.registry()` | VaultRegistry contract address (issue #320) |
+| `router_addr` | `Fixture.router()` | PortfolioRouter contract address (issue #320) |
+| `governance_addr` | `Fixture.governance()` | RouterGovernance contract address (issue #477) |
+| `rm_token_addr` | `Fixture.rm_token()` | RmToken ERC-20 address (issue #477) |
+
+**Adding new fields.** Emit the field in `testing/smoke-test/src/bin/smoke-test.rs`
+inside the `--- endpoint summary ---` block, add it to `REQUIRED_KEYS` in
+`devnet-global-setup.ts`, build it into the `endpoints` object, and declare it
+in the `DevnetEndpoints` interface in `helpers/devnet.ts`.
+
+---
+
 ## Relationship to existing harnesses
 
 | Harness | Devnet | Lifecycle owner | Scope |

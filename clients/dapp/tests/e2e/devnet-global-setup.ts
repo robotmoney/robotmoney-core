@@ -48,6 +48,9 @@ const REQUIRED_KEYS = [
   // Issue #320: vault-selector and router deposit flow.
   "registry_addr",
   "router_addr",
+  // Issue #477: governance fresh-account E2E.
+  "governance_addr",
+  "rm_token_addr",
 ] as const;
 type RequiredKey = (typeof REQUIRED_KEYS)[number];
 
@@ -148,12 +151,12 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     detached: false,
   });
 
-  // 20 minutes: chain-seed alone takes ~9m on GH-hosted runners after the
-  // #488 batch-deployer perf work (was ~13m pre-fix), and the cold dapp
-  // Docker build needs another ~6m. The previous 15m budget was too tight
-  // once #484 (RWA vault), #485 (Router governance), and #486 (AgentTokenVault
-  // shortlist) added real seed work the dapp depends on.
-  const BOOT_TIMEOUT_MS = 20 * 60 * 1000;
+  // 25 minutes: chain-seed takes ~9 min on GH-hosted runners after the #488
+  // batch-deployer perf work (#484 RWA vault, #485 Router governance, #486
+  // AgentTokenVault shortlist added seed work the dapp depends on). The dapp
+  // Docker build adds ~6 min. The pre-build step (suite-10-dapp-e2e.yml)
+  // ensures cargo compilation does not eat into this budget.
+  const BOOT_TIMEOUT_MS = 25 * 60 * 1000;
   let raw: Record<string, string>;
   try {
     raw = await waitForEndpoints(smokeTestProc, BOOT_TIMEOUT_MS);
@@ -183,6 +186,9 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     // Issue #320: vault-selector and router deposit flow.
     registry_addr: raw.registry_addr,
     router_addr: raw.router_addr,
+    // Issue #477: governance fresh-account E2E.
+    governance_addr: raw.governance_addr,
+    rm_token_addr: raw.rm_token_addr,
   };
 
   console.log("devnet-global-setup: endpoint summary received");

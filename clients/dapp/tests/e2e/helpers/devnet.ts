@@ -30,6 +30,10 @@ export interface DevnetEndpoints {
   registry_addr: string;
   /** PortfolioRouter contract address (issue #320). */
   router_addr: string;
+  /** RouterGovernance contract address (issue #477). */
+  governance_addr: string;
+  /** RmToken ERC-20 address used for governance voting power (issue #477). */
+  rm_token_addr: string;
 }
 
 export function loadEndpoints(): DevnetEndpoints {

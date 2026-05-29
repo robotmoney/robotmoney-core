@@ -37,7 +37,7 @@ jobs:
   e2e:
     name: dapp-e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: clients/dapp
@@ -60,6 +60,17 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ github.workspace }}/target
+          key: ${{ runner.os }}-cargo-dapp-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-dapp-e2e-
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -69,6 +80,12 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Pre-build smoke-test binary
+        # Build the binary before the Playwright BOOT_TIMEOUT_MS countdown starts.
+        # globalSetup re-runs `cargo run` which reuses the compiled artefacts here.
+        run: cargo build -p smoke-test
+        working-directory: ${{ github.workspace }}
 
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium

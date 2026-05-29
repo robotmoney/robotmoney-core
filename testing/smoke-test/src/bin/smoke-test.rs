@@ -266,6 +266,11 @@ fn run() -> i32 {
         // tests can drive the vault-selector and router deposit flow.
         println!("registry_addr={:#x}", fixture.registry());
         println!("router_addr={:#x}", fixture.router());
+        // Issue #477: surface governance and RM token addresses so the
+        // fresh-account drip-ETH-then-RM-then-vote E2E spec can locate
+        // RouterGovernance and RmToken without hard-coding them.
+        println!("governance_addr={:#x}", fixture.governance());
+        println!("rm_token_addr={:#x}", fixture.rm_token());
         // Issue #363: surface real adapter addresses for dapp e2e tests.
         println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
         println!("compound_adapter_addr={:#x}", fixture.compound_adapter());
