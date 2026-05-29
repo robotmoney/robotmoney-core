@@ -57,6 +57,12 @@ COPY clients/dapp/package.json clients/dapp/bun.lock ./
 RUN bun install --frozen-lockfile
 
 COPY clients/dapp ./
+# Issue #482: src/lib/dexPools.ts imports the shared Uniswap V3 pool registry
+# at `../../../../config/dex-pools.json` (repo-root `config/`). The build
+# context is the repo root, but only `clients/dapp` is copied into /build, so
+# the relative import resolves to /config/dex-pools.json — copy it there or the
+# `bun run build` (tsc -b) fails to resolve the module inside the image.
+COPY config/dex-pools.json /config/dex-pools.json
 RUN bun run build
 
 FROM oven/bun:1.3.5

@@ -76,6 +76,22 @@ pub const UNISWAP_V3_SWAP_ROUTER: Address = address!("2626664c2603336e57b271c5c0
 /// useful DEX route smoke (USDC -> WETH).
 pub const WETH9: Address = address!("4200000000000000000000000000000000000006");
 
+// -- Landing-page price-strip Uniswap V3 pools (issue #482) ------------
+// Pools the dapp landing strip reads slot0 from. These must agree with
+// `config/dex-pools.json` (the dapp's source) and with the per-pool
+// addresses recorded in `testing/ethereum-testnet/config/expected-prices.json`.
+// Canonical: docs/prd.md#112-protocol-asset-vault.
+
+/// Uniswap V3 wETH/USDC 0.05% pool on Base — also the source of the
+/// ETH/USD strip cell (ETH price == wETH price).
+pub const POOL_WETH_USDC: Address = address!("d0b53d9277642d899df5c87a3966a349a798f224");
+
+/// Uniswap V3 cbBTC/USDC pool on Base.
+pub const POOL_CBBTC_USDC: Address = address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef");
+
+/// Uniswap V3 wSOL/USDC pool on Base (Wormhole-wrapped SOL).
+pub const POOL_WSOL_USDC: Address = address!("c1bf8adf6e62cc9c56e2b246b03d3e74da45a0e1");
+
 /// All Robot Money contract addresses in canonical order. Used to
 /// derive the address-set hash that scenarios print at the top of
 /// their output (ADR §3.2).

@@ -37,6 +37,7 @@ import { ProtocolStats } from "./components/ProtocolStats";
 import { AboutModal } from "./components/AboutModal";
 import { DebugPage } from "./components/DebugPage";
 import { VaultCards } from "./components/VaultCards";
+import { LandingPriceStrip } from "./components/LandingPriceStrip";
 import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
 import { GovernancePanel } from "./components/GovernancePanel";
@@ -131,6 +132,7 @@ function App() {
       <main className="dapp-shell">
         <div className="landing-overview">
           <ProtocolStats apiUrl={explorerApiUrl} />
+          <LandingPriceStrip />
           <VaultCards apiUrl={explorerApiUrl} />
           <BalancesPanel gatewayAddress={gateway} rmTokenAddress={rmToken} />
         </div>

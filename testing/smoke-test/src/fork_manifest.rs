@@ -427,4 +427,51 @@ mod tests {
             .expect("HARNESS_USDC_HOLDER_ADDRESS_HEX parses");
         assert_eq!(m.harness_usdc_holder, expected);
     }
+
+    /// CI guard for issue #482: the landing-page price-strip expected-prices
+    /// fixture (`testing/ethereum-testnet/config/expected-prices.json`) is
+    /// pinned to the fork-block manifest. If the fork block is bumped without
+    /// the fixture being refreshed in the same commit, this test fails — the
+    /// fixture's recorded prices would no longer correspond to on-chain state
+    /// at the new block, silently breaking the fork-proof demo point.
+    /// See docs/prd.md#112-protocol-asset-vault.
+    #[test]
+    fn fork_block_aligns_with_expected_prices() {
+        let repo = crate::locate_repo_root().expect("locate repo root");
+        let manifest =
+            ForkManifest::load(&repo.join("testing/ethereum-testnet/config/fork-block.json"))
+                .expect("manifest validates");
+
+        let fixture_raw = std::fs::read_to_string(
+            repo.join("testing/ethereum-testnet/config/expected-prices.json"),
+        )
+        .expect("expected-prices.json readable");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&fixture_raw).expect("expected-prices.json parses");
+
+        let fixture_block = fixture["fork_block"]
+            .as_u64()
+            .expect("expected-prices.json has fork_block: u64");
+        assert_eq!(
+            manifest.block_number, fixture_block,
+            "fork-block.json block_number ({}) drifted from expected-prices.json \
+             fork_block ({}); refresh the price fixture in the same commit that \
+             bumps the fork block (issue #482)",
+            manifest.block_number, fixture_block
+        );
+
+        // The fixture must enumerate exactly the four landing-strip pairs so a
+        // dropped/renamed pair is caught here rather than at demo time.
+        let ids: Vec<&str> = fixture["pairs"]
+            .as_array()
+            .expect("expected-prices.json pairs is an array")
+            .iter()
+            .map(|p| p["id"].as_str().expect("pair id is a string"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"],
+            "expected-prices.json must list the four landing-strip pairs in order"
+        );
+    }
 }

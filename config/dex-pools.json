@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical registry of Uniswap V3 pool addresses used by the dapp landing-page price strip (issue #482, docs/prd.md#112-protocol-asset-vault). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0.",
+  "pairs": [
+    {
+      "id": "eth-usd",
+      "label": "ETH/USD",
+      "base": "ETH",
+      "quote": "USD",
+      "baseDecimals": 18,
+      "quoteDecimals": 6
+    },
+    {
+      "id": "weth-usdc",
+      "label": "wETH/USDC",
+      "base": "wETH",
+      "quote": "USDC",
+      "baseDecimals": 18,
+      "quoteDecimals": 6
+    },
+    {
+      "id": "cbbtc-usdc",
+      "label": "cbBTC/USDC",
+      "base": "cbBTC",
+      "quote": "USDC",
+      "baseDecimals": 8,
+      "quoteDecimals": 6
+    },
+    {
+      "id": "wsol-usdc",
+      "label": "wSOL/USDC",
+      "base": "wSOL",
+      "quote": "USDC",
+      "baseDecimals": 9,
+      "quoteDecimals": 6
+    }
+  ],
+  "mainnet": {
+    "chainId": 8453,
+    "pools": {
+      "eth-usd": {
+        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+        "token0": "0x4200000000000000000000000000000000000006",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "weth-usdc": {
+        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+        "token0": "0x4200000000000000000000000000000000000006",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "cbbtc-usdc": {
+        "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+        "token0": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 8,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "wsol-usdc": {
+        "pool": "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1",
+        "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 9,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      }
+    }
+  },
+  "devnet": {
+    "chainId": 918453,
+    "$comment": "Fork-aware override. On a fresh fork these are identical to the mainnet pools because the genesis ingester copies Base state at the fork block. Pinned to testing/ethereum-testnet/config/fork-block.json — see testing/ethereum-testnet/config/expected-prices.json for the prices these pools must read at the fork block.",
+    "pools": {
+      "eth-usd": {
+        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+        "token0": "0x4200000000000000000000000000000000000006",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "weth-usdc": {
+        "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+        "token0": "0x4200000000000000000000000000000000000006",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "cbbtc-usdc": {
+        "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+        "token0": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 8,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "wsol-usdc": {
+        "pool": "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1",
+        "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 9,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      }
+    }
+  }
+}
