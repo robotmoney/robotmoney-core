@@ -119,6 +119,30 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "agentDepositWindow",
+    inputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "windowStart",
+        type: "uint64",
+        internalType: "uint64",
+      },
+      {
+        name: "gross",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "agentOwner",
     inputs: [
       {
@@ -390,6 +414,25 @@ export const gatewayAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "effectiveDepositWindowGross",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",

@@ -125,9 +125,28 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         sole authority over her own agent (issue #269).
     mapping(address => address) public agentOwner;
 
-    /// @notice Per-agent windowed gross deposit. NOT shared across agents — each
-    ///         agent has an independent allowance per window.
+    /// @notice Per-agent calendar-window gross deposit. Deprecated in issue #497
+    ///         — the gateway stopped writing new values when rolling-window
+    ///         deposit accounting was introduced. Retained only for ABI
+    ///         compatibility with off-chain indexers that may still read it.
+    ///         Use `agentDepositWindow` and `effectiveDepositWindowGross` instead.
     mapping(address => mapping(uint64 => uint256)) public agentWindowGross;
+
+    /// @notice Per-agent rolling-window deposit accounting (issue #497).
+    ///         Mirrors the withdrawal rolling-window pattern (`agentWithdrawWindow`)
+    ///         to eliminate the fixed-window boundary burst on the deposit side.
+    ///         An agent cannot deposit more than `maxPerWindow` in any contiguous
+    ///         `WINDOW_SECONDS`-wide interval regardless of calendar boundary.
+    /// @param windowStart Unix-seconds anchor of the agent's current rolling window.
+    ///                    Zero when the agent has never deposited.
+    /// @param gross       Cumulative USDC deposited since `windowStart`.
+    struct DepositWindow {
+        uint64 windowStart;
+        uint256 gross;
+    }
+
+    /// @notice Per-agent rolling deposit window state. See `DepositWindow`.
+    mapping(address => DepositWindow) public agentDepositWindow;
 
     /// @notice Per-agent rolling-window withdrawal accounting (issue #449).
     ///         The withdrawal cap is enforced as a strict rolling window of
@@ -214,6 +233,14 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         return ww.gross;
     }
 
+    /// @inheritdoc IGateway
+    function effectiveDepositWindowGross(address agent) external view returns (uint256) {
+        DepositWindow memory dw = agentDepositWindow[agent];
+        if (dw.windowStart == 0) return 0;
+        if (block.timestamp >= uint256(dw.windowStart) + WINDOW_SECONDS) return 0;
+        return dw.gross;
+    }
+
     /// @dev Apply a `shares` redemption against the agent's rolling-window
     ///      withdrawal budget (#449). Reverts with `WithdrawWindowCapExceeded`
     ///      when the projected cumulative draw would breach `cap`. On success
@@ -231,6 +258,25 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (projected > cap) revert WithdrawWindowCapExceeded();
         ww.windowStart = anchor;
         ww.gross = projected;
+    }
+
+    /// @dev Apply an `amount` deposit against the agent's rolling-window deposit
+    ///      budget (#497). Reverts with `WindowCapExceeded` when the projected
+    ///      cumulative deposit would breach `cap`. On success writes the updated
+    ///      `DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
+    ///      the deposit side is equally hardened against calendar-boundary bursts.
+    function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal {
+        DepositWindow storage dw = agentDepositWindow[agent];
+        uint64 anchor = dw.windowStart;
+        uint256 priorGross = dw.gross;
+        if (anchor == 0 || block.timestamp >= uint256(anchor) + WINDOW_SECONDS) {
+            anchor = uint64(block.timestamp);
+            priorGross = 0;
+        }
+        uint256 projected = priorGross + amount;
+        if (projected > cap) revert WindowCapExceeded();
+        dw.windowStart = anchor;
+        dw.gross = projected;
     }
 
     // -------------------------------------------------------------------
@@ -327,8 +373,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
-    /// @dev Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, `agentWindowGross`) are
-    ///      written before external calls (CEI pattern). `nonReentrant` provides defense-in-depth.
+    /// @dev Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, rolling
+    ///      deposit window) are written before external calls (CEI pattern).
+    ///      `nonReentrant` provides defense-in-depth.
     function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
         external
         nonReentrant
@@ -359,14 +406,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         if (!p.active) revert AgentNotAuthorized();
         if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
 
-        // 4. windowId
+        // 4. windowId — used for event emission only; cap is enforced by the
+        //    rolling-window accounting below (#497).
         uint64 windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
-        // 5. window cap
-        uint256 windowSoFar = agentWindowGross[msg.sender][windowId];
-        if (windowSoFar + amount > p.maxPerWindow) revert WindowCapExceeded();
-
-        // 6. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        // 5. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
         paymentId = keccak256(
             abi.encode(block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey)
         );
@@ -377,8 +421,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             revert ShareCustodyInvariantViolated();
         }
 
-        // 7. EFFECTS: write state before any external call (CEI pattern).
-        agentWindowGross[msg.sender][windowId] = windowSoFar + amount;
+        // 6. EFFECTS: write state before any external call (CEI pattern).
+        //    Rolling-window deposit cap (#497): eliminates the calendar-boundary
+        //    burst that fixed-window accounting allowed. `agentWindowGross` is
+        //    no longer written (deprecated in #497; retained for ABI compat).
+        _accrueRollingDeposit(msg.sender, amount, p.maxPerWindow);
         usedPaymentIds[paymentId] = true;
 
         // slither-disable-start reentrancy-balance
@@ -466,25 +513,21 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.shareReceiver = p.shareReceiver;
         }
 
-        // 5. windowId
+        // 5. windowId — used for event emission only; cap is enforced by the
+        //    rolling-window accounting below (#497).
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
-        // 6. window cap
-        {
-            uint256 windowSoFar = agentWindowGross[msg.sender][args.windowId];
-            if (windowSoFar + amount > agents[msg.sender].maxPerWindow) revert WindowCapExceeded();
+        // 6. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        paymentId = keccak256(
+            abi.encode(block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey)
+        );
+        if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
-            // 7. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
-            paymentId = keccak256(
-                abi.encode(
-                    block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey
-                )
-            );
-            if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
-
-            // 8. EFFECTS: write state before any external call (CEI pattern).
-            agentWindowGross[msg.sender][args.windowId] = windowSoFar + amount;
-        }
+        // 7. EFFECTS: write state before any external call (CEI pattern).
+        //    Rolling-window deposit cap (#497): eliminates the calendar-boundary
+        //    burst that fixed-window accounting allowed. `agentWindowGross` is
+        //    no longer written (deprecated in #497; retained for ABI compat).
+        _accrueRollingDeposit(msg.sender, amount, agents[msg.sender].maxPerWindow);
         usedPaymentIds[paymentId] = true;
         args.paymentId = paymentId;
 

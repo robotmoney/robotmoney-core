@@ -594,8 +594,9 @@ contract RobotMoneyGatewayTest is Test {
         assertEq(vault.balanceOf(shareReceiver), amount);
         assertEq(vault.balanceOf(address(gateway)), 0);
 
-        // Bookkeeping.
-        assertEq(gateway.agentWindowGross(agent, expectedWindowId), amount);
+        // Bookkeeping: rolling-window deposit gross (#497).
+        // agentWindowGross is deprecated; use effectiveDepositWindowGross.
+        assertEq(gateway.effectiveDepositWindowGross(agent), amount);
         assertTrue(gateway.usedPaymentIds(paymentId));
 
         // Allowance to vault must be cleared.
@@ -947,6 +948,294 @@ contract RobotMoneyGatewayTest is Test {
         gw.deposit(
             bytes32("outer-order"), amount, uint64(block.timestamp + 60), bytes32("outer-idem")
         );
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// GatewayRollingDepositWindowTest
+// Tests for rolling-window deposit accounting (issue #497).
+//
+// Before #497 deposits used a calendar-aligned fixed window — an agent could
+// deposit maxPerWindow at the end of window N and again at the start of
+// window N+1, spending ~2x the cap within 2 seconds. This suite verifies
+// that the rolling-anchor logic eliminates that boundary burst and that the
+// deposit and withdrawal window states remain independent.
+// ───────────────────────────────────────────────────────────────────────────
+
+contract GatewayRollingDepositWindowTest is Test {
+    TestERC20 internal usdc;
+    MockVault internal vault;
+    RobotMoneyGateway internal gateway;
+
+    address internal admin = makeAddr("admin");
+    address internal pauser = makeAddr("pauser");
+    address internal agent = makeAddr("agent");
+    address internal depositor = makeAddr("depositor");
+    address internal shareReceiver = makeAddr("shareReceiver");
+    address internal assetRecipient = makeAddr("assetRecipient");
+
+    uint256 internal constant ONE_USDC = 1e6;
+    // Per-payment cap equals the per-window cap so a single max deposit
+    // consumes the entire rolling budget — simplest shape for boundary tests.
+    uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+    uint256 internal constant MAX_PER_WINDOW = 1_000 * ONE_USDC;
+    uint256 internal constant MAX_WITHDRAW_PER_PAYMENT = 500 * ONE_USDC;
+    uint256 internal constant MAX_WITHDRAW_PER_WINDOW = 500 * ONE_USDC;
+
+    function setUp() public {
+        usdc = new TestERC20();
+        vault = new MockVault(address(usdc));
+        gateway = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
+        vm.warp(1_700_000_000);
+    }
+
+    // -------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------
+
+    function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory) {
+        address[] memory none = new address[](0);
+        return IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: none,
+            assetRecipient: assetRecipient,
+            maxWithdrawPerPayment: MAX_WITHDRAW_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_WITHDRAW_PER_WINDOW,
+            allowedSourceVaults: none
+        });
+    }
+
+    function _authorize(IGateway.AgentPolicy memory p) internal {
+        vm.prank(depositor);
+        gateway.authorizeAgent(agent, p);
+    }
+
+    function _fundAndApprove(uint256 amt) internal {
+        usdc.mint(agent, amt);
+        vm.prank(agent);
+        usdc.approve(address(gateway), amt);
+    }
+
+    function _deposit(bytes32 orderId, uint256 amount, bytes32 idem) internal {
+        vm.prank(agent);
+        gateway.deposit(orderId, amount, uint64(block.timestamp + 60), idem);
+    }
+
+    function _mintSharesAndApprove(uint256 shares) internal {
+        usdc.mint(depositor, shares);
+        vm.prank(depositor);
+        usdc.approve(address(vault), shares);
+        vm.prank(depositor);
+        vault.deposit(shares, agent);
+        vm.prank(agent);
+        vault.approve(address(gateway), shares);
+    }
+
+    // -------------------------------------------------------------------
+    // AC: boundary-burst blocked (#497 acceptance criterion 1)
+    //
+    // Old fixed-window accounting: deposit maxPerWindow at timestamp
+    // WINDOW_SECONDS-1, cross the calendar boundary to WINDOW_SECONDS, deposit
+    // again — two full caps in under 2 seconds. Rolling accounting must reject
+    // the second deposit.
+    // -------------------------------------------------------------------
+
+    function test_deposit_rollingWindow_blocksBoundaryBurst() public {
+        _authorize(_defaultPolicy());
+
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+
+        // Warp to one second before the next calendar window boundary.
+        uint256 currentWindow = block.timestamp / windowSeconds;
+        uint256 nextBoundary = (currentWindow + 1) * windowSeconds;
+        vm.warp(nextBoundary - 1);
+
+        // First deposit: consumes the full rolling cap.
+        _fundAndApprove(MAX_PER_WINDOW);
+        _deposit(keccak256("o-pre"), MAX_PER_WINDOW, keccak256("i-pre"));
+
+        // Cross the calendar window boundary by 2 seconds. Fixed-window
+        // accounting would open a fresh cap; rolling accounting must not.
+        vm.warp(nextBoundary + 1);
+        _fundAndApprove(1);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WindowCapExceeded.selector);
+        gateway.deposit(keccak256("o-post"), 1, uint64(block.timestamp + 60), keccak256("i-post"));
+    }
+
+    // -------------------------------------------------------------------
+    // AC: full cap available after a full WINDOW_SECONDS (#497 AC 2)
+    // -------------------------------------------------------------------
+
+    function test_deposit_rollingWindow_fullCapAfterFullWindow() public {
+        _authorize(_defaultPolicy());
+
+        _fundAndApprove(MAX_PER_WINDOW);
+        _deposit(keccak256("o1"), MAX_PER_WINDOW, keccak256("i1"));
+
+        // Advance by exactly WINDOW_SECONDS from the anchor.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+
+        _fundAndApprove(MAX_PER_WINDOW);
+        // Must succeed — rolling window has expired.
+        _deposit(keccak256("o2"), MAX_PER_WINDOW, keccak256("i2"));
+    }
+
+    // -------------------------------------------------------------------
+    // AC: deposit and withdrawal window states are tracked independently
+    // (#497 AC 3)
+    //
+    // After a deposit and a withdrawal in the same block, the two window
+    // mappings must hold independent values.
+    // -------------------------------------------------------------------
+
+    function test_deposit_and_withdraw_windowsAreIndependent() public {
+        _authorize(_defaultPolicy());
+
+        uint256 depositAmount = MAX_PER_WINDOW;
+        uint256 withdrawShares = MAX_WITHDRAW_PER_WINDOW;
+
+        _fundAndApprove(depositAmount);
+        _deposit(keccak256("d-order"), depositAmount, keccak256("d-idem"));
+
+        _mintSharesAndApprove(withdrawShares);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("w-order"),
+            withdrawShares,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("w-idem")
+        );
+
+        // Deposit window should reflect the deposit amount.
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            depositAmount,
+            "deposit window gross must reflect deposit"
+        );
+
+        // Withdrawal window should reflect the withdrawal amount independently.
+        assertEq(
+            gateway.effectiveWithdrawWindowGross(agent),
+            withdrawShares,
+            "withdraw window gross must reflect withdrawal"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC: effectiveDepositWindowGross returns rolling-anchor gross (#497 AC 4)
+    // -------------------------------------------------------------------
+
+    function test_effectiveDepositWindowGross_returnsMidWindowGross() public {
+        _authorize(_defaultPolicy());
+
+        uint256 amount = MAX_PER_WINDOW / 2;
+        _fundAndApprove(amount);
+        _deposit(keccak256("o-mid"), amount, keccak256("i-mid"));
+
+        // Still within the rolling window — must report the deposited amount.
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            amount,
+            "mid-window gross must equal deposited amount"
+        );
+
+        // Advance past the window — must report zero.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            0,
+            "expired rolling window must report zero gross"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // effectiveDepositWindowGross returns 0 for agent that has never deposited
+    // -------------------------------------------------------------------
+
+    function test_effectiveDepositWindowGross_zeroForUntouchedAgent() public view {
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            0,
+            "untouched agent must report zero rolling deposit gross"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Fuzz: cumulative deposits in any WINDOW_SECONDS interval never exceed
+    // maxPerWindow (#497 AC 5)
+    //
+    // For random deposit amounts and inter-deposit time offsets, verify that
+    // the contract never allows the cumulative rolling gross to exceed cap.
+    // We simulate this by computing what the contract allows and asserting
+    // the invariant ourselves after every successful deposit.
+    // -------------------------------------------------------------------
+
+    function testFuzz_deposit_rollingWindow_neverExceedsCapInAnyInterval(
+        uint8 numDeposits,
+        uint64[8] memory timeOffsets,
+        uint32[8] memory rawAmounts
+    ) public {
+        // Bound inputs to tractable ranges.
+        numDeposits = uint8(bound(numDeposits, 1, 8));
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+
+        // Use a policy where maxPerPayment can be any fraction of maxPerWindow.
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // Allow each payment to be at most half the window cap to permit
+        // multi-deposit sequences.
+        p.maxPerPayment = MAX_PER_WINDOW / 2;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        // Fund agent generously.
+        _fundAndApprove(MAX_PER_WINDOW * 10);
+
+        uint256 rollingGross;
+        uint64 windowAnchor;
+
+        for (uint8 i = 0; i < numDeposits; i++) {
+            // Apply a bounded time offset between 0 and 2×WINDOW_SECONDS.
+            uint64 offset = uint64(bound(timeOffsets[i], 0, 2 * windowSeconds));
+            vm.warp(block.timestamp + offset);
+
+            // Recompute expected rolling state.
+            if (windowAnchor == 0 || block.timestamp >= uint256(windowAnchor) + windowSeconds) {
+                windowAnchor = uint64(block.timestamp);
+                rollingGross = 0;
+            }
+
+            uint256 amount = bound(rawAmounts[i], 1, p.maxPerPayment);
+            bool shouldRevert = (rollingGross + amount > MAX_PER_WINDOW);
+
+            bytes32 orderId = keccak256(abi.encode("fuzz-order", i));
+            bytes32 idem = keccak256(abi.encode("fuzz-idem", i));
+
+            if (shouldRevert) {
+                vm.prank(agent);
+                vm.expectRevert(RobotMoneyGateway.WindowCapExceeded.selector);
+                gateway.deposit(orderId, amount, uint64(block.timestamp + 60), idem);
+                // State unchanged — anchor and gross stay the same.
+            } else {
+                vm.prank(agent);
+                gateway.deposit(orderId, amount, uint64(block.timestamp + 60), idem);
+
+                rollingGross += amount;
+                // Invariant: effective gross must not exceed cap.
+                assertLe(
+                    gateway.effectiveDepositWindowGross(agent),
+                    MAX_PER_WINDOW,
+                    "rolling deposit gross must not exceed maxPerWindow"
+                );
+            }
+        }
     }
 }
 

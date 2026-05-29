@@ -270,8 +270,8 @@ contract GatewayRouterTest is Test {
         assertEq(IERC20(address(vaultA)).balanceOf(address(gateway)), 0, "gateway vaultA clean");
         assertEq(IERC20(address(vaultB)).balanceOf(address(gateway)), 0, "gateway vaultB clean");
 
-        // Window gross and idempotency key recorded.
-        assertEq(gateway.agentWindowGross(agent, expectedWindowId), amount);
+        // Rolling-window deposit gross (#497) and idempotency key recorded.
+        assertEq(gateway.effectiveDepositWindowGross(agent), amount);
         assertTrue(gateway.usedPaymentIds(paymentId));
     }
 

@@ -23,9 +23,7 @@
 //!   cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{
-    prerequisites_available, Fixture, DEMO_WEIGHT_PRIMARY_BPS,
-};
+use smoke_test::{prerequisites_available, Fixture, DEMO_WEIGHT_PRIMARY_BPS};
 
 fn skip_if_no_prereqs(name: &str) -> bool {
     if !prerequisites_available() {

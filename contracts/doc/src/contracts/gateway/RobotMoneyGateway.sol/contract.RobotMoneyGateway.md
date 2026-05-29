@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf8a75c9169f98b8e30f0ad4e13af73b36f22bc7/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0e0f94d96bb3900f4fd22dd5ae7b5741099dfdba/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -88,12 +88,24 @@ mapping(address => address) public agentOwner
 
 
 ### agentWindowGross
-Per-agent windowed gross deposit. NOT shared across agents — each
-agent has an independent allowance per window.
+Per-agent calendar-window gross deposit. Deprecated in issue #497
+— the gateway stopped writing new values when rolling-window
+deposit accounting was introduced. Retained only for ABI
+compatibility with off-chain indexers that may still read it.
+Use `agentDepositWindow` and `effectiveDepositWindowGross` instead.
 
 
 ```solidity
 mapping(address => mapping(uint64 => uint256)) public agentWindowGross
+```
+
+
+### agentDepositWindow
+Per-agent rolling deposit window state. See `DepositWindow`.
+
+
+```solidity
+mapping(address => DepositWindow) public agentDepositWindow
 ```
 
 
@@ -205,6 +217,32 @@ function effectiveWithdrawWindowGross(address agent) external view returns (uint
 |`<none>`|`uint256`|The agent's cumulative rolling-window withdrawal gross.|
 
 
+### effectiveDepositWindowGross
+
+Cumulative USDC the agent has deposited in the current rolling
+deposit window. Returns zero when the agent has either never
+deposited or the last anchor lies more than `WINDOW_SECONDS` in
+the past. Use this — not the deprecated `agentWindowGross`
+mapping — to project whether the next deposit would breach
+`maxPerWindow` (issue #497).
+
+
+```solidity
+function effectiveDepositWindowGross(address agent) external view returns (uint256);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address to look up.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`<none>`|`uint256`|The agent's cumulative rolling-window deposit gross.|
+
+
 ### _accrueRollingWithdraw
 
 Apply a `shares` redemption against the agent's rolling-window
@@ -216,6 +254,19 @@ writes the updated `WithdrawWindow` to storage. Extracted from
 
 ```solidity
 function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal;
+```
+
+### _accrueRollingDeposit
+
+Apply an `amount` deposit against the agent's rolling-window deposit
+budget (#497). Reverts with `WindowCapExceeded` when the projected
+cumulative deposit would breach `cap`. On success writes the updated
+`DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
+the deposit side is equally hardened against calendar-boundary bursts.
+
+
+```solidity
+function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal;
 ```
 
 ### authorizeAgent
@@ -309,8 +360,9 @@ function unpause() external onlyRole(ADMIN_ROLE);
 Pull `amount` USDC from caller, deposit into the vault, route
 resulting shares to the agent's configured `shareReceiver`.
 
-Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, `agentWindowGross`) are
-written before external calls (CEI pattern). `nonReentrant` provides defense-in-depth.
+Implements §2.2 steps 1–12. Effects (`usedPaymentIds`, rolling
+deposit window) are written before external calls (CEI pattern).
+`nonReentrant` provides defense-in-depth.
 
 
 ```solidity
@@ -681,6 +733,28 @@ error UnexpectedAssetsReceived();
 ```
 
 ## Structs
+### DepositWindow
+Per-agent rolling-window deposit accounting (issue #497).
+Mirrors the withdrawal rolling-window pattern (`agentWithdrawWindow`)
+to eliminate the fixed-window boundary burst on the deposit side.
+An agent cannot deposit more than `maxPerWindow` in any contiguous
+`WINDOW_SECONDS`-wide interval regardless of calendar boundary.
+
+
+```solidity
+struct DepositWindow {
+    uint64 windowStart;
+    uint256 gross;
+}
+```
+
+**Properties**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`windowStart`|`uint64`|Unix-seconds anchor of the agent's current rolling window. Zero when the agent has never deposited.|
+|`gross`|`uint256`|      Cumulative USDC deposited since `windowStart`.|
+
 ### WithdrawWindow
 Per-agent rolling-window withdrawal accounting (issue #449).
 The withdrawal cap is enforced as a strict rolling window of

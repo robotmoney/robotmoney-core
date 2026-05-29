@@ -281,4 +281,14 @@ interface IGateway {
     /// @param agent The agent address to look up.
     /// @return The agent's cumulative rolling-window withdrawal gross.
     function effectiveWithdrawWindowGross(address agent) external view returns (uint256);
+
+    /// @notice Cumulative USDC the agent has deposited in the current rolling
+    ///         deposit window. Returns zero when the agent has either never
+    ///         deposited or the last anchor lies more than `WINDOW_SECONDS` in
+    ///         the past. Use this — not the deprecated `agentWindowGross`
+    ///         mapping — to project whether the next deposit would breach
+    ///         `maxPerWindow` (issue #497).
+    /// @param agent The agent address to look up.
+    /// @return The agent's cumulative rolling-window deposit gross.
+    function effectiveDepositWindowGross(address agent) external view returns (uint256);
 }

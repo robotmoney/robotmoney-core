@@ -245,11 +245,7 @@ fn register_vault(
 /// it. Issue #475: production-readiness is registry state — `PortfolioRouter`
 /// reverts with `VaultNotRouterEligible` until the ADMIN_ROLE caller flips
 /// the flag on the registry. See `docs/development/single-production-codebase.md`.
-fn mark_router_eligible(
-    admin: &rmpc_fork_e2e::Account<'_>,
-    registry: Address,
-    vault: Address,
-) {
+fn mark_router_eligible(admin: &rmpc_fork_e2e::Account<'_>, registry: Address, vault: Address) {
     admin
         .send(
             registry,

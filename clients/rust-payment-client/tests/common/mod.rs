@@ -245,10 +245,11 @@ pub async fn install_happy_path_mocks(
         .expect_at_least(0)
         .create_async()
         .await;
+    // effectiveDepositWindowGross() = 0 (issue #497 — rolling deposit window)
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentWindowGrossCall,
+            RobotMoneyGateway::effectiveDepositWindowGrossCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::ZERO)))

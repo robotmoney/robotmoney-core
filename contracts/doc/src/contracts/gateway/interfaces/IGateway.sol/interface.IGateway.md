@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/cf8a75c9169f98b8e30f0ad4e13af73b36f22bc7/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0e0f94d96bb3900f4fd22dd5ae7b5741099dfdba/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -302,6 +302,32 @@ function effectiveWithdrawWindowGross(address agent) external view returns (uint
 |Name|Type|Description|
 |----|----|-----------|
 |`<none>`|`uint256`|The agent's cumulative rolling-window withdrawal gross.|
+
+
+### effectiveDepositWindowGross
+
+Cumulative USDC the agent has deposited in the current rolling
+deposit window. Returns zero when the agent has either never
+deposited or the last anchor lies more than `WINDOW_SECONDS` in
+the past. Use this — not the deprecated `agentWindowGross`
+mapping — to project whether the next deposit would breach
+`maxPerWindow` (issue #497).
+
+
+```solidity
+function effectiveDepositWindowGross(address agent) external view returns (uint256);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|The agent address to look up.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`<none>`|`uint256`|The agent's cumulative rolling-window deposit gross.|
 
 
 ## Events

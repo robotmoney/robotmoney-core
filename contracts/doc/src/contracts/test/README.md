@@ -41,6 +41,7 @@
 - [UnexpectedAssetsRedeemVault](RobotMoneyGateway.t.sol/contract.UnexpectedAssetsRedeemVault.md)
 - [ShareLeakRedeemVault](RobotMoneyGateway.t.sol/contract.ShareLeakRedeemVault.md)
 - [RobotMoneyGatewayTest](RobotMoneyGateway.t.sol/contract.RobotMoneyGatewayTest.md)
+- [GatewayRollingDepositWindowTest](RobotMoneyGateway.t.sol/contract.GatewayRollingDepositWindowTest.md)
 - [GatewayWithdrawTest](RobotMoneyGateway.t.sol/contract.GatewayWithdrawTest.md)
 - [TestUSDC](RobotMoneyVault.t.sol/contract.TestUSDC.md)
 - [MockAdapter](RobotMoneyVault.t.sol/contract.MockAdapter.md)

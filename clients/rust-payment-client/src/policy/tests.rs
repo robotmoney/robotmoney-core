@@ -215,11 +215,11 @@ async fn install_happy_path_mocks(server: &mut mockito::ServerGuard, cfg: &Confi
         .expect_at_least(0)
         .create_async()
         .await;
-    // agentWindowGross() = 0
+    // effectiveDepositWindowGross() = 0 (issue #497 — rolling deposit window)
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentWindowGrossCall,
+            RobotMoneyGateway::effectiveDepositWindowGrossCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::ZERO)))
@@ -503,11 +503,12 @@ async fn over_per_payment_cap_refuses() {
 async fn over_window_cap_refuses() {
     let mut server = mockito::Server::new_async().await;
     let cfg = config();
-    // High agentWindowGross such that gross + amount > maxPerWindow.
+    // High effectiveDepositWindowGross such that gross + amount > maxPerWindow.
+    // Issue #497: preflight now reads the rolling gross via effectiveDepositWindowGross.
     server
         .mock("POST", "/")
         .match_body(match_eth_call_selector(&selector_hex_of::<
-            RobotMoneyGateway::agentWindowGrossCall,
+            RobotMoneyGateway::effectiveDepositWindowGrossCall,
         >()))
         .with_status(200)
         .with_body(jrpc_result(&enc_u256(U256::from(99_999_999u64))))

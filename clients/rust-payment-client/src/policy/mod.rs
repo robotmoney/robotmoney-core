@@ -24,7 +24,8 @@
 //! 5. `gateway.vault()` matches `config.vault_address`
 //! 6. `gateway.agents(self).active && validUntil >= now`
 //! 7. `amount <= agents(self).maxPerPayment`
-//! 8. `agentWindowGross(self, currentWindow) + amount <= maxPerWindow`
+//! 8. `effectiveDepositWindowGross(self) + amount <= maxPerWindow`
+//!    (issue #497: rolling-window gross replaces per-calendar-window mapping)
 //! 9. `usdc.allowance(self, gateway) >= amount`
 //! 10. `usdc.balanceOf(self) >= amount`
 //!
@@ -288,15 +289,18 @@ impl<'a> Preflight<'a> {
             )));
         }
 
-        // 8. agentWindowGross + amount <= maxPerWindow
-        let window_id = now / WINDOW_SECONDS;
+        // 8. effectiveDepositWindowGross + amount <= maxPerWindow
+        //    Issue #497 — deposit accounting switched to a rolling window
+        //    (agentDepositWindow) matching the withdrawal-side pattern. The
+        //    preflight now reads the rolling gross via effectiveDepositWindowGross
+        //    instead of the deprecated per-calendar-window agentWindowGross.
         let window_gross = self
-            .call_view_agent_window_gross(gateway_addr, inputs.signer_address, window_id)
+            .call_view_agent_deposit_window_gross(gateway_addr, inputs.signer_address)
             .await?;
         let projected = window_gross.saturating_add(inputs.amount);
         if projected > agent.maxPerWindow {
             return Err(RmpcError::ErrConfig(format!(
-                "windowGross {} + amount {} exceeds maxPerWindow {}",
+                "rollingDepositGross {} + amount {} exceeds maxPerWindow {}",
                 window_gross, inputs.amount, agent.maxPerWindow,
             )));
         }
@@ -437,6 +441,37 @@ impl<'a> Preflight<'a> {
             .await?;
         let decoded = RobotMoneyGateway::agentWindowGrossCall::abi_decode_returns(&out, true)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("agentWindowGross decode: {e}")))?;
+        Ok(decoded._0)
+    }
+
+    /// Read the agent's rolling-window deposit gross from the gateway
+    /// via `effectiveDepositWindowGross(agent)`. Issue #497 replaced the
+    /// fixed `agentWindowGross(agent, windowId)` mapping with a
+    /// rolling-window accumulator anchored on the agent's first deposit
+    /// of each window — the view returns the cumulative USDC deposited
+    /// against the current rolling cap (zero when the anchor has aged out).
+    async fn call_view_agent_deposit_window_gross(
+        &self,
+        gateway: Address,
+        agent: Address,
+    ) -> Result<U256> {
+        let data = RobotMoneyGateway::effectiveDepositWindowGrossCall { agent }.abi_encode();
+        let out = self
+            .rpc
+            .eth_call(
+                &CallRequest {
+                    to: gateway,
+                    from: None,
+                    data: data.into(),
+                },
+                None,
+            )
+            .await?;
+        let decoded =
+            RobotMoneyGateway::effectiveDepositWindowGrossCall::abi_decode_returns(&out, true)
+                .map_err(|e| {
+                    RmpcError::ErrRpcDecode(format!("effectiveDepositWindowGross decode: {e}"))
+                })?;
         Ok(decoded._0)
     }
 
