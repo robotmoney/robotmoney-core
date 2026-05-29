@@ -1,5 +1,5 @@
 # ProtocolAssetVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/vaults/ProtocolAssetVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/vaults/ProtocolAssetVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -48,7 +48,8 @@ constructor(
     uint256 perDepositCap_,
     uint256 exitFeeBps_,
     address feeRecipient_,
-    address admin_
+    address admin_,
+    address emergencyResponder_
 )
     BasketVault(
         "Robot Money Protocol",
@@ -60,7 +61,8 @@ constructor(
         exitFeeBps_,
         _DEFAULT_SLIPPAGE_BPS,
         feeRecipient_,
-        admin_
+        admin_,
+        emergencyResponder_
     );
 ```
 

@@ -182,6 +182,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Constructor ─────────────────────────────────────────────────
 
+    /// @param admin_              Receives ADMIN_ROLE (cold/multisig key for
+    ///                            parameter changes). Must not be address(0).
+    /// @param emergencyResponder_ Receives EMERGENCY_ROLE (hot key for rapid
+    ///                            unwind/shutdown). Must not be address(0).
+    ///                            May equal admin_ as a conscious choice
+    ///                            (e.g. in test environments), but operators
+    ///                            SHOULD use distinct addresses in production
+    ///                            so a single key compromise cannot both alter
+    ///                            parameters and trigger an emergency unwind.
     constructor(
         string memory name_,
         string memory symbol_,
@@ -192,11 +201,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         uint256 exitFeeBps_,
         uint256 initialSlippageBps_,
         address feeRecipient_,
-        address admin_
+        address admin_,
+        address emergencyResponder_
     ) ERC4626(usdc_) ERC20(name_, symbol_) {
         if (
             address(usdc_) == address(0) || address(swapRouter_) == address(0)
                 || feeRecipient_ == address(0) || admin_ == address(0)
+                || emergencyResponder_ == address(0)
         ) revert ZeroAddress();
         if (exitFeeBps_ > MAX_EXIT_FEE_BPS) revert InvalidFee();
         if (initialSlippageBps_ > MAX_SLIPPAGE_BPS) revert InvalidParam();
@@ -212,7 +223,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, admin_);
-        _grantRole(EMERGENCY_ROLE, admin_);
+        _grantRole(EMERGENCY_ROLE, emergencyResponder_);
     }
 
     /// @notice Subclasses declare the maximum number of assets in the basket.

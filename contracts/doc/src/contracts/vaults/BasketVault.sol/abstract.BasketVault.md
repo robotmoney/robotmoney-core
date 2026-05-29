@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -180,9 +180,26 @@ constructor(
     uint256 exitFeeBps_,
     uint256 initialSlippageBps_,
     address feeRecipient_,
-    address admin_
+    address admin_,
+    address emergencyResponder_
 ) ERC4626(usdc_) ERC20(name_, symbol_);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`name_`|`string`||
+|`symbol_`|`string`||
+|`usdc_`|`IERC20`||
+|`swapRouter_`|`ISwapRouter`||
+|`tvlCap_`|`uint256`||
+|`perDepositCap_`|`uint256`||
+|`exitFeeBps_`|`uint256`||
+|`initialSlippageBps_`|`uint256`||
+|`feeRecipient_`|`address`||
+|`admin_`|`address`|             Receives ADMIN_ROLE (cold/multisig key for parameter changes). Must not be address(0).|
+|`emergencyResponder_`|`address`|Receives EMERGENCY_ROLE (hot key for rapid unwind/shutdown). Must not be address(0). May equal admin_ as a conscious choice (e.g. in test environments), but operators SHOULD use distinct addresses in production so a single key compromise cannot both alter parameters and trigger an emergency unwind.|
+
 
 ### maxAssets
 

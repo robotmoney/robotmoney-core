@@ -29,10 +29,14 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 ///         same script ships everywhere, only the address source differs.
 ///
 ///         Required env vars:
-///           ADMIN_ADDRESS    — receives ADMIN_ROLE/EMERGENCY_ROLE on the vault
-///                              and must hold ADMIN_ROLE on VaultRegistry
-///           SWAP_ROUTER       — Uniswap V3 SwapRouter02
-///           USDC_ADDRESS      — ERC-20 asset the vault denominates in
+///           ADMIN_ADDRESS              — receives ADMIN_ROLE on the vault and
+///                                        must hold ADMIN_ROLE on VaultRegistry
+///           EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the vault
+///                                        (hot key for rapid unwind/shutdown);
+///                                        use a distinct address from ADMIN_ADDRESS
+///                                        in production for two-role key separation
+///           SWAP_ROUTER                — Uniswap V3 SwapRouter02
+///           USDC_ADDRESS               — ERC-20 asset the vault denominates in
 ///
 ///         Optional env vars:
 ///           REGISTRY_ADDRESS  — when set, the vault is registered here as
@@ -72,16 +76,18 @@ contract DeployAgentTokenVault is Script {
     ///         shortlist, optionally registers it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
+        address emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
         address swapRouter = vm.envAddress("SWAP_ROUTER");
         address usdc = vm.envAddress("USDC_ADDRESS");
         require(admin != address(0), "ADMIN_ADDRESS=0");
+        require(emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
         require(swapRouter != address(0), "SWAP_ROUTER=0");
         require(usdc != address(0), "USDC_ADDRESS=0");
 
         Entry[6] memory entries = _resolveShortlist();
 
         vm.startBroadcast();
-        d = _deployAndSeed(admin, swapRouter, usdc, entries);
+        d = _deployAndSeed(admin, emergencyResponder, swapRouter, usdc, entries);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -92,12 +98,20 @@ contract DeployAgentTokenVault is Script {
     ///      registers the vault if REGISTRY_ADDRESS is set.
     function _deployAndSeed(
         address admin,
+        address emergencyResponder,
         address swapRouter,
         address usdc,
         Entry[6] memory entries
     ) internal returns (Deployed memory d) {
         AgentTokenVault vault = new AgentTokenVault(
-            IERC20(usdc), ISwapRouter(swapRouter), TVL_CAP, PER_DEPOSIT_CAP, 0, admin, admin
+            IERC20(usdc),
+            ISwapRouter(swapRouter),
+            TVL_CAP,
+            PER_DEPOSIT_CAP,
+            0,
+            admin,
+            admin,
+            emergencyResponder
         );
 
         d.vault = address(vault);

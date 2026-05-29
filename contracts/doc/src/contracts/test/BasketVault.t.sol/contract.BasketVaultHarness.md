@@ -1,5 +1,5 @@
 # BasketVaultHarness
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -10,7 +10,7 @@
 
 
 ```solidity
-constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_)
+constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_)
     BasketVault(
         "Basket Harness",
         "bTEST",
@@ -21,7 +21,8 @@ constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_)
         0,
         100,
         admin_,
-        admin_
+        admin_,
+        emergencyResponder_
     );
 ```
 

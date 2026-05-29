@@ -1,5 +1,5 @@
 # DeployAgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:**
 Script
@@ -19,10 +19,14 @@ ERC20 + pool addresses from `DEVNET_AGENT_TOKEN_<SYMBOL>` /
 overrides, matching the single-production-codebase principle: the
 same script ships everywhere, only the address source differs.
 Required env vars:
-ADMIN_ADDRESS    — receives ADMIN_ROLE/EMERGENCY_ROLE on the vault
-and must hold ADMIN_ROLE on VaultRegistry
-SWAP_ROUTER       — Uniswap V3 SwapRouter02
-USDC_ADDRESS      — ERC-20 asset the vault denominates in
+ADMIN_ADDRESS              — receives ADMIN_ROLE on the vault and
+must hold ADMIN_ROLE on VaultRegistry
+EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the vault
+(hot key for rapid unwind/shutdown);
+use a distinct address from ADMIN_ADDRESS
+in production for two-role key separation
+SWAP_ROUTER                — Uniswap V3 SwapRouter02
+USDC_ADDRESS               — ERC-20 asset the vault denominates in
 Optional env vars:
 REGISTRY_ADDRESS  — when set, the vault is registered here as
 "Robot Money Agent Tokens" (the same path the
@@ -82,6 +86,7 @@ registers the vault if REGISTRY_ADDRESS is set.
 ```solidity
 function _deployAndSeed(
     address admin,
+    address emergencyResponder,
     address swapRouter,
     address usdc,
     Entry[6] memory entries

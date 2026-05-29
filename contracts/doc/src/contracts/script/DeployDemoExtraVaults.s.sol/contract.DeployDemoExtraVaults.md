@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -31,15 +31,19 @@ the primary `RobotMoneyVault` (§11.1) is router-eligible; the
 router default + voted weight vectors are a single 10 000 bps leg
 pointing at it.
 Required env vars:
-ADMIN_ADDRESS      — receives ADMIN_ROLE on the new vaults and
-must already hold ADMIN_ROLE on
+ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
+and must already hold ADMIN_ROLE on
 VaultRegistry + PortfolioRouter
-REGISTRY_ADDRESS   — deployed VaultRegistry
-ROUTER_ADDRESS     — deployed PortfolioRouter
-PRIMARY_VAULT      — RobotMoneyVault deployed by Deploy.s.sol
+EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the basket
+vaults (hot key for rapid unwind);
+use a distinct address from ADMIN_ADDRESS
+in production for two-role key separation
+REGISTRY_ADDRESS            — deployed VaultRegistry
+ROUTER_ADDRESS              — deployed PortfolioRouter
+PRIMARY_VAULT               — RobotMoneyVault deployed by Deploy.s.sol
 (the only router-eligible vault in the
 weight vector)
-USDC_ADDRESS       — ERC-20 asset every vault denominates in
+USDC_ADDRESS                — ERC-20 asset every vault denominates in
 Optional env vars:
 SWAP_ROUTER        — Uniswap V3 SwapRouter02 address for the
 basket vaults (defaults to Base mainnet)
@@ -307,6 +311,9 @@ Solidity stack limit (16 slots, ~stack-too-deep).
 ```solidity
 struct Params {
     address admin;
+    /// @dev Receives EMERGENCY_ROLE on each basket vault. Distinct from
+    ///      admin in production (two-role key separation, issue #506).
+    address emergencyResponder;
     address registry;
     address router;
     address primaryVault;

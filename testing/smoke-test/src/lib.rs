@@ -2150,6 +2150,10 @@ fn run_forge_deploy_demo_extra_vaults(
     .arg("--slow")
     .arg("-vvv")
     .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    // EMERGENCY_RESPONDER_ADDRESS is required by DeployDemoExtraVaults after issue #506.
+    // For the devnet demo seed, use the same deployer address as the emergency responder
+    // (equal admin/emergency is explicitly allowed by the constructor).
+    .env("EMERGENCY_RESPONDER_ADDRESS", DEPLOYER_ADDRESS_HEX)
     .env("REGISTRY_ADDRESS", registry_address)
     .env("ROUTER_ADDRESS", router_address)
     .env("PRIMARY_VAULT", primary_vault)

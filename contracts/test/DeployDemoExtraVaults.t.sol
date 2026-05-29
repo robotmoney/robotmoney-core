@@ -71,6 +71,8 @@ contract DeployDemoExtraVaultsTest is Test {
     function test_demo_seed_populates_defaultWeights() public {
         DeployDemoExtraVaults.Params memory p = DeployDemoExtraVaults.Params({
             admin: address(script),
+            // Use admin as emergencyResponder for the demo seed test (allowed to be equal).
+            emergencyResponder: address(script),
             registry: address(registry),
             router: address(router),
             primaryVault: address(primaryVault),

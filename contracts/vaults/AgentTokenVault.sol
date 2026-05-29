@@ -44,7 +44,8 @@ contract AgentTokenVault is BasketVault {
         uint256 perDepositCap_,
         uint256 exitFeeBps_,
         address feeRecipient_,
-        address admin_
+        address admin_,
+        address emergencyResponder_
     )
         BasketVault(
             "Robot Money Agent Tokens",
@@ -56,7 +57,8 @@ contract AgentTokenVault is BasketVault {
             exitFeeBps_,
             _DEFAULT_SLIPPAGE_BPS,
             feeRecipient_,
-            admin_
+            admin_,
+            emergencyResponder_
         )
     {}
 

@@ -93,6 +93,7 @@ contract AgentTokenVaultTest is Test {
             1_000_000 * ONE_USDC,
             0,
             admin,
+            admin,
             admin
         );
         _seedSixTokenShortlist();
@@ -221,6 +222,8 @@ contract AgentTokenVaultTest is Test {
         vm.stopPrank();
 
         vm.setEnv("ADMIN_ADDRESS", vm.toString(deployer));
+        // Use deployer as emergencyResponder for demo seed (same address is allowed).
+        vm.setEnv("EMERGENCY_RESPONDER_ADDRESS", vm.toString(deployer));
         vm.setEnv("REGISTRY_ADDRESS", vm.toString(address(registry)));
         vm.setEnv("ROUTER_ADDRESS", vm.toString(address(portfolioRouter)));
         vm.setEnv("PRIMARY_VAULT", vm.toString(address(primary)));

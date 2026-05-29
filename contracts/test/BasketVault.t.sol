@@ -4,6 +4,7 @@
 //         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
 //                      minimums, ADMIN_ROLE-gated per-asset window)
+//         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -101,7 +102,7 @@ contract MockSwapRouter is ISwapRouter {
 }
 
 contract BasketVaultHarness is BasketVault {
-    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_)
+    constructor(IERC20 usdc_, ISwapRouter swapRouter_, address admin_, address emergencyResponder_)
         BasketVault(
             "Basket Harness",
             "bTEST",
@@ -112,7 +113,8 @@ contract BasketVaultHarness is BasketVault {
             0,
             100,
             admin_,
-            admin_
+            admin_,
+            emergencyResponder_
         )
     {}
 
@@ -139,6 +141,7 @@ contract BasketVaultTest is Test {
     BasketVaultHarness internal vault;
 
     address internal admin = makeAddr("admin");
+    address internal emergencyResponder = makeAddr("emergencyResponder");
     address internal stranger = makeAddr("stranger");
 
     function setUp() public {
@@ -146,7 +149,9 @@ contract BasketVaultTest is Test {
         basketToken = new TestERC20();
         router = new MockSwapRouter();
         pool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
-        vault = new BasketVaultHarness(IERC20(address(usdc)), ISwapRouter(address(router)), admin);
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
 
         vm.prank(admin);
         vault.addAsset(address(basketToken), address(pool), 500);
@@ -167,7 +172,7 @@ contract BasketVaultTest is Test {
                 MockSwapRouter.TooLittleReceived.selector, 800 * ONE_USDC, minUsdcOut
             )
         );
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertEq(
@@ -186,7 +191,7 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, false, 0);
 
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwind();
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound");
@@ -210,10 +215,10 @@ contract BasketVaultTest is Test {
 
         vm.expectEmit(true, false, false, true, address(vault));
         emit EmergencyUnwindOverrideUsed(
-            address(basketToken), tokenAmount, 900 * ONE_USDC, 0, admin
+            address(basketToken), tokenAmount, 900 * ONE_USDC, 0, emergencyResponder
         );
 
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(
@@ -284,7 +289,7 @@ contract BasketVaultTest is Test {
                 MockSwapRouter.TooLittleReceived.selector, routerOut, appliedFloor
             )
         );
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(
@@ -314,10 +319,10 @@ contract BasketVaultTest is Test {
 
         vm.expectEmit(true, false, false, true, address(vault));
         emit EmergencyUnwindOverrideUsed(
-            address(basketToken), tokenAmount, minUsdcOut, appliedFloor, admin
+            address(basketToken), tokenAmount, minUsdcOut, appliedFloor, emergencyResponder
         );
 
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(
@@ -348,11 +353,11 @@ contract BasketVaultTest is Test {
     }
 
     function test_pauseAndShutdownEmergencyControlsRemainFunctional() public {
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.pause();
         assertTrue(vault.paused(), "pause remains available");
 
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.shutdownVault();
         assertTrue(vault.isShutdown(), "shutdown remains available");
         assertEq(vault.tvlCap(), 0, "shutdown still zeros tvl cap");
@@ -452,7 +457,7 @@ contract BasketVaultTest is Test {
                 MockSwapRouter.TooLittleReceived.selector, 100 * ONE_USDC, twapDerivedMin
             )
         );
-        vm.prank(admin);
+        vm.prank(emergencyResponder);
         vault.emergencyUnwind();
     }
 
@@ -465,5 +470,83 @@ contract BasketVaultTest is Test {
 
     // Mirror the contract event so vm.expectEmit can match it.
     event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
+
+    // ─── Separate admin / emergencyResponder roles (issue #506) ───────────
+
+    /// @notice Constructor with distinct addresses grants each role to the
+    ///         correct address and does NOT cross-assign.
+    function test_constructor_grantsAdminRoleToAdminOnly() public view {
+        assertTrue(vault.hasRole(vault.ADMIN_ROLE(), admin), "admin has ADMIN_ROLE");
+        assertFalse(
+            vault.hasRole(vault.ADMIN_ROLE(), emergencyResponder),
+            "emergencyResponder must NOT have ADMIN_ROLE"
+        );
+    }
+
+    function test_constructor_grantsEmergencyRoleToEmergencyResponderOnly() public view {
+        assertTrue(
+            vault.hasRole(vault.EMERGENCY_ROLE(), emergencyResponder),
+            "emergencyResponder has EMERGENCY_ROLE"
+        );
+        assertFalse(
+            vault.hasRole(vault.EMERGENCY_ROLE(), admin), "admin must NOT have EMERGENCY_ROLE"
+        );
+    }
+
+    /// @notice Constructor reverts when admin_ is address(0).
+    function test_constructor_revertsWhenAdminIsZero() public {
+        vm.expectRevert(BasketVault.ZeroAddress.selector);
+        new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), address(0), emergencyResponder
+        );
+    }
+
+    /// @notice Constructor reverts when emergencyResponder_ is address(0).
+    function test_constructor_revertsWhenEmergencyResponderIsZero() public {
+        vm.expectRevert(BasketVault.ZeroAddress.selector);
+        new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, address(0)
+        );
+    }
+
+    /// @notice ADMIN_ROLE holder can call setMaxSlippageBps; EMERGENCY_ROLE-only holder cannot.
+    function test_setMaxSlippageBps_requiresAdminRole() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        // emergencyResponder has EMERGENCY_ROLE but NOT ADMIN_ROLE — must revert.
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", emergencyResponder, adminRole
+            )
+        );
+        vm.prank(emergencyResponder);
+        vault.setMaxSlippageBps(200);
+
+        // admin has ADMIN_ROLE — must succeed.
+        vm.prank(admin);
+        vault.setMaxSlippageBps(200);
+        assertEq(vault.maxSlippageBps(), 200, "admin can update slippage");
+    }
+
+    /// @notice EMERGENCY_ROLE holder can call emergencyUnwind; ADMIN_ROLE-only holder cannot.
+    function test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts() public {
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        basketToken.mint(address(vault), 100 * ONE_USDC);
+        usdc.mint(address(router), 100 * ONE_USDC);
+        router.setAmountOut(100 * ONE_USDC);
+
+        // admin has ADMIN_ROLE but NOT EMERGENCY_ROLE — must revert.
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", admin, emergencyRole
+            )
+        );
+        vm.prank(admin);
+        vault.emergencyUnwind();
+
+        // emergencyResponder has EMERGENCY_ROLE — must succeed.
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertTrue(vault.paused(), "emergencyUnwind pauses vault");
+    }
 }
 

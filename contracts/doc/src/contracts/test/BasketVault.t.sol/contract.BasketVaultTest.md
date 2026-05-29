@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -53,6 +53,13 @@ BasketVaultHarness internal vault
 
 ```solidity
 address internal admin = makeAddr("admin")
+```
+
+
+### emergencyResponder
+
+```solidity
+address internal emergencyResponder = makeAddr("emergencyResponder")
 ```
 
 
@@ -216,6 +223,59 @@ function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public;
 
 ```solidity
 function test_setTwapWindow_emitsEvent() public;
+```
+
+### test_constructor_grantsAdminRoleToAdminOnly
+
+Constructor with distinct addresses grants each role to the
+correct address and does NOT cross-assign.
+
+
+```solidity
+function test_constructor_grantsAdminRoleToAdminOnly() public view;
+```
+
+### test_constructor_grantsEmergencyRoleToEmergencyResponderOnly
+
+
+```solidity
+function test_constructor_grantsEmergencyRoleToEmergencyResponderOnly() public view;
+```
+
+### test_constructor_revertsWhenAdminIsZero
+
+Constructor reverts when admin_ is address(0).
+
+
+```solidity
+function test_constructor_revertsWhenAdminIsZero() public;
+```
+
+### test_constructor_revertsWhenEmergencyResponderIsZero
+
+Constructor reverts when emergencyResponder_ is address(0).
+
+
+```solidity
+function test_constructor_revertsWhenEmergencyResponderIsZero() public;
+```
+
+### test_setMaxSlippageBps_requiresAdminRole
+
+ADMIN_ROLE holder can call setMaxSlippageBps; EMERGENCY_ROLE-only holder cannot.
+
+
+```solidity
+function test_setMaxSlippageBps_requiresAdminRole() public;
+```
+
+### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts
+
+EMERGENCY_ROLE holder can call emergencyUnwind; ADMIN_ROLE-only holder cannot.
+
+
+```solidity
+function test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts() public;
 ```
 
 ## Events

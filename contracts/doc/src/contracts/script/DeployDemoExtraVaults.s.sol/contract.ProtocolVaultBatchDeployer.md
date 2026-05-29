@@ -1,5 +1,5 @@
 # ProtocolVaultBatchDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d46930cf8672ef941b507edf186b49886ff48c8a/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/03e3eaf8da3896078274cb45e36fd811b4fed616/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Batch deployer #1 — the canonical `ProtocolAssetVault` (PRD §11.2)
 deployed inside a single broadcaster CREATE. Constructed with
@@ -23,6 +23,7 @@ ProtocolAssetVault public immutable protocolVault
 constructor(
     address usdc,
     address adminAddr,
+    address emergencyResponder,
     address swapRouter,
     uint256 tvlCap,
     uint256 perDepositCap

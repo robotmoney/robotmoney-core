@@ -89,12 +89,20 @@ contract ProtocolVaultBatchDeployer {
     constructor(
         address usdc,
         address adminAddr,
+        address emergencyResponder,
         address swapRouter,
         uint256 tvlCap,
         uint256 perDepositCap
     ) {
         protocolVault = new ProtocolAssetVault(
-            IERC20(usdc), ISwapRouter(swapRouter), tvlCap, perDepositCap, 0, adminAddr, adminAddr
+            IERC20(usdc),
+            ISwapRouter(swapRouter),
+            tvlCap,
+            perDepositCap,
+            0,
+            adminAddr,
+            adminAddr,
+            emergencyResponder
         );
     }
 }
@@ -112,13 +120,21 @@ contract DemoAgentRwaBatchDeployer {
     constructor(
         address usdc,
         address adminAddr,
+        address emergencyResponder,
         address swapRouter,
         uint256 tvlCap,
         uint256 perDepositCap
     ) {
         rwaVault = new RobotMoneyVault(IERC20(usdc), tvlCap, perDepositCap, 0, adminAddr, adminAddr);
         agentVault = new AgentTokenVault(
-            IERC20(usdc), ISwapRouter(swapRouter), tvlCap, perDepositCap, 0, adminAddr, adminAddr
+            IERC20(usdc),
+            ISwapRouter(swapRouter),
+            tvlCap,
+            perDepositCap,
+            0,
+            adminAddr,
+            adminAddr,
+            emergencyResponder
         );
     }
 }
@@ -151,15 +167,19 @@ contract DemoAgentRwaBatchDeployer {
 ///         pointing at it.
 ///
 ///         Required env vars:
-///           ADMIN_ADDRESS      — receives ADMIN_ROLE on the new vaults and
-///                                must already hold ADMIN_ROLE on
-///                                VaultRegistry + PortfolioRouter
-///           REGISTRY_ADDRESS   — deployed VaultRegistry
-///           ROUTER_ADDRESS     — deployed PortfolioRouter
-///           PRIMARY_VAULT      — RobotMoneyVault deployed by Deploy.s.sol
-///                                (the only router-eligible vault in the
-///                                weight vector)
-///           USDC_ADDRESS       — ERC-20 asset every vault denominates in
+///           ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
+///                                         and must already hold ADMIN_ROLE on
+///                                         VaultRegistry + PortfolioRouter
+///           EMERGENCY_RESPONDER_ADDRESS — receives EMERGENCY_ROLE on the basket
+///                                         vaults (hot key for rapid unwind);
+///                                         use a distinct address from ADMIN_ADDRESS
+///                                         in production for two-role key separation
+///           REGISTRY_ADDRESS            — deployed VaultRegistry
+///           ROUTER_ADDRESS              — deployed PortfolioRouter
+///           PRIMARY_VAULT               — RobotMoneyVault deployed by Deploy.s.sol
+///                                         (the only router-eligible vault in the
+///                                         weight vector)
+///           USDC_ADDRESS                — ERC-20 asset every vault denominates in
 ///
 ///         Optional env vars:
 ///           SWAP_ROUTER        — Uniswap V3 SwapRouter02 address for the
@@ -220,6 +240,9 @@ contract DeployDemoExtraVaults is Script {
     ///      Solidity stack limit (16 slots, ~stack-too-deep).
     struct Params {
         address admin;
+        /// @dev Receives EMERGENCY_ROLE on each basket vault. Distinct from
+        ///      admin in production (two-role key separation, issue #506).
+        address emergencyResponder;
         address registry;
         address router;
         address primaryVault;
@@ -261,6 +284,7 @@ contract DeployDemoExtraVaults is Script {
 
     function _readParams() internal view returns (Params memory p) {
         p.admin = vm.envAddress("ADMIN_ADDRESS");
+        p.emergencyResponder = vm.envAddress("EMERGENCY_RESPONDER_ADDRESS");
         p.registry = vm.envAddress("REGISTRY_ADDRESS");
         p.router = vm.envAddress("ROUTER_ADDRESS");
         p.primaryVault = vm.envAddress("PRIMARY_VAULT");
@@ -269,6 +293,7 @@ contract DeployDemoExtraVaults is Script {
         p.rwaName = _envStringOrDefault("RWA_VAULT_NAME", DEFAULT_RWA_NAME);
 
         require(p.admin != address(0), "ADMIN_ADDRESS=0");
+        require(p.emergencyResponder != address(0), "EMERGENCY_RESPONDER_ADDRESS=0");
         require(p.registry != address(0), "REGISTRY_ADDRESS=0");
         require(p.router != address(0), "ROUTER_ADDRESS=0");
         require(p.primaryVault != address(0), "PRIMARY_VAULT=0");
@@ -284,10 +309,10 @@ contract DeployDemoExtraVaults is Script {
         // single batcher pushes initcode past geth's 49152-byte max-initcode
         // limit. Each batcher below stays under the limit.
         ProtocolVaultBatchDeployer batchA = new ProtocolVaultBatchDeployer(
-            p.usdc, p.admin, p.swapRouter, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
+            p.usdc, p.admin, p.emergencyResponder, p.swapRouter, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
         );
         DemoAgentRwaBatchDeployer batchB = new DemoAgentRwaBatchDeployer(
-            p.usdc, p.admin, p.swapRouter, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
+            p.usdc, p.admin, p.emergencyResponder, p.swapRouter, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
         );
         ProtocolBasketStubDeployer protocolStubs =
             new ProtocolBasketStubDeployer(PROTOCOL_SYMBOLS, p.usdc);
