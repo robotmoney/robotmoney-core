@@ -575,14 +575,24 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (!paused()) _pause();
     }
 
-    /// @notice Pause and swap all basket assets back to USDC using configured minimum outputs.
-    /// @dev Reverts when any router leg cannot satisfy its per-token guard.
+    /// @notice Pause and swap all basket assets back to USDC using live TWAP-derived floors.
+    /// @dev The effective per-leg floor is max(TWAP-derived, configured minUsdcOut), so the
+    ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
+    ///      stale configuration being exploited by a sandwich attacker.
+    ///      Reverts when any router leg cannot satisfy its effective floor.
     function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pauseIfNotPaused();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
-            _emergencyUnwindAsset(assets[i], emergencyUnwindGuard[assets[i].token].minUsdcOut);
+            AssetInfo memory assetInfo = assets[i];
+            uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
+            if (bal == 0) continue;
+            uint256 twapFloor = _twapUsdcValue(assetInfo.pool, assetInfo.token, bal)
+                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
+            uint256 effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
+            _emergencyUnwindAsset(assetInfo, effectiveFloor);
         }
     }
 
@@ -591,9 +601,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      Even on the override path, swap outputs are bounded by an upper-loss
     ///      cap derived from the admin-configured `minUsdcOut` reference floor:
     ///      `appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
-    ///      Swaps whose realized USDC output is below `appliedFloor` revert with
-    ///      `EmergencyUnwindLossCapExceeded`, preventing sandwich/manipulation
-    ///      from realizing catastrophic loss even when override is enabled.
+    ///      Additionally a live TWAP floor (max(TWAP-derived, appliedFloor)) is applied
+    ///      as a secondary guard to prevent sandwich exploitation of a stale `minUsdcOut`.
+    ///      Swaps whose realized USDC output is below the effective floor revert with
+    ///      `EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
+    ///      override is enabled.
     function emergencyUnwindWithOverride(address[] calldata tokens)
         external
         onlyRole(EMERGENCY_ROLE)
@@ -608,10 +620,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
             uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
+            uint256 twapFloor = _twapUsdcValue(assetInfo.pool, assetInfo.token, bal)
+                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 effectiveFloor = twapFloor > appliedFloor ? twapFloor : appliedFloor;
             emit EmergencyUnwindOverrideUsed(
-                assetInfo.token, bal, guard.minUsdcOut, appliedFloor, msg.sender
+                assetInfo.token, bal, guard.minUsdcOut, effectiveFloor, msg.sender
             );
-            _emergencyUnwindAssetWithCap(assetInfo, appliedFloor);
+            _emergencyUnwindAssetWithCap(assetInfo, effectiveFloor);
         }
     }
 

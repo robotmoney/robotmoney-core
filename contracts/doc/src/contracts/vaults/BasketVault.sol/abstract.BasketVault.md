@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/efb3a41cb351984b95b62ad6016f27ee32ee0f57/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -435,9 +435,12 @@ function _pauseIfNotPaused() internal;
 
 ### emergencyUnwind
 
-Pause and swap all basket assets back to USDC using configured minimum outputs.
+Pause and swap all basket assets back to USDC using live TWAP-derived floors.
 
-Reverts when any router leg cannot satisfy its per-token guard.
+The effective per-leg floor is max(TWAP-derived, configured minUsdcOut), so the
+admin-set value acts as a secondary lower bound while the live TWAP guards against
+stale configuration being exploited by a sandwich attacker.
+Reverts when any router leg cannot satisfy its effective floor.
 
 
 ```solidity
@@ -452,9 +455,11 @@ Emits before each swap so off-chain operators can distinguish override use.
 Even on the override path, swap outputs are bounded by an upper-loss
 cap derived from the admin-configured `minUsdcOut` reference floor:
 `appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
-Swaps whose realized USDC output is below `appliedFloor` revert with
-`EmergencyUnwindLossCapExceeded`, preventing sandwich/manipulation
-from realizing catastrophic loss even when override is enabled.
+Additionally a live TWAP floor (max(TWAP-derived, appliedFloor)) is applied
+as a secondary guard to prevent sandwich exploitation of a stale `minUsdcOut`.
+Swaps whose realized USDC output is below the effective floor revert with
+`EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
+override is enabled.
 
 
 ```solidity

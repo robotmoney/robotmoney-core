@@ -8,6 +8,7 @@
 //         issue #494 — addAsset must verify Uniswap V3 pool observation cardinality
 //         issue #501 — replace safeIncreaseAllowance with forceApprove/clear pattern
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
+//         issue #508 — emergencyUnwind uses live TWAP floor instead of stale minUsdcOut
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -174,9 +175,12 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, false, 0);
 
+        // TWAP floor (tick=0, 1:1 price, 1% slippage): 1000 * 9900 / 10000 = 990 USDC.
+        // effectiveFloor = max(TWAP=990, configured=900) = 990. Router output 800 < 990.
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
         vm.expectRevert(
             abi.encodeWithSelector(
-                MockSwapRouter.TooLittleReceived.selector, 800 * ONE_USDC, minUsdcOut
+                MockSwapRouter.TooLittleReceived.selector, 800 * ONE_USDC, twapFloor
             )
         );
         vm.prank(emergencyResponder);
@@ -190,7 +194,8 @@ contract BasketVaultTest is Test {
 
     function test_emergencyUnwind_succeedsWhenRouterOutputSatisfiesConfiguredMinimum() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 950 * ONE_USDC;
+        // TWAP floor = 1000 * 9900 / 10000 = 990 USDC. Use 995 to satisfy both floors.
+        uint256 amountOut = 995 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -208,28 +213,32 @@ contract BasketVaultTest is Test {
 
     function test_emergencyUnwindWithOverride_emitsHighRiskEvent() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 1;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC, which exceeds configFloor=0 (maxLossBps=10000).
+        // effectiveFloor = max(990, 0) = 990. Use amountOut ≥ 990 to satisfy the TWAP floor.
+        uint256 amountOut = 995 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
 
-        // maxLossBps = MAX_BPS reproduces the legacy zero-floor override semantics.
+        // maxLossBps = MAX_BPS reproduces the legacy zero configured-floor override semantics;
+        // the live TWAP floor still applies as the active guard.
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, true, 10_000);
 
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
 
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
         vm.expectEmit(true, false, false, true, address(vault));
         emit EmergencyUnwindOverrideUsed(
-            address(basketToken), tokenAmount, 900 * ONE_USDC, 0, emergencyResponder
+            address(basketToken), tokenAmount, 900 * ONE_USDC, twapFloor, emergencyResponder
         );
 
         vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
 
         assertEq(
-            usdc.balanceOf(address(vault)), amountOut, "override accepts explicit high-loss output"
+            usdc.balanceOf(address(vault)), amountOut, "override accepts output above TWAP floor"
         );
     }
 
@@ -273,10 +282,12 @@ contract BasketVaultTest is Test {
         // issue #446: an admin-configured upper-loss cap must bound override slippage.
         uint256 tokenAmount = 1_000 * ONE_USDC;
         uint256 minUsdcOut = 900 * ONE_USDC;
-        // maxLossBps = 1000 (10%) -> appliedFloor = 900 * 0.9 = 810 USDC.
+        // maxLossBps = 1000 (10%) -> configFloor = 900 * 0.9 = 810 USDC.
         uint256 maxLossBps = 1_000;
-        uint256 appliedFloor = minUsdcOut * (10_000 - maxLossBps) / 10_000;
-        // Router only returns 800 USDC — below the 810 cap.
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC > configFloor 810.
+        // effectiveFloor = max(990, 810) = 990.
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
+        // Router only returns 800 USDC — below both the TWAP floor and configured cap.
         uint256 routerOut = 800 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), routerOut);
@@ -288,13 +299,9 @@ contract BasketVaultTest is Test {
         address[] memory tokens = new address[](1);
         tokens[0] = address(basketToken);
 
-        // The router enforces appliedFloor as amountOutMinimum and reverts first,
-        // surfacing the slippage bound at the router layer. This is the
-        // upper-loss cap enforcement path.
+        // The router enforces effectiveFloor (TWAP-derived, higher than configFloor) and reverts.
         vm.expectRevert(
-            abi.encodeWithSelector(
-                MockSwapRouter.TooLittleReceived.selector, routerOut, appliedFloor
-            )
+            abi.encodeWithSelector(MockSwapRouter.TooLittleReceived.selector, routerOut, twapFloor)
         );
         vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
@@ -307,13 +314,15 @@ contract BasketVaultTest is Test {
     }
 
     function test_emergencyUnwindWithOverride_succeedsWithinUpperLossCap() public {
-        // issue #446: when realized output meets the cap, override path still works
-        // and still emits EmergencyUnwindOverrideUsed for off-chain visibility.
+        // issue #446: when realized output meets both the configured cap and the TWAP floor,
+        // override path still works and emits EmergencyUnwindOverrideUsed for off-chain visibility.
         uint256 tokenAmount = 1_000 * ONE_USDC;
         uint256 minUsdcOut = 900 * ONE_USDC;
-        uint256 maxLossBps = 1_000; // 10% cap -> appliedFloor = 810 USDC
-        uint256 appliedFloor = minUsdcOut * (10_000 - maxLossBps) / 10_000;
-        uint256 routerOut = 820 * ONE_USDC; // above 810 floor
+        uint256 maxLossBps = 1_000; // 10% cap -> configFloor = 810 USDC
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC > configFloor 810.
+        // effectiveFloor = max(990, 810) = 990.
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
+        uint256 routerOut = 995 * ONE_USDC; // above both floors
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), routerOut);
         router.setAmountOut(routerOut);
@@ -326,7 +335,7 @@ contract BasketVaultTest is Test {
 
         vm.expectEmit(true, false, false, true, address(vault));
         emit EmergencyUnwindOverrideUsed(
-            address(basketToken), tokenAmount, minUsdcOut, appliedFloor, emergencyResponder
+            address(basketToken), tokenAmount, minUsdcOut, twapFloor, emergencyResponder
         );
 
         vm.prank(emergencyResponder);
@@ -335,7 +344,7 @@ contract BasketVaultTest is Test {
         assertEq(
             usdc.balanceOf(address(vault)),
             routerOut,
-            "override succeeds when realized output meets the cap"
+            "override succeeds when realized output meets both TWAP and configured floors"
         );
     }
 
@@ -442,11 +451,10 @@ contract BasketVaultTest is Test {
     }
 
     function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public {
-        // The emergency-unwind floor is configured via setEmergencyUnwindGuard;
-        // the vault routes the router call with that floor. This test asserts
-        // that manipulating slot0 does NOT lower the floor below the admin's
-        // TWAP-derived configuration: the floor is read from storage (TWAP-derived
-        // off-chain by ADMIN), and a slot0-distorted swap cannot satisfy it.
+        // The emergency-unwind floor is now computed on-chain from the live TWAP, so slot0
+        // manipulation cannot lower it. This test verifies that even with a hostile slot0,
+        // the TWAP-derived floor (tick=0, 1:1 price, 1% slippage → 990 USDC for 1000 tokens)
+        // still rejects a router output of 100 USDC.
         uint256 tokenAmount = 1_000 * ONE_USDC;
         uint256 twapDerivedMin = 950 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
@@ -456,16 +464,140 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setEmergencyUnwindGuard(address(basketToken), twapDerivedMin, false, 0);
 
-        // Even with slot0 distorted, the TWAP-derived minimum on the router
-        // call refuses any output below the admin-configured floor.
+        // Distort slot0 to an absurd value — the vault must use the TWAP (tick=0 = 1:1)
+        // and NOT slot0. effectiveFloor = max(TWAP=990, configured=950) = 990.
         pool.setSpot(uint160(1)); // hostile slot0 — must NOT lower the floor
+        uint256 liveTwapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
         vm.expectRevert(
             abi.encodeWithSelector(
-                MockSwapRouter.TooLittleReceived.selector, 100 * ONE_USDC, twapDerivedMin
+                MockSwapRouter.TooLittleReceived.selector, 100 * ONE_USDC, liveTwapFloor
             )
         );
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
+    }
+
+    // ─── Live TWAP floor in emergencyUnwind (issue #508) ─────────────
+
+    /// @notice When minUsdcOut is stale (far below TWAP), emergencyUnwind uses the
+    ///         live TWAP-derived floor and rejects a swap that only satisfies the
+    ///         stale configured floor.
+    function test_emergencyUnwind_staleFloor_usesTwapFloor() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        // Stale configured minimum — far below current fair value (tick=0 → 1:1 price).
+        uint256 staleMin = 500 * ONE_USDC;
+        // TWAP floor (1:1 TWAP, 1% maxSlippageBps): 1000 * 9900 / 10000 = 990 USDC.
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
+
+        // Router can only return 800 USDC — satisfies stale floor (500) but NOT the TWAP floor (990).
+        uint256 routerOut = 800 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), staleMin, false, 0);
+
+        // The live TWAP floor (990) wins over the stale configured floor (500).
+        // effectiveFloor = max(990, 500) = 990. Router output 800 < 990 → revert.
+        vm.expectRevert(
+            abi.encodeWithSelector(MockSwapRouter.TooLittleReceived.selector, routerOut, twapFloor)
+        );
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokenAmount, "stale floor cannot be exploited"
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "no USDC extracted via stale floor");
+    }
+
+    /// @notice When minUsdcOut is above the TWAP-derived floor, the configured floor wins
+    ///         (max semantics). Attempting a swap at the TWAP-only level must revert.
+    function test_emergencyUnwind_configuredFloorAboveTwap_configuredFloorWins() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        // TWAP floor (1:1 TWAP, 1% slippage) = 990 USDC.
+        // Configured min is set higher than the TWAP floor.
+        uint256 highMin = 995 * ONE_USDC;
+
+        // Router output satisfies TWAP floor (990) but NOT the configured floor (995).
+        uint256 routerOut = 993 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), highMin, false, 0);
+
+        // effectiveFloor = max(TWAP=990, configured=995) = 995. Router output 993 < 995 → revert.
+        vm.expectRevert(
+            abi.encodeWithSelector(MockSwapRouter.TooLittleReceived.selector, routerOut, highMin)
+        );
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokenAmount, "configured floor rejects swap"
+        );
+    }
+
+    /// @notice When a swap satisfies both the TWAP floor and the configured floor, the
+    ///         emergency unwind completes successfully.
+    function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        // TWAP floor = 990 USDC. Configured min also below 990. Router out = 995 satisfies both.
+        uint256 configuredMin = 900 * ONE_USDC;
+        uint256 routerOut = 995 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), configuredMin, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "all tokens swapped");
+        assertEq(usdc.balanceOf(address(vault)), routerOut, "USDC received");
+        assertTrue(vault.paused(), "vault paused after unwind");
+    }
+
+    /// @notice emergencyUnwindWithOverride also applies the TWAP floor as a secondary
+    ///         check alongside the configured appliedFloor. A swap below the TWAP floor
+    ///         is rejected even when maxLossBps is generous.
+    function test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        // Configured guard: minUsdcOut=900, maxLossBps=5000 (50%) → configFloor=450 USDC.
+        uint256 minUsdcOut = 900 * ONE_USDC;
+        uint256 maxLossBps = 5_000;
+        // TWAP floor (1:1 TWAP, 1% slippage) = 990 USDC > configFloor 450.
+        // effectiveFloor = max(990, 450) = 990.
+        uint256 twapFloor = tokenAmount * (10_000 - 100) / 10_000; // 990 USDC
+
+        // Router output satisfies configFloor (450) but NOT the TWAP floor (990).
+        uint256 routerOut = 600 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, true, maxLossBps);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        // TWAP floor wins: effectiveFloor=990. Router output 600 < 990 → revert.
+        vm.expectRevert(
+            abi.encodeWithSelector(MockSwapRouter.TooLittleReceived.selector, routerOut, twapFloor)
+        );
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertEq(
+            basketToken.balanceOf(address(vault)), tokenAmount, "TWAP floor blocks sandwich exploit"
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "no USDC drained below TWAP floor");
     }
 
     function test_setTwapWindow_emitsEvent() public {
@@ -539,7 +671,8 @@ contract BasketVaultTest is Test {
     /// @notice emergencyUnwind succeeds when vault is already paused.
     function test_emergencyUnwind_succeedsWhenAlreadyPaused() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 950 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC. Use 995 to satisfy both floors.
+        uint256 amountOut = 995 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -564,7 +697,8 @@ contract BasketVaultTest is Test {
     /// @notice emergencyUnwindWithOverride succeeds when vault is already paused.
     function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 900 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC. Use 995 to satisfy.
+        uint256 amountOut = 995 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -590,7 +724,8 @@ contract BasketVaultTest is Test {
     /// @notice emergencyUnwind on unpaused vault still pauses the vault.
     function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public {
         uint256 tokenAmount = 500 * ONE_USDC;
-        uint256 amountOut = 480 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 500 * 9900 / 10000 = 495 USDC. Use 497 to satisfy.
+        uint256 amountOut = 497 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -610,7 +745,8 @@ contract BasketVaultTest is Test {
     /// @notice emergencyUnwindWithOverride on unpaused vault still pauses the vault.
     function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public {
         uint256 tokenAmount = 500 * ONE_USDC;
-        uint256 amountOut = 480 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 500 * 9900 / 10000 = 495 USDC. Use 497 to satisfy.
+        uint256 amountOut = 497 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -793,7 +929,8 @@ contract BasketVaultTest is Test {
     /// @notice After emergencyUnwindAsset, residual token allowance on the router is zero.
     function test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
-        uint256 amountOut = 950 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC. Use 995 to satisfy.
+        uint256 amountOut = 995 * ONE_USDC;
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), amountOut);
         router.setAmountOut(amountOut);
@@ -815,8 +952,10 @@ contract BasketVaultTest is Test {
     function test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap() public {
         uint256 tokenAmount = 1_000 * ONE_USDC;
         uint256 minUsdcOut = 900 * ONE_USDC;
-        uint256 maxLossBps = 1_000; // 10% cap -> appliedFloor = 810 USDC
-        uint256 routerOut = 820 * ONE_USDC; // above 810 floor
+        uint256 maxLossBps = 1_000; // 10% cap -> configFloor = 810 USDC
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC > configFloor 810.
+        // effectiveFloor = max(990, 810) = 990. Use 995 to satisfy.
+        uint256 routerOut = 995 * ONE_USDC;
 
         basketToken.mint(address(vault), tokenAmount);
         usdc.mint(address(router), routerOut);

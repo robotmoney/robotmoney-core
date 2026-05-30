@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/efb3a41cb351984b95b62ad6016f27ee32ee0f57/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -216,6 +216,48 @@ function test_effectiveTwapWindow_fallsBackToDefault() public view;
 
 ```solidity
 function test_emergencyUnwindMinimum_derivedFromTwapNotSlot0() public;
+```
+
+### test_emergencyUnwind_staleFloor_usesTwapFloor
+
+When minUsdcOut is stale (far below TWAP), emergencyUnwind uses the
+live TWAP-derived floor and rejects a swap that only satisfies the
+stale configured floor.
+
+
+```solidity
+function test_emergencyUnwind_staleFloor_usesTwapFloor() public;
+```
+
+### test_emergencyUnwind_configuredFloorAboveTwap_configuredFloorWins
+
+When minUsdcOut is above the TWAP-derived floor, the configured floor wins
+(max semantics). Attempting a swap at the TWAP-only level must revert.
+
+
+```solidity
+function test_emergencyUnwind_configuredFloorAboveTwap_configuredFloorWins() public;
+```
+
+### test_emergencyUnwind_bothFloorsSatisfied_succeeds
+
+When a swap satisfies both the TWAP floor and the configured floor, the
+emergency unwind completes successfully.
+
+
+```solidity
+function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public;
+```
+
+### test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck
+
+emergencyUnwindWithOverride also applies the TWAP floor as a secondary
+check alongside the configured appliedFloor. A swap below the TWAP floor
+is rejected even when maxLossBps is generous.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck() public;
 ```
 
 ### test_setTwapWindow_emitsEvent
