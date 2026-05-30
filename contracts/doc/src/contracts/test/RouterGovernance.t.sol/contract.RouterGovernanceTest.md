@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/8e58630207799c10307586432e49cdc81ca6ac74/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -519,6 +519,54 @@ reached (0 votes < 1 required).
 
 ```solidity
 function test_zeroVoteExploitSequenceBlocked() public;
+```
+
+### test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated
+
+Lowering quorumThreshold after a proposal's voting deadline must
+not retroactively change a Defeated proposal to Queued.
+AC: forge test: lowering quorumThreshold after a proposal's voting deadline
+does not change the proposal's state from Defeated to Queued.
+
+
+```solidity
+function test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated() public;
+```
+
+### test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued
+
+Raising quorumThreshold while a proposal is Active must not
+retroactively force it to Defeated once voting ends.
+AC: forge test: raising quorumThreshold while a proposal is Active does
+not force the proposal to Defeated.
+
+
+```solidity
+function test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued() public;
+```
+
+### test_snapshotQuorum_capturedAtProposeTime
+
+p.snapshotQuorum must equal quorumThreshold at the time propose()
+was called, even if quorumThreshold changes afterward.
+AC: forge test: p.snapshotQuorum equals quorumThreshold at the time
+propose() was called.
+
+
+```solidity
+function test_snapshotQuorum_capturedAtProposeTime() public;
+```
+
+### test_snapshotQuorum_twoProposalsIndependentSnapshots
+
+Two sequential proposals each capture their own quorumThreshold
+snapshot independently.
+AC: forge test: two sequential proposals each use their own snapshot value
+even when quorumThreshold changes between them.
+
+
+```solidity
+function test_snapshotQuorum_twoProposalsIndependentSnapshots() public;
 ```
 
 ### test_clearVotedWeights_revertsToDefault

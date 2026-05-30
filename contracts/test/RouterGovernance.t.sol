@@ -737,6 +737,119 @@ contract RouterGovernanceTest is Test {
 
     // ─── setDefaultWeights() — ADR-0002 ────────────────────────────────────────
 
+    // ─── snapshotQuorum: retroactive manipulation vectors ─────────────────────
+
+    /// @notice Lowering quorumThreshold after a proposal's voting deadline must
+    ///         not retroactively change a Defeated proposal to Queued.
+    /// AC: forge test: lowering quorumThreshold after a proposal's voting deadline
+    ///     does not change the proposal's state from Defeated to Queued.
+    function test_snapshotQuorum_loweringThresholdDoesNotReviveDefeated() public {
+        // Bob (20%) votes — below 51% quorum snapshot.
+        uint256 pid = _proposeValid();
+        vm.prank(bob);
+        gov.vote(pid);
+
+        // Advance past voting period — proposal is Defeated.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Defeated));
+
+        // Admin lowers quorumThreshold below bob's votes.
+        vm.prank(govAdmin);
+        gov.setQuorumThreshold(BOB_POWER - 1);
+
+        // Proposal must still be Defeated — snapshotQuorum is unchanged.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Defeated));
+    }
+
+    /// @notice Raising quorumThreshold while a proposal is Active must not
+    ///         retroactively force it to Defeated once voting ends.
+    /// AC: forge test: raising quorumThreshold while a proposal is Active does
+    ///     not force the proposal to Defeated.
+    function test_snapshotQuorum_raisingThresholdDoesNotDefeatQueued() public {
+        // Alice (60%) votes — exceeds 51% quorum snapshot.
+        uint256 pid = _proposeValid();
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Raise quorumThreshold above alice's votes while still Active.
+        vm.prank(govAdmin);
+        gov.setQuorumThreshold(ALICE_POWER + 1);
+
+        // Advance past voting period.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+
+        // Proposal must still be Queued — snapshotQuorum is the original threshold.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
+    }
+
+    /// @notice p.snapshotQuorum must equal quorumThreshold at the time propose()
+    ///         was called, even if quorumThreshold changes afterward.
+    /// AC: forge test: p.snapshotQuorum equals quorumThreshold at the time
+    ///     propose() was called.
+    function test_snapshotQuorum_capturedAtProposeTime() public {
+        uint256 originalThreshold = gov.quorumThreshold();
+        uint256 pid = _proposeValid();
+
+        // Change live quorumThreshold.
+        vm.prank(govAdmin);
+        gov.setQuorumThreshold(originalThreshold * 2);
+
+        // activeProposal() must expose the original snapshot.
+        (,,,,,, uint256 votesFor, uint256 snap,) = gov.activeProposal();
+        assertEq(snap, originalThreshold);
+        assertEq(votesFor, 0);
+        // Sanity: live threshold has changed.
+        assertEq(gov.quorumThreshold(), originalThreshold * 2);
+        // Suppress unused variable warning.
+        assertEq(pid, gov.currentProposalId());
+    }
+
+    /// @notice Two sequential proposals each capture their own quorumThreshold
+    ///         snapshot independently.
+    /// AC: forge test: two sequential proposals each use their own snapshot value
+    ///     even when quorumThreshold changes between them.
+    function test_snapshotQuorum_twoProposalsIndependentSnapshots() public {
+        uint256 threshold1 = gov.quorumThreshold();
+
+        // First proposal — snapshot = threshold1.
+        uint256 pid1 = _proposeValid();
+
+        // Advance past voting period without quorum to defeat it.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Defeated));
+
+        // Change quorumThreshold before creating second proposal.
+        uint256 threshold2 = threshold1 / 2; // half the original
+        vm.prank(govAdmin);
+        gov.setQuorumThreshold(threshold2);
+
+        // Second proposal — snapshot = threshold2.
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 5_000;
+        bps[1] = 5_000;
+        vm.prank(govAdmin);
+        uint256 pid2 = gov.propose(vaults, bps);
+
+        // Bob (20% of total power) votes — sufficient against threshold2 (25.5%)? No.
+        // Use carol who also has 20%. Combined (bob+carol) = 40% > threshold2 (25.5%).
+        vm.prank(bob);
+        gov.vote(pid2);
+        vm.prank(carol);
+        gov.vote(pid2);
+
+        // Advance past voting period — pid2 should be Queued (met threshold2).
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint256(gov.proposalState(pid2)), uint256(RouterGovernance.ProposalState.Queued));
+
+        // Restore threshold1 and verify pid1 is still Defeated (its snapshot is threshold1).
+        vm.prank(govAdmin);
+        gov.setQuorumThreshold(threshold1);
+        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Defeated));
+    }
+
     /// @notice clearVotedWeights forwards to the router and reverts routing to
     ///         the default vector while leaving defaultWeights untouched.
     function test_clearVotedWeights_revertsToDefault() public {

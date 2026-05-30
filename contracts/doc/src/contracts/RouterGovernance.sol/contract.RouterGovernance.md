@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/8e58630207799c10307586432e49cdc81ca6ac74/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -316,6 +316,7 @@ function activeProposal()
         uint64 votingDeadline,
         uint64 executableAfter,
         uint256 votesFor,
+        uint256 snapshotQuorum,
         bool executed
     );
 ```
@@ -589,6 +590,10 @@ struct Proposal {
     uint64 executableAfter;
     /// Total voting power cast in favour.
     uint256 votesFor;
+    /// Quorum threshold captured at propose() time. Changes to the live
+    /// quorumThreshold storage variable do not retroactively affect this
+    /// proposal — preventing both retroactive defeat and retroactive passage.
+    uint256 snapshotQuorum;
     /// Whether the proposal has been executed.
     bool executed;
 }

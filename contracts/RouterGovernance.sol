@@ -70,6 +70,10 @@ contract RouterGovernance is AccessControl {
         uint64 executableAfter;
         /// Total voting power cast in favour.
         uint256 votesFor;
+        /// Quorum threshold captured at propose() time. Changes to the live
+        /// quorumThreshold storage variable do not retroactively affect this
+        /// proposal — preventing both retroactive defeat and retroactive passage.
+        uint256 snapshotQuorum;
         /// Whether the proposal has been executed.
         bool executed;
     }
@@ -306,6 +310,7 @@ contract RouterGovernance is AccessControl {
         p.proposer = msg.sender;
         p.votingDeadline = deadline;
         p.executableAfter = execAfter;
+        p.snapshotQuorum = quorumThreshold;
 
         // Copy arrays into storage.
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -387,6 +392,7 @@ contract RouterGovernance is AccessControl {
             uint64 votingDeadline,
             uint64 executableAfter,
             uint256 votesFor,
+            uint256 snapshotQuorum,
             bool executed
         )
     {
@@ -401,6 +407,7 @@ contract RouterGovernance is AccessControl {
             p.votingDeadline,
             p.executableAfter,
             p.votesFor,
+            p.snapshotQuorum,
             p.executed
         );
     }
@@ -444,8 +451,8 @@ contract RouterGovernance is AccessControl {
             return ProposalState.Active;
         }
 
-        // Voting ended — check quorum.
-        if (p.votesFor < quorumThreshold) {
+        // Voting ended — check quorum against snapshot taken at propose() time.
+        if (p.votesFor < p.snapshotQuorum) {
             return ProposalState.Defeated;
         }
 
