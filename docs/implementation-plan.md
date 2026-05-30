@@ -2,11 +2,12 @@
 
 > Companion to `docs/architecture.md` and `docs/prd.md`. This plan covers the
 > full initiative from foundational infrastructure through production readiness.
-> As of 2026-05-22, the product layer (Vault registry, Portfolio Router,
+> As of 2026-05-30, the product layer (Vault registry, Portfolio Router,
 > Router-weight governance MVP, Gateway agent withdrawal, multi-vault explorer
-> and dapp) is shipped on `dev`. The remaining work is concentrated in: a
-> handful of backend/CI gaps, the multi-vault devnet default-adapter switch,
-> onboarding docs, and the basket-vault production-path ADRs.
+> and dapp, demo seeding, and all contract security hardening) is shipped on
+> `dev`. The remaining work is concentrated in: a handful of CI/infra gaps,
+> the multi-vault devnet default-adapter switch, and the basket-vault
+> production-path ADRs.
 >
 > **Relationship to the product.** Robot Money is a multi-vault ERC-4626 yield
 > system (stable-yield, protocol-asset, agent-token vaults) with a
@@ -143,7 +144,7 @@ Status: **Substantially complete.** The smoke-test stack boots end-to-end on
 demand; remaining items are the default-adapter switch (see Multi-vault devnet
 below for the canonical N1 item) and a not-yet-confirmed Bun dapp toolchain.
 
-- [ ] Smoke-test: confirm Bun is used for dapp build/runtime (port randomization shipped via `ChainPorts::allocate()`)
+- [x] Smoke-test: confirm Bun is used for dapp build/runtime (`clients/dapp/bun.lock` present; `lib.rs` bun bundle handling confirmed)
 - [x] Resolve missing devnet contract addresses, chain ID, RPC endpoint in bootstrap config (`testing/smoke-test/src/lib.rs` Fixture)
 - [x] Smoke-test: fork devnet from Base mainnet with genesis-time USDC balance grant (`testing/smoke-test/src/genesis_alloc.rs`)
 - [x] Smoke-test: `--full-stack` flag boots dapp, explorer-API, indexer alongside devnet
@@ -174,7 +175,7 @@ triggers so operators can install from published artifacts.
 - [x] CI: dapp Docker image published to GHCR (`.github/workflows/release-dapp.yml`)
 - [ ] CI: run all suites unconditionally on push to `dev` — suite-01-02 and others still gated by `paths:` filters
 - [x] CI: `workflow_dispatch` inputs (tag, commit, dry_run) on release workflows
-- [ ] Remove deprecated Anvil demo suite (`demo.sh` + suite-15) — confirm whether suite-15 (regime-classifier) is the same artifact slated for removal
+- [x] Remove deprecated Anvil demo suite — `demo.sh` never existed in this repo; suite-15 is the regime-classifier plugin test (not an Anvil demo, keep it)
 - [ ] Audit suite-05 (Anvil mainnet-fork) for necessity vs. suite-06 duplication
 
 ### Docs and onboarding
@@ -183,7 +184,7 @@ devnet configuration, and offer a tunnel-based hosted devnet demo path.
 
 - [ ] Publish 2026-05-09 security review document
 - [x] Create `BOOTSTRAP.md` and simplify `README` to a single agent-onboarding pointer
-- [ ] Add agent-vendor bootstrap prompts (OpenCode, OpenClaw, Claude Code)
+- [x] Add agent-vendor bootstrap prompts (OpenCode, OpenClaw, Claude Code) — `BOOTSTRAP.md` §OpenCode / §OpenClaw / §Claude-Code sections
 - [ ] Tunnel hosted devnet demo + wallet-routed dapp reads
 
 ---
@@ -251,7 +252,7 @@ Status: **Substantially complete.**
 - [x] Indexer polls all registered vaults; ingests router and governance events
 - [x] Explorer API `GET /v1/vaults/:address`
 - [x] Explorer API `GET /v1/router/state`
-- [ ] Explorer API `GET /v1/stats` — aggregate TVL / depositor count / global activity feed not yet exposed
+- [x] Explorer API `GET /v1/stats` — aggregate TVL / depositor count / global activity feed (`clients/explorer-api/src/routes.rs`)
 - [x] Explorer API `GET /v1/accounts/:address/positions`
 - [x] Explorer API `GET /v1/accounts/:address/history`
 - [x] Fork e2e — multi-vault indexer + API round-trip
@@ -286,16 +287,18 @@ balance display, RM token bundled into the dapp env, and a Base ETH gas
 faucet drip. Tracked by issue #472 (scout) and the downstream feature
 issues below.
 
+Status: **Complete.**
+
 - [x] dev-scout: demo-seeding seam map — `docs/technical/demo-seeding-seams.md` (issue #472)
-- [ ] dapp: show wallet balances for USDC, ETH, RM, and vault receipts on the main page (issue #463)
-- [ ] demo: seed all three vaults, simulated depositors, and multi-vault router weights (issue #465)
-- [ ] dapp: wire RM token address into the dapp bundle + add Base ETH gas faucet drip (issue #466)
+- [x] dapp: show wallet balances for USDC, ETH, RM, and vault receipts — `clients/dapp/src/components/BalancesPanel.tsx` (issue #463)
+- [x] demo: seed depositors binary + smoke-test — `testing/smoke-test/src/bin/demo-seed-depositors.rs`, `tests/demo_seeding.rs` (issue #465)
+- [x] dapp: RM token address threaded into dapp bundle + Base ETH/RM faucet drip — `testing/smoke-test/tests/faucet_eth.rs`, `faucet_rm.rs` (issue #466)
 
 ### Phase: Basket vault production path
 Goal: Resolve open ADRs blocking basket-vault router eligibility.
 
 - [x] dev-scout audit + gap report — `docs/technical/basket-vault-gap-report.md`
-- [ ] TWAP oracle in both basket vaults (BasketVault TWAP hardening shipped in #459; confirm coverage across ProtocolAssetVault + AgentTokenVault)
+- [x] TWAP oracle in both basket vaults — `ProtocolAssetVault` and `AgentTokenVault` are thin subclasses of `BasketVault` and inherit `_twapUsdcValue()`, `twapWindow`, and the full TWAP oracle; no separate implementation needed
 - [ ] Rebalancing model ADR + `rebalance()` implementation
 - [ ] Agent-token shortlist governance — mechanism per `docs/development/open-questions.md` §1.3
 - [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
