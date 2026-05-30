@@ -568,10 +568,17 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         _unpause();
     }
 
+    /// @dev Pause only when not already paused. Silently no-ops when the
+    ///      contract is already paused so that the common incident sequence
+    ///      pause() → emergencyUnwind() does not revert with EnforcedPause.
+    function _pauseIfNotPaused() internal {
+        if (!paused()) _pause();
+    }
+
     /// @notice Pause and swap all basket assets back to USDC using configured minimum outputs.
     /// @dev Reverts when any router leg cannot satisfy its per-token guard.
     function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
-        _pause();
+        _pauseIfNotPaused();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
@@ -592,7 +599,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {
-        _pause();
+        _pauseIfNotPaused();
         uint256 len = tokens.length;
         for (uint256 i = 0; i < len; i++) {
             EmergencyUnwindGuard memory guard = emergencyUnwindGuard[tokens[i]];

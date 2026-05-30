@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a9c23f29365b1a58869648c1ae96ac66c7ca191a/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -267,6 +267,42 @@ ADMIN_ROLE holder can call setMaxSlippageBps; EMERGENCY_ROLE-only holder cannot.
 
 ```solidity
 function test_setMaxSlippageBps_requiresAdminRole() public;
+```
+
+### test_emergencyUnwind_succeedsWhenAlreadyPaused
+
+emergencyUnwind succeeds when vault is already paused.
+
+
+```solidity
+function test_emergencyUnwind_succeedsWhenAlreadyPaused() public;
+```
+
+### test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused
+
+emergencyUnwindWithOverride succeeds when vault is already paused.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public;
+```
+
+### test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused
+
+emergencyUnwind on unpaused vault still pauses the vault.
+
+
+```solidity
+function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public;
+```
+
+### test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused
+
+emergencyUnwindWithOverride on unpaused vault still pauses the vault.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public;
 ```
 
 ### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts

@@ -4,6 +4,7 @@
 //         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
 //                      minimums, ADMIN_ROLE-gated per-asset window)
+//         issue #493 — emergencyUnwind reverts when vault is already paused
 //         issue #494 — addAsset must verify Uniswap V3 pool observation cardinality
 //         issue #501 — replace safeIncreaseAllowance with forceApprove/clear pattern
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
@@ -531,6 +532,102 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.setMaxSlippageBps(200);
         assertEq(vault.maxSlippageBps(), 200, "admin can update slippage");
+    }
+
+    // ─── Pre-paused emergency unwind (issue #493) ─────────────────────
+
+    /// @notice emergencyUnwind succeeds when vault is already paused.
+    function test_emergencyUnwind_succeedsWhenAlreadyPaused() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 950 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), amountOut);
+        router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, false, 0);
+
+        // Pre-pause first — the common incident sequence.
+        vm.prank(emergencyResponder);
+        vault.pause();
+        assertTrue(vault.paused(), "pre-condition: vault is paused");
+
+        // emergencyUnwind must not revert with EnforcedPause.
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset fully unwound");
+        assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received after pre-paused unwind");
+        assertTrue(vault.paused(), "vault remains paused after unwind");
+    }
+
+    /// @notice emergencyUnwindWithOverride succeeds when vault is already paused.
+    function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 900 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), amountOut);
+        router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 800 * ONE_USDC, true, 500);
+
+        // Pre-pause first.
+        vm.prank(emergencyResponder);
+        vault.pause();
+        assertTrue(vault.paused(), "pre-condition: vault is paused");
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "basket asset unwound with override");
+        assertTrue(vault.paused(), "vault remains paused after override unwind");
+    }
+
+    /// @notice emergencyUnwind on unpaused vault still pauses the vault.
+    function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public {
+        uint256 tokenAmount = 500 * ONE_USDC;
+        uint256 amountOut = 480 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), amountOut);
+        router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, false, 0);
+
+        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertTrue(vault.paused(), "vault is paused after emergencyUnwind");
+        assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound");
+    }
+
+    /// @notice emergencyUnwindWithOverride on unpaused vault still pauses the vault.
+    function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public {
+        uint256 tokenAmount = 500 * ONE_USDC;
+        uint256 amountOut = 480 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), amountOut);
+        router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 400 * ONE_USDC, true, 500);
+
+        assertFalse(vault.paused(), "pre-condition: vault is not paused");
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertTrue(vault.paused(), "vault is paused after emergencyUnwindWithOverride");
+        assertEq(basketToken.balanceOf(address(vault)), 0, "assets unwound with override");
     }
 
     /// @notice EMERGENCY_ROLE holder can call emergencyUnwind; ADMIN_ROLE-only holder cannot.

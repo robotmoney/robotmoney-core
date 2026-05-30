@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a9c23f29365b1a58869648c1ae96ac66c7ca191a/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e510165068242bce9f66644554c06e4b10fa3775/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -420,6 +420,17 @@ function pause() external onlyRole(EMERGENCY_ROLE);
 
 ```solidity
 function unpause() external onlyRole(ADMIN_ROLE);
+```
+
+### _pauseIfNotPaused
+
+Pause only when not already paused. Silently no-ops when the
+contract is already paused so that the common incident sequence
+pause() → emergencyUnwind() does not revert with EnforcedPause.
+
+
+```solidity
+function _pauseIfNotPaused() internal;
 ```
 
 ### emergencyUnwind
