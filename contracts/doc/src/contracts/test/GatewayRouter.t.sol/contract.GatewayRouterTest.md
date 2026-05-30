@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0e0f94d96bb3900f4fd22dd5ae7b5741099dfdba/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f8cc494733d881fe168b95aea3df5da6400c759b/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -432,5 +432,73 @@ under-pulls USDC leaves the gateway holding leftover stablecoin.
 
 ```solidity
 function test_depositTo_vaultPath_revertsOnPostCallUsdcCustody() public;
+```
+
+### test_depositTo_windowCap_enforcesSnapshotValue
+
+AC1 / Test-plan structural check: depositTo() must not re-read
+agents[msg.sender].maxPerWindow from storage at the window-cap call
+site. Post-fix the window cap is enforced using args.maxPerWindow
+(captured from the in-memory snapshot p inside the scoped block).
+We verify this behaviourally: use vm.store to set maxPerWindow in
+storage to a lower value BEFORE the depositTo call (so the snapshot
+p also captures this value). The window-cap check must enforce the
+snapshot value. We then confirm the revert is WindowCapExceeded (not
+some other error), proving the check uses the snapshot field, not a
+constant or an unrelated storage slot.
+
+
+```solidity
+function test_depositTo_windowCap_enforcesSnapshotValue() public;
+```
+
+### test_depositTo_windowCap_usesSnapshotNotSecondStorageRead
+
+AC2 / Test-plan storage-slot manipulation: use vm.store to write a
+higher maxPerWindow into the agents mapping slot after the policy is
+set, then call depositTo and verify the window cap reflects the
+updated storage value (which is also what the in-memory snapshot
+captures at call time). A further deposit that would exceed even
+the new cap must still revert with WindowCapExceeded, proving the
+snapshot is enforced end-to-end.
+Storage layout (forge inspect RobotMoneyGateway storageLayout):
+slot 3  → agents mapping (slot 2 is commitments, added by #507)
+AgentPolicy struct offsets from the mapping element base:
++0 → active (bool) + validUntil (uint64, packed)
++1 → maxPerPayment (uint256)
++2 → maxPerWindow  (uint256)   ← target slot
+
+
+```solidity
+function test_depositTo_windowCap_usesSnapshotNotSecondStorageRead() public;
+```
+
+### test_depositTo_gasReduction_singleSnapshotSLOAD
+
+AC3 / Test-plan gas snapshot: depositTo gas cost must be lower than
+it would be with an extra cold SLOAD (2100 gas). We compare the gas
+consumed by depositTo against deposit (the reference implementation
+that uses a single snapshot). The two functions share the same policy
+read pattern post-fix, so their gas delta on the policy-read path is
+zero. A fixed upper-bound on total gas is also asserted to catch
+regressions.
+Note: both functions have different stack work (depositTo builds
+DepositArgs), so the absolute gas figures differ. The key invariant
+is that depositTo no longer performs a second SLOAD for maxPerWindow.
+
+
+```solidity
+function test_depositTo_gasReduction_singleSnapshotSLOAD() public;
+```
+
+### test_depositTo_and_deposit_enforceIdenticalWindowCap
+
+AC4 / deposit() and depositTo() must use identical policy-read
+patterns. Verify that both functions enforce the window cap at the
+same threshold when given equivalent policies.
+
+
+```solidity
+function test_depositTo_and_deposit_enforceIdenticalWindowCap() public;
 ```
 

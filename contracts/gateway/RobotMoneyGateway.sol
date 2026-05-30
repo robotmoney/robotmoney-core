@@ -601,6 +601,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             // 4. destination validation + allowedDestinations whitelist.
             args.isRouter = _validateDestination(destination, p.allowedDestinations);
             args.shareReceiver = p.shareReceiver;
+            // Capture maxPerWindow from the snapshot so the rolling-window cap
+            // check below never re-reads from storage (avoids TOCTOU and saves
+            // one cold SLOAD per depositTo call — issue #509).
+            args.maxPerWindow = p.maxPerWindow;
         }
 
         // 5. windowId — used for event emission only; cap is enforced by the
@@ -617,7 +621,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         //    Rolling-window deposit cap (#497): eliminates the calendar-boundary
         //    burst that fixed-window accounting allowed. `agentWindowGross` is
         //    no longer written (deprecated in #497; retained for ABI compat).
-        _accrueRollingDeposit(msg.sender, amount, agents[msg.sender].maxPerWindow);
+        //    Issue #509: use the in-memory snapshot value (args.maxPerWindow) to
+        //    avoid a second cold SLOAD on agents[msg.sender] and a TOCTOU window
+        //    where setPolicy could update maxPerWindow between the snapshot and
+        //    this check. Matches the pattern used in deposit().
+        _accrueRollingDeposit(msg.sender, amount, args.maxPerWindow);
         usedPaymentIds[paymentId] = true;
         args.paymentId = paymentId;
 
@@ -643,6 +651,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 windowId;
         uint256 balBefore;
         bool isRouter;
+        /// @dev Captured from the in-memory policy snapshot so the rolling-window
+        ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
+        uint256 maxPerWindow;
     }
 
     /// @dev Validates `destination` against the pinned vault and router, and

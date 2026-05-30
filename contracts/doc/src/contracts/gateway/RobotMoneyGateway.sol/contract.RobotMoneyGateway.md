@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64169d1d4c5fd64418418d518fe4d696b2319b88/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f8cc494733d881fe168b95aea3df5da6400c759b/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -942,6 +942,9 @@ struct DepositArgs {
     uint64 windowId;
     uint256 balBefore;
     bool isRouter;
+    /// @dev Captured from the in-memory policy snapshot so the rolling-window
+    ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
+    uint256 maxPerWindow;
 }
 ```
 
