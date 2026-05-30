@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/791887e0a0470ac40d5a523f0d629ceefd89fe20/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d6ea170b5db4fe1e5559433d38b4563ca140fbfc/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -260,6 +260,46 @@ function test_propose_revertsOnLengthMismatch() public;
 
 ```solidity
 function test_propose_revertsIfAlreadyActive() public;
+```
+
+### test_propose_revertsOnZeroAddressVault
+
+propose() with address(0) in the vault list reverts naming address(0).
+AC: forge test: propose() with address(0) in the vault list reverts naming address(0)
+
+
+```solidity
+function test_propose_revertsOnZeroAddressVault() public;
+```
+
+### test_propose_revertsOnUnregisteredVault
+
+propose() with a vault not in VaultRegistry reverts naming that vault.
+AC: forge test: propose() with an unregistered vault reverts naming the vault address
+
+
+```solidity
+function test_propose_revertsOnUnregisteredVault() public;
+```
+
+### test_propose_revertsOnIneligibleVault
+
+propose() with a vault that was registered then had eligibility revoked reverts at propose time.
+AC: forge test: register then revoke eligibility for a vault; call propose() with it; assert revert
+
+
+```solidity
+function test_propose_revertsOnIneligibleVault() public;
+```
+
+### test_propose_allEligibleVaultsSucceedsActive
+
+propose() with all eligible vaults succeeds and transitions proposal to Active state.
+AC: forge test: propose() with all eligible vaults; assert proposal Active and no revert
+
+
+```solidity
+function test_propose_allEligibleVaultsSucceedsActive() public;
 ```
 
 ### test_propose_allowsNewProposalAfterDefeated

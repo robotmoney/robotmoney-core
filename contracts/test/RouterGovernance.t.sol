@@ -275,6 +275,83 @@ contract RouterGovernanceTest is Test {
         gov.propose(vaults, bps);
     }
 
+    /// @notice propose() with address(0) in the vault list reverts naming address(0).
+    /// AC: forge test: propose() with address(0) in the vault list reverts naming address(0)
+    function test_propose_revertsOnZeroAddressVault() public {
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(0);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(0))
+        );
+        gov.propose(vaults, bps);
+    }
+
+    /// @notice propose() with a vault not in VaultRegistry reverts naming that vault.
+    /// AC: forge test: propose() with an unregistered vault reverts naming the vault address
+    function test_propose_revertsOnUnregisteredVault() public {
+        // Deploy a vault but do NOT register it in the registry.
+        MockGovVault unregisteredVault = new MockGovVault(address(usdc));
+
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(unregisteredVault);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RouterGovernance.VaultNotEligible.selector, address(unregisteredVault)
+            )
+        );
+        gov.propose(vaults, bps);
+    }
+
+    /// @notice propose() with a vault that was registered then had eligibility revoked reverts at propose time.
+    /// AC: forge test: register then revoke eligibility for a vault; call propose() with it; assert revert
+    function test_propose_revertsOnIneligibleVault() public {
+        // vaultA is registered and eligible in setUp; revoke its eligibility.
+        vm.prank(registryAdmin);
+        registry.setRouterEligible(address(vaultA), false);
+
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vaultA))
+        );
+        gov.propose(vaults, bps);
+    }
+
+    /// @notice propose() with all eligible vaults succeeds and transitions proposal to Active state.
+    /// AC: forge test: propose() with all eligible vaults; assert proposal Active and no revert
+    function test_propose_allEligibleVaultsSucceedsActive() public {
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        uint256 pid = gov.propose(vaults, bps);
+
+        assertEq(pid, 1);
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Active));
+    }
+
     function test_propose_allowsNewProposalAfterDefeated() public {
         _proposeValid();
 

@@ -190,6 +190,14 @@ contract RouterGovernance is AccessControl {
     error QuorumBelowMinimum();
     /// @notice Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
     error VotingPeriodBelowMinimum();
+    /// @notice Thrown by propose() when a vault in the proposed weight list is
+    ///         not router-eligible (zero address, unregistered, ineligible flag
+    ///         not set, or wrong underlying asset). Identifies the offending
+    ///         vault so the proposer can correct the weight vector before
+    ///         resubmitting. Prevents governance deadlock from stuck Queued
+    ///         proposals that would revert on execute().
+    /// @param vault The vault address that failed the router-eligibility check.
+    error VaultNotEligible(address vault);
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -305,6 +313,16 @@ contract RouterGovernance is AccessControl {
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
+
+        // Validate each vault's router eligibility before entering Active state.
+        // Prevents governance deadlock from proposals that would permanently
+        // fail on execute() because router.setWeights() reverts on ineligible
+        // vaults (zero address, unregistered, or eligibility flag not set).
+        for (uint256 i = 0; i < vaults.length; i++) {
+            if (!router.isRouterEligible(vaults[i])) {
+                revert VaultNotEligible(vaults[i]);
+            }
+        }
 
         // Only one active/queued proposal at a time.
         // Defeated and Cancelled proposals do not block new proposals.
