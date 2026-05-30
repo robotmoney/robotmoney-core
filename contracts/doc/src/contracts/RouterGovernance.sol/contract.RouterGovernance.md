@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/8e58630207799c10307586432e49cdc81ca6ac74/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/791887e0a0470ac40d5a523f0d629ceefd89fe20/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -18,7 +18,7 @@ agent permissions, or protocol admin operations.
 - Exposes proposal state, vote tallies, cadence metadata, and
 resulting weights for rmpc and dapp reads.
 - One active proposal at a time (simple linear cadence).
-Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`.
+Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
 
 
 ## Constants
@@ -269,6 +269,26 @@ function propose(address[] calldata vaults, uint256[] calldata bps)
 |`bps`|`uint256[]`|    Parallel weight array; must sum to BPS_DENOMINATOR.|
 
 
+### cancel
+
+Cancel any non-executed proposal. Restricted to ADMIN_ROLE.
+Transitions the proposal to Cancelled state and emits
+ProposalCancelled. A Cancelled proposal cannot be executed and
+does not block subsequent propose() calls, providing an on-chain
+escape from governance deadlock (e.g., a vault in the weight
+vector loses router eligibility after the proposal is Queued).
+
+
+```solidity
+function cancel(uint256 proposalId) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`proposalId`|`uint256`|Id of the proposal to cancel.|
+
+
 ### vote
 
 Cast a FOR vote on the currently active proposal.
@@ -317,7 +337,8 @@ function activeProposal()
         uint64 executableAfter,
         uint256 votesFor,
         uint256 snapshotQuorum,
-        bool executed
+        bool executed,
+        bool cancelled
     );
 ```
 
@@ -443,6 +464,21 @@ event WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps
 |`vaults`|`address[]`|    New vault address list.|
 |`bps`|`uint256[]`|       New weight bps list (parallel to vaults).|
 
+### ProposalCancelled
+Emitted when a proposal is cancelled by ADMIN_ROLE.
+
+
+```solidity
+event ProposalCancelled(uint256 indexed proposalId, address indexed cancelledBy);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`proposalId`|`uint256`| Cancelled proposal id.|
+|`cancelledBy`|`address`|Address that called `cancel`.|
+
 ### QuorumThresholdSet
 Emitted when the quorum threshold is changed.
 
@@ -554,6 +590,30 @@ error ProposalDefeated();
 error ActiveProposalExists();
 ```
 
+### ProposalAlreadyExecuted
+Thrown when cancel() is called on an already-executed proposal.
+
+
+```solidity
+error ProposalAlreadyExecuted();
+```
+
+### ProposalAlreadyCancelled
+Thrown when cancel() is called on an already-cancelled proposal.
+
+
+```solidity
+error ProposalAlreadyCancelled();
+```
+
+### ProposalIsCancelled
+Thrown when execute() is called on a cancelled proposal.
+
+
+```solidity
+error ProposalIsCancelled();
+```
+
 ### QuorumBelowMinimum
 Thrown when quorumThreshold is set below MIN_QUORUM_THRESHOLD.
 
@@ -596,6 +656,8 @@ struct Proposal {
     uint256 snapshotQuorum;
     /// Whether the proposal has been executed.
     bool executed;
+    /// Whether the proposal has been cancelled by ADMIN_ROLE.
+    bool cancelled;
 }
 ```
 
@@ -611,7 +673,9 @@ enum ProposalState {
     /// Quorum reached; waiting for execution delay to elapse.
     Queued,
     /// Executed: weights applied to the router.
-    Executed
+    Executed,
+    /// Cancelled by ADMIN_ROLE before execution.
+    Cancelled
 }
 ```
 

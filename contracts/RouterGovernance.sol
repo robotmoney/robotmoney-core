@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
 // Implements: docs/implementation-plan.md "Router-weight governance" phase
-// Implements: issue #309
+// Implements: issue #309, issue #496
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
@@ -21,7 +21,7 @@ import {PortfolioRouter} from "./PortfolioRouter.sol";
 ///           resulting weights for rmpc and dapp reads.
 ///         - One active proposal at a time (simple linear cadence).
 ///
-/// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`.
+/// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
 contract RouterGovernance is AccessControl {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
@@ -51,7 +51,9 @@ contract RouterGovernance is AccessControl {
         /// Quorum reached; waiting for execution delay to elapse.
         Queued,
         /// Executed: weights applied to the router.
-        Executed
+        Executed,
+        /// Cancelled by ADMIN_ROLE before execution.
+        Cancelled
     }
 
     struct Proposal {
@@ -76,6 +78,8 @@ contract RouterGovernance is AccessControl {
         uint256 snapshotQuorum;
         /// Whether the proposal has been executed.
         bool executed;
+        /// Whether the proposal has been cancelled by ADMIN_ROLE.
+        bool cancelled;
     }
 
     // ─── Storage ─────────────────────────────────────────────────────────────
@@ -144,6 +148,11 @@ contract RouterGovernance is AccessControl {
     /// @param bps        New weight bps list (parallel to vaults).
     event WeightsApplied(uint256 indexed proposalId, address[] vaults, uint256[] bps);
 
+    /// @notice Emitted when a proposal is cancelled by ADMIN_ROLE.
+    /// @param proposalId  Cancelled proposal id.
+    /// @param cancelledBy Address that called `cancel`.
+    event ProposalCancelled(uint256 indexed proposalId, address indexed cancelledBy);
+
     /// @notice Emitted when the quorum threshold is changed.
     event QuorumThresholdSet(uint256 oldThreshold, uint256 newThreshold);
 
@@ -171,6 +180,12 @@ contract RouterGovernance is AccessControl {
     error AlreadyExecuted();
     error ProposalDefeated();
     error ActiveProposalExists();
+    /// @notice Thrown when cancel() is called on an already-executed proposal.
+    error ProposalAlreadyExecuted();
+    /// @notice Thrown when cancel() is called on an already-cancelled proposal.
+    error ProposalAlreadyCancelled();
+    /// @notice Thrown when execute() is called on a cancelled proposal.
+    error ProposalIsCancelled();
     /// @notice Thrown when quorumThreshold is set below MIN_QUORUM_THRESHOLD.
     error QuorumBelowMinimum();
     /// @notice Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
@@ -292,6 +307,7 @@ contract RouterGovernance is AccessControl {
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
 
         // Only one active/queued proposal at a time.
+        // Defeated and Cancelled proposals do not block new proposals.
         if (currentProposalId != 0) {
             ProposalState s = _state(currentProposalId);
             if (s == ProposalState.Active || s == ProposalState.Queued) {
@@ -319,6 +335,26 @@ contract RouterGovernance is AccessControl {
         }
 
         emit ProposalCreated(proposalId, msg.sender, vaults, bps, deadline);
+    }
+
+    // ─── Governance: cancel ──────────────────────────────────────────────────
+
+    /// @notice Cancel any non-executed proposal. Restricted to ADMIN_ROLE.
+    ///         Transitions the proposal to Cancelled state and emits
+    ///         ProposalCancelled. A Cancelled proposal cannot be executed and
+    ///         does not block subsequent propose() calls, providing an on-chain
+    ///         escape from governance deadlock (e.g., a vault in the weight
+    ///         vector loses router eligibility after the proposal is Queued).
+    /// @param proposalId Id of the proposal to cancel.
+    function cancel(uint256 proposalId) external onlyRole(ADMIN_ROLE) {
+        Proposal storage p = _proposals[proposalId];
+        if (p.id == 0) revert NoActiveProposal();
+        if (p.executed) revert ProposalAlreadyExecuted();
+        if (p.cancelled) revert ProposalAlreadyCancelled();
+
+        p.cancelled = true;
+
+        emit ProposalCancelled(proposalId, msg.sender);
     }
 
     // ─── Governance: vote ────────────────────────────────────────────────────
@@ -351,6 +387,7 @@ contract RouterGovernance is AccessControl {
         if (p.executed) revert AlreadyExecuted();
 
         ProposalState s = _state(proposalId);
+        if (s == ProposalState.Cancelled) revert ProposalIsCancelled();
         if (s == ProposalState.Active) {
             // Voting period still open.
             if (block.timestamp <= p.votingDeadline) revert VotingStillOpen();
@@ -393,7 +430,8 @@ contract RouterGovernance is AccessControl {
             uint64 executableAfter,
             uint256 votesFor,
             uint256 snapshotQuorum,
-            bool executed
+            bool executed,
+            bool cancelled
         )
     {
         uint256 pid = currentProposalId;
@@ -408,7 +446,8 @@ contract RouterGovernance is AccessControl {
             p.executableAfter,
             p.votesFor,
             p.snapshotQuorum,
-            p.executed
+            p.executed,
+            p.cancelled
         );
     }
 
@@ -445,6 +484,7 @@ contract RouterGovernance is AccessControl {
     /// @dev Compute proposal state without requiring `id != 0`.
     function _state(uint256 proposalId) internal view returns (ProposalState) {
         Proposal storage p = _proposals[proposalId];
+        if (p.cancelled) return ProposalState.Cancelled;
         if (p.executed) return ProposalState.Executed;
 
         if (block.timestamp <= p.votingDeadline) {

@@ -795,7 +795,7 @@ contract RouterGovernanceTest is Test {
         gov.setQuorumThreshold(originalThreshold * 2);
 
         // activeProposal() must expose the original snapshot.
-        (,,,,,, uint256 votesFor, uint256 snap,) = gov.activeProposal();
+        (,,,,,, uint256 votesFor, uint256 snap,,) = gov.activeProposal();
         assertEq(snap, originalThreshold);
         assertEq(votesFor, 0);
         // Sanity: live threshold has changed.
@@ -848,6 +848,175 @@ contract RouterGovernanceTest is Test {
         vm.prank(govAdmin);
         gov.setQuorumThreshold(threshold1);
         assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Defeated));
+    }
+
+    // ─── cancel() ────────────────────────────────────────────────────────────
+
+    /// @notice ADMIN_ROLE can cancel a Queued proposal; state transitions to
+    ///         Cancelled and ProposalCancelled event is emitted.
+    function test_cancel_adminCancelsQueuedProposal() public {
+        uint256 pid = _proposeValid();
+
+        // Alice (60%) votes — proposal reaches quorum.
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Advance past voting period so proposal is Queued.
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Queued));
+
+        // Admin cancels — expect ProposalCancelled event.
+        vm.prank(govAdmin);
+        vm.expectEmit(true, true, false, false);
+        emit RouterGovernance.ProposalCancelled(pid, govAdmin);
+        gov.cancel(pid);
+
+        // State must now be Cancelled.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Cancelled));
+    }
+
+    /// @notice ADMIN_ROLE can cancel an Active proposal.
+    function test_cancel_adminCancelsActiveProposal() public {
+        uint256 pid = _proposeValid();
+
+        // Proposal is still Active.
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Active));
+
+        vm.prank(govAdmin);
+        gov.cancel(pid);
+
+        assertEq(uint256(gov.proposalState(pid)), uint256(RouterGovernance.ProposalState.Cancelled));
+    }
+
+    /// @notice Non-ADMIN_ROLE cancel() call reverts with AccessControl error.
+    function test_cancel_revertsForNonAdmin() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        gov.cancel(pid);
+    }
+
+    /// @notice cancel() on a non-existent proposal reverts with NoActiveProposal.
+    function test_cancel_revertsOnNonExistentProposal() public {
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.NoActiveProposal.selector);
+        gov.cancel(999);
+    }
+
+    /// @notice cancel() on an already-executed proposal reverts with ProposalAlreadyExecuted.
+    function test_cancel_revertsOnAlreadyExecuted() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+        gov.execute(pid);
+
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.ProposalAlreadyExecuted.selector);
+        gov.cancel(pid);
+    }
+
+    /// @notice cancel() on an already-cancelled proposal reverts with ProposalAlreadyCancelled.
+    function test_cancel_revertsOnAlreadyCancelled() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(govAdmin);
+        gov.cancel(pid);
+
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.ProposalAlreadyCancelled.selector);
+        gov.cancel(pid);
+    }
+
+    /// @notice A new proposal can be created immediately after prior proposal is cancelled.
+    function test_cancel_allowsNewProposalAfterCancelled() public {
+        uint256 pid1 = _proposeValid();
+
+        // Cancel the first proposal.
+        vm.prank(govAdmin);
+        gov.cancel(pid1);
+
+        // Immediately submit a new proposal — must succeed.
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vaultA);
+        uint256[] memory bps = new uint256[](1);
+        bps[0] = 10_000;
+
+        vm.prank(govAdmin);
+        uint256 pid2 = gov.propose(vaults, bps);
+        assertEq(pid2, 2);
+        assertEq(gov.currentProposalId(), 2);
+    }
+
+    /// @notice execute() on a Cancelled proposal reverts with ProposalIsCancelled.
+    function test_execute_revertsIfCancelled() public {
+        uint256 pid = _proposeValid();
+
+        // Vote to queue it, then cancel.
+        vm.prank(alice);
+        gov.vote(pid);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+
+        vm.prank(govAdmin);
+        gov.cancel(pid);
+
+        vm.expectRevert(RouterGovernance.ProposalIsCancelled.selector);
+        gov.execute(pid);
+    }
+
+    /// @notice Governance deadlock recovery: vault loses router eligibility after
+    ///         proposal is Queued, cancel() unblocks propose() with valid vaults.
+    function test_cancel_deadlockRecovery() public {
+        // Propose with vaultA and vaultB both eligible.
+        uint256 pid1 = _proposeValid();
+
+        // Vote to queue.
+        vm.prank(alice);
+        gov.vote(pid1);
+        vm.warp(block.timestamp + VOTING_PERIOD + 1);
+        assertEq(uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Queued));
+
+        // Simulate deadlock: revoke vaultA's router eligibility.
+        vm.prank(registryAdmin);
+        registry.setRouterEligible(address(vaultA), false);
+
+        // execute() would now revert (router checks eligibility).
+        // cancel() unblocks the situation.
+        vm.prank(govAdmin);
+        gov.cancel(pid1);
+        assertEq(
+            uint256(gov.proposalState(pid1)), uint256(RouterGovernance.ProposalState.Cancelled)
+        );
+
+        // Restore vaultA eligibility and submit a replacement proposal using only vaultB.
+        vm.prank(registryAdmin);
+        registry.setRouterEligible(address(vaultA), true);
+
+        // Submit replacement with valid vaults (both eligible again).
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 5_000;
+        bps[1] = 5_000;
+
+        vm.prank(govAdmin);
+        uint256 pid2 = gov.propose(vaults, bps);
+        assertEq(pid2, 2);
+
+        // Vote and execute the replacement.
+        vm.prank(alice);
+        gov.vote(pid2);
+        vm.warp(block.timestamp + VOTING_PERIOD + EXECUTION_DELAY + 1);
+        gov.execute(pid2);
+
+        // Weights applied successfully.
+        (address[] memory wVaults, uint256[] memory wBps) = router.getWeights();
+        assertEq(wVaults.length, 2);
+        assertEq(wBps[0], 5_000);
+        assertEq(wBps[1], 5_000);
     }
 
     /// @notice clearVotedWeights forwards to the router and reverts routing to
