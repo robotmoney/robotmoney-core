@@ -72,6 +72,7 @@
     - [PassthroughAdapterTest](contracts/test/PassthroughAdapter.t.sol/contract.PassthroughAdapterTest.md)
     - [MockUSDC](contracts/test/PortfolioRouter.t.sol/contract.MockUSDC.md)
     - [MockRouterVault](contracts/test/PortfolioRouter.t.sol/contract.MockRouterVault.md)
+    - [PartialAcceptVault](contracts/test/PortfolioRouter.t.sol/contract.PartialAcceptVault.md)
     - [PortfolioRouterTest](contracts/test/PortfolioRouter.t.sol/contract.PortfolioRouterTest.md)
     - [FeeOnTransferUSDC](contracts/test/RobotMoneyGateway.t.sol/contract.FeeOnTransferUSDC.md)
     - [ShareLeakVault](contracts/test/RobotMoneyGateway.t.sol/contract.ShareLeakVault.md)

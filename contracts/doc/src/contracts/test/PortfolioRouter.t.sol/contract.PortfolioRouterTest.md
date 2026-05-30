@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5e0758d2049cf2770fbcc743d358f5172be4f30a/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/17d3c27bc19dd2e7dd9dd09c12e0fb0b8179d593/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -562,6 +562,75 @@ un-opted-in vault, true once the registry flag is flipped.
 
 ```solidity
 function test_isRouterEligible_followsRegistryFlag() public;
+```
+
+### _deployPartialVault
+
+Deploy and register a PartialAcceptVault, marking it router-eligible.
+
+
+```solidity
+function _deployPartialVault() internal returns (PartialAcceptVault pv);
+```
+
+### test_deposit_revertsWithInvariantViolation_whenVaultAcceptsPartial
+
+AC#1: deposit through a mock vault that accepts only half legAmount
+causes the full deposit to revert with UsdcCustodyInvariantViolated.
+
+
+```solidity
+function test_deposit_revertsWithInvariantViolation_whenVaultAcceptsPartial() public;
+```
+
+### test_deposit_happyPath_leavesZeroUsdcInRouter
+
+AC#4: normal deposit through well-behaved vaults leaves zero USDC
+in the router — confirming the invariant is satisfied on the
+happy path without triggering UsdcCustodyInvariantViolated.
+
+
+```solidity
+function test_deposit_happyPath_leavesZeroUsdcInRouter() public;
+```
+
+### test_rescueUsdc_adminTransfersBalance_andEmitsEvent
+
+AC#2: rescueUsdc called by ADMIN_ROLE transfers the full stranded
+balance and emits RescuedUsdc.
+
+
+```solidity
+function test_rescueUsdc_adminTransfersBalance_andEmitsEvent() public;
+```
+
+### test_rescueUsdc_revertsForNonAdmin
+
+AC#3: rescueUsdc called by a non-ADMIN_ROLE account reverts with
+the standard AccessControl error.
+
+
+```solidity
+function test_rescueUsdc_revertsForNonAdmin() public;
+```
+
+### test_rescueUsdc_revertsOnZeroAddress
+
+rescueUsdc reverts when the recipient is address(0).
+
+
+```solidity
+function test_rescueUsdc_revertsOnZeroAddress() public;
+```
+
+### test_rescueUsdc_noopWhenBalanceIsZero
+
+rescueUsdc is a no-op (no event, no revert) when the router holds
+zero USDC — useful for defensive calls in scripts.
+
+
+```solidity
+function test_rescueUsdc_noopWhenBalanceIsZero() public;
 ```
 
 ### _registerRwaPlaceholder

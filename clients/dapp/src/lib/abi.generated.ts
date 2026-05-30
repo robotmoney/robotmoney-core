@@ -5823,6 +5823,19 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "rescueUsdc",
+    inputs: [
+      {
+        name: "to",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "revokeRole",
     inputs: [
       {
@@ -5998,6 +6011,25 @@ export const routerAbiGenerated = [
         type: "uint256[]",
         indexed: false,
         internalType: "uint256[]",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "RescuedUsdc",
+    inputs: [
+      {
+        name: "to",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
       },
     ],
     anonymous: false,
@@ -6275,6 +6307,11 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "SlippageExceeded",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "UsdcCustodyInvariantViolated",
     inputs: [],
   },
   {

@@ -1,11 +1,12 @@
-# MockRouterVault
+# PartialAcceptVault
 [Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/17d3c27bc19dd2e7dd9dd09c12e0fb0b8179d593/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 ERC20
 
-ERC-4626-shaped vault mock for router tests. 1:1 deposit, previewDeposit returns
-1:1 unless `_failOnDeposit` is set.
+A misbehaving vault that only accepts half of the legAmount,
+leaving the other half stranded in the router. Used to exercise
+the UsdcCustodyInvariantViolated post-loop check.
 
 
 ## Constants
@@ -16,20 +17,12 @@ IERC20 public immutable assetToken
 ```
 
 
-## State Variables
-### failOnDeposit
-
-```solidity
-bool public failOnDeposit
-```
-
-
 ## Functions
 ### constructor
 
 
 ```solidity
-constructor(address asset_) ERC20("Mock Vault Shares", "MVS");
+constructor(address asset_) ERC20("Partial Vault Shares", "PVS");
 ```
 
 ### decimals
@@ -60,14 +53,9 @@ function totalAssets() external view returns (uint256);
 function previewDeposit(uint256 assets) external pure returns (uint256);
 ```
 
-### setFailOnDeposit
-
-
-```solidity
-function setFailOnDeposit(bool fail) external;
-```
-
 ### deposit
+
+Accepts only half of `assets`, leaving the remainder in the router.
 
 
 ```solidity

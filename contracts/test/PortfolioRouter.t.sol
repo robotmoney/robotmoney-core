@@ -69,6 +69,46 @@ contract MockRouterVault is ERC20 {
     }
 }
 
+/// @notice A misbehaving vault that only accepts half of the legAmount,
+///         leaving the other half stranded in the router. Used to exercise
+///         the UsdcCustodyInvariantViolated post-loop check.
+contract PartialAcceptVault is ERC20 {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable assetToken;
+
+    event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
+
+    constructor(address asset_) ERC20("Partial Vault Shares", "PVS") {
+        assetToken = IERC20(asset_);
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function asset() external view returns (address) {
+        return address(assetToken);
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return assetToken.balanceOf(address(this));
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets / 2;
+    }
+
+    /// @dev Accepts only half of `assets`, leaving the remainder in the router.
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        uint256 accepted = assets / 2;
+        assetToken.safeTransferFrom(msg.sender, address(this), accepted);
+        shares = accepted;
+        _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, accepted, shares);
+    }
+}
+
 // ─── PortfolioRouterTest ──────────────────────────────────────────────────────
 
 contract PortfolioRouterTest is Test {
@@ -985,6 +1025,114 @@ contract PortfolioRouterTest is Test {
         vm.prank(admin);
         registry.setRouterEligible(address(v), false);
         assertFalse(router.isRouterEligible(address(v)), "false after revoke");
+    }
+
+    // ─── Zero-USDC custody invariant (issue #502) ─────────────────────────────
+    //
+    // After _executeLegs completes, usdc.balanceOf(address(router)) must be
+    // zero. If any vault accepts less than its allocated legAmount the whole
+    // deposit reverts with UsdcCustodyInvariantViolated so no USDC is left
+    // stranded. A separate rescueUsdc path is available to ADMIN_ROLE to
+    // recover USDC that arrives through other means (direct transfers, etc.).
+
+    /// @dev Deploy and register a PartialAcceptVault, marking it router-eligible.
+    function _deployPartialVault() internal returns (PartialAcceptVault pv) {
+        pv = new PartialAcceptVault(address(usdc));
+        VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
+            name: "Partial Vault", asset: address(usdc), registeredAt: 0
+        });
+        vm.startPrank(admin);
+        registry.registerVault(address(pv), meta);
+        registry.setRouterEligible(address(pv), true);
+        vm.stopPrank();
+    }
+
+    /// @notice AC#1: deposit through a mock vault that accepts only half legAmount
+    ///         causes the full deposit to revert with UsdcCustodyInvariantViolated.
+    function test_deposit_revertsWithInvariantViolation_whenVaultAcceptsPartial() public {
+        PartialAcceptVault pv = _deployPartialVault();
+
+        // Single-vault weight vector so all USDC flows to the partial-accept vault.
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(pv);
+        bps[0] = 10_000;
+        vm.prank(admin);
+        router.setWeights(vaults, bps);
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.UsdcCustodyInvariantViolated.selector);
+        router.deposit(amount, new uint256[](0));
+    }
+
+    /// @notice AC#4: normal deposit through well-behaved vaults leaves zero USDC
+    ///         in the router — confirming the invariant is satisfied on the
+    ///         happy path without triggering UsdcCustodyInvariantViolated.
+    function test_deposit_happyPath_leavesZeroUsdcInRouter() public {
+        _setEqualWeights();
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        vm.prank(depositor);
+        router.deposit(amount, new uint256[](0));
+
+        assertEq(usdc.balanceOf(address(router)), 0, "router must hold zero USDC after deposit");
+    }
+
+    /// @notice AC#2: rescueUsdc called by ADMIN_ROLE transfers the full stranded
+    ///         balance and emits RescuedUsdc.
+    function test_rescueUsdc_adminTransfersBalance_andEmitsEvent() public {
+        // Strand USDC in the router by direct transfer (simulating a recovery scenario).
+        uint256 stranded = 500 * ONE_USDC;
+        usdc.mint(address(router), stranded);
+        assertEq(usdc.balanceOf(address(router)), stranded);
+
+        address recipient = makeAddr("recipient");
+
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit PortfolioRouter.RescuedUsdc(recipient, stranded);
+        router.rescueUsdc(recipient);
+
+        assertEq(usdc.balanceOf(address(router)), 0, "router must be empty after rescue");
+        assertEq(usdc.balanceOf(recipient), stranded, "recipient must receive stranded amount");
+    }
+
+    /// @notice AC#3: rescueUsdc called by a non-ADMIN_ROLE account reverts with
+    ///         the standard AccessControl error.
+    function test_rescueUsdc_revertsForNonAdmin() public {
+        usdc.mint(address(router), 100 * ONE_USDC);
+
+        bytes32 role = router.ADMIN_ROLE();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+            )
+        );
+        router.rescueUsdc(stranger);
+    }
+
+    /// @notice rescueUsdc reverts when the recipient is address(0).
+    function test_rescueUsdc_revertsOnZeroAddress() public {
+        usdc.mint(address(router), 100 * ONE_USDC);
+        vm.prank(admin);
+        vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
+        router.rescueUsdc(address(0));
+    }
+
+    /// @notice rescueUsdc is a no-op (no event, no revert) when the router holds
+    ///         zero USDC — useful for defensive calls in scripts.
+    function test_rescueUsdc_noopWhenBalanceIsZero() public {
+        assertEq(usdc.balanceOf(address(router)), 0);
+        vm.prank(admin);
+        // Should not revert and should not emit RescuedUsdc.
+        router.rescueUsdc(admin);
+        assertEq(usdc.balanceOf(address(router)), 0);
     }
 
     // ─── RWA/Thematic placeholder coexistence (issue #479) ────────────────────

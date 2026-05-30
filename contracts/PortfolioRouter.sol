@@ -134,6 +134,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 
+    /// @notice Emitted when stranded USDC is recovered from the router by an
+    ///         ADMIN_ROLE holder via `rescueUsdc`.
+    /// @param to     Recipient of the recovered USDC.
+    /// @param amount Amount of USDC transferred.
+    event RescuedUsdc(address indexed to, uint256 amount);
+
     // ─── Errors ──────────────────────────────────────────────────────────────
 
     /// @notice Address argument is `address(0)`.
@@ -182,6 +188,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         interact with such vaults.
     /// @param vault The vault address whose `asset()` call reverted.
     error VaultAssetUnreadable(address vault);
+
+    /// @notice After `_executeLegs` completes the router's USDC balance is
+    ///         non-zero, meaning one or more vaults accepted less than their
+    ///         allocated `legAmount`. The entire deposit is reverted so no
+    ///         USDC is permanently stranded in the router.
+    error UsdcCustodyInvariantViolated();
 
     /// @notice A vault has not been marked router-eligible in the
     ///         VaultRegistry (`isRouterEligible(vault) == false`).
@@ -318,6 +330,21 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         if (vault == address(0)) revert ZeroAddress();
         emit VaultCapSet(vault, vaultCap[vault], cap);
         vaultCap[vault] = cap;
+    }
+
+    /// @notice Transfer the entire USDC balance held by this contract to `to`.
+    ///         Intended as an emergency recovery path for USDC that becomes
+    ///         stranded in the router through edge cases not covered by the
+    ///         `UsdcCustodyInvariantViolated` deposit guard (e.g. direct
+    ///         transfers, or USDC approved but not pulled by a vault that
+    ///         reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
+    /// @param to  Recipient of all stranded USDC held by the router.
+    function rescueUsdc(address to) external onlyRole(ADMIN_ROLE) {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 amount = usdc.balanceOf(address(this));
+        if (amount == 0) return;
+        usdc.safeTransfer(to, amount);
+        emit RescuedUsdc(to, amount);
     }
 
     // ─── Preview ─────────────────────────────────────────────────────────────
@@ -506,6 +533,14 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             }
 
             emit RouterDeposit(receiver, vault, legAmount, sharesReceived, bpsList[i]);
+        }
+
+        // Post-loop custody invariant: the router must hold zero USDC after all
+        // legs have been executed. If any vault accepted less than its allocated
+        // legAmount the deposit reverts entirely, preventing USDC from being
+        // permanently stranded with no recovery path.
+        if (usdc.balanceOf(address(this)) != 0) {
+            revert UsdcCustodyInvariantViolated();
         }
     }
 

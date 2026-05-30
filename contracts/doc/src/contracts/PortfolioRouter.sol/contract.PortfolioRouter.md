@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5e0758d2049cf2770fbcc743d358f5172be4f30a/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/17d3c27bc19dd2e7dd9dd09c12e0fb0b8179d593/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -235,6 +235,26 @@ Restricted to `ADMIN_ROLE`.
 ```solidity
 function setVaultCap(address vault, uint256 cap) external onlyRole(ADMIN_ROLE);
 ```
+
+### rescueUsdc
+
+Transfer the entire USDC balance held by this contract to `to`.
+Intended as an emergency recovery path for USDC that becomes
+stranded in the router through edge cases not covered by the
+`UsdcCustodyInvariantViolated` deposit guard (e.g. direct
+transfers, or USDC approved but not pulled by a vault that
+reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
+
+
+```solidity
+function rescueUsdc(address to) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`to`|`address`| Recipient of all stranded USDC held by the router.|
+
 
 ### previewDeposit
 
@@ -565,6 +585,22 @@ event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 |`oldCap`|`uint256`|Previous cap (0 = uncapped).|
 |`newCap`|`uint256`|New cap (0 = uncapped).|
 
+### RescuedUsdc
+Emitted when stranded USDC is recovered from the router by an
+ADMIN_ROLE holder via `rescueUsdc`.
+
+
+```solidity
+event RescuedUsdc(address indexed to, uint256 amount);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`to`|`address`|    Recipient of the recovered USDC.|
+|`amount`|`uint256`|Amount of USDC transferred.|
+
 ## Errors
 ### ZeroAddress
 Address argument is `address(0)`.
@@ -687,6 +723,17 @@ error VaultAssetUnreadable(address vault);
 |Name|Type|Description|
 |----|----|-----------|
 |`vault`|`address`|The vault address whose `asset()` call reverted.|
+
+### UsdcCustodyInvariantViolated
+After `_executeLegs` completes the router's USDC balance is
+non-zero, meaning one or more vaults accepted less than their
+allocated `legAmount`. The entire deposit is reverted so no
+USDC is permanently stranded in the router.
+
+
+```solidity
+error UsdcCustodyInvariantViolated();
+```
 
 ### VaultNotRouterEligible
 A vault has not been marked router-eligible in the
