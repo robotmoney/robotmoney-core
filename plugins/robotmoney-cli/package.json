@@ -1,0 +1,5 @@
+{
+  "name": "opencode-robotmoney-cli",
+  "version": "0.2.0",
+  "main": "plugin.json"
+}

@@ -299,10 +299,17 @@ jobs:
           ./target/release/rmpc get-vault --config "$RMPC_CONFIG" --pretty \
             > "${RUNNER_TEMP}/robotmoney-opencode/vault-pre.json"
 
+      - name: Install robotmoney-cli plugin
+        run: opencode plugin "$PWD/plugins/robotmoney-cli"
+
       - name: Headless deposit run
         run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          opencode run "deposit 1 USDC to the vault using config $RMPC_CONFIG" --format json --plugin "$PWD/plugins/robotmoney-cli" | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
+          opencode run "deposit 1 USDC to the vault using config $RMPC_CONFIG" --format json \
+            | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
+          test -s "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json" \
+            || { echo "FAIL: headless deposit produced empty transcript"; exit 1; }
 
       - name: Capture post-deposit vault state
         run: |
@@ -416,10 +423,17 @@ jobs:
       - name: Read-only isolation assertions
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
+      - name: Install robotmoney-cli plugin
+        run: opencode plugin "$PWD/plugins/robotmoney-cli"
+
       - name: Headless read run
         run: |
+          set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          opencode run "show me the vault state and my balance" --format json --plugin "$PWD/plugins/robotmoney-cli" | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
+          opencode run "show me the vault state and my balance" --format json \
+            | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
+          test -s "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json" \
+            || { echo "FAIL: headless read produced empty transcript"; exit 1; }
 
       - name: Assert read transcript
         env:
