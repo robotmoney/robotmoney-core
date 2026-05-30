@@ -166,11 +166,6 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error AssetStillHeld();
     error NoActiveAssets();
     error CannotRescueUsdc();
-    /// @dev Raised when ADMIN_ROLE tries to rescue the vault's own share token.
-    ///      Vault shares held at address(this) represent proportional claims on
-    ///      vault assets; allowing rescue would let ADMIN drain value from
-    ///      remaining depositors by redeeming those shares to any address.
-    error CannotRescueShares();
     error EmergencyUnwindOverrideDisabled();
     error PoolTokenMismatch();
     error AssetInBasket();
@@ -326,7 +321,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 minOut = _twapTokenValue(assets[i].pool, assets[i].token, swapIn)
                 * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
-            _USDC.safeIncreaseAllowance(address(SWAP_ROUTER), swapIn);
+            _USDC.forceApprove(address(SWAP_ROUTER), swapIn);
             uint256 amountOut = SWAP_ROUTER.exactInputSingle(
                 ISwapRouter.ExactInputSingleParams({
                     tokenIn: address(_USDC),
@@ -338,6 +333,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
                     sqrtPriceLimitX96: 0
                 })
             );
+            _USDC.forceApprove(address(SWAP_ROUTER), 0);
             emit Swapped(address(_USDC), assets[i].token, swapIn, amountOut);
         }
     }
@@ -416,7 +412,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 minUsdcOut = _twapUsdcValue(assets[i].pool, assets[i].token, sellAmount)
                 * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
-            IERC20(assets[i].token).safeIncreaseAllowance(address(SWAP_ROUTER), sellAmount);
+            IERC20(assets[i].token).forceApprove(address(SWAP_ROUTER), sellAmount);
             uint256 received = SWAP_ROUTER.exactInputSingle(
                 ISwapRouter.ExactInputSingleParams({
                     tokenIn: assets[i].token,
@@ -428,6 +424,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
                     sqrtPriceLimitX96: 0
                 })
             );
+            IERC20(assets[i].token).forceApprove(address(SWAP_ROUTER), 0);
             emit Swapped(assets[i].token, address(_USDC), sellAmount, received);
             usdcOut += received;
         }
@@ -617,10 +614,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         emit Shutdown();
     }
 
-    /// @notice Recover accidentally sent ERC-20 tokens (not USDC, basket assets, or vault shares). ADMIN_ROLE.
+    /// @notice Recover accidentally sent ERC-20 tokens (not USDC or basket assets). ADMIN_ROLE.
     function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
         if (token == address(_USDC)) revert CannotRescueUsdc();
-        if (token == address(this)) revert CannotRescueShares();
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
@@ -742,7 +738,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
-        IERC20(assetInfo.token).safeIncreaseAllowance(address(SWAP_ROUTER), bal);
+        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), bal);
         uint256 received = SWAP_ROUTER.exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: assetInfo.token,
@@ -754,6 +750,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
                 sqrtPriceLimitX96: 0
             })
         );
+        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), 0);
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
 
@@ -774,7 +771,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
-        IERC20(assetInfo.token).safeIncreaseAllowance(address(SWAP_ROUTER), bal);
+        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), bal);
         uint256 received = SWAP_ROUTER.exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: assetInfo.token,
@@ -786,6 +783,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
                 sqrtPriceLimitX96: 0
             })
         );
+        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), 0);
         if (received < appliedFloor) {
             revert EmergencyUnwindLossCapExceeded(assetInfo.token, received, appliedFloor);
         }

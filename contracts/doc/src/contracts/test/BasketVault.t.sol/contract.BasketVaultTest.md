@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1e53296ac7c3def2e7f1ed72fa72a5873c593969/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/a9c23f29365b1a58869648c1ae96ac66c7ca191a/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -125,35 +125,6 @@ function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
 
 ```solidity
 function test_rescueTokens_succeedsForNonBasketAsset() public;
-```
-
-### test_rescueTokens_revertsWhenTokenIsVaultShare
-
-rescueTokens(address(this), ...) reverts with CannotRescueShares.
-Vault shares held at address(this) represent proportional claims;
-allowing an ADMIN to rescue them would let the role drain depositor value.
-
-
-```solidity
-function test_rescueTokens_revertsWhenTokenIsVaultShare() public;
-```
-
-### test_rescueTokens_revertsWhenTokenIsBasketAsset_regression
-
-rescueTokens of a basket underlying still reverts with AssetInBasket — no regression.
-
-
-```solidity
-function test_rescueTokens_revertsWhenTokenIsBasketAsset_regression() public;
-```
-
-### test_rescueTokens_revertsWhenTokenIsUsdc_regression
-
-rescueTokens of USDC still reverts with CannotRescueUsdc — no regression.
-
-
-```solidity
-function test_rescueTokens_revertsWhenTokenIsUsdc_regression() public;
 ```
 
 ### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap
@@ -344,6 +315,51 @@ MIN_POOL_CARDINALITY and succeeds at or above it.
 
 ```solidity
 function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public;
+```
+
+### test_routeDeposit_zeroResidualAllowanceAfterSwap
+
+After _routeDeposit, residual USDC allowance on the router is zero.
+
+
+```solidity
+function test_routeDeposit_zeroResidualAllowanceAfterSwap() public;
+```
+
+### test_sellProportional_zeroResidualAllowanceAfterSwap
+
+After _sellProportional (withdrawal), residual token allowance on the router is zero.
+
+
+```solidity
+function test_sellProportional_zeroResidualAllowanceAfterSwap() public;
+```
+
+### test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap
+
+After emergencyUnwindAsset, residual token allowance on the router is zero.
+
+
+```solidity
+function test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap() public;
+```
+
+### test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap
+
+After emergencyUnwindAssetWithCap, residual token allowance on the router is zero.
+
+
+```solidity
+function test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap() public;
+```
+
+### test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances
+
+Deposit + withdrawal round-trip preserves correct token balances and zero allowances.
+
+
+```solidity
+function test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances() public;
 ```
 
 ## Events

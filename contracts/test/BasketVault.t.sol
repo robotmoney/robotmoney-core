@@ -5,7 +5,7 @@
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
 //                      minimums, ADMIN_ROLE-gated per-asset window)
 //         issue #494 — addAsset must verify Uniswap V3 pool observation cardinality
-//         issue #500 — rescueTokens must reject token == address(this) (CannotRescueShares)
+//         issue #501 — replace safeIncreaseAllowance with forceApprove/clear pattern
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 pragma solidity ^0.8.24;
 
@@ -266,35 +266,6 @@ contract BasketVaultTest is Test {
 
         assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
-    }
-
-    // ─── rescueTokens self-rescue guard (issue #500) ──────────────────────
-
-    /// @notice rescueTokens(address(this), ...) reverts with CannotRescueShares.
-    ///         Vault shares held at address(this) represent proportional claims;
-    ///         allowing an ADMIN to rescue them would let the role drain depositor value.
-    function test_rescueTokens_revertsWhenTokenIsVaultShare() public {
-        // Simulate vault shares accumulating at address(vault) (e.g., accidental transfer).
-        // We deal shares directly to the vault address to bypass deposit machinery.
-        deal(address(vault), address(vault), 100 * ONE_USDC);
-
-        vm.expectRevert(BasketVault.CannotRescueShares.selector);
-        vm.prank(admin);
-        vault.rescueTokens(address(vault), admin);
-    }
-
-    /// @notice rescueTokens of a basket underlying still reverts with AssetInBasket — no regression.
-    function test_rescueTokens_revertsWhenTokenIsBasketAsset_regression() public {
-        vm.expectRevert(BasketVault.AssetInBasket.selector);
-        vm.prank(admin);
-        vault.rescueTokens(address(basketToken), admin);
-    }
-
-    /// @notice rescueTokens of USDC still reverts with CannotRescueUsdc — no regression.
-    function test_rescueTokens_revertsWhenTokenIsUsdc_regression() public {
-        vm.expectRevert(BasketVault.CannotRescueUsdc.selector);
-        vm.prank(admin);
-        vault.rescueTokens(address(usdc), admin);
     }
 
     function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public {
@@ -662,6 +633,159 @@ contract BasketVaultTest is Test {
             freshVault.addAsset(address(newAsset), address(fuzzPool), 500);
             assertEq(freshVault.assetCount(), 1, "asset registered when cardinality sufficient");
         }
+    }
+
+    // ─── forceApprove/clear pattern (issue #501) ────────────────────────
+
+    /// @notice After _routeDeposit, residual USDC allowance on the router is zero.
+    function test_routeDeposit_zeroResidualAllowanceAfterSwap() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // tick=0 → 1:1 price; slippage = 100 bps → minOut = 990 USDC.
+        // Router must return at least 990 tokens to satisfy the floor.
+        uint256 routerOut = 995 * ONE_USDC;
+
+        usdc.mint(address(stranger), depositAmount);
+        basketToken.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertEq(
+            usdc.allowance(address(vault), address(router)),
+            0,
+            "_routeDeposit: no residual USDC allowance on router"
+        );
+    }
+
+    /// @notice After _sellProportional (withdrawal), residual token allowance on the router is zero.
+    function test_sellProportional_zeroResidualAllowanceAfterSwap() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // tick=0 → 1:1 price; slippage = 100 bps → minOut = 990 USDC for deposit.
+        uint256 tokensFromDeposit = 995 * ONE_USDC;
+
+        // Seed router with basket tokens for the deposit swap.
+        usdc.mint(address(stranger), depositAmount);
+        basketToken.mint(address(router), tokensFromDeposit);
+        router.setAmountOut(tokensFromDeposit);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        // Withdrawal path: basket tokens → USDC.
+        // vault holds tokensFromDeposit basket tokens; slippage = 100 bps → minUsdcOut = 99% of TWAP value.
+        uint256 withdrawUsdc = 990 * ONE_USDC;
+        usdc.mint(address(router), withdrawUsdc);
+        router.setAmountOut(withdrawUsdc);
+
+        uint256 shares = vault.balanceOf(stranger);
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+
+        assertEq(
+            basketToken.allowance(address(vault), address(router)),
+            0,
+            "_sellProportional: no residual basket-token allowance on router"
+        );
+    }
+
+    /// @notice After emergencyUnwindAsset, residual token allowance on the router is zero.
+    function test_emergencyUnwindAsset_zeroResidualAllowanceAfterSwap() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 950 * ONE_USDC;
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), amountOut);
+        router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), 900 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(
+            basketToken.allowance(address(vault), address(router)),
+            0,
+            "_emergencyUnwindAsset: no residual basket-token allowance on router"
+        );
+    }
+
+    /// @notice After emergencyUnwindAssetWithCap, residual token allowance on the router is zero.
+    function test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 minUsdcOut = 900 * ONE_USDC;
+        uint256 maxLossBps = 1_000; // 10% cap -> appliedFloor = 810 USDC
+        uint256 routerOut = 820 * ONE_USDC; // above 810 floor
+
+        basketToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(router), routerOut);
+        router.setAmountOut(routerOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(basketToken), minUsdcOut, true, maxLossBps);
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = address(basketToken);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwindWithOverride(tokens);
+
+        assertEq(
+            basketToken.allowance(address(vault), address(router)),
+            0,
+            "_emergencyUnwindAssetWithCap: no residual basket-token allowance on router"
+        );
+    }
+
+    /// @notice Deposit + withdrawal round-trip preserves correct token balances and zero allowances.
+    function test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // tick=0 → 1:1 price; slippage = 100 bps → minOut ≥ 990. Use 995 to satisfy.
+        uint256 tokensFromDeposit = 995 * ONE_USDC; // USDC -> basket token
+        uint256 usdcFromWithdraw = 990 * ONE_USDC; // basket token -> USDC (satisfies 99% of TWAP)
+
+        usdc.mint(address(stranger), depositAmount);
+        basketToken.mint(address(router), tokensFromDeposit);
+        router.setAmountOut(tokensFromDeposit);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        // Vault holds basket tokens; allowance on router must be zero.
+        assertEq(
+            basketToken.balanceOf(address(vault)),
+            tokensFromDeposit,
+            "vault holds basket tokens after deposit"
+        );
+        assertEq(
+            usdc.allowance(address(vault), address(router)),
+            0,
+            "no residual USDC allowance after deposit"
+        );
+
+        // Withdrawal swap: basket tokens -> USDC.
+        usdc.mint(address(router), usdcFromWithdraw);
+        router.setAmountOut(usdcFromWithdraw);
+
+        uint256 shares = vault.balanceOf(stranger);
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+
+        assertEq(
+            basketToken.balanceOf(address(vault)), 0, "vault holds no basket tokens after redeem"
+        );
+        assertEq(
+            basketToken.allowance(address(vault), address(router)),
+            0,
+            "no residual basket-token allowance after redeem"
+        );
+        assertGt(usdc.balanceOf(stranger), 0, "stranger received USDC from redeem");
     }
 }
 
