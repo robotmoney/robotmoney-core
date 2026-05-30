@@ -10,7 +10,7 @@
  * is therefore enabled but we don't click it — this spec only asserts
  * UI invariants, not on-chain state changes.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 

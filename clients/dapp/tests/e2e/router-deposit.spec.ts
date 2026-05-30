@@ -13,7 +13,7 @@
  * The existing single-vault flow is exercised separately in
  * vault-deposit-withdraw.spec.ts and must remain unchanged.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   createPublicClient,

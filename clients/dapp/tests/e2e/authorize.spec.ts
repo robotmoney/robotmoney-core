@@ -11,7 +11,7 @@
  * signing prompt: every preview section either renders the structured
  * fields OR emits an explicit refusal — there is no third path.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp } from "./helpers/wallet";
 

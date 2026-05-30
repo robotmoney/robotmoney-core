@@ -21,7 +21,7 @@
  * Canonical: issue #261, docs/development/smoke-test-design.md.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";

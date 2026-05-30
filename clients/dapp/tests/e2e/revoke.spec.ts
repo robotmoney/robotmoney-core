@@ -5,7 +5,7 @@
  * for the revoke action. The on-chain follow-up (rmpc self-check after
  * revoke confirms) lives in fork-roundtrip.spec.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 

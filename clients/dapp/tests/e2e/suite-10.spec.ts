@@ -18,7 +18,7 @@
  * Canonical: docs/development/smoke-test-design.md, issue #318.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints } from "./helpers/devnet";
 import { registryAbi } from "../../src/lib/abi";

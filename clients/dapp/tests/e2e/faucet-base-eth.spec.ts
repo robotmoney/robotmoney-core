@@ -22,7 +22,7 @@
  * docs/testing/smoke-test-design.md.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";

@@ -12,7 +12,8 @@
  * isolation assertions always run. When `captured` is true each cell's numeric
  * value is asserted to match the fixture within `tolerance_pct`.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
+import type { Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";

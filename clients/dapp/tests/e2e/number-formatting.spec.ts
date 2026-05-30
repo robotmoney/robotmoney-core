@@ -16,7 +16,7 @@
  *
  * Canonical: docs/architecture.md §5.3 — Human Dapp.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";

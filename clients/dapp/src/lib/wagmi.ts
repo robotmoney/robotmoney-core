@@ -2,8 +2,8 @@
 
 /**
  * wagmi/viem client setup. The dapp uses the browser-injected EIP-1193
- * provider (MetaMask, hardware bridges, etc.) as its primary wallet
- * connector AND as its primary read transport for the foundry/devnet chain —
+ * provider (MetaMask, hardware bridges, etc.) as its only wallet
+ * connector AND as its read transport for every chain —
  * see `docs/technical/dapp-topology.md` §2 ("No dapp-owned RPC"). All
  * traffic for the chain the user is interacting with traverses an
  * endpoint the user chose, not one this bundle was built with.
@@ -75,8 +75,8 @@ export function makeConfig(_env: Record<string, string | undefined>) {
     transports: {
       [devnet.id]: devnetTransport,
       [foundry.id]: unstable_connector(injected),
-      [sepolia.id]: http(),
-      [mainnet.id]: http(),
+      [sepolia.id]: unstable_connector(injected),
+      [mainnet.id]: unstable_connector(injected),
     },
   });
 }

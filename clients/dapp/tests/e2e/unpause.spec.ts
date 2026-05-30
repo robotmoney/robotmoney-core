@@ -5,7 +5,7 @@
  * admin EOA for the positive structured-preview path, and as the
  * agent EOA (no admin role) for the disabled-button negative path.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 

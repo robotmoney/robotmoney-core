@@ -17,7 +17,7 @@
  * docs/technical/dapp-credential-decisions.md §3.1 — so there is no
  * keygen UI surface to assert against.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 

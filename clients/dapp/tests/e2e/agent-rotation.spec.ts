@@ -18,7 +18,7 @@
  *   5. Step-2 (authorize new) button is disabled until step-1
  *      (revoke old) has been submitted.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 

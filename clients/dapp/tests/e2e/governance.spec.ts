@@ -32,7 +32,7 @@
  * Canonical: issue #322, docs/development/smoke-test-design.md.
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import type { Hex } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from "./helpers/wallet";

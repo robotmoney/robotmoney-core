@@ -13,7 +13,7 @@
  * smoke-test share-receiver address, and asserts that PortfolioPosition and
  * TransactionHistory render the stubbed fixture data.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 
 let endpoints: DevnetEndpoints;

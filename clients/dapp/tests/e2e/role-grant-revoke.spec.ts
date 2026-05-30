@@ -16,7 +16,8 @@
  * and ships in a sibling spec; we keep this file focused on the UI
  * invariants the acceptance criteria explicitly enumerate.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
+import type { Page } from "@playwright/test";
 import { encodeFunctionData, keccak256, toBytes } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab, type AdminTabId } from "./helpers/wallet";

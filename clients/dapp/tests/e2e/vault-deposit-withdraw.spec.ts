@@ -16,7 +16,7 @@
  * The same dapp bundle that ships is what CI exercises — no
  * test-only code paths in the dapp.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   createPublicClient,
