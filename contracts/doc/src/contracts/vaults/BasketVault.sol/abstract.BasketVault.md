@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e30069c8df8fc8c637d65bc2f991adfaf60a1079/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1e53296ac7c3def2e7f1ed72fa72a5873c593969/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -462,7 +462,7 @@ function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 
 ### rescueTokens
 
-Recover accidentally sent ERC-20 tokens (not USDC or basket assets). ADMIN_ROLE.
+Recover accidentally sent ERC-20 tokens (not USDC, basket assets, or vault shares). ADMIN_ROLE.
 
 
 ```solidity
@@ -781,6 +781,17 @@ error NoActiveAssets();
 
 ```solidity
 error CannotRescueUsdc();
+```
+
+### CannotRescueShares
+Raised when ADMIN_ROLE tries to rescue the vault's own share token.
+Vault shares held at address(this) represent proportional claims on
+vault assets; allowing rescue would let ADMIN drain value from
+remaining depositors by redeeming those shares to any address.
+
+
+```solidity
+error CannotRescueShares();
 ```
 
 ### EmergencyUnwindOverrideDisabled

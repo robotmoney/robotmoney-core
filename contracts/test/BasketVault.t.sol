@@ -5,6 +5,7 @@
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
 //                      minimums, ADMIN_ROLE-gated per-asset window)
 //         issue #494 — addAsset must verify Uniswap V3 pool observation cardinality
+//         issue #500 — rescueTokens must reject token == address(this) (CannotRescueShares)
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 pragma solidity ^0.8.24;
 
@@ -265,6 +266,35 @@ contract BasketVaultTest is Test {
 
         assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
+    }
+
+    // ─── rescueTokens self-rescue guard (issue #500) ──────────────────────
+
+    /// @notice rescueTokens(address(this), ...) reverts with CannotRescueShares.
+    ///         Vault shares held at address(this) represent proportional claims;
+    ///         allowing an ADMIN to rescue them would let the role drain depositor value.
+    function test_rescueTokens_revertsWhenTokenIsVaultShare() public {
+        // Simulate vault shares accumulating at address(vault) (e.g., accidental transfer).
+        // We deal shares directly to the vault address to bypass deposit machinery.
+        deal(address(vault), address(vault), 100 * ONE_USDC);
+
+        vm.expectRevert(BasketVault.CannotRescueShares.selector);
+        vm.prank(admin);
+        vault.rescueTokens(address(vault), admin);
+    }
+
+    /// @notice rescueTokens of a basket underlying still reverts with AssetInBasket — no regression.
+    function test_rescueTokens_revertsWhenTokenIsBasketAsset_regression() public {
+        vm.expectRevert(BasketVault.AssetInBasket.selector);
+        vm.prank(admin);
+        vault.rescueTokens(address(basketToken), admin);
+    }
+
+    /// @notice rescueTokens of USDC still reverts with CannotRescueUsdc — no regression.
+    function test_rescueTokens_revertsWhenTokenIsUsdc_regression() public {
+        vm.expectRevert(BasketVault.CannotRescueUsdc.selector);
+        vm.prank(admin);
+        vault.rescueTokens(address(usdc), admin);
     }
 
     function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public {

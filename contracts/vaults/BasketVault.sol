@@ -166,6 +166,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error AssetStillHeld();
     error NoActiveAssets();
     error CannotRescueUsdc();
+    /// @dev Raised when ADMIN_ROLE tries to rescue the vault's own share token.
+    ///      Vault shares held at address(this) represent proportional claims on
+    ///      vault assets; allowing rescue would let ADMIN drain value from
+    ///      remaining depositors by redeeming those shares to any address.
+    error CannotRescueShares();
     error EmergencyUnwindOverrideDisabled();
     error PoolTokenMismatch();
     error AssetInBasket();
@@ -612,9 +617,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         emit Shutdown();
     }
 
-    /// @notice Recover accidentally sent ERC-20 tokens (not USDC or basket assets). ADMIN_ROLE.
+    /// @notice Recover accidentally sent ERC-20 tokens (not USDC, basket assets, or vault shares). ADMIN_ROLE.
     function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
         if (token == address(_USDC)) revert CannotRescueUsdc();
+        if (token == address(this)) revert CannotRescueShares();
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {

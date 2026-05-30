@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e30069c8df8fc8c637d65bc2f991adfaf60a1079/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/1e53296ac7c3def2e7f1ed72fa72a5873c593969/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -125,6 +125,35 @@ function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
 
 ```solidity
 function test_rescueTokens_succeedsForNonBasketAsset() public;
+```
+
+### test_rescueTokens_revertsWhenTokenIsVaultShare
+
+rescueTokens(address(this), ...) reverts with CannotRescueShares.
+Vault shares held at address(this) represent proportional claims;
+allowing an ADMIN to rescue them would let the role drain depositor value.
+
+
+```solidity
+function test_rescueTokens_revertsWhenTokenIsVaultShare() public;
+```
+
+### test_rescueTokens_revertsWhenTokenIsBasketAsset_regression
+
+rescueTokens of a basket underlying still reverts with AssetInBasket — no regression.
+
+
+```solidity
+function test_rescueTokens_revertsWhenTokenIsBasketAsset_regression() public;
+```
+
+### test_rescueTokens_revertsWhenTokenIsUsdc_regression
+
+rescueTokens of USDC still reverts with CannotRescueUsdc — no regression.
+
+
+```solidity
+function test_rescueTokens_revertsWhenTokenIsUsdc_regression() public;
 ```
 
 ### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap
