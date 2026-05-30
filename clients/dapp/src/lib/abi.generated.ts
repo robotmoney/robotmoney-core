@@ -67,6 +67,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "COMMIT_EXPIRY_BLOCKS",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "DEFAULT_ADMIN_ROLE",
     inputs: [],
     outputs: [
@@ -334,6 +347,43 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "commitAuthorization",
+    inputs: [
+      {
+        name: "commitHash",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "commitments",
+    inputs: [
+      {
+        name: "",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [
+      {
+        name: "committer",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "blockNumber",
+        type: "uint64",
+        internalType: "uint64",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "deposit",
     inputs: [
       {
@@ -547,6 +597,81 @@ export const gatewayAbiGenerated = [
         name: "callerConfirmation",
         type: "address",
         internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "revealAuthorization",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "salt",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "p",
+        type: "tuple",
+        internalType: "struct IGateway.AgentPolicy",
+        components: [
+          {
+            name: "active",
+            type: "bool",
+            internalType: "bool",
+          },
+          {
+            name: "validUntil",
+            type: "uint64",
+            internalType: "uint64",
+          },
+          {
+            name: "maxPerPayment",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "maxPerWindow",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "shareReceiver",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "allowedDestinations",
+            type: "address[]",
+            internalType: "address[]",
+          },
+          {
+            name: "assetRecipient",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "maxWithdrawPerPayment",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "maxWithdrawPerWindow",
+            type: "uint256",
+            internalType: "uint256",
+          },
+          {
+            name: "allowedSourceVaults",
+            type: "address[]",
+            internalType: "address[]",
+          },
+        ],
       },
     ],
     outputs: [],
@@ -1043,6 +1168,56 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "CommitRevealed",
+    inputs: [
+      {
+        name: "committer",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "commitHash",
+        type: "bytes32",
+        indexed: true,
+        internalType: "bytes32",
+      },
+      {
+        name: "agent",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "CommitSubmitted",
+    inputs: [
+      {
+        name: "committer",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "commitHash",
+        type: "bytes32",
+        indexed: true,
+        internalType: "bytes32",
+      },
+      {
+        name: "blockNumber",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "Paused",
     inputs: [
       {
@@ -1208,6 +1383,31 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "AssetMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CommitmentExpired",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CommitmentHashMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CommitmentNotFound",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CommitmentOwnerMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CommitmentTooRecent",
     inputs: [],
   },
   {

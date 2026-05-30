@@ -1962,3 +1962,244 @@ contract GatewayWithdrawTest is Test {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// commitAuthorization / revealAuthorization (issue #507)
+// ---------------------------------------------------------------------------
+
+contract GatewayCommitRevealTest is Test {
+    TestERC20 internal usdc;
+    MockVault internal vault;
+    RobotMoneyGateway internal gateway;
+
+    address internal admin = makeAddr("admin");
+    address internal pauser = makeAddr("pauser");
+    address internal agent = makeAddr("agent");
+    address internal depositor = makeAddr("depositor");
+    address internal shareReceiver = makeAddr("shareReceiver");
+
+    bytes32 internal agentRole;
+
+    uint256 internal constant ONE_USDC = 1e6;
+    uint256 internal constant MAX_PER_PAYMENT = 1_000 * ONE_USDC;
+    uint256 internal constant MAX_PER_WINDOW = 5_000 * ONE_USDC;
+
+    function setUp() public {
+        usdc = new TestERC20();
+        vault = new MockVault(address(usdc));
+        gateway = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
+        agentRole = gateway.AGENT_ROLE();
+        vm.warp(1_700_000_000);
+    }
+
+    function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory) {
+        address[] memory none = new address[](0);
+        return IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
+    }
+
+    /// @dev Helper: build the commit hash the same way the gateway does.
+    function _commitHash(address agentAddr, address committer, bytes32 salt)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(agentAddr, committer, salt));
+    }
+
+    // -------------------------------------------------------------------
+    // Happy path
+    // -------------------------------------------------------------------
+
+    /// @dev AC: valid commit followed by valid reveal (at least 1 block later)
+    ///      succeeds and sets agentOwner correctly.
+    function test_commitReveal_happyPath_authorizesAgent() public {
+        bytes32 salt = keccak256("my-secret-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        // Commit
+        vm.prank(depositor);
+        vm.expectEmit(true, true, false, true, address(gateway));
+        emit IGateway.CommitSubmitted(depositor, commitHash, uint64(block.number));
+        gateway.commitAuthorization(commitHash);
+
+        // Advance 1 block.
+        vm.roll(block.number + 1);
+
+        // Reveal
+        vm.prank(depositor);
+        vm.expectEmit(true, true, true, false, address(gateway));
+        emit IGateway.CommitRevealed(depositor, commitHash, agent);
+        gateway.revealAuthorization(agent, salt, p);
+
+        // Agent must be authorized correctly.
+        assertTrue(gateway.hasRole(agentRole, agent));
+        assertEq(gateway.agentOwner(agent), depositor);
+
+        // Commitment must be cleared after reveal.
+        (address committer,) = gateway.commitments(commitHash);
+        assertEq(committer, address(0));
+    }
+
+    // -------------------------------------------------------------------
+    // Revert cases
+    // -------------------------------------------------------------------
+
+    /// @dev AC: reveal without a prior commit reverts CommitmentNotFound.
+    function test_revealAuthorization_revertsWithoutPriorCommit() public {
+        bytes32 salt = keccak256("no-commit-salt");
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(depositor);
+        vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
+        gateway.revealAuthorization(agent, salt, p);
+    }
+
+    /// @dev AC: reveal with wrong salt reverts CommitmentNotFound (hash mismatch
+    ///      means no matching commitment exists).
+    function test_revealAuthorization_revertsOnWrongSalt() public {
+        bytes32 salt = keccak256("correct-salt");
+        bytes32 wrongSalt = keccak256("wrong-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(depositor);
+        gateway.commitAuthorization(commitHash);
+
+        vm.roll(block.number + 1);
+
+        // Reveal with wrong salt: recomputed hash won't match any stored commitment.
+        vm.prank(depositor);
+        vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
+        gateway.revealAuthorization(agent, wrongSalt, p);
+    }
+
+    /// @dev AC: reveal from a different address than the committer reverts.
+    ///      (The hash includes msg.sender so a different caller produces a
+    ///      different hash → CommitmentNotFound.)
+    function test_revealAuthorization_revertsFromDifferentAddress() public {
+        bytes32 salt = keccak256("alice-salt");
+        address alice = makeAddr("alice");
+        // Commit hash binds alice as the committer.
+        bytes32 commitHash = _commitHash(agent, alice, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(alice);
+        gateway.commitAuthorization(commitHash);
+
+        vm.roll(block.number + 1);
+
+        // Bob tries to reveal using the same agent/salt but from his address.
+        // The recomputed hash uses bob's address, so no matching commitment exists.
+        address bob = makeAddr("bob");
+        vm.prank(bob);
+        vm.expectRevert(RobotMoneyGateway.CommitmentNotFound.selector);
+        gateway.revealAuthorization(agent, salt, p);
+    }
+
+    /// @dev AC: reveal after COMMIT_EXPIRY_BLOCKS reverts CommitmentExpired.
+    function test_revealAuthorization_revertsAfterExpiry() public {
+        bytes32 salt = keccak256("expiry-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(depositor);
+        gateway.commitAuthorization(commitHash);
+
+        // Advance past expiry.
+        vm.roll(block.number + gateway.COMMIT_EXPIRY_BLOCKS() + 1);
+
+        vm.prank(depositor);
+        vm.expectRevert(RobotMoneyGateway.CommitmentExpired.selector);
+        gateway.revealAuthorization(agent, salt, p);
+    }
+
+    /// @dev AC: reveal in the same block as the commit reverts CommitmentTooRecent.
+    function test_revealAuthorization_revertsInSameBlock() public {
+        bytes32 salt = keccak256("same-block-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(depositor);
+        gateway.commitAuthorization(commitHash);
+
+        // No block advance — same block.
+        vm.prank(depositor);
+        vm.expectRevert(RobotMoneyGateway.CommitmentTooRecent.selector);
+        gateway.revealAuthorization(agent, salt, p);
+    }
+
+    /// @dev AC: front-runner committing for same agent after legitimate commit
+    ///      cannot reveal (msg.sender mismatch means a different hash is used).
+    ///      Alice commits legitimately; Bob then commits a commitment binding
+    ///      himself to the same agent. Bob's reveal uses his own hash and
+    ///      succeeds from his perspective, but because each committer's hash
+    ///      independently encodes the committer, Bob authorizing the same agent
+    ///      address is blocked by AgentAlreadyOwned if Alice reveals first,
+    ///      and Bob's commitment simply uses a different hash than Alice's.
+    ///
+    ///      This test verifies that when Alice reveals first she wins, and Bob's
+    ///      subsequent reveal is blocked by AgentAlreadyOwned.
+    function test_revealAuthorization_frontRunnerBlockedByAlreadyOwned() public {
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+        bytes32 saltAlice = keccak256("alice-salt");
+        bytes32 saltBob = keccak256("bob-salt");
+
+        bytes32 hashAlice = _commitHash(agent, alice, saltAlice);
+        bytes32 hashBob = _commitHash(agent, bob, saltBob);
+
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        // Both commit for the same agent address in block N.
+        vm.prank(alice);
+        gateway.commitAuthorization(hashAlice);
+        vm.prank(bob);
+        gateway.commitAuthorization(hashBob);
+
+        vm.roll(block.number + 1);
+
+        // Alice reveals first — succeeds.
+        vm.prank(alice);
+        gateway.revealAuthorization(agent, saltAlice, p);
+        assertEq(gateway.agentOwner(agent), alice);
+
+        // Bob's subsequent reveal for the same agent is blocked.
+        vm.prank(bob);
+        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
+        gateway.revealAuthorization(agent, saltBob, p);
+    }
+
+    // -------------------------------------------------------------------
+    // Event and storage verification
+    // -------------------------------------------------------------------
+
+    /// @dev Verify commitAuthorization emits CommitSubmitted with correct fields.
+    function test_commitAuthorization_emitsEvent() public {
+        bytes32 salt = keccak256("event-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+
+        vm.prank(depositor);
+        vm.expectEmit(true, true, false, true, address(gateway));
+        emit IGateway.CommitSubmitted(depositor, commitHash, uint64(block.number));
+        gateway.commitAuthorization(commitHash);
+
+        // Verify storage.
+        (address committer, uint64 blockNum) = gateway.commitments(commitHash);
+        assertEq(committer, depositor);
+        assertEq(blockNum, block.number);
+    }
+}

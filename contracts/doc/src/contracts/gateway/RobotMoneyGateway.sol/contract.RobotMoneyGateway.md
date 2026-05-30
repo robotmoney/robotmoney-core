@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0e0f94d96bb3900f4fd22dd5ae7b5741099dfdba/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64169d1d4c5fd64418418d518fe4d696b2319b88/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -37,6 +37,17 @@ uint256 public constant MAX_DEADLINE_SKEW = 600
 ```
 
 
+### COMMIT_EXPIRY_BLOCKS
+Number of blocks after which an unrevealed commitment expires.
+After `commitBlock + COMMIT_EXPIRY_BLOCKS` the commitment can
+no longer be revealed and the depositor must re-commit.
+
+
+```solidity
+uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
+```
+
+
 ### usdcToken
 Pinned USDC token.
 
@@ -66,6 +77,16 @@ IPortfolioRouter public immutable routerContract
 
 
 ## State Variables
+### commitments
+Pending commitments keyed by `commitHash =
+keccak256(abi.encode(agent, depositor, salt))`. Cleared on reveal.
+
+
+```solidity
+mapping(bytes32 => Commitment) public commitments
+```
+
+
 ### agents
 Per-agent policy. Keyed on the agent's signing address.
 
@@ -269,6 +290,54 @@ the deposit side is equally hardened against calendar-boundary bursts.
 function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal;
 ```
 
+### commitAuthorization
+
+Phase-1 of the two-phase commit/reveal agent authorization.
+Submit `commitHash = keccak256(abi.encode(agent, msg.sender, salt))`
+to reserve the agent address. Must wait at least one block
+before revealing. The commitment expires after
+`COMMIT_EXPIRY_BLOCKS` blocks.
+
+Permissionless. Any EOA may commit. The hash binds the agent
+address, the caller identity, and a caller-chosen salt so that
+a mempool observer cannot front-run the reveal with a different
+depositor address.
+
+
+```solidity
+function commitAuthorization(bytes32 commitHash) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`commitHash`|`bytes32`|`keccak256(abi.encode(agent, msg.sender, salt))`.|
+
+
+### revealAuthorization
+
+Phase-2 of the two-phase commit/reveal agent authorization.
+Reveal `agent` and `salt` to validate the prior commitment and
+authorize the agent with the supplied policy. Reverts if no
+prior commitment matches, if the commitment has expired, if
+`msg.sender` is not the original committer, or if the hash
+does not match.
+
+Must be called at least one block after `commitAuthorization`.
+
+
+```solidity
+function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`| The agent address to authorize (must not already be owned).|
+|`salt`|`bytes32`|  The caller-chosen salt used when building `commitHash`.|
+|`p`|`AgentPolicy`|     Initial policy parameters.|
+
+
 ### authorizeAgent
 
 First-time authorization for `agent`. Permissionless — any EOA
@@ -288,6 +357,17 @@ function authorizeAgent(address agent, AgentPolicy calldata p) external;
 |`agent`|`address`|The agent address to authorize (must not already be owned).|
 |`p`|`AgentPolicy`|    Initial policy parameters.|
 
+
+### _authorizeAgentInternal
+
+Shared authorization logic for both `authorizeAgent` (direct) and
+`revealAuthorization` (commit/reveal path). Extracted to avoid code
+duplication and to keep each entrypoint concise.
+
+
+```solidity
+function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal;
+```
 
 ### setPolicy
 
@@ -670,6 +750,52 @@ owner. The existing owner must call `setPolicy` to update or
 error AgentAlreadyOwned();
 ```
 
+### CommitmentNotFound
+`revealAuthorization` called but no prior commitment exists for
+this commit hash. The depositor must call `commitAuthorization`
+first and wait at least one block.
+
+
+```solidity
+error CommitmentNotFound();
+```
+
+### CommitmentExpired
+`revealAuthorization` called after the commitment has expired
+(block.number > commitBlock + COMMIT_EXPIRY_BLOCKS).
+
+
+```solidity
+error CommitmentExpired();
+```
+
+### CommitmentOwnerMismatch
+`revealAuthorization` called from a different address than the
+one that submitted the commitment.
+
+
+```solidity
+error CommitmentOwnerMismatch();
+```
+
+### CommitmentHashMismatch
+`revealAuthorization` called but `keccak256(agent, msg.sender, salt)`
+does not match the stored commitment hash.
+
+
+```solidity
+error CommitmentHashMismatch();
+```
+
+### CommitmentTooRecent
+`revealAuthorization` called in the same block as the commitment.
+Must wait at least one block before revealing.
+
+
+```solidity
+error CommitmentTooRecent();
+```
+
 ### InvalidDestination
 `depositTo` was called with a destination not in the agent's
 `allowedDestinations` list (when the list is non-empty), or the
@@ -733,6 +859,26 @@ error UnexpectedAssetsReceived();
 ```
 
 ## Structs
+### Commitment
+Pending authorization commitment. Stored by commitHash to allow
+the depositor to reveal in a subsequent block, defeating
+mempool front-running of `authorizeAgent`.
+
+
+```solidity
+struct Commitment {
+    address committer;
+    uint64 blockNumber;
+}
+```
+
+**Properties**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`committer`|`address`|  EOA that submitted the commitment (`msg.sender` at commit time).|
+|`blockNumber`|`uint64`|Block number at which the commitment was submitted.|
+
 ### DepositWindow
 Per-agent rolling-window deposit accounting (issue #497).
 Mirrors the withdrawal rolling-window pattern (`agentWithdrawWindow`)

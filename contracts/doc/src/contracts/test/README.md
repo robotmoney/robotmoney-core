@@ -43,6 +43,7 @@
 - [RobotMoneyGatewayTest](RobotMoneyGateway.t.sol/contract.RobotMoneyGatewayTest.md)
 - [GatewayRollingDepositWindowTest](RobotMoneyGateway.t.sol/contract.GatewayRollingDepositWindowTest.md)
 - [GatewayWithdrawTest](RobotMoneyGateway.t.sol/contract.GatewayWithdrawTest.md)
+- [GatewayCommitRevealTest](RobotMoneyGateway.t.sol/contract.GatewayCommitRevealTest.md)
 - [TestUSDC](RobotMoneyVault.t.sol/contract.TestUSDC.md)
 - [MockAdapter](RobotMoneyVault.t.sol/contract.MockAdapter.md)
 - [VaultHarness](RobotMoneyVault.t.sol/contract.VaultHarness.md)

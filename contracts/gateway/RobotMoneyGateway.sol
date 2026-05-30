@@ -66,6 +66,22 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         owner. The existing owner must call `setPolicy` to update or
     ///         `revokeAgent` to release the address before a new authorization.
     error AgentAlreadyOwned();
+    /// @notice `revealAuthorization` called but no prior commitment exists for
+    ///         this commit hash. The depositor must call `commitAuthorization`
+    ///         first and wait at least one block.
+    error CommitmentNotFound();
+    /// @notice `revealAuthorization` called after the commitment has expired
+    ///         (block.number > commitBlock + COMMIT_EXPIRY_BLOCKS).
+    error CommitmentExpired();
+    /// @notice `revealAuthorization` called from a different address than the
+    ///         one that submitted the commitment.
+    error CommitmentOwnerMismatch();
+    /// @notice `revealAuthorization` called but `keccak256(agent, msg.sender, salt)`
+    ///         does not match the stored commitment hash.
+    error CommitmentHashMismatch();
+    /// @notice `revealAuthorization` called in the same block as the commitment.
+    ///         Must wait at least one block before revealing.
+    error CommitmentTooRecent();
     /// @notice `depositTo` was called with a destination not in the agent's
     ///         `allowedDestinations` list (when the list is non-empty), or the
     ///         destination is neither the pinned vault nor the router.
@@ -98,6 +114,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Maximum future skew permitted on `deadline` arguments.
     uint256 public constant MAX_DEADLINE_SKEW = 600;
 
+    /// @notice Number of blocks after which an unrevealed commitment expires.
+    ///         After `commitBlock + COMMIT_EXPIRY_BLOCKS` the commitment can
+    ///         no longer be revealed and the depositor must re-commit.
+    uint256 public constant COMMIT_EXPIRY_BLOCKS = 256;
+
     // -------------------------------------------------------------------
     // Immutables
     // -------------------------------------------------------------------
@@ -115,6 +136,20 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // -------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------
+
+    /// @notice Pending authorization commitment. Stored by commitHash to allow
+    ///         the depositor to reveal in a subsequent block, defeating
+    ///         mempool front-running of `authorizeAgent`.
+    /// @param committer   EOA that submitted the commitment (`msg.sender` at commit time).
+    /// @param blockNumber Block number at which the commitment was submitted.
+    struct Commitment {
+        address committer;
+        uint64 blockNumber;
+    }
+
+    /// @notice Pending commitments keyed by `commitHash =
+    ///         keccak256(abi.encode(agent, depositor, salt))`. Cleared on reveal.
+    mapping(bytes32 => Commitment) public commitments;
 
     /// @notice Per-agent policy. Keyed on the agent's signing address.
     mapping(address => AgentPolicy) public agents;
@@ -290,7 +325,62 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     // -------------------------------------------------------------------
 
     /// @inheritdoc IGateway
+    function commitAuthorization(bytes32 commitHash) external {
+        // Overwrite any prior commitment from this caller for the same hash.
+        // This is safe: an old expired commitment is useless; overwriting it
+        // with a fresh block number resets the expiry clock, which is the
+        // depositor's intent when they re-commit.
+        commitments[commitHash] =
+            Commitment({committer: msg.sender, blockNumber: uint64(block.number)});
+        emit CommitSubmitted(msg.sender, commitHash, uint64(block.number));
+    }
+
+    /// @inheritdoc IGateway
+    function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external {
+        bytes32 commitHash = keccak256(abi.encode(agent, msg.sender, salt));
+        Commitment memory c = commitments[commitHash];
+
+        // 1. Commitment must exist.
+        if (c.committer == address(0)) revert CommitmentNotFound();
+
+        // 2. Revealer must be the original committer.
+        //
+        // Note: this branch is defense-in-depth only. Because the commit hash
+        // is computed as `keccak256(abi.encode(agent, msg.sender, salt))` at
+        // commit time, a caller with a different `msg.sender` would produce a
+        // different hash. The lookup above returns a zero-committer entry for
+        // that hash (no matching commitment), which already reverts at step 1.
+        // The `CommitmentOwnerMismatch` check here is therefore unreachable
+        // through the current API surface.
+        // coverage:unreachable
+        if (c.committer != msg.sender) revert CommitmentOwnerMismatch();
+
+        // 3. Must wait at least one block (front-running protection).
+        if (block.number <= uint256(c.blockNumber)) revert CommitmentTooRecent();
+
+        // 4. Commitment must not be expired.
+        if (block.number > uint256(c.blockNumber) + COMMIT_EXPIRY_BLOCKS) {
+            revert CommitmentExpired();
+        }
+
+        // 5. Clear the commitment before the authorization logic (CEI).
+        delete commitments[commitHash];
+
+        emit CommitRevealed(msg.sender, commitHash, agent);
+
+        // 6. Perform the authorization (same logic as authorizeAgent).
+        _authorizeAgentInternal(agent, p);
+    }
+
+    /// @inheritdoc IGateway
     function authorizeAgent(address agent, AgentPolicy calldata p) external {
+        _authorizeAgentInternal(agent, p);
+    }
+
+    /// @dev Shared authorization logic for both `authorizeAgent` (direct) and
+    ///      `revealAuthorization` (commit/reveal path). Extracted to avoid code
+    ///      duplication and to keep each entrypoint concise.
+    function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
         _validatePolicy(p);

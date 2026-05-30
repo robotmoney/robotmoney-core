@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0e0f94d96bb3900f4fd22dd5ae7b5741099dfdba/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/855a7f59159825a55b0d6d3a0d14b4090075ab13/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -134,6 +134,54 @@ function withdraw(
 |----|----|-----------|
 |`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/shares/key.|
 |`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
+
+
+### commitAuthorization
+
+Phase-1 of the two-phase commit/reveal agent authorization.
+Submit `commitHash = keccak256(abi.encode(agent, msg.sender, salt))`
+to reserve the agent address. Must wait at least one block
+before revealing. The commitment expires after
+`COMMIT_EXPIRY_BLOCKS` blocks.
+
+Permissionless. Any EOA may commit. The hash binds the agent
+address, the caller identity, and a caller-chosen salt so that
+a mempool observer cannot front-run the reveal with a different
+depositor address.
+
+
+```solidity
+function commitAuthorization(bytes32 commitHash) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`commitHash`|`bytes32`|`keccak256(abi.encode(agent, msg.sender, salt))`.|
+
+
+### revealAuthorization
+
+Phase-2 of the two-phase commit/reveal agent authorization.
+Reveal `agent` and `salt` to validate the prior commitment and
+authorize the agent with the supplied policy. Reverts if no
+prior commitment matches, if the commitment has expired, if
+`msg.sender` is not the original committer, or if the hash
+does not match.
+
+Must be called at least one block after `commitAuthorization`.
+
+
+```solidity
+function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`| The agent address to authorize (must not already be owned).|
+|`salt`|`bytes32`|  The caller-chosen salt used when building `commitHash`.|
+|`p`|`AgentPolicy`|     Initial policy parameters.|
 
 
 ### authorizeAgent
@@ -331,6 +379,44 @@ function effectiveDepositWindowGross(address agent) external view returns (uint2
 
 
 ## Events
+### CommitSubmitted
+Emitted when a depositor submits a commitment hash for a
+future `revealAuthorization` call.
+
+
+```solidity
+event CommitSubmitted(
+    address indexed committer, bytes32 indexed commitHash, uint64 blockNumber
+);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`committer`|`address`|   EOA that submitted the commitment (`msg.sender`).|
+|`commitHash`|`bytes32`|  `keccak256(abi.encode(agent, committer, salt))`.|
+|`blockNumber`|`uint64`| Block number at which the commitment was recorded.|
+
+### CommitRevealed
+Emitted when a depositor successfully reveals a commitment and
+the agent is authorized.
+
+
+```solidity
+event CommitRevealed(
+    address indexed committer, bytes32 indexed commitHash, address indexed agent
+);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`committer`|`address`|  EOA that revealed (must equal the original committer).|
+|`commitHash`|`bytes32`| The commitment hash that was revealed and cleared.|
+|`agent`|`address`|      Agent address that was authorized.|
+
 ### AgentAuthorized
 Emitted when an agent's policy is created or updated.
 

@@ -65,6 +65,24 @@ interface IGateway {
     // Events
     // -------------------------------------------------------------------
 
+    /// @notice Emitted when a depositor submits a commitment hash for a
+    ///         future `revealAuthorization` call.
+    /// @param committer    EOA that submitted the commitment (`msg.sender`).
+    /// @param commitHash   `keccak256(abi.encode(agent, committer, salt))`.
+    /// @param blockNumber  Block number at which the commitment was recorded.
+    event CommitSubmitted(
+        address indexed committer, bytes32 indexed commitHash, uint64 blockNumber
+    );
+
+    /// @notice Emitted when a depositor successfully reveals a commitment and
+    ///         the agent is authorized.
+    /// @param committer   EOA that revealed (must equal the original committer).
+    /// @param commitHash  The commitment hash that was revealed and cleared.
+    /// @param agent       Agent address that was authorized.
+    event CommitRevealed(
+        address indexed committer, bytes32 indexed commitHash, address indexed agent
+    );
+
     /// @notice Emitted when an agent's policy is created or updated.
     /// @param agent          Agent address whose policy was set.
     /// @param owner          Depositor EOA that authorized the agent
@@ -216,6 +234,30 @@ interface IGateway {
         uint64 deadline,
         bytes32 idempotencyKey
     ) external returns (bytes32 paymentId, uint256 assetsOut);
+
+    /// @notice Phase-1 of the two-phase commit/reveal agent authorization.
+    ///         Submit `commitHash = keccak256(abi.encode(agent, msg.sender, salt))`
+    ///         to reserve the agent address. Must wait at least one block
+    ///         before revealing. The commitment expires after
+    ///         `COMMIT_EXPIRY_BLOCKS` blocks.
+    /// @dev    Permissionless. Any EOA may commit. The hash binds the agent
+    ///         address, the caller identity, and a caller-chosen salt so that
+    ///         a mempool observer cannot front-run the reveal with a different
+    ///         depositor address.
+    /// @param commitHash `keccak256(abi.encode(agent, msg.sender, salt))`.
+    function commitAuthorization(bytes32 commitHash) external;
+
+    /// @notice Phase-2 of the two-phase commit/reveal agent authorization.
+    ///         Reveal `agent` and `salt` to validate the prior commitment and
+    ///         authorize the agent with the supplied policy. Reverts if no
+    ///         prior commitment matches, if the commitment has expired, if
+    ///         `msg.sender` is not the original committer, or if the hash
+    ///         does not match.
+    /// @dev    Must be called at least one block after `commitAuthorization`.
+    /// @param agent  The agent address to authorize (must not already be owned).
+    /// @param salt   The caller-chosen salt used when building `commitHash`.
+    /// @param p      Initial policy parameters.
+    function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
     /// @notice First-time authorization for `agent`. Permissionless — any EOA
     ///         may call to register their own agent. `msg.sender` is recorded
