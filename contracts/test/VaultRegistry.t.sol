@@ -327,4 +327,98 @@ contract VaultRegistryTest is Test {
         registry.setRouter(address(mockRouter));
         assertEq(address(registry.router()), address(mockRouter));
     }
+
+    // ─── setRouter(address(0)) guard — issue #498 ────────────────────────────
+
+    /// @notice setRouter(address(0)) reverts with RouterUnlinkBlocked when the
+    ///         currently-linked router still has a non-empty default weight
+    ///         vector. ADR-0002 bypass-prevention.
+    function test_setRouter_unlinkReverts_whenDefaultVectorNonEmpty() public {
+        MockDefaultWeightsRouter mockRouter = new MockDefaultWeightsRouter();
+
+        vm.startPrank(admin);
+        registry.registerVault(vault1, meta1);
+        registry.registerVault(vault2, meta2);
+        registry.setRouterEligible(vault1, true);
+        registry.setRouterEligible(vault2, true);
+        registry.setRouter(address(mockRouter));
+        mockRouter.setDefaultWeightsLength(2);
+
+        // Attempt to unlink while a non-empty default vector exists — must revert.
+        vm.expectRevert(abi.encodeWithSelector(VaultRegistry.RouterUnlinkBlocked.selector, 2));
+        registry.setRouter(address(0));
+        vm.stopPrank();
+    }
+
+    /// @notice setRouter(address(0)) succeeds when no default weight vector is
+    ///         set (initial deployment path).
+    function test_setRouter_unlink_succeedsWithNoDefaultVector() public {
+        MockDefaultWeightsRouter mockRouter = new MockDefaultWeightsRouter();
+
+        vm.startPrank(admin);
+        // Link a router with an empty default vector.
+        registry.setRouter(address(mockRouter));
+        // defaultWeightsLength is 0 → unlink is allowed.
+        registry.setRouter(address(0));
+        vm.stopPrank();
+
+        assertEq(address(registry.router()), address(0));
+    }
+
+    /// @notice setRouter(address(0)) when no router was ever linked succeeds
+    ///         unconditionally (idempotent unlink).
+    function test_setRouter_unlink_succeeds_whenNoPriorRouter() public {
+        vm.prank(admin);
+        // No router linked yet — should not revert.
+        registry.setRouter(address(0));
+        assertEq(address(registry.router()), address(0));
+    }
+
+    /// @notice setRouterEligible() with router == address(0) (initial state,
+    ///         no default vector configured) decrements routerEligibleCount
+    ///         and leaves the stale-length invariant satisfied — there is no
+    ///         default weight vector to protect. ADR-0002.
+    function test_setRouterEligible_noRouter_countUpdatesAndInvariantHolds() public {
+        vm.startPrank(admin);
+        registry.registerVault(vault1, meta1);
+
+        // No router linked. Mark vault1 eligible (count 0 → 1). Allowed
+        // because there is no default vector to protect.
+        registry.setRouterEligible(vault1, true);
+        assertEq(registry.routerEligibleCount(), 1);
+
+        // Revoke eligibility (count 1 → 0). Also allowed — no default vector,
+        // so the stale-length invariant holds trivially after the change.
+        registry.setRouterEligible(vault1, false);
+        assertEq(registry.routerEligibleCount(), 0);
+        vm.stopPrank();
+    }
+
+    /// @notice The full bypass sequence (setRouter(0) → revoke eligibility →
+    ///         re-link) is blocked at the setRouter(0) step when a non-empty
+    ///         default vector is present.
+    function test_bypassSequence_blockedAtUnlink() public {
+        MockDefaultWeightsRouter mockRouter = new MockDefaultWeightsRouter();
+
+        vm.startPrank(admin);
+        registry.registerVault(vault1, meta1);
+        registry.registerVault(vault2, meta2);
+
+        // Set up: two eligible vaults, router linked, default vector set.
+        registry.setRouterEligible(vault1, true);
+        registry.setRouterEligible(vault2, true);
+        registry.setRouter(address(mockRouter));
+        mockRouter.setDefaultWeightsLength(2);
+
+        // Bypass attempt step 1: unlink router → blocked.
+        vm.expectRevert(abi.encodeWithSelector(VaultRegistry.RouterUnlinkBlocked.selector, 2));
+        registry.setRouter(address(0));
+
+        // Registry state is unchanged: router still linked, count still 2.
+        assertEq(address(registry.router()), address(mockRouter));
+        assertEq(registry.routerEligibleCount(), 2);
+        assertTrue(registry.isRouterEligible(vault1));
+        assertTrue(registry.isRouterEligible(vault2));
+        vm.stopPrank();
+    }
 }

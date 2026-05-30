@@ -1,5 +1,5 @@
 # RmToken
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d6ea170b5db4fe1e5559433d38b4563ca140fbfc/contracts/RmToken.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5e0758d2049cf2770fbcc743d358f5172be4f30a/contracts/RmToken.sol)
 
 **Title:**
 RmToken — ERC-20 governance voting token for Robot Money.

@@ -148,6 +148,12 @@ contract VaultRegistry is AccessControl {
     /// @param defaultLength  Current default weight vector length.
     error StaleDefaultWeightsLength(uint256 expectedLength, uint256 defaultLength);
 
+    /// @notice `setRouter(address(0))` was called while the currently-linked
+    ///         router still carries a non-empty default weight vector. Clear or
+    ///         re-set `defaultWeights` on the router first, then unlink.
+    /// @param defaultLength  Current default weight vector length on the router.
+    error RouterUnlinkBlocked(uint256 defaultLength);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param admin Address that receives `ADMIN_ROLE` at deploy time.
@@ -237,8 +243,21 @@ contract VaultRegistry is AccessControl {
     /// @notice Link the `PortfolioRouter` whose default weight vector length is
     ///         kept consistent with `routerEligibleCount`. Pass `address(0)` to
     ///         unlink. Restricted to `ADMIN_ROLE`. ADR-0002.
+    ///
+    ///         Unlinking (passing `address(0)`) is blocked while the currently-
+    ///         linked router still carries a non-empty default weight vector.
+    ///         Clear or re-set `defaultWeights` on the router first. This
+    ///         prevents the bypass sequence: unlink → revoke eligibility → re-link
+    ///         which would otherwise leave the vector pointing to an ineligible
+    ///         vault without tripping the stale-length guard.
     /// @param newRouter Address of the `PortfolioRouter` (or 0 to unlink).
     function setRouter(address newRouter) external onlyRole(ADMIN_ROLE) {
+        if (newRouter == address(0) && address(router) != address(0)) {
+            uint256 defaultLength = router.defaultWeightsLength();
+            if (defaultLength != 0) {
+                revert RouterUnlinkBlocked(defaultLength);
+            }
+        }
         emit RouterSet(address(router), newRouter);
         router = IRouterDefaultWeights(newRouter);
     }

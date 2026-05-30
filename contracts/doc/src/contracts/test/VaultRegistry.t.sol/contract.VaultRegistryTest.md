@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d6ea170b5db4fe1e5559433d38b4563ca140fbfc/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5e0758d2049cf2770fbcc743d358f5172be4f30a/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -254,5 +254,59 @@ setRouter is gated by ADMIN_ROLE and emits RouterSet.
 
 ```solidity
 function test_setRouter_adminOnlyAndEmits() public;
+```
+
+### test_setRouter_unlinkReverts_whenDefaultVectorNonEmpty
+
+setRouter(address(0)) reverts with RouterUnlinkBlocked when the
+currently-linked router still has a non-empty default weight
+vector. ADR-0002 bypass-prevention.
+
+
+```solidity
+function test_setRouter_unlinkReverts_whenDefaultVectorNonEmpty() public;
+```
+
+### test_setRouter_unlink_succeedsWithNoDefaultVector
+
+setRouter(address(0)) succeeds when no default weight vector is
+set (initial deployment path).
+
+
+```solidity
+function test_setRouter_unlink_succeedsWithNoDefaultVector() public;
+```
+
+### test_setRouter_unlink_succeeds_whenNoPriorRouter
+
+setRouter(address(0)) when no router was ever linked succeeds
+unconditionally (idempotent unlink).
+
+
+```solidity
+function test_setRouter_unlink_succeeds_whenNoPriorRouter() public;
+```
+
+### test_setRouterEligible_noRouter_countUpdatesAndInvariantHolds
+
+setRouterEligible() with router == address(0) (initial state,
+no default vector configured) decrements routerEligibleCount
+and leaves the stale-length invariant satisfied — there is no
+default weight vector to protect. ADR-0002.
+
+
+```solidity
+function test_setRouterEligible_noRouter_countUpdatesAndInvariantHolds() public;
+```
+
+### test_bypassSequence_blockedAtUnlink
+
+The full bypass sequence (setRouter(0) → revoke eligibility →
+re-link) is blocked at the setRouter(0) step when a non-empty
+default vector is present.
+
+
+```solidity
+function test_bypassSequence_blockedAtUnlink() public;
 ```
 

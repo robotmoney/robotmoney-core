@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d6ea170b5db4fe1e5559433d38b4563ca140fbfc/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/5e0758d2049cf2770fbcc743d358f5172be4f30a/contracts/VaultRegistry.sol)
 
 **Inherits:**
 AccessControl
@@ -193,6 +193,12 @@ function setRouterEligible(address vault, bool eligible) external onlyRole(ADMIN
 Link the `PortfolioRouter` whose default weight vector length is
 kept consistent with `routerEligibleCount`. Pass `address(0)` to
 unlink. Restricted to `ADMIN_ROLE`. ADR-0002.
+Unlinking (passing `address(0)`) is blocked while the currently-
+linked router still carries a non-empty default weight vector.
+Clear or re-set `defaultWeights` on the router first. This
+prevents the bypass sequence: unlink → revoke eligibility → re-link
+which would otherwise leave the vector pointing to an ineligible
+vault without tripping the stale-length guard.
 
 
 ```solidity
@@ -388,6 +394,22 @@ error StaleDefaultWeightsLength(uint256 expectedLength, uint256 defaultLength);
 |----|----|-----------|
 |`expectedLength`|`uint256`|New router-eligible count after the change.|
 |`defaultLength`|`uint256`| Current default weight vector length.|
+
+### RouterUnlinkBlocked
+`setRouter(address(0))` was called while the currently-linked
+router still carries a non-empty default weight vector. Clear or
+re-set `defaultWeights` on the router first, then unlink.
+
+
+```solidity
+error RouterUnlinkBlocked(uint256 defaultLength);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`defaultLength`|`uint256`| Current default weight vector length on the router.|
 
 ## Structs
 ### VaultMetadata

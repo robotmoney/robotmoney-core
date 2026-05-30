@@ -5441,6 +5441,17 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "RouterUnlinkBlocked",
+    inputs: [
+      {
+        name: "defaultLength",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "StaleDefaultWeightsLength",
     inputs: [
       {
