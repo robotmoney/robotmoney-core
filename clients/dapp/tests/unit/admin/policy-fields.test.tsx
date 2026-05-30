@@ -5,7 +5,7 @@
  * PolicyFields is a pure presentational component — no wagmi required.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "../helpers/render";
 import { PolicyFields } from "../../../src/components/PolicyFields";
 
 const noop = vi.fn();

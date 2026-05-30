@@ -4,6 +4,9 @@
  * Acceptance criterion: `.env.example` includes the production warning
  * for the bundled faucet key. This test fails if anyone removes the
  * warning block, so the CI freshness check is automatic.
+ *
+ * Runs in Node.js environment via the "node" Vitest workspace project
+ * (vitest.workspace.ts) because it reads files from disk via node:fs.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";

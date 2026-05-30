@@ -15,7 +15,7 @@
  *    feature flag is off."
  */
 import { describe, it, expect, vi } from "vitest";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "./helpers/render";
 import type { Address } from "viem";
 import { HistoryPane } from "../../src/components/HistoryPane";
 import { resolveFlags } from "../../src/lib/featureFlags";

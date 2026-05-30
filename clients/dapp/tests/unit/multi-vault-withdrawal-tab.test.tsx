@@ -14,7 +14,7 @@
  * Wagmi hooks are mocked at the module boundary so no WagmiProvider is needed.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import type { Address } from "viem";
 import { MultiVaultWithdrawalTab } from "../../src/components/MultiVaultWithdrawalTab";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";

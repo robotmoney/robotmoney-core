@@ -85,7 +85,8 @@ module.exports = {
   overrides: [
     {
       // Playwright requires a default export for globalSetup.
-      files: ["tests/e2e/**/*.ts", "playwright.config.ts", "vite.config.ts", "vitest.config.ts"],
+      // Vitest workspace/config files also use default exports (Vitest convention).
+      files: ["tests/e2e/**/*.ts", "playwright.config.ts", "vite.config.ts", "vitest.config.ts", "vitest.workspace.ts"],
       rules: { "no-restricted-syntax": "off" },
     },
     {

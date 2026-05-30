@@ -10,7 +10,7 @@
  * All assertions use the `fetchImpl` injection point — no network or wallet.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor, within } from "@testing-library/react";
+import { render, waitFor, within } from "./helpers/render";
 import { VaultCards } from "../../src/components/VaultCards";
 import type { FetchLike, VaultsResponse } from "../../src/lib/explorerApi";
 

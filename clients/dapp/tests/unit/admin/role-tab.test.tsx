@@ -7,7 +7,7 @@
  *    returned a result (network boundary mocked to return undefined).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "../helpers/render";
 import { RoleTab } from "../../../src/components/RoleTab";
 import type { PreviewContext } from "../../../src/lib/preview";
 import type { RoleName } from "../../../src/lib/abi";

@@ -17,7 +17,7 @@
  *     allowedSourceVaults) when set.
  */
 import { describe, it, expect, vi } from "vitest";
-import { act, render, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, waitFor, fireEvent } from "./helpers/render";
 import type { Address } from "viem";
 import { WatchedAddressInput } from "../../src/components/WatchedAddressInput";
 import { PortfolioPosition } from "../../src/components/PortfolioPosition";

@@ -131,21 +131,6 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
   });
 
   test("approve+deposit then redeem mines real txs and updates balances", async ({ page }) => {
-    // Forward browser console + page errors to test stdout so silent
-    // simulate failures inside the dapp are visible in CI logs.
-    page.on("console", (msg) => {
-      // Skip noisy info-level wagmi internals; only surface signal.
-      const t = msg.type();
-      if (t === "error" || t === "warning" || t === "log") {
-        // eslint-disable-next-line no-console
-        console.log(`[dapp console:${t}] ${msg.text()}`);
-      }
-    });
-    page.on("pageerror", (err) => {
-      // eslint-disable-next-line no-console
-      console.log(`[dapp pageerror] ${err.message}`);
-    });
-
     // Pre-fund the admin EOA with USDC from the harness holder.
     await fundUsdc(endpoints, endpoints.admin_addr as Address, DEPOSIT_USDC * 2n);
 

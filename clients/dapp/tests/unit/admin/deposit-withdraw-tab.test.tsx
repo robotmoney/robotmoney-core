@@ -7,7 +7,7 @@
  * logic — verified by mocking wagmi to return no simulation data.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "../helpers/render";
 import { DepositWithdrawTab } from "../../../src/components/DepositWithdrawTab";
 import type { VaultPreviewContext } from "../../../src/lib/vaultPreview";
 

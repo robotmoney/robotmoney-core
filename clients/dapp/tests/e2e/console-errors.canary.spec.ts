@@ -53,15 +53,16 @@ test("console-error listener captures intentional console.error", async ({ page 
 test("console-error listener produces no false positives on a clean page", async ({ page }) => {
   const endpoints = loadEndpoints();
 
-  // Navigate to the dapp landing page.
-  await page.goto(endpoints.dapp_url);
-
   // Mirror the listener logic from helpers/fixtures.ts.
+  // Listener must be attached BEFORE navigation so load-time errors are caught.
   const captured: string[] = [];
   const handler = (msg: ConsoleMessage) => {
     if (msg.type() === "error") captured.push(msg.text());
   };
   page.on("console", handler);
+
+  // Navigate to the dapp landing page.
+  await page.goto(endpoints.dapp_url);
 
   // Allow the page to settle — any synchronous or microtask-delayed errors
   // will surface within this window.

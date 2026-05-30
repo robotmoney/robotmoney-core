@@ -8,7 +8,7 @@
  *    fixture."
  */
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render } from "./helpers/render";
 import { TxPreview } from "../../src/components/TxPreview";
 import { buildPreview, type AdminAction, type PreviewContext } from "../../src/lib/preview";
 

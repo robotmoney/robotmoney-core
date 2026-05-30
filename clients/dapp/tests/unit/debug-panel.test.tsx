@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen } from "./helpers/render";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DebugPanel } from "../../src/components/DebugPanel";
 
@@ -21,6 +21,11 @@ vi.mock("wagmi", () => ({
     }
     return { data: undefined, error: null };
   },
+  // lib/wagmi.ts (imported transitively via DebugPanel) statically imports these.
+  createConfig: () => ({}),
+  http: () => ({}),
+  fallback: (...args: unknown[]) => args[0],
+  unstable_connector: () => ({}),
 }));
 
 vi.mock("../../src/lib/useVaultRegistration", () => ({

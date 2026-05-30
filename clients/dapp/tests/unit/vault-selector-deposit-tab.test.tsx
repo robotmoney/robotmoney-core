@@ -15,7 +15,7 @@
  * governance-panel.test.tsx) so the tests run without a live WagmiProvider.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import type { Address } from "viem";
 import { VaultSelectorDepositTab } from "../../src/components/VaultSelectorDepositTab";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import { describe, expect, it, vi } from "vitest";
 import { AboutModal } from "../../src/components/AboutModal";
 

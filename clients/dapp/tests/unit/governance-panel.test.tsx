@@ -20,7 +20,7 @@
  * authorize-tab.test.tsx) so the tests run without a WagmiProvider.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor } from "./helpers/render";
 import type { Address } from "viem";
 import { GovernancePanel } from "../../src/components/GovernancePanel";
 import type { FetchLike } from "../../src/lib/explorerApi";

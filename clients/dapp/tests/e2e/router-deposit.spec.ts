@@ -127,18 +127,6 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
   test("select router path, preview renders, approve+deposit, assert share balance updated", async ({
     page,
   }) => {
-    page.on("console", (msg) => {
-      const t = msg.type();
-      if (t === "error" || t === "warning" || t === "log") {
-        // eslint-disable-next-line no-console
-        console.log(`[dapp console:${t}] ${msg.text()}`);
-      }
-    });
-    page.on("pageerror", (err) => {
-      // eslint-disable-next-line no-console
-      console.log(`[dapp pageerror] ${err.message}`);
-    });
-
     // Fund the admin EOA with enough USDC to cover the router deposit.
     await fundUsdc(endpoints, endpoints.admin_addr as Address, DEPOSIT_USDC * 2n);
 

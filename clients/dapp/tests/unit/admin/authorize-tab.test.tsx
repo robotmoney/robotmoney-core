@@ -10,7 +10,7 @@
  * The component's own `isAddress` validation gate is exercised directly.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "../helpers/render";
 import { AuthorizeTab } from "../../../src/components/AuthorizeTab";
 import type { PreviewContext } from "../../../src/lib/preview";
 
@@ -20,6 +20,8 @@ vi.mock("wagmi", () => ({
   useAccount: () => ({ address: undefined, isConnected: false }),
   useSimulateContract: () => ({ data: undefined }),
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false }),
+  // useVaultRegistration.ts (imported transitively) statically imports useReadContract.
+  useReadContract: () => ({ data: undefined }),
 }));
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;

@@ -72,6 +72,9 @@ jobs:
       - name: TypeScript type check
         run: bunx tsc -b
 
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium --with-deps
+
       - name: Vitest
         run: bun run test
 

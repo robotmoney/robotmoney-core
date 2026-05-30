@@ -7,7 +7,7 @@
  * role-policy effect, risk class, calldata) per ADR §3.3.
  */
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render } from "./helpers/render";
 import { TxPreview } from "../../src/components/TxPreview";
 import { buildPreview, type AdminAction, type PreviewContext } from "../../src/lib/preview";
 import type { RoleName } from "../../src/lib/abi";

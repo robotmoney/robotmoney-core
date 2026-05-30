@@ -19,7 +19,7 @@
  * needed, per docs/development/react-guide.md §Layout.
  */
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "./helpers/render";
 import type { Hex } from "viem";
 import { FaucetTabView } from "../../src/components/FaucetTabView";
 import {

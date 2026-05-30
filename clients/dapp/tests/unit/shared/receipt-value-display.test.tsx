@@ -8,7 +8,7 @@
  *   - Renders custom label.
  */
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render } from "../helpers/render";
 import { ReceiptValueDisplay } from "../../../src/components/shared/ReceiptValueDisplay";
 
 describe("ReceiptValueDisplay", () => {

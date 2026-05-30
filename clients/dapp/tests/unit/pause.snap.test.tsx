@@ -13,7 +13,7 @@
  *     the operator expects.
  */
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render } from "./helpers/render";
 import { encodeFunctionData, toFunctionSelector } from "viem";
 import { TxPreview } from "../../src/components/TxPreview";
 import { gatewayAbi } from "../../src/lib/abi";

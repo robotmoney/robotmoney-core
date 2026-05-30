@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen } from "./helpers/render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DebugPage } from "../../src/components/DebugPage";
 import { clearCapturedEntries, initErrorCapture } from "../../src/lib/error-capture";
@@ -20,6 +20,11 @@ vi.mock("wagmi", () => ({
     }
     return { data: undefined, error: null };
   },
+  // lib/wagmi.ts (imported transitively via DebugPage) statically imports these.
+  createConfig: () => ({}),
+  http: () => ({}),
+  fallback: (...args: unknown[]) => args[0],
+  unstable_connector: () => ({}),
 }));
 
 vi.mock("../../src/lib/useVaultRegistration", () => ({
@@ -47,6 +52,10 @@ describe("DebugPage (/debug route)", () => {
   let cleanup: () => void;
 
   beforeEach(() => {
+    // Suppress the global console.error guard (setup.ts) — this describe
+    // intentionally calls console.error to verify the DebugPage live feed.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     clearCapturedEntries();
     cleanup = initErrorCapture();
   });

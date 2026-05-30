@@ -6,7 +6,7 @@
  * constructing the action and on `sim` before enabling the button.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "../helpers/render";
 import { RevokeTab } from "../../../src/components/RevokeTab";
 import type { PreviewContext } from "../../../src/lib/preview";
 

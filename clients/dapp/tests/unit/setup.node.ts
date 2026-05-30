@@ -1,14 +1,7 @@
-import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
-// ---------------------------------------------------------------------------
-// console.error guard
-//
-// Any console.error during a unit test is treated as an unexpected error and
-// fails the test. Tests that intentionally call console.error (error-capture,
-// debug-page) must suppress this guard in their own beforeEach:
-//   vi.spyOn(console, "error").mockImplementation(() => undefined);
-// ---------------------------------------------------------------------------
+// console.error guard for node-environment tests (env-example-warning, faucet-shared-amount).
+// Same rule as the browser project: any unexpected console.error fails the test.
 const _capturedErrors: string[] = [];
 
 beforeEach(() => {

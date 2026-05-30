@@ -17,7 +17,7 @@
  * for live prices (they must NOT mock RPC); these are the complement.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import {
   LandingPriceStripView,
   cellTestId,

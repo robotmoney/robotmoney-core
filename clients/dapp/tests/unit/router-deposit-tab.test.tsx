@@ -12,7 +12,7 @@
  * Wagmi hooks are mocked at the module boundary so no WagmiProvider is needed.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import type { Address } from "viem";
 import { RouterDepositTab } from "../../src/components/RouterDepositTab";
 import type { RouterPreviewContext } from "../../src/lib/routerPreview";

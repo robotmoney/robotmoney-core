@@ -10,7 +10,7 @@
  *    ProtocolStats with mocked API responses"
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor } from "./helpers/render";
 import { VaultList } from "../../src/components/VaultList";
 import { VaultDetail } from "../../src/components/VaultDetail";
 import { RouterView } from "../../src/components/RouterView";

@@ -8,7 +8,7 @@
  *   - Renders vault name and optional risk label.
  */
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render } from "../helpers/render";
 import { VaultPositionCard } from "../../../src/components/shared/VaultPositionCard";
 
 const VAULT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

@@ -135,18 +135,6 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
   test("select position from PositionSelector, preview redeem, sign, assert balance decremented", async ({
     page,
   }) => {
-    page.on("console", (msg) => {
-      const t = msg.type();
-      if (t === "error" || t === "warning" || t === "log") {
-        // eslint-disable-next-line no-console
-        console.log(`[dapp console:${t}] ${msg.text()}`);
-      }
-    });
-    page.on("pageerror", (err) => {
-      // eslint-disable-next-line no-console
-      console.log(`[dapp pageerror] ${err.message}`);
-    });
-
     const admin = endpoints.admin_addr;
 
     // Step 1: fund and deposit so the admin holds a non-zero receipt balance.

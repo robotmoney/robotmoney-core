@@ -13,7 +13,7 @@
  * simulate mock so the error path and disable conditions are exercised.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "../helpers/render";
 import { RotationTab } from "../../../src/components/RotationTab";
 import type { PreviewContext } from "../../../src/lib/preview";
 

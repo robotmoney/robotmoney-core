@@ -12,7 +12,7 @@
  *   - DepositWithdrawTab hides signing prompt when balance is exceeded.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "./helpers/render";
 import { PositionSelector } from "../../src/components/PositionSelector";
 import { DepositWithdrawTab } from "../../src/components/DepositWithdrawTab";
 import type { VaultPreviewContext } from "../../src/lib/vaultPreview";

@@ -17,7 +17,7 @@
  * fixture needed, per docs/development/react-guide.md §Layout.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "./helpers/render";
 import type { Address } from "viem";
 import {
   BalancesPanelView,
