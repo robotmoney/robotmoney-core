@@ -1497,11 +1497,14 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
 }
 
 /// Derive a deterministic simulated-depositor key for the demo seeding flow
-/// (issue #465). Seed is `keccak256("rm-demo-depositor-v1\0" || index)` so
-/// the resulting key is reproducible across runs and cannot collide with the
-/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC
-/// holder). Returns `(0x-prefixed hex private key, derived address)`.
-fn demo_depositor_key(index: u32) -> (String, Address) {
+/// (issues #465, #503). Seed is `keccak256("rm-demo-depositor-v1\0" || index)`
+/// so the resulting key is reproducible across runs and cannot collide with the
+/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC holder).
+/// Returns `(0x-prefixed hex private key, derived address)`.
+///
+/// Public so the `demo-seed-depositors` standalone binary can reuse the same
+/// key derivation without depending on the full [`Fixture`] struct (issue #503).
+pub fn demo_depositor_key(index: u32) -> (String, Address) {
     let mut seed = Vec::with_capacity(64);
     seed.extend_from_slice(b"rm-demo-depositor-v1\0");
     seed.extend_from_slice(&index.to_be_bytes());

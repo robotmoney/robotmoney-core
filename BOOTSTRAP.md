@@ -139,3 +139,40 @@ If the startup succeeds you'll see a JSON envelope with an `agent_address` field
 ## 5. Hand the address back to the operator
 
 Open the Robot Money dapp, paste the agent's public address into the "Authorize agent" panel, set the deposit caps, and submit the `grantAgentRole` transaction. Once the dapp confirms the on-chain state change, the agent is authorized.
+
+## Demo ops: seed simulated depositors (issue #503)
+
+The live demo at `robotmoney-dev-dapp.superfield.co` shows non-zero vault balances
+only after the simulated-depositor seed has been run against the devnet. Run it once
+after each devnet reboot (i.e. every time `make testnet` completes deployment):
+
+```bash
+# Read the deployed addresses from the smoke-test output or from the deployment JSON.
+make demo-seed-depositors \
+  RPC_URL=https://robotmoney-dev-rpc.superfield.co \
+  DEPLOYER_KEY=0x<deployer-private-key> \
+  USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  ROUTER_ADDRESS=0x<router-address-from-deployment> \
+  REGISTRY_ADDRESS=0x<registry-address-from-deployment>
+```
+
+`DEPLOYER_KEY` must be the private key of an EOA that holds:
+- At least `0.05 ETH × COUNT` for depositor gas (default 5 depositors → 0.25 ETH).
+- At least `PER_USER_USDC × COUNT` USDC to fund depositor wallets (default 5 000 USDC).
+
+On the smoke-test devnet the genesis-funded deployer EOA (`DEPLOYER_PRIVATE_KEY_HEX`
+in `testing/smoke-test/src/lib.rs`) holds the ETH budget. The harness USDC holder
+(`HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX`) holds the USDC supply — pass whichever key
+owns the faucet supply on your target devnet.
+
+After seeding, verify that each Active vault reports non-zero `totalAssets`:
+
+```bash
+cast call --rpc-url $RPC_URL $ROUTER_ADDRESS "totalAssets()(uint256)"
+# or use the REGISTRY_ADDRESS flag — the make target prints totalAssets per vault automatically.
+```
+
+The price strip (ETH/USD and three pool prices) works without MetaMask because the
+dapp bundle now includes an HTTP fallback transport at `VITE_DEVNET_RPC_URL` for
+devnet read calls. No additional ops step is needed for the price strip beyond
+building the dapp with `VITE_DEVNET_RPC_URL` set to the public RPC endpoint.

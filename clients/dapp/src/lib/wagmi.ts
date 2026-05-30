@@ -2,26 +2,36 @@
 
 /**
  * wagmi/viem client setup. The dapp uses the browser-injected EIP-1193
- * provider (MetaMask, hardware bridges, etc.) as its only wallet
- * connector AND as its read transport for the foundry/devnet chain —
+ * provider (MetaMask, hardware bridges, etc.) as its primary wallet
+ * connector AND as its primary read transport for the foundry/devnet chain —
  * see `docs/technical/dapp-topology.md` §2 ("No dapp-owned RPC"). All
  * traffic for the chain the user is interacting with traverses an
  * endpoint the user chose, not one this bundle was built with.
+ *
+ * Exception — price-strip reads on the devnet chain: when `VITE_DEVNET_RPC_URL`
+ * is set at build time, an HTTP transport at that URL is added as a fallback
+ * (after `unstable_connector(injected)`) for the devnet chain only. This
+ * allows `useReadContract` calls (e.g. Uniswap V3 slot0 reads for the price
+ * strip) to succeed even when no MetaMask is configured for the devnet — which
+ * is always the case in CI Playwright runs and for first-time visitors to the
+ * demo URL. Wallet signing and non-price-strip writes are not affected: wagmi
+ * falls back to the HTTP transport only for read calls, never for signing.
+ *
  * Test harnesses inject `window.ethereum` themselves before the page
  * loads — no test-only branches in this file.
  */
-import { unstable_connector, http, createConfig } from "wagmi";
+import { unstable_connector, http, createConfig, fallback } from "wagmi";
 import { foundry, mainnet, sepolia } from "wagmi/chains";
 import { injected } from "wagmi/connectors";
 import { defineChain } from "viem";
 
 // Robot Money devnet (Geth+Lighthouse fork). Real prod-shaped chain id;
-// not the same as foundry/anvil (31337). The dapp never makes its own
-// HTTP requests to this URL — reads dispatch through the wallet
-// provider per §2 of docs/technical/dapp-topology.md. The URL only
-// exists so `wallet_addEthereumChain` (triggered by Connect Wallet)
-// can prefill the network entry in the user's wallet. The user can
-// always override before accepting.
+// not the same as foundry/anvil (31337). The URL is baked in at build time
+// from VITE_DEVNET_RPC_URL. It serves two purposes:
+//   1. `wallet_addEthereumChain` prefills the RPC URL in the user's wallet so
+//      Connect Wallet can rotate the stored endpoint when the tunnel URL changes.
+//   2. HTTP fallback transport for read calls (price strip, block numbers) when
+//      MetaMask is not configured for the devnet — see file-level doc above.
 const devnetRpcUrl = (import.meta.env.VITE_DEVNET_RPC_URL ?? "") as string;
 const devnet = defineChain({
   id: 918453,
@@ -50,11 +60,20 @@ export const targetChainId: number | undefined = devnetRpcUrl ? devnet.id : unde
 export const targetRpcUrl: string | undefined = devnetRpcUrl || undefined;
 
 export function makeConfig(_env: Record<string, string | undefined>) {
+  // For the devnet chain: use the injected connector as the primary transport
+  // so wallet signing continues to work when MetaMask is configured. Fall back
+  // to an HTTP transport at `devnetRpcUrl` for read calls (price strip, block
+  // numbers) when the injected connector is absent or reports the wrong chain.
+  // The fallback is a no-op when `devnetRpcUrl` is empty (non-devnet builds).
+  const devnetTransport = devnetRpcUrl
+    ? fallback([unstable_connector(injected), http(devnetRpcUrl)])
+    : unstable_connector(injected);
+
   return createConfig({
     chains: [devnet, foundry, sepolia, mainnet],
     connectors: [injected()],
     transports: {
-      [devnet.id]: unstable_connector(injected),
+      [devnet.id]: devnetTransport,
       [foundry.id]: unstable_connector(injected),
       [sepolia.id]: http(),
       [mainnet.id]: http(),

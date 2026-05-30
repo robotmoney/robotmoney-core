@@ -9,7 +9,7 @@
 # as VITE_* env vars.  Without them the bundle hardcodes localhost, which
 # makes every browser fetch fail for any device other than the dev machine.
 
-.PHONY: help teardown-zombies testnet landing-price-fork-test
+.PHONY: help teardown-zombies testnet landing-price-fork-test demo-seed-depositors
 
 PUBLIC_DAPP_URL     ?= https://robotmoney-dev-dapp.superfield.co
 PUBLIC_RPC_URL      ?= https://robotmoney-dev-rpc.superfield.co
@@ -45,6 +45,33 @@ testnet: teardown-zombies ## Boot the full-stack devnet wired to the superfield.
 		--public-dapp-url     $(PUBLIC_DAPP_URL) \
 		--public-rpc-url      $(PUBLIC_RPC_URL) \
 		--public-explorer-url $(PUBLIC_EXPLORER_URL)
+
+demo-seed-depositors: ## Seed demo depositors against an already-deployed devnet (issue #503)
+	@# Required: RPC_URL, DEPLOYER_KEY, USDC_ADDRESS, ROUTER_ADDRESS.
+	@# Optional: REGISTRY_ADDRESS (print totalAssets per vault), COUNT (default 5),
+	@#           PER_USER_USDC (whole USDC units, default 1000).
+	@#
+	@# Example:
+	@#   make demo-seed-depositors \
+	@#     RPC_URL=https://robotmoney-dev-rpc.superfield.co \
+	@#     DEPLOYER_KEY=0x<deployer-private-key> \
+	@#     USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+	@#     ROUTER_ADDRESS=0x<router-address> \
+	@#     REGISTRY_ADDRESS=0x<registry-address>
+	@#
+	@# DEPLOYER_KEY must hold enough ETH (0.05 ETH per depositor) and USDC
+	@# (PER_USER_USDC * COUNT units) to fund all depositors. On the smoke-test
+	@# devnet the genesis-funded DEPLOYER_PRIVATE_KEY_HEX from lib.rs holds
+	@# the ETH budget; the harness USDC holder holds the USDC supply — pass
+	@# whichever key owns the faucet supply on the target devnet.
+	cargo run -p smoke-test --bin demo-seed-depositors --release -- \
+		--rpc-url    "$(RPC_URL)" \
+		--deployer-key "$(DEPLOYER_KEY)" \
+		--usdc       "$(USDC_ADDRESS)" \
+		--router     "$(ROUTER_ADDRESS)" \
+		$(if $(REGISTRY_ADDRESS),--registry "$(REGISTRY_ADDRESS)",) \
+		$(if $(COUNT),--count "$(COUNT)",) \
+		$(if $(PER_USER_USDC),--per-user-usdc "$(PER_USER_USDC)",)
 
 landing-price-fork-test: ## Boot forked-Base devnet + run landing price-strip fork integration & Playwright fork tests (issue #482)
 	# 1. Fork integration: read each pool slot0 from the forked-Base devnet and

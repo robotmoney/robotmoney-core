@@ -35,6 +35,14 @@ path = "src/bin/genesis-ingester.rs"
 name = "smoke-test-fork-manifest-validate"
 path = "src/bin/fork-manifest-validate.rs"
 
+# Standalone demo-depositor seeder (issue #503). Seeds deterministic simulated
+# depositors against an already-deployed devnet without booting a new chain.
+# Invoked by `make demo-seed-depositors RPC_URL=<url> DEPLOYER_KEY=<hex>
+# USDC_ADDRESS=<addr> ROUTER_ADDRESS=<addr>`.
+[[bin]]
+name = "demo-seed-depositors"
+path = "src/bin/demo-seed-depositors.rs"
+
 [dependencies]
 test-utils = { path = "../test-utils" }
 alloy-primitives = { version = "0.8", features = ["k256"] }
@@ -47,5 +55,5 @@ which = "6"
 hex = "0.4"
 thiserror = "1"
 ctrlc = "3"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
