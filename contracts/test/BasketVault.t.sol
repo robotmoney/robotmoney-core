@@ -4,6 +4,7 @@
 //         issue #446 — upper-loss cap (slippage bound) on emergencyUnwindWithOverride
 //         issue #451 — Uniswap V3 TWAP oracle hardening (NAV, deposit/withdraw
 //                      minimums, ADMIN_ROLE-gated per-asset window)
+//         issue #494 — addAsset must verify Uniswap V3 pool observation cardinality
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 pragma solidity ^0.8.24;
 
@@ -42,6 +43,10 @@ contract MockPool {
 
     function setTickCumulativeRate(int56 rate) external {
         tickCumulativeRate = rate;
+    }
+
+    function setCardinality(uint16 cardinality_) external {
+        cardinality = cardinality_;
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
@@ -547,6 +552,86 @@ contract BasketVaultTest is Test {
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
         assertTrue(vault.paused(), "emergencyUnwind pauses vault");
+    }
+
+    // ─── Pool cardinality check on addAsset (issue #494) ──────────────
+
+    /// @notice addAsset() reverts with InsufficientPoolCardinality when the
+    ///         pool's observationCardinality is 1 (Uniswap deployment default).
+    function test_addAsset_revertsWhenPoolCardinalityIsOne() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool lowCardPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        lowCardPool.setCardinality(1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolCardinality.selector,
+                address(lowCardPool),
+                vault.MIN_POOL_CARDINALITY(),
+                uint16(1)
+            )
+        );
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(lowCardPool), 500);
+    }
+
+    /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+    function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
+
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(goodPool), 500);
+
+        assertEq(vault.assetCount(), 2, "asset registered");
+    }
+
+    /// @notice totalAssets() does not revert after a successful addAsset() call
+    ///         when cardinality satisfies the minimum.
+    function test_totalAssets_doesNotRevertAfterValidAddAsset() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool goodPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        goodPool.setCardinality(100);
+
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(goodPool), 500);
+
+        // totalAssets() must not revert after valid addAsset().
+        uint256 nav = vault.totalAssets();
+        assertGe(nav, 0, "totalAssets returned without revert");
+    }
+
+    /// @notice Fuzz: addAsset() reverts exactly when pool cardinality is below
+    ///         MIN_POOL_CARDINALITY and succeeds at or above it.
+    function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public {
+        // Use a fresh vault so we don't hit MaxAssetsReached after repeated calls.
+        BasketVaultHarness freshVault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
+
+        TestERC20 newAsset = new TestERC20();
+        MockPool fuzzPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        fuzzPool.setCardinality(cardinality_);
+
+        uint16 required = freshVault.MIN_POOL_CARDINALITY();
+
+        if (cardinality_ < required) {
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    BasketVault.InsufficientPoolCardinality.selector,
+                    address(fuzzPool),
+                    required,
+                    cardinality_
+                )
+            );
+            vm.prank(admin);
+            freshVault.addAsset(address(newAsset), address(fuzzPool), 500);
+        } else {
+            vm.prank(admin);
+            freshVault.addAsset(address(newAsset), address(fuzzPool), 500);
+            assertEq(freshVault.assetCount(), 1, "asset registered when cardinality sufficient");
+        }
     }
 }
 

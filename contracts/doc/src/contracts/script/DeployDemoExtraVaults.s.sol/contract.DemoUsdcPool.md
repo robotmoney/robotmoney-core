@@ -1,9 +1,10 @@
 # DemoUsdcPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f8cc494733d881fe168b95aea3df5da6400c759b/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e30069c8df8fc8c637d65bc2f991adfaf60a1079/contracts/script/DeployDemoExtraVaults.s.sol)
 
-Minimal Uniswap V3 pool stub exposing only `token0()`/`token1()`,
-the two reads `BasketVault.addAsset` uses to verify a pool pairs the
-basket token with USDC. Demo-only; no swap/observe liquidity.
+Minimal Uniswap V3 pool stub exposing `token0()`/`token1()` and
+`slot0()`. `BasketVault.addAsset` verifies that the pool pairs the
+basket token with USDC and that `slot0().observationCardinality >= 2`.
+Demo-only; no swap/observe liquidity.
 
 
 ## Constants
@@ -27,5 +28,27 @@ address public immutable token1
 
 ```solidity
 constructor(address tokenA, address tokenB) ;
+```
+
+### slot0
+
+Stub slot0 — returns observationCardinality = 2 so that
+`BasketVault.addAsset` passes the MIN_POOL_CARDINALITY check.
+All other fields are zeroed (unused by addAsset).
+
+
+```solidity
+function slot0()
+    external
+    pure
+    returns (
+        uint160 sqrtPriceX96,
+        int24 tick,
+        uint16 observationIndex,
+        uint16 observationCardinality,
+        uint16 observationCardinalityNext,
+        uint8 feeProtocol,
+        bool unlocked
+    );
 ```
 

@@ -179,6 +179,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      rather than a generic `InvalidParam` so off-chain governance
     ///      tooling can pin-point the failure mode.
     error InvalidTwapWindow(uint32 window);
+    /// @dev Raised by addAsset() when the pool's observation cardinality is
+    ///      below the minimum required to service TWAP reads over
+    ///      `DEFAULT_TWAP_WINDOW`. Cardinality=1 (the Uniswap default) means
+    ///      `observe()` reverts with "OLD" for any non-zero secondsAgo, which
+    ///      permanently breaks totalAssets(), deposits, and withdrawals for
+    ///      every asset in the basket. Call
+    ///      `pool.increaseObservationCardinalityNext(required)` before adding
+    ///      the asset, then wait until the pool has accumulated enough
+    ///      observations to cover the full window before depositing.
+    error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -498,10 +508,22 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Asset registry management ────────────────────────────────────
 
+    /// @notice Minimum observation cardinality required on the Uniswap V3 pool
+    ///         when registering an asset via addAsset(). A cardinality of 1
+    ///         (the Uniswap deployment default) means observe() can only return
+    ///         the single stored slot and always reverts with "OLD" for any
+    ///         non-zero secondsAgo, which would permanently break totalAssets(),
+    ///         deposits, and withdrawals for the entire basket.
+    uint16 public constant MIN_POOL_CARDINALITY = 2;
+
     /// @notice Register a new basket asset. Restricted to ADMIN_ROLE.
     /// @param token_   ERC-20 token address.
     /// @param pool_    Uniswap V3 pool pairing `token_` with USDC (either token0 or token1).
     /// @param swapFee_ Uniswap V3 fee tier (500, 3000, or 10000).
+    /// @dev Reverts with InsufficientPoolCardinality when the pool's current
+    ///      observationCardinality is below MIN_POOL_CARDINALITY. Callers must
+    ///      invoke pool.increaseObservationCardinalityNext(n) and wait for the
+    ///      cardinality to be populated before calling addAsset.
     function addAsset(address token_, address pool_, uint24 swapFee_)
         external
         onlyRole(ADMIN_ROLE)
@@ -513,6 +535,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         address t1 = IUniswapV3Pool(pool_).token1();
         if (!((t0 == token_ && t1 == address(_USDC)) || (t1 == token_ && t0 == address(_USDC)))) {
             revert PoolTokenMismatch();
+        }
+        // Verify that the pool has sufficient observation cardinality to service
+        // TWAP reads. Cardinality=1 causes observe() to revert with "OLD" for
+        // any non-zero secondsAgo, which would lock ALL vault withdrawals.
+        // slot0 returns observationCardinality as the fourth value.
+        (,,, uint16 observationCardinality,,,) = IUniswapV3Pool(pool_).slot0();
+        if (observationCardinality < MIN_POOL_CARDINALITY) {
+            revert InsufficientPoolCardinality(pool_, MIN_POOL_CARDINALITY, observationCardinality);
         }
         assets.push(AssetInfo({token: token_, pool: pool_, swapFee: swapFee_, active: true}));
         emit AssetAdded(assets.length - 1, token_, pool_, swapFee_);

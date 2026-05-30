@@ -25,9 +25,10 @@ contract DemoBasketToken is ERC20 {
     constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) {}
 }
 
-/// @notice Minimal Uniswap V3 pool stub exposing only `token0()`/`token1()`,
-///         the two reads `BasketVault.addAsset` uses to verify a pool pairs the
-///         basket token with USDC. Demo-only; no swap/observe liquidity.
+/// @notice Minimal Uniswap V3 pool stub exposing `token0()`/`token1()` and
+///         `slot0()`. `BasketVault.addAsset` verifies that the pool pairs the
+///         basket token with USDC and that `slot0().observationCardinality >= 2`.
+///         Demo-only; no swap/observe liquidity.
 contract DemoUsdcPool {
     address public immutable token0;
     address public immutable token1;
@@ -36,6 +37,25 @@ contract DemoUsdcPool {
         // Order is irrelevant to addAsset's check; store as given.
         token0 = tokenA;
         token1 = tokenB;
+    }
+
+    /// @notice Stub slot0 — returns observationCardinality = 2 so that
+    ///         `BasketVault.addAsset` passes the MIN_POOL_CARDINALITY check.
+    ///         All other fields are zeroed (unused by addAsset).
+    function slot0()
+        external
+        pure
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            uint8 feeProtocol,
+            bool unlocked
+        )
+    {
+        return (0, 0, 0, 2, 2, 0, true);
     }
 }
 

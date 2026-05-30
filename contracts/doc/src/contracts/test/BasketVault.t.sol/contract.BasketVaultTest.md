@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f8cc494733d881fe168b95aea3df5da6400c759b/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e30069c8df8fc8c637d65bc2f991adfaf60a1079/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -276,6 +276,45 @@ EMERGENCY_ROLE holder can call emergencyUnwind; ADMIN_ROLE-only holder cannot.
 
 ```solidity
 function test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts() public;
+```
+
+### test_addAsset_revertsWhenPoolCardinalityIsOne
+
+addAsset() reverts with InsufficientPoolCardinality when the
+pool's observationCardinality is 1 (Uniswap deployment default).
+
+
+```solidity
+function test_addAsset_revertsWhenPoolCardinalityIsOne() public;
+```
+
+### test_addAsset_succeedsWhenCardinalityMeetsMinimum
+
+addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
+
+
+```solidity
+function test_addAsset_succeedsWhenCardinalityMeetsMinimum() public;
+```
+
+### test_totalAssets_doesNotRevertAfterValidAddAsset
+
+totalAssets() does not revert after a successful addAsset() call
+when cardinality satisfies the minimum.
+
+
+```solidity
+function test_totalAssets_doesNotRevertAfterValidAddAsset() public;
+```
+
+### testFuzz_addAsset_cardinalityBoundary
+
+Fuzz: addAsset() reverts exactly when pool cardinality is below
+MIN_POOL_CARDINALITY and succeeds at or above it.
+
+
+```solidity
+function testFuzz_addAsset_cardinalityBoundary(uint16 cardinality_) public;
 ```
 
 ## Events

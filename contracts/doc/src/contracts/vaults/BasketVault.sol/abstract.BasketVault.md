@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f8cc494733d881fe168b95aea3df5da6400c759b/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e30069c8df8fc8c637d65bc2f991adfaf60a1079/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -93,6 +93,20 @@ ISwapRouter public immutable SWAP_ROUTER
 
 ```solidity
 IERC20 internal immutable _USDC
+```
+
+
+### MIN_POOL_CARDINALITY
+Minimum observation cardinality required on the Uniswap V3 pool
+when registering an asset via addAsset(). A cardinality of 1
+(the Uniswap deployment default) means observe() can only return
+the single stored slot and always reverts with "OLD" for any
+non-zero secondsAgo, which would permanently break totalAssets(),
+deposits, and withdrawals for the entire basket.
+
+
+```solidity
+uint16 public constant MIN_POOL_CARDINALITY = 2
 ```
 
 
@@ -364,6 +378,11 @@ function _twapQuote(address pool, address tokenIn, address tokenOut, uint256 amo
 ### addAsset
 
 Register a new basket asset. Restricted to ADMIN_ROLE.
+
+Reverts with InsufficientPoolCardinality when the pool's current
+observationCardinality is below MIN_POOL_CARDINALITY. Callers must
+invoke pool.increaseObservationCardinalityNext(n) and wait for the
+cardinality to be populated before calling addAsset.
 
 
 ```solidity
@@ -802,6 +821,22 @@ tooling can pin-point the failure mode.
 
 ```solidity
 error InvalidTwapWindow(uint32 window);
+```
+
+### InsufficientPoolCardinality
+Raised by addAsset() when the pool's observation cardinality is
+below the minimum required to service TWAP reads over
+`DEFAULT_TWAP_WINDOW`. Cardinality=1 (the Uniswap default) means
+`observe()` reverts with "OLD" for any non-zero secondsAgo, which
+permanently breaks totalAssets(), deposits, and withdrawals for
+every asset in the basket. Call
+`pool.increaseObservationCardinalityNext(required)` before adding
+the asset, then wait until the pool has accumulated enough
+observations to cover the full window before depositing.
+
+
+```solidity
+error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
 ```
 
 ## Structs
