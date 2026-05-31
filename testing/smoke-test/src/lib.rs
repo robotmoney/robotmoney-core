@@ -2977,6 +2977,46 @@ impl DappStack {
             cleanup();
         })?;
 
+        // Seed demo depositors automatically so vault TVL is non-zero on
+        // first load. 4 depositors with 1000 USDC each gives a visible
+        // balance on all router-eligible vaults without requiring the
+        // operator to run `make demo-seed-depositors` manually (issue #532).
+        // The seeding uses the harness USDC holder key (no new secrets).
+        const DEMO_SEED_DEPOSITOR_COUNT: u32 = 4;
+        const DEMO_SEED_PER_USER_USDC: u128 = 1_000 * 1_000_000; // 1000 USDC (6dp)
+        logging::info(
+            "smoke-test",
+            format!(
+                "seeding {} demo depositors ({} USDC each) so vault TVL is non-zero on first load",
+                DEMO_SEED_DEPOSITOR_COUNT,
+                DEMO_SEED_PER_USER_USDC / 1_000_000,
+            ),
+        );
+        fixture
+            .seed_demo_depositors(DEMO_SEED_DEPOSITOR_COUNT, DEMO_SEED_PER_USER_USDC)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("demo depositor seeding failed: {err}"),
+                );
+                log_compose_state(
+                    &compose_dir,
+                    &dapp_compose_files,
+                    &dapp_log_env,
+                    "dapp-compose",
+                    "demo depositor seeding failure",
+                    200,
+                );
+                cleanup();
+            })?;
+        logging::info(
+            "smoke-test",
+            format!(
+                "demo depositor seeding complete ({} depositors)",
+                DEMO_SEED_DEPOSITOR_COUNT,
+            ),
+        );
+
         Ok(DappStack {
             compose_dir,
             gateway_hex: gateway_hex.to_string(),

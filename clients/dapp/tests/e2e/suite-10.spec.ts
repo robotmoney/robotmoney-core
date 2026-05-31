@@ -284,4 +284,43 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     );
     await expect(activeCards).toHaveCount(3);
   });
+
+  // Vault cards: non-zero TVL after DappStack::boot auto-seeding (issue #532).
+  // DappStack::boot now calls seed_demo_depositors so the vault TVL is non-zero
+  // without any manual follow-up command. This test asserts the dapp reflects
+  // the seeded TVL in the landing-vault-card-tvl elements.
+  test("vault cards show non-zero total_assets after auto-seeding", async ({ page }) => {
+    await page.goto(dappUrl);
+
+    // The Active vault cards must be visible before we can read their TVL.
+    const activeCards = page.locator(
+      '[data-testid="landing-vault-card"][data-vault-active="true"]',
+    );
+    await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
+
+    // At least one Active vault card must show a non-zero TVL value. The
+    // explorer-indexer processes Deposit events asynchronously; the seeding
+    // was done during DappStack::boot so the snapshots should be present
+    // but we use a loose assertion (at-least-one) to tolerate indexer lag.
+    const tvlCells = page.getByTestId("landing-vault-card-tvl");
+    const count = await tvlCells.count();
+    expect(count, "expected TVL cells for Active vault cards").toBeGreaterThan(0);
+
+    let foundNonZero = false;
+    for (let i = 0; i < count; i++) {
+      const text = await tvlCells.nth(i).textContent();
+      const trimmed = text?.trim() ?? "";
+      // A zero TVL renders as "0" or "—" (no snapshot yet); anything else
+      // (e.g. "4,000,000,000" μUSDC, a formatted "$4,000 USDC", or a raw
+      // numeric string != "0") is treated as non-zero.
+      if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") {
+        foundNonZero = true;
+        break;
+      }
+    }
+    expect(
+      foundNonZero,
+      "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding",
+    ).toBe(true);
+  });
 });
