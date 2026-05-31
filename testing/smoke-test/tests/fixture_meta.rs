@@ -216,6 +216,110 @@ fn approve_usdc_succeeds() {
     );
 }
 
+// -- Uniswap V3 stub pools (issue #531) ----------------------------------
+
+/// All four devnet stub pool addresses are non-zero and distinct from the
+/// Base mainnet pool addresses (which have no bytecode on the fresh devnet).
+#[test]
+fn stub_pool_addresses_are_non_zero_and_distinct() {
+    if skip_if_no_prereqs("stub_pool_addresses_are_non_zero_and_distinct") {
+        return;
+    }
+    let fx = fixture();
+    let mainnet_eth_usd: Address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
+        .parse()
+        .unwrap();
+    let mainnet_cbbtc: Address = "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
+        .parse()
+        .unwrap();
+    let mainnet_wsol: Address = "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1"
+        .parse()
+        .unwrap();
+
+    for (name, addr) in [
+        ("eth_usd", fx.stub_pool_eth_usd()),
+        ("weth_usdc", fx.stub_pool_weth_usdc()),
+        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
+        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
+    ] {
+        assert_ne!(addr, Address::ZERO, "stub pool {name} is zero address");
+        assert_ne!(
+            addr, mainnet_eth_usd,
+            "stub pool {name} matches mainnet eth/usd pool"
+        );
+        assert_ne!(
+            addr, mainnet_cbbtc,
+            "stub pool {name} matches mainnet cbbtc pool"
+        );
+        assert_ne!(
+            addr, mainnet_wsol,
+            "stub pool {name} matches mainnet wsol pool"
+        );
+    }
+}
+
+/// All four stub pool contracts have bytecode deployed on the devnet.
+#[test]
+fn stub_pools_have_code() {
+    if skip_if_no_prereqs("stub_pools_have_code") {
+        return;
+    }
+    let fx = fixture();
+    for (name, addr) in [
+        ("eth_usd", fx.stub_pool_eth_usd()),
+        ("weth_usdc", fx.stub_pool_weth_usdc()),
+        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
+        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
+    ] {
+        let code = get_code(fx.rpc_url(), addr);
+        assert!(
+            code.len() > 2,
+            "stub pool {name} at {addr:#x} has no bytecode (got {code:?})"
+        );
+    }
+}
+
+/// Each stub pool returns a non-zero sqrtPriceX96 via slot0().
+///
+/// Selector: keccak256("slot0()")[0..4] = 0x3850c7bd
+#[test]
+fn stub_pools_return_nonzero_sqrt_price() {
+    if skip_if_no_prereqs("stub_pools_return_nonzero_sqrt_price") {
+        return;
+    }
+    let fx = fixture();
+    for (name, addr) in [
+        ("eth_usd", fx.stub_pool_eth_usd()),
+        ("weth_usdc", fx.stub_pool_weth_usdc()),
+        ("cbbtc_usdc", fx.stub_pool_cbbtc_usdc()),
+        ("wsol_usdc", fx.stub_pool_wsol_usdc()),
+    ] {
+        let result: String = rpc_call(
+            fx.rpc_url(),
+            "eth_call",
+            serde_json::json!([
+                {"to": format!("{:#x}", addr), "data": "0x3850c7bd"},
+                "latest"
+            ]),
+        );
+        // slot0 returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+        // ABI-encoded, the first 32 bytes hold the uint160 sqrtPriceX96.
+        let stripped = result.trim_start_matches("0x");
+        assert!(
+            stripped.len() >= 40,
+            "stub pool {name} slot0() returned too short: {result:?}"
+        );
+        // The first 32 bytes = sqrtPriceX96 (uint160 is right-aligned in a 32-byte slot).
+        let first_32 = &stripped[..64];
+        let sqrt_price =
+            u128::from_str_radix(&first_32[first_32.len().saturating_sub(40)..], 16).unwrap_or(0);
+        assert!(
+            sqrt_price > 0,
+            "stub pool {name} at {addr:#x} returned sqrtPriceX96=0"
+        );
+    }
+}
+
 // -- Drop / teardown --------------------------------------------------
 
 /// Fixture Drop runs compose-down. We can't assert this in-process (the

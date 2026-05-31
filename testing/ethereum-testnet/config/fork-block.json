@@ -1,8 +1,8 @@
 {
   "$comment": "Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections) and docs/technical/full-stack-devnet.md (Compose stack). This file is the single source of truth for the Base mainnet fork point that the smoke-test Geth+Lighthouse devnet boots from. The genesis ingester (see issue #255) reads `block_number` and `snapshot_uri` to populate `genesis.json::alloc` from Base state at the pinned block, restricted to `ingested_addresses`. The harness then patches USDC storage to grant `harness_usdc_holder` a clean-history USDC balance — see docs for the why (no whale impersonation). `block_number` and `snapshot_uri` MUST stay in lockstep with `testing/fixtures/fork-state/CURRENT.json` (the Anvil fork-e2e fixture) so both harnesses exercise identical on-chain state. The CI manifest validator asserts this alignment.",
   "chain": "base",
-  "block_number": 45743443,
-  "block_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "block_number": 46698556,
+  "block_hash": "0x8710323f22335f2561376733f71568e8e9bc3d0162b843bb6674af463e3cf8d7",
   "snapshot_uri": "file://testing/fixtures/fork-state/CURRENT.anvil-state",
   "ingested_addresses": [
     "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -10,10 +10,21 @@
     "0xA6eD7B03BC82d7c6d4ac4FEb971a06550A7817E9",
     "0x218695BdaB0FE4f8d0A8Ee590Bc6f35820fC0BeA",
     "0x8247da22a59FCe074C102431048D0CE7294C2652",
-    "0x4200000000000000000000000000000000000006"
+    "0x4200000000000000000000000000000000000006",
+    "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+    "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+    "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
+    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+    "0x1C61629598e4a901136a81BC138E5828dc150d67",
+    "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca",
+    "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+    "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",
+    "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+    "0x41675C099F32341bf84BFc5382aF534df5C7461a",
+    "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
   ],
   "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
   "harness_usdc_grant_units": "1000000000000",
-  "pinned": false,
+  "pinned": true,
   "$comment_pinned": "When `pinned` is false the manifest is structurally valid but `block_hash` has not been verified against an archive RPC. The genesis ingester refuses to build a final devnet image unless `pinned` is true. Flipping this flag to true requires (a) populating `block_hash` with the real Base block hash at `block_number` and (b) updating `snapshot_uri` to point at a snapshot artifact derived from that exact block."
 }

@@ -1,10 +1,12 @@
 {
   "$comment": "Canonical: docs/prd.md#112-protocol-asset-vault (issue #482). Expected Uniswap V3 mid prices for the landing-page price strip, pinned to the Base mainnet fork point recorded in testing/ethereum-testnet/config/fork-block.json. `fork_block` MUST equal that manifest's `block_number` — the CI guard `fork_block_aligns_with_expected_prices` in testing/smoke-test/src/fork_manifest.rs fails the build if the fork block changes without this fixture being refreshed in the same commit. The fork integration test (testing/fork-e2e-rust/tests/landing_price_strip_fork.rs) reads each pool's slot0 from the running forked-Base devnet, converts via the shared sqrtPriceX96 math, and asserts the result matches `expected_price` within `tolerance_pct`. The Playwright fork test asserts the rendered cells match these same values.",
-  "fork_block": 45743443,
+  "fork_block": 46698556,
   "chain": "base",
   "tolerance_pct": 0.01,
   "$capture_note": "expected_price values are captured by booting the forked-Base devnet (or anvil against a Base archive RPC) at fork_block and reading each pool's slot0, then applying testing/fork-e2e-rust price conversion. Refresh with scripts/devnet/snapshot-fork.sh whenever the fork block is bumped. When `captured` is false the fork integration test reads slot0 and records the live value but does not assert the magnitude (it still asserts the pool exists); flip `captured` to true after pinning real values against an archive RPC.",
-  "captured": false,
+  "captured": true,
+  "$pinned_on_archive_fork_note": "When true, the freshness-chip Playwright test asserts block >= fork_block (the devnet is an Anvil or Geth chain that continues from the fork point). When false, only asserts block > 0. The Geth+Lighthouse smoke-test devnet boots from genesis (block 0) even when the fork state is ingested from block 46698556, so the freshness-chip test can only assert block > 0 — set this to false to avoid a spurious >= 46698556 assertion.",
+  "pinned_on_archive_fork": false,
   "pairs": [
     {
       "id": "eth-usd",
@@ -13,7 +15,7 @@
       "base_decimals": 18,
       "quote_decimals": 6,
       "base_is_token0": true,
-      "expected_price": null
+      "expected_price": 2020.74
     },
     {
       "id": "weth-usdc",
@@ -22,7 +24,7 @@
       "base_decimals": 18,
       "quote_decimals": 6,
       "base_is_token0": true,
-      "expected_price": null
+      "expected_price": 2020.74
     },
     {
       "id": "cbbtc-usdc",
@@ -30,17 +32,17 @@
       "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
       "base_decimals": 8,
       "quote_decimals": 6,
-      "base_is_token0": true,
-      "expected_price": null
+      "base_is_token0": false,
+      "expected_price": 73813.96
     },
     {
       "id": "wsol-usdc",
       "label": "wSOL/USDC",
-      "pool": "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1",
+      "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
       "base_decimals": 9,
       "quote_decimals": 6,
       "base_is_token0": true,
-      "expected_price": null
+      "expected_price": 219.96
     }
   ]
 }

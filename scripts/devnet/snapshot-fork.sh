@@ -152,6 +152,7 @@ export ADMIN_ADDRESS="${ADMIN_ADDRESS:-0xf39Fd6e51aad88F6F4ce6aB8827279cffFb9226
 export PAUSER_ADDRESS="${PAUSER_ADDRESS:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}"
 export AGENT_ADDRESS="${AGENT_ADDRESS:-0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC}"
 export SHARE_RECEIVER_ADDRESS="${SHARE_RECEIVER_ADDRESS:-0x90F79bf6EB2c4f870365E785982E1f101E93b906}"
+export USDC_ADDRESS="${USDC_ADDRESS:-0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}"
 DEPLOYMENT_OUT_TMP=$(mktemp -t deploy.full-stack.XXXXXX.json)
 export DEPLOYMENT_OUT="$DEPLOYMENT_OUT_TMP"
 
@@ -190,6 +191,21 @@ WARM_ADDRESSES=(
   # DEX / infrastructure.
   "0x2626664c2603336e57b271c5c0b26f421741e481"  # Uniswap V3 SwapRouter02
   "0x4200000000000000000000000000000000000006"  # WETH9 on Base
+  # Uniswap V3 pools used by the landing-page price strip (config/dex-pools.json).
+  "0xd0b53D9277642d899DF5C87A3966A349A798F224"  # ETH/USDC + wETH/USDC (500 fee)
+  "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"  # cbBTC/USDC (500 fee)
+  "0x170De01C2b662b7d54BFFd400bc35283B8671e38"  # wSOL/USDC (3000 fee)
+  # Tokens used by price-strip pools not already in the list above.
+  "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"  # cbBTC on Base
+  "0x1C61629598e4a901136a81BC138E5828dc150d67"  # wSOL on Base
+  # Yield protocol contracts (Morpho, Aave V3, Compound V3).
+  "0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca"  # Morpho Gauntlet USDC Prime
+  "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"  # Aave V3 Pool
+  "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB"  # Aave V3 aUSDC
+  "0xb125E6687d4313864e53df431d5425969c15Eb2F"  # Compound V3 cUSDCv3
+  # Safe v1.4.1 singleton and proxy factory (used by DeployTimelock.s.sol).
+  "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton v1.4.1
+  "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"  # SafeProxyFactory v1.4.1
 )
 echo "[snapshot] warming well-known addresses (caching code in fork state)"
 for addr in "${WARM_ADDRESSES[@]}"; do
@@ -207,6 +223,33 @@ for addr in "${WARM_ADDRESSES[@]}"; do
       '{jsonrpc:"2.0",id:1,method:"anvil_setCode",params:[$a,$c]}')" \
     "$ANVIL_RPC" >/dev/null
   echo "[snapshot]   $addr: cached $(printf '%s' "$CODE" | wc -c) hex chars of bytecode"
+done
+
+# 3c. Warm slot0 storage for each Uniswap V3 price-strip pool.
+#
+#     anvil_setCode marks an account dirty (code appears in --dump-state) but
+#     does NOT capture storage. For the landing-page price strip, the dapp
+#     calls slot0() on each pool; that decodes storage slot 0. We read the
+#     upstream value at the fork block and write it back via anvil_setStorageAt
+#     so the slot is included in the dump and available to the Geth devnet
+#     genesis via the genesis ingester.
+PRICE_STRIP_POOLS=(
+  "0xd0b53D9277642d899DF5C87A3966A349A798F224"  # ETH/USDC + wETH/USDC
+  "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"  # cbBTC/USDC
+  "0x170De01C2b662b7d54BFFd400bc35283B8671e38"  # wSOL/USDC
+)
+echo "[snapshot] capturing slot0 storage for price-strip pools"
+for pool in "${PRICE_STRIP_POOLS[@]}"; do
+  SLOT0=$(cast storage "$pool" 0 --rpc-url "$RMPC_FORK_RPC_URL" --block "$PIN_BLOCK")
+  if [ -z "$SLOT0" ] || [ "$SLOT0" = "0x0000000000000000000000000000000000000000000000000000000000000000" ]; then
+    echo "[snapshot]   $pool: slot0 is zero or empty; skipping storage write"
+    continue
+  fi
+  curl -sS -X POST -H 'content-type: application/json' \
+    --data "$(jq -n --arg a "$pool" --arg v "$SLOT0" \
+      '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,"0x0",$v]}')" \
+    "$ANVIL_RPC" >/dev/null
+  echo "[snapshot]   $pool: slot0=$SLOT0"
 done
 
 # 4. Trigger Anvil's on-shutdown --dump-state by sending SIGINT to the

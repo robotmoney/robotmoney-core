@@ -190,6 +190,22 @@ struct RmTokenDeploymentJson {
     chain_id: u64,
 }
 
+/// Typed view over the Uniswap V3 stub deployment JSON produced by
+/// DeployDemoUniswapV3Stubs.s.sol (issue #531). Four `UniswapV3PoolSlot0Stub`
+/// contracts deployed at deterministic CREATE2 addresses (Arachnid factory,
+/// fixed salts). Addresses are pre-committed in `config/dex-pools.json::devnet.pools`
+/// so the dapp Docker image is built with the correct pool addresses.
+#[derive(Debug, Deserialize)]
+struct DemoUniswapV3StubsDeploymentJson {
+    eth_usd: String,
+    weth_usdc: String,
+    cbbtc_usdc: String,
+    wsol_usdc: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 /// Typed view over the demo-extra-vaults deployment JSON produced by
 /// DeployDemoExtraVaults.s.sol. Surfaces the PRD §11 vault catalog seeded into
 /// the demo so smoke-test assertions and downstream tooling can resolve every
@@ -251,6 +267,11 @@ pub struct Fixture {
     /// let the smoke-test exercise multi-vault router weights without
     /// depending on the still-ADR-blocked basket vaults.
     demo_extra_vaults: DemoExtraVaultsDeploymentJson,
+    /// Demo-only Uniswap V3 stub pool contracts deployed on the devnet so the
+    /// landing-page price strip can read slot0 (issue #531). Addresses are
+    /// deterministic (CREATE2 via Arachnid factory) and pre-committed in
+    /// `config/dex-pools.json::devnet.pools`.
+    demo_uniswap_v3_stubs: DemoUniswapV3StubsDeploymentJson,
     repo_root: PathBuf,
 }
 
@@ -922,6 +943,34 @@ impl Fixture {
 
         let demo_extra_vaults = read_demo_extra_vaults_deployment(&extra_vaults_out)?;
 
+        // Deploy Uniswap V3 stub pools via the Arachnid CREATE2 factory
+        // (issue #531). Four `UniswapV3PoolSlot0Stub` instances are deployed at
+        // deterministic addresses pre-committed in `config/dex-pools.json::devnet.pools`.
+        // The Arachnid factory is pre-installed in the devnet genesis alloc by
+        // `genesis_alloc::ARACHNID_FACTORY_ADDR`. This step makes the
+        // landing-page price strip resolve slot0 on the fresh devnet instead of
+        // rendering 'unavailable' (mainnet pool addresses have no bytecode here).
+        let stubs_out = tmp.path().join("demo-uniswap-v3-stubs.json");
+        run_forge_deploy_demo_uniswap_v3_stubs(&repo_root, &rpc_url, &stubs_out).inspect_err(
+            |err| {
+                logging::error(
+                    "smoke-test",
+                    format!("forge deploy demo uniswap v3 stubs failed: {err}"),
+                );
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "demo uniswap v3 stubs deployment failure",
+                    200,
+                );
+                cleanup();
+            },
+        )?;
+
+        let demo_uniswap_v3_stubs = read_demo_uniswap_v3_stubs_deployment(&stubs_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -963,6 +1012,7 @@ impl Fixture {
             governance_deployment,
             rm_token_deployment,
             demo_extra_vaults,
+            demo_uniswap_v3_stubs,
             repo_root,
         };
 
@@ -1155,6 +1205,36 @@ impl Fixture {
     pub fn demo_weight_primary_bps(&self) -> u64 {
         DEMO_WEIGHT_PRIMARY_BPS
     }
+
+    /// ETH/USD devnet stub pool address (issue #531). Deployed by
+    /// `DeployDemoUniswapV3Stubs.s.sol` via Arachnid CREATE2 factory.
+    /// Pre-committed address in `config/dex-pools.json::devnet.pools.eth-usd`.
+    pub fn stub_pool_eth_usd(&self) -> Address {
+        parse_addr(&self.demo_uniswap_v3_stubs.eth_usd)
+    }
+    /// wETH/USDC devnet stub pool address (issue #531).
+    pub fn stub_pool_weth_usdc(&self) -> Address {
+        parse_addr(&self.demo_uniswap_v3_stubs.weth_usdc)
+    }
+    /// cbBTC/USDC devnet stub pool address (issue #531).
+    pub fn stub_pool_cbbtc_usdc(&self) -> Address {
+        parse_addr(&self.demo_uniswap_v3_stubs.cbbtc_usdc)
+    }
+    /// wSOL/USDC devnet stub pool address (issue #531).
+    pub fn stub_pool_wsol_usdc(&self) -> Address {
+        parse_addr(&self.demo_uniswap_v3_stubs.wsol_usdc)
+    }
+    /// All four devnet stub pool addresses in `config/dex-pools.json` order:
+    /// [eth-usd, weth-usdc, cbbtc-usdc, wsol-usdc] (issue #531).
+    pub fn all_stub_pools(&self) -> [Address; 4] {
+        [
+            self.stub_pool_eth_usd(),
+            self.stub_pool_weth_usdc(),
+            self.stub_pool_cbbtc_usdc(),
+            self.stub_pool_wsol_usdc(),
+        ]
+    }
+
     /// Path to the fixture's private tempdir. Callers may write
     /// additional files (keystores, client configs) here.
     pub fn tempdir(&self) -> &Path {
@@ -2179,6 +2259,51 @@ fn run_forge_deploy_demo_extra_vaults(
 fn read_demo_extra_vaults_deployment(
     path: &Path,
 ) -> Result<DemoExtraVaultsDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
+/// Deploy the four `UniswapV3PoolSlot0Stub` contracts via the Arachnid
+/// CREATE2 factory (issue #531). The factory is pre-installed in the devnet
+/// genesis alloc (`genesis_alloc::ARACHNID_FACTORY_ADDR`). Each stub is
+/// deployed with a fixed salt producing the same address across devnet resets.
+/// These addresses are pre-committed in `config/dex-pools.json::devnet.pools`
+/// so the dapp Docker image is built with the correct pool addresses.
+fn run_forge_deploy_demo_uniswap_v3_stubs(
+    repo_root: &Path,
+    rpc_url: &str,
+    out: &Path,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployDemoUniswapV3Stubs.s.sol:DeployDemoUniswapV3Stubs",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("DEPLOYMENT_OUT", out)
+    .current_dir(repo_root);
+    let output = cmd.output()?;
+    logging::log_command_output("forge-uniswap-v3-stubs", &output);
+    if !output.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployDemoUniswapV3Stubs exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_demo_uniswap_v3_stubs_deployment(
+    path: &Path,
+) -> Result<DemoUniswapV3StubsDeploymentJson, HarnessError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
     serde_json::from_str(&raw)

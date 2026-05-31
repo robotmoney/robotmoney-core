@@ -44,6 +44,24 @@ use crate::fork_manifest::{ForkManifest, ManifestError};
 /// Canonical Base mainnet USDC proxy (Circle FiatTokenV2_1).
 pub const BASE_USDC_ADDR: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
+/// Arachnid deterministic-deployment-proxy (CREATE2 factory).
+/// Used by `DeployDemoUniswapV3Stubs.s.sol` to deploy stub Uniswap V3 pools
+/// at pre-computable addresses (issue #531). The bytecode is the canonical
+/// Nick Johnson proxy; the address is the same on every EVM chain that has
+/// had it deployed via the signed deployment transaction. We inject it into
+/// the devnet genesis alloc so that `forge script` can call it during the
+/// smoke-test fixture boot without needing a live deployment transaction.
+///
+/// Source: https://github.com/Arachnid/deterministic-deployment-proxy
+pub const ARACHNID_FACTORY_ADDR: &str = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
+
+/// Deployed bytecode of the Arachnid deterministic-deployment-proxy.
+/// This is the runtime bytecode (not creation bytecode); injected verbatim
+/// into the genesis alloc.  Verified against Base mainnet:
+///   cast code 0x4e59b44847b379578588920cA78FbF26c0B4956C --rpc-url https://mainnet.base.org
+/// The 69-byte runtime is identical for every EVM chain that has the factory.
+pub const ARACHNID_FACTORY_BYTECODE: &str = "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3";
+
 /// FiatTokenV2_1 storage slot index for the `balances` mapping. The slot
 /// holding `balances[holder]` is `keccak256(abi.encode(holder, 9))`.
 ///
@@ -390,6 +408,23 @@ fn build_alloc_from_anvil(
             storage: BTreeMap::new(),
         });
     }
+
+    // 2b. Arachnid deterministic-deployment-proxy (issue #531).
+    //     Pre-install the CREATE2 factory at the well-known address so that
+    //     `DeployDemoUniswapV3Stubs.s.sol` can deploy stub Uniswap V3 pools
+    //     via `ARACHNID_FACTORY.call(salt ++ initcode)` during the smoke-test
+    //     fixture boot.  The factory bytecode is the canonical 67-byte
+    //     runtime; the balance is zero (the factory does not hold ETH).
+    let factory_addr: Address = ARACHNID_FACTORY_ADDR
+        .parse()
+        .expect("static Arachnid factory address parses");
+    let factory_key = address_key(&factory_addr);
+    out.entry(factory_key).or_insert_with(|| AllocEntry {
+        balance: "0x0".to_string(),
+        nonce: Some(1),
+        code: Some(ARACHNID_FACTORY_BYTECODE.to_string()),
+        storage: BTreeMap::new(),
+    });
 
     // 3. USDC storage seed: layer committed slots (owner/name/symbol/…)
     //    onto the proxy account and register the implementation contract

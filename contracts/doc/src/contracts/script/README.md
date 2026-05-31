@@ -11,6 +11,7 @@
 - [ProtocolVaultBatchDeployer](DeployDemoExtraVaults.s.sol/contract.ProtocolVaultBatchDeployer.md)
 - [DemoAgentRwaBatchDeployer](DeployDemoExtraVaults.s.sol/contract.DemoAgentRwaBatchDeployer.md)
 - [DeployDemoExtraVaults](DeployDemoExtraVaults.s.sol/contract.DeployDemoExtraVaults.md)
+- [DeployDemoUniswapV3Stubs](DeployDemoUniswapV3Stubs.s.sol/contract.DeployDemoUniswapV3Stubs.md)
 - [DeployPortfolioRouter](DeployPortfolioRouter.s.sol/contract.DeployPortfolioRouter.md)
 - [DeployRmToken](DeployRmToken.s.sol/contract.DeployRmToken.md)
 - [DeployRouterGovernance](DeployRouterGovernance.s.sol/contract.DeployRouterGovernance.md)

@@ -29,6 +29,10 @@ interface ExpectedPrices {
   fork_block: number;
   tolerance_pct: number;
   captured: boolean;
+  /** When true, the devnet is a real archive fork and block numbers are >= fork_block.
+   *  When false (stub-price devnet), block numbers start near zero — only assert > 0.
+   *  Defaults to captured for backwards compatibility (issue #531). */
+  pinned_on_archive_fork?: boolean;
   pairs: ExpectedPair[];
 }
 
@@ -93,14 +97,16 @@ test("landing price strip shows block-number freshness chip", async ({ page }) =
   const expected = loadExpectedPrices();
 
   // The section-level freshness chip eventually reports a positive block
-  // number. When `captured` is true and the devnet is a real archive fork,
-  // the block is also at or after the pinned fork block (the devnet keeps
-  // producing blocks past the fork). When `captured` is false the devnet
-  // starts from its own genesis (pinned: false) so only a positive block
-  // is guaranteed.
+  // number. When `pinned_on_archive_fork` is true (real archive fork), the
+  // block is also at or after the pinned fork block (the devnet keeps
+  // producing blocks past the fork). When false (stub-price fresh devnet,
+  // issue #531) only a positive block is guaranteed — the stub devnet starts
+  // from genesis block 0, never reaching fork_block. `pinned_on_archive_fork`
+  // defaults to `captured` for backwards compatibility.
+  const pinnedOnArchiveFork = expected.pinned_on_archive_fork ?? expected.captured;
   const blockPredicate = async () =>
     parseBlock(await page.getByTestId("landing-price-strip-freshness").textContent());
-  if (expected.captured) {
+  if (pinnedOnArchiveFork) {
     await expect
       .poll(blockPredicate, { timeout: 60_000 })
       .toBeGreaterThanOrEqual(expected.fork_block);
@@ -114,7 +120,7 @@ test("landing price strip shows block-number freshness chip", async ({ page }) =
       await page.getByTestId(`landing-price-cell-${id}-block`).textContent(),
     );
     expect(block).not.toBeNull();
-    if (expected.captured) {
+    if (pinnedOnArchiveFork) {
       expect(block as number).toBeGreaterThanOrEqual(expected.fork_block);
     } else {
       expect(block as number).toBeGreaterThan(0);

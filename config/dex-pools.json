@@ -56,14 +56,14 @@
       },
       "cbbtc-usdc": {
         "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
-        "token0": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 8,
-        "token1Decimals": 6,
-        "baseIsToken0": true
+        "token0": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token1": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        "token0Decimals": 6,
+        "token1Decimals": 8,
+        "baseIsToken0": false
       },
       "wsol-usdc": {
-        "pool": "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1",
+        "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
         "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
         "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "token0Decimals": 9,
@@ -94,14 +94,14 @@
       },
       "cbbtc-usdc": {
         "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
-        "token0": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
-        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token0Decimals": 8,
-        "token1Decimals": 6,
-        "baseIsToken0": true
+        "token0": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token1": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        "token0Decimals": 6,
+        "token1Decimals": 8,
+        "baseIsToken0": false
       },
       "wsol-usdc": {
-        "pool": "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1",
+        "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
         "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
         "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "token0Decimals": 9,
