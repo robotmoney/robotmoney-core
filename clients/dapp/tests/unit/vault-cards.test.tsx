@@ -128,3 +128,70 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
     });
   });
 });
+
+// Minimal single-vault fixture helpers for TVL rendering / polling tests.
+function makeVault(total_assets: string | null): VaultsResponse {
+  return {
+    vaults: [
+      {
+        chain_id: 8453,
+        address: "0x1111111111111111111111111111111111111111",
+        name: "Robot Money USDC",
+        risk_label: "STABLE_YIELD",
+        status: 0,
+        deposit_cap: "10000000000000",
+        total_assets,
+        exit_fee_bps: 10,
+        indexed_at: "2026-01-01T12:00:00Z",
+      },
+    ],
+    block_number: 100,
+    indexed_at: "2026-01-01T12:00:00Z",
+  };
+}
+
+describe("VaultCards — TVL display and polling", () => {
+  it("renders total_assets null as — and total_assets '0' as 0", async () => {
+    const { findByTestId, rerender } = render(
+      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(makeVault(null))} />,
+    );
+    await waitFor(async () => {
+      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("—");
+    });
+
+    rerender(<VaultCards apiUrl="http://api" fetchImpl={makeFetch(makeVault("0"))} />);
+    await waitFor(async () => {
+      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
+    });
+  });
+
+  it("re-fetches on the poll interval and updates TVL from '0' to non-zero without a page reload", async () => {
+    let callCount = 0;
+    const fetchImpl: FetchLike = vi.fn(async () => ({
+      ok: true as const,
+      status: 200,
+      json: async () => (callCount++ === 0 ? makeVault("0") : makeVault("5000000000")),
+    })) as unknown as FetchLike;
+
+    // Use a short real interval so the test completes quickly without fake timers
+    // (fake timers block RTL's waitFor polling in browser mode).
+    const { findByTestId } = render(
+      <VaultCards apiUrl="http://api" fetchImpl={fetchImpl} pollInterval={50} />,
+    );
+
+    // Initial fetch shows "0".
+    await waitFor(async () => {
+      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    // After one poll interval the component re-fetches and displays the non-zero TVL.
+    await waitFor(
+      async () => {
+        expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5000000000");
+      },
+      { timeout: 2_000 },
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});

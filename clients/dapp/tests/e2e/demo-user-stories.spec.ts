@@ -93,27 +93,32 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
 
     // At least one Active vault card must show a non-zero TVL value. The
-    // explorer-indexer processes Deposit events asynchronously so we use a
-    // loose at-least-one assertion to tolerate indexer lag.
+    // explorer-indexer processes Deposit events asynchronously so we poll
+    // until it catches up — VaultCards re-fetches every 15 s, so we will
+    // see the update in the DOM without a page reload.
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
-    const count = await tvlCells.count();
-    expect(count, "expected TVL cells for Active vault cards").toBeGreaterThan(0);
+    await expect(tvlCells.first()).toBeVisible({ timeout: 30_000 });
 
-    let foundNonZero = false;
-    for (let i = 0; i < count; i++) {
-      const text = await tvlCells.nth(i).textContent();
-      const trimmed = text?.trim() ?? "";
-      // A zero or missing TVL renders as "0", "—", or blank. Anything else
-      // that is a non-empty, non-zero, non-dash string is a non-zero TVL.
-      if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") {
-        foundNonZero = true;
-        break;
-      }
-    }
-    expect(
-      foundNonZero,
-      "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding (issue #532)",
-    ).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const count = await tvlCells.count();
+          for (let i = 0; i < count; i++) {
+            const text = (await tvlCells.nth(i).textContent()) ?? "";
+            const trimmed = text.trim();
+            // "0", "—", or blank all mean no TVL yet.
+            if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") return true;
+          }
+          return false;
+        },
+        {
+          message:
+            "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding (issue #532)",
+          timeout: 60_000,
+          intervals: [3_000],
+        },
+      )
+      .toBe(true);
   });
 
   test("demo user stories console: zero JavaScript errors on the landing page", async ({

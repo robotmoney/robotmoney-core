@@ -11,9 +11,7 @@
 //! Run with:
 //!   cargo test -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture
 
-use smoke_test::{
-    prerequisites_available, DappStack, DappStackOptions, Fixture, PublicEndpoints,
-};
+use smoke_test::{prerequisites_available, DappStack, DappStackOptions, Fixture, PublicEndpoints};
 
 fn skip_if_no_prereqs(name: &str) -> bool {
     if !prerequisites_available() {

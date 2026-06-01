@@ -244,9 +244,11 @@ fn registry_lists_four_vaults_with_rwa_placeholder() {
     );
 }
 
-/// AC3: Router weights cover all three vaults, each > 0, summing to 10 000.
+/// AC3: Router weights assign the full 10 000 bps to the primary vault only.
+/// Basket vaults (ProtocolAssetVault, AgentTokenVault) are gap-blocked from
+/// router deposits per PRD §11.2/§11.3 and are not in the weight vector.
 #[test]
-fn router_weights_are_three_way_split() {
+fn router_weights_are_single_primary_vault() {
     if skip_if_no_prereqs("router_weights_are_three_way_split") {
         return;
     }
@@ -267,20 +269,20 @@ fn router_weights_are_three_way_split() {
     );
 }
 
-/// AC2: After seeding simulated depositors via the router, each vault reports
-/// non-zero `totalAssets` and the sum of per-depositor share balances equals
-/// each vault's `totalAssets`.
+/// AC2: After seeding simulated depositors via the router, the primary vault
+/// reports non-zero `totalAssets` and the sum of per-depositor share balances
+/// equals the vault's `totalAssets`.
+///
+/// Only the primary `RobotMoneyVault` (PRD §11.1) is router-eligible.
+/// Basket vaults (ProtocolAssetVault §11.2, AgentTokenVault §11.3) are
+/// gap-blocked from router deposits and receive no shares via this path.
 #[test]
-fn simulated_depositors_match_total_assets() {
-    if skip_if_no_prereqs("simulated_depositors_match_total_assets") {
+fn simulated_depositors_match_primary_vault_total_assets() {
+    if skip_if_no_prereqs("simulated_depositors_match_primary_vault_total_assets") {
         return;
     }
     let fx = fixture();
 
-    // Seed three depositors with 1000 USDC each — generous enough that the
-    // weight split yields non-zero per-leg amounts (e.g. 200 USDC into the
-    // smallest leg at 2000 bps) even after the router's rounding-remainder
-    // assignment.
     let per_user_usdc: u128 = 1_000 * 1_000_000;
     let count: u32 = 3;
     let depositors = fx
@@ -288,31 +290,24 @@ fn simulated_depositors_match_total_assets() {
         .expect("seed_demo_depositors");
     assert_eq!(depositors.len(), count as usize);
 
-    let vaults = fx.all_demo_vaults();
-    for v in vaults {
-        let ta = total_assets(fx.rpc_url(), v);
-        assert!(ta > 0, "vault {v:#x} has zero totalAssets after seeding");
+    // Only the primary vault (10 000 bps weight) receives router deposits.
+    let v = fx.vault();
+    let ta = total_assets(fx.rpc_url(), v);
+    assert!(
+        ta > 0,
+        "primary vault {v:#x} has zero totalAssets after seeding"
+    );
 
-        // Sum each simulated depositor's share balance on this vault,
-        // converted to underlying assets so the test holds regardless of the
-        // vault's `_decimalsOffset()` (RobotMoneyVault uses 18, so raw share
-        // counts are 1e18× the asset). The vault's own
-        // `convertToAssets(shares)` is the canonical inversion of the
-        // mint-on-deposit math.
-        let mut sum_assets: u128 = 0;
-        for (addr, _tx) in &depositors {
-            let shares = balance_of(fx.rpc_url(), v, *addr);
-            let assets = convert_to_assets(fx.rpc_url(), v, shares);
-            sum_assets = sum_assets.saturating_add(assets);
-        }
-        // PassthroughAdapter does not accrue yield during the seed, so
-        // summing depositor receipt-equivalent assets must equal totalAssets
-        // exactly. (No rounding remainder: every receipt is freshly minted in
-        // this test run; pre-existing dust would only manifest if other
-        // tests had deposited first.)
-        assert_eq!(
-            sum_assets, ta,
-            "vault {v:#x}: sum of depositors' receipt-equivalent assets ({sum_assets}) must equal totalAssets ({ta})"
-        );
+    // Sum each depositor's receipt-equivalent assets. RobotMoneyVault uses
+    // _decimalsOffset()=18 so convertToAssets() is the correct inverse.
+    let mut sum_assets: u128 = 0;
+    for (addr, _tx) in &depositors {
+        let shares = balance_of(fx.rpc_url(), v, *addr);
+        let assets = convert_to_assets(fx.rpc_url(), v, shares);
+        sum_assets = sum_assets.saturating_add(assets);
     }
+    assert_eq!(
+        sum_assets, ta,
+        "primary vault {v:#x}: sum of depositors' receipt-equivalent assets ({sum_assets}) must equal totalAssets ({ta})"
+    );
 }

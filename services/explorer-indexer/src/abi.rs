@@ -231,6 +231,24 @@ sol! {
             uint256 fee,
             uint256 netAssets
         );
+        /// ERC-4626 standard deposit event. Emitted by the vault on every deposit
+        /// regardless of call path (direct, gateway, or router). Watched so that
+        /// router-seeded deposits trigger an event-driven TVL snapshot without
+        /// waiting for the SNAPSHOT_HEARTBEAT_BLOCKS interval.
+        event Deposit(
+            address indexed caller,
+            address indexed owner,
+            uint256 assets,
+            uint256 shares
+        );
+        /// ERC-4626 standard withdraw event. Watched to snapshot TVL after any redemption.
+        event Withdraw(
+            address indexed caller,
+            address indexed receiver,
+            address indexed owner,
+            uint256 assets,
+            uint256 shares
+        );
     }
 
     /// Read surface for vault state snapshots.
@@ -317,6 +335,11 @@ pub struct Topics {
     pub weights_applied: B256,
     /// Per-leg deposit emitted by PortfolioRouter.sol:71.
     pub router_deposit: B256,
+    /// ERC-4626 Deposit event emitted by any vault on every deposit.
+    /// Watching this ensures TVL snapshots fire after router-seeded deposits.
+    pub erc4626_deposit: B256,
+    /// ERC-4626 Withdraw event emitted by any vault on every redemption.
+    pub erc4626_withdraw: B256,
 }
 
 impl Topics {
@@ -353,6 +376,8 @@ impl Topics {
             router_deposit: keccak256(
                 b"RouterDeposit(address,address,uint256,uint256,uint256)",
             ),
+            erc4626_deposit: keccak256(b"Deposit(address,address,uint256,uint256)"),
+            erc4626_withdraw: keccak256(b"Withdraw(address,address,address,uint256,uint256)"),
         }
     }
 
@@ -377,6 +402,8 @@ impl Topics {
             self.proposal_executed,
             self.weights_applied,
             self.router_deposit,
+            self.erc4626_deposit,
+            self.erc4626_withdraw,
         ]
     }
 }
@@ -453,6 +480,9 @@ mod tests {
             t.router_deposit,
             IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH
         );
+        // ERC-4626 standard events.
+        assert_eq!(t.erc4626_deposit, IVaultEvents::Deposit::SIGNATURE_HASH);
+        assert_eq!(t.erc4626_withdraw, IVaultEvents::Withdraw::SIGNATURE_HASH);
     }
 
     /// CI ABI drift gate — compares `sol!`-derived SIGNATURE_HASH constants
@@ -542,6 +572,17 @@ mod tests {
                 "RouterDeposit",
                 b"RouterDeposit(address,address,uint256,uint256,uint256)",
                 IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH,
+            ),
+            // ERC-4626 standard events (OpenZeppelin ERC4626 — inherited by all vaults)
+            (
+                "Deposit",
+                b"Deposit(address,address,uint256,uint256)",
+                IVaultEvents::Deposit::SIGNATURE_HASH,
+            ),
+            (
+                "Withdraw",
+                b"Withdraw(address,address,address,uint256,uint256)",
+                IVaultEvents::Withdraw::SIGNATURE_HASH,
             ),
         ];
 

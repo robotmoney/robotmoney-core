@@ -32,6 +32,8 @@ const VAULT_STATUS_ACTIVE = 0;
 interface VaultCardsProps {
   readonly apiUrl: string;
   readonly fetchImpl?: FetchLike;
+  /** Poll interval in ms. Defaults to 15 000. Overridable in tests. */
+  readonly pollInterval?: number;
 }
 
 type State =
@@ -39,19 +41,33 @@ type State =
   | { phase: "error"; message: string }
   | { phase: "ok"; vaults: readonly VaultRow[]; block_number: number };
 
-export function VaultCards({ apiUrl, fetchImpl }: VaultCardsProps) {
+export function VaultCards({ apiUrl, fetchImpl, pollInterval = 15_000 }: VaultCardsProps) {
   const [state, setState] = useState<State>({ phase: "loading" });
 
   useEffect(() => {
-    const ac = new AbortController();
-    fetchVaults(apiUrl, { fetchImpl, signal: ac.signal })
-      .then((res) => setState({ phase: "ok", vaults: res.vaults, block_number: res.block_number }))
-      .catch((err: unknown) => {
-        if (ac.signal.aborted) return;
-        setState({ phase: "error", message: String(err) });
-      });
-    return () => ac.abort();
-  }, [apiUrl, fetchImpl]);
+    let ac = new AbortController();
+
+    function doFetch() {
+      ac = new AbortController();
+      fetchVaults(apiUrl, { fetchImpl, signal: ac.signal })
+        .then((res) =>
+          setState({ phase: "ok", vaults: res.vaults, block_number: res.block_number }),
+        )
+        .catch((err: unknown) => {
+          if (ac.signal.aborted) return;
+          setState({ phase: "error", message: String(err) });
+        });
+    }
+
+    doFetch();
+    // Re-poll so the indexer's processed deposits become visible without a
+    // manual page reload (indexer tick is 12 s, so 15 s keeps up in production).
+    const timer = setInterval(doFetch, pollInterval);
+    return () => {
+      ac.abort();
+      clearInterval(timer);
+    };
+  }, [apiUrl, fetchImpl, pollInterval]);
 
   if (state.phase === "loading") {
     return (
