@@ -487,30 +487,7 @@ impl ForkFixture {
         let impl_code = decode_hex_bytes(&seed.implementation.code)?;
         self.rpc.set_code(impl_addr, impl_code)?;
 
-        // 3. Seed the whale with a large USDC balance so the
-        //    existing `fund_usdc` helper (which impersonates
-        //    [`addresses::USDC_WHALE`] and runs `transfer`) keeps
-        //    working unchanged. The seed's storage replay does NOT
-        //    include any balances (the upstream fixture only holds
-        //    token-config slots), so without this step every
-        //    whale-funded test would observe `balanceOf(whale) == 0`
-        //    and fail with `transfer: insufficient balance`.
-        //
-        //    `balances` lives at FiatTokenV1 storage slot 9; the slot
-        //    holding `balances[holder]` is
-        //    `keccak256(abi.encode(holder, 9))`. We grant the whale
-        //    `u128::MAX` units (≈ 3.4e20 USDC) — far above any
-        //    per-test funding amount, and well below `u256::MAX` so
-        //    `totalSupply` increments don't wrap.
-        let whale_balance_slot = balances_mapping_slot(addresses::USDC_WHALE, 9);
-        let whale_grant = U256::from(u128::MAX);
-        self.rpc.set_storage_at(
-            addresses::USDC,
-            whale_balance_slot,
-            u256_to_b256(whale_grant),
-        )?;
-
-        // 4. Regression guard: after replay the admin slot MUST be
+        // 3. Regression guard: after replay the admin slot MUST be
         //    non-zero. If it isn't, the proxy admin collision will
         //    silently come back — fail loudly here instead of
         //    surfacing as an opaque ABI-decode error in rmpc.
@@ -572,25 +549,18 @@ impl ForkFixture {
         )
     }
 
-    /// Top up `addr` with `amount` USDC by impersonating a
-    /// configured whale, transferring, then stopping impersonation.
+    /// Top up `addr` with `amount` USDC by writing directly to the
+    /// FiatTokenV1 `balances` mapping slot (slot 9). This is robust to
+    /// whale-balance drift: when the fork fixture has the real USDC admin
+    /// slot already set, `apply_usdc_storage_seed` skips the whale grant
+    /// (early-return), leaving the whale with whatever on-chain balance it
+    /// held at the fork block — which may be zero. Whale impersonation then
+    /// fails silently (no status check on the transfer receipt) and the
+    /// caller ends up with 0 USDC. Direct slot writes bypass that entirely.
     pub fn fund_usdc(&self, addr: Address, amount: U256) -> Result<(), HarnessError> {
-        let whale = addresses::USDC_WHALE;
-        // Make sure the whale has gas to broadcast.
+        let balance_slot = balances_mapping_slot(addr, 9);
         self.rpc
-            .set_balance(whale, U256::from(10u64).pow(U256::from(18u64)))?;
-        self.rpc.impersonate(whale)?;
-
-        let calldata = IERC20::transferCall { to: addr, amount }.abi_encode();
-
-        let tx = serde_json::json!({
-            "from": fmt_addr(whale),
-            "to": fmt_addr(addresses::USDC),
-            "data": format!("0x{}", hex::encode(&calldata)),
-        });
-        let hash: B256 = self.rpc.send_unsigned(tx)?;
-        let _ = self.rpc.wait_for_receipt(hash, Duration::from_secs(15))?;
-        self.rpc.stop_impersonate(whale)?;
+            .set_storage_at(addresses::USDC, balance_slot, u256_to_b256(amount))?;
         Ok(())
     }
 }
