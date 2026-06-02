@@ -16,13 +16,13 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 
 /// @title DeployAgentTokenVault
 /// @notice Deploys `AgentTokenVault` and seeds it with the canonical MVP
-///         six-token shortlist (ADR-0001): JUNO, ROBOTMONEY, BANKR, ZYFAI,
-///         GIZA, DEUS — Base-only, equal-weight, ADMIN_ROLE-curated. Token
-///         addresses are read from `config/agent-token-shortlist.json`; no
-///         token address is hardcoded in Solidity source.
+///         shortlist (ADR-0001, revised 2026-06-02): BNKR, JUNO, ROBOTMONEY
+///         — Base-liquid, equal-weight, ADMIN_ROLE-curated. Token addresses
+///         are read from `config/agent-token-shortlist.json`; no token address
+///         is hardcoded in Solidity source.
 ///
 ///         Chain selection: `block.chainid == 8453` (Base mainnet) reads the
-///         `mainnet` block of the config. Any other chain id reads stand-in
+///         `mainnet` array of the config. Any other chain id reads stand-in
 ///         ERC20 + pool addresses from `DEVNET_AGENT_TOKEN_<SYMBOL>` /
 ///         `DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` env
 ///         overrides, matching the single-production-codebase principle: the
@@ -49,10 +49,11 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 contract DeployAgentTokenVault is Script {
     using stdJson for string;
 
-    /// @notice Canonical MVP shortlist symbols in deploy order (ADR-0001).
+    /// @notice Canonical MVP shortlist symbols in deploy order (ADR-0001, revised 2026-06-02).
     ///         Ordering is load-bearing: AgentTokenVault.shortlist() returns
     ///         tokens in this order, and the dapp/tests assert on it.
-    string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    ///         Revised from six to three Base-liquid tokens.
+    string[3] internal SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
 
     /// @notice TVL/per-deposit caps mirrored from the other demo vaults.
     uint256 public constant TVL_CAP = 10_000_000 * 1e6;
@@ -72,7 +73,7 @@ contract DeployAgentTokenVault is Script {
         address[] tokens;
     }
 
-    /// @notice Broadcast entrypoint. Deploys the vault, seeds the six-token
+    /// @notice Broadcast entrypoint. Deploys the vault, seeds the three-token
     ///         shortlist, optionally registers it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
@@ -84,7 +85,7 @@ contract DeployAgentTokenVault is Script {
         require(swapRouter != address(0), "SWAP_ROUTER=0");
         require(usdc != address(0), "USDC_ADDRESS=0");
 
-        Entry[6] memory entries = _resolveShortlist();
+        Entry[3] memory entries = _resolveShortlist();
 
         vm.startBroadcast();
         d = _deployAndSeed(admin, emergencyResponder, swapRouter, usdc, entries);
@@ -101,7 +102,7 @@ contract DeployAgentTokenVault is Script {
         address emergencyResponder,
         address swapRouter,
         address usdc,
-        Entry[6] memory entries
+        Entry[3] memory entries
     ) internal returns (Deployed memory d) {
         AgentTokenVault vault = new AgentTokenVault(
             IERC20(usdc),
@@ -127,9 +128,11 @@ contract DeployAgentTokenVault is Script {
         }
     }
 
-    /// @dev Resolve the six shortlist entries from config (mainnet) or env
+    /// @dev Resolve the three shortlist entries from config (mainnet) or env
     ///      overrides (devnet), selected by chain id.
-    function _resolveShortlist() internal view returns (Entry[6] memory entries) {
+    ///      Mainnet reads `.mainnet[i]` from config (ADR-0001 revised 2026-06-02:
+    ///      mainnet is a flat array of three token objects).
+    function _resolveShortlist() internal view returns (Entry[3] memory entries) {
         bool isMainnet = block.chainid == 8453;
         string memory json = isMainnet ? _readConfig() : "";
 
@@ -137,7 +140,7 @@ contract DeployAgentTokenVault is Script {
             string memory sym = SYMBOLS[i];
             entries[i].symbol = sym;
             if (isMainnet) {
-                string memory base = string.concat(".mainnet.shortlist[", vm.toString(i), "]");
+                string memory base = string.concat(".mainnet[", vm.toString(i), "]");
                 entries[i].token = json.readAddress(string.concat(base, ".token"));
                 entries[i].pool = json.readAddress(string.concat(base, ".pool"));
                 entries[i].swapFee = uint24(json.readUint(string.concat(base, ".swapFee")));
