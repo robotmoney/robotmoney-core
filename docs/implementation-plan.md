@@ -16,9 +16,14 @@
 > OpenCode and OpenClaw. Launch chain is Base.
 >
 > **What this plan does not cover.** Token launch mechanics, tokenomics, agent
-> persona, CFO Feed, multi-chain expansion, agent-token shortlist governance,
-> RWA/thematic vault implementation, and MCP server implementation are all
+> persona, CFO Feed, multi-chain expansion, and MCP server implementation are
 > deferred. See `docs/prd.md` open-questions for their TBD status.
+>
+> **Active reversal (2026-06-02).** The *Real four-vault demo* initiative at the
+> end of this document brings two previously-deferred items into active scope:
+> agent-token shortlist governance and the RWA/thematic vault. The goal is a
+> launch demo in which all four PRD §11 vaults hold real Base-mainnet assets and
+> show real depositors at startup — no placeholders.
 
 ## Goal
 
@@ -32,12 +37,14 @@ and multi-vault layers that complete the product.
 ## Non-goals
 
 - Token launch mechanics, tokenomics, Clanker terms, v1/v2 migration
-- Agent-token shortlist governance, inclusion proposals, tier system
 - CFO Feed product surface
 - Multi-chain expansion beyond Base
-- RWA or thematic vault implementation
 - MCP server (deferred pending OpenClaw/OpenCode integration review)
 - Hosted custody or hosted signing
+
+> The earlier non-goals "agent-token shortlist governance" and "RWA/thematic
+> vault implementation" are superseded by the *Real four-vault demo* initiative
+> below and are now in active scope.
 
 ## Phases
 
@@ -302,3 +309,121 @@ Goal: Resolve open ADRs blocking basket-vault router eligibility.
 - [ ] Rebalancing model ADR + `rebalance()` implementation
 - [ ] Agent-token shortlist governance — mechanism per `docs/development/open-questions.md` §1.3
 - [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
+
+> The four open items above are absorbed and superseded by the *Real four-vault
+> demo* initiative below, which carries them through to a real, seeded,
+> router-eligible end state plus the RWA vault and the test pyramid.
+
+---
+
+# Initiative: Real four-vault demo — production-grade, no placeholders
+
+## Goal
+
+The launch demo must show all four PRD §11 vaults — Stable Yield, Protocol
+(rmPROTO), Agent (rmAGENT), and RWA/Thematic — holding **real Base-mainnet
+assets** and populated with **real depositors and real on-chain transactions**
+at startup. No stand-in tokens, no Paused placeholder. This requires finishing
+the basket-vault production path so rmPROTO and rmAGENT are genuinely
+router-eligible, standing up a real RWA vault, and proving the result at every
+layer of the test pyramid.
+
+## What is already done (do not re-create)
+
+Verified against current code on `dev` (2026-06-02): the BasketVault **TWAP
+oracle** (`observe()`-based, slot0 off all hot paths), **emergency unwind** with
+TWAP floors + audited override, the VaultRegistry **router-eligibility flag**
+(`setRouterEligible`/`isRouterEligible`/`routerEligibleCount`), the router
+**prototype gate** (`isPrototype`/`setPrototypeOverride`), per-asset Uniswap V3
+**observation-cardinality** check in `addAsset`, per-asset slippage/window
+config, and the on-chain **`defaultWeights`** fallback. The initiative builds on
+these; it does not redo them.
+
+## Non-goals
+
+- Primary NAV mint/redeem of the RWA asset (ERC-7540 async + KYC) — the RWA
+  vault enters and exits **only** via permissionless secondary DEX swap.
+- RM-token-weighted on-chain voting for the agent shortlist beyond the governance
+  surface this initiative requires (full token vote stays deferred to token launch).
+- Listing the illiquid agent tokens (ZYFAI, GIZA, DEUS) — they lack usable Base
+  liquidity and are dropped from the shortlist.
+
+## External dependencies and risks
+
+- **Base archive RPC** (`RMPC_FORK_RPC_URL`) is required to ingest real DEX pool
+  state (Uniswap V3/V4 + Aerodrome) and liquidity into the fork manifest. Public
+  sandbox RPCs are pruned at the pinned fork block. Real seeded swaps cannot be
+  proven without it.
+- **deSPXA address gap**: the deSPXA ERC-20 address on Base, its Aerodrome
+  pool/fee/TVL, and the Chronicle NAV feed address must be resolved from
+  Basescan/GeckoTerminal at implementation time and pinned into config + the
+  fork manifest. deSPXA carries an issuer `freeze` control (USDC-blacklist risk
+  class) to document.
+- **Aerodrome / Uniswap V4 liquidity** for agent tokens is thinner and more
+  volatile than Uniswap V3; trade sizes and slippage bounds must be sized to
+  ingested fork depth.
+
+## Phases
+
+### Phase A — Canonical docs and decisions
+Goal: Land the PRD changes and the ADRs that gate the contract work, so no
+basket-vault implementation task starts before its decision is approved.
+
+- [ ] dev-scout: map the four-vault real-asset + fork-ingest seams (DEX adapters, registry eligibility, seed path, fork manifest)
+- [ ] PRD §11.2/§11.3/§11.4 rewrite — rmPROTO and rmAGENT become router-eligible post-hardening; RWA re-specified as the deSPXA real vault (exit-via-swap-only, Chronicle oracle)
+- [ ] Revise ADR-0001 — agent-token shortlist trimmed to the Base-liquid set (BNKR, JUNO, ROBOTMONEY); drop ZYFAI/GIZA/DEUS with rationale
+- [ ] ADR: slippage-adjusted preview — worst-case-floor `previewRedeem`/`previewDeposit` for basket vaults
+- [ ] ADR: BasketVault rebalancing model — trigger, target weights, cost disclosure
+- [ ] ADR: agent-token shortlist governance — production mechanism enabling rmAGENT router-eligibility
+- [ ] ADR: multi-DEX routing — Aerodrome + Uniswap V4 swap and TWAP for BasketVault
+- [ ] ADR: deSPXA RWA vault — asset, oracle (Chronicle), swap venue (Aerodrome), exit-only-via-swap, freeze-risk handling
+
+### Phase B — BasketVault production hardening (contracts)
+Goal: Close the remaining router-eligibility gaps shared by both basket vaults.
+
+- [ ] Slippage-adjusted `previewRedeem`/`previewDeposit` returning the TWAP-minus-slippage worst-case floor
+- [ ] `rebalance()` per the approved rebalancing model, with pre-execution cost disclosure
+- [ ] Per-asset minimum-liquidity proof gate in `addAsset` (pool-depth floor, beyond cardinality)
+- [ ] AgentTokenVault shortlist governance mechanism per the approved ADR
+
+### Phase C — Multi-DEX swap and pricing
+Goal: Let BasketVault hold assets whose real Base liquidity is on Aerodrome or
+Uniswap V4, not just Uniswap V3.
+
+- [ ] Aerodrome swap + TWAP adapter for BasketVault
+- [ ] Uniswap V4 swap + TWAP adapter for BasketVault
+- [ ] Per-asset venue selection in `addAsset` (V3 / V4 / Aerodrome) with venue-specific oracle wiring
+
+### Phase D — Fork ingest of real DEX pools
+Goal: Make the devnet fork carry real pool state and liquidity for every asset
+the four vaults trade.
+
+- [ ] Expand the fork manifest to ingest Uniswap V3/V4 + Aerodrome pools for cbBTC, wSOL, BNKR, JUNO, ROBOTMONEY, and deSPXA against USDC/WETH
+- [ ] Capture and pin real pool prices via an archive RPC; flip the price fixture to `captured: true`
+- [ ] CI guard: fork-block bump must refresh the ingested-pool + expected-price fixtures
+
+### Phase E — Real assets wired and router-eligible
+Goal: Both basket vaults hold their real baskets and are weighted by the router.
+
+- [ ] rmPROTO: confirm real wETH/cbBTC/wSOL pools, clear the prototype gate, `setRouterEligible(true)`, add to `defaultWeights`
+- [ ] rmAGENT: wire the real {BNKR, JUNO, ROBOTMONEY} basket across V3/V4/Aerodrome, clear the prototype gate, `setRouterEligible(true)`, add to `defaultWeights`
+
+### Phase F — Real RWA vault (deSPXA)
+Goal: Replace the Paused RWA placeholder with a real deSPXA-backed vault.
+
+- [ ] deSPXA RWA vault: hold deSPXA, swap USDC↔deSPXA on Aerodrome, Chronicle NAV oracle, caps + pause, exit-only-via-swap; resolve and pin Base addresses
+- [ ] Register the RWA vault Active and decide + implement its router-eligibility and `defaultWeights` placement
+
+### Phase G — Seed all four vaults at startup
+Goal: Real depositors with real transactions land in every vault on boot.
+
+- [ ] Extend `seed_demo_depositors` / `DappStack::boot` so depositors fund all four vaults at startup with real on-chain swaps on the fork
+
+### Phase H — Test pyramid for four real vaults
+Goal: Prove the real four-vault demo at every layer; all checks automated.
+
+- [ ] Forge unit: per-vault TVL + a deSPXA vault test; `DeployDemoExtraVaults.t.sol` asserts four vaults Active, router-eligible, non-zero seeded TVL
+- [ ] Rust integration (smoke-test): `demo_seeding.rs` asserts each of four vaults `totalAssets > 0`; `full_stack_demo_tvl.rs` asserts `GET /v1/vaults` returns four entries all with non-zero `total_assets`
+- [ ] Dapp unit (`vault-cards.test.tsx`): four Active cards with real TVL, no Future/placeholder tile
+- [ ] Dapp e2e (`demo-user-stories.spec.ts`): first visitor sees four vault cards all showing non-zero TVL and real depositor activity, price strip numeric, zero console errors
+- [ ] CI: update suites 01-02 (forge), 14 (smoke-test), and 10 (dapp e2e) to enforce the four-vault real-TVL assertions
