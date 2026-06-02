@@ -359,17 +359,31 @@ remaining adapters before reverting.
 | Allocation model | Equal-weight across active basket assets at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
-| Status | Prototype — not audited, not Router-eligible |
+| Status | Router-eligible after hardening gates (see below) |
 
 Deposits swap USDC into basket assets; withdrawals swap back. NAV is
 denominated in USDC and priced from a Uniswap V3 TWAP over an
 admin-configured per-asset window; `slot0` is not consulted on hot
 paths. Swap slippage means actual withdrawal proceeds may differ from
-the preview by up to the configured slippage bound. Router eligibility
-remains blocked by the unresolved intra-vault rebalancing model
-(`docs/development/open-questions.md` §3.15); concrete subclasses must additionally certify pool
-cardinality and per-asset window prerequisites before opting out of
-prototype status.
+the preview by up to the configured slippage bound.
+
+Router eligibility is gated on all of the following hardening criteria
+being satisfied and formally certified for a given deployment:
+
+1. **Slippage-preview gate** — `previewWithdraw` returns a bound that
+   includes worst-case Uniswap V3 swap slippage; the Portfolio Router
+   will not route into any vault whose preview deviates from the
+   realised amount by more than the configured tolerance.
+2. **Rebalancing model gate** — the intra-vault rebalancing strategy
+   (drift limits, timing, allowed DEX routes) is specified in a merged
+   ADR and implemented in the contract; open question §3.15 in
+   `docs/development/open-questions.md` is closed.
+3. **Liquidity-proof gate** — per-asset pool cardinality and TWAP
+   window prerequisites are met and verified on-chain; `slot0` is never
+   consulted on hot paths.
+
+Until all three gates are certified for a given deployment, the vault
+subclass must not be added to the Portfolio Router weight vector.
 
 ### 11.3 Agent Token Vault
 
@@ -380,39 +394,69 @@ prototype status.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Exposure | Admin-curated basket of agent-economy tokens via Uniswap V3 swaps |
-| MVP shortlist | JUNO, ROBOTMONEY, BANKR, ZYFAI, GIZA, DEUS (Base-chain only) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
+| Agent shortlist | BNKR, JUNO, ROBOTMONEY (Base-liquid set) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
 | Allocation model | Equal-weight across shortlisted tokens at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
-| Status | Prototype — not audited, not Router-eligible |
+| Status | Router-eligible after hardening gates (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with a fixed
-six-token equal-weighted basket (see ADR-0001). Changes flow through
-the Safe → Timelock → `ADMIN_ROLE` path; there is no token-holder vote
-over shortlist membership in the MVP. The production model
-(bribery-based or RM-token inclusion vote) is deferred past MVP. TWAP
-pricing is shipped via the basket-vault base. Router eligibility
-remains blocked by the unresolved intra-vault rebalancing model
-(`docs/development/open-questions.md` §3.15).
+three-token equal-weighted basket: BNKR, JUNO, ROBOTMONEY (Base-liquid
+set; see ADR-0001). Changes flow through the Safe → Timelock →
+`ADMIN_ROLE` path; there is no token-holder vote over shortlist
+membership in the MVP. The production model (bribery-based or RM-token
+inclusion vote) is deferred past MVP. TWAP pricing is shipped via the
+basket-vault base.
+
+Router eligibility is gated on all of the following hardening criteria
+being satisfied and formally certified for a given deployment:
+
+1. **Slippage-preview gate** — same requirement as rmPROTO (§11.2).
+2. **Rebalancing model gate** — same requirement as rmPROTO (§11.2);
+   open question §3.15 in `docs/development/open-questions.md` is
+   closed.
+3. **Liquidity-proof gate** — same requirement as rmPROTO (§11.2).
+4. **Shortlist-governance gate** — the shortlist governance model (admin
+   path for MVP, deferred on-chain vote for production) is specified in
+   a merged ADR; the deployed shortlist consists exclusively of the
+   Base-liquid set {BNKR, JUNO, ROBOTMONEY}.
+
+Until all four gates are certified for a given deployment, the vault
+subclass must not be added to the Portfolio Router weight vector.
 
 ### 11.4 RWA / Thematic Vault
 
 | Property | Value |
 | --- | --- |
 | Name | Robot Money RWA / Thematic |
+| Receipt token | rmRWA |
+| Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
-| Status | Future — not specified; registered as a non-Active placeholder |
+| Underlying asset | Centrifuge deSPXA — tokenized S&P 500 exposure via Janus Henderson / Anemoy, issued on Centrifuge V3 and bridged to Base |
+| Oracle | Chronicle on-chain NAV oracle for deSPXA (Base), providing a signed, push-updated price feed |
+| Entry / exit | Aerodrome secondary-market swap only; ERC-7540 primary NAV redeem (Centrifuge V3) is never used by this vault |
+| Status | Active — real asset, seeded, Router-eligible |
 
-Flagged for narrative value (SP500 perp via Hyperliquid, commodities).
-Requires separate legal, oracle, liquidation, disclosure, and redemption
-work before inclusion in Portfolio Router allocations (a business/launch
-decision tracked outside this repository).
+The RWA/Thematic vault holds deSPXA (Centrifuge V3, Base deployment).
+deSPXA is a tokenized representation of S&P 500 exposure, issued by
+Janus Henderson / Anemoy through the Centrifuge V3 protocol. The vault
+enters and exits positions exclusively via Aerodrome secondary-market
+swaps; it does not invoke ERC-7540 primary redemption against the
+Centrifuge issuer, avoiding the primary NAV redemption queue entirely.
 
-To keep the deployed vault set aligned with this four-category catalog, the
-RWA/Thematic vault is registered in `VaultRegistry` as a non-Active
-placeholder that is never Router-eligible. It is therefore visible everywhere
-the registry is read — the public allocation surface and the dapp render it as
-a Future / coming-soon entry — while the Portfolio Router skips it entirely
-(it is not in the weight vector and `isRouterEligible` returns false). The
-non-Active state is on-chain registry state, not a code variant, consistent
-with the single-production-codebase principle.
+NAV pricing is supplied by the Chronicle on-chain NAV oracle for
+deSPXA on Base. The oracle is a signed, push-updated feed; the vault
+reads the latest signed price and reverts if the feed is stale beyond
+the configured heartbeat.
+
+**Issuer freeze-control risk disclosure:** deSPXA is subject to
+Centrifuge and Janus Henderson issuer controls. The issuer may freeze
+or restrict transfers of the underlying token at any time, which would
+block vault entry and exit independently of Aerodrome liquidity. This
+risk is disclosed to depositors in the dapp vault detail page and is a
+known, accepted product risk for this vault category.
+
+The vault is registered in `VaultRegistry` as Active. The Portfolio
+Router may allocate to it once the Chronicle oracle integration and
+Aerodrome adapter are deployed and the vault passes the standard Router
+eligibility checks (`isRouterEligible` returns true).
