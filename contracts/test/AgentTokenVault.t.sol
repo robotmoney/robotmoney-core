@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/adr/ADR-0001-mvp-agent-token-shortlist.md;
 //            docs/prd.md §11.3 — Agent Token Vault
-// Covers issue #481 — seed AgentTokenVault with the canonical MVP six-token
-//                      shortlist (equal-weight, admin-curated, Base-only).
+// Covers issue #481 — seed AgentTokenVault with the canonical MVP shortlist
+//                      (equal-weight, admin-curated, Base-only).
+// Updated by issue #543 — shortlist revised to three Base-liquid tokens
+//                          {BNKR, JUNO, ROBOTMONEY} (ADR-0001, 2026-06-02).
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -71,14 +73,15 @@ contract RecordingSwapRouter is ISwapRouter {
 
 contract AgentTokenVaultTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
-    uint256 internal constant N = 6;
+    /// @dev ADR-0001 revised 2026-06-02: three Base-liquid tokens {BNKR, JUNO, ROBOTMONEY}.
+    uint256 internal constant N = 3;
 
-    string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    string[3] internal SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
 
     TestERC20 internal usdc;
     RecordingSwapRouter internal router;
     AgentTokenVault internal vault;
-    TestERC20[6] internal tokens;
+    TestERC20[3] internal tokens;
 
     address internal admin = makeAddr("admin");
     address internal stranger = makeAddr("stranger");
@@ -96,12 +99,13 @@ contract AgentTokenVaultTest is Test {
             admin,
             admin
         );
-        _seedSixTokenShortlist();
+        _seedThreeTokenShortlist();
     }
 
-    /// @dev Seed the vault with the six MVP tokens, in canonical order, each
-    ///      paired with USDC via a 1:1 mock pool — mirrors the deploy seed.
-    function _seedSixTokenShortlist() internal {
+    /// @dev Seed the vault with the three MVP tokens (ADR-0001 revised 2026-06-02:
+    ///      {BNKR, JUNO, ROBOTMONEY}), in canonical order, each paired with USDC
+    ///      via a 1:1 mock pool — mirrors the deploy seed.
+    function _seedThreeTokenShortlist() internal {
         for (uint256 i = 0; i < N; i++) {
             tokens[i] = new TestERC20();
             MockPool pool = new MockPool(address(tokens[i]), address(usdc));
@@ -110,9 +114,11 @@ contract AgentTokenVaultTest is Test {
         }
     }
 
-    function test_shortlist_seeded_with_six_mvp_tokens() public view {
+    function test_shortlist_seeded_with_three_mvp_tokens() public view {
         (address[] memory t,,,,) = vault.shortlist();
-        assertEq(t.length, N, "shortlist holds exactly six MVP tokens");
+        assertEq(
+            t.length, N, "shortlist holds exactly three MVP tokens (ADR-0001 revised 2026-06-02)"
+        );
         for (uint256 i = 0; i < N; i++) {
             assertEq(t[i], address(tokens[i]), "shortlist entry present");
         }
@@ -127,9 +133,9 @@ contract AgentTokenVaultTest is Test {
         }
     }
 
-    function test_equal_weight_allocation_across_six_tokens() public {
-        // 600 USDC across six assets => each leg swaps exactly 100 USDC.
-        uint256 deposit = 600 * ONE_USDC;
+    function test_equal_weight_allocation_across_three_tokens() public {
+        // 300 USDC across three assets => each leg swaps exactly 100 USDC.
+        uint256 deposit = 300 * ONE_USDC;
         usdc.mint(address(this), deposit);
         usdc.approve(address(vault), deposit);
         vault.deposit(deposit, address(this));
@@ -150,7 +156,7 @@ contract AgentTokenVaultTest is Test {
         MockPool pool = new MockPool(address(replacement), address(usdc));
 
         vm.prank(admin);
-        vault.removeAsset(0); // deactivate JUNO slot (vault holds zero)
+        vault.removeAsset(0); // deactivate BNKR slot (vault holds zero)
 
         vm.prank(admin);
         vault.addAsset(address(replacement), address(pool), 10_000);
@@ -187,10 +193,10 @@ contract AgentTokenVaultTest is Test {
     // ─── Demo-seed integration (issue #481 test plan) ──────────────────────
 
     /// @notice Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-    ///         deploys + seeds AgentTokenVault with the six MVP tokens and
+    ///         deploys + seeds AgentTokenVault with the three MVP tokens and
     ///         registers it in VaultRegistry. Asserts the vault is reachable via
     ///         the same registry path the dapp uses and that shortlist() returns
-    ///         the six-token list. AgentTokenVault must NOT be router-eligible.
+    ///         the three-token list. AgentTokenVault must NOT be router-eligible.
     function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
         // The script body runs under vm.startBroadcast(), which executes as the
         // foundry default sender. Registry/router/primary admin must be that
@@ -233,13 +239,15 @@ contract AgentTokenVaultTest is Test {
         DeployDemoExtraVaults script = new DeployDemoExtraVaults();
         DeployDemoExtraVaults.Deployed memory d = script.run();
 
-        // 1. AgentTokenVault deployed and seeded with six tokens.
+        // 1. AgentTokenVault deployed and seeded with three tokens (ADR-0001 revised 2026-06-02).
         assertTrue(d.agentTokenVault != address(0), "agent token vault deployed");
-        assertEq(d.agentTokens.length, N, "six MVP shortlist tokens seeded");
+        assertEq(
+            d.agentTokens.length, N, "three MVP shortlist tokens seeded (BNKR, JUNO, ROBOTMONEY)"
+        );
 
         AgentTokenVault agentVault = AgentTokenVault(d.agentTokenVault);
         (address[] memory t,,,,) = agentVault.shortlist();
-        assertEq(t.length, N, "shortlist() returns six tokens after demo seed");
+        assertEq(t.length, N, "shortlist() returns three tokens after demo seed");
 
         // 2. Reachable via the registry path the dapp uses. getVault reverts if
         //    the vault is not registered, so a successful read proves presence.

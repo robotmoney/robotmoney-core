@@ -60,18 +60,16 @@ contract DemoUsdcPool {
 }
 
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket
-///         stand-ins (PRD §11.3). Its constructor performs all 12 sub-`CREATE`s
-///         (six `DemoBasketToken` + six `DemoUsdcPool`) in a single broadcaster
+///         stand-ins (PRD §11.3). Its constructor performs all 6 sub-`CREATE`s
+///         (three `DemoBasketToken` + three `DemoUsdcPool`) in a single broadcaster
 ///         transaction. The script then makes one `vault.addAsset(...)` call
-///         per token. Collapses the per-symbol broadcast loop from 18 tx
-///         (6 × token + pool + addAsset) down to 7, keeping smoke-test
-///         chain-boot inside the dapp-e2e `globalSetup` budget on GH-hosted
-///         runners. Demo-only.
+///         per token. Revised from six to three tokens per ADR-0001 (2026-06-02):
+///         Base-liquid set {BNKR, JUNO, ROBOTMONEY}. Demo-only.
 contract AgentBasketStubDeployer {
-    DemoBasketToken[6] public tokens;
-    DemoUsdcPool[6] public pools;
+    DemoBasketToken[3] public tokens;
+    DemoUsdcPool[3] public pools;
 
-    constructor(string[6] memory symbols, address usdc) {
+    constructor(string[3] memory symbols, address usdc) {
         for (uint256 i = 0; i < symbols.length; i++) {
             DemoBasketToken token =
                 new DemoBasketToken(string.concat("Demo Agent ", symbols[i]), symbols[i]);
@@ -232,8 +230,10 @@ contract DeployDemoExtraVaults is Script {
     }
 
     /// @notice Canonical MVP AgentTokenVault shortlist symbols, in deploy order
-    ///         (docs/adr/ADR-0001-mvp-agent-token-shortlist.md). PEAQ excluded.
-    string[6] internal AGENT_SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    ///         (docs/adr/ADR-0001-mvp-agent-token-shortlist.md, revised 2026-06-02).
+    ///         Revised from six to three Base-liquid tokens: {BNKR, JUNO, ROBOTMONEY}.
+    ///         ZYFAI, GIZA, and DEUS removed — no swappable Base liquidity found.
+    string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
     /// @notice Default swap fee tier for demo stand-in pools (agent tokens are
     ///         illiquid; matches AgentTokenVault's 3% default-slippage stance).
     uint24 internal constant DEMO_AGENT_SWAP_FEE = 10_000;
@@ -360,9 +360,10 @@ contract DeployDemoExtraVaults is Script {
             _seedProtocolAssetVault(ProtocolAssetVault(d.protocolVault), protocolStubs);
         _registerIfAbsent(registry, d.protocolVault, p.usdc, "Robot Money Protocol");
 
-        // 2. Seed AgentTokenVault (PRD §11.3) with the canonical MVP six-token
-        //    shortlist (ADR-0001) and register it Active. NOT router-eligible
-        //    for the same reasons as ProtocolAssetVault above.
+        // 2. Seed AgentTokenVault (PRD §11.3) with the canonical MVP three-token
+        //    shortlist (ADR-0001, revised 2026-06-02: BNKR, JUNO, ROBOTMONEY) and
+        //    register it Active. NOT router-eligible for the same reasons as
+        //    ProtocolAssetVault above.
         d.agentTokens = _seedAgentTokenVault(AgentTokenVault(d.agentTokenVault), agentStubs);
         _registerIfAbsent(registry, d.agentTokenVault, p.usdc, "Robot Money Agent Tokens");
 
