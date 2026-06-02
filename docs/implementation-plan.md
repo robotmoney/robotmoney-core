@@ -302,3 +302,8 @@ Goal: Resolve open ADRs blocking basket-vault router eligibility.
 - [ ] Rebalancing model ADR + `rebalance()` implementation
 - [ ] Agent-token shortlist governance — mechanism per `docs/development/open-questions.md` §1.3
 - [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
+
+### Phase: Real four-vault demo
+Goal: All four PRD §11 vaults hold real Base-mainnet assets and show real depositors at startup — production-grade, no placeholders. Resolve basket-vault router-eligibility ADRs, add Aerodrome + Uniswap V4 multi-DEX support, ingest real DEX pools into the fork, stand up the deSPXA RWA vault, seed all four vaults, and prove it at every test-pyramid layer. Tracked as Plan #109 phase (issues #541–#568).
+
+- [ ] dev-scout: seam map — `docs/technical/real-four-vault-demo-seams.md` (issue #541)
