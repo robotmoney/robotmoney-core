@@ -122,7 +122,7 @@ contract AgentTokenVaultTest is Test {
             tokens[i] = new TestERC20();
             MockPool pool = new MockPool(address(tokens[i]), address(usdc));
             vm.prank(admin);
-            vault.addAsset(address(tokens[i]), address(pool), 10_000);
+            vault.addAsset(address(tokens[i]), address(pool), 10_000, address(0));
         }
     }
 
@@ -169,7 +169,7 @@ contract AgentTokenVaultTest is Test {
         vault.removeAsset(0); // deactivate JUNO slot (vault holds zero)
 
         vm.prank(admin);
-        vault.addAsset(address(replacement), address(pool), 10_000);
+        vault.addAsset(address(replacement), address(pool), 10_000, address(0));
 
         (address[] memory t,,, bool[] memory active,) = vault.shortlist();
         assertEq(t.length, N + 1, "swap adds a new entry");
@@ -189,7 +189,7 @@ contract AgentTokenVaultTest is Test {
             )
         );
         vm.prank(stranger);
-        vault.addAsset(address(newToken), address(pool), 10_000);
+        vault.addAsset(address(newToken), address(pool), 10_000, address(0));
 
         vm.expectRevert(
             abi.encodeWithSignature(
