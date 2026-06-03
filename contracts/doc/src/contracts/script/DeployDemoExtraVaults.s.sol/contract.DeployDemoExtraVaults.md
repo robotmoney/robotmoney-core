@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/51bc4e0872e897b6ac297f478bbafc344398550d/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -119,11 +119,13 @@ address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F
 ## State Variables
 ### AGENT_SYMBOLS
 Canonical MVP AgentTokenVault shortlist symbols, in deploy order
-(docs/adr/ADR-0001-mvp-agent-token-shortlist.md). PEAQ excluded.
+(docs/adr/ADR-0001-mvp-agent-token-shortlist.md, revised 2026-06-02).
+Revised from six to three Base-liquid tokens: {BNKR, JUNO, ROBOTMONEY}.
+ZYFAI, GIZA, and DEUS removed — no swappable Base liquidity found.
 
 
 ```solidity
-string[6] internal AGENT_SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"]
+string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"]
 ```
 
 

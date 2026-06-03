@@ -1,5 +1,5 @@
 # AgentTokenVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/51bc4e0872e897b6ac297f478bbafc344398550d/contracts/test/AgentTokenVault.t.sol)
 
 **Inherits:**
 Test
@@ -14,9 +14,11 @@ uint256 internal constant ONE_USDC = 1e6
 
 
 ### N
+ADR-0001 revised 2026-06-02: three Base-liquid tokens {BNKR, JUNO, ROBOTMONEY}.
+
 
 ```solidity
-uint256 internal constant N = 6
+uint256 internal constant N = 3
 ```
 
 
@@ -24,7 +26,7 @@ uint256 internal constant N = 6
 ### SYMBOLS
 
 ```solidity
-string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"]
+string[3] internal SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"]
 ```
 
 
@@ -52,7 +54,7 @@ AgentTokenVault internal vault
 ### tokens
 
 ```solidity
-TestERC20[6] internal tokens
+TestERC20[3] internal tokens
 ```
 
 
@@ -78,21 +80,22 @@ address internal stranger = makeAddr("stranger")
 function setUp() public;
 ```
 
-### _seedSixTokenShortlist
+### _seedThreeTokenShortlist
 
-Seed the vault with the six MVP tokens, in canonical order, each
-paired with USDC via a 1:1 mock pool — mirrors the deploy seed.
+Seed the vault with the three MVP tokens (ADR-0001 revised 2026-06-02:
+{BNKR, JUNO, ROBOTMONEY}), in canonical order, each paired with USDC
+via a 1:1 mock pool — mirrors the deploy seed.
 
 
 ```solidity
-function _seedSixTokenShortlist() internal;
+function _seedThreeTokenShortlist() internal;
 ```
 
-### test_shortlist_seeded_with_six_mvp_tokens
+### test_shortlist_seeded_with_three_mvp_tokens
 
 
 ```solidity
-function test_shortlist_seeded_with_six_mvp_tokens() public view;
+function test_shortlist_seeded_with_three_mvp_tokens() public view;
 ```
 
 ### test_shortlist_ordering_matches_config
@@ -102,11 +105,11 @@ function test_shortlist_seeded_with_six_mvp_tokens() public view;
 function test_shortlist_ordering_matches_config() public view;
 ```
 
-### test_equal_weight_allocation_across_six_tokens
+### test_equal_weight_allocation_across_three_tokens
 
 
 ```solidity
-function test_equal_weight_allocation_across_six_tokens() public;
+function test_equal_weight_allocation_across_three_tokens() public;
 ```
 
 ### test_shortlist_mutation_admin_only
@@ -126,10 +129,10 @@ function test_shortlist_mutation_rejected_for_non_admin() public;
 ### test_demo_seed_registers_agent_token_vault_with_shortlist
 
 Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-deploys + seeds AgentTokenVault with the six MVP tokens and
+deploys + seeds AgentTokenVault with the three MVP tokens and
 registers it in VaultRegistry. Asserts the vault is reachable via
 the same registry path the dapp uses and that shortlist() returns
-the six-token list. AgentTokenVault must NOT be router-eligible.
+the three-token list. AgentTokenVault must NOT be router-eligible.
 
 
 ```solidity
