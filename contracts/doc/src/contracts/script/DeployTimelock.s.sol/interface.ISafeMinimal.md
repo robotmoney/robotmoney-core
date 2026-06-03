@@ -1,5 +1,5 @@
 # ISafeMinimal
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f472e86b1dbfd5373d4ad4db0a93939bfff1d557/contracts/script/DeployTimelock.s.sol)
 
 Minimal Safe interface — only `getThreshold()` is required for the
 deploy-time guard that rejects EOA or low-threshold Safe addresses.
