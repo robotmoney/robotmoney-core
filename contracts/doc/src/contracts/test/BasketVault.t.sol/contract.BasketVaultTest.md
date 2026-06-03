@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60363b48a75d8bae8417fc6771b479b3f86ed62c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dd2b70b308807d48418288c918e3bb6256623fb2/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -383,6 +383,25 @@ when cardinality satisfies the minimum.
 
 ```solidity
 function test_totalAssets_doesNotRevertAfterValidAddAsset() public;
+```
+
+### test_addAsset_revertsWhenPoolLiquidityBelowMinimum
+
+addAsset() reverts with InsufficientPoolLiquidity when the
+pool's in-range liquidity is below MIN_POOL_LIQUIDITY.
+
+
+```solidity
+function test_addAsset_revertsWhenPoolLiquidityBelowMinimum() public;
+```
+
+### test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum
+
+addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
+
+
+```solidity
+function test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum() public;
 ```
 
 ### testFuzz_addAsset_cardinalityBoundary
