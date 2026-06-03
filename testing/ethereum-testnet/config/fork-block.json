@@ -1,5 +1,5 @@
 {
-  "$comment": "Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections) and docs/technical/full-stack-devnet.md (Compose stack). This file is the single source of truth for the Base mainnet fork point that the smoke-test Geth+Lighthouse devnet boots from. The genesis ingester (see issue #255) reads `block_number` and `snapshot_uri` to populate `genesis.json::alloc` from Base state at the pinned block, restricted to `ingested_addresses`. The harness then patches USDC storage to grant `harness_usdc_holder` a clean-history USDC balance — see docs for the why (no whale impersonation). `block_number` and `snapshot_uri` MUST stay in lockstep with `testing/fixtures/fork-state/CURRENT.json` (the Anvil fork-e2e fixture) so both harnesses exercise identical on-chain state. The CI manifest validator asserts this alignment. The DEX pool contracts for new four-vault demo basket assets (Uniswap V3/V4 pools for JUNO/WOON/ZYFAI/GIZA, Aerodrome pool for deSPXA) cannot be added here until (a) their pool addresses are confirmed on-chain (see config/dex-pools.json basket_assets) and (b) a fresh fork-state snapshot is captured with those pool contract bytecode + storage warmed — see scripts/devnet/snapshot-fork.sh.",
+  "$comment": "Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections) and docs/technical/full-stack-devnet.md (Compose stack). This file is the single source of truth for the Base mainnet fork point that the smoke-test Geth+Lighthouse devnet boots from. The genesis ingester (see issue #255) reads `block_number` and `snapshot_uri` to populate `genesis.json::alloc` from Base state at the pinned block, restricted to `ingested_addresses`. The harness then patches USDC storage to grant `harness_usdc_holder` a clean-history USDC balance — see docs for the why (no whale impersonation). `block_number` and `snapshot_uri` MUST stay in lockstep with `testing/fixtures/fork-state/CURRENT.json` (the Anvil fork-e2e fixture) so both harnesses exercise identical on-chain state. The CI manifest validator asserts this alignment. ingested_addresses now includes the four-vault demo basket assets: Uniswap V3 pools for JUNO/ZYFAI, Uniswap V4 PoolManager (holds WOON V4 pool state), Aerodrome SlipStream pool for GIZA, and the Uniswap V3 deSPXA/USDC pool — plus corresponding token contracts. A fresh fork-state snapshot capturing this expanded ingest set is needed before the devnet image can be rebuilt; see scripts/devnet/snapshot-fork.sh.",
   "chain": "base",
   "block_number": 46698556,
   "block_hash": "0x8710323f22335f2561376733f71568e8e9bc3d0162b843bb6674af463e3cf8d7",
@@ -21,7 +21,18 @@
     "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",
     "0xb125E6687d4313864e53df431d5425969c15Eb2F",
     "0x41675C099F32341bf84BFc5382aF534df5C7461a",
-    "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"
+    "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",
+    "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
+    "0x6f320f066d41e8896da5baee732ab7d8a6b4f62f",
+    "0x85eac631c800af804476b140f87039f742c28ba3",
+    "0x498581ff718922c3f8e6a244956af099b2652b2b",
+    "0xd080ed3c74a20250a2c9821885203034acd2d5ae",
+    "0xc6f63e4bea6682aa502ed94c1301b56230fc03d2",
+    "0x590830dfdf9a3f68afcdde2694773debdf267774",
+    "0xe077ddfb9e9d9403a8ec42d3023d17e8417ee399",
+    "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
+    "0x9c5c365e764829876243d0b289733b9d2b729685",
+    "0xd08f1fb797bfacded23323178672557034c64cfa"
   ],
   "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
   "harness_usdc_grant_units": "1000000000000",
