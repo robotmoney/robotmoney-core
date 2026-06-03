@@ -152,6 +152,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      Off-chain monitors can use the delta between `oldWindow` and
     ///      `newWindow` to detect governance shortening the oracle window.
     event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
+    /// @dev Emitted on every deposit, recording the equal-weight allocation applied
+    ///      to the depositor's inflow. Satisfies the event-stream cost-disclosure
+    ///      requirement from docs/architecture.md §8 and ADR-0003.
+    ///      `bpsWeights` contains the basis-point weight for each element of `assets`
+    ///      (10_000 / n for each active asset, with the remainder allocated to the first).
+    event WeightSnapshot(
+        address indexed depositor, address[] assets, uint256[] bpsWeights, uint256 timestamp
+    );
 
     // ─── Errors ───────────────────────────────────────────────────────
 
@@ -179,6 +187,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      rather than a generic `InvalidParam` so off-chain governance
     ///      tooling can pin-point the failure mode.
     error InvalidTwapWindow(uint32 window);
+    /// @dev Raised by the `rebalance()` stub. Global vault rebalancing is not
+    ///      implemented in the MVP. The selector is reserved for Phase B.
+    ///      See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+    error NotImplemented();
     /// @dev Raised by addAsset() when the pool's observation cardinality is
     ///      below the minimum required to service TWAP reads over
     ///      `DEFAULT_TWAP_WINDOW`. Cardinality=1 (the Uniswap default) means
@@ -298,12 +310,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
         // Pulls USDC from caller and mints shares.
         super._deposit(caller, receiver, usdcAmount, shares);
-        _routeDeposit(usdcAmount);
+        _routeDeposit(caller, usdcAmount);
     }
 
     /// @dev Splits usdcAmount equally across active assets, swapping each portion via Uniswap V3.
     ///      The first active asset absorbs any indivisible remainder.
-    function _routeDeposit(uint256 usdcAmount) internal {
+    ///      Emits a WeightSnapshot event recording the equal-weight allocation applied.
+    function _routeDeposit(address caller, uint256 usdcAmount) internal {
         uint256 n = _activeAssetCount();
         if (n == 0 || usdcAmount == 0) return;
 
@@ -312,9 +325,20 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         uint256 len = assets.length;
         bool firstActive = true;
 
+        // Build WeightSnapshot arrays for the active asset set.
+        address[] memory snapshotAssets = new address[](n);
+        uint256[] memory snapshotWeights = new uint256[](n);
+        uint256 baseWeightBps = MAX_BPS / n;
+        uint256 remainderWeightBps = MAX_BPS - baseWeightBps * n;
+        uint256 snapshotIdx = 0;
+
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
             uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
+            snapshotAssets[snapshotIdx] = assets[i].token;
+            snapshotWeights[snapshotIdx] =
+                firstActive ? baseWeightBps + remainderWeightBps : baseWeightBps;
+            snapshotIdx++;
             firstActive = false;
             if (swapIn == 0) continue;
 
@@ -336,6 +360,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             _USDC.forceApprove(address(SWAP_ROUTER), 0);
             emit Swapped(address(_USDC), assets[i].token, swapIn, amountOut);
         }
+
+        emit WeightSnapshot(caller, snapshotAssets, snapshotWeights, block.timestamp);
     }
 
     // ─── Withdraw / redeem ────────────────────────────────────────────
@@ -761,6 +787,97 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         uint32 old = twapWindow[token];
         twapWindow[token] = window;
         emit TwapWindowUpdated(token, old, window);
+    }
+
+    // ─── Rebalancing (ADR-0003) ───────────────────────────────────────
+
+    /// @notice Reserved for Phase B: global vault rebalance.
+    /// @dev Not implemented in MVP. Reverts with `NotImplemented()`.
+    ///      Eventual signature (subject to Phase B ADR):
+    ///        rebalance(uint256 maxSlippageBps, uint256 deadline)
+    ///        -> (uint256[] swapAmounts, uint256[] gasEstimates)
+    ///      See docs/adr/ADR-0003-basketvault-rebalancing-model.md
+    // solhint-disable-next-line no-unused-vars
+    function rebalance(uint256, uint256) external pure {
+        revert NotImplemented();
+    }
+
+    /// @notice Pre-execution cost preview: shows how `usdcAmount` would be allocated
+    ///         across active basket assets at current TWAP prices.
+    ///         Returns parallel arrays of `(assets, amountsOut)` for active assets only.
+    ///         This satisfies the cost-preview requirement in docs/architecture.md §8.
+    ///         See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+    function previewDepositWeights(uint256 usdcAmount)
+        external
+        view
+        returns (address[] memory activeAssets, uint256[] memory amountsOut)
+    {
+        uint256 n = _activeAssetCount();
+        activeAssets = new address[](n);
+        amountsOut = new uint256[](n);
+        if (n == 0 || usdcAmount == 0) return (activeAssets, amountsOut);
+
+        uint256 perAsset = usdcAmount / n;
+        uint256 remainder = usdcAmount - perAsset * n;
+        uint256 len = assets.length;
+        uint256 idx = 0;
+        bool firstActive = true;
+
+        for (uint256 i = 0; i < len; i++) {
+            if (!assets[i].active) continue;
+            uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
+            firstActive = false;
+            activeAssets[idx] = assets[i].token;
+            amountsOut[idx] =
+                swapIn > 0 ? _twapTokenValue(assets[i].pool, assets[i].token, swapIn) : 0;
+            idx++;
+        }
+    }
+
+    /// @notice Per-depositor realized weight vector.
+    ///         Returns each active asset's share of the depositor's pro-rata vault
+    ///         holdings, expressed in basis points (0–10_000), where 10_000 = 100%.
+    ///         A depositor with no shares gets all-zero weights.
+    ///         See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+    function realizedWeights(address depositor)
+        external
+        view
+        returns (address[] memory activeAssets, uint256[] memory bpsWeights)
+    {
+        uint256 n = _activeAssetCount();
+        activeAssets = new address[](n);
+        bpsWeights = new uint256[](n);
+        if (n == 0) return (activeAssets, bpsWeights);
+
+        uint256 depositorShares = balanceOf(depositor);
+        uint256 supply = totalSupply();
+        if (depositorShares == 0 || supply == 0) return (activeAssets, bpsWeights);
+
+        // Compute the depositor's pro-rata USDC value for each active asset.
+        uint256 len = assets.length;
+        uint256 idx = 0;
+        uint256 totalValue = 0;
+        uint256[] memory values = new uint256[](n);
+
+        for (uint256 i = 0; i < len; i++) {
+            if (!assets[i].active) continue;
+            uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
+            uint256 depositorBal = bal.mulDiv(depositorShares, supply);
+            uint256 val = depositorBal > 0
+                ? _twapUsdcValue(assets[i].pool, assets[i].token, depositorBal)
+                : 0;
+            activeAssets[idx] = assets[i].token;
+            values[idx] = val;
+            totalValue += val;
+            idx++;
+        }
+
+        // Convert to basis points.
+        if (totalValue > 0) {
+            for (uint256 j = 0; j < n; j++) {
+                bpsWeights[j] = values[j].mulDiv(MAX_BPS, totalValue);
+            }
+        }
     }
 
     // ─── Views ────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f472e86b1dbfd5373d4ad4db0a93939bfff1d557/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/96e73e7f201b20e754dab9ca2f28b150e1238e85/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -262,10 +262,11 @@ function _deposit(address caller, address receiver, uint256 usdcAmount, uint256 
 
 Splits usdcAmount equally across active assets, swapping each portion via Uniswap V3.
 The first active asset absorbs any indivisible remainder.
+Emits a WeightSnapshot event recording the equal-weight allocation applied.
 
 
 ```solidity
-function _routeDeposit(uint256 usdcAmount) internal;
+function _routeDeposit(address caller, uint256 usdcAmount) internal;
 ```
 
 ### previewRedeem
@@ -596,6 +597,53 @@ function setTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROL
 |`window`|`uint32`| TWAP window in seconds (10 min ≤ window ≤ 24 h).|
 
 
+### rebalance
+
+Reserved for Phase B: global vault rebalance.
+
+Not implemented in MVP. Reverts with `NotImplemented()`.
+Eventual signature (subject to Phase B ADR):
+rebalance(uint256 maxSlippageBps, uint256 deadline)
+-> (uint256[] swapAmounts, uint256[] gasEstimates)
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md
+
+
+```solidity
+function rebalance(uint256, uint256) external pure;
+```
+
+### previewDepositWeights
+
+Pre-execution cost preview: shows how `usdcAmount` would be allocated
+across active basket assets at current TWAP prices.
+Returns parallel arrays of `(assets, amountsOut)` for active assets only.
+This satisfies the cost-preview requirement in docs/architecture.md §8.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+function previewDepositWeights(uint256 usdcAmount)
+    external
+    view
+    returns (address[] memory activeAssets, uint256[] memory amountsOut);
+```
+
+### realizedWeights
+
+Per-depositor realized weight vector.
+Returns each active asset's share of the depositor's pro-rata vault
+holdings, expressed in basis points (0–10_000), where 10_000 = 100%.
+A depositor with no shares gets all-zero weights.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+function realizedWeights(address depositor)
+    external
+    view
+    returns (address[] memory activeAssets, uint256[] memory bpsWeights);
+```
+
 ### assetCount
 
 
@@ -762,6 +810,20 @@ Off-chain monitors can use the delta between `oldWindow` and
 event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 ```
 
+### WeightSnapshot
+Emitted on every deposit, recording the equal-weight allocation applied
+to the depositor's inflow. Satisfies the event-stream cost-disclosure
+requirement from docs/architecture.md §8 and ADR-0003.
+`bpsWeights` contains the basis-point weight for each element of `assets`
+(10_000 / n for each active asset, with the remainder allocated to the first).
+
+
+```solidity
+event WeightSnapshot(
+    address indexed depositor, address[] assets, uint256[] bpsWeights, uint256 timestamp
+);
+```
+
 ## Errors
 ### TVLCapExceeded
 
@@ -867,6 +929,16 @@ tooling can pin-point the failure mode.
 
 ```solidity
 error InvalidTwapWindow(uint32 window);
+```
+
+### NotImplemented
+Raised by the `rebalance()` stub. Global vault rebalancing is not
+implemented in the MVP. The selector is reserved for Phase B.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+error NotImplemented();
 ```
 
 ### InsufficientPoolCardinality
