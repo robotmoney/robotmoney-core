@@ -1,5 +1,5 @@
 # AgentTokenVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9eed07634921aa5428fc9e4e6b0452434840368d/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0f44df6c1ea9643363189d9e52250db5bd47a617/contracts/test/AgentTokenVault.t.sol)
 
 **Inherits:**
 Test
@@ -140,10 +140,10 @@ function test_governance_shortlist_remove_delay_is_24h() public view;
 ### test_demo_seed_registers_agent_token_vault_with_shortlist
 
 Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-deploys + seeds AgentTokenVault with the six MVP tokens and
-registers it in VaultRegistry. Asserts the vault is reachable via
-the same registry path the dapp uses and that shortlist() returns
-the six-token list. AgentTokenVault must NOT be router-eligible.
+deploys + seeds AgentTokenVault with the three real-asset demo
+tokens (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome), registers it in
+VaultRegistry, and makes it router-eligible (issue #560).
+The vault is reachable via the same registry path the dapp uses.
 
 
 ```solidity

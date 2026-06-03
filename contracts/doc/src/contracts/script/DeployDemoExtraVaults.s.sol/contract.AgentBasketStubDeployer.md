@@ -1,28 +1,33 @@
 # AgentBasketStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9eed07634921aa5428fc9e4e6b0452434840368d/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0f44df6c1ea9643363189d9e52250db5bd47a617/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the AgentTokenVault devnet basket
-stand-ins (PRD §11.3). Its constructor performs all 12 sub-`CREATE`s
-(six `DemoBasketToken` + six `DemoUsdcPool`) in a single broadcaster
-transaction. The script then makes one `vault.addAsset(...)` call
-per token. Collapses the per-symbol broadcast loop from 18 tx
-(6 × token + pool + addAsset) down to 7, keeping smoke-test
-chain-boot inside the dapp-e2e `globalSetup` budget on GH-hosted
-runners. Demo-only.
+stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens).
+Its constructor performs all 6 sub-`CREATE`s (three `DemoBasketToken` +
+three `DemoUsdcPool`) in a single broadcaster transaction. The script
+then makes one `vault.addAsset(...)` call per token with the per-asset
+venue selection (BNKR→V3, JUNO→V4, ROBOTMONEY→Aerodrome). Demo-only.
 
 
 ## State Variables
 ### tokens
 
 ```solidity
-DemoBasketToken[6] public tokens
+DemoBasketToken[3] public tokens
 ```
 
 
 ### pools
 
 ```solidity
-DemoUsdcPool[6] public pools
+DemoUsdcPool[3] public pools
+```
+
+
+### AGENT_SYMBOLS_3
+
+```solidity
+string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"]
 ```
 
 
@@ -31,6 +36,6 @@ DemoUsdcPool[6] public pools
 
 
 ```solidity
-constructor(string[6] memory symbols, address usdc) ;
+constructor(address usdc) ;
 ```
 
