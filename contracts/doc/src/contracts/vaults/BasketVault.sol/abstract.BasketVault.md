@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e1a131c0c2ecf9334ca951298cb03794be5b1ef2/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -270,11 +270,41 @@ function _routeDeposit(uint256 usdcAmount) internal;
 
 ### previewRedeem
 
-Estimated USDC received when redeeming `shares` (spot-priced, pre-slippage).
+Worst-case floor of USDC received when redeeming `shares`.
+The floor is: TWAP NAV × (1 − maxSlippageBps) × (1 − exitFeeBps).
+This satisfies the ERC-4626 guarantee that `redeem(s, ...)` returns
+at least `previewRedeem(s)` because:
+1. `totalAssets()` is TWAP-priced (not slot0), so NAV is
+manipulation-resistant.
+2. `maxSlippageBps` is the worst-case slippage passed as
+`amountOutMinimum` to the Uniswap V3 router. Actual swap
+proceeds are always ≥ that floor (or the swap reverts).
+3. The exit fee is deducted on the same proceeds in `_withdraw`.
+Documented as a floor, not an exact quote — actual proceeds will
+typically exceed this value when swap depth is healthy.
+See docs/technical/basket-vault-gap-report.md §3, §5.
 
 
 ```solidity
 function previewRedeem(uint256 shares) public view override returns (uint256);
+```
+
+### previewDeposit
+
+Worst-case shares estimate for a deposit of `assets_` USDC.
+The floor is computed by discounting the deposited USDC by
+`maxSlippageBps` before converting to shares. This reflects that
+the Uniswap V3 router guarantees at least
+`amountOutMinimum = TWAP × (1 − maxSlippageBps)` tokens will be
+acquired per leg. The resulting share count represents the minimum
+shares a depositor can expect; actual shares may be higher when
+swap depth is healthy.
+Documented as a floor, not an exact quote.
+See docs/technical/basket-vault-gap-report.md §3.
+
+
+```solidity
+function previewDeposit(uint256 assets_) public view override returns (uint256);
 ```
 
 ### previewWithdraw

@@ -977,6 +977,136 @@ contract BasketVaultTest is Test {
         );
     }
 
+    // ─── Slippage-adjusted previewRedeem / previewDeposit (issue #549) ──
+
+    /// @notice previewRedeem returns TWAP-minus-slippage-minus-exitFee floor.
+    ///         With tick=0 (1:1 price), 1 000 USDC of vault NAV, 1% maxSlippage, 0% fee:
+    ///         floor = 1 000 * 9 900/10 000 = 990 USDC.
+    function test_previewRedeem_returnsSlippageAndFeeAdjustedFloor() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // Seed the vault with basketToken directly so totalAssets() = depositAmount (tick=0 → 1:1).
+        basketToken.mint(address(vault), depositAmount);
+        // Mint shares to stranger directly via a deposit, but we need to test previewRedeem on
+        // a known share count — use totalSupply trick: mint USDC and deposit.
+        usdc.mint(address(stranger), depositAmount);
+        uint256 tokensFromDeposit = 995 * ONE_USDC;
+        basketToken.mint(address(router), tokensFromDeposit);
+        router.setAmountOut(tokensFromDeposit);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 shares = vault.balanceOf(stranger);
+        uint256 preview = vault.previewRedeem(shares);
+
+        // gross = _convertToAssets(shares) ≈ depositAmount (initial 1 000 + deposit-derived NAV).
+        // The exact gross depends on share math, but the floor must be:
+        //   gross * (MAX_BPS - maxSlippageBps) / MAX_BPS * (MAX_BPS - exitFeeBps) / MAX_BPS.
+        // exitFeeBps = 0 in the harness, maxSlippageBps = 100 (1%).
+        // Verify the preview is strictly less than the unadjusted gross (i.e., slippage was applied).
+        uint256 grossWithFeeOnly = vault.convertToAssets(shares); // TWAP NAV without slippage
+        assertLt(preview, grossWithFeeOnly, "previewRedeem must be below unadjusted TWAP NAV");
+        // Verify the floor equals exactly TWAP NAV * (1 - 100 bps).
+        uint256 expectedFloor = grossWithFeeOnly * (10_000 - 100) / 10_000;
+        assertEq(preview, expectedFloor, "previewRedeem must equal TWAP-minus-slippage floor");
+    }
+
+    /// @notice Actual redeem proceeds are >= previewRedeem when slippage < maxSlippageBps.
+    ///         This is the ERC-4626 guarantee: redeem must return at least previewRedeem.
+    function test_previewRedeem_floorLeqActualSwapProceeds_underSlippage() public {
+        // Set up vault with basket tokens worth 1 000 USDC (tick=0 → 1:1).
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        usdc.mint(address(stranger), depositAmount);
+        // Router returns 995 tokens (above the 990 minOut floor for 1% slippage).
+        uint256 tokensFromDeposit = 995 * ONE_USDC;
+        basketToken.mint(address(router), tokensFromDeposit);
+        router.setAmountOut(tokensFromDeposit);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 shares = vault.balanceOf(stranger);
+        uint256 preview = vault.previewRedeem(shares);
+
+        // Simulate a redemption that returns 992 USDC — above the 990-USDC floor.
+        // (Router mock returns a fixed amountOut.)
+        uint256 actualSwapOut = 992 * ONE_USDC; // between floor(990) and full(~995)
+        usdc.mint(address(router), actualSwapOut);
+        router.setAmountOut(actualSwapOut);
+
+        uint256 usdcBefore = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+        uint256 usdcAfter = usdc.balanceOf(stranger);
+        uint256 actualNet = usdcAfter - usdcBefore;
+
+        // ERC-4626 invariant: actual >= preview.
+        assertGe(actualNet, preview, "actual redeem proceeds must be >= previewRedeem floor");
+    }
+
+    /// @notice previewRedeem with a non-zero exit fee applies fee on top of slippage.
+    function test_previewRedeem_appliesExitFeeOnSlippageAdjustedProceeds() public {
+        // Set exit fee to 50 bps (0.5%) on the shared vault.
+        vm.prank(admin);
+        vault.setExitFeeBps(50); // 0.5%
+
+        // Seed the vault by depositing.
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        usdc.mint(address(stranger), depositAmount);
+        uint256 tokensFromDeposit = 995 * ONE_USDC;
+        basketToken.mint(address(router), tokensFromDeposit);
+        router.setAmountOut(tokensFromDeposit);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 shares = vault.balanceOf(stranger);
+        uint256 gross = vault.convertToAssets(shares);
+        // Expected floor: gross * (MAX_BPS - maxSlippageBps) / MAX_BPS, then * (MAX_BPS - exitFeeBps) / MAX_BPS.
+        // Use the same mulDiv rounding as the contract (Math.mulDiv floors by default).
+        uint256 afterSlippage = gross * (10_000 - 100) / 10_000; // 1% slippage (floor)
+        // The contract applies exitFeeBps via mulDiv(floor) on afterSlippage.
+        // afterSlippage - afterSlippage * exitFeeBps / MAX_BPS, where the subtracted term is floored.
+        uint256 feeAmount = afterSlippage * 50 / 10_000;
+        uint256 expectedFloor = afterSlippage - feeAmount;
+
+        uint256 preview = vault.previewRedeem(shares);
+        assertEq(
+            preview,
+            expectedFloor,
+            "previewRedeem must apply exit fee on slippage-adjusted proceeds"
+        );
+    }
+
+    /// @notice previewDeposit returns fewer shares than without slippage discount.
+    ///         With 1% maxSlippage, depositing 1 000 USDC should preview fewer
+    ///         shares than the raw convertToShares(1 000).
+    function test_previewDeposit_returnsSlippageAdjustedShareFloor() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // Seed vault with some tokens so NAV is non-zero (prevents divide-by-zero).
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+
+        // previewDeposit should be less than the unadjusted share conversion.
+        uint256 unadjusted = vault.convertToShares(depositAmount);
+        uint256 preview = vault.previewDeposit(depositAmount);
+        assertLt(preview, unadjusted, "previewDeposit must be below unadjusted share conversion");
+
+        // Verify it equals exactly convertToShares(depositAmount * (MAX_BPS - maxSlippageBps) / MAX_BPS).
+        uint256 effectiveAssets = depositAmount * (10_000 - 100) / 10_000;
+        uint256 expectedPreview = vault.convertToShares(effectiveAssets);
+        assertEq(
+            preview,
+            expectedPreview,
+            "previewDeposit must equal slippage-discounted share conversion"
+        );
+    }
+
     /// @notice Deposit + withdrawal round-trip preserves correct token balances and zero allowances.
     function test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances() public {
         uint256 depositAmount = 1_000 * ONE_USDC;
