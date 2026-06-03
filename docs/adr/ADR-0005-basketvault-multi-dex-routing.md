@@ -1,4 +1,4 @@
-# ADR-0004: BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4
+# ADR-0005: BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4
 
 - **Status:** Accepted
 - **Date:** 2026-06-03
