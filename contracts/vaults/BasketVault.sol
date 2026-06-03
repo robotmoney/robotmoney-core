@@ -7,9 +7,11 @@
 // `VaultRegistry.isRouterEligible(vault)` — ADMIN_ROLE flips the flag once
 // audit / oracle hardening is complete. The same contract ships into every
 // environment; only the registry flag's value differs.
-// NAV and emergency-unwind minimums derive from a Uniswap V3 TWAP via
-// `observe()` over an admin-configurable per-asset window; `slot0` is no
-// longer read on hot paths. See issue #451 and docs/technical/security-model.md §5.
+// NAV and emergency-unwind minimums derive from a TWAP oracle via the per-asset
+// swap adapter's `twapPrice()` method over an admin-configurable per-asset window;
+// `slot0` is never read on hot paths. See issue #451 and
+// docs/technical/security-model.md §5. Multi-DEX venue abstraction added per
+// docs/technical/real-four-vault-demo-seams.md §3 (issue #553).
 pragma solidity ^0.8.24;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
@@ -22,6 +24,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
+import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {TickMath} from "../lib/TickMath.sol";
 
 /// @title BasketVault
@@ -75,9 +78,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     struct AssetInfo {
         address token;
-        address pool; // Uniswap V3 pool pairing token with USDC
-        uint24 swapFee; // Uniswap V3 fee tier for exactInputSingle swaps
+        address pool; // DEX pool pairing token with USDC (venue-specific)
+        uint24 swapFee; // Fee parameter forwarded to the adapter (e.g. Uniswap V3 fee tier)
         bool active;
+        /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
+        ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
+        address adapter;
     }
 
     struct EmergencyUnwindGuard {
@@ -115,7 +121,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Events ───────────────────────────────────────────────────────
 
-    event AssetAdded(uint256 indexed index, address indexed token, address pool, uint24 swapFee);
+    event AssetAdded(
+        uint256 indexed index, address indexed token, address pool, uint24 swapFee, address adapter
+    );
     event AssetRemoved(uint256 indexed index, address indexed token);
     event Swapped(
         address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut
@@ -296,7 +304,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
             uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
-            if (bal > 0) sum += _twapUsdcValue(assets[i].pool, assets[i].token, bal);
+            if (bal > 0) {
+                sum += _twapUsdcValue(assets[i].pool, assets[i].token, assets[i].adapter, bal);
+            }
         }
         return sum;
     }
@@ -320,7 +330,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         _routeDeposit(caller, usdcAmount);
     }
 
-    /// @dev Splits usdcAmount equally across active assets, swapping each portion via Uniswap V3.
+    /// @dev Splits usdcAmount equally across active assets, swapping each portion via the
+    ///      per-asset swap adapter (Aerodrome or Uniswap V3 default).
     ///      The first active asset absorbs any indivisible remainder.
     ///      Emits a WeightSnapshot event recording the equal-weight allocation applied.
     function _routeDeposit(address caller, uint256 usdcAmount) internal {
@@ -349,22 +360,19 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             firstActive = false;
             if (swapIn == 0) continue;
 
-            uint256 minOut = _twapTokenValue(assets[i].pool, assets[i].token, swapIn)
-                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 minOut = _twapTokenValue(
+                    assets[i].pool, assets[i].token, assets[i].adapter, swapIn
+                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
-            _USDC.forceApprove(address(SWAP_ROUTER), swapIn);
-            uint256 amountOut = SWAP_ROUTER.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: address(_USDC),
-                    tokenOut: assets[i].token,
-                    fee: assets[i].swapFee,
-                    recipient: address(this),
-                    amountIn: swapIn,
-                    amountOutMinimum: minOut,
-                    sqrtPriceLimitX96: 0
-                })
+            uint256 amountOut = _executeSwap(
+                assets[i].adapter,
+                address(_USDC),
+                assets[i].token,
+                assets[i].swapFee,
+                swapIn,
+                minOut,
+                address(this)
             );
-            _USDC.forceApprove(address(SWAP_ROUTER), 0);
             emit Swapped(address(_USDC), assets[i].token, swapIn, amountOut);
         }
 
@@ -479,22 +487,19 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
-            uint256 minUsdcOut = _twapUsdcValue(assets[i].pool, assets[i].token, sellAmount)
-                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 minUsdcOut = _twapUsdcValue(
+                    assets[i].pool, assets[i].token, assets[i].adapter, sellAmount
+                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
 
-            IERC20(assets[i].token).forceApprove(address(SWAP_ROUTER), sellAmount);
-            uint256 received = SWAP_ROUTER.exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                    tokenIn: assets[i].token,
-                    tokenOut: address(_USDC),
-                    fee: assets[i].swapFee,
-                    recipient: address(this),
-                    amountIn: sellAmount,
-                    amountOutMinimum: minUsdcOut,
-                    sqrtPriceLimitX96: 0
-                })
+            uint256 received = _executeSwap(
+                assets[i].adapter,
+                assets[i].token,
+                address(_USDC),
+                assets[i].swapFee,
+                sellAmount,
+                minUsdcOut,
+                address(this)
             );
-            IERC20(assets[i].token).forceApprove(address(SWAP_ROUTER), 0);
             emit Swapped(assets[i].token, address(_USDC), sellAmount, received);
             usdcOut += received;
         }
@@ -503,22 +508,34 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     // ─── TWAP pricing ─────────────────────────────────────────────────
 
     /// @dev Returns the USDC value of `tokenAmount` tokens, priced via the
-    ///      Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
-    function _twapUsdcValue(address pool, address token, uint256 tokenAmount)
+    ///      adapter's TWAP (or the built-in Uniswap V3 path when adapter is address(0)).
+    function _twapUsdcValue(address pool, address token, address adapter, uint256 tokenAmount)
         internal
         view
         returns (uint256)
     {
+        if (adapter != address(0)) {
+            uint32 window = effectiveTwapWindow(token);
+            return
+                IBasketSwapAdapter(adapter)
+                    .twapPrice(pool, token, address(_USDC), tokenAmount, window);
+        }
         return _twapQuote(pool, token, address(_USDC), tokenAmount);
     }
 
     /// @dev Returns the estimated token amount for `usdcAmount` USDC, priced
-    ///      via the Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
-    function _twapTokenValue(address pool, address token, uint256 usdcAmount)
+    ///      via the adapter's TWAP (or the built-in Uniswap V3 path when adapter is address(0)).
+    function _twapTokenValue(address pool, address token, address adapter, uint256 usdcAmount)
         internal
         view
         returns (uint256)
     {
+        if (adapter != address(0)) {
+            uint32 window = effectiveTwapWindow(token);
+            return
+                IBasketSwapAdapter(adapter)
+                    .twapPrice(pool, address(_USDC), token, usdcAmount, window);
+        }
         return _twapQuote(pool, address(_USDC), token, usdcAmount);
     }
 
@@ -603,20 +620,26 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint128 public constant MIN_POOL_LIQUIDITY = 1e6;
 
     /// @notice Register a new basket asset. Restricted to ADMIN_ROLE.
-    /// @param token_   ERC-20 token address.
-    /// @param pool_    Uniswap V3 pool pairing `token_` with USDC (either token0 or token1).
-    /// @param swapFee_ Uniswap V3 fee tier (500, 3000, or 10000).
+    /// @param token_    ERC-20 token address.
+    /// @param pool_     DEX pool pairing `token_` with USDC (either token0 or token1).
+    ///                  For the Uniswap V3 default path, this is the V3 pool address.
+    ///                  For Aerodrome, this is the CL pool address used for TWAP reads.
+    /// @param swapFee_  Fee parameter forwarded to the adapter (Uniswap V3 fee tier;
+    ///                  unused by Aerodrome adapters but kept for interface uniformity).
+    /// @param adapter_  Swap+TWAP adapter address implementing `IBasketSwapAdapter`.
+    ///                  Pass `address(0)` to use the built-in Uniswap V3 default path.
     /// @dev Reverts with InsufficientPoolCardinality when the pool's current
     ///      observationCardinality is below MIN_POOL_CARDINALITY. Callers must
     ///      invoke pool.increaseObservationCardinalityNext(n) and wait for the
     ///      cardinality to be populated before calling addAsset.
-    function addAsset(address token_, address pool_, uint24 swapFee_)
+    function addAsset(address token_, address pool_, uint24 swapFee_, address adapter_)
         external
         onlyRole(ADMIN_ROLE)
     {
         if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
         if (assets.length >= maxAssets()) revert MaxAssetsReached();
         // Verify pool actually pairs this token with USDC.
+        // For Uniswap V3 pools and Aerodrome CL pools, token0/token1 are standard.
         address t0 = IUniswapV3Pool(pool_).token0();
         address t1 = IUniswapV3Pool(pool_).token1();
         if (!((t0 == token_ && t1 == address(_USDC)) || (t1 == token_ && t0 == address(_USDC)))) {
@@ -637,8 +660,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (poolLiquidity < MIN_POOL_LIQUIDITY) {
             revert InsufficientPoolLiquidity(pool_, MIN_POOL_LIQUIDITY, poolLiquidity);
         }
-        assets.push(AssetInfo({token: token_, pool: pool_, swapFee: swapFee_, active: true}));
-        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_);
+        assets.push(
+            AssetInfo({
+                token: token_, pool: pool_, swapFee: swapFee_, active: true, adapter: adapter_
+            })
+        );
+        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_);
     }
 
     /// @notice Deactivate a basket asset. The vault must hold zero of that token. Restricted to ADMIN_ROLE.
@@ -679,8 +706,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             AssetInfo memory assetInfo = assets[i];
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
-            uint256 twapFloor = _twapUsdcValue(assetInfo.pool, assetInfo.token, bal)
-                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 twapFloor = _twapUsdcValue(
+                    assetInfo.pool, assetInfo.token, assetInfo.adapter, bal
+                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
             uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
             uint256 effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
             _emergencyUnwindAsset(assetInfo, effectiveFloor);
@@ -711,8 +739,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
             uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
-            uint256 twapFloor = _twapUsdcValue(assetInfo.pool, assetInfo.token, bal)
-                * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 twapFloor = _twapUsdcValue(
+                    assetInfo.pool, assetInfo.token, assetInfo.adapter, bal
+                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
             uint256 effectiveFloor = twapFloor > appliedFloor ? twapFloor : appliedFloor;
             emit EmergencyUnwindOverrideUsed(
                 assetInfo.token, bal, guard.minUsdcOut, effectiveFloor, msg.sender
@@ -856,8 +885,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
             firstActive = false;
             activeAssets[idx] = assets[i].token;
-            amountsOut[idx] =
-                swapIn > 0 ? _twapTokenValue(assets[i].pool, assets[i].token, swapIn) : 0;
+            amountsOut[idx] = swapIn > 0
+                ? _twapTokenValue(assets[i].pool, assets[i].token, assets[i].adapter, swapIn)
+                : 0;
             idx++;
         }
     }
@@ -892,7 +922,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
             uint256 depositorBal = bal.mulDiv(depositorShares, supply);
             uint256 val = depositorBal > 0
-                ? _twapUsdcValue(assets[i].pool, assets[i].token, depositorBal)
+                ? _twapUsdcValue(assets[i].pool, assets[i].token, assets[i].adapter, depositorBal)
                 : 0;
             activeAssets[idx] = assets[i].token;
             values[idx] = val;
@@ -942,19 +972,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
-        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), bal);
-        uint256 received = SWAP_ROUTER.exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: assetInfo.token,
-                tokenOut: address(_USDC),
-                fee: assetInfo.swapFee,
-                recipient: address(this),
-                amountIn: bal,
-                amountOutMinimum: minUsdcOut,
-                sqrtPriceLimitX96: 0
-            })
+        uint256 received = _executeSwap(
+            assetInfo.adapter,
+            assetInfo.token,
+            address(_USDC),
+            assetInfo.swapFee,
+            bal,
+            minUsdcOut,
+            address(this)
         );
-        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), 0);
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
 
@@ -975,23 +1001,58 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
-        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), bal);
-        uint256 received = SWAP_ROUTER.exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: assetInfo.token,
-                tokenOut: address(_USDC),
-                fee: assetInfo.swapFee,
-                recipient: address(this),
-                amountIn: bal,
-                amountOutMinimum: appliedFloor,
-                sqrtPriceLimitX96: 0
-            })
+        uint256 received = _executeSwap(
+            assetInfo.adapter,
+            assetInfo.token,
+            address(_USDC),
+            assetInfo.swapFee,
+            bal,
+            appliedFloor,
+            address(this)
         );
-        IERC20(assetInfo.token).forceApprove(address(SWAP_ROUTER), 0);
         if (received < appliedFloor) {
             revert EmergencyUnwindLossCapExceeded(assetInfo.token, received, appliedFloor);
         }
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
+
     // slither-disable-end reentrancy-balance
+
+    // ─── Swap execution helper ────────────────────────────────────────
+
+    /// @dev Routes a swap through the per-asset adapter when set, or falls back
+    ///      to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
+    ///      management: forceApprove before the call, clear after.
+    function _executeSwap(
+        address adapter,
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient
+    ) internal returns (uint256 amountOut) {
+        if (adapter != address(0)) {
+            // Adapter pulls `tokenIn` from this contract via transferFrom.
+            IERC20(tokenIn).forceApprove(adapter, amountIn);
+            amountOut = IBasketSwapAdapter(adapter)
+                .swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient);
+            IERC20(tokenIn).forceApprove(adapter, 0);
+        } else {
+            // Default Uniswap V3 path (backward-compatible).
+            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), amountIn);
+            amountOut = SWAP_ROUTER.exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: recipient,
+                    amountIn: amountIn,
+                    amountOutMinimum: minAmountOut,
+                    sqrtPriceLimitX96: 0
+                })
+            );
+            IERC20(tokenIn).forceApprove(address(SWAP_ROUTER), 0);
+        }
+    }
 }

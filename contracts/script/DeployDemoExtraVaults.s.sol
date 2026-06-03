@@ -411,7 +411,7 @@ contract DeployDemoExtraVaults is Script {
         for (uint256 i = 0; i < PROTOCOL_SYMBOLS.length; i++) {
             address token_ = address(seeder.tokens(i));
             address pool_ = address(seeder.pools(i));
-            vault.addAsset(token_, pool_, DEMO_PROTOCOL_SWAP_FEE);
+            vault.addAsset(token_, pool_, DEMO_PROTOCOL_SWAP_FEE, address(0));
             tokens[i] = token_;
         }
     }
@@ -428,7 +428,7 @@ contract DeployDemoExtraVaults is Script {
         for (uint256 i = 0; i < AGENT_SYMBOLS.length; i++) {
             address token_ = address(seeder.tokens(i));
             address pool_ = address(seeder.pools(i));
-            vault.addAsset(token_, pool_, DEMO_AGENT_SWAP_FEE);
+            vault.addAsset(token_, pool_, DEMO_AGENT_SWAP_FEE, address(0));
             tokens[i] = token_;
         }
     }

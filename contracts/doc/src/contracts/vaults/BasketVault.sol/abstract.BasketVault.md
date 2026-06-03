@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dd2b70b308807d48418288c918e3bb6256623fb2/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fde825fa14af6eda7d4a1766f6f45e033e4f39a0/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -279,7 +279,8 @@ function _deposit(address caller, address receiver, uint256 usdcAmount, uint256 
 
 ### _routeDeposit
 
-Splits usdcAmount equally across active assets, swapping each portion via Uniswap V3.
+Splits usdcAmount equally across active assets, swapping each portion via the
+per-asset swap adapter (Aerodrome or Uniswap V3 default).
 The first active asset absorbs any indivisible remainder.
 Emits a WeightSnapshot event recording the equal-weight allocation applied.
 
@@ -372,11 +373,11 @@ function _sellProportional(uint256 shares, uint256 supplyBefore)
 ### _twapUsdcValue
 
 Returns the USDC value of `tokenAmount` tokens, priced via the
-Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
+adapter's TWAP (or the built-in Uniswap V3 path when adapter is address(0)).
 
 
 ```solidity
-function _twapUsdcValue(address pool, address token, uint256 tokenAmount)
+function _twapUsdcValue(address pool, address token, address adapter, uint256 tokenAmount)
     internal
     view
     returns (uint256);
@@ -385,11 +386,11 @@ function _twapUsdcValue(address pool, address token, uint256 tokenAmount)
 ### _twapTokenValue
 
 Returns the estimated token amount for `usdcAmount` USDC, priced
-via the Uniswap V3 TWAP arithmetic-mean tick over the asset's window.
+via the adapter's TWAP (or the built-in Uniswap V3 path when adapter is address(0)).
 
 
 ```solidity
-function _twapTokenValue(address pool, address token, uint256 usdcAmount)
+function _twapTokenValue(address pool, address token, address adapter, uint256 usdcAmount)
     internal
     view
     returns (uint256);
@@ -436,7 +437,7 @@ cardinality to be populated before calling addAsset.
 
 
 ```solidity
-function addAsset(address token_, address pool_, uint24 swapFee_)
+function addAsset(address token_, address pool_, uint24 swapFee_, address adapter_)
     external
     onlyRole(ADMIN_ROLE);
 ```
@@ -444,9 +445,10 @@ function addAsset(address token_, address pool_, uint24 swapFee_)
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token_`|`address`|  ERC-20 token address.|
-|`pool_`|`address`|   Uniswap V3 pool pairing `token_` with USDC (either token0 or token1).|
-|`swapFee_`|`uint24`|Uniswap V3 fee tier (500, 3000, or 10000).|
+|`token_`|`address`|   ERC-20 token address.|
+|`pool_`|`address`|    DEX pool pairing `token_` with USDC (either token0 or token1). For the Uniswap V3 default path, this is the V3 pool address. For Aerodrome, this is the CL pool address used for TWAP reads.|
+|`swapFee_`|`uint24`| Fee parameter forwarded to the adapter (Uniswap V3 fee tier; unused by Aerodrome adapters but kept for interface uniformity).|
+|`adapter_`|`address`| Swap+TWAP adapter address implementing `IBasketSwapAdapter`. Pass `address(0)` to use the built-in Uniswap V3 default path.|
 
 
 ### removeAsset
@@ -719,11 +721,32 @@ function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 applie
     internal;
 ```
 
+### _executeSwap
+
+Routes a swap through the per-asset adapter when set, or falls back
+to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
+management: forceApprove before the call, clear after.
+
+
+```solidity
+function _executeSwap(
+    address adapter,
+    address tokenIn,
+    address tokenOut,
+    uint24 fee,
+    uint256 amountIn,
+    uint256 minAmountOut,
+    address recipient
+) internal returns (uint256 amountOut);
+```
+
 ## Events
 ### AssetAdded
 
 ```solidity
-event AssetAdded(uint256 indexed index, address indexed token, address pool, uint24 swapFee);
+event AssetAdded(
+    uint256 indexed index, address indexed token, address pool, uint24 swapFee, address adapter
+);
 ```
 
 ### AssetRemoved
@@ -995,9 +1018,12 @@ error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 ```solidity
 struct AssetInfo {
     address token;
-    address pool; // Uniswap V3 pool pairing token with USDC
-    uint24 swapFee; // Uniswap V3 fee tier for exactInputSingle swaps
+    address pool; // DEX pool pairing token with USDC (venue-specific)
+    uint24 swapFee; // Fee parameter forwarded to the adapter (e.g. Uniswap V3 fee tier)
     bool active;
+    /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
+    ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
+    address adapter;
 }
 ```
 

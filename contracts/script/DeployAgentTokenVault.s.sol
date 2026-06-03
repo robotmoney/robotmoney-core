@@ -117,7 +117,7 @@ contract DeployAgentTokenVault is Script {
         d.vault = address(vault);
         d.tokens = new address[](entries.length);
         for (uint256 i = 0; i < entries.length; i++) {
-            vault.addAsset(entries[i].token, entries[i].pool, entries[i].swapFee);
+            vault.addAsset(entries[i].token, entries[i].pool, entries[i].swapFee, address(0));
             d.tokens[i] = entries[i].token;
         }
 
