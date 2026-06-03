@@ -5,6 +5,7 @@
 - [IAerodromePool](IAerodromePool.sol/interface.IAerodromePool.md)
 - [IAerodromeRouter](IAerodromeRouter.sol/interface.IAerodromeRouter.md)
 - [IBasketSwapAdapter](IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
+- [IChronicleOracle](IChronicleOracle.sol/interface.IChronicleOracle.md)
 - [IComet](IComet.sol/interface.IComet.md)
 - [IStrategyAdapter](IStrategyAdapter.sol/interface.IStrategyAdapter.md)
 - [ISwapRouter](ISwapRouter.sol/interface.ISwapRouter.md)
