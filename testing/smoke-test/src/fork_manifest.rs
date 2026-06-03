@@ -501,9 +501,10 @@ mod tests {
 
         // The fixture must enumerate exactly the four landing-strip pairs so a
         // dropped/renamed pair is caught here rather than at demo time.
-        let ids: Vec<&str> = fixture["pairs"]
+        let pairs = fixture["pairs"]
             .as_array()
-            .expect("expected-prices.json pairs is an array")
+            .expect("expected-prices.json pairs is an array");
+        let ids: Vec<&str> = pairs
             .iter()
             .map(|p| p["id"].as_str().expect("pair id is a string"))
             .collect();
@@ -511,6 +512,104 @@ mod tests {
             ids,
             vec!["eth-usd", "weth-usdc", "cbbtc-usdc", "wsol-usdc"],
             "expected-prices.json must list the four landing-strip pairs in order"
+        );
+
+        // Guard: every pool address referenced in expected-prices.json must be
+        // present in fork-block.json::ingested_addresses.  If a DEX pool
+        // address is NOT ingested the genesis alloc will not contain that
+        // pool's storage, so the forked-Base devnet will have a zeroed slot0
+        // and the price strip will read 0.  Failing here catches the drift at
+        // manifest-validation time rather than at demo boot time.
+        let ingested_lower: std::collections::HashSet<String> = manifest
+            .ingested_addresses
+            .iter()
+            .map(|a| a.to_string().to_lowercase())
+            .collect();
+        for pair in pairs {
+            let pool_raw = pair["pool"]
+                .as_str()
+                .expect("each expected-prices pair has a pool field");
+            let pool_lower = pool_raw.to_lowercase();
+            assert!(
+                ingested_lower.contains(&pool_lower),
+                "expected-prices.json pair {:?} references pool {} which is absent from \
+                 fork-block.json ingested_addresses; add the pool to ingested_addresses \
+                 in the same commit that refreshes the price fixture (issue #558)",
+                pair["id"].as_str().unwrap_or("?"),
+                pool_raw
+            );
+        }
+    }
+
+    /// Simulates a fork-block bump where the developer forgot to add the new
+    /// pool address to `ingested_addresses`.  The guard in
+    /// `fork_block_aligns_with_expected_prices` must catch this by detecting
+    /// the pool referenced in expected-prices.json is absent from
+    /// `ingested_addresses`.  This test exercises that logic path in isolation
+    /// without touching the on-disk fixtures (issue #558).
+    #[test]
+    fn pool_missing_from_ingested_addresses_is_detected() {
+        // Build a manifest that does NOT include the pool address that will
+        // appear in the simulated expected-prices fixture.
+        let manifest_json = r#"{
+            "chain": "base",
+            "block_number": 99999999,
+            "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "snapshot_uri": "file://testing/fixtures/fork-state/CURRENT.anvil-state",
+            "ingested_addresses": [
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            ],
+            "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
+            "harness_usdc_grant_units": "1000000000000",
+            "pinned": false
+        }"#;
+        let manifest = ForkManifest::from_str(manifest_json).expect("manifest parses");
+
+        // Simulate an expected-prices fixture that references a pool address
+        // NOT in the manifest's ingested_addresses — exactly the condition that
+        // occurs when a fork block is bumped without refreshing the pool list.
+        let prices_json: serde_json::Value = serde_json::from_str(r#"{
+            "fork_block": 99999999,
+            "chain": "base",
+            "pairs": [
+                {
+                    "id": "eth-usd",
+                    "pool": "0xd0b53D9277642d899DF5C87A3966A349A798F224",
+                    "base_decimals": 18,
+                    "quote_decimals": 6,
+                    "base_is_token0": true,
+                    "expected_price": 3000.0
+                }
+            ]
+        }"#).unwrap();
+
+        let ingested_lower: std::collections::HashSet<String> = manifest
+            .ingested_addresses
+            .iter()
+            .map(|a| a.to_string().to_lowercase())
+            .collect();
+
+        let pairs = prices_json["pairs"].as_array().unwrap();
+        let unsynced: Vec<&str> = pairs
+            .iter()
+            .filter_map(|p| {
+                let pool = p["pool"].as_str()?;
+                if ingested_lower.contains(&pool.to_lowercase()) {
+                    None
+                } else {
+                    Some(pool)
+                }
+            })
+            .collect();
+
+        assert!(
+            !unsynced.is_empty(),
+            "expected the guard to detect pool 0xd0b53... as missing from ingested_addresses"
+        );
+        assert_eq!(
+            unsynced,
+            vec!["0xd0b53D9277642d899DF5C87A3966A349A798F224"],
+            "guard must report the specific un-ingested pool address"
         );
     }
 }
