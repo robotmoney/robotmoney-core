@@ -1,5 +1,5 @@
 # ChronicleOracleAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e7f8d434b5251917b3fb5672139a21537b84392f/contracts/adapters/ChronicleOracleAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/298fe53d078e3114670e9c65d370bad82c79d34b/contracts/adapters/ChronicleOracleAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)

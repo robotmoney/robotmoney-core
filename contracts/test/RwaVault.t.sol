@@ -353,7 +353,11 @@ contract RwaVaultTest is Test {
     /// @notice totalAssets() reverts with StalePriceFeed when oracle is stale.
     ///         AC-2: pricing uses Chronicle NAV oracle; stale feed halts operations.
     function test_staleFeed_totalAssetsReverts() public {
-        uint256 oracleTs = block.timestamp;
+        // Read oracle timestamp directly from the mock — avoids a viaIR/coverage
+        // optimisation that can evaluate `block.timestamp` after vm.warp when it
+        // is only used in a vm.expectRevert selector argument (compiler re-ordering
+        // of pure reads in --ir-minimum mode).
+        uint256 oracleTs = chronicle.latestTimestamp();
         vm.warp(block.timestamp + 25 hours); // beyond 24h heartbeat
 
         vm.expectRevert(
@@ -364,7 +368,8 @@ contract RwaVaultTest is Test {
 
     /// @notice Deposits revert when the oracle is stale (totalAssets is on the hot path).
     function test_staleFeed_depositReverts() public {
-        uint256 oracleTs = block.timestamp;
+        // Read oracle timestamp directly from the mock — same viaIR guard as above.
+        uint256 oracleTs = chronicle.latestTimestamp();
         vm.warp(block.timestamp + 25 hours);
         usdc.mint(user, 1_000 * ONE_USDC);
 
