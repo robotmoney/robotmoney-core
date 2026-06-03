@@ -885,8 +885,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
             firstActive = false;
             activeAssets[idx] = assets[i].token;
-            amountsOut[idx] =
-                swapIn > 0 ? _twapTokenValue(assets[i].pool, assets[i].token, swapIn) : 0;
+            amountsOut[idx] = swapIn > 0
+                ? _twapTokenValue(assets[i].pool, assets[i].token, assets[i].adapter, swapIn)
+                : 0;
             idx++;
         }
     }
@@ -921,7 +922,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
             uint256 depositorBal = bal.mulDiv(depositorShares, supply);
             uint256 val = depositorBal > 0
-                ? _twapUsdcValue(assets[i].pool, assets[i].token, depositorBal)
+                ? _twapUsdcValue(assets[i].pool, assets[i].token, assets[i].adapter, depositorBal)
                 : 0;
             activeAssets[idx] = assets[i].token;
             values[idx] = val;

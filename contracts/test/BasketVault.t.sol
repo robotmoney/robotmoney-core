@@ -1243,8 +1243,8 @@ contract BasketVaultRebalanceTest is Test {
         );
 
         vm.startPrank(admin);
-        vault.addAsset(address(tokenA), address(poolA), 500);
-        vault.addAsset(address(tokenB), address(poolB), 500);
+        vault.addAsset(address(tokenA), address(poolA), 500, address(0));
+        vault.addAsset(address(tokenB), address(poolB), 500, address(0));
         vm.stopPrank();
     }
 
