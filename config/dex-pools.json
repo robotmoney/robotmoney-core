@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Canonical registry of Uniswap V3 pool addresses used by the dapp landing-page price strip (issue #482, docs/prd.md#112-protocol-asset-vault). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0.",
+  "description": "Canonical registry of DEX pool addresses for the dapp landing-page price strip and the four-vault basket swap routes (issue #482, #556, docs/prd.md§11). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0. `basket_assets` records per-asset token addresses, swap venues (UniswapV3/UniswapV4/Aerodrome), and pool addresses for vault swap routing (issue #556). Pool addresses marked with `pool_status: pending` must be pinned from on-chain verification before the vault can be deployed.",
   "pairs": [
     {
       "id": "eth-usd",
@@ -35,6 +35,81 @@
       "quoteDecimals": 6
     }
   ],
+  "$comment_basket_assets": "Basket-vault swap routes (issue #556, docs/prd.md§11.2 ProtocolAssetVault, §11.3 AgentTokenVault, §11.4 RWA vault). Each entry records the asset token address on Base mainnet, the DEX venue (UniswapV3 / UniswapV4 / Aerodrome), pool address, and pool parameter (fee tier for V3/V4 in bps, or 0=volatile/1=stable for Aerodrome). Entries with `pool_status: pending` have a confirmed token address but the pool address must be verified on-chain (Basescan / Aerodrome factory / Uniswap V4 PoolManager) before vault deployment or fork-state snapshot update. The genesis ingester (testing/smoke-test/src/genesis_alloc.rs) must ingest every pool address listed here via testing/ethereum-testnet/config/fork-block.json::ingested_addresses.",
+  "basket_assets": {
+    "$comment": "ProtocolAssetVault (rmPROTO) assets: cbBTC and wSOL use Uniswap V3; pool addresses are already confirmed and ingested in fork-block.json.",
+    "cbbtc": {
+      "symbol": "cbBTC",
+      "token": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "tokenDecimals": 8,
+      "venue": "UniswapV3",
+      "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+      "poolFee": 500,
+      "pool_status": "confirmed"
+    },
+    "wsol": {
+      "symbol": "wSOL",
+      "token": "0x1C61629598e4a901136a81BC138E5828dc150d67",
+      "tokenDecimals": 9,
+      "venue": "UniswapV3",
+      "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
+      "poolFee": 500,
+      "pool_status": "confirmed"
+    },
+    "$comment_agent_tokens": "AgentTokenVault (rmAGENT) shortlist assets: JUNO (Uniswap V4), WOON, ZYFAI, GIZA. Token addresses are confirmed from on-chain research (PR #580 / issue #543). Pool addresses are pending on-chain verification via Uniswap V4 PoolManager and Aerodrome factory before vault deployment. Venue tags follow ADR-0004 BasketVault multi-DEX routing.",
+    "juno": {
+      "symbol": "JUNO",
+      "token": "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
+      "tokenDecimals": 18,
+      "venue": "UniswapV4",
+      "pool": "0x0000000000000000000000000000000000000000",
+      "poolFee": 10000,
+      "pool_status": "pending",
+      "$comment_pool": "JUNO/USDC Uniswap V4 pool on Base — pool address to be pinned from on-chain PoolManager lookup before devnet snapshot update."
+    },
+    "woon": {
+      "symbol": "WOON",
+      "token": "0x85eac631c800af804476b140f87039f742c28ba3",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0x0000000000000000000000000000000000000000",
+      "poolFee": 10000,
+      "pool_status": "pending",
+      "$comment_pool": "WOON/USDC Uniswap V3 pool on Base — pool address to be pinned from Basescan before devnet snapshot update."
+    },
+    "zyfai": {
+      "symbol": "ZYFAI",
+      "token": "0xd080ed3c74a20250a2c9821885203034acd2d5ae",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0x0000000000000000000000000000000000000000",
+      "poolFee": 10000,
+      "pool_status": "pending",
+      "$comment_pool": "ZYFAI/USDC Uniswap V3 pool on Base — pool address to be pinned from Basescan before devnet snapshot update."
+    },
+    "giza": {
+      "symbol": "GIZA",
+      "token": "0x590830dfdf9a3f68afcdde2694773debdf267774",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0x0000000000000000000000000000000000000000",
+      "poolFee": 10000,
+      "pool_status": "pending",
+      "$comment_pool": "GIZA/USDC Uniswap V3 pool on Base — pool address to be pinned from Basescan before devnet snapshot update."
+    },
+    "$comment_rwa": "RWA vault (rmRWA) asset: deSPXA (Centrifuge V3, Base). Entry/exit via Aerodrome secondary market only (ERC-7540 primary NAV redeem is KYC-gated and not used — see ADR-0004). Token address is the deSPXA ERC-20 on Base. Pool address and Aerodrome stable/volatile flag are pending on-chain verification via Aerodrome factory before vault deployment.",
+    "despxa": {
+      "symbol": "deSPXA",
+      "token": "0x0000000000000000000000000000000000000000",
+      "tokenDecimals": 18,
+      "venue": "Aerodrome",
+      "pool": "0x0000000000000000000000000000000000000000",
+      "poolStable": false,
+      "pool_status": "pending",
+      "$comment_token": "Centrifuge deSPXA ERC-20 on Base — tokenized S&P 500 exposure via Janus Henderson / Anemoy, issued through Centrifuge V3. Token address to be pinned from Basescan / Centrifuge V3 Base deployment registry before devnet snapshot update. See ADR-0004 for vault design constraints.",
+      "$comment_pool": "deSPXA/USDC Aerodrome pool on Base — pool address and stable/volatile flag to be pinned from Aerodrome factory lookup before devnet snapshot update. Chronicle NAV oracle address for this vault is also TBD (separate deployment config). Both addresses must be verified on-chain before the deSPXA addresses in fork-block.json::ingested_addresses are populated."
+    }
+  },
   "mainnet": {
     "chainId": 8453,
     "pools": {
