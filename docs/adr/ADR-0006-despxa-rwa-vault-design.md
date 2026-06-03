@@ -1,4 +1,4 @@
-# ADR-0004: deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk
+# ADR-0006: deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk
 
 - **Status:** Accepted
 - **Date:** 2026-06-03
