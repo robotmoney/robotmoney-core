@@ -1,0 +1,63 @@
+# MockPoolForGuards
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/test/ConfusedDeputyGuards.t.sol)
+
+Uniswap V3 pool stub. token0/token1 are set at construction.
+observe() returns linear tick cumulative (tick rate 0 → 1:1 price).
+cardinality is settable so addAsset cardinality checks can be tested.
+
+
+## Constants
+### token0
+
+```solidity
+address public immutable token0
+```
+
+
+### token1
+
+```solidity
+address public immutable token1
+```
+
+
+## State Variables
+### cardinality
+
+```solidity
+uint16 public cardinality
+```
+
+
+## Functions
+### constructor
+
+
+```solidity
+constructor(address token0_, address token1_) ;
+```
+
+### setCardinality
+
+
+```solidity
+function setCardinality(uint16 c) external;
+```
+
+### slot0
+
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+```
+
+### observe
+
+
+```solidity
+function observe(uint32[] calldata secondsAgos)
+    external
+    view
+    returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq);
+```
+
