@@ -57,6 +57,14 @@ contract DemoUsdcPool {
     {
         return (0, 0, 0, 2, 2, 0, true);
     }
+
+    /// @notice Stub liquidity — returns a value above MIN_POOL_LIQUIDITY (1e6)
+    ///         so that `BasketVault.addAsset` passes the minimum-liquidity gate.
+    ///         Demo pools are not real Uniswap V3 pools; this value is purely
+    ///         a stub to satisfy the gate check without forking mainnet.
+    function liquidity() external pure returns (uint128) {
+        return 1e18;
+    }
 }
 
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket

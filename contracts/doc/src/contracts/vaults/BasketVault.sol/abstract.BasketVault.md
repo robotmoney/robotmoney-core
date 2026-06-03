@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/96e73e7f201b20e754dab9ca2f28b150e1238e85/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -107,6 +107,25 @@ deposits, and withdrawals for the entire basket.
 
 ```solidity
 uint16 public constant MIN_POOL_CARDINALITY = 2
+```
+
+
+### MIN_POOL_LIQUIDITY
+Minimum in-range Uniswap V3 pool liquidity required when
+registering an asset via addAsset(). Pools below this floor
+cannot absorb vault-sized trades without exceeding the
+configured slippage bound, which would leave depositors unable
+to exit synchronously — a blocking router-eligibility gap
+(basket-vault-gap-report.md §1). Callers must seed pool depth
+before calling addAsset.
+The value of 1e6 is a conservative floor that rejects completely
+empty or dust-seeded pools while being easy for integration tests
+to satisfy with a small seed. Production operators are expected
+to seed pools well above this floor before activating assets.
+
+
+```solidity
+uint128 public constant MIN_POOL_LIQUIDITY = 1e6
 ```
 
 
@@ -955,6 +974,19 @@ observations to cover the full window before depositing.
 
 ```solidity
 error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
+```
+
+### InsufficientPoolLiquidity
+Raised by addAsset() when the pool's in-range liquidity (as
+returned by `IUniswapV3Pool.liquidity()`) is below
+`MIN_POOL_LIQUIDITY`. Thin pools cannot guarantee synchronous
+withdrawal at the TWAP-derived slippage bound — a core router-
+eligibility requirement (gap-report §1). Provide depth before
+registering the asset.
+
+
+```solidity
+error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 ```
 
 ## Structs

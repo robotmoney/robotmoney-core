@@ -8,6 +8,12 @@ interface IUniswapV3Pool {
     function token0() external view returns (address);
     function token1() external view returns (address);
 
+    /// @notice The in-range liquidity available to the pool.
+    /// @dev This value does not include out-of-range concentrated liquidity
+    ///      positions. Used by `BasketVault.addAsset` to enforce a minimum-
+    ///      liquidity floor before activating an asset.
+    function liquidity() external view returns (uint128);
+
     function slot0()
         external
         view
