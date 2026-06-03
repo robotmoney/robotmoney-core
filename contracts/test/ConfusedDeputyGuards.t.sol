@@ -414,7 +414,7 @@ contract BasketVaultSwapGuardsTest is Test {
 
         // Register the valid pool.
         vm.prank(admin);
-        vault.addAsset(address(basketToken), address(pool), 500, address(0));
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
 
         vm.warp(1_700_000_000);
     }
@@ -434,7 +434,7 @@ contract BasketVaultSwapGuardsTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
-        vault.addAsset(address(newAsset), address(badPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice addAsset also rejects a pool that pairs the basket token with the
@@ -448,7 +448,7 @@ contract BasketVaultSwapGuardsTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
-        vault.addAsset(address(newAsset), address(badPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice addAsset rejects a pool with cardinality < MIN_POOL_CARDINALITY (2).
@@ -468,7 +468,9 @@ contract BasketVaultSwapGuardsTest is Test {
                 uint16(1)
             )
         );
-        vault.addAsset(address(newAsset), address(lowCardPool), 500, address(0));
+        vault.addAsset(
+            address(newAsset), address(lowCardPool), 500, address(0), BasketVault.Venue.V3
+        );
     }
 
     // ─── Invariant 9: deposit slippage floor is non-zero ─────────────────────

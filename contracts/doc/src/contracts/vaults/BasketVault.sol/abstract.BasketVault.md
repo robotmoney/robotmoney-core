@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6aebcae7361098e1770e9b79c53f0125f87edaa3/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9eed07634921aa5428fc9e4e6b0452434840368d/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -437,9 +437,13 @@ cardinality to be populated before calling addAsset.
 
 
 ```solidity
-function addAsset(address token_, address pool_, uint24 swapFee_, address adapter_)
-    external
-    onlyRole(ADMIN_ROLE);
+function addAsset(
+    address token_,
+    address pool_,
+    uint24 swapFee_,
+    address adapter_,
+    Venue venue_
+) external onlyRole(ADMIN_ROLE);
 ```
 **Parameters**
 
@@ -448,7 +452,8 @@ function addAsset(address token_, address pool_, uint24 swapFee_, address adapte
 |`token_`|`address`|   ERC-20 token address.|
 |`pool_`|`address`|    DEX pool pairing `token_` with USDC (either token0 or token1). For the Uniswap V3 default path, this is the V3 pool address. For Aerodrome, this is the CL pool address used for TWAP reads.|
 |`swapFee_`|`uint24`| Fee parameter forwarded to the adapter (Uniswap V3 fee tier; unused by Aerodrome adapters but kept for interface uniformity).|
-|`adapter_`|`address`| Swap+TWAP adapter address implementing `IBasketSwapAdapter`. Pass `address(0)` to use the built-in Uniswap V3 default path.|
+|`adapter_`|`address`| Swap+TWAP adapter address implementing `IBasketSwapAdapter`. Pass `address(0)` to use the built-in Uniswap V3 default path (venue = V3). For V4 or Aerodrome, pass the deployed adapter address and the corresponding `venue_`.|
+|`venue_`|`Venue`|   DEX venue selector. Must match the adapter type: `Venue.V3` with `adapter_=address(0)`, `Venue.V4` with a `UniswapV4SwapAdapter`, `Venue.Aerodrome` with an `AerodromeSwapAdapter`. Stored on `AssetInfo` so governance tooling can inspect the venue without decoding the adapter address.|
 
 
 ### removeAsset
@@ -745,7 +750,12 @@ function _executeSwap(
 
 ```solidity
 event AssetAdded(
-    uint256 indexed index, address indexed token, address pool, uint24 swapFee, address adapter
+    uint256 indexed index,
+    address indexed token,
+    address pool,
+    uint24 swapFee,
+    address adapter,
+    Venue venue
 );
 ```
 
@@ -1024,6 +1034,11 @@ struct AssetInfo {
     /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
     ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
     address adapter;
+    /// @notice DEX venue this asset is wired to.
+    ///         Mirrors the adapter choice in a human-readable form so governance
+    ///         and monitoring tooling can inspect the venue without decoding the
+    ///         adapter address.
+    Venue venue;
 }
 ```
 
@@ -1039,6 +1054,25 @@ struct EmergencyUnwindGuard {
     // `MAX_BPS` reproduces the legacy zero-floor behaviour; a value of `0`
     // forbids any loss versus the reference floor.
     uint256 maxLossBps;
+}
+```
+
+## Enums
+### Venue
+DEX venue selector for a basket asset.
+Recorded on AssetInfo so off-chain tooling and governance can
+inspect which DEX each asset is wired to without parsing the
+opaque adapter address.
+V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
+V4       — Uniswap V4 via a UniswapV4SwapAdapter.
+Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
+
+
+```solidity
+enum Venue {
+    V3,
+    V4,
+    Aerodrome
 }
 ```
 

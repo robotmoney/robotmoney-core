@@ -70,6 +70,7 @@
     - [MockUniswapV4Router](contracts/test/BasketVault.t.sol/contract.MockUniswapV4Router.md)
     - [MockUniswapV4Pool](contracts/test/BasketVault.t.sol/contract.MockUniswapV4Pool.md)
     - [BasketVaultUniswapV4Test](contracts/test/BasketVault.t.sol/contract.BasketVaultUniswapV4Test.md)
+    - [BasketVaultVenueSelectorTest](contracts/test/BasketVault.t.sol/contract.BasketVaultVenueSelectorTest.md)
     - [MockPoolForGuards](contracts/test/ConfusedDeputyGuards.t.sol/contract.MockPoolForGuards.md)
     - [MockSwapRouterForGuards](contracts/test/ConfusedDeputyGuards.t.sol/contract.MockSwapRouterForGuards.md)
     - [BasketVaultHarnessForGuards](contracts/test/ConfusedDeputyGuards.t.sol/contract.BasketVaultHarnessForGuards.md)

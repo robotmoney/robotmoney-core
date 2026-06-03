@@ -11,7 +11,8 @@
 // swap adapter's `twapPrice()` method over an admin-configurable per-asset window;
 // `slot0` is never read on hot paths. See issue #451 and
 // docs/technical/security-model.md §5. Multi-DEX venue abstraction added per
-// docs/technical/real-four-vault-demo-seams.md §3 (issue #553).
+// docs/technical/real-four-vault-demo-seams.md §3 (issue #553). Per-asset
+// venue selector (Venue enum) added per issue #555.
 pragma solidity ^0.8.24;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
@@ -76,6 +77,19 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Asset registry ───────────────────────────────────────────────
 
+    /// @notice DEX venue selector for a basket asset.
+    ///         Recorded on AssetInfo so off-chain tooling and governance can
+    ///         inspect which DEX each asset is wired to without parsing the
+    ///         opaque adapter address.
+    ///         V3       — Uniswap V3 via the built-in SWAP_ROUTER (adapter = address(0)).
+    ///         V4       — Uniswap V4 via a UniswapV4SwapAdapter.
+    ///         Aerodrome — Aerodrome CL pool via an AerodromeSwapAdapter.
+    enum Venue {
+        V3,
+        V4,
+        Aerodrome
+    }
+
     struct AssetInfo {
         address token;
         address pool; // DEX pool pairing token with USDC (venue-specific)
@@ -84,6 +98,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         /// @dev Swap + TWAP adapter for this asset. address(0) falls back to the
         ///      default Uniswap V3 path via SWAP_ROUTER, preserving backward compat.
         address adapter;
+        /// @notice DEX venue this asset is wired to.
+        ///         Mirrors the adapter choice in a human-readable form so governance
+        ///         and monitoring tooling can inspect the venue without decoding the
+        ///         adapter address.
+        Venue venue;
     }
 
     struct EmergencyUnwindGuard {
@@ -122,7 +141,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     // ─── Events ───────────────────────────────────────────────────────
 
     event AssetAdded(
-        uint256 indexed index, address indexed token, address pool, uint24 swapFee, address adapter
+        uint256 indexed index,
+        address indexed token,
+        address pool,
+        uint24 swapFee,
+        address adapter,
+        Venue venue
     );
     event AssetRemoved(uint256 indexed index, address indexed token);
     event Swapped(
@@ -627,15 +651,26 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @param swapFee_  Fee parameter forwarded to the adapter (Uniswap V3 fee tier;
     ///                  unused by Aerodrome adapters but kept for interface uniformity).
     /// @param adapter_  Swap+TWAP adapter address implementing `IBasketSwapAdapter`.
-    ///                  Pass `address(0)` to use the built-in Uniswap V3 default path.
+    ///                  Pass `address(0)` to use the built-in Uniswap V3 default path
+    ///                  (venue = V3). For V4 or Aerodrome, pass the deployed adapter
+    ///                  address and the corresponding `venue_`.
+    /// @param venue_    DEX venue selector. Must match the adapter type:
+    ///                  `Venue.V3` with `adapter_=address(0)`,
+    ///                  `Venue.V4` with a `UniswapV4SwapAdapter`,
+    ///                  `Venue.Aerodrome` with an `AerodromeSwapAdapter`.
+    ///                  Stored on `AssetInfo` so governance tooling can inspect
+    ///                  the venue without decoding the adapter address.
     /// @dev Reverts with InsufficientPoolCardinality when the pool's current
     ///      observationCardinality is below MIN_POOL_CARDINALITY. Callers must
     ///      invoke pool.increaseObservationCardinalityNext(n) and wait for the
     ///      cardinality to be populated before calling addAsset.
-    function addAsset(address token_, address pool_, uint24 swapFee_, address adapter_)
-        external
-        onlyRole(ADMIN_ROLE)
-    {
+    function addAsset(
+        address token_,
+        address pool_,
+        uint24 swapFee_,
+        address adapter_,
+        Venue venue_
+    ) external onlyRole(ADMIN_ROLE) {
         if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
         if (assets.length >= maxAssets()) revert MaxAssetsReached();
         // Verify pool actually pairs this token with USDC.
@@ -662,10 +697,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         }
         assets.push(
             AssetInfo({
-                token: token_, pool: pool_, swapFee: swapFee_, active: true, adapter: adapter_
+                token: token_,
+                pool: pool_,
+                swapFee: swapFee_,
+                active: true,
+                adapter: adapter_,
+                venue: venue_
             })
         );
-        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_);
+        emit AssetAdded(assets.length - 1, token_, pool_, swapFee_, adapter_, venue_);
     }
 
     /// @notice Deactivate a basket asset. The vault must hold zero of that token. Restricted to ADMIN_ROLE.

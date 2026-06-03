@@ -122,7 +122,9 @@ contract AgentTokenVaultTest is Test {
             tokens[i] = new TestERC20();
             MockPool pool = new MockPool(address(tokens[i]), address(usdc));
             vm.prank(admin);
-            vault.addAsset(address(tokens[i]), address(pool), 10_000, address(0));
+            vault.addAsset(
+                address(tokens[i]), address(pool), 10_000, address(0), BasketVault.Venue.V3
+            );
         }
     }
 
@@ -169,7 +171,9 @@ contract AgentTokenVaultTest is Test {
         vault.removeAsset(0); // deactivate JUNO slot (vault holds zero)
 
         vm.prank(admin);
-        vault.addAsset(address(replacement), address(pool), 10_000, address(0));
+        vault.addAsset(
+            address(replacement), address(pool), 10_000, address(0), BasketVault.Venue.V3
+        );
 
         (address[] memory t,,, bool[] memory active,) = vault.shortlist();
         assertEq(t.length, N + 1, "swap adds a new entry");
@@ -189,7 +193,7 @@ contract AgentTokenVaultTest is Test {
             )
         );
         vm.prank(stranger);
-        vault.addAsset(address(newToken), address(pool), 10_000, address(0));
+        vault.addAsset(address(newToken), address(pool), 10_000, address(0), BasketVault.Venue.V3);
 
         vm.expectRevert(
             abi.encodeWithSignature(
@@ -351,8 +355,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         tokenB = new TestERC20();
         poolA = new MockPool(address(tokenA), address(usdc));
         poolB = new MockPool(address(tokenB), address(usdc));
-        vault.addAsset(address(tokenA), address(poolA), 3000, address(0));
-        vault.addAsset(address(tokenB), address(poolB), 3000, address(0));
+        vault.addAsset(address(tokenA), address(poolA), 3000, address(0), BasketVault.Venue.V3);
+        vault.addAsset(address(tokenB), address(poolB), 3000, address(0), BasketVault.Venue.V3);
 
         // Deploy TimelockController: safe is proposer + executor.
         // signer also gets PROPOSER_ROLE (OpenZeppelin 5.x TimelockController grants
@@ -391,16 +395,18 @@ contract AgentTokenVaultGovernanceTest is Test {
         internal
         returns (bytes32 opId)
     {
-        bytes memory callData =
-            abi.encodeCall(BasketVault.addAsset, (token_, pool_, fee_, address(0)));
+        bytes memory callData = abi.encodeCall(
+            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
+        );
         vm.prank(safe);
         timelock.schedule(address(vault), 0, callData, bytes32(0), salt_, ADD_DELAY);
         opId = timelock.hashOperation(address(vault), 0, callData, bytes32(0), salt_);
     }
 
     function _executeAddAsset(address token_, address pool_, uint24 fee_, bytes32 salt_) internal {
-        bytes memory callData =
-            abi.encodeCall(BasketVault.addAsset, (token_, pool_, fee_, address(0)));
+        bytes memory callData = abi.encodeCall(
+            BasketVault.addAsset, (token_, pool_, fee_, address(0), BasketVault.Venue.V3)
+        );
         vm.prank(safe);
         timelock.execute(address(vault), 0, callData, bytes32(0), salt_);
     }
@@ -560,7 +566,7 @@ contract AgentTokenVaultGovernanceTest is Test {
             )
         );
         vm.prank(stranger);
-        vault.addAsset(address(newToken), address(newPool), 3000, address(0));
+        vault.addAsset(address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice A stranger cannot call removeAsset directly because ADMIN_ROLE is
@@ -582,7 +588,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         TestERC20 newToken = new TestERC20();
         MockPool newPool = new MockPool(address(newToken), address(usdc));
         bytes memory callData = abi.encodeCall(
-            BasketVault.addAsset, (address(newToken), address(newPool), 3000, address(0))
+            BasketVault.addAsset,
+            (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         vm.expectRevert();
@@ -600,7 +607,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         lowCardPool.setCardinality(1); // below MIN_POOL_CARDINALITY = 2
 
         bytes memory callData = abi.encodeCall(
-            BasketVault.addAsset, (address(newToken), address(lowCardPool), 3000, address(0))
+            BasketVault.addAsset,
+            (address(newToken), address(lowCardPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         // Schedule through the timelock.
@@ -631,7 +639,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         MockPool wrongPool = new MockPool(address(newToken), address(notUsdc));
 
         bytes memory callData = abi.encodeCall(
-            BasketVault.addAsset, (address(newToken), address(wrongPool), 3000, address(0))
+            BasketVault.addAsset,
+            (address(newToken), address(wrongPool), 3000, address(0), BasketVault.Venue.V3)
         );
 
         bytes32 salt = keccak256("wrong-pair-salt");
