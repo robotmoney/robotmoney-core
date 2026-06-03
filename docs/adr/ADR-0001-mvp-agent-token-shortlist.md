@@ -26,15 +26,21 @@ For the MVP, the agent-token vault shortlist is **hand-picked by the
 product owner** and **equal-weighted** at deposit time. The MVP
 shortlist is:
 
-- JUNO
-- ROBOTMONEY
-- BANKR
-- ZYFAI
-- GIZA
-- DEUS
+- JUNO (`0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07`)
+- Woon (`0x85eac631c800af804476b140f87039f742c28ba3`)
+- ZYFAI (`0xd080ed3c74a20250a2c9821885203034acd2d5ae`)
+- GIZA (`0x590830dfdf9a3f68afcdde2694773debdf267774`)
 
-PEAQ was considered but excluded because it does not live on Base; the
-vault is Base-only by deployment.
+Tokens excluded from the shortlist and rationale:
+
+- **ROBOTMONEY** — the protocol's own token; including it in the vault
+  creates a self-referential conflict of interest.
+- **BANKR / BNKR** — not on the live product allocation; dropped.
+- **DEUS** — no active Base presence; dropped.
+- **PEAQ** — not native to Base; the vault is Base-only by deployment.
+
+Pool addresses (Uniswap V3 USDC pairs) must be confirmed per-token
+before mainnet deploy; see `config/agent-token-shortlist.json`.
 
 Changes to the shortlist (add, remove, swap) flow through the existing
 admin path: a Safe (≥2-of-N) proposes/executes against the
