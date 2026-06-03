@@ -1,5 +1,5 @@
 # IUniswapV3Pool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/interfaces/IUniswapV3Pool.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60363b48a75d8bae8417fc6771b479b3f86ed62c/contracts/interfaces/IUniswapV3Pool.sol)
 
 Minimal Uniswap V3 Pool interface used for slot0 pricing and
 TWAP reads via `observe()`.
@@ -18,19 +18,6 @@ function token0() external view returns (address);
 
 ```solidity
 function token1() external view returns (address);
-```
-
-### liquidity
-
-The in-range liquidity available to the pool.
-
-This value does not include out-of-range concentrated liquidity
-positions. Used by `BasketVault.addAsset` to enforce a minimum-
-liquidity floor before activating an asset.
-
-
-```solidity
-function liquidity() external view returns (uint128);
 ```
 
 ### slot0

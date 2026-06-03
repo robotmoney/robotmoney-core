@@ -1,5 +1,5 @@
 # DeployRouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60363b48a75d8bae8417fc6771b479b3f86ed62c/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:**
 Script

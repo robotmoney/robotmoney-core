@@ -1,5 +1,5 @@
 # MockPoolForGuards
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/60363b48a75d8bae8417fc6771b479b3f86ed62c/contracts/test/ConfusedDeputyGuards.t.sol)
 
 Uniswap V3 pool stub. token0/token1 are set at construction.
 observe() returns linear tick cumulative (tick rate 0 → 1:1 price).
@@ -29,13 +29,6 @@ uint16 public cardinality
 ```
 
 
-### poolLiquidity
-
-```solidity
-uint128 public poolLiquidity
-```
-
-
 ## Functions
 ### constructor
 
@@ -49,20 +42,6 @@ constructor(address token0_, address token1_) ;
 
 ```solidity
 function setCardinality(uint16 c) external;
-```
-
-### setLiquidity
-
-
-```solidity
-function setLiquidity(uint128 l) external;
-```
-
-### liquidity
-
-
-```solidity
-function liquidity() external view returns (uint128);
 ```
 
 ### slot0
