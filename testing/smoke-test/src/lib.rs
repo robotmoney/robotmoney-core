@@ -1374,59 +1374,58 @@ impl Fixture {
 
     /// Seed `count` deterministic simulated-depositor EOAs by funding each
     /// with `per_user_usdc` USDC and a small amount of ETH (for gas), then
-    /// having each EOA route a USDC deposit through `PortfolioRouter` so the
-    /// resulting share balances spread across all three demo vaults
-    /// (issue #465).
+    /// having each EOA deposit directly into the primary `RobotMoneyVault`
+    /// (§11.1) via ERC-4626 `deposit(uint256,address)` (issue #465, #559).
+    ///
+    /// Why direct-vault deposit (not PortfolioRouter): after issue #559 the
+    /// router weight vector includes `ProtocolAssetVault` (§11.2, rmPROTO) at
+    /// 5 000 bps. Deposits into that vault require real Uniswap V3 swap
+    /// infrastructure (USDC → basket-token swaps). The devnet has no real swap
+    /// router — only `UniswapV3PoolSlot0Stub` contracts for the dapp price
+    /// strip — so a router-routed deposit would revert with "execution reverted"
+    /// on the ProtocolAssetVault leg. The primary `RobotMoneyVault` uses a
+    /// `PassthroughAdapter` and accepts deposits without any swap, so seeding
+    /// it directly is safe and keeps TVL non-zero for the dapp's first-visitor
+    /// experience. The router and registry still reflect the production state
+    /// (rmPROTO router-eligible, two-leg weight vector).
     ///
     /// Returns the list of `(depositor_address, deposit_tx_hash)` pairs. The
     /// keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed
     /// is reproducible across runs and keys never collide with the harness
     /// EOAs (deployer / pauser / agent / share-receiver / USDC holder).
-    ///
-    /// Each depositor approves the router for exactly `per_user_usdc`, then
-    /// calls `deposit(uint256,uint256[])` with an empty `minSharesPerLeg`
-    /// (slippage protection skipped — this is a deterministic demo seed, not
-    /// a production deposit). Router math splits the USDC across the active
-    /// weight vector and mints shares for each vault back to msg.sender, so
-    /// summing the depositors' per-vault `balanceOf` equals each vault's
-    /// `totalAssets` by construction.
     pub fn seed_demo_depositors(
         &self,
         count: u32,
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
         let mut out = Vec::with_capacity(count as usize);
-        let router_hex = format!("{:#x}", self.router());
+        let vault_hex = format!("{:#x}", self.vault());
         for i in 0..count {
             let (pk_hex, depositor) = demo_depositor_key(i);
+            let depositor_hex = format!("{depositor:#x}");
 
             // 1. Fund gas (small — single approve + single deposit). 0.05 ETH
             //    is comfortably above the worst-case deposit cost.
-            fund_eth_from_deployer(
-                &self.rpc_url,
-                &format!("{depositor:#x}"),
-                "50000000000000000",
-            )?;
+            fund_eth_from_deployer(&self.rpc_url, &depositor_hex, "50000000000000000")?;
 
             // 2. Fund USDC via the canonical harness ERC-20 transfer.
             self.fund_usdc(depositor, per_user_usdc)?;
 
-            // 3. Approve the router for the full deposit amount.
+            // 3. Approve the primary vault for the full deposit amount.
             self.cast_send(
                 &pk_hex,
                 self.usdc(),
                 "approve(address,uint256)",
-                &[&router_hex, &per_user_usdc.to_string()],
+                &[&vault_hex, &per_user_usdc.to_string()],
             )?;
 
-            // 4. Route the deposit. Empty `minSharesPerLeg` skips slippage
-            //    guard — fine for the demo seed against passthrough adapters
-            //    where shares are exact and deterministic.
+            // 4. Deposit directly into the primary RobotMoneyVault (ERC-4626).
+            //    Shares go back to the depositor (msg.sender).
             let tx = self.cast_send(
                 &pk_hex,
-                self.router(),
-                "deposit(uint256,uint256[])",
-                &[&per_user_usdc.to_string(), "[]"],
+                self.vault(),
+                "deposit(uint256,address)",
+                &[&per_user_usdc.to_string(), &depositor_hex],
             )?;
 
             out.push((depositor, tx));
