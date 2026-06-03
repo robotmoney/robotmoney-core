@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0f44df6c1ea9643363189d9e52250db5bd47a617/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e3ee0bd75d52506549a0416bdd36e7e170b4b50b/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -208,6 +208,9 @@ function _doDeploy(Params memory p) internal returns (Deployed memory d);
 Phase 1: deploy all vaults, stubs, and adapters.
 Returns addresses bundled in `_VaultAddrs` to keep the caller
 stack under 16 slots.
+Router stubs + swap adapters (V3/V4/Aerodrome) are collapsed into
+a single `AgentBasketStubDeployer` CREATE to minimise on-chain tx
+count and keep smoke-test devnet boot under the 30m CI budget.
 
 
 ```solidity

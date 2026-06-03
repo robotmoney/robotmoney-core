@@ -154,18 +154,38 @@ contract DemoAerodromeRouter {
 }
 
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket
-///         stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens).
-///         Its constructor performs all 6 sub-`CREATE`s (three `DemoBasketToken` +
-///         three `DemoUsdcPool`) in a single broadcaster transaction. The script
-///         then makes one `vault.addAsset(...)` call per token with the per-asset
-///         venue selection (BNKR→V3, JUNO→V4, ROBOTMONEY→Aerodrome). Demo-only.
+///         stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+///         AND the per-asset swap router stubs + adapters. Its constructor performs
+///         all 11 sub-CREATEs in a single broadcaster transaction:
+///           - 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+///           - 3 × DemoUsdcPool
+///           - DemoV3SwapRouter (BNKR built-in path)
+///           - DemoV4SwapRouter (JUNO V4 path)
+///           - DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+///           - UniswapV4SwapAdapter (JUNO)
+///           - AerodromeSwapAdapter (ROBOTMONEY)
+///         Collapsed into one broadcaster CREATE to minimize on-chain tx count
+///         and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 contract AgentBasketStubDeployer {
     DemoBasketToken[3] public tokens;
     DemoUsdcPool[3] public pools;
+    address public v3Router;
+    address public v4Adapter;
+    address public aeroAdapter;
 
     string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"];
 
     constructor(address usdc) {
+        // Deploy router stubs first so adapters can reference them.
+        DemoV3SwapRouter v3 = new DemoV3SwapRouter();
+        DemoV4SwapRouter v4Router = new DemoV4SwapRouter();
+        DemoAerodromeRouter aeroRouter = new DemoAerodromeRouter();
+
+        v3Router = address(v3);
+        v4Adapter = address(new UniswapV4SwapAdapter(address(v4Router)));
+        aeroAdapter =
+            address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter), false));
+
         for (uint256 i = 0; i < 3; i++) {
             DemoBasketToken token = new DemoBasketToken(
                 string.concat("Demo Agent ", AGENT_SYMBOLS_3[i]), AGENT_SYMBOLS_3[i]
@@ -446,16 +466,31 @@ contract DeployDemoExtraVaults is Script {
     /// @dev Phase 1: deploy all vaults, stubs, and adapters.
     ///      Returns addresses bundled in `_VaultAddrs` to keep the caller
     ///      stack under 16 slots.
+    ///
+    ///      Router stubs + swap adapters (V3/V4/Aerodrome) are collapsed into
+    ///      a single `AgentBasketStubDeployer` CREATE to minimise on-chain tx
+    ///      count and keep smoke-test devnet boot under the 30m CI budget.
     function _deployVaults(Params memory p) internal returns (_VaultAddrs memory v) {
-        // Demo V3 router stub replaces the real Uniswap V3 SwapRouter02 so
-        // that V3-venue assets (BNKR) can execute deposit swaps on devnet.
-        address demoV3Router = address(new DemoV3SwapRouter());
+        // Collapse all agent basket stubs + router stubs + adapters into one
+        // broadcaster CREATE. The batch deployer sets its own v3Router, then
+        // uses it as the swapRouter for the downstream vault contracts.
+        AgentBasketStubDeployer agentBatch = new AgentBasketStubDeployer(p.usdc);
 
         ProtocolVaultBatchDeployer batchA = new ProtocolVaultBatchDeployer(
-            p.usdc, p.admin, p.emergencyResponder, demoV3Router, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
+            p.usdc,
+            p.admin,
+            p.emergencyResponder,
+            agentBatch.v3Router(),
+            DEMO_TVL_CAP,
+            DEMO_PER_DEPOSIT_CAP
         );
         DemoAgentRwaBatchDeployer batchB = new DemoAgentRwaBatchDeployer(
-            p.usdc, p.admin, p.emergencyResponder, demoV3Router, DEMO_TVL_CAP, DEMO_PER_DEPOSIT_CAP
+            p.usdc,
+            p.admin,
+            p.emergencyResponder,
+            agentBatch.v3Router(),
+            DEMO_TVL_CAP,
+            DEMO_PER_DEPOSIT_CAP
         );
 
         v.protocolVault = address(batchA.protocolVault());
@@ -463,13 +498,9 @@ contract DeployDemoExtraVaults is Script {
         v.agentVault = address(batchB.agentVault());
 
         v.protocolStubs = address(new ProtocolBasketStubDeployer(PROTOCOL_SYMBOLS, p.usdc));
-        v.agentStubs = address(new AgentBasketStubDeployer(p.usdc));
-
-        // Deploy multi-DEX adapters for JUNO (V4) and ROBOTMONEY (Aerodrome).
-        address demoV4Router = address(new DemoV4SwapRouter());
-        address demoAeroRouter = address(new DemoAerodromeRouter());
-        v.v4Adapter = address(new UniswapV4SwapAdapter(demoV4Router));
-        v.aeroAdapter = address(new AerodromeSwapAdapter(demoAeroRouter, demoAeroRouter, false));
+        v.agentStubs = address(agentBatch);
+        v.v4Adapter = agentBatch.v4Adapter();
+        v.aeroAdapter = agentBatch.aeroAdapter();
     }
 
     /// @dev Phase 2: seed baskets, register vaults, set router eligibility

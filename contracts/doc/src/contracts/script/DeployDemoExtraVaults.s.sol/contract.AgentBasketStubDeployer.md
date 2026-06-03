@@ -1,12 +1,19 @@
 # AgentBasketStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0f44df6c1ea9643363189d9e52250db5bd47a617/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e3ee0bd75d52506549a0416bdd36e7e170b4b50b/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the AgentTokenVault devnet basket
-stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens).
-Its constructor performs all 6 sub-`CREATE`s (three `DemoBasketToken` +
-three `DemoUsdcPool`) in a single broadcaster transaction. The script
-then makes one `vault.addAsset(...)` call per token with the per-asset
-venue selection (BNKR→V3, JUNO→V4, ROBOTMONEY→Aerodrome). Demo-only.
+stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+AND the per-asset swap router stubs + adapters. Its constructor performs
+all 11 sub-CREATEs in a single broadcaster transaction:
+- 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+- 3 × DemoUsdcPool
+- DemoV3SwapRouter (BNKR built-in path)
+- DemoV4SwapRouter (JUNO V4 path)
+- DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+- UniswapV4SwapAdapter (JUNO)
+- AerodromeSwapAdapter (ROBOTMONEY)
+Collapsed into one broadcaster CREATE to minimize on-chain tx count
+and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 
 
 ## State Variables
@@ -21,6 +28,27 @@ DemoBasketToken[3] public tokens
 
 ```solidity
 DemoUsdcPool[3] public pools
+```
+
+
+### v3Router
+
+```solidity
+address public v3Router
+```
+
+
+### v4Adapter
+
+```solidity
+address public v4Adapter
+```
+
+
+### aeroAdapter
+
+```solidity
+address public aeroAdapter
 ```
 
 
