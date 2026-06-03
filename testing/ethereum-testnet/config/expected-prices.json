@@ -3,7 +3,7 @@
   "fork_block": 46698556,
   "chain": "base",
   "tolerance_pct": 0.01,
-  "$capture_note": "expected_price values are captured by booting the forked-Base devnet (or anvil against a Base archive RPC) at fork_block and reading each pool's slot0, then applying testing/fork-e2e-rust price conversion. Refresh with scripts/devnet/snapshot-fork.sh whenever the fork block is bumped. When `captured` is false the fork integration test reads slot0 and records the live value but does not assert the magnitude (it still asserts the pool exists); flip `captured` to true after pinning real values against an archive RPC.",
+  "$capture_note": "expected_price values are captured by booting an Anvil fork at fork_block against a Base archive RPC (set RMPC_FORK_RPC_URL to an archive node — public RPCs like publicnode.com prune state older than ~128 blocks and will fail with 'state is pruned'). Run: cast call <pool> 'slot0()(uint160,int24,uint16,uint16,uint16,uint8,bool)' --rpc-url $RMPC_FORK_RPC_URL --block <fork_block> for each pair, decode sqrtPriceX96 using the sqrt_price_x96_to_price logic in testing/fork-e2e-rust/tests/landing_price_strip_fork.rs (rawRatio = (sqrtPriceX96/2^96)^2 * 10^(token0_decimals-token1_decimals), then invert if base_is_token0==false). Update each pair's expected_price and flip its captured flag to true. Also run scripts/devnet/snapshot-fork.sh to refresh the Anvil fork-state fixture when the fork block is bumped. The CI guard fork_block_aligns_with_expected_prices (testing/smoke-test/src/fork_manifest.rs) fails if fork_block drifts. When captured is false the fork integration test reads slot0 and records the live value but does not assert the magnitude (it still asserts the pool exists).",
   "captured": true,
   "$pinned_on_archive_fork_note": "When true, the freshness-chip Playwright test asserts block >= fork_block (the devnet is an Anvil or Geth chain that continues from the fork point). When false, only asserts block > 0. The Geth+Lighthouse smoke-test devnet boots from genesis (block 0) even when the fork state is ingested from block 46698556, so the freshness-chip test can only assert block > 0 — set this to false to avoid a spurious >= 46698556 assertion.",
   "pinned_on_archive_fork": false,
@@ -15,6 +15,7 @@
       "base_decimals": 18,
       "quote_decimals": 6,
       "base_is_token0": true,
+      "captured": true,
       "expected_price": 2020.74
     },
     {
@@ -24,6 +25,7 @@
       "base_decimals": 18,
       "quote_decimals": 6,
       "base_is_token0": true,
+      "captured": true,
       "expected_price": 2020.74
     },
     {
@@ -33,6 +35,7 @@
       "base_decimals": 8,
       "quote_decimals": 6,
       "base_is_token0": false,
+      "captured": true,
       "expected_price": 73813.96
     },
     {
@@ -42,6 +45,7 @@
       "base_decimals": 9,
       "quote_decimals": 6,
       "base_is_token0": true,
+      "captured": true,
       "expected_price": 219.96
     }
   ]

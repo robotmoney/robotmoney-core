@@ -428,6 +428,45 @@ mod tests {
         assert_eq!(m.harness_usdc_holder, expected);
     }
 
+    /// CI guard for issue #557: every pair in the expected-prices fixture must
+    /// have `captured: true` and a non-null `expected_price` so that the fork
+    /// integration test's magnitude assertions are active for all pairs. A
+    /// pair with `captured: false` or `expected_price: null` silently disables
+    /// the price-drift assertion for that pair, hiding stale fixture values.
+    /// See docs/prd.md#112-protocol-asset-vault.
+    #[test]
+    fn all_pairs_captured_and_priced() {
+        let repo = crate::locate_repo_root().expect("locate repo root");
+        let fixture_raw = std::fs::read_to_string(
+            repo.join("testing/ethereum-testnet/config/expected-prices.json"),
+        )
+        .expect("expected-prices.json readable");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&fixture_raw).expect("expected-prices.json parses");
+
+        let pairs = fixture["pairs"]
+            .as_array()
+            .expect("expected-prices.json pairs is an array");
+        assert!(
+            !pairs.is_empty(),
+            "expected-prices.json must have at least one pair"
+        );
+
+        for pair in pairs {
+            let id = pair["id"].as_str().unwrap_or("<unknown>");
+            assert!(
+                pair["captured"].as_bool() == Some(true),
+                "pair {id}: captured must be true (run scripts/devnet/snapshot-fork.sh \
+                 against a Base archive RPC and update expected_price + captured per pair)"
+            );
+            assert!(
+                pair["expected_price"].as_f64().is_some(),
+                "pair {id}: expected_price must be a non-null number (run \
+                 scripts/devnet/snapshot-fork.sh against a Base archive RPC)"
+            );
+        }
+    }
+
     /// CI guard for issue #482: the landing-page price-strip expected-prices
     /// fixture (`testing/ethereum-testnet/config/expected-prices.json`) is
     /// pinned to the fork-block manifest. If the fork block is bumped without
