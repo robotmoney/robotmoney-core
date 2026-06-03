@@ -394,15 +394,15 @@ subclass must not be added to the Portfolio Router weight vector.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Exposure | Admin-curated basket of agent-economy tokens via Uniswap V3 swaps |
-| Agent shortlist | BNKR, JUNO, ROBOTMONEY (Base-liquid set) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
+| MVP shortlist | JUNO, Woon, ZYFAI, GIZA (Base-chain only) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
 | Allocation model | Equal-weight across shortlisted tokens at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
 | Status | Router-eligible after hardening gates (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with a fixed
-three-token equal-weighted basket: BNKR, JUNO, ROBOTMONEY (Base-liquid
-set; see ADR-0001). Changes flow through the Safe → Timelock →
+four-token equal-weighted basket: JUNO, Woon, ZYFAI, GIZA (Base-chain
+only; see ADR-0001). Changes flow through the Safe → Timelock →
 `ADMIN_ROLE` path; there is no token-holder vote over shortlist
 membership in the MVP. The production model (bribery-based or RM-token
 inclusion vote) is deferred past MVP. TWAP pricing is shipped via the
@@ -419,7 +419,7 @@ being satisfied and formally certified for a given deployment:
 4. **Shortlist-governance gate** — the shortlist governance model (admin
    path for MVP, deferred on-chain vote for production) is specified in
    a merged ADR; the deployed shortlist consists exclusively of the
-   Base-liquid set {BNKR, JUNO, ROBOTMONEY}.
+   Base-chain set {JUNO, Woon, ZYFAI, GIZA}.
 
 Until all four gates are certified for a given deployment, the vault
 subclass must not be added to the Portfolio Router weight vector.

@@ -1,13 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Canonical MVP AgentTokenVault shortlist (ADR-0001). Six equal-weight, Base-only agent-economy tokens curated by ADMIN_ROLE. Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployAgentTokenVault.s.sol) selects `mainnet` vs `devnet` by chain id. PEAQ is intentionally excluded (not native to Base). Each entry pairs the token with the Uniswap V3 USDC pool used for swaps/NAV; `pool` and `swapFee` must be populated before a mainnet deploy. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
+  "description": "Canonical MVP AgentTokenVault shortlist (ADR-0001). Four equal-weight, Base-only agent-economy tokens curated by ADMIN_ROLE. Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployAgentTokenVault.s.sol) selects `mainnet` vs `devnet` by chain id. ROBOTMONEY (protocol's own token), BANKR, DEUS, and PEAQ are intentionally excluded — see ADR-0001 for rationale. Each entry pairs the token with the pool used for swaps/NAV; `pool` and `swapFee` must be populated before a mainnet deploy. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
   "tokens": [
     "JUNO",
-    "ROBOTMONEY",
-    "BANKR",
+    "WOON",
     "ZYFAI",
-    "GIZA",
-    "DEUS"
+    "GIZA"
   ],
   "mainnet": {
     "chain_id": 8453,
@@ -15,45 +13,31 @@
     "shortlist": [
       {
         "symbol": "JUNO",
-        "token": "0x0000000000000000000000000000000000000000",
+        "token": "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet JUNO token + USDC V3 pool before mainnet deploy"
+        "note": "TODO: confirm Base mainnet JUNO/USDC V3 pool address before mainnet deploy"
       },
       {
-        "symbol": "ROBOTMONEY",
-        "token": "0x0000000000000000000000000000000000000000",
+        "symbol": "WOON",
+        "token": "0x85eac631c800af804476b140f87039f742c28ba3",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: wire deployed RmToken address (clients/dapp VITE_RM_TOKEN_ADDRESS) + USDC V3 pool"
-      },
-      {
-        "symbol": "BANKR",
-        "token": "0x0000000000000000000000000000000000000000",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet BANKR token + USDC V3 pool before mainnet deploy"
+        "note": "TODO: confirm Base mainnet WOON/USDC V3 pool address before mainnet deploy"
       },
       {
         "symbol": "ZYFAI",
-        "token": "0x0000000000000000000000000000000000000000",
+        "token": "0xd080ed3c74a20250a2c9821885203034acd2d5ae",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet ZYFAI token + USDC V3 pool before mainnet deploy"
+        "note": "TODO: confirm Base mainnet ZYFAI/USDC V3 pool address before mainnet deploy"
       },
       {
         "symbol": "GIZA",
-        "token": "0x0000000000000000000000000000000000000000",
+        "token": "0x590830dfdf9a3f68afcdde2694773debdf267774",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet GIZA token + USDC V3 pool before mainnet deploy"
-      },
-      {
-        "symbol": "DEUS",
-        "token": "0x0000000000000000000000000000000000000000",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet DEUS token + USDC V3 pool before mainnet deploy"
+        "note": "TODO: confirm Base mainnet GIZA/USDC V3 pool address before mainnet deploy"
       }
     ]
   },
