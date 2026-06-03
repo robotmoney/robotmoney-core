@@ -26,10 +26,15 @@ contract MockPool {
     address public immutable token0;
     address public immutable token1;
     uint16 public cardinality = 100;
+    uint128 public poolLiquidity = 1e18; // large default so all existing tests pass unmodified
 
     constructor(address token0_, address token1_) {
         token0 = token0_;
         token1 = token1_;
+    }
+
+    function liquidity() external view returns (uint128) {
+        return poolLiquidity;
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {

@@ -29,6 +29,7 @@ contract MockPool {
     uint160 public sqrtPriceX96Spot; // mutable so tests can simulate manipulation
     int56 public tickCumulativeRate; // ticks per second contributed to TWAP
     uint16 public cardinality;
+    uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
         token0 = token0_;
@@ -38,6 +39,7 @@ contract MockPool {
         // when tickCumulativeRate=0. Tests override as needed.
         tickCumulativeRate = 0;
         cardinality = 100;
+        poolLiquidity = 1e18; // large default so existing tests pass unmodified
     }
 
     function setSpot(uint160 sqrtPriceX96_) external {
@@ -50,6 +52,14 @@ contract MockPool {
 
     function setCardinality(uint16 cardinality_) external {
         cardinality = cardinality_;
+    }
+
+    function setLiquidity(uint128 liquidity_) external {
+        poolLiquidity = liquidity_;
+    }
+
+    function liquidity() external view returns (uint128) {
+        return poolLiquidity;
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
@@ -834,6 +844,41 @@ contract BasketVaultTest is Test {
         // totalAssets() must not revert after valid addAsset().
         uint256 nav = vault.totalAssets();
         assertGe(nav, 0, "totalAssets returned without revert");
+    }
+
+    // ─── Pool minimum-liquidity gate on addAsset (issue #551) ─────────
+
+    /// @notice addAsset() reverts with InsufficientPoolLiquidity when the
+    ///         pool's in-range liquidity is below MIN_POOL_LIQUIDITY.
+    function test_addAsset_revertsWhenPoolLiquidityBelowMinimum() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool thinPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        // Set liquidity below the minimum. MIN_POOL_LIQUIDITY = 1e6; use 0 (empty pool).
+        thinPool.setLiquidity(0);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BasketVault.InsufficientPoolLiquidity.selector,
+                address(thinPool),
+                vault.MIN_POOL_LIQUIDITY(),
+                uint128(0)
+            )
+        );
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(thinPool), 500);
+    }
+
+    /// @notice addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
+    function test_addAsset_succeedsWhenPoolLiquidityMeetsMinimum() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool deepPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        // Set liquidity exactly at the minimum floor.
+        deepPool.setLiquidity(vault.MIN_POOL_LIQUIDITY());
+
+        vm.prank(admin);
+        vault.addAsset(address(newAsset), address(deepPool), 500);
+
+        assertEq(vault.assetCount(), 2, "asset registered when liquidity sufficient");
     }
 
     /// @notice Fuzz: addAsset() reverts exactly when pool cardinality is below
