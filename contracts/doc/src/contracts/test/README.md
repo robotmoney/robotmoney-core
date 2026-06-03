@@ -14,6 +14,7 @@
 - [MockSwapRouter](BasketVault.t.sol/contract.MockSwapRouter.md)
 - [BasketVaultHarness](BasketVault.t.sol/contract.BasketVaultHarness.md)
 - [BasketVaultTest](BasketVault.t.sol/contract.BasketVaultTest.md)
+- [BasketVaultRebalanceTest](BasketVault.t.sol/contract.BasketVaultRebalanceTest.md)
 - [MockPoolForGuards](ConfusedDeputyGuards.t.sol/contract.MockPoolForGuards.md)
 - [MockSwapRouterForGuards](ConfusedDeputyGuards.t.sol/contract.MockSwapRouterForGuards.md)
 - [BasketVaultHarnessForGuards](ConfusedDeputyGuards.t.sol/contract.BasketVaultHarnessForGuards.md)
