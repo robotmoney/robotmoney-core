@@ -9,3 +9,5 @@
 - [IStrategyAdapter](IStrategyAdapter.sol/interface.IStrategyAdapter.md)
 - [ISwapRouter](ISwapRouter.sol/interface.ISwapRouter.md)
 - [IUniswapV3Pool](IUniswapV3Pool.sol/interface.IUniswapV3Pool.md)
+- [IUniswapV4Pool](IUniswapV4Pool.sol/interface.IUniswapV4Pool.md)
+- [IUniswapV4SwapRouter](IUniswapV4SwapRouter.sol/interface.IUniswapV4SwapRouter.md)
