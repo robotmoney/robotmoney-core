@@ -201,6 +201,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      the asset, then wait until the pool has accumulated enough
     ///      observations to cover the full window before depositing.
     error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
+    /// @dev Raised by addAsset() when the pool's in-range liquidity (as
+    ///      returned by `IUniswapV3Pool.liquidity()`) is below
+    ///      `MIN_POOL_LIQUIDITY`. Thin pools cannot guarantee synchronous
+    ///      withdrawal at the TWAP-derived slippage bound — a core router-
+    ///      eligibility requirement (gap-report §1). Provide depth before
+    ///      registering the asset.
+    error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -581,6 +588,20 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         deposits, and withdrawals for the entire basket.
     uint16 public constant MIN_POOL_CARDINALITY = 2;
 
+    /// @notice Minimum in-range Uniswap V3 pool liquidity required when
+    ///         registering an asset via addAsset(). Pools below this floor
+    ///         cannot absorb vault-sized trades without exceeding the
+    ///         configured slippage bound, which would leave depositors unable
+    ///         to exit synchronously — a blocking router-eligibility gap
+    ///         (basket-vault-gap-report.md §1). Callers must seed pool depth
+    ///         before calling addAsset.
+    ///
+    ///         The value of 1e6 is a conservative floor that rejects completely
+    ///         empty or dust-seeded pools while being easy for integration tests
+    ///         to satisfy with a small seed. Production operators are expected
+    ///         to seed pools well above this floor before activating assets.
+    uint128 public constant MIN_POOL_LIQUIDITY = 1e6;
+
     /// @notice Register a new basket asset. Restricted to ADMIN_ROLE.
     /// @param token_   ERC-20 token address.
     /// @param pool_    Uniswap V3 pool pairing `token_` with USDC (either token0 or token1).
@@ -608,6 +629,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         (,,, uint16 observationCardinality,,,) = IUniswapV3Pool(pool_).slot0();
         if (observationCardinality < MIN_POOL_CARDINALITY) {
             revert InsufficientPoolCardinality(pool_, MIN_POOL_CARDINALITY, observationCardinality);
+        }
+        // Verify that the pool has sufficient in-range liquidity to absorb
+        // vault-sized trades within the configured slippage bound. Thin pools
+        // break the synchronous-redemption guarantee (gap-report §1).
+        uint128 poolLiquidity = IUniswapV3Pool(pool_).liquidity();
+        if (poolLiquidity < MIN_POOL_LIQUIDITY) {
+            revert InsufficientPoolLiquidity(pool_, MIN_POOL_LIQUIDITY, poolLiquidity);
         }
         assets.push(AssetInfo({token: token_, pool: pool_, swapFee: swapFee_, active: true}));
         emit AssetAdded(assets.length - 1, token_, pool_, swapFee_);
