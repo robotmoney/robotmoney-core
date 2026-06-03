@@ -30,9 +30,9 @@ This document tracks only the questions that are **still open and product/engine
 
 **Trading authority and strategy (§3.2).** Specify trading strategy, position-sizing rules, stop-loss enforcement, and real-time NAV loss reporting *if* an agent component is reintroduced to the agent-token vault. Not live in the MVP shortlist model (admin-curated, equal-weighted, no agent trading); question needs reframing with the product owner before any engineering work.
 
-**Intra-vault rebalancing (§3.15).** The working direction is "new-deposits-only" rebalancing — when target weights change, only incremental deposits route at the new weights; existing positions are never sold. Zero swap cost, but per-depositor weight drift relative to the published target.
+**Intra-vault rebalancing (§3.15).** **Resolved** — see [ADR-0003](../adr/ADR-0003-basketvault-rebalancing-model.md) (2026-06-02).
 
-Open residual: which depositor-facing reporting surface does the PRD's transparent-performance requirement demand — (a) target weights, (b) aggregate realized weights across all depositors, or (c) per-depositor effective weights — and is (a) sufficient without (c)?
+Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigger = deposit; target = equal-weight; cost disclosure = `WeightSnapshot` event on every deposit + `previewDepositWeights` view + `realizedWeights(depositor)` view. The transparent-performance requirement is satisfied by exposing both (a) target weights and (c) per-depositor effective weights — option (a) alone is insufficient. A `rebalance()` stub with `NotImplemented()` revert reserves the selector for Phase B.
 
 ### 1.C Vault lifecycle and redemption
 
@@ -47,6 +47,6 @@ Open residual: which depositor-facing reporting surface does the PRD's transpare
 ## 2. Suggested resolution order
 
 1. **Router default-weight vector on-chain** — implement the admin-settable fallback per ADR-0002 and close §3.9.
-2. **Intra-vault rebalancing transparency** — pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15.
+2. **Intra-vault rebalancing transparency** — ~~pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15~~ **Closed** by ADR-0003.
 3. **Vault lifecycle residuals** — depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7); only the latter blocks marking a basket vault router-eligible.
 4. **Trading authority reframe (§3.2)** — product to reframe before any engineering work.
