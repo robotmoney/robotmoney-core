@@ -11,6 +11,7 @@ import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 
@@ -117,7 +118,13 @@ contract DeployAgentTokenVault is Script {
         d.vault = address(vault);
         d.tokens = new address[](entries.length);
         for (uint256 i = 0; i < entries.length; i++) {
-            vault.addAsset(entries[i].token, entries[i].pool, entries[i].swapFee, address(0));
+            vault.addAsset(
+                entries[i].token,
+                entries[i].pool,
+                entries[i].swapFee,
+                address(0),
+                BasketVault.Venue.V3
+            );
             d.tokens[i] = entries[i].token;
         }
 

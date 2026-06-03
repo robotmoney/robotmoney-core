@@ -14,6 +14,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 
 /// @notice Demo-only stand-in ERC20 for the basket-vault devnet seeds. The
@@ -411,7 +412,7 @@ contract DeployDemoExtraVaults is Script {
         for (uint256 i = 0; i < PROTOCOL_SYMBOLS.length; i++) {
             address token_ = address(seeder.tokens(i));
             address pool_ = address(seeder.pools(i));
-            vault.addAsset(token_, pool_, DEMO_PROTOCOL_SWAP_FEE, address(0));
+            vault.addAsset(token_, pool_, DEMO_PROTOCOL_SWAP_FEE, address(0), BasketVault.Venue.V3);
             tokens[i] = token_;
         }
     }
@@ -428,7 +429,7 @@ contract DeployDemoExtraVaults is Script {
         for (uint256 i = 0; i < AGENT_SYMBOLS.length; i++) {
             address token_ = address(seeder.tokens(i));
             address pool_ = address(seeder.pools(i));
-            vault.addAsset(token_, pool_, DEMO_AGENT_SWAP_FEE, address(0));
+            vault.addAsset(token_, pool_, DEMO_AGENT_SWAP_FEE, address(0), BasketVault.Venue.V3);
             tokens[i] = token_;
         }
     }

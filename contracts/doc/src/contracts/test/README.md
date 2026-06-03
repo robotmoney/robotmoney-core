@@ -23,6 +23,7 @@
 - [MockUniswapV4Router](BasketVault.t.sol/contract.MockUniswapV4Router.md)
 - [MockUniswapV4Pool](BasketVault.t.sol/contract.MockUniswapV4Pool.md)
 - [BasketVaultUniswapV4Test](BasketVault.t.sol/contract.BasketVaultUniswapV4Test.md)
+- [BasketVaultVenueSelectorTest](BasketVault.t.sol/contract.BasketVaultVenueSelectorTest.md)
 - [MockPoolForGuards](ConfusedDeputyGuards.t.sol/contract.MockPoolForGuards.md)
 - [MockSwapRouterForGuards](ConfusedDeputyGuards.t.sol/contract.MockSwapRouterForGuards.md)
 - [BasketVaultHarnessForGuards](ConfusedDeputyGuards.t.sol/contract.BasketVaultHarnessForGuards.md)
