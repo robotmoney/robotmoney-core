@@ -11,6 +11,7 @@
 //         issue #508 — emergencyUnwind uses live TWAP floor instead of stale minUsdcOut
 //         issue #553 — Aerodrome swap + TWAP adapter (IBasketSwapAdapter venue abstraction)
 //         issue #554 — Uniswap V4 swap + TWAP adapter (UniswapV4SwapAdapter)
+//         issue #555 — per-asset DEX venue selector (Venue enum on AssetInfo + addAsset)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -179,7 +180,7 @@ contract BasketVaultTest is Test {
         );
 
         vm.prank(admin);
-        vault.addAsset(address(basketToken), address(pool), 500, address(0));
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
     }
 
     function test_emergencyUnwind_revertsWhenRouterOutputBelowConfiguredMinimum() public {
@@ -275,7 +276,7 @@ contract BasketVaultTest is Test {
 
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(badPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public {
@@ -823,7 +824,9 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(lowCardPool), 500, address(0));
+        vault.addAsset(
+            address(newAsset), address(lowCardPool), 500, address(0), BasketVault.Venue.V3
+        );
     }
 
     /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
@@ -833,7 +836,7 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
 
         assertEq(vault.assetCount(), 2, "asset registered");
     }
@@ -846,7 +849,7 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(100);
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(goodPool), 500, address(0), BasketVault.Venue.V3);
 
         // totalAssets() must not revert after valid addAsset().
         uint256 nav = vault.totalAssets();
@@ -872,7 +875,7 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(thinPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(thinPool), 500, address(0), BasketVault.Venue.V3);
     }
 
     /// @notice addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
@@ -883,7 +886,7 @@ contract BasketVaultTest is Test {
         deepPool.setLiquidity(vault.MIN_POOL_LIQUIDITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(deepPool), 500, address(0));
+        vault.addAsset(address(newAsset), address(deepPool), 500, address(0), BasketVault.Venue.V3);
 
         assertEq(vault.assetCount(), 2, "asset registered when liquidity sufficient");
     }
@@ -912,10 +915,14 @@ contract BasketVaultTest is Test {
                 )
             );
             vm.prank(admin);
-            freshVault.addAsset(address(newAsset), address(fuzzPool), 500, address(0));
+            freshVault.addAsset(
+                address(newAsset), address(fuzzPool), 500, address(0), BasketVault.Venue.V3
+            );
         } else {
             vm.prank(admin);
-            freshVault.addAsset(address(newAsset), address(fuzzPool), 500, address(0));
+            freshVault.addAsset(
+                address(newAsset), address(fuzzPool), 500, address(0), BasketVault.Venue.V3
+            );
             assertEq(freshVault.assetCount(), 1, "asset registered when cardinality sufficient");
         }
     }
@@ -1246,8 +1253,8 @@ contract BasketVaultRebalanceTest is Test {
         );
 
         vm.startPrank(admin);
-        vault.addAsset(address(tokenA), address(poolA), 500, address(0));
-        vault.addAsset(address(tokenB), address(poolB), 500, address(0));
+        vault.addAsset(address(tokenA), address(poolA), 500, address(0), BasketVault.Venue.V3);
+        vault.addAsset(address(tokenB), address(poolB), 500, address(0), BasketVault.Venue.V3);
         vm.stopPrank();
     }
 
@@ -1534,7 +1541,13 @@ contract BasketVaultAerodromeTest is Test {
 
         // Register aeroToken with the Aerodrome adapter.
         vm.prank(admin);
-        vault.addAsset(address(aeroToken), address(aeroPool), 0, address(aeroAdapter));
+        vault.addAsset(
+            address(aeroToken),
+            address(aeroPool),
+            0,
+            address(aeroAdapter),
+            BasketVault.Venue.Aerodrome
+        );
     }
 
     // ─── AC1: Aerodrome swap path ──────────────────────────────────────────
@@ -1608,7 +1621,7 @@ contract BasketVaultAerodromeTest is Test {
         MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
 
         vm.prank(admin);
-        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0));
+        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3);
 
         uint256 depositAmount = 2_000 * ONE_USDC; // 2 assets → 1000 each
         uint256 routerOut = 990 * ONE_USDC;
@@ -1878,7 +1891,9 @@ contract BasketVaultUniswapV4Test is Test {
 
         // Register v4Token with the V4 adapter, fee tier 3000 (standard 0.3% pool).
         vm.prank(admin);
-        vault.addAsset(address(v4Token), address(v4Pool), 3000, address(v4Adapter));
+        vault.addAsset(
+            address(v4Token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
     }
 
     // ─── AC1: Uniswap V4 swap path ────────────────────────────────────────
@@ -1993,7 +2008,7 @@ contract BasketVaultUniswapV4Test is Test {
         MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
 
         vm.prank(admin);
-        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0));
+        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3);
 
         uint256 depositAmount = 2_000 * ONE_USDC; // 2 assets → 1000 each
         uint256 routerOut = 990 * ONE_USDC;
@@ -2160,6 +2175,435 @@ contract BasketVaultUniswapV4Test is Test {
             uint256 out = adapter.swap(address(ta), address(tb), fees[i], amtIn, 0, address(this));
             assertEq(out, amtOut, "swap succeeds for standard fee tier");
         }
+    }
+}
+
+// ─── Per-asset venue selector tests (issue #555) ──────────────────────────────
+
+/// @title BasketVaultVenueSelectorTest
+/// @notice Verifies that addAsset stores the Venue enum on AssetInfo and
+///         dispatches swap + TWAP through the matching adapter for all three
+///         venue types (V3, V4, Aerodrome).
+///         Acceptance criteria (issue #555):
+///         AC1 — addAsset accepts a venue selector and stores it on AssetInfo.
+///         AC2 — Swap and TWAP dispatch to the correct adapter per venue,
+///               including in emergency unwind.
+///         AC3 — Tests cover adding assets on V3, V4, and Aerodrome.
+contract BasketVaultVenueSelectorTest is Test {
+    uint256 internal constant ONE_USDC = 1e6;
+
+    event AssetAdded(
+        uint256 indexed index,
+        address indexed token,
+        address pool,
+        uint24 swapFee,
+        address adapter,
+        BasketVault.Venue venue
+    );
+
+    TestERC20 internal usdc;
+    MockSwapRouter internal v3Router;
+    MockUniswapV4Router internal v4Router;
+    MockAerodromeRouter internal aeroRouter;
+    BasketVaultHarness internal vault;
+
+    address internal admin = makeAddr("admin");
+    address internal emergencyResponder = makeAddr("emergencyResponder");
+    address internal stranger = makeAddr("stranger");
+    address internal fakeFactory = makeAddr("fakeFactory");
+
+    function setUp() public {
+        vm.warp(1_800_000); // ensure block.timestamp > DEFAULT_TWAP_WINDOW
+
+        usdc = new TestERC20();
+        v3Router = new MockSwapRouter();
+        v4Router = new MockUniswapV4Router();
+        aeroRouter = new MockAerodromeRouter();
+
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
+        );
+    }
+
+    // ─── AC1: venue stored on AssetInfo ──────────────────────────────────────
+
+    /// @notice addAsset with Venue.V3 stores Venue.V3 on AssetInfo and emits AssetAdded.
+    function test_addAsset_venueV3_storedOnAssetInfo() public {
+        TestERC20 token = new TestERC20();
+        MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit AssetAdded(0, address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+
+        vm.prank(admin);
+        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+
+        (
+            address storedToken,
+            address storedPool,
+            uint24 storedFee,
+            bool storedActive,
+            address storedAdapter,
+            BasketVault.Venue storedVenue
+        ) = vault.assets(0);
+        assertEq(storedToken, address(token), "V3: token stored");
+        assertEq(storedPool, address(mockPool), "V3: pool stored");
+        assertEq(storedFee, 500, "V3: fee stored");
+        assertTrue(storedActive, "V3: active");
+        assertEq(storedAdapter, address(0), "V3: adapter is zero");
+        assertEq(uint8(storedVenue), uint8(BasketVault.Venue.V3), "V3: venue stored as V3");
+    }
+
+    /// @notice addAsset with Venue.V4 stores Venue.V4 on AssetInfo and emits AssetAdded.
+    function test_addAsset_venueV4_storedOnAssetInfo() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
+        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit AssetAdded(
+            0, address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
+
+        (,,,,, BasketVault.Venue storedVenue) = vault.assets(0);
+        assertEq(uint8(storedVenue), uint8(BasketVault.Venue.V4), "V4: venue stored as V4");
+    }
+
+    /// @notice addAsset with Venue.Aerodrome stores Venue.Aerodrome on AssetInfo and emits AssetAdded.
+    function test_addAsset_venueAerodrome_storedOnAssetInfo() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockAerodromePool aeroPool = new MockAerodromePool(t0, t1);
+        AerodromeSwapAdapter aeroAdapter =
+            new AerodromeSwapAdapter(address(aeroRouter), fakeFactory, false);
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit AssetAdded(
+            0,
+            address(token),
+            address(aeroPool),
+            0,
+            address(aeroAdapter),
+            BasketVault.Venue.Aerodrome
+        );
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(aeroPool), 0, address(aeroAdapter), BasketVault.Venue.Aerodrome
+        );
+
+        (,,,,, BasketVault.Venue storedVenue) = vault.assets(0);
+        assertEq(
+            uint8(storedVenue),
+            uint8(BasketVault.Venue.Aerodrome),
+            "Aerodrome: venue stored as Aerodrome"
+        );
+    }
+
+    // ─── AC2: dispatch to correct adapter per venue ───────────────────────────
+
+    /// @notice V3 asset (venue=V3, adapter=address(0)) deposits via the V3 router.
+    function test_venueV3_deposit_routesThroughV3Router() public {
+        TestERC20 token = new TestERC20();
+        MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
+
+        vm.prank(admin);
+        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 routerOut = 995 * ONE_USDC;
+        usdc.mint(stranger, depositAmount);
+        token.mint(address(v3Router), routerOut);
+        v3Router.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertEq(
+            token.balanceOf(address(vault)), routerOut, "V3 venue: tokens deposited via V3 router"
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "no idle USDC after V3 deposit");
+    }
+
+    /// @notice V3 asset emergency unwind dispatches via the V3 router.
+    function test_venueV3_emergencyUnwind_routesThroughV3Router() public {
+        TestERC20 token = new TestERC20();
+        MockPool mockPool = new MockPool(address(token), address(usdc), uint160(1 << 96));
+
+        vm.prank(admin);
+        vault.addAsset(address(token), address(mockPool), 500, address(0), BasketVault.Venue.V3);
+
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 995 * ONE_USDC;
+        token.mint(address(vault), tokenAmount);
+        usdc.mint(address(v3Router), amountOut);
+        v3Router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(token), 900 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(token.balanceOf(address(vault)), 0, "V3 venue: token unwound via V3 router");
+        assertEq(usdc.balanceOf(address(vault)), amountOut, "V3 venue: USDC received via V3 router");
+    }
+
+    /// @notice V4 asset (venue=V4) deposits via the V4 adapter, not V3 router.
+    function test_venueV4_deposit_routesThroughV4Adapter() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
+        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
+
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 routerOut = 995 * ONE_USDC;
+        usdc.mint(stranger, depositAmount);
+        token.mint(address(v4Router), routerOut);
+        v4Router.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertEq(
+            token.balanceOf(address(vault)), routerOut, "V4 venue: tokens deposited via V4 adapter"
+        );
+        // V3 router must not have been touched.
+        assertEq(
+            usdc.allowance(address(vault), address(v3Router)),
+            0,
+            "V4 venue: no approval on V3 router"
+        );
+    }
+
+    /// @notice V4 asset emergency unwind dispatches via the V4 adapter.
+    function test_venueV4_emergencyUnwind_routesThroughV4Adapter() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(t0, t1);
+        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
+
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 995 * ONE_USDC;
+        token.mint(address(vault), tokenAmount);
+        usdc.mint(address(v4Router), amountOut);
+        v4Router.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(token), 900 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(token.balanceOf(address(vault)), 0, "V4 venue: token unwound via V4 adapter");
+        assertEq(
+            usdc.balanceOf(address(vault)), amountOut, "V4 venue: USDC received via V4 adapter"
+        );
+    }
+
+    /// @notice Aerodrome asset (venue=Aerodrome) deposits via the Aerodrome adapter.
+    function test_venueAerodrome_deposit_routesThroughAerodromeAdapter() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockAerodromePool aeroPool = new MockAerodromePool(t0, t1);
+        AerodromeSwapAdapter aeroAdapter =
+            new AerodromeSwapAdapter(address(aeroRouter), fakeFactory, false);
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(aeroPool), 0, address(aeroAdapter), BasketVault.Venue.Aerodrome
+        );
+
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 routerOut = 995 * ONE_USDC;
+        usdc.mint(stranger, depositAmount);
+        token.mint(address(aeroRouter), routerOut);
+        aeroRouter.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertEq(
+            token.balanceOf(address(vault)),
+            routerOut,
+            "Aerodrome venue: tokens deposited via Aerodrome"
+        );
+        assertEq(
+            usdc.allowance(address(vault), address(v3Router)),
+            0,
+            "Aerodrome venue: no approval on V3 router"
+        );
+    }
+
+    /// @notice Aerodrome asset emergency unwind dispatches via the Aerodrome adapter.
+    function test_venueAerodrome_emergencyUnwind_routesThroughAerodromeAdapter() public {
+        TestERC20 token = new TestERC20();
+        address t0 = address(token) < address(usdc) ? address(token) : address(usdc);
+        address t1 = address(token) < address(usdc) ? address(usdc) : address(token);
+        MockAerodromePool aeroPool = new MockAerodromePool(t0, t1);
+        AerodromeSwapAdapter aeroAdapter =
+            new AerodromeSwapAdapter(address(aeroRouter), fakeFactory, false);
+
+        vm.prank(admin);
+        vault.addAsset(
+            address(token), address(aeroPool), 0, address(aeroAdapter), BasketVault.Venue.Aerodrome
+        );
+
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        uint256 amountOut = 995 * ONE_USDC;
+        token.mint(address(vault), tokenAmount);
+        usdc.mint(address(aeroRouter), amountOut);
+        aeroRouter.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(token), 900 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(
+            token.balanceOf(address(vault)),
+            0,
+            "Aerodrome venue: token unwound via Aerodrome adapter"
+        );
+        assertEq(
+            usdc.balanceOf(address(vault)),
+            amountOut,
+            "Aerodrome venue: USDC received via Aerodrome adapter"
+        );
+    }
+
+    // ─── AC3: mixed-venue basket — venue values stored correctly ─────────────
+
+    /// @notice A three-asset basket (V3 + V4 + Aerodrome) stores all three venue
+    ///         values correctly on AssetInfo.
+    function test_mixedVenue_allVenueValuesStoredCorrectly() public {
+        BasketVaultHarness freshVault = _buildMixedVenueVault();
+        (,,,,, BasketVault.Venue venue0) = freshVault.assets(0);
+        (,,,,, BasketVault.Venue venue1) = freshVault.assets(1);
+        (,,,,, BasketVault.Venue venue2) = freshVault.assets(2);
+        assertEq(uint8(venue0), uint8(BasketVault.Venue.V3), "mixed: asset[0] venue is V3");
+        assertEq(uint8(venue1), uint8(BasketVault.Venue.V4), "mixed: asset[1] venue is V4");
+        assertEq(
+            uint8(venue2), uint8(BasketVault.Venue.Aerodrome), "mixed: asset[2] venue is Aerodrome"
+        );
+    }
+
+    /// @notice A three-asset basket deposits each portion through the correct router.
+    function test_mixedVenue_deposit_eachAssetDispatchedThroughCorrectRouter() public {
+        BasketVaultHarness freshVault = _buildMixedVenueVault();
+        _doMixedVenueDeposit(freshVault);
+    }
+
+    /// @dev Builds a fresh vault wired with V3 + V4 + Aerodrome assets.
+    ///      Extracted to avoid stack-too-deep in the deposit test.
+    function _buildMixedVenueVault() internal returns (BasketVaultHarness freshVault) {
+        freshVault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
+        );
+
+        // V3 asset
+        TestERC20 v3Token = new TestERC20();
+        MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
+
+        // V4 asset
+        TestERC20 v4Token = new TestERC20();
+        address v4t0 = address(v4Token) < address(usdc) ? address(v4Token) : address(usdc);
+        address v4t1 = address(v4Token) < address(usdc) ? address(usdc) : address(v4Token);
+        MockUniswapV4Pool v4Pool = new MockUniswapV4Pool(v4t0, v4t1);
+        UniswapV4SwapAdapter v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        // Aerodrome asset
+        TestERC20 aeroToken = new TestERC20();
+        address aero0 = address(aeroToken) < address(usdc) ? address(aeroToken) : address(usdc);
+        address aero1 = address(aeroToken) < address(usdc) ? address(usdc) : address(aeroToken);
+        MockAerodromePool aeroPool = new MockAerodromePool(aero0, aero1);
+        AerodromeSwapAdapter aeroAdapter =
+            new AerodromeSwapAdapter(address(aeroRouter), fakeFactory, false);
+
+        vm.startPrank(admin);
+        freshVault.addAsset(
+            address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3
+        );
+        freshVault.addAsset(
+            address(v4Token), address(v4Pool), 3000, address(v4Adapter), BasketVault.Venue.V4
+        );
+        freshVault.addAsset(
+            address(aeroToken),
+            address(aeroPool),
+            0,
+            address(aeroAdapter),
+            BasketVault.Venue.Aerodrome
+        );
+        vm.stopPrank();
+    }
+
+    /// @dev Performs a deposit on a mixed-venue vault, seeding all three routers,
+    ///      and asserts each asset was received.
+    function _doMixedVenueDeposit(BasketVaultHarness freshVault) internal {
+        // Read token addresses from vault.
+        (address v3TokenAddr,,,,,) = freshVault.assets(0);
+        (address v4TokenAddr,,,,,) = freshVault.assets(1);
+        (address aeroTokenAddr,,,,,) = freshVault.assets(2);
+
+        uint256 depositAmount = 3_000 * ONE_USDC;
+        uint256 routerOut = 990 * ONE_USDC;
+
+        usdc.mint(stranger, depositAmount);
+        TestERC20(v3TokenAddr).mint(address(v3Router), routerOut);
+        v3Router.setAmountOut(routerOut);
+        TestERC20(v4TokenAddr).mint(address(v4Router), routerOut);
+        v4Router.setAmountOut(routerOut);
+        TestERC20(aeroTokenAddr).mint(address(aeroRouter), routerOut);
+        aeroRouter.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(freshVault), depositAmount);
+        freshVault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertGt(
+            IERC20(v3TokenAddr).balanceOf(address(freshVault)),
+            0,
+            "mixed: v3Token received via V3 router"
+        );
+        assertGt(
+            IERC20(v4TokenAddr).balanceOf(address(freshVault)),
+            0,
+            "mixed: v4Token received via V4 adapter"
+        );
+        assertGt(
+            IERC20(aeroTokenAddr).balanceOf(address(freshVault)),
+            0,
+            "mixed: aeroToken received via Aerodrome"
+        );
     }
 }
 
