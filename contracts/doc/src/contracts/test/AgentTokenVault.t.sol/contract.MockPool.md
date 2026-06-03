@@ -1,5 +1,5 @@
 # MockPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/96e73e7f201b20e754dab9ca2f28b150e1238e85/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/test/AgentTokenVault.t.sol)
 
 Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
@@ -30,12 +30,26 @@ uint16 public cardinality = 100
 ```
 
 
+### poolLiquidity
+
+```solidity
+uint128 public poolLiquidity = 1e18
+```
+
+
 ## Functions
 ### constructor
 
 
 ```solidity
 constructor(address token0_, address token1_) ;
+```
+
+### liquidity
+
+
+```solidity
+function liquidity() external view returns (uint128);
 ```
 
 ### slot0
