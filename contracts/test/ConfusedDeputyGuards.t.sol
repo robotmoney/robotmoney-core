@@ -550,8 +550,12 @@ contract BasketVaultSwapGuardsTest is Test {
         vm.prank(user);
         uint256 assetsReceived = vault.redeem(shares, user, user);
 
+        // `redeem` returns `previewRedeem(shares)` — the worst-case slippage-adjusted
+        // floor — so `assetsReceived` is a lower bound, not the exact swap proceeds.
+        // The actual USDC credited to the redeemer must be ≥ that floor.
         assertGt(assetsReceived, 0, "assets received on redeem");
-        assertEq(usdc.balanceOf(user), assetsReceived, "USDC at redeemer");
+        assertGe(usdc.balanceOf(user), assetsReceived, "USDC at redeemer >= floor");
+        assertEq(usdc.balanceOf(user), usdcOut, "USDC at redeemer equals actual swap proceeds");
     }
 }
 

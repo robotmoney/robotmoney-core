@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/423bf4aec8aba7d6c7cd55373bad56163e077782/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f472e86b1dbfd5373d4ad4db0a93939bfff1d557/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -429,6 +429,47 @@ After emergencyUnwindAssetWithCap, residual token allowance on the router is zer
 
 ```solidity
 function test_emergencyUnwindAssetWithCap_zeroResidualAllowanceAfterSwap() public;
+```
+
+### test_previewRedeem_returnsSlippageAndFeeAdjustedFloor
+
+previewRedeem returns TWAP-minus-slippage-minus-exitFee floor.
+With tick=0 (1:1 price), 1 000 USDC of vault NAV, 1% maxSlippage, 0% fee:
+floor = 1 000 * 9 900/10 000 = 990 USDC.
+
+
+```solidity
+function test_previewRedeem_returnsSlippageAndFeeAdjustedFloor() public;
+```
+
+### test_previewRedeem_floorLeqActualSwapProceeds_underSlippage
+
+Actual redeem proceeds are >= previewRedeem when slippage < maxSlippageBps.
+This is the ERC-4626 guarantee: redeem must return at least previewRedeem.
+
+
+```solidity
+function test_previewRedeem_floorLeqActualSwapProceeds_underSlippage() public;
+```
+
+### test_previewRedeem_appliesExitFeeOnSlippageAdjustedProceeds
+
+previewRedeem with a non-zero exit fee applies fee on top of slippage.
+
+
+```solidity
+function test_previewRedeem_appliesExitFeeOnSlippageAdjustedProceeds() public;
+```
+
+### test_previewDeposit_returnsSlippageAdjustedShareFloor
+
+previewDeposit returns fewer shares than without slippage discount.
+With 1% maxSlippage, depositing 1 000 USDC should preview fewer
+shares than the raw convertToShares(1 000).
+
+
+```solidity
+function test_previewDeposit_returnsSlippageAdjustedShareFloor() public;
 ```
 
 ### test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances
