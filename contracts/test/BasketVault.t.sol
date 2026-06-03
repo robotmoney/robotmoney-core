@@ -1155,3 +1155,203 @@ contract BasketVaultTest is Test {
     }
 }
 
+// ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────
+
+contract BasketVaultRebalanceTest is Test {
+    // Covers: issue #550 — ADR-0003 rebalancing model implementation
+    //         WeightSnapshot event, previewDepositWeights, realizedWeights, rebalance() stub
+
+    uint256 internal constant ONE_USDC = 1e6;
+
+    event WeightSnapshot(
+        address indexed depositor, address[] assets, uint256[] bpsWeights, uint256 timestamp
+    );
+
+    TestERC20 internal usdc;
+    TestERC20 internal tokenA;
+    TestERC20 internal tokenB;
+    MockSwapRouter internal router;
+    MockPool internal poolA;
+    MockPool internal poolB;
+    BasketVaultHarness internal vault;
+
+    address internal admin = makeAddr("admin");
+    address internal emergencyResponder = makeAddr("emergencyResponder");
+    address internal depositor = makeAddr("depositor");
+
+    function setUp() public {
+        vm.warp(1_000_000); // fixed block.timestamp for snapshot assertions
+        usdc = new TestERC20();
+        tokenA = new TestERC20();
+        tokenB = new TestERC20();
+        router = new MockSwapRouter();
+        // Tick=0 → 1:1 price for both pools
+        poolA = new MockPool(address(tokenA), address(usdc), uint160(1 << 96));
+        poolB = new MockPool(address(tokenB), address(usdc), uint160(1 << 96));
+
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(router)), admin, emergencyResponder
+        );
+
+        vm.startPrank(admin);
+        vault.addAsset(address(tokenA), address(poolA), 500);
+        vault.addAsset(address(tokenB), address(poolB), 500);
+        vm.stopPrank();
+    }
+
+    // ─── rebalance() stub ─────────────────────────────────────────────
+
+    function test_rebalance_revertsWithNotImplemented() public {
+        vm.expectRevert(BasketVault.NotImplemented.selector);
+        vault.rebalance(100, block.timestamp + 60);
+    }
+
+    function test_rebalance_revertsForAnyCallerNotJustAdmin() public {
+        // The stub is permissionless but always reverts — no role gates needed.
+        vm.prank(depositor);
+        vm.expectRevert(BasketVault.NotImplemented.selector);
+        vault.rebalance(0, 0);
+    }
+
+    // ─── WeightSnapshot event ─────────────────────────────────────────
+
+    function test_deposit_emitsWeightSnapshot_singleAsset() public {
+        // Remove tokenB so only tokenA is active → weight must be 10_000 bps.
+        // First we need to have no tokenB balance (which is the case initially).
+        vm.prank(admin);
+        vault.removeAsset(1);
+
+        uint256 usdcAmount = 1_000 * ONE_USDC;
+        usdc.mint(depositor, usdcAmount);
+
+        // Router returns 1:1 (tick=0). Set amountOut to the full swapIn amount.
+        tokenA.mint(address(router), usdcAmount);
+        router.setAmountOut(usdcAmount);
+
+        address[] memory expectedAssets = new address[](1);
+        expectedAssets[0] = address(tokenA);
+        uint256[] memory expectedWeights = new uint256[](1);
+        expectedWeights[0] = 10_000; // 100% to the single active asset
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), usdcAmount);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit WeightSnapshot(depositor, expectedAssets, expectedWeights, block.timestamp);
+        vault.deposit(usdcAmount, depositor);
+        vm.stopPrank();
+    }
+
+    function test_deposit_emitsWeightSnapshot_twoAssets() public {
+        // Two active assets → each gets 5_000 bps (50%).
+        // With usdcAmount = 1000 and n=2: perAsset=500, remainder=0.
+        // First active gets: baseWeightBps + remainderWeightBps = 5000 + 0 = 5000 bps.
+        uint256 usdcAmount = 1_000 * ONE_USDC;
+        usdc.mint(depositor, usdcAmount);
+
+        // Router swaps at 1:1; each leg needs tokenA/B in router.
+        uint256 perAsset = usdcAmount / 2; // 500 USDC each
+        tokenA.mint(address(router), perAsset);
+        tokenB.mint(address(router), perAsset);
+        router.setAmountOut(perAsset);
+
+        address[] memory expectedAssets = new address[](2);
+        expectedAssets[0] = address(tokenA);
+        expectedAssets[1] = address(tokenB);
+        uint256[] memory expectedWeights = new uint256[](2);
+        expectedWeights[0] = 5_000;
+        expectedWeights[1] = 5_000;
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), usdcAmount);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit WeightSnapshot(depositor, expectedAssets, expectedWeights, block.timestamp);
+        vault.deposit(usdcAmount, depositor);
+        vm.stopPrank();
+    }
+
+    // ─── previewDepositWeights ────────────────────────────────────────
+
+    function test_previewDepositWeights_returnsActiveAssetsOnly() public {
+        // Remove tokenB; only tokenA active.
+        vm.prank(admin);
+        vault.removeAsset(1);
+
+        uint256 usdcAmount = 1_000 * ONE_USDC;
+        (address[] memory activeAssets, uint256[] memory amountsOut) =
+            vault.previewDepositWeights(usdcAmount);
+
+        assertEq(activeAssets.length, 1, "one active asset");
+        assertEq(activeAssets[0], address(tokenA), "tokenA is the active asset");
+        // TWAP tick=0 → 1:1 price; 1000 USDC → 1000 token units
+        assertEq(amountsOut[0], usdcAmount, "full amount goes to single active asset");
+    }
+
+    function test_previewDepositWeights_splitEquallyAcrossTwoAssets() public {
+        uint256 usdcAmount = 1_000 * ONE_USDC;
+        (address[] memory activeAssets, uint256[] memory amountsOut) =
+            vault.previewDepositWeights(usdcAmount);
+
+        assertEq(activeAssets.length, 2, "two active assets");
+        assertEq(activeAssets[0], address(tokenA));
+        assertEq(activeAssets[1], address(tokenB));
+        // Each leg gets 500 USDC; TWAP 1:1 → 500 token units each.
+        assertEq(amountsOut[0], 500 * ONE_USDC, "tokenA gets half");
+        assertEq(amountsOut[1], 500 * ONE_USDC, "tokenB gets half");
+    }
+
+    function test_previewDepositWeights_zeroAmountReturnsZeros() public {
+        (address[] memory activeAssets, uint256[] memory amountsOut) =
+            vault.previewDepositWeights(0);
+        assertEq(activeAssets.length, 2, "returns active asset list even for zero amount");
+        assertEq(amountsOut[0], 0, "zero output for zero input");
+        assertEq(amountsOut[1], 0, "zero output for zero input");
+    }
+
+    // ─── realizedWeights ──────────────────────────────────────────────
+
+    function test_realizedWeights_returnsZerosForNonDepositor() public {
+        (address[] memory activeAssets, uint256[] memory bpsWeights) =
+            vault.realizedWeights(depositor);
+        assertEq(activeAssets.length, 2, "returns active asset set");
+        assertEq(bpsWeights[0], 0, "zero weight for non-depositor");
+        assertEq(bpsWeights[1], 0, "zero weight for non-depositor");
+    }
+
+    function test_realizedWeights_returnsEqualWeightsAfterEqualDeposit() public {
+        // Deposit equal amounts → should hold 50/50 of each asset.
+        uint256 usdcAmount = 1_000 * ONE_USDC;
+        usdc.mint(depositor, usdcAmount);
+
+        uint256 perAsset = usdcAmount / 2;
+        tokenA.mint(address(router), perAsset);
+        tokenB.mint(address(router), perAsset);
+        router.setAmountOut(perAsset);
+
+        vm.startPrank(depositor);
+        usdc.approve(address(vault), usdcAmount);
+        vault.deposit(usdcAmount, depositor);
+        vm.stopPrank();
+
+        (, uint256[] memory bpsWeights) = vault.realizedWeights(depositor);
+        // Both assets have equal USDC value (tick=0, 1:1 price) → 5000 bps each.
+        // Due to integer rounding the sum may be 9999 or 10000; check approximate equality.
+        assertApproxEqAbs(bpsWeights[0], 5_000, 1, "tokenA weight ~50%");
+        assertApproxEqAbs(bpsWeights[1], 5_000, 1, "tokenB weight ~50%");
+    }
+
+    function test_realizedWeights_noActiveAssets_returnsEmpty() public {
+        // Remove both assets (they hold zero balance).
+        vm.prank(admin);
+        vault.removeAsset(0);
+        vm.prank(admin);
+        vault.removeAsset(1);
+
+        (address[] memory activeAssets, uint256[] memory bpsWeights) =
+            vault.realizedWeights(depositor);
+        assertEq(activeAssets.length, 0, "no active assets");
+        assertEq(bpsWeights.length, 0, "no weights");
+    }
+}
+
