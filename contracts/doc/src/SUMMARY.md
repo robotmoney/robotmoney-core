@@ -50,6 +50,8 @@
     - [MockPool](contracts/test/AgentTokenVault.t.sol/contract.MockPool.md)
     - [RecordingSwapRouter](contracts/test/AgentTokenVault.t.sol/contract.RecordingSwapRouter.md)
     - [AgentTokenVaultTest](contracts/test/AgentTokenVault.t.sol/contract.AgentTokenVaultTest.md)
+    - [AgentTokenVaultGovernanceTest](contracts/test/AgentTokenVault.t.sol/contract.AgentTokenVaultGovernanceTest.md)
+    - [MockHighThresholdSafeGov](contracts/test/AgentTokenVault.t.sol/contract.MockHighThresholdSafeGov.md)
     - [MockPool](contracts/test/BasketVault.t.sol/contract.MockPool.md)
     - [MockSwapRouter](contracts/test/BasketVault.t.sol/contract.MockSwapRouter.md)
     - [BasketVaultHarness](contracts/test/BasketVault.t.sol/contract.BasketVaultHarness.md)

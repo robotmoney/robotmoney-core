@@ -1,10 +1,12 @@
 # MockPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/bf1c7761f8915541f9704694084c37ff757fe82d/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dd2b70b308807d48418288c918e3bb6256623fb2/contracts/test/AgentTokenVault.t.sol)
 
 Uniswap V3 pool mock: token0/token1 reads for addAsset validation plus
 a flat 1:1 TWAP via observe() (arithmetic-mean tick = 0). One unit of
 basket token is worth one unit of USDC, which makes equal-weight
 assertions exact and independent of slot0.
+setCardinality() allows governance gate-rejection tests to simulate
+a pool that has not yet grown its observation buffer.
 
 
 ## Constants
@@ -50,6 +52,13 @@ constructor(address token0_, address token1_) ;
 
 ```solidity
 function liquidity() external view returns (uint128);
+```
+
+### setCardinality
+
+
+```solidity
+function setCardinality(uint16 c) external;
 ```
 
 ### slot0
