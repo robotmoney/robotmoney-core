@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Canonical registry of Uniswap V3 pool addresses used by the dapp landing-page price strip (issue #482, docs/prd.md#112-protocol-asset-vault). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0.",
+  "description": "Canonical registry of DEX pool addresses for the dapp landing-page price strip and the four-vault basket swap routes (issue #482, #556, docs/prd.md§11). The `mainnet` map holds real Base mainnet pool + token addresses; the `devnet` map is the fork-aware override applied when the dapp targets the forked-Base devnet (chain id 918453). On a fresh fork the devnet pools ARE the Base mainnet pools (the genesis ingester copies Base state at the fork block), so the devnet override map points at the same addresses unless a smoke-test stub pool is deployed in their place. Pool addresses MUST NOT be hardcoded in TypeScript — the dapp reads them from this file (acceptance criteria, issue #482). `token0`/`token1` ordering and decimals are recorded so the sqrtPriceX96 -> price conversion is decimals-aware regardless of which token Uniswap assigned to slot 0. `basket_assets` records per-asset token addresses, swap venues (UniswapV3/UniswapV4/Aerodrome), and pool addresses for vault swap routing (issue #556). Pool addresses marked with `pool_status: pending` must be pinned from on-chain verification before the vault can be deployed.",
   "pairs": [
     {
       "id": "eth-usd",
@@ -35,6 +35,81 @@
       "quoteDecimals": 6
     }
   ],
+  "$comment_basket_assets": "Basket-vault swap routes (issue #556, docs/prd.md§11.2 ProtocolAssetVault, §11.3 AgentTokenVault, §11.4 RWA vault). Each entry records the asset token address on Base mainnet, the DEX venue (UniswapV3 / UniswapV4 / Aerodrome), pool address, and pool parameter (fee tier for V3/V4 in bps, or 0=volatile/1=stable for Aerodrome). Entries with `pool_status: pending` have a confirmed token address but the pool address must be verified on-chain (Basescan / Aerodrome factory / Uniswap V4 PoolManager) before vault deployment or fork-state snapshot update. The genesis ingester (testing/smoke-test/src/genesis_alloc.rs) must ingest every pool address listed here via testing/ethereum-testnet/config/fork-block.json::ingested_addresses.",
+  "basket_assets": {
+    "$comment": "ProtocolAssetVault (rmPROTO) assets: cbBTC and wSOL use Uniswap V3; pool addresses are already confirmed and ingested in fork-block.json.",
+    "cbbtc": {
+      "symbol": "cbBTC",
+      "token": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "tokenDecimals": 8,
+      "venue": "UniswapV3",
+      "pool": "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef",
+      "poolFee": 500,
+      "pool_status": "confirmed"
+    },
+    "wsol": {
+      "symbol": "wSOL",
+      "token": "0x1C61629598e4a901136a81BC138E5828dc150d67",
+      "tokenDecimals": 9,
+      "venue": "UniswapV3",
+      "pool": "0x170De01C2b662b7d54BFFd400bc35283B8671e38",
+      "poolFee": 500,
+      "pool_status": "confirmed"
+    },
+    "$comment_agent_tokens": "AgentTokenVault (rmAGENT) shortlist assets: JUNO, WOON, ZYFAI, GIZA. Token addresses are confirmed from on-chain research (PR #580 / issue #543). Pool addresses are pinned from on-chain verification (Basescan / GeckoTerminal / Uniswap V4 PoolManager) — see issue #556. Venue tags follow ADR-0005 BasketVault multi-DEX routing. JUNO and ZYFAI route through their deepest Uniswap V3 pools; WOON routes through the Uniswap V4 PoolManager (no V3 USDC pool exists on Base); GIZA routes through its Aerodrome SlipStream USDC pool.",
+    "juno": {
+      "symbol": "JUNO",
+      "token": "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0x6f320f066d41e8896da5baee732ab7d8a6b4f62f",
+      "poolFee": 10000,
+      "pool_status": "confirmed",
+      "$comment_pool": "JUNO/USDC Uniswap V3 1% pool on Base — verified on-chain via GeckoTerminal/Basescan (issue #556). ~$6.5K TVL as of 2026-06-03."
+    },
+    "woon": {
+      "symbol": "WOON",
+      "token": "0x85eac631c800af804476b140f87039f742c28ba3",
+      "tokenDecimals": 18,
+      "venue": "UniswapV4",
+      "pool": "0x498581ff718922c3f8e6a244956af099b2652b2b",
+      "poolFee": 100000,
+      "pool_status": "confirmed",
+      "$comment_pool": "WOON has no Uniswap V3 USDC pool on Base. Routing uses the Uniswap V4 PoolManager (0x498581ff…) with the WOON/USDC V4 pool (poolId 0xb5027ded…, 10% fee). The `pool` field records the PoolManager contract address because V4 state is held centrally there, not in per-pool contracts. The V4 pool id 0xb5027deddaca3c0dac8fe461640578efcc22a7a2ac923743db00e25150d69af9 has ~$4.4K TVL; the deepest WOON pool (WOON/WETH, ~$195K TVL, poolId 0xd09b80fb…) is not a USDC direct route."
+    },
+    "zyfai": {
+      "symbol": "ZYFAI",
+      "token": "0xd080ed3c74a20250a2c9821885203034acd2d5ae",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0xc6f63e4bea6682aa502ed94c1301b56230fc03d2",
+      "poolFee": 10000,
+      "pool_status": "confirmed",
+      "$comment_pool": "ZYFAI/WETH Uniswap V3 1% pool on Base — deepest ZYFAI pool (~$148K TVL as of 2026-06-03), verified on-chain via GeckoTerminal. No liquid USDC direct pool exists on Base; swap routing is USDC→WETH→ZYFAI (2-hop via WETH/USDC V3 pool). The vault adapter must use a multi-hop path for this asset."
+    },
+    "giza": {
+      "symbol": "GIZA",
+      "token": "0x590830dfdf9a3f68afcdde2694773debdf267774",
+      "tokenDecimals": 18,
+      "venue": "Aerodrome",
+      "pool": "0xe077ddfb9e9d9403a8ec42d3023d17e8417ee399",
+      "poolFee": 0,
+      "pool_status": "confirmed",
+      "$comment_pool": "GIZA/USDC Aerodrome SlipStream 0.3% pool on Base — ~$50K TVL as of 2026-06-03, verified on-chain via GeckoTerminal/Basescan. poolFee=0 follows the ADR-0005 Aerodrome convention (volatile pool flag). The GIZA/USDC 0.9% Aerodrome pool 0xe9eed35… has less liquidity."
+    },
+    "$comment_rwa": "RWA vault (rmRWA) asset: deSPXA (Centrifuge V3, Base). Entry/exit via Uniswap V3 secondary market (ERC-7540 primary NAV redeem is KYC-gated and not used — see ADR-0006). ADR-0006 originally assumed Aerodrome but on-chain liquidity has migrated to Uniswap V3 (~$3.6M TVL). Token address is the deSPXA ERC-20 on Base (Centrifuge ShareToken). Chronicle NAV oracle address is TBD — separate deployment config item in Phase D.",
+    "despxa": {
+      "symbol": "deSPXA",
+      "token": "0x9c5c365e764829876243d0b289733b9d2b729685",
+      "tokenDecimals": 18,
+      "venue": "UniswapV3",
+      "pool": "0xd08f1fb797bfacded23323178672557034c64cfa",
+      "poolFee": 100,
+      "pool_status": "confirmed",
+      "$comment_token": "Centrifuge deSPXA ERC-20 on Base — DeFi Janus Henderson Anemoy S&P500® Fund Token (ShareToken). Verified on Basescan and Centrifuge blog (centrifuge.io/blog/despxa-on-base, issue #556).",
+      "$comment_pool": "deSPXA/USDC Uniswap V3 0.01% pool on Base — ~$3.6M TVL, verified on-chain via Basescan/Moonwell governance forum. ADR-0006 §5 noted Aerodrome as original venue but liquidity migrated to Uniswap V3 per Centrifuge team confirmation (Moonwell proposal 2026-05-20). poolFee=100 (0.01% = 1 bps). token0=USDC, token1=deSPXA."
+    }
+  },
   "mainnet": {
     "chainId": 8453,
     "pools": {

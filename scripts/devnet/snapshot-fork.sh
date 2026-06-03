@@ -206,6 +206,20 @@ WARM_ADDRESSES=(
   # Safe v1.4.1 singleton and proxy factory (used by DeployTimelock.s.sol).
   "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton v1.4.1
   "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"  # SafeProxyFactory v1.4.1
+  # Four-vault basket assets: tokens + primary pool contracts (issue #556).
+  # AgentTokenVault (rmAGENT) assets.
+  "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07"  # JUNO token on Base
+  "0x6f320f066d41e8896da5baee732ab7d8a6b4f62f"  # JUNO/USDC Uniswap V3 1% pool
+  "0x85eac631c800af804476b140f87039f742c28ba3"  # WOON token on Base
+  "0x498581ff718922c3f8e6a244956af099b2652b2b"  # Uniswap V4 PoolManager (WOON/USDC V4)
+  "0xd080ed3c74a20250a2c9821885203034acd2d5ae"  # ZYFAI token on Base
+  "0xc6f63e4bea6682aa502ed94c1301b56230fc03d2"  # ZYFAI/WETH Uniswap V3 1% pool
+  "0x590830dfdf9a3f68afcdde2694773debdf267774"  # GIZA token on Base
+  "0xe077ddfb9e9d9403a8ec42d3023d17e8417ee399"  # GIZA/USDC Aerodrome SlipStream pool
+  "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43"  # Aerodrome Router (periphery)
+  # RWA vault (rmRWA) asset.
+  "0x9c5c365e764829876243d0b289733b9d2b729685"  # deSPXA token (Centrifuge ShareToken)
+  "0xd08f1fb797bfacded23323178672557034c64cfa"  # deSPXA/USDC Uniswap V3 0.01% pool
 )
 echo "[snapshot] warming well-known addresses (caching code in fork state)"
 for addr in "${WARM_ADDRESSES[@]}"; do
@@ -237,6 +251,12 @@ PRICE_STRIP_POOLS=(
   "0xd0b53D9277642d899DF5C87A3966A349A798F224"  # ETH/USDC + wETH/USDC
   "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"  # cbBTC/USDC
   "0x170De01C2b662b7d54BFFd400bc35283B8671e38"  # wSOL/USDC
+  # Four-vault basket swap pools (issue #556). slot0 is needed so that
+  # on-chain price queries succeed during smoke-test and fork-e2e runs.
+  "0x6f320f066d41e8896da5baee732ab7d8a6b4f62f"  # JUNO/USDC Uniswap V3 1%
+  "0xc6f63e4bea6682aa502ed94c1301b56230fc03d2"  # ZYFAI/WETH Uniswap V3 1%
+  "0xe077ddfb9e9d9403a8ec42d3023d17e8417ee399"  # GIZA/USDC Aerodrome SlipStream
+  "0xd08f1fb797bfacded23323178672557034c64cfa"  # deSPXA/USDC Uniswap V3 0.01%
 )
 echo "[snapshot] capturing slot0 storage for price-strip pools"
 for pool in "${PRICE_STRIP_POOLS[@]}"; do
