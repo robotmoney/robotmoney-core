@@ -9,6 +9,7 @@
 //         issue #501 — replace safeIncreaseAllowance with forceApprove/clear pattern
 //         issue #506 — separate admin_ and emergencyResponder_ addresses in constructor
 //         issue #508 — emergencyUnwind uses live TWAP floor instead of stale minUsdcOut
+//         issue #553 — Aerodrome swap + TWAP adapter (IBasketSwapAdapter venue abstraction)
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -16,6 +17,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
+import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
+import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
@@ -172,7 +176,7 @@ contract BasketVaultTest is Test {
         );
 
         vm.prank(admin);
-        vault.addAsset(address(basketToken), address(pool), 500);
+        vault.addAsset(address(basketToken), address(pool), 500, address(0));
     }
 
     function test_emergencyUnwind_revertsWhenRouterOutputBelowConfiguredMinimum() public {
@@ -268,7 +272,7 @@ contract BasketVaultTest is Test {
 
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(badPool), 500);
+        vault.addAsset(address(newAsset), address(badPool), 500, address(0));
     }
 
     function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public {
@@ -816,7 +820,7 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(lowCardPool), 500);
+        vault.addAsset(address(newAsset), address(lowCardPool), 500, address(0));
     }
 
     /// @notice addAsset() succeeds when pool cardinality equals MIN_POOL_CARDINALITY (2).
@@ -826,7 +830,7 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(vault.MIN_POOL_CARDINALITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500);
+        vault.addAsset(address(newAsset), address(goodPool), 500, address(0));
 
         assertEq(vault.assetCount(), 2, "asset registered");
     }
@@ -839,7 +843,7 @@ contract BasketVaultTest is Test {
         goodPool.setCardinality(100);
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(goodPool), 500);
+        vault.addAsset(address(newAsset), address(goodPool), 500, address(0));
 
         // totalAssets() must not revert after valid addAsset().
         uint256 nav = vault.totalAssets();
@@ -865,7 +869,7 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(thinPool), 500);
+        vault.addAsset(address(newAsset), address(thinPool), 500, address(0));
     }
 
     /// @notice addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
@@ -876,7 +880,7 @@ contract BasketVaultTest is Test {
         deepPool.setLiquidity(vault.MIN_POOL_LIQUIDITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(deepPool), 500);
+        vault.addAsset(address(newAsset), address(deepPool), 500, address(0));
 
         assertEq(vault.assetCount(), 2, "asset registered when liquidity sufficient");
     }
@@ -905,10 +909,10 @@ contract BasketVaultTest is Test {
                 )
             );
             vm.prank(admin);
-            freshVault.addAsset(address(newAsset), address(fuzzPool), 500);
+            freshVault.addAsset(address(newAsset), address(fuzzPool), 500, address(0));
         } else {
             vm.prank(admin);
-            freshVault.addAsset(address(newAsset), address(fuzzPool), 500);
+            freshVault.addAsset(address(newAsset), address(fuzzPool), 500, address(0));
             assertEq(freshVault.assetCount(), 1, "asset registered when cardinality sufficient");
         }
     }
@@ -1239,8 +1243,8 @@ contract BasketVaultRebalanceTest is Test {
         );
 
         vm.startPrank(admin);
-        vault.addAsset(address(tokenA), address(poolA), 500);
-        vault.addAsset(address(tokenB), address(poolB), 500);
+        vault.addAsset(address(tokenA), address(poolA), 500, address(0));
+        vault.addAsset(address(tokenB), address(poolB), 500, address(0));
         vm.stopPrank();
     }
 
@@ -1397,6 +1401,349 @@ contract BasketVaultRebalanceTest is Test {
             vault.realizedWeights(depositor);
         assertEq(activeAssets.length, 0, "no active assets");
         assertEq(bpsWeights.length, 0, "no weights");
+    }
+}
+
+// ─── Aerodrome swap + TWAP adapter tests (issue #553) ─────────────────────────
+
+/// @dev Mock Aerodrome Router: records calls and disburses pre-set amounts.
+///      Mimics the IAerodromeRouter.swapExactTokensForTokens signature.
+contract MockAerodromeRouter {
+    using SafeERC20 for IERC20;
+
+    uint256 public amountOut;
+
+    error TooLittleReceived(uint256 amountOut, uint256 amountOutMin);
+
+    function setAmountOut(uint256 amountOut_) external {
+        amountOut = amountOut_;
+    }
+
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        IAerodromeRouter.Route[] calldata routes,
+        address to,
+        uint256 /* deadline */
+    ) external returns (uint256[] memory amounts) {
+        if (amountOut < amountOutMin) revert TooLittleReceived(amountOut, amountOutMin);
+        IERC20(routes[0].from).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(routes[routes.length - 1].to).safeTransfer(to, amountOut);
+        amounts = new uint256[](routes.length + 1);
+        amounts[routes.length] = amountOut;
+    }
+
+    function defaultFactory() external pure returns (address) {
+        return address(0xF00D);
+    }
+}
+
+/// @dev Aerodrome-style CL pool mock: observe() returns tick cumulatives like MockPool.
+///      Also implements token0/token1 and slot0 so addAsset cardinality check passes.
+contract MockAerodromePool {
+    address public immutable token0;
+    address public immutable token1;
+    int56 public tickCumulativeRate;
+    uint16 public cardinality;
+
+    constructor(address token0_, address token1_) {
+        token0 = token0_;
+        token1 = token1_;
+        tickCumulativeRate = 0;
+        cardinality = 100;
+    }
+
+    function setTickCumulativeRate(int56 rate) external {
+        tickCumulativeRate = rate;
+    }
+
+    function setCardinality(uint16 cardinality_) external {
+        cardinality = cardinality_;
+    }
+
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (uint160(1 << 96), 0, 0, cardinality, cardinality, 0, true);
+    }
+
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
+    {
+        tickCumulatives = new int56[](secondsAgos.length);
+        secondsPerLiq = new uint160[](secondsAgos.length);
+        for (uint256 i = 0; i < secondsAgos.length; i++) {
+            int56 t =
+                int56(int256(uint256(block.timestamp))) - int56(int256(uint256(secondsAgos[i])));
+            tickCumulatives[i] = tickCumulativeRate * t;
+        }
+    }
+
+    function observations(uint256) external view returns (uint32, int56, uint160, bool) {
+        return (uint32(block.timestamp), 0, 0, true);
+    }
+
+    /// @dev Return sufficient liquidity so addAsset's MIN_POOL_LIQUIDITY gate passes.
+    function liquidity() external pure returns (uint128) {
+        return 1e18;
+    }
+}
+
+/// @title BasketVaultAerodromeTest
+/// @notice Verifies the Aerodrome swap + TWAP adapter path in BasketVault.
+///         All tests use a mock AerodromeRouter and mock Aerodrome CL pool;
+///         no mainnet fork is required (issue #553 acceptance criterion: mocked/forked).
+contract BasketVaultAerodromeTest is Test {
+    uint256 internal constant ONE_USDC = 1e6;
+
+    TestERC20 internal usdc;
+    TestERC20 internal aeroToken;
+    MockAerodromeRouter internal aeroRouter;
+    MockAerodromePool internal aeroPool;
+    MockSwapRouter internal v3Router; // kept for vault constructor; not exercised by Aerodrome tests
+    AerodromeSwapAdapter internal aeroAdapter;
+    BasketVaultHarness internal vault;
+
+    address internal admin = makeAddr("admin");
+    address internal emergencyResponder = makeAddr("emergencyResponder");
+    address internal stranger = makeAddr("stranger");
+    address internal fakeFactory = address(0xF00D);
+
+    function setUp() public {
+        vm.warp(1_800_000); // ensure block.timestamp > DEFAULT_TWAP_WINDOW (1800 s)
+
+        usdc = new TestERC20();
+        aeroToken = new TestERC20();
+        aeroRouter = new MockAerodromeRouter();
+
+        // Token ordering: sort so token0 < token1.
+        address t0 = address(aeroToken) < address(usdc) ? address(aeroToken) : address(usdc);
+        address t1 = address(aeroToken) < address(usdc) ? address(usdc) : address(aeroToken);
+        aeroPool = new MockAerodromePool(t0, t1);
+
+        v3Router = new MockSwapRouter();
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
+        );
+
+        // Deploy Aerodrome adapter (volatile, mock factory).
+        aeroAdapter = new AerodromeSwapAdapter(address(aeroRouter), fakeFactory, false);
+
+        // Register aeroToken with the Aerodrome adapter.
+        vm.prank(admin);
+        vault.addAsset(address(aeroToken), address(aeroPool), 0, address(aeroAdapter));
+    }
+
+    // ─── AC1: Aerodrome swap path ──────────────────────────────────────────
+
+    /// @notice Deposit routes USDC→aeroToken through the Aerodrome adapter, not V3.
+    function test_aerodrome_deposit_routesThroughAerodromeAdapter() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // tick=0 → 1:1 price; slippage = 100 bps → minOut = 990 tokens.
+        uint256 routerOut = 995 * ONE_USDC; // satisfies floor
+
+        usdc.mint(stranger, depositAmount);
+        aeroToken.mint(address(aeroRouter), routerOut);
+        aeroRouter.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertEq(
+            aeroToken.balanceOf(address(vault)),
+            routerOut,
+            "Aerodrome deposit: vault holds aeroTokens received from router"
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "no idle USDC after full deposit");
+        // V3 router must NOT have been touched.
+        assertEq(
+            usdc.allowance(address(vault), address(v3Router)),
+            0,
+            "no residual USDC approval on V3 router"
+        );
+    }
+
+    /// @notice Withdrawal routes aeroToken→USDC through the Aerodrome adapter.
+    function test_aerodrome_withdrawal_routesThroughAerodromeAdapter() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 depositOut = 995 * ONE_USDC; // tokens received on deposit
+        uint256 withdrawOut = 990 * ONE_USDC; // USDC received on withdrawal
+
+        usdc.mint(stranger, depositAmount);
+        aeroToken.mint(address(aeroRouter), depositOut);
+        aeroRouter.setAmountOut(depositOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        // Now redeem.
+        usdc.mint(address(aeroRouter), withdrawOut);
+        aeroRouter.setAmountOut(withdrawOut);
+
+        uint256 shares = vault.balanceOf(stranger);
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+
+        assertEq(aeroToken.balanceOf(address(vault)), 0, "all aeroTokens swapped on redeem");
+        assertGt(usdc.balanceOf(stranger), 0, "stranger received USDC from Aerodrome redeem");
+        assertEq(
+            aeroToken.allowance(address(vault), address(aeroAdapter)),
+            0,
+            "no residual aeroToken allowance on adapter"
+        );
+    }
+
+    // ─── AC2: Uniswap V3 default path unchanged ────────────────────────────
+
+    /// @notice A V3-registered asset (adapter=address(0)) still swaps via V3 router.
+    function test_aerodrome_v3DefaultPathUnchanged() public {
+        TestERC20 v3Token = new TestERC20();
+        MockPool v3Pool = new MockPool(address(v3Token), address(usdc), uint160(1 << 96));
+
+        vm.prank(admin);
+        vault.addAsset(address(v3Token), address(v3Pool), 500, address(0));
+
+        uint256 depositAmount = 2_000 * ONE_USDC; // 2 assets → 1000 each
+        uint256 routerOut = 990 * ONE_USDC;
+
+        usdc.mint(stranger, depositAmount);
+        aeroToken.mint(address(aeroRouter), routerOut);
+        aeroRouter.setAmountOut(routerOut);
+        v3Token.mint(address(v3Router), routerOut);
+        v3Router.setAmountOut(routerOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        assertGt(v3Token.balanceOf(address(vault)), 0, "V3 token received via V3 router");
+        assertGt(aeroToken.balanceOf(address(vault)), 0, "aeroToken received via Aerodrome adapter");
+    }
+
+    // ─── AC3: Aerodrome TWAP drives NAV and slippage floors ───────────────
+
+    /// @notice totalAssets() prices aeroToken via the Aerodrome adapter's twapPrice().
+    ///         tick=0 → 1:1 price → 1000 aeroTokens == 1000 USDC in NAV.
+    function test_aerodrome_totalAssets_usesAdapterTwap() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        aeroToken.mint(address(vault), tokenAmount);
+        // tick=0 (default rate=0) → 1:1 price → NAV should be 1000 USDC.
+        uint256 nav = vault.totalAssets();
+        assertEq(nav, tokenAmount, "Aerodrome TWAP NAV: 1:1 price at tick=0");
+    }
+
+    /// @notice The Aerodrome TWAP drives slippage floors: a deposit that can only
+    ///         receive zero output (router mock set to 0) reverts, proving the floor is active.
+    function test_aerodrome_deposit_slippageFloorFromAdapterTwap() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        // minOut = 1000 * 9900/10000 = 990. Router returns 0 → revert.
+        aeroRouter.setAmountOut(0);
+        usdc.mint(stranger, depositAmount);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        vm.expectRevert(); // Aerodrome router revert (TooLittleReceived)
+        vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+    }
+
+    // ─── Aerodrome emergencyUnwind path ────────────────────────────────────
+
+    /// @notice emergencyUnwind uses the Aerodrome adapter path for aeroToken assets.
+    function test_aerodrome_emergencyUnwind_routesThroughAdapter() public {
+        uint256 tokenAmount = 1_000 * ONE_USDC;
+        // TWAP floor (tick=0, 1:1, 1% slippage) = 990 USDC. Use 995.
+        uint256 amountOut = 995 * ONE_USDC;
+        aeroToken.mint(address(vault), tokenAmount);
+        usdc.mint(address(aeroRouter), amountOut);
+        aeroRouter.setAmountOut(amountOut);
+
+        vm.prank(admin);
+        vault.setEmergencyUnwindGuard(address(aeroToken), 900 * ONE_USDC, false, 0);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+
+        assertEq(aeroToken.balanceOf(address(vault)), 0, "aeroToken unwound via Aerodrome");
+        assertEq(usdc.balanceOf(address(vault)), amountOut, "USDC received via Aerodrome adapter");
+        assertTrue(vault.paused(), "vault paused after Aerodrome emergency unwind");
+    }
+
+    // ─── AerodromeSwapAdapter unit tests ──────────────────────────────────
+
+    /// @notice AerodromeSwapAdapter.swap() reverts when minAmountOut is not met.
+    function test_AerodromeSwapAdapter_swap_revertsOnSlippage() public {
+        TestERC20 tokenA = new TestERC20();
+        TestERC20 tokenB = new TestERC20();
+
+        address t0Addr = address(tokenA) < address(tokenB) ? address(tokenA) : address(tokenB);
+        address t1Addr = address(tokenA) < address(tokenB) ? address(tokenB) : address(tokenA);
+
+        MockAerodromePool localPool = new MockAerodromePool(t0Addr, t1Addr);
+        MockAerodromeRouter localRouter = new MockAerodromeRouter();
+        AerodromeSwapAdapter adapter =
+            new AerodromeSwapAdapter(address(localRouter), fakeFactory, false);
+
+        tokenA.mint(address(this), 1_000 * ONE_USDC);
+        tokenB.mint(address(localRouter), 500 * ONE_USDC);
+        tokenA.approve(address(adapter), 1_000 * ONE_USDC);
+        localRouter.setAmountOut(500 * ONE_USDC); // below minAmountOut
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockAerodromeRouter.TooLittleReceived.selector, 500 * ONE_USDC, 900 * ONE_USDC
+            )
+        );
+        adapter.swap(
+            address(tokenA), address(tokenB), 0, 1_000 * ONE_USDC, 900 * ONE_USDC, address(this)
+        );
+        // localPool is used to establish token ordering; it has no further role in this test.
+        assertTrue(localPool.token0() != address(0), "pool token ordering set");
+    }
+
+    /// @notice AerodromeSwapAdapter.twapPrice() returns 1:1 at tick=0.
+    function test_AerodromeSwapAdapter_twapPrice_returnsCorrectAtTickZero() public {
+        uint256 baseAmount = 1_000 * ONE_USDC;
+        uint32 window = 1800;
+        // tick=0, pool default rate=0 → 1:1 → twapPrice should return baseAmount.
+        uint256 quote = aeroAdapter.twapPrice(
+            address(aeroPool), address(aeroToken), address(usdc), baseAmount, window
+        );
+        assertEq(quote, baseAmount, "tick=0: 1:1 price");
+    }
+
+    /// @notice AerodromeSwapAdapter.twapPrice() reverts on pool token mismatch.
+    function test_AerodromeSwapAdapter_twapPrice_revertsOnPoolTokenMismatch() public {
+        TestERC20 wrongToken = new TestERC20();
+        vm.expectRevert(AerodromeSwapAdapter.PoolTokenMismatch.selector);
+        aeroAdapter.twapPrice(
+            address(aeroPool), address(wrongToken), address(usdc), 1_000 * ONE_USDC, 1800
+        );
+    }
+
+    /// @notice AerodromeSwapAdapter.twapPrice() reverts on zero window.
+    function test_AerodromeSwapAdapter_twapPrice_revertsOnZeroWindow() public {
+        vm.expectRevert(AerodromeSwapAdapter.ZeroWindow.selector);
+        aeroAdapter.twapPrice(
+            address(aeroPool), address(aeroToken), address(usdc), 1_000 * ONE_USDC, 0
+        );
+    }
+
+    /// @notice AerodromeSwapAdapter constructor reverts on zero router address.
+    function test_AerodromeSwapAdapter_constructor_revertsOnZeroRouter() public {
+        vm.expectRevert(AerodromeSwapAdapter.ZeroAddress.selector);
+        new AerodromeSwapAdapter(address(0), fakeFactory, false);
+    }
+
+    /// @notice AerodromeSwapAdapter constructor reverts on zero factory address.
+    function test_AerodromeSwapAdapter_constructor_revertsOnZeroFactory() public {
+        vm.expectRevert(AerodromeSwapAdapter.ZeroAddress.selector);
+        new AerodromeSwapAdapter(address(aeroRouter), address(0), false);
     }
 }
 
