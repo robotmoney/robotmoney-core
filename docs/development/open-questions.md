@@ -26,6 +26,10 @@ This document tracks only the questions that are **still open and product/engine
 
 **Router default-weight vector (§3.9).** Ship an admin-settable on-chain default-weights vector that the Router falls back to below quorum, sized to the live vault set and sourced from chain state per [ADR-0002](../adr/ADR-0002-router-default-weights-on-chain.md). Continuous smoothing / whiplash blending is deferred.
 
+**AgentTokenVault shortlist governance (§1.3, §1.4).** **Resolved** — see [ADR-0004](../adr/ADR-0004-agent-token-shortlist-governance.md) (2026-06-03).
+
+Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay (48 h for `addAsset`, 24 h for `removeAsset`) + public veto window. Any Safe signer may cancel a queued change unilaterally. `addAsset` gate requires market-cap ≥ $10M, listing age ≥ 90 days, daily volume ≥ $100K, holder count ≥ 500, oracle availability, and liquidity depth ≥ $50K within 2% of mid-price. Maximum shortlist size: 15 tokens. Upgrade path to RM-token veto module (Option B) is reserved via `TimelockController` `CANCELLER_ROLE`. Resolves the blocking gap-report Appendix C item and enables rmAGENT router-eligibility (pending TWAP oracle, rebalancing model, and liquidity proof gaps).
+
 ### 1.B Agent-token vault internals
 
 **Trading authority and strategy (§3.2).** Specify trading strategy, position-sizing rules, stop-loss enforcement, and real-time NAV loss reporting *if* an agent component is reintroduced to the agent-token vault. Not live in the MVP shortlist model (admin-curated, equal-weighted, no agent trading); question needs reframing with the product owner before any engineering work.
