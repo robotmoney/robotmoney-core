@@ -60,6 +60,7 @@
     - [MockSwapRouter](contracts/test/BasketVault.t.sol/contract.MockSwapRouter.md)
     - [BasketVaultHarness](contracts/test/BasketVault.t.sol/contract.BasketVaultHarness.md)
     - [BasketVaultTest](contracts/test/BasketVault.t.sol/contract.BasketVaultTest.md)
+    - [BasketVaultRebalanceTest](contracts/test/BasketVault.t.sol/contract.BasketVaultRebalanceTest.md)
     - [MockAerodromeRouter](contracts/test/BasketVault.t.sol/contract.MockAerodromeRouter.md)
     - [MockAerodromePool](contracts/test/BasketVault.t.sol/contract.MockAerodromePool.md)
     - [BasketVaultAerodromeTest](contracts/test/BasketVault.t.sol/contract.BasketVaultAerodromeTest.md)

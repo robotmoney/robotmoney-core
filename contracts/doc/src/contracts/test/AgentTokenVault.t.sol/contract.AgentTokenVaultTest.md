@@ -1,5 +1,5 @@
 # AgentTokenVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2def9f9874e376c42240f560498ed7a0ea248d0e/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fde825fa14af6eda7d4a1766f6f45e033e4f39a0/contracts/test/AgentTokenVault.t.sol)
 
 **Inherits:**
 Test
@@ -121,6 +121,20 @@ function test_shortlist_mutation_admin_only() public;
 
 ```solidity
 function test_shortlist_mutation_rejected_for_non_admin() public;
+```
+
+### test_governance_shortlist_add_delay_is_48h
+
+
+```solidity
+function test_governance_shortlist_add_delay_is_48h() public view;
+```
+
+### test_governance_shortlist_remove_delay_is_24h
+
+
+```solidity
+function test_governance_shortlist_remove_delay_is_24h() public view;
 ```
 
 ### test_demo_seed_registers_agent_token_vault_with_shortlist

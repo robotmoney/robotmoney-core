@@ -1,5 +1,5 @@
 # MockAerodromePool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2def9f9874e376c42240f560498ed7a0ea248d0e/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fde825fa14af6eda7d4a1766f6f45e033e4f39a0/contracts/test/BasketVault.t.sol)
 
 Aerodrome-style CL pool mock: observe() returns tick cumulatives like MockPool.
 Also implements token0/token1 and slot0 so addAsset cardinality check passes.
@@ -79,5 +79,14 @@ function observe(uint32[] calldata secondsAgos)
 
 ```solidity
 function observations(uint256) external view returns (uint32, int56, uint160, bool);
+```
+
+### liquidity
+
+Return sufficient liquidity so addAsset's MIN_POOL_LIQUIDITY gate passes.
+
+
+```solidity
+function liquidity() external pure returns (uint128);
 ```
 

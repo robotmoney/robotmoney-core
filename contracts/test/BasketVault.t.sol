@@ -869,7 +869,7 @@ contract BasketVaultTest is Test {
             )
         );
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(thinPool), 500);
+        vault.addAsset(address(newAsset), address(thinPool), 500, address(0));
     }
 
     /// @notice addAsset() succeeds when pool liquidity meets MIN_POOL_LIQUIDITY.
@@ -880,7 +880,7 @@ contract BasketVaultTest is Test {
         deepPool.setLiquidity(vault.MIN_POOL_LIQUIDITY());
 
         vm.prank(admin);
-        vault.addAsset(address(newAsset), address(deepPool), 500);
+        vault.addAsset(address(newAsset), address(deepPool), 500, address(0));
 
         assertEq(vault.assetCount(), 2, "asset registered when liquidity sufficient");
     }
@@ -1481,6 +1481,11 @@ contract MockAerodromePool {
 
     function observations(uint256) external view returns (uint32, int56, uint160, bool) {
         return (uint32(block.timestamp), 0, 0, true);
+    }
+
+    /// @dev Return sufficient liquidity so addAsset's MIN_POOL_LIQUIDITY gate passes.
+    function liquidity() external pure returns (uint128) {
+        return 1e18;
     }
 }
 

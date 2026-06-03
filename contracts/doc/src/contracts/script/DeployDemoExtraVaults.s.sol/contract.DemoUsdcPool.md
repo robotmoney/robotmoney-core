@@ -1,5 +1,5 @@
 # DemoUsdcPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2def9f9874e376c42240f560498ed7a0ea248d0e/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fde825fa14af6eda7d4a1766f6f45e033e4f39a0/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Uniswap V3 pool stub exposing `token0()`/`token1()` and
 `slot0()`. `BasketVault.addAsset` verifies that the pool pairs the
@@ -50,5 +50,17 @@ function slot0()
         uint8 feeProtocol,
         bool unlocked
     );
+```
+
+### liquidity
+
+Stub liquidity — returns a value above MIN_POOL_LIQUIDITY (1e6)
+so that `BasketVault.addAsset` passes the minimum-liquidity gate.
+Demo pools are not real Uniswap V3 pools; this value is purely
+a stub to satisfy the gate check without forking mainnet.
+
+
+```solidity
+function liquidity() external pure returns (uint128);
 ```
 

@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2def9f9874e376c42240f560498ed7a0ea248d0e/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fde825fa14af6eda7d4a1766f6f45e033e4f39a0/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -107,6 +107,25 @@ deposits, and withdrawals for the entire basket.
 
 ```solidity
 uint16 public constant MIN_POOL_CARDINALITY = 2
+```
+
+
+### MIN_POOL_LIQUIDITY
+Minimum in-range Uniswap V3 pool liquidity required when
+registering an asset via addAsset(). Pools below this floor
+cannot absorb vault-sized trades without exceeding the
+configured slippage bound, which would leave depositors unable
+to exit synchronously — a blocking router-eligibility gap
+(basket-vault-gap-report.md §1). Callers must seed pool depth
+before calling addAsset.
+The value of 1e6 is a conservative floor that rejects completely
+empty or dust-seeded pools while being easy for integration tests
+to satisfy with a small seed. Production operators are expected
+to seed pools well above this floor before activating assets.
+
+
+```solidity
+uint128 public constant MIN_POOL_LIQUIDITY = 1e6
 ```
 
 
@@ -263,19 +282,50 @@ function _deposit(address caller, address receiver, uint256 usdcAmount, uint256 
 Splits usdcAmount equally across active assets, swapping each portion via the
 per-asset swap adapter (Aerodrome or Uniswap V3 default).
 The first active asset absorbs any indivisible remainder.
+Emits a WeightSnapshot event recording the equal-weight allocation applied.
 
 
 ```solidity
-function _routeDeposit(uint256 usdcAmount) internal;
+function _routeDeposit(address caller, uint256 usdcAmount) internal;
 ```
 
 ### previewRedeem
 
-Estimated USDC received when redeeming `shares` (spot-priced, pre-slippage).
+Worst-case floor of USDC received when redeeming `shares`.
+The floor is: TWAP NAV × (1 − maxSlippageBps) × (1 − exitFeeBps).
+This satisfies the ERC-4626 guarantee that `redeem(s, ...)` returns
+at least `previewRedeem(s)` because:
+1. `totalAssets()` is TWAP-priced (not slot0), so NAV is
+manipulation-resistant.
+2. `maxSlippageBps` is the worst-case slippage passed as
+`amountOutMinimum` to the Uniswap V3 router. Actual swap
+proceeds are always ≥ that floor (or the swap reverts).
+3. The exit fee is deducted on the same proceeds in `_withdraw`.
+Documented as a floor, not an exact quote — actual proceeds will
+typically exceed this value when swap depth is healthy.
+See docs/technical/basket-vault-gap-report.md §3, §5.
 
 
 ```solidity
 function previewRedeem(uint256 shares) public view override returns (uint256);
+```
+
+### previewDeposit
+
+Worst-case shares estimate for a deposit of `assets_` USDC.
+The floor is computed by discounting the deposited USDC by
+`maxSlippageBps` before converting to shares. This reflects that
+the Uniswap V3 router guarantees at least
+`amountOutMinimum = TWAP × (1 − maxSlippageBps)` tokens will be
+acquired per leg. The resulting share count represents the minimum
+shares a depositor can expect; actual shares may be higher when
+swap depth is healthy.
+Documented as a floor, not an exact quote.
+See docs/technical/basket-vault-gap-report.md §3.
+
+
+```solidity
+function previewDeposit(uint256 assets_) public view override returns (uint256);
 ```
 
 ### previewWithdraw
@@ -568,6 +618,53 @@ function setTwapWindow(address token, uint32 window) external onlyRole(ADMIN_ROL
 |`window`|`uint32`| TWAP window in seconds (10 min ≤ window ≤ 24 h).|
 
 
+### rebalance
+
+Reserved for Phase B: global vault rebalance.
+
+Not implemented in MVP. Reverts with `NotImplemented()`.
+Eventual signature (subject to Phase B ADR):
+rebalance(uint256 maxSlippageBps, uint256 deadline)
+-> (uint256[] swapAmounts, uint256[] gasEstimates)
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md
+
+
+```solidity
+function rebalance(uint256, uint256) external pure;
+```
+
+### previewDepositWeights
+
+Pre-execution cost preview: shows how `usdcAmount` would be allocated
+across active basket assets at current TWAP prices.
+Returns parallel arrays of `(assets, amountsOut)` for active assets only.
+This satisfies the cost-preview requirement in docs/architecture.md §8.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+function previewDepositWeights(uint256 usdcAmount)
+    external
+    view
+    returns (address[] memory activeAssets, uint256[] memory amountsOut);
+```
+
+### realizedWeights
+
+Per-depositor realized weight vector.
+Returns each active asset's share of the depositor's pro-rata vault
+holdings, expressed in basis points (0–10_000), where 10_000 = 100%.
+A depositor with no shares gets all-zero weights.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+function realizedWeights(address depositor)
+    external
+    view
+    returns (address[] memory activeAssets, uint256[] memory bpsWeights);
+```
+
 ### assetCount
 
 
@@ -755,6 +852,20 @@ Off-chain monitors can use the delta between `oldWindow` and
 event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 ```
 
+### WeightSnapshot
+Emitted on every deposit, recording the equal-weight allocation applied
+to the depositor's inflow. Satisfies the event-stream cost-disclosure
+requirement from docs/architecture.md §8 and ADR-0003.
+`bpsWeights` contains the basis-point weight for each element of `assets`
+(10_000 / n for each active asset, with the remainder allocated to the first).
+
+
+```solidity
+event WeightSnapshot(
+    address indexed depositor, address[] assets, uint256[] bpsWeights, uint256 timestamp
+);
+```
+
 ## Errors
 ### TVLCapExceeded
 
@@ -862,6 +973,16 @@ tooling can pin-point the failure mode.
 error InvalidTwapWindow(uint32 window);
 ```
 
+### NotImplemented
+Raised by the `rebalance()` stub. Global vault rebalancing is not
+implemented in the MVP. The selector is reserved for Phase B.
+See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
+
+
+```solidity
+error NotImplemented();
+```
+
 ### InsufficientPoolCardinality
 Raised by addAsset() when the pool's observation cardinality is
 below the minimum required to service TWAP reads over
@@ -876,6 +997,19 @@ observations to cover the full window before depositing.
 
 ```solidity
 error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
+```
+
+### InsufficientPoolLiquidity
+Raised by addAsset() when the pool's in-range liquidity (as
+returned by `IUniswapV3Pool.liquidity()`) is below
+`MIN_POOL_LIQUIDITY`. Thin pools cannot guarantee synchronous
+withdrawal at the TWAP-derived slippage bound — a core router-
+eligibility requirement (gap-report §1). Provide depth before
+registering the asset.
+
+
+```solidity
+error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
 ```
 
 ## Structs
