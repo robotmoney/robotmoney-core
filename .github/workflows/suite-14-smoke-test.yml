@@ -52,6 +52,7 @@ on:
       - "testing/smoke-test/**"
       - "testing/ethereum-testnet/**"
       - "contracts/**"
+      - "config/dex-pools.json"
       - ".github/workflows/suite-14-smoke-test.yml"
   workflow_dispatch:
 
@@ -101,6 +102,15 @@ jobs:
       # broken manifest is caught before any container boot is attempted.
       - name: fork-block manifest + alloc-ingester guard
         run: bash scripts/devnet/check-fork-manifest.sh
+
+      # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
+      # ingested_addresses stay in sync after a fork-block bump.  Runs as a
+      # hermetic lib-test (no Docker required) so it can be caught early,
+      # before the container-boot steps below.  Also exercises the simulated
+      # failure path that proves the guard detects an un-ingested pool.
+      - name: fork-block alignment guard (expected-prices + ingested pools)
+        working-directory: testing/smoke-test
+        run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
 
       - name: cargo test (boots full-stack CLI, asserts summary + teardown)
         working-directory: testing/smoke-test
