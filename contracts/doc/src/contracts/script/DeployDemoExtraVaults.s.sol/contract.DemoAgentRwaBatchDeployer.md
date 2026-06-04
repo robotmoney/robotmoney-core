@@ -1,10 +1,10 @@
 # DemoAgentRwaBatchDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/f39b06a56217d7376251b1403dc50b5a82486455/contracts/script/DeployDemoExtraVaults.s.sol)
 
-Batch deployer #2 — the RWA/Thematic placeholder vault (PRD §11.4)
-plus the `AgentTokenVault` (PRD §11.3). Performs two direct
-sub-CREATEs inside a single broadcaster CREATE. Kept separate
-from `ProtocolVaultBatchDeployer` so combined initcode stays under
+Batch deployer #2 — the real `RwaVault` (PRD §11.4, deSPXA) plus the
+`AgentTokenVault` (PRD §11.3). Performs two direct sub-CREATEs inside
+a single broadcaster CREATE. Kept separate from
+`ProtocolVaultBatchDeployer` so combined initcode stays under
 EIP-3860's 49152-byte limit (geth enforces this on the smoke-test
 devnet). All vaults constructed with admin = adminAddr. Demo-only.
 
@@ -13,7 +13,7 @@ devnet). All vaults constructed with admin = adminAddr. Demo-only.
 ### rwaVault
 
 ```solidity
-RobotMoneyVault public immutable rwaVault
+RwaVault public immutable rwaVault
 ```
 
 
@@ -34,6 +34,7 @@ constructor(
     address adminAddr,
     address emergencyResponder,
     address swapRouter,
+    address chronicle,
     uint256 tvlCap,
     uint256 perDepositCap
 ) ;

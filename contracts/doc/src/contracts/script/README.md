@@ -9,6 +9,8 @@
 - [DemoV3SwapRouter](DeployDemoExtraVaults.s.sol/contract.DemoV3SwapRouter.md)
 - [DemoV4SwapRouter](DeployDemoExtraVaults.s.sol/contract.DemoV4SwapRouter.md)
 - [DemoAerodromeRouter](DeployDemoExtraVaults.s.sol/contract.DemoAerodromeRouter.md)
+- [DemoChronicleOracle](DeployDemoExtraVaults.s.sol/contract.DemoChronicleOracle.md)
+- [DemoRwaStubDeployer](DeployDemoExtraVaults.s.sol/contract.DemoRwaStubDeployer.md)
 - [AgentBasketStubDeployer](DeployDemoExtraVaults.s.sol/contract.AgentBasketStubDeployer.md)
 - [ProtocolBasketStubDeployer](DeployDemoExtraVaults.s.sol/contract.ProtocolBasketStubDeployer.md)
 - [ProtocolVaultBatchDeployer](DeployDemoExtraVaults.s.sol/contract.ProtocolVaultBatchDeployer.md)
