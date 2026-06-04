@@ -322,7 +322,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     // ─── totalAssets ─────────────────────────────────────────────────
 
     /// @notice USDC value of all held assets (idle USDC + TWAP-priced basket assets).
-    function totalAssets() public view override returns (uint256) {
+    /// @dev Marked `virtual` so subclasses (e.g. RwaVault) can inject oracle-freshness
+    ///      checks before delegating to this base implementation.
+    function totalAssets() public view virtual override returns (uint256) {
         uint256 sum = _USDC.balanceOf(address(this));
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {

@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e3ee0bd75d52506549a0416bdd36e7e170b4b50b/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -261,9 +261,12 @@ function _decimalsOffset() internal pure override returns (uint8);
 
 USDC value of all held assets (idle USDC + TWAP-priced basket assets).
 
+Marked `virtual` so subclasses (e.g. RwaVault) can inject oracle-freshness
+checks before delegating to this base implementation.
+
 
 ```solidity
-function totalAssets() public view override returns (uint256);
+function totalAssets() public view virtual override returns (uint256);
 ```
 
 ### _deposit
