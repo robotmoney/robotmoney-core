@@ -550,9 +550,9 @@ async fn handle_log(
                 cfg.chain_id,
                 decoded.vault.into_array(),
                 &decoded.name,
-                "stable-yield", // riskLabel removed from VaultRegistered (VaultRegistry.sol:67); use default
-                U256::ZERO,     // depositCap removed
-                0i16,           // VaultStatus::Active at registration
+                risk_label_from_vault_name(&decoded.name),
+                U256::ZERO,              // depositCap removed
+                0i16,                    // VaultStatus::Active at registration
                 log.block_number as i64, // registeredAt removed; use block_number
                 log.block_number as i64,
                 log.tx_hash.0,
@@ -756,4 +756,18 @@ async fn call_bool(
 ) -> Result<bool, IndexerError> {
     let v = call_u256(rpc, to, data, block).await?;
     Ok(v != U256::ZERO)
+}
+
+/// Map vault name to risk label per PRD §11.
+/// The VaultRegistered event carries only name and asset; risk_label was
+/// removed from VaultMetadata to avoid contract changes. The indexer derives
+/// it from the registration name as a stopgap — a contract-level risk_label
+/// field is a future improvement.
+fn risk_label_from_vault_name(name: &str) -> &'static str {
+    match name {
+        "Robot Money USDC" => "STABLE_YIELD",
+        "Robot Money Protocol" => "VOLATILE",
+        "Robot Money Agent Tokens" | "Robot Money RWA / Thematic" => "SPECULATIVE",
+        _ => "STABLE_YIELD",
+    }
 }

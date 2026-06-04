@@ -206,7 +206,7 @@ async fn get_vaults_one_registered_vault() {
         .with_body(jrpc_result(&enc_vault_record(
             VAULT,
             "RobotMoney USDC Vault",
-            "stable-yield",
+            "STABLE_YIELD",
             "Deposit USDC, earn yield",
             0, // Active
             VAULT,
@@ -247,7 +247,7 @@ async fn get_vaults_one_registered_vault() {
         format!("{VAULT:#x}")
     );
     assert_eq!(vault["name"], "RobotMoney USDC Vault");
-    assert_eq!(vault["risk_label"], "stable-yield");
+    assert_eq!(vault["risk_label"], "STABLE_YIELD");
     assert_eq!(vault["status"], "active");
     assert_eq!(vault["total_assets"].as_str().unwrap(), "5000000");
     assert_eq!(vault["deposit_cap"].as_str().unwrap(), "0");
@@ -296,7 +296,7 @@ async fn get_vaults_paused_vault_status() {
         .with_body(jrpc_result(&enc_vault_record(
             VAULT,
             "Paused Vault",
-            "stable-yield",
+            "STABLE_YIELD",
             "",
             1, // Paused
             VAULT,
@@ -368,7 +368,7 @@ async fn get_vault_address_happy_path() {
         .with_body(jrpc_result(&enc_vault_record(
             VAULT,
             "Robot Money Vault",
-            "stable-yield",
+            "STABLE_YIELD",
             "Yield-bearing USDC vault",
             0, // Active
             VAULT,
@@ -453,7 +453,7 @@ async fn get_vault_address_happy_path() {
         format!("{VAULT:#x}")
     );
     assert_eq!(d["name"], "Robot Money Vault");
-    assert_eq!(d["risk_label"], "stable-yield");
+    assert_eq!(d["risk_label"], "STABLE_YIELD");
     assert_eq!(d["status"], "active");
     assert_eq!(d["exit_fee_bps"], 10);
     assert_eq!(d["registered_at"], 1_715_000_000u64);

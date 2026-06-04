@@ -397,7 +397,7 @@ async fn get_vault_returns_detail_for_known_address() {
         .await
         .unwrap();
     assert_eq!(body["vault"]["name"], "Alpha Vault");
-    assert_eq!(body["vault"]["risk_label"], "stable-yield");
+    assert_eq!(body["vault"]["risk_label"], "STABLE_YIELD");
     assert_eq!(body["vault"]["status"], 0);
     // TVL history should contain the snapshot seeded in common::seed_fixture.
     let tvl = body["vault"]["tvl_history"].as_array().unwrap();

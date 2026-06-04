@@ -3119,6 +3119,25 @@ impl DappStack {
                 );
                 cleanup();
             })?;
+
+        // Fund the deployer (admin EOA) with USDC so the 3 Playwright e2e
+        // specs (vault-deposit-withdraw, router-deposit, multi-vault-withdrawal)
+        // can run without their own bespoke fundUsdc() calls (issue #603).
+        const ADMIN_SEED_USDC: u128 = 100_000_000; // 100 USDC (6dp)
+        let admin_addr: Address = DEPLOYER_ADDRESS_HEX
+            .parse()
+            .expect("valid deployer address");
+        fixture
+            .fund_usdc(admin_addr, ADMIN_SEED_USDC)
+            .inspect_err(|err| {
+                logging::error("smoke-test", format!("admin USDC seeding failed: {err}"));
+                cleanup();
+            })?;
+        logging::info(
+            "smoke-test",
+            format!("seeded admin EOA with {ADMIN_SEED_USDC} USDC (6dp)"),
+        );
+
         eprintln!(
             "smoke-test: demo depositor seeding complete ({} depositors)",
             DEMO_SEED_DEPOSITOR_COUNT,

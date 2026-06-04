@@ -55,28 +55,6 @@ async function vaultBalanceOf(rpc: string, vault: string, who: string): Promise<
   return j.result && j.result !== "0x" ? BigInt(j.result) : 0n;
 }
 
-/** Fund `recipient` with `amount` USDC from the harness holder and await receipt. */
-async function fundUsdc(
-  endpoints: DevnetEndpoints,
-  recipient: Address,
-  amount: bigint,
-): Promise<void> {
-  const account = privateKeyToAccount(endpoints.harness_usdc_holder_private_key as Hex);
-  const wallet = createWalletClient({ account, transport: http(endpoints.rpc_url) });
-  const publicClient = createPublicClient({ transport: http(endpoints.rpc_url) });
-  const data = encodeFunctionData({
-    abi: erc20Abi,
-    functionName: "transfer",
-    args: [recipient, amount],
-  });
-  const hash = await wallet.sendTransaction({
-    chain: null,
-    to: endpoints.usdc_addr as Address,
-    data,
-  });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-}
-
 /** Sign USDC.approve(vault, amount) + vault.deposit(amount, receiver) and await both. */
 async function depositToVault(endpoints: DevnetEndpoints, amount: bigint): Promise<void> {
   const account = privateKeyToAccount(endpoints.admin_private_key as Hex);
@@ -137,8 +115,8 @@ test.describe("Multi-vault withdrawal — PositionSelector and previewRedeem on 
   }) => {
     const admin = endpoints.admin_addr;
 
-    // Step 1: fund and deposit so the admin holds a non-zero receipt balance.
-    await fundUsdc(endpoints, admin as Address, DEPOSIT_USDC);
+    // Step 1: deposit so the admin holds a non-zero receipt balance.
+    // Admin EOA is pre-funded with USDC via DappStack::boot (issue #603).
     await depositToVault(endpoints, DEPOSIT_USDC);
 
     const sharesBefore = await vaultBalanceOf(endpoints.rpc_url, endpoints.vault_addr, admin);

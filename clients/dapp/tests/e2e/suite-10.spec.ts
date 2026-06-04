@@ -293,29 +293,32 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     );
     await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
-    // At least one Active vault card must show a non-zero TVL value. The
+    // All four Active vault cards must show a non-zero TVL value. The
     // explorer-indexer processes Deposit events asynchronously; the seeding
-    // was done during DappStack::boot so the snapshots should be present
-    // but we use a loose assertion (at-least-one) to tolerate indexer lag.
+    // was done during DappStack::boot but the indexer may still be catching
+    // up, so we poll until every card has a non-zero TVL.
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
     const count = await tvlCells.count();
-    expect(count, "expected TVL cells for Active vault cards").toBeGreaterThan(0);
+    expect(count, "expected 4 TVL cells for Active vault cards").toBe(4);
 
-    let foundNonZero = false;
-    for (let i = 0; i < count; i++) {
-      const text = await tvlCells.nth(i).textContent();
-      const trimmed = text?.trim() ?? "";
-      // A zero TVL renders as "0" or "—" (no snapshot yet); anything else
-      // (e.g. "4,000,000,000" μUSDC, a formatted "$4,000 USDC", or a raw
-      // numeric string != "0") is treated as non-zero.
-      if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") {
-        foundNonZero = true;
-        break;
-      }
-    }
-    expect(
-      foundNonZero,
-      "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding",
-    ).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          for (let i = 0; i < count; i++) {
+            const text = (await tvlCells.nth(i).textContent()) ?? "";
+            const trimmed = text.trim();
+            // "0", "—", or blank all mean no TVL yet.
+            if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
+          }
+          return true;
+        },
+        {
+          message:
+            "all 4 Active vault cards must show a non-zero TVL after DappStack::boot auto-seeding (issue #593)",
+          timeout: 120_000,
+          intervals: [5_000],
+        },
+      )
+      .toBe(true);
   });
 });
