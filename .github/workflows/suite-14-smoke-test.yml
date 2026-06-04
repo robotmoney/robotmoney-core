@@ -124,6 +124,18 @@ jobs:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-fixture_meta.log
         run: cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture
 
+      # The smoke-test fixture hardcodes the Docker compose project name
+      # `ethereum-testnet` and refuses to boot if those containers already
+      # exist. The preceding cli_meta / fixture_meta steps each tear down via
+      # `Drop`, but on a busy runner that teardown can still be settling when
+      # the next step's `Fixture::new()` runs — leaving the chain containers
+      # half-up and failing the boot with "compose project already running
+      # containers". Force a clean slot before the four-vault step so it always
+      # starts from zero containers. Mirrors the safety-net teardown below.
+      - name: Ensure clean devnet slot before four-vault test
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true
+
       # Issue #592 CI gate: four-vault real-TVL end state. Boots the devnet
       # fixture, seeds the simulated depositors, and asserts the VaultRegistry
       # lists exactly four Active vaults (PRD §11.1–§11.4), the router weights
