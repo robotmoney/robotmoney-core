@@ -12,6 +12,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RwaVault} from "../vaults/RwaVault.sol";
+import {BasketVault} from "../vaults/BasketVault.sol";
 import {ChronicleOracleAdapter} from "../adapters/ChronicleOracleAdapter.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
@@ -239,7 +240,8 @@ contract RwaVaultTest is Test {
             address(despxa),
             address(pool),
             0, // swapFee (unused by Aerodrome)
-            address(adapter)
+            address(adapter),
+            BasketVault.Venue.Aerodrome
         );
     }
 
@@ -562,7 +564,13 @@ contract RwaVaultTest is Test {
 
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("MaxAssetsReached()"))));
-        vault.addAsset(address(secondToken), address(secondPool), 0, address(adapter));
+        vault.addAsset(
+            address(secondToken),
+            address(secondPool),
+            0,
+            address(adapter),
+            BasketVault.Venue.Aerodrome
+        );
     }
 
     // ─── Oracle heartbeat configuration ──────────────────────────────────────

@@ -1,28 +1,61 @@
 # AgentBasketStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/298fe53d078e3114670e9c65d370bad82c79d34b/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the AgentTokenVault devnet basket
-stand-ins (PRD §11.3). Its constructor performs all 12 sub-`CREATE`s
-(six `DemoBasketToken` + six `DemoUsdcPool`) in a single broadcaster
-transaction. The script then makes one `vault.addAsset(...)` call
-per token. Collapses the per-symbol broadcast loop from 18 tx
-(6 × token + pool + addAsset) down to 7, keeping smoke-test
-chain-boot inside the dapp-e2e `globalSetup` budget on GH-hosted
-runners. Demo-only.
+stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+AND the per-asset swap router stubs + adapters. Its constructor performs
+all 11 sub-CREATEs in a single broadcaster transaction:
+- 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+- 3 × DemoUsdcPool
+- DemoV3SwapRouter (BNKR built-in path)
+- DemoV4SwapRouter (JUNO V4 path)
+- DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+- UniswapV4SwapAdapter (JUNO)
+- AerodromeSwapAdapter (ROBOTMONEY)
+Collapsed into one broadcaster CREATE to minimize on-chain tx count
+and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 
 
 ## State Variables
 ### tokens
 
 ```solidity
-DemoBasketToken[6] public tokens
+DemoBasketToken[3] public tokens
 ```
 
 
 ### pools
 
 ```solidity
-DemoUsdcPool[6] public pools
+DemoUsdcPool[3] public pools
+```
+
+
+### v3Router
+
+```solidity
+address public v3Router
+```
+
+
+### v4Adapter
+
+```solidity
+address public v4Adapter
+```
+
+
+### aeroAdapter
+
+```solidity
+address public aeroAdapter
+```
+
+
+### AGENT_SYMBOLS_3
+
+```solidity
+string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"]
 ```
 
 
@@ -31,6 +64,6 @@ DemoUsdcPool[6] public pools
 
 
 ```solidity
-constructor(string[6] memory symbols, address usdc) ;
+constructor(address usdc) ;
 ```
 

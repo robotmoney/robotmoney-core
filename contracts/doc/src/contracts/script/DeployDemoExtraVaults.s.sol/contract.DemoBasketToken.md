@@ -1,5 +1,5 @@
 # DemoBasketToken
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/298fe53d078e3114670e9c65d370bad82c79d34b/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 ERC20
@@ -17,5 +17,15 @@ enumerate them. Never deployed on mainnet (this script is demo-only).
 
 ```solidity
 constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_);
+```
+
+### mint
+
+Permissionless mint used by demo router stubs to simulate swap output.
+Demo-only; never deployed on mainnet.
+
+
+```solidity
+function mint(address to, uint256 amount) external;
 ```
 
