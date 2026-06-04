@@ -224,13 +224,17 @@ contract AgentTokenVaultTest is Test {
     ///         VaultRegistry, and makes it router-eligible (issue #560).
     ///         The vault is reachable via the same registry path the dapp uses.
     function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
-        // The script body runs under vm.startBroadcast(), which executes as the
-        // foundry default sender. Registry/router/primary admin must be that
-        // address so the broadcast holds ADMIN_ROLE on every governed surface.
-        address deployer = DEFAULT_SENDER;
+        // Drive the demo seed through `runInProcess(Params)` rather than the
+        // env-driven `run()`. `vm.setEnv` mutates process-global state, so two
+        // env-driven script tests running in parallel test files (this one and
+        // Deploy.t.sol::test_deploy_envDriven_runInProcessSucceeds) raced on
+        // ADMIN_ADDRESS and intermittently deployed with the wrong admin,
+        // reverting with AccessControlUnauthorizedAccount. The in-process path
+        // takes a fully-formed Params struct (no env reads) and is the same
+        // deterministic seam every DeployDemoExtraVaults.t.sol test uses.
+        address deployer = address(this);
         TestERC20 seedUsdc = new TestERC20();
 
-        vm.startPrank(deployer);
         VaultRegistry registry = new VaultRegistry(deployer);
         PortfolioRouter portfolioRouter =
             new PortfolioRouter(address(seedUsdc), address(registry), deployer);
@@ -251,19 +255,25 @@ contract AgentTokenVaultTest is Test {
             })
         );
         registry.setRouterEligible(address(primary), true);
-        vm.stopPrank();
 
-        vm.setEnv("ADMIN_ADDRESS", vm.toString(deployer));
-        // Use deployer as emergencyResponder for demo seed (same address is allowed).
-        vm.setEnv("EMERGENCY_RESPONDER_ADDRESS", vm.toString(deployer));
-        vm.setEnv("REGISTRY_ADDRESS", vm.toString(address(registry)));
-        vm.setEnv("ROUTER_ADDRESS", vm.toString(address(portfolioRouter)));
-        vm.setEnv("PRIMARY_VAULT", vm.toString(address(primary)));
-        vm.setEnv("USDC_ADDRESS", vm.toString(address(seedUsdc)));
-        vm.setEnv("DEPLOYMENT_OUT", "/tmp/agent-token-demo-seed-test.json");
-
+        // The script makes the registry/router calls in-process, so it must
+        // hold ADMIN_ROLE on both (mirrors the production broadcast key).
         DeployDemoExtraVaults script = new DeployDemoExtraVaults();
-        DeployDemoExtraVaults.Deployed memory d = script.run();
+        registry.grantRole(registry.ADMIN_ROLE(), address(script));
+        portfolioRouter.grantRole(portfolioRouter.ADMIN_ROLE(), address(script));
+
+        DeployDemoExtraVaults.Deployed memory d = script.runInProcess(
+            DeployDemoExtraVaults.Params({
+                admin: address(script),
+                emergencyResponder: address(script),
+                registry: address(registry),
+                router: address(portfolioRouter),
+                primaryVault: address(primary),
+                usdc: address(seedUsdc),
+                swapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481,
+                rwaName: "Robot Money RWA / Thematic"
+            })
+        );
 
         // 1. AgentTokenVault deployed and seeded with three real-asset demo tokens
         //    (BNKR, JUNO, ROBOTMONEY — issue #560 three-token basket).
