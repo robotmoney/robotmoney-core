@@ -301,15 +301,14 @@ contract ProtocolVaultBatchDeployer {
     }
 }
 
-/// @notice Batch deployer #2 — the real `RwaVault` (PRD §11.4, deSPXA) plus the
-///         `AgentTokenVault` (PRD §11.3). Performs two direct sub-CREATEs inside
-///         a single broadcaster CREATE. Kept separate from
-///         `ProtocolVaultBatchDeployer` so combined initcode stays under
-///         EIP-3860's 49152-byte limit (geth enforces this on the smoke-test
-///         devnet). All vaults constructed with admin = adminAddr. Demo-only.
-contract DemoAgentRwaBatchDeployer {
+/// @notice Batch deployer #2a — the real `RwaVault` (PRD §11.4, deSPXA) alone.
+///         Split from `DemoAgentBatchDeployer` to keep each batch deployer's
+///         initcode under EIP-3860's 49152-byte limit (geth enforces this on
+///         the smoke-test devnet). `RwaVault` initcode is ~25KB; combining it
+///         with `AgentTokenVault` (~24KB) would push combined initcode to ~51KB,
+///         which exceeds the geth limit. Demo-only.
+contract DemoRwaBatchDeployer {
     RwaVault public immutable rwaVault;
-    AgentTokenVault public immutable agentVault;
 
     constructor(
         address usdc,
@@ -331,6 +330,24 @@ contract DemoAgentRwaBatchDeployer {
             adminAddr,
             emergencyResponder
         );
+    }
+}
+
+/// @notice Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
+///         Split from the former `DemoAgentRwaBatchDeployer` to keep each
+///         batch deployer's initcode under EIP-3860's 49152-byte limit.
+///         All vaults constructed with admin = adminAddr. Demo-only.
+contract DemoAgentBatchDeployer {
+    AgentTokenVault public immutable agentVault;
+
+    constructor(
+        address usdc,
+        address adminAddr,
+        address emergencyResponder,
+        address swapRouter,
+        uint256 tvlCap,
+        uint256 perDepositCap
+    ) {
         agentVault = new AgentTokenVault(
             IERC20(usdc),
             ISwapRouter(swapRouter),
@@ -563,7 +580,11 @@ contract DeployDemoExtraVaults is Script {
             DEMO_TVL_CAP,
             DEMO_PER_DEPOSIT_CAP
         );
-        DemoAgentRwaBatchDeployer batchB = new DemoAgentRwaBatchDeployer(
+        // Deploy RwaVault and AgentTokenVault in separate batch deployers:
+        // combined initcode of RwaVault (~25KB) + AgentTokenVault (~24KB) would
+        // exceed the EIP-3860 49152-byte limit on geth (smoke-test devnet).
+        // Splitting into two single-vault deployers keeps each under the limit.
+        DemoRwaBatchDeployer batchB = new DemoRwaBatchDeployer(
             p.usdc,
             p.admin,
             p.emergencyResponder,
@@ -572,10 +593,18 @@ contract DeployDemoExtraVaults is Script {
             DEMO_TVL_CAP,
             DEMO_PER_DEPOSIT_CAP
         );
+        DemoAgentBatchDeployer batchC = new DemoAgentBatchDeployer(
+            p.usdc,
+            p.admin,
+            p.emergencyResponder,
+            agentBatch.v3Router(),
+            DEMO_TVL_CAP,
+            DEMO_PER_DEPOSIT_CAP
+        );
 
         v.protocolVault = address(batchA.protocolVault());
         v.rwaVault = address(batchB.rwaVault());
-        v.agentVault = address(batchB.agentVault());
+        v.agentVault = address(batchC.agentVault());
 
         v.protocolStubs = address(new ProtocolBasketStubDeployer(PROTOCOL_SYMBOLS, p.usdc));
         v.agentStubs = address(agentBatch);
