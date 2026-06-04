@@ -377,19 +377,16 @@ contract DemoAgentBatchDeployer {
 ///         devnet basket stubs; `RwaVault` (PRD §11.4) holds the deSPXA stub
 ///         + a demo Chronicle oracle that always returns a fresh price.
 ///
-///         Router eligibility (ADR-0006 §1, issue #562):
-///           - rmRWA (§11.4) is registered Active but NOT router-eligible.
-///             The PortfolioRouter deposit path reads totalAssets() to compute
-///             shares, which in turn enforces a Chronicle oracle staleness check.
-///             On the demo devnet the demo Chronicle oracle always returns a
-///             fresh price, but routing through the PortfolioRouter for an
-///             oracle-gated vault complicates the deposit transaction and adds
-///             no value — RWA deposits are inherently direct (single-asset,
-///             Aerodrome secondary swap). The dapp presents rmRWA as a live
-///             vault tile (Active) with direct-deposit-only treatment, consistent
-///             with the "direct-seed-only" stance in ADR-0006 §1.
-///           - rmAGENT (§11.3) is router-eligible (50% of the default vector).
-///           - The primary `RobotMoneyVault` (§11.1) holds the other 50%.
+///         Router eligibility (issues #559, #560, ADR-0006 §1):
+///           - rmPROTO (§11.2) is router-eligible (issue #559). DemoV3SwapRouter
+///             stubs satisfy the V3 deposit path on devnet. ~3333 bps leg.
+///           - rmAGENT (§11.3) is router-eligible (issue #560). Multi-DEX stubs
+///             (V3/V4/Aerodrome) satisfy all three deposit legs on devnet. ~3333 bps.
+///           - rmRWA (§11.4) is registered Active but NOT router-eligible per
+///             ADR-0006 §1 — direct-deposit-only (Chronicle oracle gates totalAssets).
+///           - The primary `RobotMoneyVault` (§11.1) holds ~3334 bps (one-third).
+///           - Default + voted weight vectors: 3334 / 3333 / 3333 bps (primary /
+///             rmPROTO / rmAGENT) summing to 10 000 bps.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
@@ -402,7 +399,7 @@ contract DemoAgentBatchDeployer {
 ///           REGISTRY_ADDRESS            — deployed VaultRegistry
 ///           ROUTER_ADDRESS              — deployed PortfolioRouter
 ///           PRIMARY_VAULT               — RobotMoneyVault deployed by Deploy.s.sol
-///                                         (holds 50% of the default weight vector)
+///                                         (~3334 bps in the default weight vector)
 ///           USDC_ADDRESS                — ERC-20 asset every vault denominates in
 ///
 ///         Optional env vars:
@@ -417,8 +414,9 @@ contract DeployDemoExtraVaults is Script {
 
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
-        /// @dev `ProtocolAssetVault` (PRD §11.2). Registered Active, NOT router-eligible
-        ///      (basket-vault gap blocks live deposits; see basket-vault-gap-report.md).
+        /// @dev `ProtocolAssetVault` (PRD §11.2, rmPROTO). Registered Active and
+        ///      router-eligible (issue #559). Included in the default + voted weight
+        ///      vectors at 3 333 bps (~33% of routed deposits).
         address protocolVault;
         /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
         address[] protocolTokens;
@@ -628,18 +626,17 @@ contract DeployDemoExtraVaults is Script {
         VaultRegistry registry = VaultRegistry(p.registry);
 
         // 1. Seed ProtocolAssetVault (PRD §11.2) basket with wETH/cbBTC/wSOL
-        //    stand-ins and register it Active. NOT router-eligible per
-        //    PRD §11.2 "Prototype — not Router-eligible": BasketVault.deposit
-        //    swaps USDC → basket asset via Uniswap V3 SwapRouter, and the
-        //    devnet has no real swap router, so a router-weighted deposit to
-        //    this vault would revert. The dapp renders it from the registry
-        //    as an Active tile for display; live deposits remain blocked
-        //    independently by the basket-vault gap (TWAP, previewRedeem) —
-        //    docs/technical/basket-vault-gap-report.md.
+        //    stand-ins and register it Active. Made router-eligible (issue #559):
+        //    the demo deploys DemoV3SwapRouter stubs so a router-weighted deposit
+        //    succeeds end-to-end on devnet. setRouterEligible is called before
+        //    setRouter so the VaultRegistry stale-length guard is inactive (it
+        //    only fires when the router is already linked with a non-empty vector).
         d.protocolTokens = _seedProtocolAssetVault(
             ProtocolAssetVault(v.protocolVault), ProtocolBasketStubDeployer(v.protocolStubs)
         );
         _registerIfAbsent(registry, v.protocolVault, p.usdc, "Robot Money Protocol");
+        // Set rmPROTO router-eligible (issue #559) before setRouter is called.
+        registry.setRouterEligible(d.protocolVault, true);
 
         // 2. Seed AgentTokenVault (PRD §11.3) with the real four-vault demo
         //    three-token basket: BNKR (Venue.V3), JUNO (Venue.V4 via v4Adapter),
@@ -669,14 +666,18 @@ contract DeployDemoExtraVaults is Script {
         _registerIfAbsent(registry, v.rwaVault, p.usdc, p.rwaName);
 
         // 4. Refresh the router default (below-quorum fallback, ADR-0002) and
-        //    voted weight vectors. Two vaults are now router-eligible: PRIMARY_VAULT
-        //    (§11.1) and agentTokenVault (§11.3, issue #560). Split 50/50.
-        //    Default vector length must match the registry's router-eligible count,
-        //    so link the router on the registry first (idempotent).
+        //    voted weight vectors. Three vaults are now router-eligible: PRIMARY_VAULT
+        //    (§11.1), protocolVault (§11.2, issue #559), and agentTokenVault
+        //    (§11.3, issue #560). Equal three-way split (~3334/3333/3333 bps).
+        //    Both setRouterEligible calls above happened before setRouter, so the
+        //    stale-length guard was inactive. Link the router first (idempotent),
+        //    then set the three-vault weight vector.
         if (address(registry.router()) != p.router) {
             registry.setRouter(p.router);
         }
-        _applyTwoVaultWeights(PortfolioRouter(p.router), p.primaryVault, v.agentVault);
+        _applyThreeVaultWeights(
+            PortfolioRouter(p.router), p.primaryVault, d.protocolVault, v.agentVault
+        );
     }
 
     /// @dev Wire the three PRD §11.2 basket symbols into the pre-built
@@ -764,17 +765,23 @@ contract DeployDemoExtraVaults is Script {
 
     /// @dev Refresh both the voted weight vector (used by the AC3 smoke test
     ///      which reads `getWeights()`) and the on-chain default (below-quorum
-    ///      fallback, ADR-0002). Two router-eligible vaults: primary (§11.1)
-    ///      and rmAGENT (§11.3, issue #560). Equal 50/50 split.
-    function _applyTwoVaultWeights(PortfolioRouter router, address primary, address agentVault)
-        internal
-    {
-        address[] memory vaults = new address[](2);
+    ///      fallback, ADR-0002). Three router-eligible vaults: primary (§11.1),
+    ///      rmPROTO (§11.2, issue #559), and rmAGENT (§11.3, issue #560).
+    ///      Approximately equal three-way split: 3334/3333/3333 bps = 10000 total.
+    function _applyThreeVaultWeights(
+        PortfolioRouter router,
+        address primary,
+        address proto,
+        address agentVault
+    ) internal {
+        address[] memory vaults = new address[](3);
         vaults[0] = primary;
-        vaults[1] = agentVault;
-        uint256[] memory bps = new uint256[](2);
-        bps[0] = 5_000;
-        bps[1] = 5_000;
+        vaults[1] = proto;
+        vaults[2] = agentVault;
+        uint256[] memory bps = new uint256[](3);
+        bps[0] = 3_334;
+        bps[1] = 3_333;
+        bps[2] = 3_333;
         router.setWeights(vaults, bps);
         router.setDefaultWeights(vaults, bps);
     }
@@ -830,7 +837,7 @@ contract DeployDemoExtraVaults is Script {
 
     function _logResult(Deployed memory d) internal pure {
         console2.log("DeployDemoExtraVaults complete");
-        console2.log("  protocolVault :", d.protocolVault);
+        console2.log("  protocolVault :", d.protocolVault, "(router-eligible, wETH/cbBTC/wSOL)");
         console2.log("  protocolTokens:", d.protocolTokens.length);
         console2.log(
             "  agentVault    :", d.agentTokenVault, "(router-eligible, BNKR/JUNO/ROBOTMONEY)"

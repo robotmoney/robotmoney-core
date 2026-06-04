@@ -1,5 +1,5 @@
 # MockVaultForRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/test/DeployPortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/test/DeployPortfolioRouter.t.sol)
 
 Minimal ERC-4626-shaped mock vault for router weight tests.
 Implements `asset()` because PortfolioRouter.setWeights validates
