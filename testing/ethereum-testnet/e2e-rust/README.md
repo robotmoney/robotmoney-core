@@ -80,7 +80,7 @@ The crate originally shipped two backends: Anvil (sub-second blocks,
 fast) and Geth+Lighthouse (12-second blocks, real). Issue #37 dropped
 the Anvil flavor — the project is not optimizing for fast feedback,
 and parallel coverage was net cost. The single backend lets the
-harness drop `anvil_impersonateAccount`, `evm_snapshot`/`evm_revert`,
+harness drop impersonation RPCs, snapshot/revert helpers,
 and `anvil_setNextBlockBaseFeePerGas`, replacing them with real-key
 signing and unit-test coverage in `clients/rust-payment-client/src/fees`
 for the fee-cap math.

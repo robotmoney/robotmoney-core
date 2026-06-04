@@ -15,9 +15,8 @@
 //!   an empty array and `rmpc get-vaults` exits 0 with `vaults: []`.
 //!
 //! All scenarios run against the same per-test anvil-fork backend (fork
-//! restart per test, per ADR §3.5). Each scenario uses `evm_snapshot` /
-//! `evm_revert` to restore state between sub-cases so there is no shared
-//! mutable state between scenarios within a test.
+//! restart per test, per ADR §3.5). Each test has its own isolated chain
+//! state for the full duration of the test function.
 //!
 //! The rmpc binary is compiled once (via `cargo build --bin rmpc`) and
 //! reused for the `get-vaults` round-trip assertion. The VaultRegistry.sol
@@ -192,9 +191,6 @@ fn registry_register_list() {
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
 
-    // — snapshot before any registry state changes —
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
-
     // Deploy VaultRegistry with deployer as admin.
     let initcode = vault_registry_initcode(deployer.address);
     let registry_addr = deployer
@@ -296,9 +292,6 @@ fn registry_register_list() {
         "rmpc get-vaults: vault {fake_vault:#x} not found in data.vaults; envelope:\n{v:#}"
     );
     eprintln!("[registry_register_list] rmpc get-vaults passed");
-
-    // Revert to clean state.
-    fx.rpc().evm_revert(snap).expect("evm_revert");
 }
 
 /// Scenario 2: register a vault then change its status to Paused.
@@ -315,8 +308,6 @@ fn registry_status_change() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy and register.
     let initcode = vault_registry_initcode(deployer.address);
@@ -432,7 +423,6 @@ fn registry_status_change() {
         "rmpc get-vaults vault address mismatch after status change"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[registry_status_change] passed");
 }
 
@@ -449,8 +439,6 @@ fn registry_empty_list() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy a fresh registry — no vaults registered.
     let initcode = vault_registry_initcode(deployer.address);
@@ -489,6 +477,4 @@ fn registry_empty_list() {
         "rmpc get-vaults on empty registry must return vaults=[]; got {v:#}"
     );
     eprintln!("[registry_empty_list] rmpc get-vaults vaults=[] confirmed");
-
-    fx.rpc().evm_revert(snap).expect("evm_revert");
 }

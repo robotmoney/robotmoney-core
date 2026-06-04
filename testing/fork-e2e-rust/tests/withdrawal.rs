@@ -22,8 +22,8 @@
 //!   per-window cap, then attempt a second withdrawal in the same window and assert
 //!   it reverts with `WithdrawWindowCapExceeded`.
 //!
-//! All scenarios use `evm_snapshot` / `evm_revert` for state isolation. Each
-//! test boots its own anvil fork backend (per ADR §3.5).
+//! Each test boots its own anvil fork backend (per ADR §3.5), providing
+//! full state isolation without snapshot/revert coordination.
 
 use std::path::PathBuf;
 
@@ -268,8 +268,6 @@ fn agent_withdrawal_happy_path() {
         .parse()
         .unwrap();
 
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
-
     // Deploy vault and gateway.
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
@@ -407,7 +405,6 @@ fn agent_withdrawal_happy_path() {
         "agent must hold 0 shares after withdrawal"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[agent_withdrawal_happy_path] passed");
 }
 
@@ -448,8 +445,6 @@ fn agent_withdrawal_redirect_blocked() {
     let asset_recipient_addr: Address = "0x000000000000000000000000000000000000BEEF"
         .parse()
         .unwrap();
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
@@ -536,7 +531,6 @@ fn agent_withdrawal_redirect_blocked() {
         "attacker address must receive 0 USDC"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[agent_withdrawal_redirect_blocked] passed");
 }
 
@@ -571,8 +565,6 @@ fn agent_withdrawal_window_cap() {
     let asset_recipient_addr: Address = "0x000000000000000000000000000000000000CAFE"
         .parse()
         .unwrap();
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     let vault = deploy_mock_vault(&admin, usdc);
     let gateway = deploy_gateway(&admin, usdc, vault, admin.address, pauser.address);
@@ -683,6 +675,5 @@ fn agent_withdrawal_window_cap() {
         "assetRecipient must have received exactly half_amount USDC"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[agent_withdrawal_window_cap] passed");
 }

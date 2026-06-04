@@ -54,10 +54,10 @@ pub const MORPHO_GAUNTLET_USDC_PRIME: Address =
 /// Verified against `cast call <compound-adapter> "COMET()(address)"` on Base mainnet.
 pub const COMPOUND_V3_COMET: Address = address!("b125e6687d4313864e53df431d5425969c15eb2f");
 
-/// USDC whale on Base used for funding ephemeral test accounts via
-/// `anvil_impersonateAccount`. This address holds a large enough
-/// USDC balance to cover all per-test funding amounts at any
-/// reasonable fork pin.
+/// USDC whale on Base. Historically used for funding via impersonation;
+/// the harness now uses direct storage-slot writes instead. This address
+/// holds a large enough USDC balance to cover all per-test funding amounts
+/// at any reasonable fork pin.
 ///
 /// Source: known Aave-V3 USDC reserve / lending pool address on
 /// Base. Picked over Coinbase / Circle treasury addresses because

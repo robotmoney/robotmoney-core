@@ -49,7 +49,7 @@ pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa7
 
 /// Key paired with PAUSER_ROLE. The derived address (`0x6145…`) is
 /// granted PAUSER_ROLE at deploy time so [`Fixture::pause_gateway`] can
-/// use `cast send` (real signature) without `anvil_impersonateAccount`.
+/// use `cast send` with a real signed transaction.
 pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8";

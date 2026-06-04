@@ -21,8 +21,8 @@
 //!   `execute()` is called before the execution delay elapses; the call
 //!   reverts.
 //!
-//! All scenarios use `evm_snapshot` / `evm_revert` for isolation. Each
-//! test boots its own anvil fork backend (per ADR §3.5).
+//! Each test boots its own anvil fork backend (per ADR §3.5), providing
+//! full state isolation without snapshot/revert coordination.
 
 use std::path::PathBuf;
 
@@ -336,8 +336,6 @@ fn governance_propose_vote_execute() {
         .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
         .expect("fund deployer");
 
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
-
     // Deploy the full governance stack.
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
@@ -510,7 +508,6 @@ fn governance_propose_vote_execute() {
     assert_eq!(state_after_exec, 3, "proposal must be Executed");
     eprintln!("[governance_propose_vote_execute] state=Executed, weights confirmed");
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[governance_propose_vote_execute] passed");
 }
 
@@ -531,8 +528,6 @@ fn governance_quorum_not_reached() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
@@ -662,7 +657,6 @@ fn governance_quorum_not_reached() {
         e => panic!("expected Reverted error, got: {e:?}"),
     }
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[governance_quorum_not_reached] passed");
 }
 
@@ -686,8 +680,6 @@ fn governance_execute_before_delay_reverts() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
@@ -808,6 +800,5 @@ fn governance_execute_before_delay_reverts() {
     assert_eq!(w_vaults[0], vault_a, "router must still point to vault_a");
     eprintln!("[governance_execute_before_delay_reverts] router weights unchanged, confirmed");
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[governance_execute_before_delay_reverts] passed");
 }

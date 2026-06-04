@@ -231,8 +231,6 @@ fn get_timelock_integration() {
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
 
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
-
     // Choose a fixed proposer/executor address for this test.
     // In a full Safe integration this would be the Safe proxy; here we use
     // a known test address to keep the test self-contained and hermetic.
@@ -363,7 +361,4 @@ fn get_timelock_integration() {
     );
 
     eprintln!("[get_timelock_integration] all assertions passed");
-
-    // Restore fork state.
-    fx.rpc().evm_revert(snap).expect("evm_revert");
 }

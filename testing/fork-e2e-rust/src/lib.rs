@@ -5,10 +5,9 @@
 //! Forked-mainnet end-to-end harness for Robot Money. Each test boots
 //! its own `anvil --fork-url $RMPC_FORK_RPC_URL --fork-block-number
 //! $RMPC_FORK_BLOCK` backend (per §3.5 of the ADR, fork-restart per
-//! test, no shared backend, no `evm_snapshot` orchestration), creates
-//! an ephemeral secp256k1 signer, funds the resulting EOA with ETH
-//! (via `anvil_setBalance`) and USDC (via `anvil_impersonateAccount`
-//! against a known whale on Base), then exercises the deployed
+//! test, no shared backend), creates an ephemeral secp256k1 signer,
+//! funds the resulting EOA with ETH (via `anvil_setBalance`) and USDC
+//! (via direct storage-slot writes), then exercises the deployed
 //! Robot Money contracts plus the surrounding USDC / DEX state.
 //!
 //! The harness intentionally keeps a small public surface:
@@ -901,8 +900,7 @@ impl Rpc {
         parse_b256(&s)
     }
 
-    /// Send an unsigned tx via the impersonation route — caller
-    /// must have called [`Self::impersonate`] first for `from`.
+    /// Send an unsigned tx as `from` — requires the node to have the account unlocked.
     pub fn send_unsigned(&self, mut tx: serde_json::Value) -> Result<B256, HarnessError> {
         // Ensure gas/value defaults so anvil accepts the tx.
         if tx.get("gas").is_none() {
@@ -962,22 +960,6 @@ impl Rpc {
             serde_json::json!([fmt_addr(addr), format!("{:#x}", slot), "latest"]),
         )?;
         parse_b256(&s)
-    }
-
-    pub fn impersonate(&self, addr: Address) -> Result<(), HarnessError> {
-        let _: serde_json::Value = self.rpc(
-            "anvil_impersonateAccount",
-            serde_json::json!([fmt_addr(addr)]),
-        )?;
-        Ok(())
-    }
-
-    pub fn stop_impersonate(&self, addr: Address) -> Result<(), HarnessError> {
-        let _: serde_json::Value = self.rpc(
-            "anvil_stopImpersonatingAccount",
-            serde_json::json!([fmt_addr(addr)]),
-        )?;
-        Ok(())
     }
 
     pub fn wait_for_receipt(&self, hash: B256, timeout: Duration) -> Result<Receipt, HarnessError> {
@@ -1075,21 +1057,6 @@ impl Rpc {
         params: serde_json::Value,
     ) -> Result<T, HarnessError> {
         self.rpc(method, params)
-    }
-
-    /// Take an EVM state snapshot. Returns the snapshot ID.
-    pub fn evm_snapshot(&self) -> Result<B256, HarnessError> {
-        let s: String = self.rpc("evm_snapshot", serde_json::json!([]))?;
-        parse_b256(&format!("0x{:0>64}", s.trim_start_matches("0x")))
-    }
-
-    /// Revert the EVM to the snapshot identified by `snapshot_id`.
-    pub fn evm_revert(&self, snapshot_id: B256) -> Result<bool, HarnessError> {
-        let r: bool = self.rpc(
-            "evm_revert",
-            serde_json::json!([format!("{:#x}", snapshot_id)]),
-        )?;
-        Ok(r)
     }
 }
 
