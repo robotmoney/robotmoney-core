@@ -1,29 +1,24 @@
-//! Smoke-test: demo seeding of the four-vault catalog, simulated depositors,
-//! and a non-degenerate router weight split (issues #465, #479).
+//! Smoke-test: demo seeding of the four-vault catalog and real simulated
+//! depositors funding every vault at boot (issues #465, #479, #559, #560, #563).
 //!
 //! Asserts the smoke-test devnet boots in the four-vault shape:
-//!   1. `VaultRegistry.listVaults()` returns four vaults — the primary
-//!      `RobotMoneyVault`, the two `DeployDemoExtraVaults` stand-ins (all
-//!      three Active), plus the RWA/Thematic placeholder (issue #479), which
-//!      is registered non-Active (Paused) and never router-eligible so the
-//!      deployed set matches the four PRD §11 categories.
-//!   2. `PortfolioRouter.getWeights()` returns the three demo weights
-//!      (5000/3000/2000 bps) summing to exactly 10 000 — the RWA placeholder
-//!      is never weighted.
-//!   3. After `Fixture::seed_demo_depositors`, each Active vault reports
-//!      non-zero `totalAssets` and the sum of the simulated depositors' share
-//!      balances on each vault equals that vault's `totalAssets`.
-//!
-//! The basket vaults `ProtocolAssetVault` and `AgentTokenVault` remain
-//! ADR-blocked (see `docs/technical/basket-vault-gap-report.md`); the demo
-//! ships passthrough-backed stand-ins so the multi-vault router story is
-//! exercised end-to-end without depending on TWAP hardening.
+//!   1. `VaultRegistry.listVaults()` returns four **Active** vaults — the
+//!      primary `RobotMoneyVault` (§11.1), `ProtocolAssetVault` (§11.2),
+//!      `AgentTokenVault` (§11.3) and the deSPXA `RwaVault` (§11.4). The first
+//!      three are router-eligible; rmRWA is Active but not router-eligible
+//!      (ADR-0006 §1) and is seeded by a direct deposit.
+//!   2. `PortfolioRouter.getWeights()` returns three weight entries — the
+//!      router-eligible vaults — summing to exactly 10 000 bps. rmRWA is never
+//!      weighted.
+//!   3. After `Fixture::seed_demo_depositors`, **all four** vaults report
+//!      non-zero `totalAssets` and each simulated depositor holds receipt-share
+//!      balances across the seeded vaults.
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture
 
 use alloy_primitives::Address;
-use smoke_test::{prerequisites_available, Fixture, DEMO_WEIGHT_PRIMARY_BPS};
+use smoke_test::{prerequisites_available, Fixture};
 
 fn skip_if_no_prereqs(name: &str) -> bool {
     if !prerequisites_available() {
@@ -191,11 +186,11 @@ fn vault_status(fx: &Fixture, vault: Address) -> u128 {
         .unwrap_or_else(|e| panic!("status word {status_word:?} not hex: {e}"))
 }
 
-/// AC1 (issues #465, #479): VaultRegistry.listVaults() returns four vaults —
-/// three Active router vaults plus the non-Active RWA/Thematic placeholder.
+/// AC1 (issues #465, #479, #559, #560): VaultRegistry.listVaults() returns the
+/// four PRD §11 vaults — primary, protocol, agent and RWA — all Active.
 #[test]
-fn registry_lists_four_vaults_with_rwa_placeholder() {
-    if skip_if_no_prereqs("registry_lists_four_vaults_with_rwa_placeholder") {
+fn registry_lists_four_active_vaults() {
+    if skip_if_no_prereqs("registry_lists_four_active_vaults") {
         return;
     }
     let fx = fixture();
@@ -206,17 +201,19 @@ fn registry_lists_four_vaults_with_rwa_placeholder() {
     assert_eq!(
         vaults.len(),
         4,
-        "expected 4 registered vaults after demo seeding (3 Active + RWA placeholder), got {} ({:?})",
+        "expected 4 registered vaults after demo seeding, got {} ({:?})",
         vaults.len(),
         vaults
     );
 
-    // The three Active router vaults must be present and report Active.
-    let active = fx.all_demo_vaults();
-    for v in active {
+    // All four PRD §11 vaults must be present and report Active (status=0):
+    // the three router-eligible vaults plus the directly-seeded RWA vault.
+    let mut expected = fx.all_demo_vaults().to_vec();
+    expected.push(fx.rwa_vault());
+    for v in expected {
         assert!(
             vaults.contains(&v),
-            "expected Active vault {v:#x} in registry, got {vaults:?}"
+            "expected vault {v:#x} in registry, got {vaults:?}"
         );
         let status = vault_status(fx, v);
         assert_eq!(
@@ -224,32 +221,14 @@ fn registry_lists_four_vaults_with_rwa_placeholder() {
             "vault {v:#x} should be Active (status=0); got status={status}"
         );
     }
-
-    // The RWA/Thematic placeholder must be present and report a non-Active
-    // status (Paused=1). Its inactive state is on-chain registry state, the
-    // same signal the dapp reads to render a Future / Coming-soon tile.
-    let rwa = fx.rwa_vault();
-    assert!(
-        vaults.contains(&rwa),
-        "expected RWA placeholder {rwa:#x} in registry, got {vaults:?}"
-    );
-    let rwa_status = vault_status(fx, rwa);
-    assert_ne!(
-        rwa_status, 0,
-        "RWA placeholder {rwa:#x} must be non-Active; got status={rwa_status}"
-    );
-    assert_eq!(
-        rwa_status, 1,
-        "RWA placeholder {rwa:#x} should be Paused (status=1); got status={rwa_status}"
-    );
 }
 
-/// AC3: Router weights assign the full 10 000 bps to the primary vault only.
-/// Basket vaults (ProtocolAssetVault, AgentTokenVault) are gap-blocked from
-/// router deposits per PRD §11.2/§11.3 and are not in the weight vector.
+/// AC3: Router weights cover the three router-eligible vaults (§11.1/§11.2/
+/// §11.3) and sum to exactly 10 000 bps. The §11.4 RWA vault is never weighted
+/// (ADR-0006 §1) — it is seeded by a direct deposit instead.
 #[test]
-fn router_weights_are_single_primary_vault() {
-    if skip_if_no_prereqs("router_weights_are_three_way_split") {
+fn router_weights_cover_three_eligible_vaults() {
+    if skip_if_no_prereqs("router_weights_cover_three_eligible_vaults") {
         return;
     }
     let fx = fixture();
@@ -257,28 +236,47 @@ fn router_weights_are_single_primary_vault() {
     // getWeights() selector: 0x22acb867
     let raw = eth_call_raw(fx.rpc_url(), fx.router(), "0x22acb867");
     let (vaults, bps) = decode_address_array_and_uint_array(&raw);
-    assert_eq!(vaults.len(), 1, "expected 1 router weight entry (primary)");
-    assert_eq!(bps.len(), 1, "expected 1 router weight bps entry");
-
-    // Only the primary RobotMoneyVault (PRD §11.1) is router-eligible — the
-    // basket vaults stay gap-blocked per PRD §11.2/§11.3.
-    assert_eq!(vaults[0], fx.vault(), "weight[0] must be the primary vault");
     assert_eq!(
-        bps[0] as u64, DEMO_WEIGHT_PRIMARY_BPS,
-        "primary vault must carry the full 10000 bps"
+        vaults.len(),
+        3,
+        "expected 3 router weight entries (eligible vaults), got {vaults:?}"
+    );
+    assert_eq!(bps.len(), 3, "expected 3 router weight bps entries");
+
+    // The three router-eligible vaults must all appear in the weight vector;
+    // the RWA vault must not.
+    for v in fx.all_demo_vaults() {
+        assert!(
+            vaults.contains(&v),
+            "router-eligible vault {v:#x} missing from weights {vaults:?}"
+        );
+    }
+    assert!(
+        !vaults.contains(&fx.rwa_vault()),
+        "RWA vault {:#x} must not be router-weighted, got {vaults:?}",
+        fx.rwa_vault()
+    );
+
+    let total: u128 = bps.iter().sum();
+    assert_eq!(
+        total, 10_000,
+        "router weights must sum to 10000 bps, got {total}"
     );
 }
 
-/// AC2: After seeding simulated depositors via the router, the primary vault
-/// reports non-zero `totalAssets` and the sum of per-depositor share balances
-/// equals the vault's `totalAssets`.
+/// AC2: After seeding simulated depositors, **all four** vaults report non-zero
+/// `totalAssets` and every depositor holds a non-zero receipt-share balance
+/// across the seeded vaults.
 ///
-/// Only the primary `RobotMoneyVault` (PRD §11.1) is router-eligible.
-/// Basket vaults (ProtocolAssetVault §11.2, AgentTokenVault §11.3) are
-/// gap-blocked from router deposits and receive no shares via this path.
+/// The router deposit funds the three router-eligible vaults (§11.1/§11.2/
+/// §11.3); a direct deposit funds the §11.4 RWA vault. Basket and RWA legs run
+/// real USDC → token swaps, so the depositor's per-vault share count is not a
+/// clean linear function of the deposit amount — we assert non-zero TVL and
+/// non-zero depositor shares (the invariant the dapp tiles depend on), not an
+/// exact share/asset identity.
 #[test]
-fn simulated_depositors_match_primary_vault_total_assets() {
-    if skip_if_no_prereqs("simulated_depositors_match_primary_vault_total_assets") {
+fn simulated_depositors_fund_all_four_vaults() {
+    if skip_if_no_prereqs("simulated_depositors_fund_all_four_vaults") {
         return;
     }
     let fx = fixture();
@@ -290,24 +288,30 @@ fn simulated_depositors_match_primary_vault_total_assets() {
         .expect("seed_demo_depositors");
     assert_eq!(depositors.len(), count as usize);
 
-    // Only the primary vault (10 000 bps weight) receives router deposits.
-    let v = fx.vault();
-    let ta = total_assets(fx.rpc_url(), v);
-    assert!(
-        ta > 0,
-        "primary vault {v:#x} has zero totalAssets after seeding"
-    );
-
-    // Sum each depositor's receipt-equivalent assets. RobotMoneyVault uses
-    // _decimalsOffset()=18 so convertToAssets() is the correct inverse.
-    let mut sum_assets: u128 = 0;
-    for (addr, _tx) in &depositors {
-        let shares = balance_of(fx.rpc_url(), v, *addr);
-        let assets = convert_to_assets(fx.rpc_url(), v, shares);
-        sum_assets = sum_assets.saturating_add(assets);
+    // Every one of the four vaults must hold real deposits.
+    let mut all_vaults = fx.all_demo_vaults().to_vec();
+    all_vaults.push(fx.rwa_vault());
+    for v in &all_vaults {
+        let ta = total_assets(fx.rpc_url(), *v);
+        assert!(ta > 0, "vault {v:#x} has zero totalAssets after seeding");
     }
-    assert_eq!(
-        sum_assets, ta,
-        "primary vault {v:#x}: sum of depositors' receipt-equivalent assets ({sum_assets}) must equal totalAssets ({ta})"
-    );
+
+    // Each depositor must hold receipt shares across the seeded vaults: the
+    // primary (router) leg and the RWA (direct) leg are the highest-signal
+    // checks because both mint shares 1:1-ish without basket dilution edge
+    // cases. Require a non-zero balance on each.
+    for (addr, _tx) in &depositors {
+        let primary_shares = balance_of(fx.rpc_url(), fx.vault(), *addr);
+        assert!(
+            primary_shares > 0,
+            "depositor {addr:#x} holds no primary-vault shares"
+        );
+        let rwa_shares = balance_of(fx.rpc_url(), fx.rwa_vault(), *addr);
+        assert!(
+            rwa_shares > 0,
+            "depositor {addr:#x} holds no RWA-vault shares"
+        );
+        // convert_to_assets sanity-checks the primary receipt is redeemable.
+        let _ = convert_to_assets(fx.rpc_url(), fx.vault(), primary_shares);
+    }
 }

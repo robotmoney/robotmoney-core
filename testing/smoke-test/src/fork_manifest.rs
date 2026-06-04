@@ -568,7 +568,8 @@ mod tests {
         // Simulate an expected-prices fixture that references a pool address
         // NOT in the manifest's ingested_addresses — exactly the condition that
         // occurs when a fork block is bumped without refreshing the pool list.
-        let prices_json: serde_json::Value = serde_json::from_str(r#"{
+        let prices_json: serde_json::Value = serde_json::from_str(
+            r#"{
             "fork_block": 99999999,
             "chain": "base",
             "pairs": [
@@ -581,7 +582,9 @@ mod tests {
                     "expected_price": 3000.0
                 }
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let ingested_lower: std::collections::HashSet<String> = manifest
             .ingested_addresses
