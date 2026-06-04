@@ -86,6 +86,7 @@
     - [BasketVaultSwapGuardsTest](contracts/test/ConfusedDeputyGuards.t.sol/contract.BasketVaultSwapGuardsTest.md)
     - [PortfolioRouterRuntimeEligibilityTest](contracts/test/ConfusedDeputyGuards.t.sol/contract.PortfolioRouterRuntimeEligibilityTest.md)
     - [DeployTest](contracts/test/Deploy.t.sol/contract.DeployTest.md)
+    - [IERC4626Min](contracts/test/DeployDemoExtraVaults.t.sol/interface.IERC4626Min.md)
     - [DeployDemoExtraVaultsTest](contracts/test/DeployDemoExtraVaults.t.sol/contract.DeployDemoExtraVaultsTest.md)
     - [MockVaultForRouter](contracts/test/DeployPortfolioRouter.t.sol/contract.MockVaultForRouter.md)
     - [DeployPortfolioRouterTest](contracts/test/DeployPortfolioRouter.t.sol/contract.DeployPortfolioRouterTest.md)

@@ -36,6 +36,14 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 4. `forge fmt --check`
 5. `forge build`
 6. `forge test` — unit tests: every public function, access control boundary, revert path, event emission, ERC-4626 rounding invariant
+7. `forge test` (four-vault real-TVL pyramid, issue #592) — a dedicated, named
+   step guards the real four-vault end state so it cannot silently regress:
+   `DeployDemoExtraVaults.t.sol` asserts **all four** PRD §11 vaults are
+   registered Active, three are router-eligible while the deSPXA RWA vault is
+   direct-seed-only (ADR-0006 §1), and every vault reports non-zero
+   `totalAssets` after a routed + direct deposit; `RwaVault.t.sol` covers the
+   deSPXA deposit/redeem round-trip and stale-oracle halt; the
+   `BasketVault`/`AgentTokenVault` suites pin per-vault basket composition.
 
 **Steps — `invariant` job:**
 1. Checkout repository
@@ -390,11 +398,20 @@ isolation, independent of any client (rmpc, dapp, explorer).
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
+11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`
+12. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
 > path that all devnet-backed suites (7, 8, 10, 11, 12) depend on. A
 > failure here blocks those suites before they pay their own boot costs.
+>
+> **Four-vault coverage (issue #592):** Step 11 is the integration-layer half
+> of the four-vault real-TVL test pyramid; the forge layer (suite 1–2 step 7)
+> is the contract half. The companion full-stack assertion
+> `full_stack_demo_tvl::explorer_api_shows_four_active_nonzero_vaults_after_boot`
+> (`GET /v1/vaults` returns exactly four Active entries, each non-zero
+> `total_assets`) boots the heavier `DappStack` and is run locally / via the
+> dapp suites rather than this fixture-only suite.
 
 ---
 

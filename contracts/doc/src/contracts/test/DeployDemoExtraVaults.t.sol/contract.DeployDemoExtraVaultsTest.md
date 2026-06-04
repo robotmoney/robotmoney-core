@@ -1,5 +1,5 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/409d003e7840e5cca4a5a03ebbc053080a81a5b7/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
@@ -219,6 +219,22 @@ The rmRWA vault is NOT included in the router defaultWeights vector
 
 ```solidity
 function test_rwaVault_not_in_defaultWeights() public;
+```
+
+### test_four_vaults_all_active_with_nonzero_totalAssets
+
+The full four-vault PRD §11 end state: after the demo seed, all
+four vaults are registered Active, the three router-eligible
+vaults (§11.1 primary, §11.2 rmPROTO, §11.3 rmAGENT) are funded
+by a single routed deposit, the §11.4 deSPXA RWA vault is funded
+by a direct deposit (ADR-0006 §1 — never router-weighted), and
+every one of the four reports non-zero `totalAssets`. This is the
+forge-layer mirror of the smoke-test four-vault TVL invariant the
+dapp tiles depend on (issue #592).
+
+
+```solidity
+function test_four_vaults_all_active_with_nonzero_totalAssets() public;
 ```
 
 ### test_rwaVault_holds_deSPXA_asset_Aerodrome_venue
