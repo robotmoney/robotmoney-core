@@ -18,9 +18,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
-import { erc20Abi, vaultAbi, registryAbi } from "../../src/lib/abi";
+import { vaultAbi, registryAbi } from "../../src/lib/abi";
 
-const DEPOSIT_USDC = 10_000_000n; // 10 USDC, 6 decimals
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 180_000;
 
