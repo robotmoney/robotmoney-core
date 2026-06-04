@@ -1,52 +1,74 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Canonical MVP AgentTokenVault shortlist (ADR-0001). Four equal-weight, Base-only agent-economy tokens curated by ADMIN_ROLE. Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployAgentTokenVault.s.sol) selects `mainnet` vs `devnet` by chain id. ROBOTMONEY (protocol's own token), BANKR, DEUS, and PEAQ are intentionally excluded — see ADR-0001 for rationale. Each entry pairs the token with the pool used for swaps/NAV; `pool` and `swapFee` must be populated before a mainnet deploy. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
+  "description": "Real four-vault demo AgentTokenVault basket (issue #560). Three Base-only agent-economy tokens curated by ADMIN_ROLE: BNKR (V3), JUNO (V4), ROBOTMONEY (V4/Aerodrome). Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployDemoExtraVaults.s.sol) seeds devnet stand-in ERC20s + stub pools at deploy time. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
   "tokens": [
+    "BNKR",
     "JUNO",
-    "WOON",
-    "ZYFAI",
-    "GIZA"
+    "ROBOTMONEY"
   ],
   "mainnet": {
     "chain_id": 8453,
     "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "shortlist": [
       {
+        "symbol": "BNKR",
+        "token": "0x22aF33FE49fD1Fa80c7149773dDe5890D3C76F3b",
+        "pool": "0x0000000000000000000000000000000000000000",
+        "swapFee": 10000,
+        "venue": "V3",
+        "adapter": null,
+        "note": "TODO: confirm Base mainnet BNKR/USDC V3 pool address before mainnet deploy"
+      },
+      {
         "symbol": "JUNO",
         "token": "0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet JUNO/USDC V3 pool address before mainnet deploy"
+        "venue": "V4",
+        "adapter": null,
+        "note": "TODO: confirm Base mainnet JUNO/USDC V4 pool address and deploy UniswapV4SwapAdapter before mainnet deploy"
       },
       {
-        "symbol": "WOON",
-        "token": "0x85eac631c800af804476b140f87039f742c28ba3",
+        "symbol": "ROBOTMONEY",
+        "token": "0x0000000000000000000000000000000000000000",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet WOON/USDC V3 pool address before mainnet deploy"
-      },
-      {
-        "symbol": "ZYFAI",
-        "token": "0xd080ed3c74a20250a2c9821885203034acd2d5ae",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet ZYFAI/USDC V3 pool address before mainnet deploy"
-      },
-      {
-        "symbol": "GIZA",
-        "token": "0x590830dfdf9a3f68afcdde2694773debdf267774",
-        "pool": "0x0000000000000000000000000000000000000000",
-        "swapFee": 10000,
-        "note": "TODO: confirm Base mainnet GIZA/USDC V3 pool address before mainnet deploy"
+        "venue": "Aerodrome",
+        "adapter": null,
+        "note": "TODO: confirm ROBOTMONEY token address, Aerodrome CL pool, and deploy AerodromeSwapAdapter before mainnet deploy"
       }
     ]
   },
   "devnet": {
-    "description": "Stand-in ERC20 + Uniswap V3 pool addresses for devnet/test deploys, keyed by chain id. The deploy script reads DEVNET_AGENT_TOKEN_* / DEVNET_AGENT_POOL_* env overrides when present (the smoke-test harness mints stand-in ERC20s and pools at deploy time and threads the addresses here), so this map only holds the override-key contract; actual addresses are injected per run.",
+    "description": "Stand-in ERC20 + pool addresses for devnet/test deploys. The demo deploy script (DeployDemoExtraVaults.s.sol) creates DemoBasketToken + DemoUsdcPool stubs at run-time and wires them with per-asset venue adapters (DemoV3SwapRouter for BNKR, DemoV4SwapRouter for JUNO, DemoAerodromeRouter for ROBOTMONEY). Token/pool/adapter addresses are dynamically assigned per run; this config documents the expected structure and venue assignment only.",
+    "shortlist": [
+      {
+        "symbol": "BNKR",
+        "venue": "V3",
+        "swapFee": 10000,
+        "adapter_type": "none",
+        "note": "Uses built-in SWAP_ROUTER path (DemoV3SwapRouter on devnet). No per-asset adapter (adapter = address(0))."
+      },
+      {
+        "symbol": "JUNO",
+        "venue": "V4",
+        "swapFee": 10000,
+        "adapter_type": "UniswapV4SwapAdapter",
+        "note": "Uses UniswapV4SwapAdapter wrapping DemoV4SwapRouter on devnet."
+      },
+      {
+        "symbol": "ROBOTMONEY",
+        "venue": "Aerodrome",
+        "swapFee": 10000,
+        "adapter_type": "AerodromeSwapAdapter",
+        "note": "Uses AerodromeSwapAdapter wrapping DemoAerodromeRouter on devnet. stable=false (volatile pool)."
+      }
+    ],
     "override_env_prefix": {
       "token": "DEVNET_AGENT_TOKEN_",
       "pool": "DEVNET_AGENT_POOL_",
-      "swapFee": "DEVNET_AGENT_FEE_"
+      "swapFee": "DEVNET_AGENT_FEE_",
+      "adapter": "DEVNET_AGENT_ADAPTER_"
     },
     "default_swap_fee": 10000
   }

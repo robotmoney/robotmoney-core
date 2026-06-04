@@ -216,13 +216,13 @@ contract AgentTokenVaultTest is Test {
         );
     }
 
-    // ─── Demo-seed integration (issue #481 test plan) ──────────────────────
+    // ─── Demo-seed integration (issues #481, #560 test plan) ─────────────────
 
     /// @notice Exercises the real demo seed chain: DeployDemoExtraVaults.run()
-    ///         deploys + seeds AgentTokenVault with the six MVP tokens and
-    ///         registers it in VaultRegistry. Asserts the vault is reachable via
-    ///         the same registry path the dapp uses and that shortlist() returns
-    ///         the six-token list. AgentTokenVault must NOT be router-eligible.
+    ///         deploys + seeds AgentTokenVault with the three real-asset demo
+    ///         tokens (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome), registers it in
+    ///         VaultRegistry, and makes it router-eligible (issue #560).
+    ///         The vault is reachable via the same registry path the dapp uses.
     function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
         // The script body runs under vm.startBroadcast(), which executes as the
         // foundry default sender. Registry/router/primary admin must be that
@@ -265,13 +265,14 @@ contract AgentTokenVaultTest is Test {
         DeployDemoExtraVaults script = new DeployDemoExtraVaults();
         DeployDemoExtraVaults.Deployed memory d = script.run();
 
-        // 1. AgentTokenVault deployed and seeded with six tokens.
+        // 1. AgentTokenVault deployed and seeded with three real-asset demo tokens
+        //    (BNKR, JUNO, ROBOTMONEY — issue #560 three-token basket).
         assertTrue(d.agentTokenVault != address(0), "agent token vault deployed");
-        assertEq(d.agentTokens.length, N, "six MVP shortlist tokens seeded");
+        assertEq(d.agentTokens.length, 3, "three real-asset demo tokens seeded");
 
         AgentTokenVault agentVault = AgentTokenVault(d.agentTokenVault);
         (address[] memory t,,,,) = agentVault.shortlist();
-        assertEq(t.length, N, "shortlist() returns six tokens after demo seed");
+        assertEq(t.length, 3, "shortlist() returns three tokens after demo seed");
 
         // 2. Reachable via the registry path the dapp uses. getVault reverts if
         //    the vault is not registered, so a successful read proves presence.
@@ -279,14 +280,15 @@ contract AgentTokenVaultTest is Test {
         assertEq(meta.name, "Robot Money Agent Tokens", "registered under canonical name");
         assertEq(meta.asset, address(seedUsdc), "registered against USDC");
 
-        // 3. NOT router-eligible per PRD §11.3: BasketVault.deposit needs a
-        //    real Uniswap V3 SwapRouter and the devnet has none, so a router-
-        //    weighted deposit here would revert. The basket-vault gap (TWAP,
-        //    previewRedeem) is the production blocker; nothing in this demo
-        //    seed resolves it.
-        assertFalse(
+        // 3. Router-eligible (issue #560): demo adapters wire working multi-DEX
+        //    swap paths (DemoV4SwapRouter + DemoAerodromeRouter), so a routed
+        //    deposit to rmAGENT succeeds on devnet. This overrides the prior
+        //    "basket-vault gap blocks live deposits" constraint from the
+        //    prototype deploy: the real multi-DEX adapters resolve that gap for
+        //    the demo environment.
+        assertTrue(
             registry.isRouterEligible(d.agentTokenVault),
-            "agent token vault must remain router-ineligible"
+            "rmAGENT must be router-eligible after real four-vault demo seed (issue #560)"
         );
     }
 }
