@@ -1174,11 +1174,11 @@ impl Fixture {
     pub fn demo_agent_vault_hex(&self) -> &str {
         &self.demo_extra_vaults.agent_token_vault
     }
-    /// Convenience accessor returning every Active vault in the demo set
-    /// (primary, protocol, agent). The primary is the only router-eligible
-    /// vault; the basket vaults are listed for registry-presence and
-    /// dapp-tile assertions but never receive router flow. Excludes the
-    /// RWA/Thematic placeholder, which is non-Active — see
+    /// Convenience accessor returning the three router-eligible Active vaults
+    /// in the demo set (primary §11.1, protocol §11.2, agent §11.3). After
+    /// issues #559/#560 all three carry router weight and receive router flow
+    /// from `seed_demo_depositors`. Excludes the §11.4 RWA vault, which is
+    /// Active but not router-eligible (seeded directly) — see
     /// [`Fixture::rwa_vault`].
     pub fn all_demo_vaults(&self) -> [Address; 3] {
         [
@@ -1187,11 +1187,12 @@ impl Fixture {
             self.demo_agent_vault(),
         ]
     }
-    /// RWA/Thematic placeholder registered by `DeployDemoExtraVaults.s.sol`
-    /// (issue #479, PRD §11.4). Registered non-Active (Paused) and never
-    /// router-eligible: it makes the deployed vault set match the four PRD §11
-    /// categories without ever receiving router flow. Smoke tests assert it is
-    /// present in `listVaults()` and reports a non-Active status.
+    /// RWA/Thematic vault (deSPXA) registered by `DeployDemoExtraVaults.s.sol`
+    /// (PRD §11.4, ADR-0006). Registered **Active** but intentionally not
+    /// router-eligible: its single-asset entry is a direct Aerodrome swap gated
+    /// by the Chronicle NAV oracle, so the PortfolioRouter never funds it.
+    /// `seed_demo_depositors` deposits into it directly so it reports non-zero
+    /// `totalAssets` like the three router-eligible vaults (issue #563).
     pub fn rwa_vault(&self) -> Address {
         parse_addr(&self.demo_extra_vaults.rwa_vault)
     }
@@ -1372,63 +1373,96 @@ impl Fixture {
         )
     }
 
-    /// Seed `count` deterministic simulated-depositor EOAs by funding each
-    /// with `per_user_usdc` USDC and a small amount of ETH (for gas), then
-    /// having each EOA deposit directly into the primary `RobotMoneyVault`
-    /// (§11.1) via ERC-4626 `deposit(uint256,address)` (issue #465, #559).
+    /// Seed `count` deterministic simulated-depositor EOAs so that **all four**
+    /// PRD §11 vaults report non-zero `totalAssets` and real depositor share
+    /// balances the moment the dapp first loads (issues #465, #532, #563).
     ///
-    /// Why direct-vault deposit (not PortfolioRouter): after issues #559 and #560
-    /// the router weight vector includes `ProtocolAssetVault` (§11.2, rmPROTO) and
-    /// `AgentTokenVault` (§11.3, rmAGENT) at ~3333 bps each. Deposits into basket
-    /// vaults require real swap infrastructure (USDC → basket-token swaps). The
-    /// demo devnet wires stub swap routers for all basket-vault legs (DemoV3SwapRouter,
-    /// DemoV4SwapRouter, DemoAerodromeRouter), so router deposits work in the dapp
-    /// E2E test. However, the smoke-test depositor seeds TVL for the first-visitor
-    /// experience, where simplicity matters: depositing directly into the primary
-    /// `RobotMoneyVault` (PassthroughAdapter, no swap required) guarantees TVL without
-    /// depending on the basket-vault swap path. The router and registry still reflect
-    /// the production state (rmPROTO + rmAGENT router-eligible, three-leg weight vector).
+    /// Each depositor performs two real on-chain deposits, both denominated in
+    /// `per_user_usdc`:
     ///
-    /// Returns the list of `(depositor_address, deposit_tx_hash)` pairs. The
-    /// keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed
-    /// is reproducible across runs and keys never collide with the harness
-    /// EOAs (deployer / pauser / agent / share-receiver / USDC holder).
+    /// 1. **Router deposit** — `PortfolioRouter.deposit(uint256,uint256[])`
+    ///    splits `per_user_usdc` across the three router-eligible vaults by the
+    ///    on-chain weight vector: the primary `RobotMoneyVault` (§11.1,
+    ///    `PassthroughAdapter`), `ProtocolAssetVault` (§11.2, rmPROTO) and
+    ///    `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The basket legs
+    ///    execute real USDC → basket-token swaps through the demo swap routers
+    ///    (`DemoV3SwapRouter`, `DemoV4SwapRouter`, `DemoAerodromeRouter`), so
+    ///    every router-eligible vault ends boot with non-zero TVL. An empty
+    ///    `minSharesPerLeg` array skips per-leg slippage protection — acceptable
+    ///    for the seed against the demo stub pools.
+    ///
+    /// 2. **Direct RWA deposit** — `RwaVault.deposit(uint256,address)` deposits
+    ///    `per_user_usdc` straight into the §11.4 RWA vault. rmRWA is registered
+    ///    Active but intentionally **not** router-eligible (ADR-0006 §1: its
+    ///    single-asset entry is a direct Aerodrome swap gated by the Chronicle
+    ///    NAV oracle, so routing through the PortfolioRouter adds no value). The
+    ///    deposit performs the real USDC → deSPXA entry swap; the demo Chronicle
+    ///    stub always reports a fresh price so the staleness check passes.
+    ///
+    /// Each depositor is therefore funded with `2 * per_user_usdc` USDC (one
+    /// budget per deposit path) plus a small ETH gas grant.
+    ///
+    /// Returns the list of `(depositor_address, router_deposit_tx_hash)` pairs.
+    /// The keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed
+    /// is reproducible across runs and keys never collide with the harness EOAs
+    /// (deployer / pauser / agent / share-receiver / USDC holder).
     pub fn seed_demo_depositors(
         &self,
         count: u32,
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
         let mut out = Vec::with_capacity(count as usize);
-        let vault_hex = format!("{:#x}", self.vault());
+        let router_hex = format!("{:#x}", self.router());
+        let rwa_hex = format!("{:#x}", self.rwa_vault());
+        // Each depositor runs two deposit paths (router split + direct RWA),
+        // each consuming `per_user_usdc`, so fund twice the per-path amount.
+        let total_usdc = per_user_usdc.saturating_mul(2);
         for i in 0..count {
             let (pk_hex, depositor) = demo_depositor_key(i);
             let depositor_hex = format!("{depositor:#x}");
 
-            // 1. Fund gas (small — single approve + single deposit). 0.05 ETH
-            //    is comfortably above the worst-case deposit cost.
+            // 1. Fund gas. 0.05 ETH comfortably covers two approves + two
+            //    deposits (the basket-vault swap legs are the costliest step).
             fund_eth_from_deployer(&self.rpc_url, &depositor_hex, "50000000000000000")?;
 
-            // 2. Fund USDC via the canonical harness ERC-20 transfer.
-            self.fund_usdc(depositor, per_user_usdc)?;
+            // 2. Fund USDC for both deposit paths via the canonical harness
+            //    ERC-20 transfer.
+            self.fund_usdc(depositor, total_usdc)?;
 
-            // 3. Approve the primary vault for the full deposit amount.
+            // 3. Approve the router for the router-leg budget, then deposit.
+            //    The router splits the amount across the three router-eligible
+            //    vaults by the on-chain weight vector and mints shares to the
+            //    depositor (msg.sender). Empty minSharesPerLeg skips slippage
+            //    protection (demo stub pools).
             self.cast_send(
                 &pk_hex,
                 self.usdc(),
                 "approve(address,uint256)",
-                &[&vault_hex, &per_user_usdc.to_string()],
+                &[&router_hex, &per_user_usdc.to_string()],
+            )?;
+            let router_tx = self.cast_send(
+                &pk_hex,
+                self.router(),
+                "deposit(uint256,uint256[])",
+                &[&per_user_usdc.to_string(), "[]"],
             )?;
 
-            // 4. Deposit directly into the primary RobotMoneyVault (ERC-4626).
-            //    Shares go back to the depositor (msg.sender).
-            let tx = self.cast_send(
+            // 4. Approve and deposit directly into the §11.4 RWA vault, which
+            //    is Active but not router-eligible. Shares go to the depositor.
+            self.cast_send(
                 &pk_hex,
-                self.vault(),
+                self.usdc(),
+                "approve(address,uint256)",
+                &[&rwa_hex, &per_user_usdc.to_string()],
+            )?;
+            self.cast_send(
+                &pk_hex,
+                self.rwa_vault(),
                 "deposit(uint256,address)",
                 &[&per_user_usdc.to_string(), &depositor_hex],
             )?;
 
-            out.push((depositor, tx));
+            out.push((depositor, router_tx));
         }
         Ok(out)
     }

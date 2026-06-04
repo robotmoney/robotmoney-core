@@ -19,11 +19,21 @@
 //! `keccak256("rm-demo-depositor-v1\0" || index)`, the same derivation used
 //! by `Fixture::seed_demo_depositors` in the smoke-test harness.
 //!
-//! Each depositor is funded with 0.05 ETH (gas) from the deployer key and
-//! `per_user_usdc` USDC from the same deployer key (which must hold enough
-//! USDC — typically the genesis-funded harness USDC holder key, or whatever
-//! key owns the faucet supply on the target devnet). Then the depositor
-//! approves the router and calls `deposit(uint256,uint256[])`.
+//! Each depositor is funded with 0.05 ETH (gas) and USDC from the deployer key
+//! (which must hold enough USDC — typically the genesis-funded harness USDC
+//! holder key, or whatever key owns the faucet supply on the target devnet).
+//! Then the depositor seeds every PRD §11 vault (issue #563):
+//!
+//!   * approves the router and calls `deposit(uint256,uint256[])`, which splits
+//!     `per_user_usdc` across the three router-eligible vaults (§11.1/§11.2/§11.3)
+//!     by the on-chain weight vector; and
+//!   * when `--rwa-vault` is supplied, approves and deposits another
+//!     `per_user_usdc` directly into the §11.4 RWA vault via
+//!     `deposit(uint256,address)` — rmRWA is Active but not router-eligible
+//!     (ADR-0006 §1), so it must be seeded directly.
+//!
+//! With `--rwa-vault` each depositor is funded with `2 * per_user_usdc` USDC
+//! (one budget per deposit path).
 
 use clap::Parser;
 use std::process::Command;
@@ -174,6 +184,13 @@ struct Cli {
     #[arg(long, env = "ROUTER_ADDRESS")]
     router: String,
 
+    /// RWA vault (§11.4) address. When provided, each depositor also deposits
+    /// `per_user_usdc` directly into this vault (it is Active but not
+    /// router-eligible, so the router split never funds it). Optional — omit to
+    /// seed only the three router-eligible vaults.
+    #[arg(long, env = "RWA_VAULT_ADDRESS")]
+    rwa_vault: Option<String>,
+
     /// VaultRegistry address. When provided, `totalAssets` is printed for
     /// each registered vault after seeding. Optional — omit to skip.
     #[arg(long, env = "REGISTRY_ADDRESS")]
@@ -200,6 +217,14 @@ fn main() {
     let per_user_usdc_units: u128 = cli.per_user_usdc as u128 * 1_000_000;
     let router = cli.router.trim().to_string();
     let usdc = cli.usdc.trim().to_string();
+    let rwa_vault = cli.rwa_vault.as_ref().map(|s| s.trim().to_string());
+    // When the RWA vault is seeded, each depositor runs two deposit paths
+    // (router split + direct RWA), each consuming per_user_usdc_units.
+    let fund_units: u128 = if rwa_vault.is_some() {
+        per_user_usdc_units.saturating_mul(2)
+    } else {
+        per_user_usdc_units
+    };
 
     println!(
         "demo-seed-depositors: seeding {} depositors with {} USDC each",
@@ -208,6 +233,10 @@ fn main() {
     println!("  rpc_url : {}", cli.rpc_url);
     println!("  router  : {router}");
     println!("  usdc    : {usdc}");
+    match &rwa_vault {
+        Some(v) => println!("  rwa     : {v}"),
+        None => println!("  rwa     : (skipped — router-eligible vaults only)"),
+    }
 
     for i in 0..cli.count {
         let (pk_hex, depositor) = smoke_test::demo_depositor_key(i);
@@ -231,13 +260,14 @@ fn main() {
         }
 
         // 2. Fund USDC via the deployer key (must hold the faucet supply).
-        print!("  [2/4] fund USDC ({} units) ... ", per_user_usdc_units);
+        //    `fund_units` covers both deposit paths when the RWA vault is set.
+        print!("  [2/4] fund USDC ({} units) ... ", fund_units);
         match cast_send(
             &cli.rpc_url,
             &cli.deployer_key,
             &usdc,
             "transfer(address,uint256)",
-            &[&depositor_hex, &per_user_usdc_units.to_string()],
+            &[&depositor_hex, &fund_units.to_string()],
         ) {
             Ok(tx) => println!("ok (tx={tx})"),
             Err(e) => {
@@ -263,7 +293,8 @@ fn main() {
         }
 
         // 4. Deposit through the router. Empty minSharesPerLeg skips slippage
-        //    guard — fine for the demo seed against passthrough adapters.
+        //    guard — fine for the demo seed against the demo stub pools. The
+        //    router splits across the three router-eligible vaults.
         print!("  [4/4] router.deposit ... ");
         match cast_send(
             &cli.rpc_url,
@@ -276,6 +307,40 @@ fn main() {
             Err(e) => {
                 eprintln!("FAILED: {e}");
                 std::process::exit(1);
+            }
+        }
+
+        // 5. Direct deposit into the §11.4 RWA vault (Active, not
+        //    router-eligible). Approve then deposit `per_user_usdc` so rmRWA
+        //    also reports non-zero totalAssets after seeding (issue #563).
+        if let Some(rwa) = &rwa_vault {
+            print!("  [+]   approve RWA ... ");
+            match cast_send(
+                &cli.rpc_url,
+                &pk_hex,
+                &usdc,
+                "approve(address,uint256)",
+                &[rwa, &per_user_usdc_units.to_string()],
+            ) {
+                Ok(tx) => println!("ok (tx={tx})"),
+                Err(e) => {
+                    eprintln!("FAILED: {e}");
+                    std::process::exit(1);
+                }
+            }
+            print!("  [+]   rwa.deposit ... ");
+            match cast_send(
+                &cli.rpc_url,
+                &pk_hex,
+                rwa,
+                "deposit(uint256,address)",
+                &[&per_user_usdc_units.to_string(), &depositor_hex],
+            ) {
+                Ok(tx) => println!("ok (tx={tx})"),
+                Err(e) => {
+                    eprintln!("FAILED: {e}");
+                    std::process::exit(1);
+                }
             }
         }
     }
