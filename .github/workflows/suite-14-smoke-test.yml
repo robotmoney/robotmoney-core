@@ -60,7 +60,13 @@ jobs:
   smoke-test:
     name: smoke-test-devnet
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 min (was 30): the job boots the devnet three times — cli_meta
+    # (--full-stack), fixture_meta, and the issue #592 demo_seeding four-vault
+    # step. On slower GitHub-hosted runners each chain boot can take several
+    # minutes, so the third boot pushed the 30-min budget over the edge and the
+    # job was cancelled mid-step. 45 min gives headroom for all three boots
+    # plus the inter-step compose-down without masking a genuinely hung boot.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
