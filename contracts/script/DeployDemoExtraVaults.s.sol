@@ -14,10 +14,13 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
+import {RwaVault} from "../vaults/RwaVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
+import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
+import {ChronicleOracleAdapter} from "../adapters/ChronicleOracleAdapter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 
@@ -153,6 +156,62 @@ contract DemoAerodromeRouter {
     }
 }
 
+/// @notice Minimal Chronicle oracle stub for the RWA vault devnet demo.
+///         Always returns a fresh price (current block.timestamp) so the
+///         staleness check in RwaVault._checkOracleFreshness() never reverts
+///         during demo deploys. The price is set to 5000 USD/deSPXA (5000e18)
+///         as a plausible S&P 500 NAV reference. Demo-only; never deployed on mainnet.
+contract DemoChronicleOracle is IChronicleOracle {
+    /// @notice Latest price in 18-decimal WAD format (1e18 = 1 USD).
+    ///         Initialised to 5000 USD/deSPXA — a plausible S&P 500 NAV.
+    uint256 public constant DEMO_PRICE = 5_000e18;
+
+    /// @notice Latest price returned by this stub oracle.
+    function latestAnswer() external pure returns (uint256) {
+        return DEMO_PRICE;
+    }
+
+    /// @notice Returns `block.timestamp` so the staleness check always passes.
+    ///         Demo-only; a real Chronicle feed updates asynchronously.
+    function latestTimestamp() external view returns (uint256) {
+        return block.timestamp;
+    }
+}
+
+/// @notice One-shot batch deployer for the RWA vault devnet stubs (PRD §11.4).
+///         Deploys the deSPXA stand-in token, its USDC pool stub, the demo
+///         Chronicle oracle stub, and the ChronicleOracleAdapter in a single
+///         CREATE. Used by `DemoRwaBatchDeployer` to satisfy the RwaVault
+///         `addAsset` gate (cardinality + liquidity) on the demo devnet.
+///         Demo-only; never deployed on mainnet.
+contract DemoRwaStubDeployer {
+    DemoBasketToken public immutable despxaToken;
+    DemoUsdcPool public immutable pool;
+    DemoChronicleOracle public immutable chronicle;
+    DemoAerodromeRouter public immutable aeroRouter;
+    ChronicleOracleAdapter public immutable chronicleAdapter;
+
+    constructor(address usdc) {
+        despxaToken = new DemoBasketToken("Demo deSPXA", "deSPXA");
+        pool = new DemoUsdcPool(address(despxaToken), usdc);
+        chronicle = new DemoChronicleOracle();
+        // Deploy a dedicated Aerodrome router stub for the RWA vault.
+        // The same stub address is used as both the router and factory
+        // (ChronicleOracleAdapter requires factory != address(0); on devnet
+        // the factory is embedded in the Route struct but never validated by
+        // the stub swap implementation). Demo-only.
+        aeroRouter = new DemoAerodromeRouter();
+        chronicleAdapter = new ChronicleOracleAdapter(
+            address(aeroRouter),
+            address(aeroRouter), // factory — non-zero stub; demo only
+            false, // stable = false (concentrated pool on devnet)
+            address(chronicle),
+            address(despxaToken),
+            usdc
+        );
+    }
+}
+
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket
 ///         stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
 ///         AND the per-asset swap router stubs + adapters. Its constructor performs
@@ -242,14 +301,43 @@ contract ProtocolVaultBatchDeployer {
     }
 }
 
-/// @notice Batch deployer #2 — the RWA/Thematic placeholder vault (PRD §11.4)
-///         plus the `AgentTokenVault` (PRD §11.3). Performs two direct
-///         sub-CREATEs inside a single broadcaster CREATE. Kept separate
-///         from `ProtocolVaultBatchDeployer` so combined initcode stays under
-///         EIP-3860's 49152-byte limit (geth enforces this on the smoke-test
-///         devnet). All vaults constructed with admin = adminAddr. Demo-only.
-contract DemoAgentRwaBatchDeployer {
-    RobotMoneyVault public immutable rwaVault;
+/// @notice Batch deployer #2a — the real `RwaVault` (PRD §11.4, deSPXA) alone.
+///         Split from `DemoAgentBatchDeployer` to keep each batch deployer's
+///         initcode under EIP-3860's 49152-byte limit (geth enforces this on
+///         the smoke-test devnet). `RwaVault` initcode is ~25KB; combining it
+///         with `AgentTokenVault` (~24KB) would push combined initcode to ~51KB,
+///         which exceeds the geth limit. Demo-only.
+contract DemoRwaBatchDeployer {
+    RwaVault public immutable rwaVault;
+
+    constructor(
+        address usdc,
+        address adminAddr,
+        address emergencyResponder,
+        address swapRouter,
+        address chronicle,
+        uint256 tvlCap,
+        uint256 perDepositCap
+    ) {
+        rwaVault = new RwaVault(
+            IERC20(usdc),
+            ISwapRouter(swapRouter),
+            IChronicleOracle(chronicle),
+            tvlCap,
+            perDepositCap,
+            0, // exitFeeBps
+            adminAddr, // feeRecipient
+            adminAddr,
+            emergencyResponder
+        );
+    }
+}
+
+/// @notice Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
+///         Split from the former `DemoAgentRwaBatchDeployer` to keep each
+///         batch deployer's initcode under EIP-3860's 49152-byte limit.
+///         All vaults constructed with admin = adminAddr. Demo-only.
+contract DemoAgentBatchDeployer {
     AgentTokenVault public immutable agentVault;
 
     constructor(
@@ -260,7 +348,6 @@ contract DemoAgentRwaBatchDeployer {
         uint256 tvlCap,
         uint256 perDepositCap
     ) {
-        rwaVault = new RobotMoneyVault(IERC20(usdc), tvlCap, perDepositCap, 0, adminAddr, adminAddr);
         agentVault = new AgentTokenVault(
             IERC20(usdc),
             ISwapRouter(swapRouter),
@@ -277,29 +364,32 @@ contract DemoAgentRwaBatchDeployer {
 /// @title DeployDemoExtraVaults
 /// @notice Demo-only deploy script that aligns the devnet vault set with the
 ///         four-vault PRD §11 catalog: Stable Yield (deployed by Deploy.s.sol),
-///         Protocol Asset, Agent Token, and an RWA/Thematic placeholder.
-///         Registers all three additions in `VaultRegistry`, seeds the two
-///         basket vaults with devnet stand-in tokens, and resets the router
-///         weight vector to single-vault (Primary only — matches PRD §11
-///         production router eligibility).
+///         Protocol Asset, Agent Token, and the real deSPXA RWA vault (ADR-0006).
+///         Registers all three additions in `VaultRegistry`, seeds the basket
+///         vaults with devnet stand-in tokens, seeds the RWA vault with the
+///         deSPXA stub + Chronicle oracle stub, and resets the router weight
+///         vector to two-vault 50/50 (Primary + rmAGENT).
 ///
 ///         Why this exists: to exercise the full PRD vault catalog end to end
 ///         (Portfolio Explorer, /v1/vaults TVL, Router Governance weights) the
 ///         demo seed deploys the same vault classes the PRD names — no generic
 ///         stand-in clones. `ProtocolAssetVault` and `AgentTokenVault` carry
-///         devnet basket stubs; `RobotMoneyVault` is reused as the RWA
-///         placeholder (Paused, never router-eligible) because PRD §11.4 marks
-///         that vault as Future / not specified — no canonical contract.
+///         devnet basket stubs; `RwaVault` (PRD §11.4) holds the deSPXA stub
+///         + a demo Chronicle oracle that always returns a fresh price.
 ///
-///         Router eligibility: per PRD §11.2 and §11.3, the basket vaults are
-///         "Prototype — not Router-eligible". The demo seed honours this:
-///         `BasketVault.deposit` swaps USDC → basket asset via Uniswap V3
-///         SwapRouter, and the devnet has no real swap router (defaults to
-///         the Base mainnet SwapRouter02 which doesn't exist on devnet), so a
-///         router-weighted deposit to either basket vault would revert. Only
-///         the primary `RobotMoneyVault` (§11.1) is router-eligible; the
-///         router default + voted weight vectors are a single 10 000 bps leg
-///         pointing at it.
+///         Router eligibility (ADR-0006 §1, issue #562):
+///           - rmRWA (§11.4) is registered Active but NOT router-eligible.
+///             The PortfolioRouter deposit path reads totalAssets() to compute
+///             shares, which in turn enforces a Chronicle oracle staleness check.
+///             On the demo devnet the demo Chronicle oracle always returns a
+///             fresh price, but routing through the PortfolioRouter for an
+///             oracle-gated vault complicates the deposit transaction and adds
+///             no value — RWA deposits are inherently direct (single-asset,
+///             Aerodrome secondary swap). The dapp presents rmRWA as a live
+///             vault tile (Active) with direct-deposit-only treatment, consistent
+///             with the "direct-seed-only" stance in ADR-0006 §1.
+///           - rmAGENT (§11.3) is router-eligible (50% of the default vector).
+///           - The primary `RobotMoneyVault` (§11.1) holds the other 50%.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
@@ -312,15 +402,13 @@ contract DemoAgentRwaBatchDeployer {
 ///           REGISTRY_ADDRESS            — deployed VaultRegistry
 ///           ROUTER_ADDRESS              — deployed PortfolioRouter
 ///           PRIMARY_VAULT               — RobotMoneyVault deployed by Deploy.s.sol
-///                                         (the only router-eligible vault in the
-///                                         weight vector)
+///                                         (holds 50% of the default weight vector)
 ///           USDC_ADDRESS                — ERC-20 asset every vault denominates in
 ///
 ///         Optional env vars:
 ///           SWAP_ROUTER        — Uniswap V3 SwapRouter02 address for the
 ///                                basket vaults (defaults to Base mainnet)
-///           RWA_VAULT_NAME     — registry name for the RWA/Thematic
-///                                placeholder
+///           RWA_VAULT_NAME     — registry name for the RWA vault
 ///                                (default: "Robot Money RWA / Thematic")
 ///           DEPLOYMENT_OUT     — output JSON path
 ///                                (default: "deployments/demo-extra-vaults-<chain_id>.json")
@@ -340,8 +428,9 @@ contract DeployDemoExtraVaults is Script {
         /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
         ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
         address[] agentTokens;
-        /// @dev RWA/Thematic placeholder (PRD §11.4). Registered non-Active
-        ///      (Paused) and never router-eligible; not in the weight vector.
+        /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active, NOT router-eligible
+        ///      (direct-deposit-only per ADR-0006 §1; Chronicle oracle gates totalAssets).
+        ///      Not in the router weight vector. The dapp renders it as a live vault tile.
         address rwaVault;
         /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
         address v4Adapter;
@@ -453,6 +542,7 @@ contract DeployDemoExtraVaults is Script {
         address aeroAdapter;
         address agentStubs; // AgentBasketStubDeployer
         address protocolStubs; // ProtocolBasketStubDeployer
+        address rwaStubs; // DemoRwaStubDeployer
     }
 
     /// @dev Caller must hold ADMIN_ROLE on registry + router via broadcast
@@ -476,6 +566,12 @@ contract DeployDemoExtraVaults is Script {
         // uses it as the swapRouter for the downstream vault contracts.
         AgentBasketStubDeployer agentBatch = new AgentBasketStubDeployer(p.usdc);
 
+        // Deploy the RWA stubs: deSPXA token stub, pool stub, demo Chronicle oracle,
+        // dedicated DemoAerodromeRouter, and ChronicleOracleAdapter — all collapsed
+        // into one CREATE. The stub router address is used as the Aerodrome factory
+        // parameter (non-zero required by ChronicleOracleAdapter; demo-only). Demo-only.
+        DemoRwaStubDeployer rwaStubs = new DemoRwaStubDeployer(p.usdc);
+
         ProtocolVaultBatchDeployer batchA = new ProtocolVaultBatchDeployer(
             p.usdc,
             p.admin,
@@ -484,7 +580,20 @@ contract DeployDemoExtraVaults is Script {
             DEMO_TVL_CAP,
             DEMO_PER_DEPOSIT_CAP
         );
-        DemoAgentRwaBatchDeployer batchB = new DemoAgentRwaBatchDeployer(
+        // Deploy RwaVault and AgentTokenVault in separate batch deployers:
+        // combined initcode of RwaVault (~25KB) + AgentTokenVault (~24KB) would
+        // exceed the EIP-3860 49152-byte limit on geth (smoke-test devnet).
+        // Splitting into two single-vault deployers keeps each under the limit.
+        DemoRwaBatchDeployer batchB = new DemoRwaBatchDeployer(
+            p.usdc,
+            p.admin,
+            p.emergencyResponder,
+            agentBatch.v3Router(),
+            address(rwaStubs.chronicle()),
+            DEMO_TVL_CAP,
+            DEMO_PER_DEPOSIT_CAP
+        );
+        DemoAgentBatchDeployer batchC = new DemoAgentBatchDeployer(
             p.usdc,
             p.admin,
             p.emergencyResponder,
@@ -495,10 +604,11 @@ contract DeployDemoExtraVaults is Script {
 
         v.protocolVault = address(batchA.protocolVault());
         v.rwaVault = address(batchB.rwaVault());
-        v.agentVault = address(batchB.agentVault());
+        v.agentVault = address(batchC.agentVault());
 
         v.protocolStubs = address(new ProtocolBasketStubDeployer(PROTOCOL_SYMBOLS, p.usdc));
         v.agentStubs = address(agentBatch);
+        v.rwaStubs = address(rwaStubs);
         v.v4Adapter = agentBatch.v4Adapter();
         v.aeroAdapter = agentBatch.aeroAdapter();
     }
@@ -547,17 +657,16 @@ contract DeployDemoExtraVaults is Script {
         // deposit path so a router-weighted deposit to agentTokenVault succeeds.
         registry.setRouterEligible(v.agentVault, true);
 
-        // 3. Register the RWA/Thematic placeholder (PRD §11.4). Registered then
-        //    immediately set to non-Active (Paused) and never router-eligible
-        //    (registry default). PortfolioRouter never weights or deposits into
-        //    it (not in the weight vector, isRouterEligible() == false); the
-        //    dapp renders it as a Future / Coming-soon tile from on-chain
-        //    status, not a hard-coded flag.
-        registry.registerVault(
-            v.rwaVault,
-            VaultRegistry.VaultMetadata({name: p.rwaName, asset: p.usdc, registeredAt: 0})
-        );
-        registry.setVaultStatus(v.rwaVault, VaultRegistry.VaultStatus.Paused);
+        // 3. Seed the RWA vault (PRD §11.4) with the deSPXA stand-in asset and
+        //    register it Active. NOT router-eligible per ADR-0006 §1:
+        //    the Chronicle oracle staleness check in totalAssets() gates every
+        //    price-sensitive operation; routing a deposit through PortfolioRouter
+        //    adds no value for a single-asset vault whose entry path is a direct
+        //    Aerodrome secondary swap. The dapp renders rmRWA as a live Active
+        //    tile; deposits are direct (not routed). isRouterEligible() remains
+        //    false (registry default).
+        _seedRwaVault(RwaVault(v.rwaVault), DemoRwaStubDeployer(v.rwaStubs));
+        _registerIfAbsent(registry, v.rwaVault, p.usdc, p.rwaName);
 
         // 4. Refresh the router default (below-quorum fallback, ADR-0002) and
         //    voted weight vectors. Two vaults are now router-eligible: PRIMARY_VAULT
@@ -632,6 +741,23 @@ contract DeployDemoExtraVaults is Script {
             address(seeder.pools(2)),
             DEMO_AGENT_ROBOTMONEY_FEE,
             aeroAdapterAddr,
+            BasketVault.Venue.Aerodrome
+        );
+    }
+
+    /// @dev Wire the deSPXA stand-in asset into the pre-built `RwaVault` via
+    ///      `addAsset`. The ChronicleOracleAdapter (already deployed inside
+    ///      `DemoRwaStubDeployer`) is passed as the per-asset adapter with
+    ///      Venue.Aerodrome so BasketVault routes swaps through it. The fee
+    ///      param is 0 — Aerodrome derives fee from the pool config, not the
+    ///      adapter. The pool stub satisfies cardinality + liquidity gates.
+    ///      Per ADR-0006 §1, the vault is seeded once (maxAssets = 1).
+    function _seedRwaVault(RwaVault vault, DemoRwaStubDeployer seeder) internal {
+        vault.addAsset(
+            address(seeder.despxaToken()),
+            address(seeder.pool()),
+            0, // fee — Aerodrome ignores this; Chronicle provides NAV pricing
+            address(seeder.chronicleAdapter()),
             BasketVault.Venue.Aerodrome
         );
     }
@@ -712,7 +838,9 @@ contract DeployDemoExtraVaults is Script {
         console2.log("  agentTokens   :", d.agentTokens.length, "(V3/V4/Aerodrome)");
         console2.log("  v4Adapter     :", d.v4Adapter);
         console2.log("  aeroAdapter   :", d.aeroAdapter);
-        console2.log("  rwaVault      :", d.rwaVault);
+        console2.log(
+            "  rwaVault      :", d.rwaVault, "(Active, direct-seed-only, deSPXA/Chronicle)"
+        );
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {

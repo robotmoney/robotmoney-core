@@ -1,5 +1,5 @@
 # MockDeSPXAPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/test/RwaVault.t.sol)
 
 Mock pool for addAsset() cardinality and liquidity gate checks.
 Chronicle (not pool TWAP) is used for pricing, so observe() is never

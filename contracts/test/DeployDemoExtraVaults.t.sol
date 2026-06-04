@@ -2,6 +2,8 @@
 // Canonical: docs/adr/ADR-0002-router-default-weights-on-chain.md — demo seed
 //            populates a non-empty defaultWeights vector so the allocation
 //            surface renders with no governance activity.
+//            docs/adr/ADR-0006-despxa-rwa-vault-design.md — deSPXA RWA vault;
+//            issue #562 — register deSPXA RWA vault Active, direct-seed-only.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -10,6 +12,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
+import {RwaVault} from "../vaults/RwaVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
@@ -21,6 +24,8 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///         runs, rmAGENT is router-eligible with BNKR/JUNO/ROBOTMONEY basket,
 ///         the router carries a two-vault default weight vector (primary + rmAGENT),
 ///         and a routed deposit reaches both vaults. ADR-0002; issue #560.
+///         Also: deSPXA RWA vault is registered Active and NOT router-eligible
+///         (direct-seed-only per ADR-0006; issue #562).
 contract DeployDemoExtraVaultsTest is Test {
     DeployDemoExtraVaults internal script;
     TestERC20 internal usdc;
@@ -235,5 +240,60 @@ contract DeployDemoExtraVaultsTest is Test {
         );
         assertNotEq(adapter, address(0), "ROBOTMONEY uses Aerodrome adapter");
         assertEq(adapter, d.aeroAdapter, "ROBOTMONEY adapter = deployed aeroAdapter");
+    }
+
+    // ─── deSPXA RWA vault tests (issue #562) ─────────────────────────────────
+
+    /// @notice The deSPXA RWA vault (PRD §11.4) is registered Active after the
+    ///         demo seed — no Paused placeholder remains (issue #562 AC1).
+    function test_rwaVault_is_Active_after_demo_seed() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        (, VaultRegistry.VaultStatus status) = registry.getVault(d.rwaVault);
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "rmRWA must be registered Active (no Paused placeholder)"
+        );
+    }
+
+    /// @notice The deSPXA RWA vault is NOT router-eligible per ADR-0006 §1
+    ///         (direct-seed-only; Chronicle oracle gates totalAssets). Issue #562 AC2.
+    function test_rwaVault_is_not_router_eligible() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        assertFalse(
+            registry.isRouterEligible(d.rwaVault),
+            "rmRWA must NOT be router-eligible (direct-seed-only per ADR-0006)"
+        );
+    }
+
+    /// @notice The rmRWA vault is NOT included in the router defaultWeights vector
+    ///         (only primary + rmAGENT are in the 50/50 split). Issue #562 AC2.
+    function test_rwaVault_not_in_defaultWeights() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        (address[] memory dV,) = router.getDefaultWeights();
+        for (uint256 i = 0; i < dV.length; i++) {
+            assertNotEq(dV[i], d.rwaVault, "rmRWA must NOT appear in defaultWeights");
+        }
+    }
+
+    /// @notice The rmRWA vault holds exactly one basket asset (deSPXA stub),
+    ///         wired with Venue.Aerodrome and a ChronicleOracleAdapter. Issue #562 AC1.
+    function test_rwaVault_holds_deSPXA_asset_Aerodrome_venue() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        RwaVault rwaVault = RwaVault(d.rwaVault);
+
+        // maxAssets() == 1 enforced by RwaVault.
+        assertEq(rwaVault.maxAssets(), 1, "RwaVault.maxAssets() must be 1");
+
+        // Exactly one asset is seeded.
+        (address token, address pool,, bool active, address adapter, BasketVault.Venue venue) =
+            rwaVault.assets(0);
+        assertTrue(token != address(0), "deSPXA stub token must be set");
+        assertTrue(pool != address(0), "deSPXA pool stub must be set");
+        assertTrue(active, "deSPXA asset must be active");
+        assertNotEq(adapter, address(0), "deSPXA must use ChronicleOracleAdapter (not built-in V3)");
+        assertEq(
+            uint256(venue), uint256(BasketVault.Venue.Aerodrome), "deSPXA venue must be Aerodrome"
+        );
     }
 }

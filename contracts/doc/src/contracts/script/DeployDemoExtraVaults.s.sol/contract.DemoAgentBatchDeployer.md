@@ -1,17 +1,17 @@
-# ProtocolVaultBatchDeployer
+# DemoAgentBatchDeployer
 [Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/script/DeployDemoExtraVaults.s.sol)
 
-Batch deployer #1 — the canonical `ProtocolAssetVault` (PRD §11.2)
-deployed inside a single broadcaster CREATE. Constructed with
-admin = adminAddr (the script broadcaster) so subsequent
-`addAsset` + registry calls remain on the broadcast key. Demo-only.
+Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
+Split from the former `DemoAgentRwaBatchDeployer` to keep each
+batch deployer's initcode under EIP-3860's 49152-byte limit.
+All vaults constructed with admin = adminAddr. Demo-only.
 
 
 ## Constants
-### protocolVault
+### agentVault
 
 ```solidity
-ProtocolAssetVault public immutable protocolVault
+AgentTokenVault public immutable agentVault
 ```
 
 

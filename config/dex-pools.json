@@ -33,17 +33,9 @@
       "quote": "USDC",
       "baseDecimals": 9,
       "quoteDecimals": 6
-    },
-    {
-      "id": "despxa-usdc",
-      "label": "deSPXA/USDC",
-      "base": "deSPXA",
-      "quote": "USDC",
-      "baseDecimals": 18,
-      "quoteDecimals": 6,
-      "$comment": "Centrifuge deSPXA (tokenised S&amp;P 500). Priced via Chronicle NAV oracle (not DEX TWAP). Aerodrome secondary-market pool only — no ERC-7540 primary redemption. See docs/adr/ADR-0006-despxa-rwa-vault-design.md."
     }
   ],
+  "$comment_despxa_not_in_pairs": "deSPXA/USDC is intentionally NOT in the `pairs` array. The landing-page price strip uses Uniswap sqrtPriceX96 reads; deSPXA is priced via the Chronicle NAV oracle (not a DEX TWAP). The Aerodrome pool address and all RWA vault routing config lives in the mainnet/devnet pool maps under 'despxa-usdc' (for use by basket-asset routing), NOT in the price-strip pairs list. See ADR-0006.",
   "$comment_basket_assets": "Basket-vault swap routes (issue #556, docs/prd.md§11.2 ProtocolAssetVault, §11.3 AgentTokenVault, §11.4 RWA vault). Each entry records the asset token address on Base mainnet, the DEX venue (UniswapV3 / UniswapV4 / Aerodrome), pool address, and pool parameter (fee tier for V3/V4 in bps, or 0=volatile/1=stable for Aerodrome). Entries with `pool_status: pending` have a confirmed token address but the pool address must be verified on-chain (Basescan / Aerodrome factory / Uniswap V4 PoolManager) before vault deployment or fork-state snapshot update. The genesis ingester (testing/smoke-test/src/genesis_alloc.rs) must ingest every pool address listed here via testing/ethereum-testnet/config/fork-block.json::ingested_addresses.",
   "basket_assets": {
     "$comment": "ProtocolAssetVault (rmPROTO) assets: cbBTC and wSOL use Uniswap V3; pool addresses are already confirmed and ingested in fork-block.json.",

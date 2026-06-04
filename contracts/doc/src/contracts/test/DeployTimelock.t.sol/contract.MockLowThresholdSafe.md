@@ -1,5 +1,5 @@
 # MockLowThresholdSafe
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/test/DeployTimelock.t.sol)
 
 Minimal stub that mimics a 1-of-N Safe — `getThreshold()` returns 1.
 Used to prove DeployTimelock rejects low-threshold Safes.
