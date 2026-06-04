@@ -33,6 +33,15 @@
       "quote": "USDC",
       "baseDecimals": 9,
       "quoteDecimals": 6
+    },
+    {
+      "id": "despxa-usdc",
+      "label": "deSPXA/USDC",
+      "base": "deSPXA",
+      "quote": "USDC",
+      "baseDecimals": 18,
+      "quoteDecimals": 6,
+      "$comment": "Centrifuge deSPXA (tokenised S&amp;P 500). Priced via Chronicle NAV oracle (not DEX TWAP). Aerodrome secondary-market pool only — no ERC-7540 primary redemption. See docs/adr/ADR-0006-despxa-rwa-vault-design.md."
     }
   ],
   "$comment_basket_assets": "Basket-vault swap routes (issue #556, docs/prd.md§11.2 ProtocolAssetVault, §11.3 AgentTokenVault, §11.4 RWA vault). Each entry records the asset token address on Base mainnet, the DEX venue (UniswapV3 / UniswapV4 / Aerodrome), pool address, and pool parameter (fee tier for V3/V4 in bps, or 0=volatile/1=stable for Aerodrome). Entries with `pool_status: pending` have a confirmed token address but the pool address must be verified on-chain (Basescan / Aerodrome factory / Uniswap V4 PoolManager) before vault deployment or fork-state snapshot update. The genesis ingester (testing/smoke-test/src/genesis_alloc.rs) must ingest every pool address listed here via testing/ethereum-testnet/config/fork-block.json::ingested_addresses.",
@@ -144,6 +153,20 @@
         "token0Decimals": 9,
         "token1Decimals": 6,
         "baseIsToken0": true
+      },
+      "despxa-usdc": {
+        "$comment": "Centrifuge deSPXA tokenised S&P 500 on Base. Aerodrome secondary pool; Chronicle NAV oracle (0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e). Addresses verified from ADR-0006 research — confirm on Basescan before production deployment.",
+        "deSPXA": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
+        "aerodromePool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
+        "aerodromeRouter": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
+        "aerodromeFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+        "chronicleFeed": "0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e",
+        "pool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
+        "token0": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
+        "token1Decimals": 6,
+        "baseIsToken0": true
       }
     }
   },
@@ -180,6 +203,20 @@
         "token0": "0x1C61629598e4a901136a81BC138E5828dc150d67",
         "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "token0Decimals": 9,
+        "token1Decimals": 6,
+        "baseIsToken0": true
+      },
+      "despxa-usdc": {
+        "$comment": "Fork-aware: same as mainnet (Base state copied at fork block). Chronicle feed must be kissed for the deployed RwaVault address before use.",
+        "deSPXA": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
+        "aerodromePool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
+        "aerodromeRouter": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
+        "aerodromeFactory": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
+        "chronicleFeed": "0xc9Bc046d3a832f5Fb5cf24e8cb7Bb15Fe6F1b9e",
+        "pool": "0xd53bF0FcE8E80a2f28c17Ef22FcBfB9b8FC8b6A",
+        "token0": "0x1c0375688De2e7e8f83DB30A91aD8f9e31e4A4A",
+        "token1": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "token0Decimals": 18,
         "token1Decimals": 6,
         "baseIsToken0": true
       }
