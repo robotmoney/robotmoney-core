@@ -2984,6 +2984,17 @@ impl DappStack {
         // The seeding uses the harness USDC holder key (no new secrets).
         const DEMO_SEED_DEPOSITOR_COUNT: u32 = 4;
         const DEMO_SEED_PER_USER_USDC: u128 = 1_000 * 1_000_000; // 1000 USDC (6dp)
+
+        // Surface the seeding phase on stderr. Readiness has already
+        // passed by this point, but every step below logs only to the
+        // log file, so without this banner the terminal sits on the
+        // "waiting for dapp containers to become ready..." line for the
+        // ~2-3 minutes seeding takes (one approve+deposit per depositor,
+        // each cast send waiting for a receipt) and looks frozen.
+        eprintln!(
+            "smoke-test: seeding {} demo depositors (this takes ~2-3 min; follow progress with `tail -f artifacts/smoke-test/smoke-test.log`)...",
+            DEMO_SEED_DEPOSITOR_COUNT,
+        );
         logging::info(
             "smoke-test",
             format!(
@@ -3009,6 +3020,10 @@ impl DappStack {
                 );
                 cleanup();
             })?;
+        eprintln!(
+            "smoke-test: demo depositor seeding complete ({} depositors)",
+            DEMO_SEED_DEPOSITOR_COUNT,
+        );
         logging::info(
             "smoke-test",
             format!(
