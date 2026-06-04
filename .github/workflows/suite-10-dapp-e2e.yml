@@ -21,10 +21,21 @@
 name: dapp-e2e
 
 on:
+  # HEAVY tier (issue #600): the dapp-e2e Playwright suite boots a full devnet and is
+  # NOT run on ordinary feature-branch PRs (to main/dev). It is re-anchored at the
+  # phase-integration boundary — push to dev-phase-* staging branches and dev (and
+  # main), plus PRs that target a dev-phase-* branch.
+  # See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev]
+    branches: [main, dev, "dev-phase-*"]
+    paths:
+      - "clients/dapp/**"
+      - "contracts/**"
+      - "testing/smoke-test/**"
+      - "testing/ethereum-testnet/**"
+      - ".github/workflows/suite-10-dapp-e2e.yml"
   pull_request:
-    branches: [main, dev]
+    branches: ["dev-phase-*"]
     paths:
       - "clients/dapp/**"
       - "contracts/**"
@@ -32,6 +43,14 @@ on:
       - "testing/ethereum-testnet/**"
       - ".github/workflows/suite-10-dapp-e2e.yml"
   workflow_dispatch:
+
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e:
@@ -61,15 +80,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ github.workspace }}/target
-          key: ${{ runner.os }}-cargo-dapp-e2e-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-dapp-e2e-
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1

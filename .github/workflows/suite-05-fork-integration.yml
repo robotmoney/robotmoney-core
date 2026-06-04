@@ -34,6 +34,14 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fork-integration:
     name: fork-integration
@@ -55,15 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-fork-e2e-${{ hashFiles('testing/fork-e2e-rust/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-fork-e2e-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build Solidity contracts (required by registry fork-e2e)
         run: forge build

@@ -46,6 +46,14 @@ on:
       - ".github/workflows/suite-04-rust-quality.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: rust-lint
@@ -62,15 +70,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml', 'services/explorer-indexer/Cargo.toml', 'testing/smoke-test/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-quality-
+        uses: Swatinem/rust-cache@v2
 
       - name: cargo fmt --check (all crates)
         run: cargo fmt --check --all
@@ -92,15 +92,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-quality-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml', 'services/explorer-indexer/Cargo.toml', 'testing/smoke-test/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-quality-
+        uses: Swatinem/rust-cache@v2
 
       - name: cargo build --all-targets
         run: cargo build --all-targets

@@ -39,10 +39,22 @@
 name: rust-client-devnet-integration
 
 on:
+  # HEAVY tier (issue #600): this devnet integration suite is NOT run on ordinary
+  # feature-branch PRs (to main/dev). It is re-anchored at the phase-integration
+  # boundary — push to dev-phase-* staging branches and dev (and main), plus PRs
+  # that target a dev-phase-* branch (feature -> phase staging merges). This is
+  # where cross-feature devnet interactions actually need to be proven.
+  # See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev]
+    branches: [main, dev, "dev-phase-*"]
+    paths:
+      - "clients/rust-payment-client/**"
+      - "testing/ethereum-testnet/e2e-rust/**"
+      - "testing/smoke-test/**"
+      - "contracts/**"
+      - ".github/workflows/suite-07-rmpc-integration.yml"
   pull_request:
-    branches: [main, dev]
+    branches: ["dev-phase-*"]
     paths:
       - "clients/rust-payment-client/**"
       - "testing/ethereum-testnet/e2e-rust/**"
@@ -51,11 +63,59 @@ on:
       - ".github/workflows/suite-07-rmpc-integration.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  geth-tests:
-    name: rmpc-geth-tests
+  # Non-devnet rmpc tests that need the release binary but no chain. Kept in this
+  # suite (rather than suite 6) because they depend on the release build; split into
+  # their own fast job so a manifest/TOML drift fails in <1 min without booting Docker.
+  parity:
+    name: rmpc-parity
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build rmpc binary
+        run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
+
+      - name: Skill-package parity
+        working-directory: clients/rust-payment-client
+        run: cargo test --test skill_docs_parity -- --nocapture
+
+      - name: dApp TOML round-trip
+        working-directory: clients/rust-payment-client
+        run: cargo test --test dapp_toml_roundtrip -- --nocapture
+
+  # PARALLEL DEVNET MATRIX (issue #600): each e2e binary booted its own Geth+Lighthouse
+  # devnet on port 8545, so they were forced to run SERIALLY in one job with a
+  # `docker compose down -v` between each (suite wall-clock ~45m). Splitting them into a
+  # matrix gives one runner per binary, each booting + tearing down its OWN stack with
+  # `if: always()`, removing the shared-port-8545 contention (suite ~45m -> ~13m).
+  # fail-fast: false so one failing binary does not cancel the others, and the
+  # per-binary green/red signal stays independent.
+  devnet-e2e:
+    name: rmpc-e2e-${{ matrix.binary }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [smoke, scenarios, window_cap, withdraw]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,58 +137,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-rmpc-integration-${{ hashFiles('clients/rust-payment-client/Cargo.toml', 'testing/ethereum-testnet/e2e-rust/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-integration-
+        uses: Swatinem/rust-cache@v2
 
       - name: Pre-pull Docker images
         working-directory: testing/ethereum-testnet/config
         run: docker compose pull --ignore-pull-failures || true
 
-      - name: Build rmpc binary
-        run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
-
-      - name: Skill-package parity
-        working-directory: clients/rust-payment-client
-        run: cargo test --test skill_docs_parity -- --nocapture
-
-      - name: dApp TOML round-trip
-        working-directory: clients/rust-payment-client
-        run: cargo test --test dapp_toml_roundtrip -- --nocapture
-
-      - name: e2e smoke test
+      - name: e2e ${{ matrix.binary }}
         working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --release --test smoke -- --test-threads=1 --nocapture
-
-      - name: Tear down docker (post-smoke)
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans
-
-      - name: e2e scenario suite
-        working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --release --test scenarios -- --test-threads=1 --nocapture
-
-      - name: Tear down docker (post-scenarios)
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans
-
-      - name: e2e window-cap scenario
-        working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --release --test window_cap -- --test-threads=1 --nocapture
-
-      - name: Tear down docker (post-window-cap)
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans
-
-      - name: e2e withdraw refusal scenarios (issue #312)
-        working-directory: testing/ethereum-testnet/e2e-rust
-        run: cargo test --release --test withdraw -- --test-threads=1 --nocapture
+        run: cargo test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
       - name: Tear down docker (always)
         if: always()
@@ -146,15 +163,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-nonce-stress-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-nonce-stress-
+        uses: Swatinem/rust-cache@v2
 
       - name: Run 100× stress
         run: bash .github/scripts/stress_nonce_race.sh
