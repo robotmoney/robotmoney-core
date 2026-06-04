@@ -1377,17 +1377,17 @@ impl Fixture {
     /// having each EOA deposit directly into the primary `RobotMoneyVault`
     /// (§11.1) via ERC-4626 `deposit(uint256,address)` (issue #465, #559).
     ///
-    /// Why direct-vault deposit (not PortfolioRouter): after issue #559 the
-    /// router weight vector includes `ProtocolAssetVault` (§11.2, rmPROTO) at
-    /// 5 000 bps. Deposits into that vault require real Uniswap V3 swap
-    /// infrastructure (USDC → basket-token swaps). The devnet has no real swap
-    /// router — only `UniswapV3PoolSlot0Stub` contracts for the dapp price
-    /// strip — so a router-routed deposit would revert with "execution reverted"
-    /// on the ProtocolAssetVault leg. The primary `RobotMoneyVault` uses a
-    /// `PassthroughAdapter` and accepts deposits without any swap, so seeding
-    /// it directly is safe and keeps TVL non-zero for the dapp's first-visitor
-    /// experience. The router and registry still reflect the production state
-    /// (rmPROTO router-eligible, two-leg weight vector).
+    /// Why direct-vault deposit (not PortfolioRouter): after issues #559 and #560
+    /// the router weight vector includes `ProtocolAssetVault` (§11.2, rmPROTO) and
+    /// `AgentTokenVault` (§11.3, rmAGENT) at ~3333 bps each. Deposits into basket
+    /// vaults require real swap infrastructure (USDC → basket-token swaps). The
+    /// demo devnet wires stub swap routers for all basket-vault legs (DemoV3SwapRouter,
+    /// DemoV4SwapRouter, DemoAerodromeRouter), so router deposits work in the dapp
+    /// E2E test. However, the smoke-test depositor seeds TVL for the first-visitor
+    /// experience, where simplicity matters: depositing directly into the primary
+    /// `RobotMoneyVault` (PassthroughAdapter, no swap required) guarantees TVL without
+    /// depending on the basket-vault swap path. The router and registry still reflect
+    /// the production state (rmPROTO + rmAGENT router-eligible, three-leg weight vector).
     ///
     /// Returns the list of `(depositor_address, deposit_tx_hash)` pairs. The
     /// keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed

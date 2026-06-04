@@ -1,15 +1,15 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
 
 Integration test for the demo seed path: after `DeployDemoExtraVaults`
-runs, rmAGENT is router-eligible with BNKR/JUNO/ROBOTMONEY basket,
-the router carries a two-vault default weight vector (primary + rmAGENT),
-and a routed deposit reaches both vaults. ADR-0002; issue #560.
-Also: deSPXA RWA vault is registered Active and NOT router-eligible
-(direct-seed-only per ADR-0006; issue #562).
+runs, rmPROTO (issue #559) and rmAGENT (issue #560) are both router-eligible,
+the router carries a three-vault default weight vector (primary + rmPROTO +
+rmAGENT at ~3334/3333/3333 bps), and a routed deposit reaches all three vaults.
+ADR-0002; issues #559, #560. Also: deSPXA RWA vault is registered Active
+and NOT router-eligible (direct-seed-only per ADR-0006; issue #562).
 
 
 ## State Variables
@@ -72,9 +72,9 @@ function _runScript() internal returns (DeployDemoExtraVaults.Deployed memory d)
 
 ### test_demo_seed_populates_defaultWeights
 
-After the demo seed runs, rmAGENT is router-eligible and the
-router default vector is a two-leg 50/50 split between primary and
-rmAGENT. Registry router-eligible count = 2.
+After the demo seed runs, rmPROTO and rmAGENT are router-eligible and the
+router default vector is a three-leg ~equal split (3334/3333/3333 bps).
+Registry router-eligible count = 3.
 
 
 ```solidity
@@ -163,6 +163,34 @@ function _assertRobotmoneyAsset(AgentTokenVault vault, DeployDemoExtraVaults.Dep
     view;
 ```
 
+### test_rmPROTO_is_router_eligible
+
+AC#1 (issue #559): rmPROTO is router-eligible after the demo seed.
+
+
+```solidity
+function test_rmPROTO_is_router_eligible() public;
+```
+
+### test_rmPROTO_in_defaultWeights
+
+AC#2 (issue #559): rmPROTO appears in the router defaultWeights vector.
+
+
+```solidity
+function test_rmPROTO_in_defaultWeights() public;
+```
+
+### test_rmPROTO_router_deposit_succeeds
+
+AC#3 (issue #559): a router deposit succeeds end-to-end with
+rmPROTO eligible — the DemoV3SwapRouter stub handles the V3 path.
+
+
+```solidity
+function test_rmPROTO_router_deposit_succeeds() public;
+```
+
 ### test_rwaVault_is_Active_after_demo_seed
 
 The deSPXA RWA vault (PRD §11.4) is registered Active after the
@@ -186,7 +214,7 @@ function test_rwaVault_is_not_router_eligible() public;
 ### test_rwaVault_not_in_defaultWeights
 
 The rmRWA vault is NOT included in the router defaultWeights vector
-(only primary + rmAGENT are in the 50/50 split). Issue #562 AC2.
+(primary + rmPROTO + rmAGENT are in the three-way split). Issue #562 AC2.
 
 
 ```solidity

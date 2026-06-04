@@ -1,5 +1,5 @@
 # UniswapV3PoolSlot0Stub
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/UniswapV3PoolSlot0Stub.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/UniswapV3PoolSlot0Stub.sol)
 
 **Title:**
 UniswapV3PoolSlot0Stub
