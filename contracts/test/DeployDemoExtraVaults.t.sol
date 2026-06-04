@@ -21,6 +21,13 @@ import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {AdapterBytecodeGuard} from "../script/AdapterBytecodeGuard.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
+/// @notice Minimal ERC-4626 view surface shared by every PRD §11 vault
+///         (RobotMoneyVault + BasketVault subclasses) used to read TVL in a
+///         vault-type-agnostic way for the four-vault real-TVL assertion.
+interface IERC4626Min {
+    function totalAssets() external view returns (uint256);
+}
+
 /// @notice Integration test for the demo seed path: after `DeployDemoExtraVaults`
 ///         runs, rmPROTO (issue #559) and rmAGENT (issue #560) are both router-eligible,
 ///         the router carries a three-vault default weight vector (primary + rmPROTO +
@@ -327,6 +334,65 @@ contract DeployDemoExtraVaultsTest is Test {
         (address[] memory dV,) = router.getDefaultWeights();
         for (uint256 i = 0; i < dV.length; i++) {
             assertNotEq(dV[i], d.rwaVault, "rmRWA must NOT appear in defaultWeights");
+        }
+    }
+
+    // ─── Four-vault real-TVL end state (issue #592) ─────────────────────────
+
+    /// @notice The full four-vault PRD §11 end state: after the demo seed, all
+    ///         four vaults are registered Active, the three router-eligible
+    ///         vaults (§11.1 primary, §11.2 rmPROTO, §11.3 rmAGENT) are funded
+    ///         by a single routed deposit, the §11.4 deSPXA RWA vault is funded
+    ///         by a direct deposit (ADR-0006 §1 — never router-weighted), and
+    ///         every one of the four reports non-zero `totalAssets`. This is the
+    ///         forge-layer mirror of the smoke-test four-vault TVL invariant the
+    ///         dapp tiles depend on (issue #592).
+    function test_four_vaults_all_active_with_nonzero_totalAssets() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+
+        address[4] memory vaults =
+            [address(primaryVault), d.protocolVault, d.agentTokenVault, d.rwaVault];
+
+        // 1) All four vaults are registered Active.
+        for (uint256 i = 0; i < 4; i++) {
+            (, VaultRegistry.VaultStatus status) = registry.getVault(vaults[i]);
+            assertEq(
+                uint256(status),
+                uint256(VaultRegistry.VaultStatus.Active),
+                "every PRD section-11 vault must be registered Active"
+            );
+        }
+
+        // 2) Exactly three of the four are router-eligible; the RWA vault is
+        //    Active but direct-seed-only (ADR-0006 §1).
+        assertEq(registry.routerEligibleCount(), 3, "three router-eligible vaults");
+        assertTrue(registry.isRouterEligible(d.protocolVault), "rmPROTO router-eligible");
+        assertTrue(registry.isRouterEligible(d.agentTokenVault), "rmAGENT router-eligible");
+        assertTrue(registry.isRouterEligible(address(primaryVault)), "primary router-eligible");
+        assertFalse(registry.isRouterEligible(d.rwaVault), "rmRWA NOT router-eligible");
+
+        // 3) A single routed deposit funds the three router-eligible vaults.
+        //    Use the seeded default vector (no governance activity) so the
+        //    router splits across primary + rmPROTO + rmAGENT.
+        router.clearVotedWeights();
+        uint256 routedAmount = 900e6; // divisible by 3 for the equal split
+        usdc.mint(address(this), routedAmount);
+        usdc.approve(address(router), routedAmount);
+        router.deposit(routedAmount, new uint256[](0));
+
+        // 4) A direct deposit funds the §11.4 RWA vault (Chronicle-priced).
+        uint256 rwaAmount = 1_000e6;
+        usdc.mint(address(this), rwaAmount);
+        usdc.approve(d.rwaVault, rwaAmount);
+        RwaVault(d.rwaVault).deposit(rwaAmount, address(this));
+
+        // 5) Every one of the four vaults now reports non-zero totalAssets.
+        for (uint256 i = 0; i < 4; i++) {
+            assertGt(
+                IERC4626Min(vaults[i]).totalAssets(),
+                0,
+                "every PRD section-11 vault must hold non-zero totalAssets after seeding"
+            );
         }
     }
 

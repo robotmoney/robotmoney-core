@@ -124,6 +124,19 @@ jobs:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-fixture_meta.log
         run: cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture
 
+      # Issue #592 CI gate: four-vault real-TVL end state. Boots the devnet
+      # fixture, seeds the simulated depositors, and asserts the VaultRegistry
+      # lists exactly four Active vaults (PRD §11.1–§11.4), the router weights
+      # cover the three router-eligible vaults summing to 10000 bps (the deSPXA
+      # RWA vault is direct-seed-only, never weighted — ADR-0006 §1), and that
+      # **all four** vaults report non-zero on-chain totalAssets after seeding.
+      # Runs single-threaded for the same fixed-port reason as fixture_meta.
+      - name: cargo test (four-vault real-TVL — registry/router/seeded TVL)
+        working-directory: testing/smoke-test
+        env:
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-demo_seeding.log
+        run: cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture
+
       - name: Upload smoke-test logs
         if: always()
         uses: actions/upload-artifact@v4
