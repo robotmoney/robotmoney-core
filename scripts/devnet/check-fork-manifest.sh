@@ -41,15 +41,16 @@ cargo build \
   --bin smoke-test-genesis-ingester \
   --quiet
 
-VALIDATOR="$REPO_ROOT/testing/smoke-test/target/debug/smoke-test-fork-manifest-validate"
-if [ ! -x "$VALIDATOR" ]; then
-  # Some hosts route the target dir to the parent workspace target.
-  VALIDATOR="$REPO_ROOT/target/debug/smoke-test-fork-manifest-validate"
-fi
-INGESTER="$REPO_ROOT/testing/smoke-test/target/debug/smoke-test-genesis-ingester"
-if [ ! -x "$INGESTER" ]; then
-  INGESTER="$REPO_ROOT/target/debug/smoke-test-genesis-ingester"
-fi
+# Resolve the Cargo target directory dynamically so the script works when
+# CARGO_TARGET_DIR is overridden (e.g. by Swatinem/rust-cache@v2 in CI).
+TARGET_DIR="$(cargo metadata \
+  --manifest-path "$REPO_ROOT/testing/smoke-test/Cargo.toml" \
+  --format-version=1 \
+  --no-deps \
+  | jq -r .target_directory)"
+
+VALIDATOR="$TARGET_DIR/debug/smoke-test-fork-manifest-validate"
+INGESTER="$TARGET_DIR/debug/smoke-test-genesis-ingester"
 
 echo "[check-fork-manifest] validating $MANIFEST"
 "$VALIDATOR" --manifest "$MANIFEST" $REQUIRE_PINNED_FLAG
