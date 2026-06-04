@@ -86,11 +86,12 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     await expect(vaultCards).toBeVisible({ timeout: 30_000 });
 
     // Wait for Active vault cards to appear (DappStack::boot auto-seeding
-    // should have produced at least three Active vaults).
+    // should have produced four Active vaults — all four are Active after
+    // issue #562 which registers the RWA vault Active, no Paused placeholder).
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
-    await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
+    await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
     // At least one Active vault card must show a non-zero TVL value. The
     // explorer-indexer processes Deposit events asynchronously so we poll

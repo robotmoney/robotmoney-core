@@ -1,5 +1,5 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/23bb26853ebab25914ee89c1967707490ad65007/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
@@ -8,6 +8,8 @@ Integration test for the demo seed path: after `DeployDemoExtraVaults`
 runs, rmAGENT is router-eligible with BNKR/JUNO/ROBOTMONEY basket,
 the router carries a two-vault default weight vector (primary + rmAGENT),
 and a routed deposit reaches both vaults. ADR-0002; issue #560.
+Also: deSPXA RWA vault is registered Active and NOT router-eligible
+(direct-seed-only per ADR-0006; issue #562).
 
 
 ## State Variables
@@ -159,5 +161,45 @@ function _assertJunoAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed 
 function _assertRobotmoneyAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed memory d)
     internal
     view;
+```
+
+### test_rwaVault_is_Active_after_demo_seed
+
+The deSPXA RWA vault (PRD §11.4) is registered Active after the
+demo seed — no Paused placeholder remains (issue #562 AC1).
+
+
+```solidity
+function test_rwaVault_is_Active_after_demo_seed() public;
+```
+
+### test_rwaVault_is_not_router_eligible
+
+The deSPXA RWA vault is NOT router-eligible per ADR-0006 §1
+(direct-seed-only; Chronicle oracle gates totalAssets). Issue #562 AC2.
+
+
+```solidity
+function test_rwaVault_is_not_router_eligible() public;
+```
+
+### test_rwaVault_not_in_defaultWeights
+
+The rmRWA vault is NOT included in the router defaultWeights vector
+(only primary + rmAGENT are in the 50/50 split). Issue #562 AC2.
+
+
+```solidity
+function test_rwaVault_not_in_defaultWeights() public;
+```
+
+### test_rwaVault_holds_deSPXA_asset_Aerodrome_venue
+
+The rmRWA vault holds exactly one basket asset (deSPXA stub),
+wired with Venue.Aerodrome and a ChronicleOracleAdapter. Issue #562 AC1.
+
+
+```solidity
+function test_rwaVault_holds_deSPXA_asset_Aerodrome_venue() public;
 ```
 

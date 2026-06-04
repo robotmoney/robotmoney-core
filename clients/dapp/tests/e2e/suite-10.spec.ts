@@ -247,19 +247,18 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(page.getByTestId("vault-detail-freshness")).toBeVisible();
   });
 
-  // Four-vault PRD conformance (issue #479): the landing VaultCards must
-  // render one tile per registered vault — four after the demo seed — and the
-  // RWA/Thematic placeholder must render in its inactive presentation (Future,
-  // no deposit/TVL stats) with the inactive flag sourced from a registry read,
-  // not a constant.
-  test("landing renders a tile per registered vault with the RWA tile inactive", async ({
+  // Four-vault PRD conformance (issue #479, updated by #562): the landing
+  // VaultCards must render one tile per registered vault — four after the demo
+  // seed — and all four tiles must be Active (the RWA vault is now registered
+  // Active per issue #562; no Paused placeholder remains).
+  test("landing renders a tile per registered vault with all four tiles Active", async ({
     page,
   }) => {
     // Ground truth: the chain-registered vault set, and each vault's status.
     const registeredVaults = await listVaults(rpcUrl, registryAddr);
     expect(
       registeredVaults.length,
-      "expected the four-vault demo set in the registry (3 Active + RWA placeholder)",
+      "expected the four-vault demo set in the registry (4 Active vaults)",
     ).toBe(4);
 
     await page.goto(dappUrl);
@@ -268,21 +267,16 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     // One tile per registered vault.
     await expect(cards).toHaveCount(registeredVaults.length, { timeout: 30_000 });
 
-    // Exactly one tile must be in the inactive presentation — the RWA/Thematic
-    // placeholder — and it must show the Future notice and no deposit/TVL stats.
+    // All four tiles are Active — no Paused placeholder remains (issue #562).
     const inactiveCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="false"]',
     );
-    await expect(inactiveCards).toHaveCount(1);
-    await expect(inactiveCards.getByTestId("landing-vault-card-future")).toBeVisible();
-    // No deposit affordance / live stats on the inactive tile.
-    await expect(inactiveCards.getByTestId("landing-vault-card-tvl")).toHaveCount(0);
+    await expect(inactiveCards).toHaveCount(0);
 
-    // The other three tiles are Active.
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
-    await expect(activeCards).toHaveCount(3);
+    await expect(activeCards).toHaveCount(4);
   });
 
   // Vault cards: non-zero TVL after DappStack::boot auto-seeding (issue #532).
@@ -293,10 +287,11 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await page.goto(dappUrl);
 
     // The Active vault cards must be visible before we can read their TVL.
+    // All four vaults are Active after issue #562 (no Paused placeholder).
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
-    await expect(activeCards).toHaveCount(3, { timeout: 30_000 });
+    await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
     // At least one Active vault card must show a non-zero TVL value. The
     // explorer-indexer processes Deposit events asynchronously; the seeding
