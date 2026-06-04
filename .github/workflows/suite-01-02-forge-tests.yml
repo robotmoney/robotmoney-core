@@ -39,6 +39,14 @@ on:
       - ".github/workflows/suite-01-02-forge-tests.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   unit:
     name: forge-unit-tests
@@ -174,6 +182,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [unit, invariant]
+    # HEAVY tier (issue #600): unit + invariant stay quick and run on every feature
+    # PR, but the expensive lcov coverage gate is re-anchored at the phase-integration
+    # boundary. It runs on push (dev / dev-phase-* / main) and on PRs that target a
+    # dev-phase-* branch, but NOT on ordinary feature-branch PRs (to main/dev).
+    # See docs/development/ci-suites.md (CI velocity tiers).
+    if: >-
+      github.event_name != 'pull_request' ||
+      startsWith(github.base_ref, 'dev-phase-')
     steps:
       - uses: actions/checkout@v4
         with:
