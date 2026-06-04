@@ -264,6 +264,18 @@ the prod `injected()` wagmi connector exactly like a real wallet
 extension. The harness supplies the real expected code hash. See
 `docs/development/smoke-test-design.md`.
 
+**Real four-vault demo assertions (issue #593):** the
+`demo-user-stories.spec.ts` spec is the frontend layer of the four-vault
+real-TVL test pyramid. Run against the full-stack devnet via `globalSetup`,
+it asserts that a first-time visitor on the landing page sees **all four**
+vault cards Active — with **no** Future/coming-soon placeholder tile — and
+that **each** of the four cards shows a non-zero TVL produced by the real
+depositors `DappStack::boot` seeds into every vault. The same spec keeps the
+price-strip numeric assertions (all four price cells parse to a positive
+number) and the zero-console-error hygiene check. The companion unit layer
+lives in `clients/dapp/tests/unit/vault-cards.test.tsx` (four Active cards,
+real non-null TVL, no placeholder); the forge/smoke-test layer is issue #592.
+
 **Steps:**
 1. Checkout repository (recursive submodules)
 2. Setup Bun + Node 22
@@ -272,7 +284,8 @@ extension. The harness supplies the real expected code hash. See
 5. `bun install --frozen-lockfile`
 6. `bunx playwright install --with-deps chromium`
 7. `bun run test:e2e` — Playwright globalSetup boots smoke-test full
-   stack; runs every spec under `clients/dapp/tests/e2e/` against it
+   stack; runs every spec under `clients/dapp/tests/e2e/` against it,
+   including the four-vault demo-user-stories assertions above
 8. Upload Playwright report artifact on failure
 
 ---

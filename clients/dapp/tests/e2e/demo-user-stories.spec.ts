@@ -7,9 +7,10 @@
  *
  *   1. Price strip — all four cells show a numeric price (not 'unavailable',
  *      not a loading ellipsis '…').
- *   2. Vault TVL — at least one Active vault card shows a non-zero total_assets
- *      value (requires DappStack::boot auto-seeding from issue #532 and stub
- *      pools from issue #531).
+ *   2. Vault TVL — all four vault cards are Active and EACH shows a non-zero
+ *      total_assets value (real four-vault demo: the RWA/Thematic vault is
+ *      registered Active in #595 and DappStack::boot seeds real depositors
+ *      into every vault in #597; there is no Paused placeholder tile).
  *   3. Console hygiene — zero JavaScript errors recorded during the landing-page
  *      session (inherits the _consoleGuard fixture from helpers/fixtures.ts).
  *
@@ -75,7 +76,7 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     }
   });
 
-  test("demo user stories vault TVL: at least one vault card shows non-zero total_assets", async ({
+  test("demo user stories vault TVL: all four vault cards are Active and each shows non-zero total_assets", async ({
     page,
   }) => {
     const endpoints = loadEndpoints();
@@ -85,37 +86,56 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     const vaultCards = page.getByTestId("landing-vault-cards");
     await expect(vaultCards).toBeVisible({ timeout: 30_000 });
 
-    // Wait for Active vault cards to appear (DappStack::boot auto-seeding
-    // should have produced four Active vaults — all four are Active after
-    // issue #562 which registers the RWA vault Active, no Paused placeholder).
+    // All four PRD §11 vaults are Active in the real four-vault demo (#595
+    // registers the RWA/Thematic vault Active) — there is NO Paused
+    // placeholder tile, so every rendered card must be Active.
+    const allCards = page.locator('[data-testid="landing-vault-card"]');
     const activeCards = page.locator(
       '[data-testid="landing-vault-card"][data-vault-active="true"]',
     );
+    const inactiveCards = page.locator(
+      '[data-testid="landing-vault-card"][data-vault-active="false"]',
+    );
+    await expect(allCards).toHaveCount(4, { timeout: 30_000 });
     await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
+    await expect(inactiveCards).toHaveCount(0);
 
-    // At least one Active vault card must show a non-zero TVL value. The
-    // explorer-indexer processes Deposit events asynchronously so we poll
-    // until it catches up — VaultCards re-fetches every 15 s, so we will
-    // see the update in the DOM without a page reload.
+    // No Future / coming-soon placeholder tile may be present.
+    await expect(page.getByTestId("landing-vault-card-future")).toHaveCount(0);
+
+    // EVERY Active vault card must show a non-zero TVL value from real seeded
+    // depositor activity (#597). The explorer-indexer processes Deposit events
+    // asynchronously, so we poll until all four cells have caught up —
+    // VaultCards re-fetches every 15 s, so the update lands without a reload.
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
-    await expect(tvlCells.first()).toBeVisible({ timeout: 30_000 });
+    await expect(tvlCells).toHaveCount(4, { timeout: 30_000 });
 
     await expect
       .poll(
         async () => {
           const count = await tvlCells.count();
+          if (count !== 4) return false;
           for (let i = 0; i < count; i++) {
             const text = (await tvlCells.nth(i).textContent()) ?? "";
             const trimmed = text.trim();
-            // "0", "—", or blank all mean no TVL yet.
-            if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") return true;
+            // "0", "—", or blank all mean no TVL yet for THIS card.
+            if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
+            // Reject any non-numeric / non-positive value.
+            let value: bigint;
+            try {
+              value = BigInt(trimmed);
+            } catch {
+              return false;
+            }
+            if (value <= 0n) return false;
           }
-          return false;
+          // All four cards show a real, strictly-positive TVL.
+          return true;
         },
         {
           message:
-            "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding (issue #532)",
-          timeout: 60_000,
+            "all four Active vault cards must show a non-zero TVL after DappStack::boot seeds real depositors into every vault (#597)",
+          timeout: 90_000,
           intervals: [3_000],
         },
       )

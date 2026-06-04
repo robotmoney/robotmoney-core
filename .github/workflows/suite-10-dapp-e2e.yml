@@ -7,6 +7,15 @@
 # Geth+Lighthouse devnet with the gateway, vault, and explorer indexer all
 # deployed. Type-checking (suite 9) does not prove these flows work.
 #
+# REAL FOUR-VAULT DEMO COVERAGE (issue #593)
+# The demo-user-stories.spec.ts spec enforces the frontend layer of the
+# four-vault real-TVL test pyramid: a first-time visitor on the landing page
+# must see exactly four vault cards, ALL Active (no Paused/Future placeholder
+# tile), and EACH showing a non-zero TVL produced by the real depositors that
+# DappStack::boot seeds into every vault (#597). The price-strip numeric and
+# zero-console-error assertions run in the same spec. These run automatically
+# on every `clients/dapp/**`, `contracts/**`, or seeding-path change below.
+#
 # WHY ONE JOB
 # Every spec runs against the same smoke-test full-stack devnet, booted by
 # Playwright globalSetup. There is no "fast" local-dev variant — the dapp
