@@ -46,6 +46,14 @@ on:
       - ".github/workflows/suite-08-explorer-indexer.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fast:
     name: explorer-indexer-fast
@@ -60,15 +68,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-explorer-indexer-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build test binaries
         working-directory: services/explorer-indexer
@@ -108,15 +108,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-explorer-indexer-${{ hashFiles('services/explorer-indexer/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-explorer-indexer-
+        uses: Swatinem/rust-cache@v2
 
       - name: Fork indexer test (reorg + finality)
         working-directory: services/explorer-indexer

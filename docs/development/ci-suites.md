@@ -424,6 +424,72 @@ isolation, independent of any client (rmpc, dapp, explorer).
 
 ---
 
+## CI velocity tiers
+
+Issue #600 splits CI into two tiers so a routine feature PR waits only on cheap,
+deterministic feedback while expensive devnet integration is proven where
+cross-feature interactions actually matter.
+
+- **QUICK tier** — runs on every feature-branch PR (`pull_request` to `main`/`dev`).
+  Forge unit + invariant tests, solidity fmt/natspec/slither, dapp
+  lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage, rmpc unit, hermetic
+  fork-fixture integration, abi-drift, doc/manifest guards, and this tier guard.
+  This is the only gate a routine feature PR blocks on.
+- **HEAVY tier** — relocated off per-feature-PR triggers and re-anchored at the
+  **phase-integration boundary**: `push` to per-phase staging branches
+  (`dev-phase-*`) and `dev` (and `main`), plus `pull_request`s that target a
+  `dev-phase-*` branch. The devnet e2e matrices (`rust-client-devnet-integration`,
+  `smoke-test-devnet-boot-teardown`), the full-devnet `dapp-e2e` Playwright suite,
+  and the `forge-coverage-gate` job all live here. No integration coverage is
+  lost — every heavy suite removed from per-PR triggers is re-anchored at the
+  `dev-phase-*` / `dev` boundary.
+
+Structural invariants (enforced by `scripts/ci/check-workflow-tiers.sh`, run by
+the `ci-velocity-tier-guard` workflow on every PR):
+
+- Every PR-triggered workflow declares `concurrency.cancel-in-progress` (enabled
+  for `pull_request` events) with a `${{ github.ref }}`-keyed group, so re-pushing
+  a PR cancels superseded runs while `push:main`/`dev` runs keep a distinct,
+  non-cancelling lane and merged-commit coverage always completes.
+- `rust-client-devnet-integration` (suite-07) and `smoke-test-devnet-boot-teardown`
+  (suite-14) express their devnet binaries as a `fail-fast: false` job matrix —
+  one runner per binary, each booting and tearing down its own stack with an
+  `if: always()` `docker compose down` step. No devnet binary runs as a sequential
+  step in a shared job, so the port-8545 contention that forced serial execution
+  is gone.
+- No Rust-building workflow uses a hand-rolled `actions/cache` for cargo
+  target/registry; each uses `Swatinem/rust-cache@v2`.
+
+### Tier mapping
+
+Every workflow's `name:` and its tier. The guard fails if a heavy suite is
+reachable from a feature-branch PR or if this table drifts from the workflows.
+
+| Workflow `name:` | Tier | Notes |
+|------------------|------|-------|
+| `forge-unit-invariant-coverage` | quick | `unit`/`invariant` quick on feature PRs; the `forge-coverage-gate` job is heavy and `if:`-gated to push / `dev-phase-*` |
+| `solidity-fmt-natspec-slither` | quick | |
+| `rust-fmt-clippy-doc-coverage` | quick | |
+| `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
+| `rust-client-unit-tests` | quick | |
+| `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
+| `explorer-indexer-migrations-reorg` | quick | |
+| `dapp-lint-typecheck-vitest-build` | quick | |
+| `dapp-e2e` | heavy | full-devnet Playwright suite |
+| `opencode-plugin-validate-walkthrough-offline` | quick | |
+| `openclaw-safety-walkthrough` | quick | |
+| `doc-adr-runbook-migration-checks` | quick | |
+| `smoke-test-devnet-boot-teardown` | heavy | devnet matrix (`cli_meta`, `fixture_meta`, `demo_seeding`/four-vault) |
+| `regime-classifier-plugin-checks` | quick | |
+| `abi-drift-gate` | quick | |
+| `natspec-coverage` | quick | |
+| `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
+| `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
+| `release-dapp` | release | tag/dispatch-only; not PR-triggered |
+| `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
+
+---
+
 ## Summary
 
 | # | Suggested workflow file | Jobs | Environment |

@@ -66,15 +66,7 @@ jobs:
           version: stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-unit-
+        uses: Swatinem/rust-cache@v2
 
       - name: Refusal transcript assertions
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_refusal -- --nocapture
@@ -106,15 +98,7 @@ jobs:
           version: stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-unit-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
@@ -375,15 +359,7 @@ jobs:
           version: stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-unit-
+        uses: Swatinem/rust-cache@v2
 
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc

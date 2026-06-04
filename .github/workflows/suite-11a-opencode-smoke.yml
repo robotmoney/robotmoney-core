@@ -50,6 +50,14 @@ on:
       - ".github/workflows/suite-11a-opencode-smoke.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   plugin-validate:
     name: opencode-plugin-validate
@@ -139,15 +147,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-unit-
+        uses: Swatinem/rust-cache@v2
 
       - name: fmt + clippy
         run: |
@@ -183,15 +183,7 @@ jobs:
           version: stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            clients/rust-payment-client/target
-          key: ${{ runner.os }}-cargo-rmpc-unit-${{ hashFiles('clients/rust-payment-client/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rmpc-unit-
+        uses: Swatinem/rust-cache@v2
 
       - name: Read-only walkthrough
         run: cargo test -p doctests --test opencode_read_only -- --nocapture

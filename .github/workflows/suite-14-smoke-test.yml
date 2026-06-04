@@ -44,10 +44,20 @@
 name: smoke-test-devnet-boot-teardown
 
 on:
+  # HEAVY tier (issue #600): this devnet boot/teardown suite is NOT run on ordinary
+  # feature-branch PRs (to main/dev). It is re-anchored at the phase-integration
+  # boundary — push to dev-phase-* staging branches and dev (and main), plus PRs
+  # that target a dev-phase-* branch. See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev]
+    branches: [main, dev, "dev-phase-*"]
+    paths:
+      - "testing/smoke-test/**"
+      - "testing/ethereum-testnet/**"
+      - "contracts/**"
+      - "config/dex-pools.json"
+      - ".github/workflows/suite-14-smoke-test.yml"
   pull_request:
-    branches: [main, dev]
+    branches: ["dev-phase-*"]
     paths:
       - "testing/smoke-test/**"
       - "testing/ethereum-testnet/**"
@@ -56,11 +66,70 @@ on:
       - ".github/workflows/suite-14-smoke-test.yml"
   workflow_dispatch:
 
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  smoke-test:
-    name: smoke-test-devnet
+  # Hermetic guards that need the binary/lib but NO Docker. Kept as their own fast
+  # job so a manifest/alignment regression fails in seconds, before paying for any
+  # container boot in the devnet matrix below.
+  guards:
+    name: smoke-test-guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo build (includes CLI binary)
+        working-directory: testing/smoke-test
+        run: cargo build -p smoke-test
+
+      # Issue #255 CI gate: validate fork-block.json against every rule in
+      # smoke_test::fork_manifest, and run the genesis-alloc ingester against
+      # the committed Anvil fixture to assert the canonical Base USDC ends up
+      # in the produced alloc with non-empty bytecode and the harness USDC
+      # balance + totalSupply slots. Fast (<5s once binaries are built); a
+      # broken manifest is caught before any container boot is attempted.
+      - name: fork-block manifest + alloc-ingester guard
+        run: bash scripts/devnet/check-fork-manifest.sh
+
+      # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
+      # ingested_addresses stay in sync after a fork-block bump.  Runs as a
+      # hermetic lib-test (no Docker required).  Also exercises the simulated
+      # failure path that proves the guard detects an un-ingested pool.
+      - name: fork-block alignment guard (expected-prices + ingested pools)
+        working-directory: testing/smoke-test
+        run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
+
+  # PARALLEL DEVNET MATRIX (issue #600): each devnet-booting binary used to run as a
+  # SERIAL step in one job, each booting Geth+Lighthouse on port 8545 (suite ~38m).
+  # Splitting them into a matrix gives one runner per binary, each booting + tearing
+  # down its OWN stack with `if: always()`, removing the shared-port-8545 contention
+  # (suite ~38m -> ~18m). fail-fast: false keeps every binary's signal independent.
+  #   - cli_meta:      boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
+  #   - fixture_meta:  boots devnet, deploys contracts, asserts RPC + block production
+  #   - demo_seeding:  boots the four-vault catalog and asserts all four vaults seed
+  devnet:
+    name: smoke-test-devnet-${{ matrix.binary }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [cli_meta, fixture_meta, demo_seeding]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,55 +149,23 @@ jobs:
           version: stable
 
       - name: Cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            testing/smoke-test/target
-          key: ${{ runner.os }}-cargo-smoke-test-${{ hashFiles('testing/smoke-test/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-smoke-test-
+        uses: Swatinem/rust-cache@v2
 
       - name: cargo build (includes CLI binary)
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
-      # Issue #255 CI gate: validate fork-block.json against every rule in
-      # smoke_test::fork_manifest, and run the genesis-alloc ingester against
-      # the committed Anvil fixture to assert the canonical Base USDC ends up
-      # in the produced alloc with non-empty bytecode and the harness USDC
-      # balance + totalSupply slots. Fast (<5s once binaries are built); a
-      # broken manifest is caught before any container boot is attempted.
-      - name: fork-block manifest + alloc-ingester guard
-        run: bash scripts/devnet/check-fork-manifest.sh
-
-      # Issue #558 CI gate: assert fork-block.json, expected-prices.json, and
-      # ingested_addresses stay in sync after a fork-block bump.  Runs as a
-      # hermetic lib-test (no Docker required) so it can be caught early,
-      # before the container-boot steps below.  Also exercises the simulated
-      # failure path that proves the guard detects an un-ingested pool.
-      - name: fork-block alignment guard (expected-prices + ingested pools)
-        working-directory: testing/smoke-test
-        run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
-
-      - name: cargo test (boots full-stack CLI, asserts summary + teardown)
+      - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
         working-directory: testing/smoke-test
         env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-cli_meta.log
-        run: cargo test -p smoke-test --release --test cli_meta -- --nocapture
-
-      - name: cargo test (boots devnet, deploys contracts, asserts RPC + blocks, tears down)
-        working-directory: testing/smoke-test
-        env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-fixture_meta.log
-        run: cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture
+          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
+        run: cargo test -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
 
       - name: Upload smoke-test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-test-logs
+          name: smoke-test-logs-${{ matrix.binary }}
           path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
       - name: Safety-net teardown (always)
