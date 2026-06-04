@@ -1402,69 +1402,135 @@ impl Fixture {
     /// Each depositor is therefore funded with `2 * per_user_usdc` USDC (one
     /// budget per deposit path) plus a small ETH gas grant.
     ///
-    /// Returns the list of `(depositor_address, router_deposit_tx_hash)` pairs.
-    /// The keys are derived from `keccak256("rm-demo-depositor-vN")` so the seed
-    /// is reproducible across runs and keys never collide with the harness EOAs
-    /// (deployer / pauser / agent / share-receiver / USDC holder).
+    /// Returns the list of `(depositor_address, router_deposit_tx_hash)` pairs,
+    /// ordered by depositor index. The keys are derived from
+    /// `keccak256("rm-demo-depositor-vN")` so the seed is reproducible across
+    /// runs and keys never collide with the harness EOAs (deployer / pauser /
+    /// agent / share-receiver / USDC holder).
+    ///
+    /// ## Why this is parallelised
+    ///
+    /// The smoke-test devnet is a real Geth+Lighthouse PoS chain with a 12s
+    /// slot time, and `cast send` blocks until its transaction is mined (one
+    /// confirmation). A naive serial seed of N depositors does `6N`
+    /// confirmation-bound transactions back to back — at four depositors that
+    /// is 24 block-waits (~5–8 min) on top of the multi-minute chain+dapp boot,
+    /// which pushed the `smoke-test-devnet` CI job (30-min budget) into a
+    /// timeout (issue #563). The work splits into two phases so the wall-clock
+    /// collapses to ~8 block-waits without changing the on-chain outcome:
+    ///
+    /// - **Funding phase** — ETH grants are signed by the shared DEPLOYER key
+    ///   and USDC grants by the shared HARNESS_USDC_HOLDER key. Same-key sends
+    ///   must stay serial (sequential nonces), but the two streams use
+    ///   *different* keys, so they run concurrently in two scoped threads.
+    /// - **Deposit phase** — each depositor's four deposit transactions
+    ///   (approve+deposit router, approve+deposit RWA) are signed by that
+    ///   depositor's unique key, so the per-depositor sequences are fully
+    ///   independent and run concurrently, one scoped thread per depositor.
+    ///   Transactions from distinct EOAs are mined together in the same block.
     pub fn seed_demo_depositors(
         &self,
         count: u32,
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
-        let mut out = Vec::with_capacity(count as usize);
-        let router_hex = format!("{:#x}", self.router());
-        let rwa_hex = format!("{:#x}", self.rwa_vault());
         // Each depositor runs two deposit paths (router split + direct RWA),
         // each consuming `per_user_usdc`, so fund twice the per-path amount.
         let total_usdc = per_user_usdc.saturating_mul(2);
-        for i in 0..count {
-            let (pk_hex, depositor) = demo_depositor_key(i);
-            let depositor_hex = format!("{depositor:#x}");
+        let keys: Vec<(String, Address)> = (0..count).map(demo_depositor_key).collect();
 
-            // 1. Fund gas. 0.05 ETH comfortably covers two approves + two
-            //    deposits (the basket-vault swap legs are the costliest step).
-            fund_eth_from_deployer(&self.rpc_url, &depositor_hex, "50000000000000000")?;
+        // ── Funding phase ────────────────────────────────────────────────
+        // Fund all depositors with gas ETH (DEPLOYER key) and USDC (harness
+        // holder key) before any deposits. The two faucet streams use distinct
+        // shared keys, so they run concurrently; within each stream the sends
+        // stay serial to keep that key's nonce sequence well-ordered.
+        thread::scope(|s| -> Result<(), HarnessError> {
+            let eth = s.spawn(|| -> Result<(), HarnessError> {
+                for (_pk, depositor) in &keys {
+                    let depositor_hex = format!("{depositor:#x}");
+                    // 0.05 ETH comfortably covers two approves + two deposits
+                    // (the basket-vault swap legs are the costliest step).
+                    fund_eth_from_deployer(&self.rpc_url, &depositor_hex, "50000000000000000")?;
+                }
+                Ok(())
+            });
+            let usdc = s.spawn(|| -> Result<(), HarnessError> {
+                for (_pk, depositor) in &keys {
+                    self.fund_usdc(*depositor, total_usdc)?;
+                }
+                Ok(())
+            });
+            eth.join()
+                .map_err(|_| HarnessError::other("eth-funding thread panicked"))??;
+            usdc.join()
+                .map_err(|_| HarnessError::other("usdc-funding thread panicked"))??;
+            Ok(())
+        })?;
 
-            // 2. Fund USDC for both deposit paths via the canonical harness
-            //    ERC-20 transfer.
-            self.fund_usdc(depositor, total_usdc)?;
+        // ── Deposit phase ────────────────────────────────────────────────
+        // Run each depositor's deposit sequence on its own scoped thread. The
+        // sequences are signed by distinct keys, so they neither share nonces
+        // nor depend on one another; the chain mines them in parallel.
+        let router_hex = format!("{:#x}", self.router());
+        let rwa_hex = format!("{:#x}", self.rwa_vault());
+        let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
+            let handles: Vec<_> = keys
+                .iter()
+                .map(|(pk_hex, depositor)| {
+                    let router_hex = &router_hex;
+                    let rwa_hex = &rwa_hex;
+                    s.spawn(move || -> Result<(Address, String), HarnessError> {
+                        let depositor_hex = format!("{depositor:#x}");
 
-            // 3. Approve the router for the router-leg budget, then deposit.
-            //    The router splits the amount across the three router-eligible
-            //    vaults by the on-chain weight vector and mints shares to the
-            //    depositor (msg.sender). Empty minSharesPerLeg skips slippage
-            //    protection (demo stub pools).
-            self.cast_send(
-                &pk_hex,
-                self.usdc(),
-                "approve(address,uint256)",
-                &[&router_hex, &per_user_usdc.to_string()],
-            )?;
-            let router_tx = self.cast_send(
-                &pk_hex,
-                self.router(),
-                "deposit(uint256,uint256[])",
-                &[&per_user_usdc.to_string(), "[]"],
-            )?;
+                        // Approve the router for the router-leg budget, then
+                        // deposit. The router splits the amount across the three
+                        // router-eligible vaults by the on-chain weight vector
+                        // and mints shares to the depositor (msg.sender). Empty
+                        // minSharesPerLeg skips slippage protection (demo stubs).
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[router_hex, &per_user_usdc.to_string()],
+                        )?;
+                        let router_tx = self.cast_send(
+                            pk_hex,
+                            self.router(),
+                            "deposit(uint256,uint256[])",
+                            &[&per_user_usdc.to_string(), "[]"],
+                        )?;
 
-            // 4. Approve and deposit directly into the §11.4 RWA vault, which
-            //    is Active but not router-eligible. Shares go to the depositor.
-            self.cast_send(
-                &pk_hex,
-                self.usdc(),
-                "approve(address,uint256)",
-                &[&rwa_hex, &per_user_usdc.to_string()],
-            )?;
-            self.cast_send(
-                &pk_hex,
-                self.rwa_vault(),
-                "deposit(uint256,address)",
-                &[&per_user_usdc.to_string(), &depositor_hex],
-            )?;
+                        // Approve and deposit directly into the §11.4 RWA vault,
+                        // which is Active but not router-eligible. Shares go to
+                        // the depositor.
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[rwa_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.rwa_vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
 
-            out.push((depositor, router_tx));
-        }
-        Ok(out)
+                        Ok((*depositor, router_tx))
+                    })
+                })
+                .collect();
+
+            let mut out = Vec::with_capacity(handles.len());
+            for h in handles {
+                out.push(
+                    h.join()
+                        .map_err(|_| HarnessError::other("depositor-seed thread panicked"))??,
+                );
+            }
+            Ok(out)
+        })?;
+
+        Ok(results)
     }
 
     /// Fund `recipient` with `amount` RM tokens by signing a real
