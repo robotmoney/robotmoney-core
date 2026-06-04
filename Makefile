@@ -48,7 +48,9 @@ testnet: teardown-zombies ## Boot the full-stack devnet wired to the superfield.
 
 demo-seed-depositors: ## Seed demo depositors against an already-deployed devnet (issue #503)
 	@# Required: RPC_URL, DEPLOYER_KEY, USDC_ADDRESS, ROUTER_ADDRESS.
-	@# Optional: REGISTRY_ADDRESS (print totalAssets per vault), COUNT (default 5),
+	@# Optional: RWA_VAULT_ADDRESS (direct-seed the §11.4 RWA vault, which is
+	@#           Active but not router-eligible — issue #563),
+	@#           REGISTRY_ADDRESS (print totalAssets per vault), COUNT (default 5),
 	@#           PER_USER_USDC (whole USDC units, default 1000).
 	@#
 	@# Example:
@@ -69,6 +71,7 @@ demo-seed-depositors: ## Seed demo depositors against an already-deployed devnet
 		--deployer-key "$(DEPLOYER_KEY)" \
 		--usdc       "$(USDC_ADDRESS)" \
 		--router     "$(ROUTER_ADDRESS)" \
+		$(if $(RWA_VAULT_ADDRESS),--rwa-vault "$(RWA_VAULT_ADDRESS)",) \
 		$(if $(REGISTRY_ADDRESS),--registry "$(REGISTRY_ADDRESS)",) \
 		$(if $(COUNT),--count "$(COUNT)",) \
 		$(if $(PER_USER_USDC),--per-user-usdc "$(PER_USER_USDC)",)
