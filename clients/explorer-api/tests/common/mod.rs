@@ -312,7 +312,7 @@ async fn seed_fixture(pool: &PgPool) {
         (
             &vault_a_addr[..],
             "Alpha Vault",
-            "stable-yield",
+            "STABLE_YIELD",
             0_i16,
             "1000000000",
         ),

@@ -18,15 +18,7 @@
  */
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createPublicClient,
-  createWalletClient,
-  encodeFunctionData,
-  http,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 import { erc20Abi, vaultAbi } from "../../src/lib/abi";
@@ -81,38 +73,6 @@ async function exitFeeBps(rpc: string, vault: string): Promise<bigint> {
   return readUint(rpc, vault, data);
 }
 
-/**
- * Top up `recipient` with `amount` USDC by signing an ERC-20 transfer
- * from the harness USDC holder. Mirrors the Rust fork-e2e fixture's
- * `Fixture::fund_usdc` path.
- *
- * IMPORTANT: this awaits the transaction *receipt*, not just the
- * broadcast. Without that, subsequent `usdcBalanceOf` reads race past
- * the unmined fund tx and the deposit assertion observes a phantom
- * USDC credit when the fund tx finally lands (admin's balance goes
- * UP by `amount - DEPOSIT_USDC` instead of DOWN by DEPOSIT_USDC).
- */
-async function fundUsdc(
-  endpoints: DevnetEndpoints,
-  recipient: Address,
-  amount: bigint,
-): Promise<void> {
-  const account = privateKeyToAccount(endpoints.harness_usdc_holder_private_key as Hex);
-  const wallet = createWalletClient({ account, transport: http(endpoints.rpc_url) });
-  const publicClient = createPublicClient({ transport: http(endpoints.rpc_url) });
-  const data = encodeFunctionData({
-    abi: erc20Abi,
-    functionName: "transfer",
-    args: [recipient, amount],
-  });
-  const hash = await wallet.sendTransaction({
-    chain: null,
-    to: endpoints.usdc_addr as Address,
-    data,
-  });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-}
-
 async function waitUntil<T>(predicate: () => Promise<T | null>, description: string): Promise<T> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -131,8 +91,7 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
   });
 
   test("approve+deposit then redeem mines real txs and updates balances", async ({ page }) => {
-    // Pre-fund the admin EOA with USDC from the harness holder.
-    await fundUsdc(endpoints, endpoints.admin_addr as Address, DEPOSIT_USDC * 2n);
+    // Admin EOA is pre-funded with USDC via DappStack::boot (issue #603).
 
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");

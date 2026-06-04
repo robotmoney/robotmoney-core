@@ -75,7 +75,7 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     }
   });
 
-  test("demo user stories vault TVL: at least one vault card shows non-zero total_assets", async ({
+  test("demo user stories vault TVL: all four vault cards show non-zero total_assets", async ({
     page,
   }) => {
     const endpoints = loadEndpoints();
@@ -93,7 +93,7 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     );
     await expect(activeCards).toHaveCount(4, { timeout: 30_000 });
 
-    // At least one Active vault card must show a non-zero TVL value. The
+    // All four Active vault cards must show a non-zero TVL. The
     // explorer-indexer processes Deposit events asynchronously so we poll
     // until it catches up — VaultCards re-fetches every 15 s, so we will
     // see the update in the DOM without a page reload.
@@ -108,15 +108,15 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
             const text = (await tvlCells.nth(i).textContent()) ?? "";
             const trimmed = text.trim();
             // "0", "—", or blank all mean no TVL yet.
-            if (trimmed !== "" && trimmed !== "—" && trimmed !== "0") return true;
+            if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
           }
-          return false;
+          return true;
         },
         {
           message:
-            "at least one Active vault card must show a non-zero TVL after DappStack::boot auto-seeding (issue #532)",
-          timeout: 60_000,
-          intervals: [3_000],
+            "all 4 Active vault cards must show a non-zero TVL after DappStack::boot auto-seeding (issue #593)",
+          timeout: 120_000,
+          intervals: [5_000],
         },
       )
       .toBe(true);

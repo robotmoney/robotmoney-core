@@ -216,7 +216,7 @@ async fn vault_registered_event_inserts_vaults_row() {
         "vault_address must match"
     );
     assert_eq!(name, "RobotMoney USDC Vault");
-    assert_eq!(risk_label, "stable-yield");
+    assert_eq!(risk_label, "STABLE_YIELD");
     assert_eq!(status, 0, "status must be Active (0) at registration");
 
     stub.shutdown();
