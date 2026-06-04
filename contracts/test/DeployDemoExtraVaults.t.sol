@@ -3,6 +3,7 @@
 //            populates a non-empty defaultWeights vector so the allocation
 //            surface renders with no governance activity.
 //            docs/adr/ADR-0006-despxa-rwa-vault-design.md — deSPXA RWA vault;
+//            issue #559 — rmPROTO router-eligible in demo seed.
 //            issue #562 — register deSPXA RWA vault Active, direct-seed-only.
 pragma solidity ^0.8.24;
 
@@ -21,11 +22,11 @@ import {AdapterBytecodeGuard} from "../script/AdapterBytecodeGuard.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @notice Integration test for the demo seed path: after `DeployDemoExtraVaults`
-///         runs, rmAGENT is router-eligible with BNKR/JUNO/ROBOTMONEY basket,
-///         the router carries a two-vault default weight vector (primary + rmAGENT),
-///         and a routed deposit reaches both vaults. ADR-0002; issue #560.
-///         Also: deSPXA RWA vault is registered Active and NOT router-eligible
-///         (direct-seed-only per ADR-0006; issue #562).
+///         runs, rmPROTO (issue #559) and rmAGENT (issue #560) are both router-eligible,
+///         the router carries a three-vault default weight vector (primary + rmPROTO +
+///         rmAGENT at ~3334/3333/3333 bps), and a routed deposit reaches all three vaults.
+///         ADR-0002; issues #559, #560. Also: deSPXA RWA vault is registered Active
+///         and NOT router-eligible (direct-seed-only per ADR-0006; issue #562).
 contract DeployDemoExtraVaultsTest is Test {
     DeployDemoExtraVaults internal script;
     TestERC20 internal usdc;
@@ -85,22 +86,31 @@ contract DeployDemoExtraVaultsTest is Test {
         d = script.runInProcess(p);
     }
 
-    /// @notice After the demo seed runs, rmAGENT is router-eligible and the
-    ///         router default vector is a two-leg 50/50 split between primary and
-    ///         rmAGENT. Registry router-eligible count = 2.
+    /// @notice After the demo seed runs, rmPROTO and rmAGENT are router-eligible and the
+    ///         router default vector is a three-leg ~equal split (3334/3333/3333 bps).
+    ///         Registry router-eligible count = 3.
     function test_demo_seed_populates_defaultWeights() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
 
-        // Default vector spans both router-eligible vaults: primary + rmAGENT.
+        // Default vector spans all three router-eligible vaults.
         (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
-        assertEq(dV.length, 2, "default vector must span primary + rmAGENT");
-        assertEq(dV[0], address(primaryVault), "leg 0 = primary vault");
-        assertEq(dV[1], d.agentTokenVault, "leg 1 = rmAGENT");
-        assertEq(dB[0], 5_000, "primary weight must be 5000 bps (50%)");
-        assertEq(dB[1], 5_000, "rmAGENT weight must be 5000 bps (50%)");
+        assertEq(dV.length, 3, "default vector must span primary + rmPROTO + rmAGENT");
+        assertEq(dB[0] + dB[1] + dB[2], 10_000, "weights must sum to 10 000 bps");
+
+        bool foundPrimary;
+        bool foundProto;
+        bool foundAgent;
+        for (uint256 i = 0; i < dV.length; i++) {
+            if (dV[i] == address(primaryVault)) foundPrimary = true;
+            else if (dV[i] == d.protocolVault) foundProto = true;
+            else if (dV[i] == d.agentTokenVault) foundAgent = true;
+        }
+        assertTrue(foundPrimary, "primary vault must be in default vector");
+        assertTrue(foundProto, "rmPROTO must be in default vector");
+        assertTrue(foundAgent, "rmAGENT must be in default vector");
 
         // Registry router-eligible count matches the default vector length.
-        assertEq(registry.routerEligibleCount(), 2, "two router-eligible vaults");
+        assertEq(registry.routerEligibleCount(), 3, "three router-eligible vaults");
 
         // Represent the "no governance activity" (below-quorum) state: the
         // voted vector is not in effect. The demo also seeds a voted vector
@@ -108,13 +118,17 @@ contract DeployDemoExtraVaultsTest is Test {
         router.clearVotedWeights();
         assertFalse(router.votedWeightsActive());
 
-        // previewDeposit routes 50/50 across both vaults.
+        // previewDeposit routes across all three vaults.
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
-        assertEq(legs.length, 2, "preview must have two legs");
-        assertEq(legs[0].weightBps, 5_000, "primary leg weight 5000 bps");
-        assertEq(legs[1].weightBps, 5_000, "rmAGENT leg weight 5000 bps");
-        assertEq(legs[0].legAmount, 500e6, "primary receives half the deposit");
-        assertEq(legs[1].legAmount, 500e6, "rmAGENT receives half the deposit");
+        assertEq(legs.length, 3, "preview must have three legs");
+        uint256 totalBps;
+        uint256 totalAmt;
+        for (uint256 i = 0; i < legs.length; i++) {
+            totalBps += legs[i].weightBps;
+            totalAmt += legs[i].legAmount;
+        }
+        assertEq(totalBps, 10_000, "preview weights must sum to 10 000 bps");
+        assertEq(totalAmt, 1_000e6, "preview amounts must sum to deposit");
     }
 
     /// @notice rmAGENT is router-eligible after the demo seed (issue #560 AC1).
@@ -242,6 +256,46 @@ contract DeployDemoExtraVaultsTest is Test {
         assertEq(adapter, d.aeroAdapter, "ROBOTMONEY adapter = deployed aeroAdapter");
     }
 
+    // ─── rmPROTO router-eligibility (issue #559) ─────────────────────────────
+
+    /// @notice AC#1 (issue #559): rmPROTO is router-eligible after the demo seed.
+    function test_rmPROTO_is_router_eligible() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        assertTrue(
+            registry.isRouterEligible(d.protocolVault), "registry must mark rmPROTO router-eligible"
+        );
+    }
+
+    /// @notice AC#2 (issue #559): rmPROTO appears in the router defaultWeights vector.
+    function test_rmPROTO_in_defaultWeights() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        (address[] memory dV,) = router.getDefaultWeights();
+        bool found;
+        for (uint256 i = 0; i < dV.length; i++) {
+            if (dV[i] == d.protocolVault) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, "rmPROTO must appear in defaultWeights");
+    }
+
+    /// @notice AC#3 (issue #559): a router deposit succeeds end-to-end with
+    ///         rmPROTO eligible — the DemoV3SwapRouter stub handles the V3 path.
+    function test_rmPROTO_router_deposit_succeeds() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+
+        uint256 depositAmt = 300e6;
+        usdc.mint(address(this), depositAmt);
+        usdc.approve(address(router), depositAmt);
+
+        uint256 sharesBefore = primaryVault.balanceOf(address(this));
+        router.deposit(depositAmt, new uint256[](0));
+        assertGt(
+            primaryVault.balanceOf(address(this)), sharesBefore, "primary shares must increase"
+        );
+    }
+
     // ─── deSPXA RWA vault tests (issue #562) ─────────────────────────────────
 
     /// @notice The deSPXA RWA vault (PRD §11.4) is registered Active after the
@@ -267,7 +321,7 @@ contract DeployDemoExtraVaultsTest is Test {
     }
 
     /// @notice The rmRWA vault is NOT included in the router defaultWeights vector
-    ///         (only primary + rmAGENT are in the 50/50 split). Issue #562 AC2.
+    ///         (primary + rmPROTO + rmAGENT are in the three-way split). Issue #562 AC2.
     function test_rwaVault_not_in_defaultWeights() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
         (address[] memory dV,) = router.getDefaultWeights();

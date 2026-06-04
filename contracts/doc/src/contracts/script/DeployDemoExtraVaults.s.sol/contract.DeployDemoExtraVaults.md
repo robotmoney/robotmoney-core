@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39467bf9ff113c7821b3343e7468c20f3d3ee5af/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -20,19 +20,16 @@ demo seed deploys the same vault classes the PRD names — no generic
 stand-in clones. `ProtocolAssetVault` and `AgentTokenVault` carry
 devnet basket stubs; `RwaVault` (PRD §11.4) holds the deSPXA stub
 + a demo Chronicle oracle that always returns a fresh price.
-Router eligibility (ADR-0006 §1, issue #562):
-- rmRWA (§11.4) is registered Active but NOT router-eligible.
-The PortfolioRouter deposit path reads totalAssets() to compute
-shares, which in turn enforces a Chronicle oracle staleness check.
-On the demo devnet the demo Chronicle oracle always returns a
-fresh price, but routing through the PortfolioRouter for an
-oracle-gated vault complicates the deposit transaction and adds
-no value — RWA deposits are inherently direct (single-asset,
-Aerodrome secondary swap). The dapp presents rmRWA as a live
-vault tile (Active) with direct-deposit-only treatment, consistent
-with the "direct-seed-only" stance in ADR-0006 §1.
-- rmAGENT (§11.3) is router-eligible (50% of the default vector).
-- The primary `RobotMoneyVault` (§11.1) holds the other 50%.
+Router eligibility (issues #559, #560, ADR-0006 §1):
+- rmPROTO (§11.2) is router-eligible (issue #559). DemoV3SwapRouter
+stubs satisfy the V3 deposit path on devnet. ~3333 bps leg.
+- rmAGENT (§11.3) is router-eligible (issue #560). Multi-DEX stubs
+(V3/V4/Aerodrome) satisfy all three deposit legs on devnet. ~3333 bps.
+- rmRWA (§11.4) is registered Active but NOT router-eligible per
+ADR-0006 §1 — direct-deposit-only (Chronicle oracle gates totalAssets).
+- The primary `RobotMoneyVault` (§11.1) holds ~3334 bps (one-third).
+- Default + voted weight vectors: 3334 / 3333 / 3333 bps (primary /
+rmPROTO / rmAGENT) summing to 10 000 bps.
 Required env vars:
 ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
 and must already hold ADMIN_ROLE on
@@ -44,7 +41,7 @@ in production for two-role key separation
 REGISTRY_ADDRESS            — deployed VaultRegistry
 ROUTER_ADDRESS              — deployed PortfolioRouter
 PRIMARY_VAULT               — RobotMoneyVault deployed by Deploy.s.sol
-(holds 50% of the default weight vector)
+(~3334 bps in the default weight vector)
 USDC_ADDRESS                — ERC-20 asset every vault denominates in
 Optional env vars:
 SWAP_ROUTER        — Uniswap V3 SwapRouter02 address for the
@@ -281,17 +278,22 @@ Per ADR-0006 §1, the vault is seeded once (maxAssets = 1).
 function _seedRwaVault(RwaVault vault, DemoRwaStubDeployer seeder) internal;
 ```
 
-### _applyTwoVaultWeights
+### _applyThreeVaultWeights
 
 Refresh both the voted weight vector (used by the AC3 smoke test
 which reads `getWeights()`) and the on-chain default (below-quorum
-fallback, ADR-0002). Two router-eligible vaults: primary (§11.1)
-and rmAGENT (§11.3, issue #560). Equal 50/50 split.
+fallback, ADR-0002). Three router-eligible vaults: primary (§11.1),
+rmPROTO (§11.2, issue #559), and rmAGENT (§11.3, issue #560).
+Approximately equal three-way split: 3334/3333/3333 bps = 10000 total.
 
 
 ```solidity
-function _applyTwoVaultWeights(PortfolioRouter router, address primary, address agentVault)
-    internal;
+function _applyThreeVaultWeights(
+    PortfolioRouter router,
+    address primary,
+    address proto,
+    address agentVault
+) internal;
 ```
 
 ### _registerIfAbsent
@@ -350,8 +352,9 @@ Result struct returned to in-process callers (e.g. forge tests).
 
 ```solidity
 struct Deployed {
-    /// @dev `ProtocolAssetVault` (PRD §11.2). Registered Active, NOT router-eligible
-    ///      (basket-vault gap blocks live deposits; see basket-vault-gap-report.md).
+    /// @dev `ProtocolAssetVault` (PRD §11.2, rmPROTO). Registered Active and
+    ///      router-eligible (issue #559). Included in the default + voted weight
+    ///      vectors at 3 333 bps (~33% of routed deposits).
     address protocolVault;
     /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
     address[] protocolTokens;
