@@ -1,5 +1,5 @@
 # IStrategyAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9eed07634921aa5428fc9e4e6b0452434840368d/contracts/interfaces/IStrategyAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e3ee0bd75d52506549a0416bdd36e7e170b4b50b/contracts/interfaces/IStrategyAdapter.sol)
 
 Minimal interface every Robot Money strategy adapter must implement.
 
