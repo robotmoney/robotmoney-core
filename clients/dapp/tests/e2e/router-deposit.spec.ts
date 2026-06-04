@@ -15,15 +15,7 @@
  */
 import { test, expect } from "./helpers/fixtures";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createPublicClient,
-  createWalletClient,
-  encodeFunctionData,
-  http,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { encodeFunctionData, type Address } from "viem";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
 import { openDapp, openTab } from "./helpers/wallet";
 import { erc20Abi, vaultAbi, registryAbi } from "../../src/lib/abi";
@@ -31,27 +23,6 @@ import { erc20Abi, vaultAbi, registryAbi } from "../../src/lib/abi";
 const DEPOSIT_USDC = 10_000_000n; // 10 USDC, 6 decimals
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 180_000;
-
-async function fundUsdc(
-  endpoints: DevnetEndpoints,
-  recipient: Address,
-  amount: bigint,
-): Promise<void> {
-  const account = privateKeyToAccount(endpoints.harness_usdc_holder_private_key as Hex);
-  const wallet = createWalletClient({ account, transport: http(endpoints.rpc_url) });
-  const publicClient = createPublicClient({ transport: http(endpoints.rpc_url) });
-  const data = encodeFunctionData({
-    abi: erc20Abi,
-    functionName: "transfer",
-    args: [recipient, amount],
-  });
-  const hash = await wallet.sendTransaction({
-    chain: null,
-    to: endpoints.usdc_addr as Address,
-    data,
-  });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-}
 
 async function vaultBalanceOf(rpc: string, vault: string, who: string): Promise<bigint> {
   const data = encodeFunctionData({
@@ -127,9 +98,7 @@ test.describe("Router deposit — multi-vault via PortfolioRouter on smoke-test 
   test("select router path, preview renders, approve+deposit, assert share balance updated", async ({
     page,
   }) => {
-    // Fund the admin EOA with enough USDC to cover the router deposit.
-    await fundUsdc(endpoints, endpoints.admin_addr as Address, DEPOSIT_USDC * 2n);
-
+    // Admin EOA is pre-funded with USDC via DappStack::boot (issue #603).
     await openDapp(page, endpoints, { role: "admin" });
     await openTab(page, "deposit-withdraw");
 

@@ -5,10 +5,20 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// Walk up from `CARGO_MANIFEST_DIR` to find the workspace root.
+/// Walk up from the runtime working directory to find the workspace root.
+/// Falls back to `CARGO_MANIFEST_DIR` for tests launched from outside the repo.
 /// Identified by the presence of both `foundry.toml` and `clients/rust-payment-client`.
 pub fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Ok(dir) = std::env::current_dir() {
+        if let Some(root) = find_workspace_root_from(dir) {
+            return Some(root);
+        }
+    }
+
+    find_workspace_root_from(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn find_workspace_root_from(mut dir: PathBuf) -> Option<PathBuf> {
     for _ in 0..8 {
         if dir.join("foundry.toml").exists() && dir.join("clients/rust-payment-client").exists() {
             return Some(dir);
