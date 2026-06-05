@@ -223,12 +223,13 @@ fn registry_lists_four_active_vaults() {
     }
 }
 
-/// AC3: Router weights cover the three router-eligible vaults (§11.1/§11.2/
-/// §11.3) and sum to exactly 10 000 bps. The §11.4 RWA vault is never weighted
-/// (ADR-0006 §1) — it is seeded by a direct deposit instead.
+/// AC3: Router weights cover all four router-eligible vaults (§11.1/§11.2/
+/// §11.3/§11.4) and sum to exactly 10 000 bps with the 8500/500/500/500 split.
+/// Issue #621: rmRWA is router-eligible at 500 bps (ADR-0006 §1 amended
+/// 2026-06-05 — product owner confirmed).
 #[test]
-fn router_weights_cover_three_eligible_vaults() {
-    if skip_if_no_prereqs("router_weights_cover_three_eligible_vaults") {
+fn router_weights_cover_four_eligible_vaults() {
+    if skip_if_no_prereqs("router_weights_cover_four_eligible_vaults") {
         return;
     }
     let fx = fixture();
@@ -238,13 +239,13 @@ fn router_weights_cover_three_eligible_vaults() {
     let (vaults, bps) = decode_address_array_and_uint_array(&raw);
     assert_eq!(
         vaults.len(),
-        3,
-        "expected 3 router weight entries (eligible vaults), got {vaults:?}"
+        4,
+        "expected 4 router weight entries (all four eligible vaults), got {vaults:?}"
     );
-    assert_eq!(bps.len(), 3, "expected 3 router weight bps entries");
+    assert_eq!(bps.len(), 4, "expected 4 router weight bps entries");
 
-    // The three router-eligible vaults must all appear in the weight vector;
-    // the RWA vault must not.
+    // All four router-eligible vaults must appear in the weight vector,
+    // including the RWA vault at 500 bps (issue #621).
     for v in fx.all_demo_vaults() {
         assert!(
             vaults.contains(&v),
@@ -252,10 +253,35 @@ fn router_weights_cover_three_eligible_vaults() {
         );
     }
     assert!(
-        !vaults.contains(&fx.rwa_vault()),
-        "RWA vault {:#x} must not be router-weighted, got {vaults:?}",
+        vaults.contains(&fx.rwa_vault()),
+        "RWA vault {:#x} must be router-weighted at 500 bps (issue #621), got {vaults:?}",
         fx.rwa_vault()
     );
+
+    // Validate the 8500/500/500/500 bps split.
+    let primary = fx.vault();
+    let rwa = fx.rwa_vault();
+    for (i, &v) in vaults.iter().enumerate() {
+        if v == primary {
+            assert_eq!(
+                bps[i], 8_500,
+                "primary vault must carry 8500 bps, got {}",
+                bps[i]
+            );
+        } else if v == rwa {
+            assert_eq!(
+                bps[i], 500,
+                "rmRWA vault must carry 500 bps, got {}",
+                bps[i]
+            );
+        } else {
+            assert_eq!(
+                bps[i], 500,
+                "basket vault {v:#x} must carry 500 bps, got {}",
+                bps[i]
+            );
+        }
+    }
 
     let total: u128 = bps.iter().sum();
     assert_eq!(

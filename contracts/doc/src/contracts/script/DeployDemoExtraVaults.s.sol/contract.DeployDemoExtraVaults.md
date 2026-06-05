@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e2c936763868ac281d428b1ab176ecdd042ef467/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -13,23 +13,24 @@ Protocol Asset, Agent Token, and the real deSPXA RWA vault (ADR-0006).
 Registers all three additions in `VaultRegistry`, seeds the basket
 vaults with devnet stand-in tokens, seeds the RWA vault with the
 deSPXA stub + Chronicle oracle stub, and resets the router weight
-vector to two-vault 50/50 (Primary + rmAGENT).
+vector to a four-vault 8500/500/500/500 bps split.
 Why this exists: to exercise the full PRD vault catalog end to end
 (Portfolio Explorer, /v1/vaults TVL, Router Governance weights) the
 demo seed deploys the same vault classes the PRD names — no generic
 stand-in clones. `ProtocolAssetVault` and `AgentTokenVault` carry
 devnet basket stubs; `RwaVault` (PRD §11.4) holds the deSPXA stub
 + a demo Chronicle oracle that always returns a fresh price.
-Router eligibility (issues #559, #560, ADR-0006 §1):
+Router eligibility (issues #559, #560, #621, ADR-0006 §1 as amended):
 - rmPROTO (§11.2) is router-eligible (issue #559). DemoV3SwapRouter
-stubs satisfy the V3 deposit path on devnet. ~3333 bps leg.
+stubs satisfy the V3 deposit path on devnet. 500 bps leg.
 - rmAGENT (§11.3) is router-eligible (issue #560). Multi-DEX stubs
-(V3/V4/Aerodrome) satisfy all three deposit legs on devnet. ~3333 bps.
-- rmRWA (§11.4) is registered Active but NOT router-eligible per
-ADR-0006 §1 — direct-deposit-only (Chronicle oracle gates totalAssets).
-- The primary `RobotMoneyVault` (§11.1) holds ~3334 bps (one-third).
-- Default + voted weight vectors: 3334 / 3333 / 3333 bps (primary /
-rmPROTO / rmAGENT) summing to 10 000 bps.
+(V3/V4/Aerodrome) satisfy all three deposit legs on devnet. 500 bps.
+- rmRWA (§11.4) is router-eligible at 500 bps (issue #621, ADR-0006
+§1 amended 2026-06-05 — product owner confirmed). The Aerodrome
+swap stub and demo Chronicle oracle satisfy the deposit path on devnet.
+- The primary `RobotMoneyVault` (§11.1) holds 8500 bps (~85%).
+- Default + voted weight vectors: 8500 / 500 / 500 / 500 bps
+(primary / rmRWA / rmPROTO / rmAGENT) summing to 10 000 bps.
 Required env vars:
 ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
 and must already hold ADMIN_ROLE on
@@ -278,19 +279,21 @@ Per ADR-0006 §1, the vault is seeded once (maxAssets = 1).
 function _seedRwaVault(RwaVault vault, DemoRwaStubDeployer seeder) internal;
 ```
 
-### _applyThreeVaultWeights
+### _applyFourVaultWeights
 
 Refresh both the voted weight vector (used by the AC3 smoke test
 which reads `getWeights()`) and the on-chain default (below-quorum
-fallback, ADR-0002). Three router-eligible vaults: primary (§11.1),
-rmPROTO (§11.2, issue #559), and rmAGENT (§11.3, issue #560).
-Approximately equal three-way split: 3334/3333/3333 bps = 10000 total.
+fallback, ADR-0002). All four router-eligible vaults: primary (§11.1),
+rmRWA (§11.4, issue #621), rmPROTO (§11.2, issue #559), and rmAGENT
+(§11.3, issue #560). Conservative stablecoin-heavy split:
+8500 / 500 / 500 / 500 bps = 10 000 total.
 
 
 ```solidity
-function _applyThreeVaultWeights(
+function _applyFourVaultWeights(
     PortfolioRouter router,
     address primary,
+    address rwaVault,
     address proto,
     address agentVault
 ) internal;
@@ -364,9 +367,9 @@ struct Deployed {
     /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
     ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
     address[] agentTokens;
-    /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active, NOT router-eligible
-    ///      (direct-deposit-only per ADR-0006 §1; Chronicle oracle gates totalAssets).
-    ///      Not in the router weight vector. The dapp renders it as a live vault tile.
+    /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
+    ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
+    ///      stub and demo Chronicle oracle satisfy the deposit path on devnet.
     address rwaVault;
     /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
     address v4Adapter;
