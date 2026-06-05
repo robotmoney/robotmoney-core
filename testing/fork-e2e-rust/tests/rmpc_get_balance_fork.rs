@@ -46,7 +46,7 @@ fn rmpc_get_balance_against_fork() {
     let cfg = rmpc_bin::write_config(
         tmp.path(),
         &fx.rpc_url,
-        rmpc_fork_e2e::BASE_CHAIN_ID,
+        fx.chain_id,
         addresses::USDC,
         Address::ZERO,
     );
@@ -70,7 +70,7 @@ fn rmpc_get_balance_against_fork() {
     );
 
     let v: Value = serde_json::from_slice(&out.stdout).expect("rmpc stdout is JSON");
-    assert_eq!(v["chain_id"], rmpc_fork_e2e::BASE_CHAIN_ID);
+    assert_eq!(v["chain_id"], fx.chain_id);
     assert_eq!(v["source"], "json_rpc");
     assert_eq!(v["partial"], false);
     assert!(v["errors"].as_array().unwrap().is_empty());

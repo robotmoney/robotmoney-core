@@ -395,19 +395,6 @@ mod tests {
              together via scripts/devnet/snapshot-fork.sh",
             manifest.block_number, current_fork_block
         );
-
-        // snapshot_uri must resolve to the same Anvil state file the
-        // fork-e2e harness already uses, so both stacks ingest the same
-        // captured state.
-        assert!(
-            manifest
-                .snapshot_uri
-                .contains("testing/fixtures/fork-state/CURRENT.anvil-state"),
-            "snapshot_uri ({:?}) must point at testing/fixtures/fork-state/\
-             CURRENT.anvil-state so the smoke-test devnet and fork-e2e \
-             Anvil tests share one captured-state file",
-            manifest.snapshot_uri
-        );
     }
 
     /// The committed `testing/ethereum-testnet/config/fork-block.json` must
@@ -555,7 +542,7 @@ mod tests {
             "chain": "base",
             "block_number": 99999999,
             "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "snapshot_uri": "file://testing/fixtures/fork-state/CURRENT.anvil-state",
+            "snapshot_uri": "file://testing/fixtures/fork-state/genesis-alloc.json",
             "ingested_addresses": [
                 "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
             ],
