@@ -33,9 +33,7 @@ function AssetRow({ token, active, balance, label }: AssetRowProps) {
       {active != null && (
         <span data-testid="vault-list-asset-active">{active ? "active" : "inactive"}</span>
       )}
-      {balance != null && (
-        <span data-testid="vault-list-asset-balance">{balance.toString()}</span>
-      )}
+      {balance != null && <span data-testid="vault-list-asset-balance">{balance.toString()}</span>}
     </li>
   );
 }
