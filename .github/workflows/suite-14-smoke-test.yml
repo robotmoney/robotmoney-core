@@ -50,12 +50,6 @@ on:
   # that target a dev-phase-* branch. See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [main, dev, "dev-phase-*"]
-    paths:
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - "contracts/**"
-      - "config/dex-pools.json"
-      - ".github/workflows/suite-14-smoke-test.yml"
   pull_request:
     branches: ["dev-phase-*"]
     paths:

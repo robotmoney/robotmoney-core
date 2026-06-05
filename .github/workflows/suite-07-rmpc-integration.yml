@@ -47,12 +47,6 @@ on:
   # See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [main, dev, "dev-phase-*"]
-    paths:
-      - "clients/rust-payment-client/**"
-      - "testing/ethereum-testnet/e2e-rust/**"
-      - "testing/smoke-test/**"
-      - "contracts/**"
-      - ".github/workflows/suite-07-rmpc-integration.yml"
   pull_request:
     branches: ["dev-phase-*"]
     paths:
