@@ -17,6 +17,12 @@
  * shared data-fetching seams so all downstream components receive vault
  * metadata from a single batched registry read rather than N independent
  * chain reads. See docs/technical/multi-vault-dapp-decisions.md §4.1.
+ *
+ * ExplorerProvider (ExplorerContext) is mounted here as the single polling
+ * loop for the explorer API (/v1/vaults and /v1/stats). All components that
+ * display TVL, stats, or block freshness consume useExplorer() instead of
+ * issuing independent fetches — ensuring they always reflect the same
+ * indexed block_number with no mixed-block state across components.
  */
 import "./styles.css";
 import React, { useEffect, useState } from "react";
@@ -47,6 +53,7 @@ import { resolveExplorerApiUrl } from "./lib/explorerApi";
 import { initErrorCapture } from "./lib/error-capture";
 import { VaultRegistryProvider } from "./lib/VaultRegistryContext";
 import { RouterProvider } from "./lib/RouterContext";
+import { ExplorerProvider } from "./lib/ExplorerContext";
 
 // Install global error capture before React renders so startup errors are
 // included in the /debug feed.
@@ -131,9 +138,9 @@ function App() {
       <VerificationBanner state={verificationState} refresh={verificationRefresh} />
       <main className="dapp-shell">
         <div className="landing-overview">
-          <ProtocolStats apiUrl={explorerApiUrl} />
+          <ProtocolStats />
           <LandingPriceStrip />
-          <VaultCards apiUrl={explorerApiUrl} />
+          <VaultCards />
           <BalancesPanel gatewayAddress={gateway} rmTokenAddress={rmToken} />
         </div>
 
@@ -191,7 +198,7 @@ function App() {
                       onBack={() => setSelectedVault(null)}
                     />
                   ) : (
-                    <VaultList apiUrl={explorerApiUrl} onSelectVault={setSelectedVault} />
+                    <VaultList onSelectVault={setSelectedVault} />
                   )}
                   <AccountLayerView
                     apiUrl={explorerApiUrl}
@@ -210,11 +217,12 @@ function App() {
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element missing from index.html");
 
-// Wrap App with VaultRegistryProvider and RouterProvider when contract
-// addresses are configured. Both providers are no-ops when their address is
-// missing (e.g. single-vault deployments).
+// Wrap App with ExplorerProvider (single polling loop for /v1/vaults and
+// /v1/stats), VaultRegistryProvider, and RouterProvider when contract
+// addresses are configured. Both chain-read providers are no-ops when their
+// address is missing (e.g. single-vault deployments).
 // docs/technical/multi-vault-dapp-decisions.md §4.1.
-const appWithProviders = registry ? (
+const appWithChainProviders = registry ? (
   <VaultRegistryProvider registryAddress={registry}>
     {router ? (
       <RouterProvider routerAddress={router}>
@@ -226,6 +234,10 @@ const appWithProviders = registry ? (
   </VaultRegistryProvider>
 ) : (
   <App />
+);
+
+const appWithProviders = (
+  <ExplorerProvider apiUrl={explorerApiUrl}>{appWithChainProviders}</ExplorerProvider>
 );
 
 ReactDOM.createRoot(rootEl).render(

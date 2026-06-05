@@ -12,10 +12,13 @@
  * per-vault flag, so the same code marks any non-Active vault inactive in
  * every environment (single-production-codebase,
  * docs/development/single-production-codebase.md).
+ *
+ * Data comes from ExplorerContext (shared polling loop in main.tsx), so this
+ * component and VaultList always display the same block_number — no
+ * mixed-block state. The pollInterval prop is forwarded to ExplorerProvider in
+ * tests to control re-fetch timing without fake timers.
  */
-import { useEffect, useState } from "react";
-import type { FetchLike, VaultRow } from "../lib/explorerApi";
-import { fetchVaults } from "../lib/explorerApi";
+import { useExplorer } from "../lib/ExplorerContext";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -29,47 +32,10 @@ const STATUS_LABEL: Record<number, string> = {
  */
 const VAULT_STATUS_ACTIVE = 0;
 
-interface VaultCardsProps {
-  readonly apiUrl: string;
-  readonly fetchImpl?: FetchLike;
-  /** Poll interval in ms. Defaults to 15 000. Overridable in tests. */
-  readonly pollInterval?: number;
-}
+export function VaultCards() {
+  const { vaults, blockNumber, vaultsLoading, vaultsError } = useExplorer();
 
-type State =
-  | { phase: "loading" }
-  | { phase: "error"; message: string }
-  | { phase: "ok"; vaults: readonly VaultRow[]; block_number: number };
-
-export function VaultCards({ apiUrl, fetchImpl, pollInterval = 15_000 }: VaultCardsProps) {
-  const [state, setState] = useState<State>({ phase: "loading" });
-
-  useEffect(() => {
-    let ac = new AbortController();
-
-    function doFetch() {
-      ac = new AbortController();
-      fetchVaults(apiUrl, { fetchImpl, signal: ac.signal })
-        .then((res) =>
-          setState({ phase: "ok", vaults: res.vaults, block_number: res.block_number }),
-        )
-        .catch((err: unknown) => {
-          if (ac.signal.aborted) return;
-          setState({ phase: "error", message: String(err) });
-        });
-    }
-
-    doFetch();
-    // Re-poll so the indexer's processed deposits become visible without a
-    // manual page reload (indexer tick is 12 s, so 15 s keeps up in production).
-    const timer = setInterval(doFetch, pollInterval);
-    return () => {
-      ac.abort();
-      clearInterval(timer);
-    };
-  }, [apiUrl, fetchImpl, pollInterval]);
-
-  if (state.phase === "loading") {
+  if (vaultsLoading) {
     return (
       <section className="landing-vaults" data-testid="landing-vault-cards">
         <h2>Vaults</h2>
@@ -78,11 +44,11 @@ export function VaultCards({ apiUrl, fetchImpl, pollInterval = 15_000 }: VaultCa
     );
   }
 
-  if (state.phase === "error") {
+  if (vaultsError) {
     return (
       <section className="landing-vaults" data-testid="landing-vault-cards">
         <h2>Vaults</h2>
-        <p data-testid="landing-vault-cards-error">{state.message}</p>
+        <p data-testid="landing-vault-cards-error">{vaultsError}</p>
       </section>
     );
   }
@@ -91,13 +57,15 @@ export function VaultCards({ apiUrl, fetchImpl, pollInterval = 15_000 }: VaultCa
     <section className="landing-vaults" data-testid="landing-vault-cards">
       <div className="section-heading-row">
         <h2>Vaults</h2>
-        <p data-testid="landing-vault-cards-freshness">Block {state.block_number}</p>
+        {blockNumber != null && (
+          <p data-testid="landing-vault-cards-freshness">Block {blockNumber}</p>
+        )}
       </div>
-      {state.vaults.length === 0 ? (
+      {vaults.length === 0 ? (
         <p data-testid="landing-vault-cards-empty">No vaults registered yet.</p>
       ) : (
         <div className="vault-card-grid">
-          {state.vaults.map((vault) => {
+          {vaults.map((vault) => {
             // Inactive presentation is driven by the on-chain registry status
             // surfaced through the indexer — not a per-vault constant.
             const isActive = vault.status === VAULT_STATUS_ACTIVE;
