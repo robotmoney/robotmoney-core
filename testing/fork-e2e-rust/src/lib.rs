@@ -338,6 +338,10 @@ pub struct ForkFixture {
     /// API key). Used in test output.
     pub rpc_label: String,
     pub pin: ForkPin,
+    /// Actual chain_id returned by the connected backend. For anvil forks this
+    /// equals BASE_CHAIN_ID (8453); for the shared Geth devnet it is 918453.
+    /// All transactions signed against this fixture MUST use this chain_id.
+    pub chain_id: u64,
     rpc: Rpc,
     /// Captured tx hashes for output; kept under a Mutex so
     /// scenarios can append from any helper.
@@ -453,6 +457,7 @@ impl ForkFixture {
             rpc_url,
             rpc_label,
             pin,
+            chain_id: BASE_CHAIN_ID,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
         };
@@ -548,6 +553,7 @@ impl ForkFixture {
     fn new_testnet(url: &str) -> Result<Self, HarnessError> {
         let rpc = Rpc::new(url);
         let block = rpc.block_number()?;
+        let chain_id = rpc.chain_id()?;
         let pin = ForkPin {
             block,
             source: PinSource::LatestMinusN,
@@ -557,6 +563,7 @@ impl ForkFixture {
             rpc_url: url.to_string(),
             rpc_label: sanitize_rpc_label(url),
             pin,
+            chain_id,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
         })
@@ -592,7 +599,7 @@ impl ForkFixture {
             signer: holder_signer,
             address: holder_addr,
             fixture_rpc_url: self.rpc_url.clone(),
-            chain_id: BASE_CHAIN_ID,
+            chain_id: self.chain_id,
             rpc: self.rpc.clone(),
             tx_hashes: &holder_tx_hashes,
         };
@@ -633,7 +640,7 @@ impl ForkFixture {
             signer,
             address: addr,
             fixture_rpc_url: self.rpc_url.clone(),
-            chain_id: BASE_CHAIN_ID,
+            chain_id: self.chain_id,
             rpc: self.rpc.clone(),
             tx_hashes: &self.tx_hashes,
         })
@@ -657,7 +664,7 @@ impl ForkFixture {
         let h = addresses::address_set_hash();
         format!(
             "chain_id={} fork_block={} rpc_label={} address_set_hash={}",
-            BASE_CHAIN_ID,
+            self.chain_id,
             self.pin.block,
             self.rpc_label,
             hex::encode(h)

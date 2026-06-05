@@ -64,7 +64,11 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         // block. Use saturating_sub so a fresh devnet (pin.block < CONFIRMATIONS)
         // doesn't panic — the indexer processes the genesis range and the heartbeat
         // fires because there is no previous vault snapshot in the DB.
-        end_block: Some(fork.pin.block.saturating_sub(explorer_indexer::CONFIRMATIONS)),
+        end_block: Some(
+            fork.pin
+                .block
+                .saturating_sub(explorer_indexer::CONFIRMATIONS),
+        ),
         feature_flags: 0,
     };
 
