@@ -99,8 +99,13 @@ jobs:
             sleep 2
           done
           BOOT_END=$(date +%s)
-          echo "devnet-boot-seconds=$((BOOT_END - BOOT_START))" >> "$GITHUB_STEP_SUMMARY" || true
-          echo "Devnet ready in $((BOOT_END - BOOT_START))s"
+          BOOT_SECS=$((BOOT_END - BOOT_START))
+          echo "devnet-boot-seconds=${BOOT_SECS}" >> "$GITHUB_STEP_SUMMARY" || true
+          echo "Devnet ready in ${BOOT_SECS}s"
+          if [ "${BOOT_SECS}" -gt 90 ]; then
+            echo "ERROR: devnet boot took ${BOOT_SECS}s > 90s limit (AC #6: median target 60s)" >&2
+            exit 1
+          fi
 
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
