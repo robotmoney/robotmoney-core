@@ -29,6 +29,41 @@ import { erc20Abi } from "./abi";
 export type RegistrationStatus = "disconnected" | "unregistered" | "registered";
 
 const STORAGE_PREFIX = "rm:agent-registered:";
+const ONBOARDING_DISMISSED_PREFIX = "rm:onboarding-dismissed:";
+
+function onboardingDismissedKey(addr: string): string {
+  return `${ONBOARDING_DISMISSED_PREFIX}${addr.toLowerCase()}`;
+}
+
+/**
+ * markOnboardingDismissed — writes a per-wallet localStorage flag so that
+ * AgentsPanel can skip the OnboardingWizard on subsequent page loads.
+ *
+ * Follows the same pattern as markRegistered. Private-mode / unavailable
+ * localStorage failures are silently swallowed — the caller falls back to
+ * showing the wizard on reload, which is safe.
+ */
+export function markOnboardingDismissed(addr: string): void {
+  try {
+    localStorage.setItem(onboardingDismissedKey(addr), "1");
+    window.dispatchEvent(new Event("rm:onboarding-dismissed-changed"));
+  } catch {
+    // localStorage may be unavailable (private mode, etc) — fall back
+    // gracefully; wizard will re-appear on reload, which is safe.
+  }
+}
+
+/**
+ * isOnboardingDismissed — synchronous read of the per-wallet dismiss flag.
+ * Returns false on any localStorage error (private mode, quota exceeded, etc).
+ */
+export function isOnboardingDismissed(addr: string): boolean {
+  try {
+    return localStorage.getItem(onboardingDismissedKey(addr)) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function storageKey(addr: string): string {
   return `${STORAGE_PREFIX}${addr.toLowerCase()}`;
