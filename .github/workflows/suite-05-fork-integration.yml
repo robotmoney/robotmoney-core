@@ -8,17 +8,29 @@
 # mainnet. This suite is the line of defence between a refactor breaking a live
 # integration and that breakage reaching users.
 #
-# WHY NO RMPC_FORK_RPC_URL SECRET
-# The fork state is loaded from a checked-in fixture (testing/fixtures/fork-state/).
-# No upstream RPC is contacted at runtime. The fixture is refreshed offline with
-# scripts/devnet/snapshot-fork.sh when the mainnet state it depends on changes.
-# This eliminates flakiness from external RPC rate limits and makes the suite
-# fully hermetic.
+# WHY GETH DEVNET INSTEAD OF ANVIL
+# Tests run against the shared Geth+Lighthouse devnet (issue #607). The devnet boots
+# from the committed genesis-alloc.json which mirrors the Base mainnet state at the
+# pinned fork block. RMPC_TESTNET_RPC_URL is set to http://localhost:8545, which
+# triggers testnet mode in ForkFixture: no anvil is spawned, accounts are funded via
+# signed transactions from HARNESS_USDC_HOLDER (pre-funded in genesis). This
+# eliminates the behavioural gap between the two EVM backends and removes the anvil
+# binary from the critical path.
+#
+# WHY --test-threads=1
+# Testnet mode shares the HARNESS_USDC_HOLDER nonce across concurrent tests. Running
+# single-threaded avoids nonce collisions. Boot time (~15-30s) is amortised across
+# all tests in one sequential run.
+#
+# WHY FOUNDRY IS STILL INSTALLED
+# forge build is required by tests/registry.rs which reads the VaultRegistry compiled
+# artefact from out/VaultRegistry.sol/VaultRegistry.json. anvil is NOT invoked.
 #
 # GOTCHAS
-# - If the fork fixture is stale (e.g. a contract was upgraded on mainnet), tests will
-#   fail with ABI mismatch errors that look like encoding bugs. Check the fixture age
-#   and re-run snapshot-fork.sh before debugging the test code.
+# - The devnet's genesis-alloc.json must stay in sync with CURRENT.json (the fork pin).
+#   If the fixture is refreshed (snapshot-fork.sh), re-run smoke-test-genesis-ingester
+#   and commit the new genesis-alloc.json.
+# - If GETH_RPC_PORT is not set, docker compose maps geth:8545 -> host:8545.
 # - cargo test --no-run is a separate step so compile errors are surfaced immediately
 #   with clear output, rather than buried in the test runner's timeout output.
 # - The registry fork-e2e scenarios (tests/registry.rs) deploy VaultRegistry from the
@@ -52,6 +64,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker compose version
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -68,10 +85,32 @@ jobs:
       - name: Build Solidity contracts (required by registry fork-e2e)
         run: forge build
 
+      - name: Boot Geth+Lighthouse devnet
+        working-directory: testing/ethereum-testnet/config
+        run: |
+          BOOT_START=$(date +%s)
+          docker compose up -d
+          echo "Waiting for Geth RPC to be ready..."
+          until curl -sf -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            http://localhost:8545 2>/dev/null | grep -q '"result"'; do
+            sleep 2
+          done
+          BOOT_END=$(date +%s)
+          echo "devnet-boot-seconds=$((BOOT_END - BOOT_START))" >> "$GITHUB_STEP_SUMMARY" || true
+          echo "Devnet ready in $((BOOT_END - BOOT_START))s"
+
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
         run: cargo test --no-run
 
-      - name: Full fork integration suite
+      - name: Full fork integration suite (testnet mode)
         working-directory: testing/fork-e2e-rust
-        run: cargo test --release -- --nocapture
+        env:
+          RMPC_TESTNET_RPC_URL: http://localhost:8545
+        run: cargo test --release -- --test-threads=1 --nocapture
+
+      - name: Devnet teardown (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true

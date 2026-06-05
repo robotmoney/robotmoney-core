@@ -1,7 +1,7 @@
-//! Full-stack integration test: boot Postgres in a container, boot a
-//! Base-mainnet fork-anvil via the Phase 2 `rmpc-fork-e2e` harness,
-//! point the indexer at both, run a bounded range, and assert the
-//! contract of issue #57:
+//! Full-stack integration test: boot Postgres in a container, connect to a
+//! shared Geth devnet via `RMPC_TESTNET_RPC_URL` (or fall back to the
+//! `rmpc-fork-e2e` anvil harness when the env var is unset), point the
+//! indexer at both, run a bounded range, and assert the contract of issue #57:
 //!
 //! - `indexer_runs` records a successful run.
 //! - All 9 minimum tables are reachable by COUNT(*) (i.e. every
@@ -11,9 +11,9 @@
 //!   readable, so the snapshot succeeds).
 //! - Re-running the same range produces 0 net inserts (idempotency).
 //!
-//! Uses a checked-in fork-state snapshot (detected by the `rmpc-fork-e2e`
-//! harness via `RMPC_FORK_RPC_URL` or the fallback fixture path).
-//! Skips only when `anvil` is not on PATH.
+//! Preferred: set `RMPC_TESTNET_RPC_URL=http://localhost:8545` (shared Geth
+//! devnet). Falls back to anvil via `RMPC_FORK_RPC_URL` or the checked-in
+//! fixture. Skips when neither is available.
 
 mod common;
 
@@ -25,8 +25,9 @@ use explorer_indexer::{db::CountTable, indexer::run_once, indexer::IndexerConfig
 async fn populates_nine_tables_and_reindex_is_idempotent() {
     if !rmpc_fork_e2e::can_run() {
         eprintln!(
-            "[explorer-indexer] skipping: anvil not on PATH and no checked-in fixture found. \
-             Install Foundry (https://getfoundry.sh) to run."
+            "[explorer-indexer] skipping: no RMPC_TESTNET_RPC_URL, no RMPC_FORK_RPC_URL, \
+             and anvil+fixture not available. Set RMPC_TESTNET_RPC_URL to run against \
+             the shared Geth devnet."
         );
         return;
     }

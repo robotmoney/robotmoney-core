@@ -103,8 +103,9 @@ macro_rules! skip_if_no_fork {
     () => {
         if !$crate::can_run() {
             eprintln!(
-                "[fork-e2e] skipping: anvil not on PATH and no checked-in fixture found. \
-                 Install Foundry (https://getfoundry.sh) to run fork tests."
+                "[fork-e2e] skipping: no RMPC_TESTNET_RPC_URL, no RMPC_FORK_RPC_URL, \
+                 and anvil+fixture not available. Set RMPC_TESTNET_RPC_URL to run against \
+                 the shared devnet, or install Foundry (https://getfoundry.sh)."
             );
             return;
         }
@@ -137,6 +138,15 @@ macro_rules! skip_if_no_mainnet_fork {
 const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
 const FIXTURE_META_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
 
+/// Private key for the harness USDC holder EOA. Test-only — this key is also
+/// hardcoded in `testing/smoke-test/src/lib.rs` and the genesis alloc.
+/// Matches address `HARNESS_USDC_HOLDER_ADDR_HEX` below.
+const HARNESS_USDC_HOLDER_KEY_HEX: &str =
+    "0xd2dffaf3c3c5e3e2f5cb5cef1a3a2e0e0a8b9d4ae2f6c1d3e8a5b7c9e0f1a2b3";
+/// Address derived from `HARNESS_USDC_HOLDER_KEY_HEX`. Pre-funded with 1000 ETH
+/// and a USDC grant in the devnet genesis alloc. Used as the faucet in testnet mode.
+const HARNESS_USDC_HOLDER_ADDR_HEX: &str = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
+
 fn workspace_root() -> Option<std::path::PathBuf> {
     test_utils::find_workspace_root()
 }
@@ -158,9 +168,17 @@ pub fn fixture_state_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Returns true iff the harness can boot an Anvil backend — either via
-/// `RMPC_FORK_RPC_URL` (live upstream) or via a checked-in fork-state fixture.
+/// Returns true iff the harness can run fork-e2e tests — either via
+/// `RMPC_TESTNET_RPC_URL` (shared Geth devnet), `RMPC_FORK_RPC_URL` (live
+/// archive upstream for anvil fork), or a checked-in fork-state fixture.
 pub fn can_run() -> bool {
+    // Testnet mode: no anvil required.
+    if std::env::var("RMPC_TESTNET_RPC_URL")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
     if which::which("anvil").is_err() {
         return false;
     }
@@ -327,13 +345,25 @@ pub struct ForkFixture {
 }
 
 impl ForkFixture {
-    /// Boot a fresh Anvil backend.
+    /// Boot a fresh fixture backend.
     ///
-    /// Prefers `RMPC_FORK_RPC_URL` (live upstream fork) when set. Falls back to
-    /// a checked-in fork-state snapshot (detected via [`fixture_state_path`]) so
-    /// CI never needs the secret. Returns [`HarnessError::SkipNoRpc`] only when
-    /// neither is available.
+    /// Mode selection (in priority order):
+    /// 1. `RMPC_TESTNET_RPC_URL` — point at a shared Geth+Lighthouse devnet;
+    ///    no anvil required, accounts funded via signed transactions from the
+    ///    harness USDC holder (pre-funded in genesis).
+    /// 2. `RMPC_FORK_RPC_URL` — live archive fork via anvil.
+    /// 3. Checked-in fork-state fixture — anvil `--load-state`.
+    ///
+    /// Returns [`HarnessError::SkipNoRpc`] only when none of the above are
+    /// available.
     pub fn new() -> Result<Self, HarnessError> {
+        // Testnet mode: shared devnet, no anvil.
+        if let Ok(url) = std::env::var("RMPC_TESTNET_RPC_URL") {
+            if !url.is_empty() {
+                return Self::new_testnet(&url);
+            }
+        }
+
         if which::which("anvil").is_err() {
             return Err(HarnessError::AnvilMissing);
         }
@@ -511,16 +541,96 @@ impl ForkFixture {
         Ok(())
     }
 
-    /// Build a fresh ephemeral account funded with ETH and (optionally)
-    /// USDC by impersonating the configured whale.
+    /// Connect to a shared Geth+Lighthouse devnet at `url`. No anvil is spawned.
+    /// USDC storage is pre-seeded in the genesis alloc so `apply_usdc_storage_seed`
+    /// is a no-op (admin slot already non-zero).
+    fn new_testnet(url: &str) -> Result<Self, HarnessError> {
+        let rpc = Rpc::new(url);
+        let block = rpc.block_number()?;
+        let pin = ForkPin {
+            block,
+            source: PinSource::LatestMinusN,
+        };
+        let fx = ForkFixture {
+            backend: None,
+            rpc_url: url.to_string(),
+            rpc_label: sanitize_rpc_label(url),
+            pin,
+            rpc,
+            tx_hashes: Mutex::new(Vec::new()),
+        };
+        // apply_usdc_storage_seed is a no-op when the admin slot is already set
+        // (which it is on a devnet booted from genesis-alloc.json).
+        fx.apply_usdc_storage_seed()?;
+        Ok(fx)
+    }
+
+    /// Fund `to` with ETH and USDC by sending signed transactions from
+    /// `HARNESS_USDC_HOLDER` — the pre-funded faucet account in the devnet
+    /// genesis alloc. Used in testnet mode in place of `anvil_setBalance` /
+    /// `anvil_setStorageAt`.
+    ///
+    /// NOTE: serialize calls to this function when running with `--test-threads=1`
+    /// to avoid nonce collisions on the shared faucet account.
+    fn fund_from_harness_holder(
+        &self,
+        to: Address,
+        eth_wei: U256,
+        usdc_units: U256,
+    ) -> Result<(), HarnessError> {
+        let key_hex = HARNESS_USDC_HOLDER_KEY_HEX.trim_start_matches("0x");
+        let key_bytes: Vec<u8> =
+            hex::decode(key_hex).map_err(|e| HarnessError::Rpc(format!("holder key hex: {e}")))?;
+        let key_arr: [u8; 32] = key_bytes
+            .try_into()
+            .map_err(|_| HarnessError::Rpc("holder key wrong length".into()))?;
+        let holder_signer = SigningKey::from_bytes((&key_arr).into())
+            .map_err(|e| HarnessError::Rpc(format!("holder signer: {e}")))?;
+        let holder_addr: Address = HARNESS_USDC_HOLDER_ADDR_HEX.parse().map_err(
+            |e: alloy_primitives::hex::FromHexError| HarnessError::Rpc(format!("holder addr: {e}")),
+        )?;
+
+        let holder_tx_hashes = Mutex::new(Vec::<B256>::new());
+        let holder = Account {
+            signer: holder_signer,
+            address: holder_addr,
+            fixture_rpc_url: self.rpc_url.clone(),
+            chain_id: BASE_CHAIN_ID,
+            rpc: self.rpc.clone(),
+            tx_hashes: &holder_tx_hashes,
+        };
+
+        if eth_wei > U256::ZERO {
+            holder.send_raw(to, alloy_primitives::Bytes::new(), eth_wei, 21_000)?;
+        }
+        if usdc_units > U256::ZERO {
+            let call = IERC20::transferCall {
+                to,
+                amount: usdc_units,
+            };
+            holder.send(addresses::USDC, &call, U256::ZERO, 200_000)?;
+        }
+        Ok(())
+    }
+
+    /// Build a fresh ephemeral account funded with ETH and (optionally) USDC.
+    ///
+    /// In anvil mode: uses `anvil_setBalance` / `anvil_setStorageAt` admin RPCs.
+    /// In testnet mode (`RMPC_TESTNET_RPC_URL`): sends signed transactions from
+    /// `HARNESS_USDC_HOLDER` (the genesis-funded faucet). Run with
+    /// `--test-threads=1` when using testnet mode to avoid nonce collisions.
     pub fn ephemeral(&self, eth_wei: U256, usdc_units: U256) -> Result<Account<'_>, HarnessError> {
         let signer = SigningKey::random(&mut rand_core::OsRng);
         let addr = derive_address(&signer);
-        // Fund ETH.
-        self.rpc.set_balance(addr, eth_wei)?;
-        // Fund USDC via whale impersonation if requested.
-        if usdc_units > U256::ZERO {
-            self.fund_usdc(addr, usdc_units)?;
+        if self.backend.is_none() {
+            // Testnet mode: fund via transfers from the harness holder.
+            self.fund_from_harness_holder(addr, eth_wei, usdc_units)?;
+        } else {
+            // Anvil mode: use admin RPCs.
+            self.rpc.set_balance(addr, eth_wei)?;
+            if usdc_units > U256::ZERO {
+                self.fund_usdc(addr, usdc_units)?;
+            }
         }
         Ok(Account {
             signer,
