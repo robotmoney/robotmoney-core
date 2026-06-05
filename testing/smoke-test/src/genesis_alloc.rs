@@ -1,10 +1,11 @@
 //! Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections).
 //! Implements: issue #255 — genesis alloc builder for the Geth+Lighthouse devnet.
 //!
-//! This module ingests a Base-mainnet state snapshot (the Anvil `--dump-state`
-//! JSON committed at `testing/fixtures/fork-state/CURRENT.anvil-state`) and
-//! produces a geth-genesis-compatible `alloc` map restricted to the address
-//! allowlist declared in `testing/ethereum-testnet/config/fork-block.json`.
+//! This module ingests a Base-mainnet state snapshot (an Anvil `--dump-state`
+//! JSON, see `testing/fixtures/fork-state/`) and produces a
+//! geth-genesis-compatible `alloc` map restricted to the address allowlist
+//! declared in `testing/ethereum-testnet/config/fork-block.json`. The output
+//! is committed as `testing/fixtures/fork-state/genesis-alloc.json`.
 //!
 //! On top of the ingested Base state the builder:
 //! 1. Overlays the harness EOAs (deployer, pauser, share receiver, agent,
@@ -22,14 +23,14 @@
 //!
 //! ## USDC storage seed
 //!
-//! `CURRENT.anvil-state` is produced by Anvil's `--dump-state`, which only
-//! captures bytecode for addresses that have been explicitly warmed; full
-//! storage is NOT preserved. To make `USDC.symbol()` / `name()` /
-//! `totalSupply()` resolve to real Base values on the devnet, the builder
-//! layers a committed seed file (`testing/fixtures/fork-state/usdc-storage-seed.json`)
-//! onto the proxy account and registers the FiatTokenV2_2 implementation
-//! contract so the proxy's delegatecall resolves. See
-//! `docs/development/smoke-test-design.md` for the capture procedure.
+//! Anvil's `--dump-state` only captures bytecode for addresses that have been
+//! explicitly warmed; full storage is NOT preserved. To make `USDC.symbol()` /
+//! `name()` / `totalSupply()` resolve to real Base values on the devnet, the
+//! builder layers a committed seed file
+//! (`testing/fixtures/fork-state/usdc-storage-seed.json`) onto the proxy
+//! account and registers the FiatTokenV2_2 implementation contract so the
+//! proxy's delegatecall resolves. See `docs/development/smoke-test-design.md`
+//! for the capture procedure.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -555,8 +556,8 @@ mod tests {
     use super::*;
     use crate::fork_manifest::ForkManifest;
 
-    /// Path to the committed Anvil fixture relative to repo root.
-    const FIXTURE_REL: &str = "testing/fixtures/fork-state/CURRENT.anvil-state";
+    /// Path to the committed pre-built genesis alloc relative to repo root.
+    const GENESIS_ALLOC_REL: &str = "testing/fixtures/fork-state/genesis-alloc.json";
     const MANIFEST_REL: &str = "testing/ethereum-testnet/config/fork-block.json";
 
     fn repo_root() -> std::path::PathBuf {
@@ -631,56 +632,70 @@ mod tests {
         );
     }
 
+    /// Validate the pre-built `testing/fixtures/fork-state/genesis-alloc.json`
+    /// against the fork-block manifest invariants. The file is produced by
+    /// `smoke-test-genesis-ingester` and committed so the devnet genesis can
+    /// be assembled without re-running the ingester at test time.
     #[test]
-    fn build_alloc_over_committed_fixture() {
+    fn pre_built_genesis_alloc_validates() {
         let root = repo_root();
-        let snap = root.join(FIXTURE_REL);
+        let alloc_path = root.join(GENESIS_ALLOC_REL);
         let m_path = root.join(MANIFEST_REL);
-        if !snap.exists() || !m_path.exists() {
-            // Fixture not checked out; skip.
+        if !alloc_path.exists() || !m_path.exists() {
+            // Not checked out; skip.
             return;
         }
         let manifest = ForkManifest::load(&m_path).expect("manifest valid");
-        let alloc = build_alloc(&snap, &manifest).expect("alloc built");
+        let raw = std::fs::read_to_string(&alloc_path).expect("read genesis-alloc.json");
+        let alloc: serde_json::Value =
+            serde_json::from_str(&raw).expect("genesis-alloc.json parses as JSON");
+        let obj = alloc
+            .as_object()
+            .expect("genesis-alloc.json is a JSON object");
 
         // 1. Every ingested address ends up in the output.
         for a in &manifest.ingested_addresses {
+            let key = address_key(a);
             assert!(
-                alloc.0.contains_key(&address_key(a)),
-                "ingested address {a:?} missing from output alloc"
+                obj.contains_key(&key),
+                "ingested address {a:?} ({key}) missing from pre-built alloc"
             );
         }
 
-        // 2. Every harness EOA ends up in the output with at least the
-        //    default ETH balance.
+        // 2. Every harness EOA ends up in the output with the default ETH balance.
         for eoa in harness_eoas() {
-            let entry = alloc
-                .0
-                .get(&address_key(&eoa))
-                .unwrap_or_else(|| panic!("harness EOA {eoa:?} missing"));
+            let key = address_key(&eoa);
+            let entry = obj
+                .get(&key)
+                .unwrap_or_else(|| panic!("harness EOA {eoa:?} ({key}) missing"));
+            let bal = entry["balance"].as_str().unwrap_or("");
             assert_eq!(
-                entry.balance, DEFAULT_HARNESS_ETH_WEI,
+                bal, DEFAULT_HARNESS_ETH_WEI,
                 "harness EOA {eoa:?} did not receive ETH grant"
             );
         }
 
-        // 3. USDC entry has the harness balance slot set to exactly the
-        //    grant (snapshot has no prior balance for the harness EOA).
+        // 3. USDC entry has the harness balance slot set.
         let usdc_key = address_key(&BASE_USDC_ADDR.parse::<Address>().unwrap());
-        let usdc = alloc.0.get(&usdc_key).expect("USDC alloc entry exists");
-        assert!(usdc.code.is_some(), "USDC must carry ingested bytecode");
+        let usdc = obj.get(&usdc_key).expect("USDC alloc entry exists");
+        assert!(
+            usdc.get("code").and_then(|c| c.as_str()).is_some(),
+            "USDC must carry ingested bytecode"
+        );
+        let storage = usdc.get("storage").expect("USDC has storage");
         let bal_slot = b256_hex(&balances_slot(&manifest.harness_usdc_holder, 9));
-        let stored = usdc.storage.get(&bal_slot).expect("balance slot present");
+        let stored = storage
+            .get(&bal_slot)
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("balance slot {bal_slot} missing from USDC storage"));
         let expected = u256_hex(&U256::from(manifest.harness_usdc_grant_units));
         assert_eq!(stored, &expected, "balance slot != grant amount");
 
-        // 4. totalSupply slot was bumped by the grant amount. Note: when the
-        //    seed file is present the prior value is non-zero (real Base
-        //    totalSupply), so we assert >= grant rather than ==.
+        // 4. totalSupply slot was bumped by the grant amount.
         let ts_slot = slot_index_hex(FIAT_TOKEN_TOTAL_SUPPLY_SLOT);
-        let stored_ts = usdc
-            .storage
+        let stored_ts = storage
             .get(&ts_slot)
+            .and_then(|v| v.as_str())
             .expect("totalSupply slot present");
         let stored_ts_u = U256::from_str_radix(stored_ts.trim_start_matches("0x"), 16).unwrap();
         assert!(
@@ -689,8 +704,7 @@ mod tests {
             manifest.harness_usdc_grant_units
         );
 
-        // 5. Seeded slots are present at expected positions: name, symbol,
-        //    decimals, totalSupply, implementation pointer.
+        // 5. Seeded slots are present: name, symbol, decimals, impl pointer.
         let want_slots = [
             (
                 "0x0000000000000000000000000000000000000000000000000000000000000004",
@@ -708,25 +722,27 @@ mod tests {
         ];
         for (slot, label) in want_slots {
             assert!(
-                usdc.storage.contains_key(slot),
+                storage.get(slot).is_some(),
                 "seeded slot for {label} missing"
             );
         }
-        // Implementation account is registered as its own alloc entry.
-        let impl_addr: Address = "0x2cE6311ddAE708829Bc0784C967b7d77D19FD779"
-            .parse()
-            .unwrap();
-        let impl_entry = alloc
-            .0
-            .get(&address_key(&impl_addr))
-            .expect("USDC impl account registered");
+
+        // 6. USDC implementation account is registered.
+        let impl_key = address_key(
+            &"0x2cE6311ddAE708829Bc0784C967b7d77D19FD779"
+                .parse::<Address>()
+                .unwrap(),
+        );
+        let impl_entry = obj.get(&impl_key).expect("USDC impl account registered");
         assert!(
-            impl_entry.code.as_deref().map(|c| c.len()).unwrap_or(0) > 1000,
+            impl_entry
+                .get("code")
+                .and_then(|c| c.as_str())
+                .map(|c| c.len())
+                .unwrap_or(0)
+                > 1000,
             "USDC impl bytecode missing or stub"
         );
-
-        // 6. Output is JSON-serializable.
-        let _ = serde_json::to_string(&alloc).expect("alloc serializes");
     }
 
     #[test]

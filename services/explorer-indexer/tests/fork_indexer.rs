@@ -11,8 +11,8 @@
 //!   readable, so the snapshot succeeds).
 //! - Re-running the same range produces 0 net inserts (idempotency).
 //!
-//! Uses the checked-in `testing/fixtures/fork-state/CURRENT.anvil-state` snapshot
-//! by default; falls back to `RMPC_FORK_RPC_URL` live fork if set.
+//! Uses a checked-in fork-state snapshot (detected by the `rmpc-fork-e2e`
+//! harness via `RMPC_FORK_RPC_URL` or the fallback fixture path).
 //! Skips only when `anvil` is not on PATH.
 
 mod common;

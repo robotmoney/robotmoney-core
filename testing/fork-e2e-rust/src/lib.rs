@@ -134,23 +134,32 @@ macro_rules! skip_if_no_mainnet_fork {
 }
 
 /// Path to the checked-in Anvil state snapshot relative to the workspace root.
-const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.anvil-state";
+const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
 const FIXTURE_META_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
 
 fn workspace_root() -> Option<std::path::PathBuf> {
     test_utils::find_workspace_root()
 }
 
-/// Returns the path to `CURRENT.anvil-state` if it exists on disk.
+/// Returns the path to the checked-in fork-state metadata if it exists on disk.
+/// Used by the harness to find the pinned fork block and chain id when
+/// `RMPC_FORK_RPC_URL` is unset.
 pub fn fixture_state_path() -> Option<std::path::PathBuf> {
-    workspace_root()
+    // Look for the paired .anvil-state file (same basename, different ext).
+    let meta = workspace_root()
         .map(|r| r.join(FIXTURE_STATE_REL))
-        .filter(|p| p.exists())
+        .filter(|p| p.exists())?;
+    // The anvil-state file sits next to the .json meta file.
+    let state = meta.with_extension("anvil-state");
+    if state.exists() {
+        Some(state)
+    } else {
+        None
+    }
 }
 
 /// Returns true iff the harness can boot an Anvil backend — either via
-/// `RMPC_FORK_RPC_URL` (live upstream) or via the checked-in fork-state
-/// fixture (`testing/fixtures/fork-state/CURRENT.anvil-state`).
+/// `RMPC_FORK_RPC_URL` (live upstream) or via a checked-in fork-state fixture.
 pub fn can_run() -> bool {
     if which::which("anvil").is_err() {
         return false;
@@ -321,7 +330,7 @@ impl ForkFixture {
     /// Boot a fresh Anvil backend.
     ///
     /// Prefers `RMPC_FORK_RPC_URL` (live upstream fork) when set. Falls back to
-    /// `testing/fixtures/fork-state/CURRENT.anvil-state` (checked-in snapshot) so
+    /// a checked-in fork-state snapshot (detected via [`fixture_state_path`]) so
     /// CI never needs the secret. Returns [`HarnessError::SkipNoRpc`] only when
     /// neither is available.
     pub fn new() -> Result<Self, HarnessError> {
