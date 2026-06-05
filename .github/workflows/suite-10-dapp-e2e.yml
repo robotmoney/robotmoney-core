@@ -28,12 +28,6 @@ on:
   # See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [main, dev, "dev-phase-*"]
-    paths:
-      - "clients/dapp/**"
-      - "contracts/**"
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - ".github/workflows/suite-10-dapp-e2e.yml"
   pull_request:
     branches: ["dev-phase-*"]
     paths:
