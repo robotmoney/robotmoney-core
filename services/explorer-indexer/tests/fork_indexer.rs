@@ -59,6 +59,7 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         vault: rmpc_fork_e2e::addresses::VAULT,
         registry: None,
         router_governance: None,
+        portfolio_router: None,
         max_blocks_per_tick: 200,
         // Cap the run at the safe head so the heartbeat snapshot lands at a known
         // block. Use saturating_sub so a fresh devnet (pin.block < CONFIRMATIONS)
