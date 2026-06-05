@@ -16,7 +16,7 @@
  * The RM button is additionally gated on `rmTokenAddress` being provided and
  * `harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM` (issue #365 AC).
  */
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { type Address, type Hex, getAddress, isAddress } from "viem";
 import {
   FAUCET_DRIP_AMOUNT_ETH,
@@ -53,7 +53,7 @@ export type Props = Readonly<{
   /** Injected RM drip handler. */
   dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
   /**
-   * Harness native ETH balance for the Get Base ETH preflight gate (issue
+   * Harness native ETH balance for the Drip Base ETH preflight gate (issue
    * #466). The button is disabled until this is `>= FAUCET_DRIP_AMOUNT_ETH`.
    */
   harnessEthBalance?: bigint;
@@ -70,6 +70,17 @@ export function FaucetTabView(props: Props) {
   const [rmStatus, setRmStatus] = useState<DripStatus>({ kind: "idle" });
   const [ethStatus, setEthStatus] = useState<DripStatus>({ kind: "idle" });
 
+  /**
+   * Shared promise-chain queue that serializes all harness drips so concurrent
+   * button clicks never submit two transactions with the same nonce. Each drip
+   * enqueues itself onto the tail of the chain and the previous tail resolves
+   * (or rejects) before the next one starts — issue #619.
+   */
+  const harnessQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  /** True while any drip is executing — disables ALL drip buttons globally. */
+  const [harnessBusy, setHarnessBusy] = useState(false);
+
   if (props.harnessPrivateKey === null) {
     return (
       <section data-testid="faucet-unavailable" className="faucet-tab">
@@ -85,17 +96,15 @@ export function FaucetTabView(props: Props) {
   const harnessFunded =
     props.harnessBalance !== undefined && props.harnessBalance >= FAUCET_DRIP_AMOUNT_USDC;
   const validRecipient = isAddress(selected);
-  const canDrip = validRecipient && harnessFunded && status.kind !== "pending";
+  const canDrip = validRecipient && harnessFunded && !harnessBusy;
 
   const harnessRmFunded =
     props.harnessRmBalance !== undefined && props.harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM;
-  const canDripRm =
-    validRecipient && harnessRmFunded && rmStatus.kind !== "pending" && !!props.rmTokenAddress;
+  const canDripRm = validRecipient && harnessRmFunded && !harnessBusy && !!props.rmTokenAddress;
 
   const harnessEthFunded =
     props.harnessEthBalance !== undefined && props.harnessEthBalance >= FAUCET_DRIP_AMOUNT_ETH;
-  const canDripEth =
-    validRecipient && harnessEthFunded && ethStatus.kind !== "pending" && !!props.dripEth;
+  const canDripEth = validRecipient && harnessEthFunded && !harnessBusy && !!props.dripEth;
 
   const onDrip = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -109,32 +118,39 @@ export function FaucetTabView(props: Props) {
       return;
     }
     setStatus({ kind: "pending" });
-    void props
-      .drip({
-        usdcAddress: props.usdcAddress,
-        recipient: getAddress(selected),
-        provider,
-        harnessPrivateKey: props.harnessPrivateKey as Hex,
-        chainId: props.chainId,
-      })
-      .then((hash) => {
-        setStatus({ kind: "success", hash });
-        void props.refetchRecipientBalance();
-      })
-      .catch((err: unknown) => {
-        const message =
-          typeof err === "object" && err !== null && "shortMessage" in err
-            ? String((err as { shortMessage: unknown }).shortMessage)
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        setStatus({ kind: "error", message });
-      });
+    setHarnessBusy(true);
+    const recipient = getAddress(selected);
+    harnessQueueRef.current = harnessQueueRef.current.then(() =>
+      props
+        .drip({
+          usdcAddress: props.usdcAddress,
+          recipient,
+          provider,
+          harnessPrivateKey: props.harnessPrivateKey as Hex,
+          chainId: props.chainId,
+        })
+        .then((hash) => {
+          setStatus({ kind: "success", hash });
+          setHarnessBusy(false);
+          void props.refetchRecipientBalance();
+        })
+        .catch((err: unknown) => {
+          const message =
+            typeof err === "object" && err !== null && "shortMessage" in err
+              ? String((err as { shortMessage: unknown }).shortMessage)
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          setStatus({ kind: "error", message });
+          setHarnessBusy(false);
+        }),
+    );
   };
 
   const onDripEth = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canDripEth || !props.dripEth) return;
+    const dripEth = props.dripEth;
     const provider = getInjectedProvider();
     if (!provider) {
       setEthStatus({
@@ -144,30 +160,36 @@ export function FaucetTabView(props: Props) {
       return;
     }
     setEthStatus({ kind: "pending" });
-    void props
-      .dripEth({
-        recipient: getAddress(selected),
+    setHarnessBusy(true);
+    const recipient = getAddress(selected);
+    harnessQueueRef.current = harnessQueueRef.current.then(() =>
+      dripEth({
+        recipient,
         provider,
         harnessPrivateKey: props.harnessPrivateKey as Hex,
         chainId: props.chainId,
       })
-      .then((hash) => {
-        setEthStatus({ kind: "success", hash });
-      })
-      .catch((err: unknown) => {
-        const message =
-          typeof err === "object" && err !== null && "shortMessage" in err
-            ? String((err as { shortMessage: unknown }).shortMessage)
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        setEthStatus({ kind: "error", message });
-      });
+        .then((hash) => {
+          setEthStatus({ kind: "success", hash });
+          setHarnessBusy(false);
+        })
+        .catch((err: unknown) => {
+          const message =
+            typeof err === "object" && err !== null && "shortMessage" in err
+              ? String((err as { shortMessage: unknown }).shortMessage)
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          setEthStatus({ kind: "error", message });
+          setHarnessBusy(false);
+        }),
+    );
   };
 
   const onDripRm = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canDripRm || !props.rmTokenAddress || !props.dripRm) return;
+    const dripRm = props.dripRm;
     const provider = getInjectedProvider();
     if (!provider) {
       setRmStatus({
@@ -177,26 +199,32 @@ export function FaucetTabView(props: Props) {
       return;
     }
     setRmStatus({ kind: "pending" });
-    void props
-      .dripRm({
-        rmTokenAddress: props.rmTokenAddress,
-        recipient: getAddress(selected),
+    setHarnessBusy(true);
+    const recipient = getAddress(selected);
+    const rmTokenAddress = props.rmTokenAddress;
+    harnessQueueRef.current = harnessQueueRef.current.then(() =>
+      dripRm({
+        rmTokenAddress,
+        recipient,
         provider,
         harnessPrivateKey: props.harnessPrivateKey as Hex,
         chainId: props.chainId,
       })
-      .then((hash) => {
-        setRmStatus({ kind: "success", hash });
-      })
-      .catch((err: unknown) => {
-        const message =
-          typeof err === "object" && err !== null && "shortMessage" in err
-            ? String((err as { shortMessage: unknown }).shortMessage)
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        setRmStatus({ kind: "error", message });
-      });
+        .then((hash) => {
+          setRmStatus({ kind: "success", hash });
+          setHarnessBusy(false);
+        })
+        .catch((err: unknown) => {
+          const message =
+            typeof err === "object" && err !== null && "shortMessage" in err
+              ? String((err as { shortMessage: unknown }).shortMessage)
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          setRmStatus({ kind: "error", message });
+          setHarnessBusy(false);
+        }),
+    );
   };
 
   return (
@@ -274,21 +302,21 @@ export function FaucetTabView(props: Props) {
             disabled={!canDripEth}
             data-harness-eth-funded={harnessEthFunded ? "true" : "false"}
           >
-            Get Base ETH
+            Drip Base ETH
           </button>
           {ethStatus.kind === "pending" && (
             <p data-testid="faucet-eth-drip-pending" className="hint">
-              Signing and broadcasting Base ETH drip…
+              Signing and broadcasting drip…
             </p>
           )}
           {ethStatus.kind === "success" && (
             <p data-testid="faucet-eth-drip-success" className="hint">
-              Base ETH drip sent — tx <code>{ethStatus.hash}</code>
+              Drip sent — tx <code>{ethStatus.hash}</code>
             </p>
           )}
           {ethStatus.kind === "error" && (
             <p data-testid="faucet-eth-drip-error" className="unsafe-banner">
-              <strong>Base ETH drip failed:</strong> {ethStatus.message}
+              <strong>Drip failed:</strong> {ethStatus.message}
             </p>
           )}
         </form>
@@ -301,21 +329,21 @@ export function FaucetTabView(props: Props) {
             Router Governance.
           </p>
           <button type="submit" data-testid="faucet-rm-drip-button" disabled={!canDripRm}>
-            Get RM tokens
+            Drip RM tokens
           </button>
           {rmStatus.kind === "pending" && (
             <p data-testid="faucet-rm-drip-pending" className="hint">
-              Signing and broadcasting RM drip…
+              Signing and broadcasting drip…
             </p>
           )}
           {rmStatus.kind === "success" && (
             <p data-testid="faucet-rm-drip-success" className="hint">
-              RM drip sent — tx <code>{rmStatus.hash}</code>
+              Drip sent — tx <code>{rmStatus.hash}</code>
             </p>
           )}
           {rmStatus.kind === "error" && (
             <p data-testid="faucet-rm-drip-error" className="unsafe-banner">
-              <strong>RM drip failed:</strong> {rmStatus.message}
+              <strong>Drip failed:</strong> {rmStatus.message}
             </p>
           )}
         </form>
