@@ -45,9 +45,12 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
     let rpc_url = fork.rpc_url.clone();
 
     let rpc = JsonRpc::new(&rpc_url);
-    // The vault is real on Base mainnet; the gateway hasn't deployed
-    // yet so we use a zero-address placeholder. eth_getLogs against
-    // an empty-event address is allowed.
+    // The vault is real on Base mainnet (present in the devnet genesis alloc via
+    // genesis-alloc.json); the gateway hasn't deployed yet so we use a zero-address
+    // placeholder. eth_getLogs against an empty-event address is allowed.
+    // On the shared Geth devnet the chain_id is 918453 (the local testnet network
+    // id), but we record it as BASE_CHAIN_ID in the DB since the contract addresses
+    // are the same as Base mainnet — the chain_id field is metadata only.
     let cfg = IndexerConfig {
         chain_id: rmpc_fork_e2e::BASE_CHAIN_ID as i64,
         chain_name: "base".into(),
@@ -57,10 +60,11 @@ async fn populates_nine_tables_and_reindex_is_idempotent() {
         registry: None,
         router_governance: None,
         max_blocks_per_tick: 200,
-        // Anvil's `eth_blockNumber` returns the fork pin; we cap the
-        // run at the pin so the heartbeat snapshot lands at a known
-        // block.
-        end_block: Some(fork.pin.block - explorer_indexer::CONFIRMATIONS),
+        // Cap the run at the safe head so the heartbeat snapshot lands at a known
+        // block. Use saturating_sub so a fresh devnet (pin.block < CONFIRMATIONS)
+        // doesn't panic — the indexer processes the genesis range and the heartbeat
+        // fires because there is no previous vault snapshot in the DB.
+        end_block: Some(fork.pin.block.saturating_sub(explorer_indexer::CONFIRMATIONS)),
         feature_flags: 0,
     };
 
