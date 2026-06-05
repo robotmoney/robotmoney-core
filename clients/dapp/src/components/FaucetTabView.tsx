@@ -62,6 +62,13 @@ export type Props = Readonly<{
    * `lib/faucetClient.ts`; the e2e harness substitutes its own forwarder.
    */
   dripEth?: (args: DripEthArgs) => Promise<Hex>;
+  /**
+   * Optional callback invoked after any drip (USDC, RM, or ETH) succeeds.
+   * FaucetTab wires this to `useQueryClient().invalidateQueries()` so the
+   * BalancesPanel re-fetches without a page reload (issue #622).
+   * FaucetTabView itself stays render-only — no wagmi hooks here.
+   */
+  onDripSuccess?: () => void;
 }>;
 
 export function FaucetTabView(props: Props) {
@@ -133,6 +140,7 @@ export function FaucetTabView(props: Props) {
           setStatus({ kind: "success", hash });
           setHarnessBusy(false);
           void props.refetchRecipientBalance();
+          props.onDripSuccess?.();
         })
         .catch((err: unknown) => {
           const message =
@@ -172,6 +180,7 @@ export function FaucetTabView(props: Props) {
         .then((hash) => {
           setEthStatus({ kind: "success", hash });
           setHarnessBusy(false);
+          props.onDripSuccess?.();
         })
         .catch((err: unknown) => {
           const message =
@@ -213,6 +222,7 @@ export function FaucetTabView(props: Props) {
         .then((hash) => {
           setRmStatus({ kind: "success", hash });
           setHarnessBusy(false);
+          props.onDripSuccess?.();
         })
         .catch((err: unknown) => {
           const message =
