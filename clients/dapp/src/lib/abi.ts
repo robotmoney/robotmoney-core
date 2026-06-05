@@ -446,3 +446,41 @@ export const routerAbi = [
 ] as const;
 
 export type RouterActionName = "deposit";
+
+/**
+ * Minimal ABI fragment for AgentTokenVault.shortlist() and
+ * ProtocolAssetVault.shortlist() — called by VaultCardAssets /
+ * VaultListRowAssets to enumerate the basket composition without a connected
+ * wallet (wagmi useReadContract works without a signer).
+ *
+ * shortlist() returns an array of ShortlistEntry structs:
+ *   { token: address, active: bool, vaultBalance: uint256 }
+ *
+ * Canonical: docs/prd.md §11.2, §11.3 — basket vault composition.
+ */
+export const BASKET_VAULT_SHORTLIST_ABI = [
+  {
+    type: "function",
+    name: "shortlist",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      {
+        name: "entries",
+        type: "tuple[]",
+        components: [
+          { name: "token", type: "address" },
+          { name: "active", type: "bool" },
+          { name: "vaultBalance", type: "uint256" },
+        ],
+      },
+    ],
+  },
+] as const;
+
+/** A decoded shortlist entry from AgentTokenVault / ProtocolAssetVault. */
+export interface ShortlistEntry {
+  token: `0x${string}`;
+  active: boolean;
+  vaultBalance: bigint;
+}

@@ -15,6 +15,7 @@
  */
 import type { VaultRow } from "../lib/explorerApi";
 import { useExplorer } from "../lib/ExplorerContext";
+import { VaultListRowAssets } from "./VaultListRowAssets";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -71,6 +72,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
               <th>TVL</th>
               <th>Exit Fee (bps)</th>
               <th>Headroom</th>
+              <th>Assets</th>
             </tr>
           </thead>
           <tbody>
@@ -90,6 +92,13 @@ export function VaultList({ onSelectVault }: VaultListProps) {
                 <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
                 <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
                 <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
+                <td>
+                  <VaultListRowAssets
+                    vaultAddress={v.address}
+                    riskLabel={v.risk_label}
+                    status={v.status}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
