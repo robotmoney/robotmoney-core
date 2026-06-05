@@ -31,6 +31,35 @@ struct VaultListResponse {
     vaults: Vec<VaultEntry>,
 }
 
+/// Deserialise the fields we care about from GET /v1/router/weights.
+#[derive(Debug, serde::Deserialize)]
+struct RouterWeightsResponse {
+    current_weights: Vec<RouterWeightEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RouterWeightEntry {
+    bps: u64,
+}
+
+/// Poll GET /v1/router/weights on the explorer-api and return the response.
+fn fetch_router_weights(explorer_api_url: &str) -> Result<RouterWeightsResponse, String> {
+    let url = format!("{explorer_api_url}/v1/router/weights");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("reqwest builder: {e}"))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("GET {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("GET {url}: HTTP {}", resp.status()));
+    }
+    resp.json::<RouterWeightsResponse>()
+        .map_err(|e| format!("GET {url} json decode: {e}"))
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct VaultEntry {
     /// 0 = Active, 1 = Paused, 2 = Retired (matches on-chain VaultStatus enum).
@@ -136,5 +165,76 @@ fn explorer_api_shows_four_active_nonzero_vaults_after_boot() {
     panic!(
         "expected exactly four Active vaults each with total_assets > 0 after \
          DappStack::boot + 90s indexer wait, but got: {vaults_debug}"
+    );
+}
+
+/// AC (issue #615): After DappStack::boot, GET /v1/router/weights must return
+/// non-empty current_weights with the three router-eligible vault entries summing
+/// to exactly 10 000 bps.  This proves the indexer ingests WeightsSet /
+/// DefaultWeightsSet events emitted by the demo seed's direct admin calls to
+/// PortfolioRouter.setWeights() / setDefaultWeights().
+///
+/// INDEXER_PORTFOLIO_ROUTER must be set to the PortfolioRouter address in
+/// DappStack — confirmed in smoke-test/src/lib.rs.
+///
+/// Run with:
+///   cargo test -p smoke-test --release --test full_stack_demo_tvl
+///              explorer_api_shows_router_weights_after_boot
+///              -- --test-threads=1 --nocapture
+#[test]
+fn explorer_api_shows_router_weights_after_boot() {
+    if skip_if_no_prereqs("explorer_api_shows_router_weights_after_boot") {
+        return;
+    }
+
+    let fixture = Fixture::new().expect("fixture boot");
+    let opts = DappStackOptions {
+        dapp_port: None,
+        explorer_api_port: None,
+        public_endpoints: PublicEndpoints::Local,
+    };
+    let dapp = DappStack::boot(&fixture, opts).expect("DappStack::boot");
+
+    let explorer_api_url = &dapp.endpoints.explorer_api_url;
+
+    // Poll for up to 90 s giving the indexer time to process the WeightsSet /
+    // DefaultWeightsSet events emitted during demo seeding.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    let mut last_response: Option<RouterWeightsResponse> = None;
+    while std::time::Instant::now() < deadline {
+        match fetch_router_weights(explorer_api_url) {
+            Ok(resp) => {
+                if !resp.current_weights.is_empty() {
+                    let total_bps: u64 = resp.current_weights.iter().map(|w| w.bps).sum();
+                    if total_bps == 10_000 {
+                        // Exactly 10 000 bps across the router-eligible vaults.
+                        return;
+                    }
+                }
+                last_response = Some(resp);
+            }
+            Err(e) => {
+                eprintln!(
+                    "explorer_api_shows_router_weights_after_boot: poll error (will retry): {e}"
+                );
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+
+    let debug = last_response
+        .map(|r| {
+            let total: u64 = r.current_weights.iter().map(|w| w.bps).sum();
+            format!(
+                "{} weight entries, total bps={}",
+                r.current_weights.len(),
+                total
+            )
+        })
+        .unwrap_or_else(|| "no response received".to_string());
+
+    panic!(
+        "expected GET /v1/router/weights to return non-empty current_weights summing to \
+         10000 bps after DappStack::boot + 90s indexer wait, but got: {debug}"
     );
 }

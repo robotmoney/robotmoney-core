@@ -181,15 +181,23 @@ function makeFetch(body: unknown, ok = true, status = 200): FetchLike {
 }
 
 /**
- * RouterView calls two URLs (/v1/router/weights and /v1/governance/proposals).
+ * RouterView calls three URLs:
+ * /v1/router/weights, /v1/governance/proposals, /v1/vaults.
  * Return different fixtures depending on which URL is called.
  */
-function makeRouterFetch(): FetchLike {
+function makeRouterFetch(
+  weights: RouterWeightsResponse = routerWeightsFixture,
+  proposals = proposalsFixture,
+  vaults: VaultsResponse = vaultsFixture,
+): FetchLike {
   return vi.fn(async (url: string) => {
     if (url.includes("/v1/router/weights")) {
-      return { ok: true, status: 200, json: async () => routerWeightsFixture };
+      return { ok: true, status: 200, json: async () => weights };
     }
-    return { ok: true, status: 200, json: async () => proposalsFixture };
+    if (url.includes("/v1/vaults")) {
+      return { ok: true, status: 200, json: async () => vaults };
+    }
+    return { ok: true, status: 200, json: async () => proposals };
   }) as unknown as FetchLike;
 }
 
@@ -365,8 +373,75 @@ describe("RouterView", () => {
 
     const rows = getAllByTestId("router-view-weight-row");
     expect(rows).toHaveLength(2);
-    const bps = getAllByTestId("router-view-weight-bps").map((n) => n.textContent);
-    expect(bps).toEqual(["5000", "5000"]);
+    // Raw bps values are in the router-view-weight-bps-raw span.
+    const rawBps = getAllByTestId("router-view-weight-bps-raw").map((n) => n.textContent);
+    expect(rawBps).toEqual(["5000", "5000"]);
+  });
+
+  it("displays bps as both raw value and percentage", async () => {
+    const { getAllByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+    );
+    await waitFor(() => getAllByTestId("router-view-weight-bps-raw"));
+
+    const rawBps = getAllByTestId("router-view-weight-bps-raw").map((n) => n.textContent);
+    expect(rawBps).toEqual(["5000", "5000"]);
+
+    const pctBps = getAllByTestId("router-view-weight-bps-pct").map((n) => n.textContent);
+    // 5000 bps = 50.00%
+    expect(pctBps).toEqual(["50.00%", "50.00%"]);
+  });
+
+  it("resolves vault addresses to human-readable names from /v1/vaults", async () => {
+    const { getAllByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+    );
+    await waitFor(() => getAllByTestId("router-view-weight-vault"));
+
+    const vaultCells = getAllByTestId("router-view-weight-vault").map((n) => n.textContent);
+    // vaultsFixture maps VAULT_A_ADDR → "Alpha Vault", VAULT_B_ADDR → "Beta Vault".
+    expect(vaultCells).toContain("Alpha Vault");
+    expect(vaultCells).toContain("Beta Vault");
+  });
+
+  it("renders a proportion bar for each weight entry", async () => {
+    const { getAllByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+    );
+    await waitFor(() => getAllByTestId("router-view-weight-bar"));
+
+    const bars = getAllByTestId("router-view-weight-bar");
+    expect(bars).toHaveLength(2);
+    // Each bar should have a non-empty width style reflecting the bps percentage.
+    for (const bar of bars) {
+      const width = (bar as HTMLElement).style.width;
+      expect(width).toBeTruthy();
+      expect(width).toContain("%");
+    }
+  });
+
+  it("labels weights as 'Effective (voted)' when a governance proposal is open", async () => {
+    const { getByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+    );
+    // proposalsFixture has an "open" proposal.
+    await waitFor(() =>
+      expect(getByTestId("router-view-weight-source").textContent).toBe("Effective (voted)"),
+    );
+  });
+
+  it("labels weights as 'Effective (default)' when no open proposal exists", async () => {
+    const noOpen: ProposalsResponse = {
+      proposals: [{ ...proposalsFixture.proposals[0], status: "executed" }],
+      block_number: 850,
+      indexed_at: "2026-01-01T12:00:00Z",
+    };
+    const { getByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch(routerWeightsFixture, noOpen)} />,
+    );
+    await waitFor(() =>
+      expect(getByTestId("router-view-weight-source").textContent).toBe("Effective (default)"),
+    );
   });
 
   it("renders pending open proposal description", async () => {
@@ -381,20 +456,42 @@ describe("RouterView", () => {
   });
 
   it("shows no pending proposal when all proposals are executed", async () => {
-    const noOpenFetch = vi.fn(async (url: string) => {
-      if (url.includes("/v1/router/weights")) {
-        return { ok: true, status: 200, json: async () => routerWeightsFixture };
-      }
-      const noOpen: ProposalsResponse = {
-        proposals: [{ ...proposalsFixture.proposals[0], status: "executed" }],
-        block_number: 850,
-        indexed_at: "2026-01-01T12:00:00Z",
-      };
-      return { ok: true, status: 200, json: async () => noOpen };
-    }) as unknown as FetchLike;
+    const noOpen: ProposalsResponse = {
+      proposals: [{ ...proposalsFixture.proposals[0], status: "executed" }],
+      block_number: 850,
+      indexed_at: "2026-01-01T12:00:00Z",
+    };
+    const noOpenFetch = makeRouterFetch(routerWeightsFixture, noOpen);
 
     const { getByTestId } = render(<RouterView apiUrl="http://api" fetchImpl={noOpenFetch} />);
     await waitFor(() => expect(getByTestId("router-view-no-proposal")).toBeTruthy());
+  });
+
+  it("shows empty-state only when current_weights is truly empty", async () => {
+    const emptyWeights: RouterWeightsResponse = {
+      current_weights: [],
+      history: [],
+      block_number: 0,
+      indexed_at: "2026-01-01T12:00:00Z",
+    };
+    const { getByTestId, queryByTestId } = render(
+      <RouterView
+        apiUrl="http://api"
+        fetchImpl={makeRouterFetch(emptyWeights)}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("router-view-weights-empty")).toBeTruthy());
+    expect(queryByTestId("router-view-weights-table")).toBeNull();
+    // Weight source label is only shown when weights are present.
+    expect(queryByTestId("router-view-weight-source")).toBeNull();
+  });
+
+  it("does not show empty-state when current_weights is non-empty", async () => {
+    const { getByTestId, queryByTestId } = render(
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch()} />,
+    );
+    await waitFor(() => expect(getByTestId("router-view-weights-table")).toBeTruthy());
+    expect(queryByTestId("router-view-weights-empty")).toBeNull();
   });
 
   it("renders weight history rows", async () => {

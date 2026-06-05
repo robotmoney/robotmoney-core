@@ -2798,6 +2798,8 @@ impl DappStack {
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
             ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
+            // Index WeightsSet/DefaultWeightsSet from PortfolioRouter (issue #615).
+            ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
             (
                 "INDEXER_RPC_URL",
                 format!("http://host.docker.internal:{}", fixture.rpc_port()),
@@ -2890,6 +2892,11 @@ impl DappStack {
                 "INDEXER_REGISTRY".into(),
                 fixture.registry_hex().to_string(),
             ),
+            // Index WeightsSet/DefaultWeightsSet from PortfolioRouter (issue #615).
+            (
+                "INDEXER_PORTFOLIO_ROUTER".into(),
+                fixture.router_hex().to_string(),
+            ),
             (
                 "INDEXER_RPC_URL".into(),
                 format!("http://host.docker.internal:{}", fixture.rpc_port()),
@@ -2939,6 +2946,8 @@ impl DappStack {
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
             .env("INDEXER_REGISTRY", fixture.registry_hex())
+            // Index WeightsSet/DefaultWeightsSet from PortfolioRouter (issue #615).
+            .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
             // RPC is on the host; containers reach it via host.docker.internal
             .env(
                 "INDEXER_RPC_URL",
