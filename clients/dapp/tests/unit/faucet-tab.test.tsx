@@ -10,7 +10,7 @@
  *     a "faucet-unavailable" state instead of the form.
  *
  * Issue #365 extends coverage to RM token drip:
- *   - 'Get RM tokens' button renders when rmTokenAddress is provided.
+ *   - 'Drip RM tokens' button renders when rmTokenAddress is provided.
  *   - Button is absent when rmTokenAddress is undefined.
  *   - Button is disabled until harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM.
  *   - Clicking calls the injected dripRm handler with the right rmTokenAddress.
@@ -196,12 +196,12 @@ describe("FaucetTabView", () => {
 
   // -- Base ETH drip (issue #466) -------------------------------------------
 
-  it("does NOT render the Get Base ETH button when dripEth is undefined", () => {
+  it("does NOT render the Drip Base ETH button when dripEth is undefined", () => {
     renderView({ harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n });
     expect(screen.queryByTestId("faucet-eth-drip-button")).toBeNull();
   });
 
-  it("renders the Get Base ETH button when dripEth is provided", () => {
+  it("renders the Drip Base ETH button when dripEth is provided", () => {
     renderView({
       harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
       harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
@@ -210,7 +210,7 @@ describe("FaucetTabView", () => {
     expect(screen.getByTestId("faucet-eth-drip-button")).toBeInTheDocument();
   });
 
-  it("disables the Get Base ETH button when harness ETH balance is below the drip amount", () => {
+  it("disables the Drip Base ETH button when harness ETH balance is below the drip amount", () => {
     renderView({
       harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
       harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH - 1n,
@@ -219,7 +219,7 @@ describe("FaucetTabView", () => {
     expect(screen.getByTestId("faucet-eth-drip-button")).toBeDisabled();
   });
 
-  it("enables the Get Base ETH button once harness ETH balance covers the drip", () => {
+  it("enables the Drip Base ETH button once harness ETH balance covers the drip", () => {
     renderView({
       harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
       harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
@@ -248,7 +248,7 @@ describe("FaucetTabView", () => {
     delete (window as unknown as { ethereum?: unknown }).ethereum;
   });
 
-  it("does NOT render the Get Base ETH button when the harness key is missing", () => {
+  it("does NOT render the Drip Base ETH button when the harness key is missing", () => {
     renderView({
       harnessPrivateKey: null,
       harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,

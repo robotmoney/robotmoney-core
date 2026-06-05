@@ -53,7 +53,7 @@ type Props = Readonly<{
   drip?: (args: DripUsdcArgs) => Promise<Hex>;
   /**
    * RM token contract address. When provided and env is not mainnet, the
-   * FaucetTabView renders a 'Get RM tokens' button (issue #365).
+   * FaucetTabView renders a 'Drip RM tokens' button (issue #365).
    */
   rmTokenAddress?: Address;
   /**
