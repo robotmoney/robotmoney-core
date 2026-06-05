@@ -42,7 +42,7 @@ export interface UseFaucetBalancesResult {
   readonly harnessRm: FaucetBalanceQuery;
   /**
    * Harness native ETH balance (issue #466). Powers the preflight gate for
-   * the Get Base ETH button — disabled until the harness holds enough ETH
+   * the Drip Base ETH button — disabled until the harness holds enough ETH
    * to cover the drip plus gas.
    */
   readonly harnessEth: FaucetBalanceQuery;

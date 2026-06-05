@@ -48,7 +48,7 @@ export type BuildAdminTabsArgs = Readonly<{
   explorerApiUrl?: string;
   /**
    * RM token contract address (issue #365). When provided, the Faucet tab
-   * renders a 'Get RM tokens' button so testnet users can self-serve
+   * renders a 'Drip RM tokens' button so testnet users can self-serve
    * governance voting power.
    */
   rmTokenAddress?: Address;
