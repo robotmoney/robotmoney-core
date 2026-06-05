@@ -7,8 +7,7 @@
 This crate runs the five §8 fork scenarios against a forked Base
 mainnet (`anvil --fork-url`) backend. Each scenario is a plain
 `#[test]` — the harness boots one anvil child per test (per ADR
-§3.5: fork-restart-per-test isolation, no shared backend, no
-`evm_snapshot` / `evm_revert` orchestration). The Phase 1 e2e
+§3.5: fork-restart-per-test isolation, no shared backend). The Phase 1 e2e
 `Fixture` lives in `../ethereum-testnet/e2e-rust/` and is **not**
 shared with this crate; the two `Fixture` types deliberately do
 not implement a common trait (ADR §3.6).

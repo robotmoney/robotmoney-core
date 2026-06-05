@@ -22,8 +22,8 @@
 //!   router, authorize an agent, call `gateway.depositTo(router)`, and
 //!   assert the `AgentDepositRouted` event is emitted.
 //!
-//! All scenarios use `evm_snapshot` / `evm_revert` for isolation. Each
-//! test boots its own anvil fork backend (per ADR §3.5).
+//! Each test boots its own anvil fork backend (per ADR §3.5), providing
+//! full state isolation without snapshot/revert coordination.
 
 use std::path::PathBuf;
 
@@ -369,8 +369,6 @@ fn router_deposit_happy_path() {
         .ephemeral(one_eth * U256::from(5u64), deposit_amount)
         .expect("fund deployer");
 
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
-
     // Deploy infrastructure.
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
@@ -465,7 +463,6 @@ fn router_deposit_happy_path() {
         "RouterDeposit missing vault_b leg"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[router_deposit_happy_path] passed");
 }
 
@@ -497,8 +494,6 @@ fn router_unavailable_leg_reverts() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(5u64), deposit_amount)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy two USDC-backed vaults and the registry/router.
     let registry = deploy_registry(&deployer, deployer.address);
@@ -575,7 +570,6 @@ fn router_unavailable_leg_reverts() {
         "vault_a must hold 0 USDC after full revert"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[router_unavailable_leg_reverts] passed");
 }
 
@@ -599,8 +593,6 @@ fn router_cap_exceeded_reverts() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(5u64), deposit_amount)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     let registry = deploy_registry(&deployer, deployer.address);
     let vault_a = deploy_mock_vault(&deployer, usdc);
@@ -655,7 +647,6 @@ fn router_cap_exceeded_reverts() {
         e => panic!("expected Reverted error, got: {e:?}"),
     }
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[router_cap_exceeded_reverts] passed");
 }
 
@@ -695,8 +686,6 @@ fn agent_gateway_router_deposit() {
     let agent = fx
         .ephemeral(one_eth * U256::from(3u64), deposit_amount)
         .expect("fund agent");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy full stack.
     let registry = deploy_registry(&owner, owner.address);
@@ -832,6 +821,5 @@ fn agent_gateway_router_deposit() {
         "owner must hold vault_a shares equal to deposit (1:1 MockVault)"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[agent_gateway_router_deposit] passed");
 }

@@ -49,7 +49,7 @@ pub const DEPLOYER_ADDRESS_HEX: &str = "0x8943545177806ED17B9F23F0a21ee5948eCaa7
 
 /// Key paired with PAUSER_ROLE. The derived address (`0x6145…`) is
 /// granted PAUSER_ROLE at deploy time so [`Fixture::pause_gateway`] can
-/// use `cast send` (real signature) without `anvil_impersonateAccount`.
+/// use `cast send` with a real signed transaction.
 pub const PAUSER_PRIVATE_KEY_HEX: &str =
     "0x53321db7c1e331d93a11a41d16f004d7ff63972ec8ec7c25db329728ceeb1710";
 pub const PAUSER_ADDRESS_HEX: &str = "0x614561D2d143621E126e87831AEF287678B442b8";
@@ -1627,40 +1627,35 @@ pub fn prerequisites_available() -> bool {
 
 // -- Internal helpers -------------------------------------------------
 
-/// Issue #255: render the genesis alloc overlay JSON into `out_dir` and
-/// return its absolute path. Returns `Ok(None)` (NOT an error) when either
-/// the fork-block manifest or the Anvil fixture snapshot is missing — the
-/// caller falls back to the legacy clean-room genesis path in that case so
-/// developer shells without the snapshot still work.
+/// Issue #255 / #607: copy the pre-built genesis alloc overlay JSON into
+/// `out_dir` and return its absolute path. Returns `Ok(None)` when the
+/// committed `genesis-alloc.json` fixture is absent — the caller falls back
+/// to the legacy clean-room genesis path.
 ///
-/// Errors are reserved for cases where both inputs exist but the build
-/// itself fails (malformed manifest, missing required ingested address, IO
-/// failure writing the output). The caller logs these and falls back.
+/// The pre-built JSON is produced by `smoke-test-genesis-ingester` from
+/// Committed at `testing/fixtures/fork-state/genesis-alloc.json`. Regenerate
+/// whenever the fork block is bumped:
+///
+///     cargo run --bin smoke-test-genesis-ingester --release -- \
+///         --manifest testing/ethereum-testnet/config/fork-block.json \
+///         --snapshot testing/fixtures/fork-state/<BLOCK>.anvil-state \
+///         --output   testing/fixtures/fork-state/genesis-alloc.json
 fn render_genesis_alloc_overlay(
     repo_root: &Path,
     out_dir: &Path,
 ) -> Result<Option<PathBuf>, HarnessError> {
-    let manifest_path = repo_root.join("testing/ethereum-testnet/config/fork-block.json");
-    let snapshot_path = repo_root.join("testing/fixtures/fork-state/CURRENT.anvil-state");
-    if !manifest_path.exists() || !snapshot_path.exists() {
+    let src = repo_root.join("testing/fixtures/fork-state/genesis-alloc.json");
+    if !src.exists() {
         return Ok(None);
     }
 
-    let manifest = fork_manifest::ForkManifest::load(&manifest_path)
-        .map_err(|e| HarnessError::other(format!("load fork-block.json: {e}")))?;
-    let alloc = genesis_alloc::build_alloc(&snapshot_path, &manifest)
-        .map_err(|e| HarnessError::other(format!("build alloc: {e}")))?;
-    let json = serde_json::to_string_pretty(&alloc)
-        .map_err(|e| HarnessError::other(format!("serialize alloc: {e}")))?;
-
     let out_path = out_dir.join("genesis-alloc.json");
-    std::fs::write(&out_path, json)?;
+    std::fs::copy(&src, &out_path)?;
     // docker requires an absolute path for bind-mount source; the tempdir
     // path already is absolute, but be defensive.
     let absolute = std::fs::canonicalize(&out_path)?;
     eprintln!(
-        "smoke-test: rendered genesis alloc overlay ({} accounts) -> {}",
-        alloc.0.len(),
+        "smoke-test: using pre-built genesis alloc overlay -> {}",
         absolute.display()
     );
     Ok(Some(absolute))

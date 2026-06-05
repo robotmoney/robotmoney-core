@@ -8,22 +8,39 @@
 # mainnet. This suite is the line of defence between a refactor breaking a live
 # integration and that breakage reaching users.
 #
-# WHY NO RMPC_FORK_RPC_URL SECRET
-# The fork state is loaded from a checked-in fixture (testing/fixtures/fork-state/).
-# No upstream RPC is contacted at runtime. The fixture is refreshed offline with
-# scripts/devnet/snapshot-fork.sh when the mainnet state it depends on changes.
-# This eliminates flakiness from external RPC rate limits and makes the suite
-# fully hermetic.
+# WHY A PARALLEL MATRIX (issue #607)
+# Running all 17 test files with --test-threads=1 against a single Geth devnet took
+# ~60 min because governance tests each need ~2 min to propose/vote before time
+# manipulation. Splitting into 4 independent matrix slots — each with its own
+# isolated backend — cuts wall-clock to ~20-25 min (dominated by the heaviest slot).
+# fail-fast: false keeps every slot's signal independent.
+#
+# WHY GOVERNANCE USES ANVIL, NOT GETH (matrix.devnet = false)
+# Governance scenarios advance the EVM clock by 1+ hour via evm_increaseTime to
+# simulate voting periods. Geth does not expose evm_increaseTime (Anvil-only admin
+# RPC). Since the governance contract's MIN_VOTING_PERIOD is 3600 s, waiting for
+# real Geth blocks is not feasible. The governance slot therefore boots anvil with
+# the checked-in fixture (no RMPC_TESTNET_RPC_URL set), while the three Geth slots
+# share RMPC_TESTNET_RPC_URL=http://localhost:8545 for their isolated devnets.
+#
+# WHY --test-threads=1
+# Within each Geth slot, HARNESS_USDC_HOLDER funds ephemeral accounts via signed
+# txs. Running tests concurrently within a slot would collide on that nonce.
+# Sequential within a slot, parallel across slots — no collision possible.
+#
+# WHY FOUNDRY IS INSTALLED FOR EVERY SLOT
+# forge build is required by tests/registry.rs (reads VaultRegistry.json artefact).
+# The anvil binary is required by the governance slot. Installing once and caching
+# covers both needs with negligible overhead.
 #
 # GOTCHAS
-# - If the fork fixture is stale (e.g. a contract was upgraded on mainnet), tests will
-#   fail with ABI mismatch errors that look like encoding bugs. Check the fixture age
-#   and re-run snapshot-fork.sh before debugging the test code.
-# - cargo test --no-run is a separate step so compile errors are surfaced immediately
-#   with clear output, rather than buried in the test runner's timeout output.
-# - The registry fork-e2e scenarios (tests/registry.rs) deploy VaultRegistry from the
-#   Foundry build artefact (out/VaultRegistry.sol/VaultRegistry.json). The "forge build"
-#   step below must run before cargo test so that artefact is present.
+# - The devnet's genesis-alloc.json must stay in sync with CURRENT.json (the fork pin).
+#   If the fixture is refreshed (snapshot-fork.sh), re-run smoke-test-genesis-ingester
+#   and commit the new genesis-alloc.json.
+# - The governance slot must NOT set RMPC_TESTNET_RPC_URL; omitting it makes
+#   ForkFixture fall through to the checked-in .anvil-state fixture.
+# - Each Geth slot boots docker compose on the default port 8545. Slots run on
+#   separate GitHub-hosted runners so there is no port conflict between them.
 
 name: fork-protocol-adapter-integration
 
@@ -44,13 +61,54 @@ concurrency:
 
 jobs:
   fork-integration:
-    name: fork-integration
+    name: fork-integration-${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Heaviest Geth slot: router (18 tests — deposit/redeem/weight flows).
+          - group: geth-router
+            cargo_tests: --test router
+            devnet: true
+          # Medium Geth slot: withdrawal (13) + registry (10, deploys VaultRegistry).
+          - group: geth-withdrawal-registry
+            cargo_tests: --test withdrawal --test registry
+            devnet: true
+          # Light Geth slot: rmpc CLI read-path and failure surface tests.
+          - group: geth-light
+            cargo_tests: >-
+              --test failure_surface_smoke
+              --test rmpc_get_timelock_fork
+              --test rmpc_get_vault_fork
+              --test rmpc_get_balance_fork
+              --test rmpc_get_allowance_fork
+              --test rmpc_get_tx_fork
+              --test abi_address_sanity
+              --test devnet_adapter_round_trip
+              --test dex_route_smoke
+              --test gas_estimate_reality_check
+              --test landing_price_strip_fork
+              --test vault_deposit_redeem_smoke
+            devnet: true
+          # Governance slot: uses anvil + checked-in fixture for evm_increaseTime.
+          # RMPC_TESTNET_RPC_URL is intentionally NOT set so ForkFixture falls back
+          # to the .anvil-state fixture (see WHY GOVERNANCE USES ANVIL above).
+          - group: anvil-governance
+            cargo_tests: --test governance
+            devnet: false
+
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Verify Docker is available
+        if: matrix.devnet
+        run: |
+          docker version
+          docker compose version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,10 +126,40 @@ jobs:
       - name: Build Solidity contracts (required by registry fork-e2e)
         run: forge build
 
+      - name: Boot Geth+Lighthouse devnet (with genesis alloc overlay)
+        if: matrix.devnet
+        working-directory: testing/ethereum-testnet/config
+        env:
+          SMOKE_GENESIS_ALLOC_FILE: ${{ github.workspace }}/testing/fixtures/fork-state/genesis-alloc.json
+        run: |
+          BOOT_START=$(date +%s)
+          docker compose -f docker-compose.yaml -f docker-compose.alloc.yaml up -d
+          echo "Waiting for Geth RPC to be ready..."
+          until curl -sf -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            http://localhost:8545 2>/dev/null | grep -q '"result"'; do
+            sleep 2
+          done
+          BOOT_END=$(date +%s)
+          BOOT_SECS=$((BOOT_END - BOOT_START))
+          echo "devnet-boot-seconds=${BOOT_SECS}" >> "$GITHUB_STEP_SUMMARY" || true
+          echo "Devnet ready in ${BOOT_SECS}s"
+          if [ "${BOOT_SECS}" -gt 90 ]; then
+            echo "ERROR: devnet boot took ${BOOT_SECS}s > 90s limit (AC #6: median target 60s)" >&2
+            exit 1
+          fi
+
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
-        run: cargo test --no-run
+        run: cargo test --no-run --release
 
-      - name: Full fork integration suite
+      - name: Fork integration tests (${{ matrix.group }})
         working-directory: testing/fork-e2e-rust
-        run: cargo test --release -- --nocapture
+        env:
+          RMPC_TESTNET_RPC_URL: ${{ matrix.devnet && 'http://localhost:8545' || '' }}
+        run: cargo test --release ${{ matrix.cargo_tests }} -- --test-threads=1 --nocapture
+
+      - name: Devnet teardown (always)
+        if: always() && matrix.devnet
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true

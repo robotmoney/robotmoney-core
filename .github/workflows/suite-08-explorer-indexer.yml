@@ -110,6 +110,35 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Fork indexer test (reorg + finality)
+      - name: Boot Geth+Lighthouse devnet (with genesis alloc overlay)
+        working-directory: testing/ethereum-testnet/config
+        env:
+          SMOKE_GENESIS_ALLOC_FILE: ${{ github.workspace }}/testing/fixtures/fork-state/genesis-alloc.json
+        run: |
+          BOOT_START=$(date +%s)
+          docker compose -f docker-compose.yaml -f docker-compose.alloc.yaml up -d
+          echo "Waiting for Geth RPC to be ready..."
+          until curl -sf -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            http://localhost:8545 2>/dev/null | grep -q '"result"'; do
+            sleep 2
+          done
+          BOOT_END=$(date +%s)
+          BOOT_SECS=$((BOOT_END - BOOT_START))
+          echo "devnet-boot-seconds=${BOOT_SECS}" >> "$GITHUB_STEP_SUMMARY" || true
+          echo "Devnet ready in ${BOOT_SECS}s"
+          if [ "${BOOT_SECS}" -gt 90 ]; then
+            echo "ERROR: devnet boot took ${BOOT_SECS}s > 90s limit (AC #6: median target 60s)" >&2
+            exit 1
+          fi
+
+      - name: Fork indexer test (against shared devnet)
         working-directory: services/explorer-indexer
+        env:
+          RMPC_TESTNET_RPC_URL: http://localhost:8545
         run: cargo test --test fork_indexer -- --nocapture
+
+      - name: Devnet teardown (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true

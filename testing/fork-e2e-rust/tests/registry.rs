@@ -15,9 +15,8 @@
 //!   an empty array and `rmpc get-vaults` exits 0 with `vaults: []`.
 //!
 //! All scenarios run against the same per-test anvil-fork backend (fork
-//! restart per test, per ADR §3.5). Each scenario uses `evm_snapshot` /
-//! `evm_revert` to restore state between sub-cases so there is no shared
-//! mutable state between scenarios within a test.
+//! restart per test, per ADR §3.5). Each test has its own isolated chain
+//! state for the full duration of the test function.
 //!
 //! The rmpc binary is compiled once (via `cargo build --bin rmpc`) and
 //! reused for the `get-vaults` round-trip assertion. The VaultRegistry.sol
@@ -33,7 +32,7 @@ use std::sync::OnceLock;
 
 use alloy_primitives::{keccak256, Address, Bytes, U256};
 use alloy_sol_types::SolCall;
-use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture, IOnchainVaultRegistry, BASE_CHAIN_ID};
+use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture, IOnchainVaultRegistry};
 use serde_json::Value;
 
 // ── Workspace helpers ────────────────────────────────────────────────────────
@@ -127,7 +126,12 @@ fn rmpc_bin() -> &'static PathBuf {
 /// Write a minimal `rmpc.toml` pointing at `rpc_url` with `registry_address`
 /// set. The config references a non-existent keystore; read-only commands
 /// (`get-vaults`) never open it.
-fn write_rmpc_config(tmp: &tempfile::TempDir, rpc_url: &str, registry_addr: Address) -> PathBuf {
+fn write_rmpc_config(
+    tmp: &tempfile::TempDir,
+    rpc_url: &str,
+    chain_id: u64,
+    registry_addr: Address,
+) -> PathBuf {
     let keystore = tmp.path().join("keystore.json");
     let cfg_path = tmp.path().join("rmpc.toml");
     let toml = format!(
@@ -144,7 +148,7 @@ max_fee_per_gas_cap   = 100000000000
 allow_software_fallback = true
 keystore_path           = "{ks}"
 "#,
-        chain_id = BASE_CHAIN_ID,
+        chain_id = chain_id,
         usdc_zeros = "00".repeat(20),
         vault_zeros = "00".repeat(20),
         registry = registry_addr,
@@ -191,9 +195,6 @@ fn registry_register_list() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
-
-    // — snapshot before any registry state changes —
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy VaultRegistry with deployer as admin.
     let initcode = vault_registry_initcode(deployer.address);
@@ -275,7 +276,7 @@ fn registry_register_list() {
 
     // rmpc get-vaults round-trip: assert exit 0, vault appears in `data.vaults`.
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, registry_addr);
+    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, fx.chain_id, registry_addr);
     let v = run_get_vaults(&cfg);
 
     // The envelope must contain at least one vault entry with our address.
@@ -296,9 +297,6 @@ fn registry_register_list() {
         "rmpc get-vaults: vault {fake_vault:#x} not found in data.vaults; envelope:\n{v:#}"
     );
     eprintln!("[registry_register_list] rmpc get-vaults passed");
-
-    // Revert to clean state.
-    fx.rpc().evm_revert(snap).expect("evm_revert");
 }
 
 /// Scenario 2: register a vault then change its status to Paused.
@@ -315,8 +313,6 @@ fn registry_status_change() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy and register.
     let initcode = vault_registry_initcode(deployer.address);
@@ -412,7 +408,7 @@ fn registry_status_change() {
 
     // rmpc get-vaults still exits 0 and the vault appears in output.
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, registry_addr);
+    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, fx.chain_id, registry_addr);
     let v = run_get_vaults(&cfg);
     let vaults_json = v["data"]["vaults"]
         .as_array()
@@ -432,7 +428,6 @@ fn registry_status_change() {
         "rmpc get-vaults vault address mismatch after status change"
     );
 
-    fx.rpc().evm_revert(snap).expect("evm_revert");
     eprintln!("[registry_status_change] passed");
 }
 
@@ -449,8 +444,6 @@ fn registry_empty_list() {
     let deployer = fx
         .ephemeral(one_eth * U256::from(3u64), U256::ZERO)
         .expect("fund deployer");
-
-    let snap = fx.rpc().evm_snapshot().expect("evm_snapshot");
 
     // Deploy a fresh registry — no vaults registered.
     let initcode = vault_registry_initcode(deployer.address);
@@ -473,7 +466,7 @@ fn registry_empty_list() {
 
     // rmpc get-vaults must exit 0 with data.vaults = [].
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, registry_addr);
+    let cfg = write_rmpc_config(&tmp, &fx.rpc_url, fx.chain_id, registry_addr);
     let v = run_get_vaults(&cfg);
 
     assert_eq!(v["source"], "json_rpc", "source must be json_rpc: {v}");
@@ -489,6 +482,4 @@ fn registry_empty_list() {
         "rmpc get-vaults on empty registry must return vaults=[]; got {v:#}"
     );
     eprintln!("[registry_empty_list] rmpc get-vaults vaults=[] confirmed");
-
-    fx.rpc().evm_revert(snap).expect("evm_revert");
 }

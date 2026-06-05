@@ -3,7 +3,7 @@
   "chain": "base",
   "block_number": 46698556,
   "block_hash": "0x8710323f22335f2561376733f71568e8e9bc3d0162b843bb6674af463e3cf8d7",
-  "snapshot_uri": "file://testing/fixtures/fork-state/CURRENT.anvil-state",
+  "snapshot_uri": "file://testing/fixtures/fork-state/genesis-alloc.json",
   "ingested_addresses": [
     "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "0x4F835c9F54bCF17daf9040f60Cb72951CCbb49Dd",

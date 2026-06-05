@@ -14,12 +14,13 @@
 //!
 //!     smoke-test-genesis-ingester \
 //!         --manifest testing/ethereum-testnet/config/fork-block.json \
-//!         --snapshot testing/fixtures/fork-state/CURRENT.anvil-state \
-//!         --output    /tmp/genesis-alloc.json
+//!         --snapshot testing/fixtures/fork-state/<BLOCK>.anvil-state \
+//!         --output   testing/fixtures/fork-state/genesis-alloc.json
 //!
 //! The output JSON is the `alloc` map only — not a full genesis. The Docker
 //! `setup` container is expected to merge it into the generated
-//! `genesis.json` via `jq`.
+//! `genesis.json` via `jq`. Commit the output so the devnet can be rebuilt
+//! without re-running this tool.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -39,7 +40,7 @@ struct Cli {
     manifest: PathBuf,
 
     /// Path to the Anvil `--dump-state` snapshot (typically
-    /// `testing/fixtures/fork-state/CURRENT.anvil-state`).
+    /// `testing/fixtures/fork-state/<BLOCK>.anvil-state`).
     #[arg(long)]
     snapshot: PathBuf,
 
