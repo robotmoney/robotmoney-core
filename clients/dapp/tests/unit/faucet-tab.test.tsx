@@ -48,6 +48,7 @@ interface RenderOpts {
   dripRm?: (args: DripRmTokenArgs) => Promise<Hex>;
   harnessEthBalance?: bigint;
   dripEth?: (args: DripEthArgs) => Promise<Hex>;
+  onDripSuccess?: () => void;
 }
 
 function renderView(opts: RenderOpts = {}) {
@@ -70,6 +71,7 @@ function renderView(opts: RenderOpts = {}) {
       dripRm={opts.dripRm}
       harnessEthBalance={opts.harnessEthBalance}
       dripEth={opts.dripEth}
+      onDripSuccess={opts.onDripSuccess}
     />,
   );
   return { ...utils, drip, refetch };
@@ -256,5 +258,113 @@ describe("FaucetTabView", () => {
     });
     expect(screen.queryByTestId("faucet-eth-drip-button")).toBeNull();
     expect(screen.getByTestId("faucet-unavailable")).toBeInTheDocument();
+  });
+
+  // -- onDripSuccess callback (issue #622) ------------------------------------
+
+  it("calls onDripSuccess after a successful USDC drip", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-drip-submit"));
+    await screen.findByTestId("faucet-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).toHaveBeenCalledTimes(1);
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("does NOT call onDripSuccess when a USDC drip fails", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    const failingDrip = vi.fn(async (): Promise<Hex> => {
+      throw new Error("drip failed");
+    });
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      drip: failingDrip,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-drip-submit"));
+    await screen.findByTestId("faucet-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).not.toHaveBeenCalled();
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("calls onDripSuccess after a successful RM drip", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    const dripRm = vi.fn(async (): Promise<Hex> => "0xabcd" as Hex);
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM * 100n,
+      dripRm,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-rm-drip-button"));
+    await screen.findByTestId("faucet-rm-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).toHaveBeenCalledTimes(1);
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("does NOT call onDripSuccess when an RM drip fails", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    const failingDripRm = vi.fn(async (): Promise<Hex> => {
+      throw new Error("rm drip failed");
+    });
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      rmTokenAddress: RM_TOKEN,
+      harnessRmBalance: FAUCET_DRIP_AMOUNT_RM * 100n,
+      dripRm: failingDripRm,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-rm-drip-button"));
+    await screen.findByTestId("faucet-rm-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).not.toHaveBeenCalled();
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("calls onDripSuccess after a successful ETH drip", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    const dripEth = vi.fn(async (): Promise<Hex> => "0xeeee" as Hex);
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-eth-drip-button"));
+    await screen.findByTestId("faucet-eth-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).toHaveBeenCalledTimes(1);
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
+  });
+
+  it("does NOT call onDripSuccess when an ETH drip fails", async () => {
+    (window as unknown as { ethereum: unknown }).ethereum = { request: vi.fn() };
+    const onDripSuccess = vi.fn();
+    const failingDripEth = vi.fn(async (): Promise<Hex> => {
+      throw new Error("eth drip failed");
+    });
+    renderView({
+      harnessBalance: FAUCET_DRIP_AMOUNT_USDC * 100n,
+      harnessEthBalance: FAUCET_DRIP_AMOUNT_ETH * 100n,
+      dripEth: failingDripEth,
+      onDripSuccess,
+    });
+    fireEvent.click(screen.getByTestId("faucet-eth-drip-button"));
+    await screen.findByTestId("faucet-eth-drip-pending");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onDripSuccess).not.toHaveBeenCalled();
+    delete (window as unknown as { ethereum?: unknown }).ethereum;
   });
 });

@@ -22,9 +22,10 @@
  * keeping component tests free of a wagmi/QueryClient fixture per
  * docs/development/react-guide.md §Layout.
  */
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { type Address, type Hex, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { useQueryClient } from "@tanstack/react-query";
 import { useFaucetBalances } from "../lib/useFaucetBalances";
 import {
   dripEth,
@@ -70,6 +71,11 @@ type Props = Readonly<{
 }>;
 
 export function FaucetTab(props: Props) {
+  const queryClient = useQueryClient();
+  const onDripSuccess = useCallback(() => {
+    void queryClient.invalidateQueries();
+  }, [queryClient]);
+
   const harnessAccount = useMemo(
     () => (props.harnessPrivateKey ? privateKeyToAccount(props.harnessPrivateKey) : null),
     [props.harnessPrivateKey],
@@ -106,6 +112,7 @@ export function FaucetTab(props: Props) {
       dripRm={props.dripRm ?? dripRmToken}
       harnessEthBalance={balances.harnessEth.data}
       dripEth={props.dripEth ?? dripEth}
+      onDripSuccess={onDripSuccess}
     />
   );
 }
