@@ -19,6 +19,7 @@
  * tests to control re-fetch timing without fake timers.
  */
 import { useExplorer } from "../lib/ExplorerContext";
+import { VaultCardAssets } from "./VaultCardAssets";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -108,6 +109,11 @@ export function VaultCards() {
                     Future — coming soon
                   </p>
                 )}
+                <VaultCardAssets
+                  vaultAddress={vault.address}
+                  riskLabel={vault.risk_label}
+                  status={vault.status}
+                />
               </article>
             );
           })}
