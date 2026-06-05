@@ -9,6 +9,13 @@
  *      into a fresh agent session. The agent downloads `rmpc`, writes its
  *      operator config, and prints its public address.
  *
+ *      On testnet/devnet, step 1 also shows a "Drip test assets" button
+ *      when the connected wallet has zero balance for USDC, Base ETH, or
+ *      RM tokens — removing the chicken-and-egg friction for brand-new
+ *      wallets (issue #614). The button fires all three drip handlers in
+ *      parallel and shows per-asset status feedback. The gate mirrors the
+ *      FaucetTab: harness key must be present, chain must not be mainnet.
+ *
  *   2. Paste the agent's address + shareReceiver + policy caps.
  *
  *   3. Preview and sign the on-chain `authorizeAgent` transaction.
@@ -21,20 +28,37 @@
 import { useState, type FormEvent } from "react";
 import {
   useAccount,
+  useBalance,
   useChainId,
   useReadContract,
   useSimulateContract,
   useWriteContract,
 } from "wagmi";
-import { isAddress, type Address } from "viem";
-import { gatewayAbi } from "../lib/abi";
+import { isAddress, type Address, type Hex } from "viem";
+import { gatewayAbi, erc20Abi } from "../lib/abi";
 import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
 import { getInjectedProvider } from "../lib/syncDevnetChain";
+import {
+  dripUsdc,
+  dripEth,
+  dripRmToken,
+  readHarnessPrivateKey,
+  type DripUsdcArgs,
+  type DripEthArgs,
+  type DripRmTokenArgs,
+} from "../lib/faucetClient";
+import { classifyChain } from "../lib/chainClassifier";
 import { PolicyFields } from "./PolicyFields";
 import { TxPreview } from "./TxPreview";
+
+type DripStatus =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "success"; hash: Hex }
+  | { kind: "error"; message: string };
 
 type Props = Readonly<{
   gatewayAddress: Address;
@@ -43,6 +67,23 @@ type Props = Readonly<{
   env: Record<string, string | undefined>;
   now: number;
   onDismiss?: () => void;
+  /** RM token address. When provided, the drip button also drips RM tokens (issue #614). */
+  rmTokenAddress?: Address;
+  /**
+   * Injected USDC drip handler for tests. Production uses `dripUsdc` from faucetClient.
+   * @internal
+   */
+  dripUsdcFn?: (args: DripUsdcArgs) => Promise<Hex>;
+  /**
+   * Injected Base ETH drip handler for tests. Production uses `dripEth` from faucetClient.
+   * @internal
+   */
+  dripEthFn?: (args: DripEthArgs) => Promise<Hex>;
+  /**
+   * Injected RM drip handler for tests. Production uses `dripRmToken` from faucetClient.
+   * @internal
+   */
+  dripRmFn?: (args: DripRmTokenArgs) => Promise<Hex>;
 }>;
 
 type Step = 1 | 2 | 3;
@@ -52,6 +93,11 @@ export function OnboardingWizard(props: Props) {
   const chainId = useChainId();
   const { writeContract, isPending } = useWriteContract();
   const [seedResult, setSeedResult] = useState<SeedResult | null>(null);
+
+  // Drip button state — per-asset status for step-1 inline feedback (issue #614).
+  const [usdcDripStatus, setUsdcDripStatus] = useState<DripStatus>({ kind: "idle" });
+  const [ethDripStatus, setEthDripStatus] = useState<DripStatus>({ kind: "idle" });
+  const [rmDripStatus, setRmDripStatus] = useState<DripStatus>({ kind: "idle" });
 
   // Read the USDC contract address from the gateway so the seed drip
   // targets the same canonical token AdminFlow does. Enabled only once
@@ -63,6 +109,126 @@ export function OnboardingWizard(props: Props) {
     functionName: "usdc",
     query: { enabled: isConnected },
   });
+
+  const usdcAddress = (usdcData as Address | undefined) ?? null;
+
+  // Balance checks for the connected wallet — used to decide whether the
+  // "Drip test assets" button should render on step 1 (issue #614).
+  const { data: usdcBalance } = useReadContract({
+    address: usdcAddress ?? undefined,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    chainId,
+    query: { enabled: isConnected && !!usdcAddress && !!address, retry: 0 },
+  });
+
+  const { data: ethBalanceResult } = useBalance({
+    address: address ?? undefined,
+    chainId,
+    query: { enabled: isConnected && !!address, retry: 0 },
+  });
+  const ethBalance = ethBalanceResult?.value;
+
+  const { data: rmBalance } = useReadContract({
+    address: props.rmTokenAddress ?? undefined,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    chainId,
+    query: { enabled: isConnected && !!props.rmTokenAddress && !!address, retry: 0 },
+  });
+
+  // Faucet drip button gate logic (issue #614):
+  // - must be on testnet/devnet (classifyChain)
+  // - must have a harness key in the build env
+  // - button shows if any of USDC, ETH, or RM token balance is zero
+  const harnessPrivateKey = readHarnessPrivateKey(props.env);
+  const isTestnet = classifyChain(chainId) === "testnet";
+  const usdcIsZero = usdcBalance !== undefined && (usdcBalance as bigint) === 0n;
+  const ethIsZero = ethBalance !== undefined && ethBalance === 0n;
+  const rmIsZero =
+    props.rmTokenAddress !== undefined && rmBalance !== undefined && (rmBalance as bigint) === 0n;
+  const anyBalanceZero = usdcIsZero || ethIsZero || rmIsZero;
+  const showDripButton = isTestnet && !!harnessPrivateKey && anyBalanceZero;
+
+  const isDripping =
+    usdcDripStatus.kind === "pending" ||
+    ethDripStatus.kind === "pending" ||
+    rmDripStatus.kind === "pending";
+
+  const onDrip = () => {
+    if (!address || !harnessPrivateKey) return;
+    const provider = getInjectedProvider();
+    if (!provider) return;
+
+    const dripUsdcHandler = props.dripUsdcFn ?? dripUsdc;
+    const dripEthHandler = props.dripEthFn ?? dripEth;
+    const dripRmHandler = props.dripRmFn ?? dripRmToken;
+
+    // USDC drip
+    if (usdcAddress && isAddress(usdcAddress)) {
+      setUsdcDripStatus({ kind: "pending" });
+      void dripUsdcHandler({
+        usdcAddress,
+        recipient: address,
+        provider,
+        harnessPrivateKey,
+        chainId,
+      })
+        .then((hash) => setUsdcDripStatus({ kind: "success", hash }))
+        .catch((err: unknown) => {
+          const message =
+            typeof err === "object" && err !== null && "shortMessage" in err
+              ? String((err as { shortMessage: unknown }).shortMessage)
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          setUsdcDripStatus({ kind: "error", message });
+        });
+    }
+
+    // Base ETH drip
+    setEthDripStatus({ kind: "pending" });
+    void dripEthHandler({
+      recipient: address,
+      provider,
+      harnessPrivateKey,
+      chainId,
+    })
+      .then((hash) => setEthDripStatus({ kind: "success", hash }))
+      .catch((err: unknown) => {
+        const message =
+          typeof err === "object" && err !== null && "shortMessage" in err
+            ? String((err as { shortMessage: unknown }).shortMessage)
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        setEthDripStatus({ kind: "error", message });
+      });
+
+    // RM token drip
+    if (props.rmTokenAddress) {
+      setRmDripStatus({ kind: "pending" });
+      void dripRmHandler({
+        rmTokenAddress: props.rmTokenAddress,
+        recipient: address,
+        provider,
+        harnessPrivateKey,
+        chainId,
+      })
+        .then((hash) => setRmDripStatus({ kind: "success", hash }))
+        .catch((err: unknown) => {
+          const message =
+            typeof err === "object" && err !== null && "shortMessage" in err
+              ? String((err as { shortMessage: unknown }).shortMessage)
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          setRmDripStatus({ kind: "error", message });
+        });
+    }
+  };
 
   const [step, setStep] = useState<Step>(1);
   const [agent, setAgent] = useState("");
@@ -119,7 +285,6 @@ export function OnboardingWizard(props: Props) {
         // Testnet/devnet only — seedOnboardingUsdc itself classifies the
         // active chain and returns `skipped-mainnet` on canonical mainnet
         // IDs, so this call is safe to issue unconditionally here.
-        const usdcAddress = (usdcData as Address | undefined) ?? null;
         if (!usdcAddress || !isAddress(usdcAddress)) return;
         void seedOnboardingUsdc({
           chainId,
@@ -176,6 +341,63 @@ export function OnboardingWizard(props: Props) {
             >
               Copy prompt
             </button>
+            {showDripButton && (
+              <div className="wizard-drip-section">
+                <p className="hint">
+                  Your wallet has zero balance for one or more required assets. Drip testnet assets
+                  before you start.
+                </p>
+                <button
+                  type="button"
+                  data-testid="onboarding-drip-button"
+                  disabled={isDripping}
+                  onClick={onDrip}
+                >
+                  Drip test assets
+                </button>
+                <div className="wizard-drip-statuses">
+                  {usdcDripStatus.kind !== "idle" && (
+                    <p
+                      data-testid="onboarding-drip-usdc-status"
+                      data-status={usdcDripStatus.kind}
+                      className="hint"
+                    >
+                      {usdcDripStatus.kind === "pending" && "USDC: dripping…"}
+                      {usdcDripStatus.kind === "success" &&
+                        `USDC: sent (tx ${usdcDripStatus.hash})`}
+                      {usdcDripStatus.kind === "error" &&
+                        `USDC: failed — ${usdcDripStatus.message}`}
+                    </p>
+                  )}
+                  {ethDripStatus.kind !== "idle" && (
+                    <p
+                      data-testid="onboarding-drip-eth-status"
+                      data-status={ethDripStatus.kind}
+                      className="hint"
+                    >
+                      {ethDripStatus.kind === "pending" && "Base ETH: dripping…"}
+                      {ethDripStatus.kind === "success" &&
+                        `Base ETH: sent (tx ${ethDripStatus.hash})`}
+                      {ethDripStatus.kind === "error" &&
+                        `Base ETH: failed — ${ethDripStatus.message}`}
+                    </p>
+                  )}
+                  {props.rmTokenAddress && rmDripStatus.kind !== "idle" && (
+                    <p
+                      data-testid="onboarding-drip-rm-status"
+                      data-status={rmDripStatus.kind}
+                      className="hint"
+                    >
+                      {rmDripStatus.kind === "pending" && "RM token: dripping…"}
+                      {rmDripStatus.kind === "success" &&
+                        `RM token: sent (tx ${rmDripStatus.hash})`}
+                      {rmDripStatus.kind === "error" &&
+                        `RM token: failed — ${rmDripStatus.message}`}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="wizard-nav">
               <button type="button" data-testid="step-1-next" onClick={() => setStep(2)}>
                 I&apos;ve started the agent — next

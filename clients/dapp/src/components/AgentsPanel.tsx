@@ -144,6 +144,7 @@ export function AgentsPanel(props: Props) {
           if (address) markOnboardingDismissed(address);
           setOnboardingDismissed(true);
         }}
+        rmTokenAddress={props.rmTokenAddress}
       />
     );
   }
