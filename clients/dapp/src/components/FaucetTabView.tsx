@@ -150,6 +150,7 @@ export function FaucetTabView(props: Props) {
   const onDripEth = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canDripEth || !props.dripEth) return;
+    const dripEth = props.dripEth;
     const provider = getInjectedProvider();
     if (!provider) {
       setEthStatus({
@@ -162,7 +163,7 @@ export function FaucetTabView(props: Props) {
     setHarnessBusy(true);
     const recipient = getAddress(selected);
     harnessQueueRef.current = harnessQueueRef.current.then(() =>
-      props.dripEth!({
+      dripEth({
         recipient,
         provider,
         harnessPrivateKey: props.harnessPrivateKey as Hex,
@@ -188,6 +189,7 @@ export function FaucetTabView(props: Props) {
   const onDripRm = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!canDripRm || !props.rmTokenAddress || !props.dripRm) return;
+    const dripRm = props.dripRm;
     const provider = getInjectedProvider();
     if (!provider) {
       setRmStatus({
@@ -201,7 +203,7 @@ export function FaucetTabView(props: Props) {
     const recipient = getAddress(selected);
     const rmTokenAddress = props.rmTokenAddress;
     harnessQueueRef.current = harnessQueueRef.current.then(() =>
-      props.dripRm!({
+      dripRm({
         rmTokenAddress,
         recipient,
         provider,
