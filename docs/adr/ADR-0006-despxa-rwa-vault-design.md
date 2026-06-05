@@ -46,7 +46,7 @@ These constraints collectively force the hold-and-swap model described below.
 
 ## Decision
 
-### 1. Vault model: hold-and-swap via Aerodrome secondary market only
+### 1. Vault model: hold-and-swap via Aerodrome secondary market only; router-eligible at 500 bps
 
 The rmRWA vault uses the **hold-and-swap** model:
 
@@ -61,6 +61,16 @@ The rmRWA vault uses the **hold-and-swap** model:
 Rationale: ERC-7540 primary redemption requires KYC that a permissionless
 smart-contract vault cannot satisfy. The secondary Aerodrome path is the only
 viable permissionless route for both entry and exit.
+
+**Amendment 2026-06-05 (issue #621):** rmRWA is **router-eligible at 500 bps**
+in the demo devnet seed. Product owner confirmed on 2026-06-05 that the
+PortfolioRouter may route deposits into rmRWA via the Aerodrome/Chronicle path,
+giving it 500 bps in the four-vault default weight vector
+(8500 / 500 / 500 / 500 bps: primary / rmRWA / rmPROTO / rmAGENT). The demo
+seed calls `VaultRegistry.setRouterEligible(rwaVault, true)` and includes
+rmRWA in both `setWeights` and `setDefaultWeights`. This amendment applies only
+to the demo devnet seed; the hold-and-swap entry model and all other vault
+constraints remain unchanged.
 
 ### 2. Oracle: Chronicle NAV oracle for deSPXA (Base)
 
