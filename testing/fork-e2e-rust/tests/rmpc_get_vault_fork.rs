@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use rmpc_fork_e2e::{addresses, skip_if_no_fork, ForkFixture, BASE_CHAIN_ID};
+use rmpc_fork_e2e::{addresses, skip_if_no_fork, ForkFixture};
 use serde_json::Value;
 
 /// `0x000…dEaD` — used as the throwaway gateway address. On Base
@@ -80,7 +80,7 @@ fn workspace_root() -> PathBuf {
 /// throwaway gateway address (the gateway is not deployed on Base; the
 /// gateway-side sub-reads are expected to fail and be recorded as
 /// per-field errors in the `partial`/`errors` envelope).
-fn write_config(tmp: &tempfile::TempDir, rpc_url: &str) -> PathBuf {
+fn write_config(tmp: &tempfile::TempDir, rpc_url: &str, chain_id: u64) -> PathBuf {
     // The read commands don't load the signer, but Config::from_path
     // requires a parseable [signer] block. The keystore file is
     // referenced but never read, so we just point at a non-existent
@@ -100,7 +100,7 @@ max_fee_per_gas_cap   = 100000000000
 allow_software_fallback = true
 keystore_path           = "{ks}"
 "#,
-        chain_id = BASE_CHAIN_ID,
+        chain_id = chain_id,
         usdc = addresses::USDC,
         vault = addresses::VAULT,
         zeros = "0".repeat(64),
@@ -114,7 +114,7 @@ keystore_path           = "{ks}"
 /// JSON. Asserts exit 0 and stable envelope-level fields (chain_id,
 /// source). Returns the parsed JSON value for command-specific
 /// assertions.
-fn run_rmpc(cfg: &Path, args: &[&str]) -> Value {
+fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
     let out = Command::new(rmpc_bin())
         .arg(args[0])
         .args(["--config", cfg.to_str().unwrap()])
@@ -137,7 +137,7 @@ fn run_rmpc(cfg: &Path, args: &[&str]) -> Value {
     });
     // Envelope shape — locked by docs/technical/rmpc-read-output-contract.md.
     assert_eq!(
-        v["chain_id"], BASE_CHAIN_ID,
+        v["chain_id"], chain_id,
         "chain_id drift in {}: {v}",
         args[0]
     );
@@ -175,10 +175,10 @@ fn rmpc_get_vault_fork_base_mainnet() {
     eprintln!("[rmpc_get_vault_fork_base_mainnet] {}", fx.summary_line());
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(&tmp, &fx.rpc_url);
+    let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id);
 
     // ---- get-vault: happy path against the real Base vault. -------
-    let v = run_rmpc(&cfg, &["get-vault"]);
+    let v = run_rmpc(&cfg, &["get-vault"], fx.chain_id);
     // gateway.vault() can't succeed (DEAD_GATEWAY has no code), so the
     // envelope is partial. Vault sub-reads still resolve from the
     // pinned deployed bytecode.
@@ -214,7 +214,7 @@ fn rmpc_get_vault_fork_base_mainnet() {
     }
 
     // ---- get-gateway: degradation path (no gateway on Base). ------
-    let v = run_rmpc(&cfg, &["get-gateway"]);
+    let v = run_rmpc(&cfg, &["get-gateway"], fx.chain_id);
     assert_eq!(
         v["partial"], true,
         "get-gateway must be partial when gateway is not deployed: {v}"
@@ -244,6 +244,7 @@ fn rmpc_get_vault_fork_base_mainnet() {
             "--agent",
             "0x000000000000000000000000000000000000bEEF",
         ],
+        fx.chain_id,
     );
     assert_eq!(v["partial"], true, "get-agent must be partial: {v}");
     let errors = v["errors"]
@@ -262,6 +263,7 @@ fn rmpc_get_vault_fork_base_mainnet() {
             "--address",
             "0x000000000000000000000000000000000000bEEF",
         ],
+        fx.chain_id,
     );
     assert_eq!(v["partial"], true, "get-roles must be partial: {v}");
     let errors = v["errors"]

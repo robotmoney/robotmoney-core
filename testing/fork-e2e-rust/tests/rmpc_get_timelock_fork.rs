@@ -29,7 +29,7 @@ use std::sync::OnceLock;
 
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::SolCall;
-use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture, BASE_CHAIN_ID};
+use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture};
 use serde_json::Value;
 
 // ── TimelockController ABI bindings ──────────────────────────────────────────
@@ -174,7 +174,7 @@ fn pad_addr(a: Address) -> [u8; 32] {
 /// `timelock_address = <timelock>`. All other fields use placeholder
 /// values — read commands only consume the fields relevant to the
 /// command being tested.
-fn write_config(dir: &Path, rpc_url: &str, timelock: Address) -> PathBuf {
+fn write_config(dir: &Path, rpc_url: &str, chain_id: u64, timelock: Address) -> PathBuf {
     let keystore = dir.join("keystore.json");
     let cfg_path = dir.join("rmpc.toml");
     let toml = format!(
@@ -191,7 +191,7 @@ max_fee_per_gas_cap   = 100000000000
 allow_software_fallback = true
 keystore_path           = "{ks}"
 "#,
-        chain_id = BASE_CHAIN_ID,
+        chain_id = chain_id,
         rpc_url = rpc_url,
         usdc_zeros = "00".repeat(20),
         vault_zeros = "00".repeat(20),
@@ -263,7 +263,7 @@ fn get_timelock_integration() {
 
     // Write rmpc config pointing at the freshly deployed timelock.
     let tmp = tempfile::TempDir::new().expect("tempdir");
-    let cfg = write_config(tmp.path(), &fx.rpc_url, timelock_addr);
+    let cfg = write_config(tmp.path(), &fx.rpc_url, fx.chain_id, timelock_addr);
 
     // Run rmpc get-timelock.
     let out = Command::new(rmpc_bin())
@@ -287,10 +287,9 @@ fn get_timelock_integration() {
 
     // ── Envelope-level assertions ──────────────────────────────────────────
 
-    // chain_id must match Base mainnet (8453).
     assert_eq!(
         v["chain_id"].as_u64().unwrap_or(0),
-        BASE_CHAIN_ID,
+        fx.chain_id,
         "chain_id mismatch: {v}"
     );
     assert_eq!(v["source"], "json_rpc", "source must be json_rpc: {v}");
