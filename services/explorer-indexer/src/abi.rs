@@ -284,8 +284,11 @@ sol! {
 
     /// Event surface from `PortfolioRouter`.  The `RouterDeposit` event is
     /// emitted once per vault leg on every successful `deposit()` call.
+    /// `WeightsSet` and `DefaultWeightsSet` are emitted by admin calls to
+    /// `setWeights()` and `setDefaultWeights()` respectively — the direct-seed
+    /// paths taken by the demo seed script (not governance execution).
     ///
-    /// Signature matches `PortfolioRouter.sol:71` exactly so that
+    /// Signatures match `PortfolioRouter.sol` exactly so that
     /// `SolEvent::SIGNATURE_HASH` agrees with the on-chain topic-0.
     #[allow(missing_docs)]
     interface IPortfolioRouterEvents {
@@ -298,6 +301,15 @@ sol! {
             uint256 shares,
             uint256 weightBps
         );
+
+        /// Emitted when the voted weight vector is set directly by admin.
+        /// PortfolioRouter.sol:114
+        event WeightsSet(address[] vaults, uint256[] bps);
+
+        /// Emitted when the default (below-quorum fallback) weight vector is
+        /// set by ADMIN_ROLE.
+        /// PortfolioRouter.sol:120
+        event DefaultWeightsSet(address[] vaults, uint256[] bps);
     }
 
     /// Minimum stable read surface for `VaultRegistry`.  Defined in
@@ -335,6 +347,12 @@ pub struct Topics {
     pub weights_applied: B256,
     /// Per-leg deposit emitted by PortfolioRouter.sol:71.
     pub router_deposit: B256,
+    /// Voted weight vector set directly by admin — PortfolioRouter.sol:114.
+    /// Emitted by `setWeights()` (demo-seed and direct-admin path, not governance).
+    pub weights_set: B256,
+    /// Default (fallback) weight vector set by ADMIN_ROLE — PortfolioRouter.sol:120.
+    /// Emitted by `setDefaultWeights()`.
+    pub default_weights_set: B256,
     /// ERC-4626 Deposit event emitted by any vault on every deposit.
     /// Watching this ensures TVL snapshots fire after router-seeded deposits.
     pub erc4626_deposit: B256,
@@ -376,6 +394,8 @@ impl Topics {
             router_deposit: keccak256(
                 b"RouterDeposit(address,address,uint256,uint256,uint256)",
             ),
+            weights_set: keccak256(b"WeightsSet(address[],uint256[])"),
+            default_weights_set: keccak256(b"DefaultWeightsSet(address[],uint256[])"),
             erc4626_deposit: keccak256(b"Deposit(address,address,uint256,uint256)"),
             erc4626_withdraw: keccak256(b"Withdraw(address,address,address,uint256,uint256)"),
         }
@@ -402,6 +422,8 @@ impl Topics {
             self.proposal_executed,
             self.weights_applied,
             self.router_deposit,
+            self.weights_set,
+            self.default_weights_set,
             self.erc4626_deposit,
             self.erc4626_withdraw,
         ]
@@ -479,6 +501,14 @@ mod tests {
         assert_eq!(
             t.router_deposit,
             IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.weights_set,
+            IPortfolioRouterEvents::WeightsSet::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.default_weights_set,
+            IPortfolioRouterEvents::DefaultWeightsSet::SIGNATURE_HASH
         );
         // ERC-4626 standard events.
         assert_eq!(t.erc4626_deposit, IVaultEvents::Deposit::SIGNATURE_HASH);
@@ -572,6 +602,18 @@ mod tests {
                 "RouterDeposit",
                 b"RouterDeposit(address,address,uint256,uint256,uint256)",
                 IPortfolioRouterEvents::RouterDeposit::SIGNATURE_HASH,
+            ),
+            // PortfolioRouter.sol:114 — direct admin weight-set (demo-seed path)
+            (
+                "WeightsSet",
+                b"WeightsSet(address[],uint256[])",
+                IPortfolioRouterEvents::WeightsSet::SIGNATURE_HASH,
+            ),
+            // PortfolioRouter.sol:120 — default (fallback) weight-set by ADMIN_ROLE
+            (
+                "DefaultWeightsSet",
+                b"DefaultWeightsSet(address[],uint256[])",
+                IPortfolioRouterEvents::DefaultWeightsSet::SIGNATURE_HASH,
             ),
             // ERC-4626 standard events (OpenZeppelin ERC4626 — inherited by all vaults)
             (

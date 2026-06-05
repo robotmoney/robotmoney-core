@@ -56,6 +56,13 @@ struct Cli {
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 
+    /// Optional PortfolioRouter contract address.
+    /// When set, the indexer ingests WeightsSet and DefaultWeightsSet events
+    /// emitted by direct admin calls to setWeights() / setDefaultWeights()
+    /// (the demo-seed path, distinct from governance-executed weight changes).
+    #[arg(long, env = "INDEXER_PORTFOLIO_ROUTER")]
+    portfolio_router: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -110,6 +117,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let portfolio_router = cli
+        .portfolio_router
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -118,6 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vault: Address::from_str(cli.vault.trim_start_matches("0x"))?,
         registry,
         router_governance,
+        portfolio_router,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
         // Load feature flags from FEATURE_FLAGS env var at startup.

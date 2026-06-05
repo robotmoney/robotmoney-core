@@ -60,6 +60,11 @@ pub struct IndexerConfig {
     /// When set, the indexer ingests `ProposalCreated`, `VoteCast`,
     /// `ProposalExecuted`, and `WeightsApplied` events.
     pub router_governance: Option<Address>,
+    /// Optional PortfolioRouter contract address (may differ from
+    /// `router_governance`).  When set, the indexer ingests `WeightsSet`
+    /// and `DefaultWeightsSet` events emitted by direct admin calls to
+    /// `setWeights()` / `setDefaultWeights()` (the demo-seed path).
+    pub portfolio_router: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -88,6 +93,12 @@ impl IndexerConfig {
         }
         if let Some(gov) = self.router_governance {
             addrs.push(gov);
+        }
+        if let Some(pr) = self.portfolio_router {
+            // Only add if not already present (e.g. when portfolio_router == router_governance).
+            if !addrs.contains(&pr) {
+                addrs.push(pr);
+            }
         }
         addrs
     }
@@ -123,6 +134,13 @@ pub async fn run_once(
     }
     if let Some(gov) = cfg.router_governance {
         db.upsert_contract(cfg.chain_id, gov.into_array(), "router_governance", None)
+            .await?;
+    }
+    if let Some(pr) = cfg.portfolio_router {
+        // Register the PortfolioRouter as a watched contract so its events are
+        // attributed correctly. Use "portfolio_router" type to distinguish from
+        // the RouterGovernance contract.
+        db.upsert_contract(cfg.chain_id, pr.into_array(), "portfolio_router", None)
             .await?;
     }
 
@@ -647,6 +665,61 @@ async fn handle_log(
         let decoded =
             IRouterGovernanceEvents::WeightsApplied::decode_log(&into_alloy_log(log), true)
                 .map_err(|e| IndexerError::Decode(format!("WeightsApplied: {e}")))?;
+        let vault_addresses: Vec<[u8; 20]> =
+            decoded.vaults.iter().map(|a| a.into_array()).collect();
+        let bps_values: Vec<i64> = decoded
+            .bps
+            .iter()
+            .map(|b| b.try_into().unwrap_or(i64::MAX))
+            .collect();
+        let r = db
+            .insert_router_weight_snapshot(
+                cfg.chain_id,
+                log.address.into_array(),
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                vault_addresses,
+                bps_values,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // WeightsSet — direct admin call to PortfolioRouter.setWeights().
+    // Signature: WeightsSet(address[] vaults, uint256[] bps).
+    // This is the path taken by the demo seed script (not governance execution).
+    if topic0 == topics.weights_set {
+        let decoded = IPortfolioRouterEvents::WeightsSet::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("WeightsSet: {e}")))?;
+        let vault_addresses: Vec<[u8; 20]> =
+            decoded.vaults.iter().map(|a| a.into_array()).collect();
+        let bps_values: Vec<i64> = decoded
+            .bps
+            .iter()
+            .map(|b| b.try_into().unwrap_or(i64::MAX))
+            .collect();
+        let r = db
+            .insert_router_weight_snapshot(
+                cfg.chain_id,
+                log.address.into_array(),
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                vault_addresses,
+                bps_values,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // DefaultWeightsSet — direct admin call to PortfolioRouter.setDefaultWeights().
+    // Signature: DefaultWeightsSet(address[] vaults, uint256[] bps).
+    // Emitted by ADMIN_ROLE setting the fallback weight vector.
+    if topic0 == topics.default_weights_set {
+        let decoded =
+            IPortfolioRouterEvents::DefaultWeightsSet::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("DefaultWeightsSet: {e}")))?;
         let vault_addresses: Vec<[u8; 20]> =
             decoded.vaults.iter().map(|a| a.into_array()).collect();
         let bps_values: Vec<i64> = decoded
