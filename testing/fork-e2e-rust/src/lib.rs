@@ -112,6 +112,27 @@ macro_rules! skip_if_no_fork {
     };
 }
 
+/// Skip the test when running in testnet mode (`RMPC_TESTNET_RPC_URL` is set).
+/// Use this for tests that require Anvil-specific admin RPCs such as
+/// `evm_increaseTime` / `evm_mine` that Geth does not expose. The test still
+/// runs against the checked-in fixture and a live `RMPC_FORK_RPC_URL` fork.
+#[macro_export]
+macro_rules! skip_in_testnet_mode {
+    () => {
+        if std::env::var("RMPC_TESTNET_RPC_URL")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        {
+            eprintln!(
+                "[fork-e2e] skipping: RMPC_TESTNET_RPC_URL is set (testnet mode). \
+                 This test requires evm_increaseTime which Geth does not support. \
+                 Run against anvil (RMPC_FORK_RPC_URL or checked-in fixture) to exercise it."
+            );
+            return;
+        }
+    };
+}
+
 /// Skip the test unless a live mainnet fork RPC is available via
 /// `RMPC_FORK_RPC_URL`. Use this for tests that read storage from
 /// production Base mainnet contracts (e.g. `abi_address_sanity`),
