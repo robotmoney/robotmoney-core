@@ -1,5 +1,5 @@
 # IUniswapV3Pool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9530ac6fd9de73ac01a8ac8179230105bec76195/contracts/interfaces/IUniswapV3Pool.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e2c936763868ac281d428b1ab176ecdd042ef467/contracts/interfaces/IUniswapV3Pool.sol)
 
 Minimal Uniswap V3 Pool interface used for slot0 pricing and
 TWAP reads via `observe()`.

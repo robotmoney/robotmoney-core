@@ -89,10 +89,10 @@ pub fn agent_address() -> Address {
 }
 
 /// Demo router weight (bps) for the primary RobotMoneyVault (PRD §11.1 Stable
-/// Yield) after demo seeding. The primary vault is the only router-eligible
-/// vault — basket vaults stay gap-blocked per PRD §11.2/§11.3 — so it
-/// carries the full 10 000 bps.
-pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 10_000;
+/// Yield) after demo seeding. The primary vault carries 8500 bps; the remaining
+/// 1500 bps are split equally across rmRWA (§11.4), rmPROTO (§11.2), and rmAGENT
+/// (§11.3) at 500 bps each. Issue #621.
+pub const DEMO_WEIGHT_PRIMARY_BPS: u64 = 8_500;
 
 // -- Error type -------------------------------------------------------
 
@@ -1174,12 +1174,12 @@ impl Fixture {
     pub fn demo_agent_vault_hex(&self) -> &str {
         &self.demo_extra_vaults.agent_token_vault
     }
-    /// Convenience accessor returning the three router-eligible Active vaults
-    /// in the demo set (primary §11.1, protocol §11.2, agent §11.3). After
+    /// Convenience accessor returning the three non-RWA router-eligible Active
+    /// vaults in the demo set (primary §11.1, protocol §11.2, agent §11.3). After
     /// issues #559/#560 all three carry router weight and receive router flow
-    /// from `seed_demo_depositors`. Excludes the §11.4 RWA vault, which is
-    /// Active but not router-eligible (seeded directly) — see
-    /// [`Fixture::rwa_vault`].
+    /// from `seed_demo_depositors`. The §11.4 RWA vault is separately returned by
+    /// [`Fixture::rwa_vault`] — after issue #621 it is also router-eligible at
+    /// 500 bps (ADR-0006 §1 amended 2026-06-05).
     pub fn all_demo_vaults(&self) -> [Address; 3] {
         [
             self.vault(),
@@ -1188,11 +1188,11 @@ impl Fixture {
         ]
     }
     /// RWA/Thematic vault (deSPXA) registered by `DeployDemoExtraVaults.s.sol`
-    /// (PRD §11.4, ADR-0006). Registered **Active** but intentionally not
-    /// router-eligible: its single-asset entry is a direct Aerodrome swap gated
-    /// by the Chronicle NAV oracle, so the PortfolioRouter never funds it.
-    /// `seed_demo_depositors` deposits into it directly so it reports non-zero
-    /// `totalAssets` like the three router-eligible vaults (issue #563).
+    /// (PRD §11.4, ADR-0006). Registered **Active** and router-eligible at
+    /// 500 bps (issue #621, ADR-0006 §1 amended 2026-06-05 — product owner
+    /// confirmed). The router deposit routes 500 bps of each deposit into rmRWA
+    /// via the Aerodrome swap + Chronicle NAV oracle path. `seed_demo_depositors`
+    /// also issues a direct deposit for belt-and-suspenders TVL seeding.
     pub fn rwa_vault(&self) -> Address {
         parse_addr(&self.demo_extra_vaults.rwa_vault)
     }
@@ -1375,29 +1375,28 @@ impl Fixture {
 
     /// Seed `count` deterministic simulated-depositor EOAs so that **all four**
     /// PRD §11 vaults report non-zero `totalAssets` and real depositor share
-    /// balances the moment the dapp first loads (issues #465, #532, #563).
+    /// balances the moment the dapp first loads (issues #465, #532, #563, #621).
     ///
     /// Each depositor performs two real on-chain deposits, both denominated in
     /// `per_user_usdc`:
     ///
     /// 1. **Router deposit** — `PortfolioRouter.deposit(uint256,uint256[])`
-    ///    splits `per_user_usdc` across the three router-eligible vaults by the
-    ///    on-chain weight vector: the primary `RobotMoneyVault` (§11.1,
-    ///    `PassthroughAdapter`), `ProtocolAssetVault` (§11.2, rmPROTO) and
-    ///    `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The basket legs
-    ///    execute real USDC → basket-token swaps through the demo swap routers
-    ///    (`DemoV3SwapRouter`, `DemoV4SwapRouter`, `DemoAerodromeRouter`), so
-    ///    every router-eligible vault ends boot with non-zero TVL. An empty
+    ///    splits `per_user_usdc` across all four router-eligible vaults by the
+    ///    on-chain 8500/500/500/500 bps weight vector (issue #621): the primary
+    ///    `RobotMoneyVault` (§11.1, `PassthroughAdapter`), `RwaVault` (§11.4,
+    ///    rmRWA, ADR-0006 §1 amended 2026-06-05), `ProtocolAssetVault` (§11.2,
+    ///    rmPROTO) and `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The
+    ///    basket and RWA legs execute real USDC → token swaps through the demo
+    ///    swap routers (`DemoV3SwapRouter`, `DemoV4SwapRouter`, `DemoAerodromeRouter`),
+    ///    so every router-eligible vault ends boot with non-zero TVL. An empty
     ///    `minSharesPerLeg` array skips per-leg slippage protection — acceptable
     ///    for the seed against the demo stub pools.
     ///
     /// 2. **Direct RWA deposit** — `RwaVault.deposit(uint256,address)` deposits
-    ///    `per_user_usdc` straight into the §11.4 RWA vault. rmRWA is registered
-    ///    Active but intentionally **not** router-eligible (ADR-0006 §1: its
-    ///    single-asset entry is a direct Aerodrome swap gated by the Chronicle
-    ///    NAV oracle, so routing through the PortfolioRouter adds no value). The
-    ///    deposit performs the real USDC → deSPXA entry swap; the demo Chronicle
-    ///    stub always reports a fresh price so the staleness check passes.
+    ///    `per_user_usdc` straight into the §11.4 RWA vault as a belt-and-suspenders
+    ///    guarantee. While the router now funds rmRWA at 500 bps (issue #621), the
+    ///    direct deposit ensures the depositor holds rmRWA receipt shares and
+    ///    exercises the full Aerodrome/Chronicle deposit path end to end.
     ///
     /// Each depositor is therefore funded with `2 * per_user_usdc` USDC (one
     /// budget per deposit path) plus a small ETH gas grant.

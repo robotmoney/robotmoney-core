@@ -29,11 +29,12 @@ interface IERC4626Min {
 }
 
 /// @notice Integration test for the demo seed path: after `DeployDemoExtraVaults`
-///         runs, rmPROTO (issue #559) and rmAGENT (issue #560) are both router-eligible,
-///         the router carries a three-vault default weight vector (primary + rmPROTO +
-///         rmAGENT at ~3334/3333/3333 bps), and a routed deposit reaches all three vaults.
-///         ADR-0002; issues #559, #560. Also: deSPXA RWA vault is registered Active
-///         and NOT router-eligible (direct-seed-only per ADR-0006; issue #562).
+///         runs, rmPROTO (issue #559), rmAGENT (issue #560), and rmRWA (issue #621)
+///         are all router-eligible, the router carries a four-vault default weight
+///         vector (primary 8500 bps + rmRWA/rmPROTO/rmAGENT at 500 bps each), and
+///         a routed deposit reaches all four vaults.
+///         ADR-0002; issues #559, #560, #621. Also: deSPXA RWA vault is registered
+///         Active and router-eligible at 500 bps (ADR-0006 §1 amended 2026-06-05).
 contract DeployDemoExtraVaultsTest is Test {
     DeployDemoExtraVaults internal script;
     TestERC20 internal usdc;
@@ -93,31 +94,55 @@ contract DeployDemoExtraVaultsTest is Test {
         d = script.runInProcess(p);
     }
 
-    /// @notice After the demo seed runs, rmPROTO and rmAGENT are router-eligible and the
-    ///         router default vector is a three-leg ~equal split (3334/3333/3333 bps).
-    ///         Registry router-eligible count = 3.
+    /// @notice After the demo seed runs, rmPROTO, rmAGENT, and rmRWA are all
+    ///         router-eligible and the router default vector is a four-leg
+    ///         8500/500/500/500 bps split (primary + rmRWA + rmPROTO + rmAGENT).
+    ///         Registry router-eligible count = 4. Issue #621.
     function test_demo_seed_populates_defaultWeights() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
 
-        // Default vector spans all three router-eligible vaults.
+        // Default vector spans all four router-eligible vaults.
         (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
-        assertEq(dV.length, 3, "default vector must span primary + rmPROTO + rmAGENT");
-        assertEq(dB[0] + dB[1] + dB[2], 10_000, "weights must sum to 10 000 bps");
+        assertEq(dV.length, 4, "default vector must span primary + rmRWA + rmPROTO + rmAGENT");
+        assertEq(dB[0] + dB[1] + dB[2] + dB[3], 10_000, "weights must sum to 10 000 bps");
 
+        // Find per-vault bps by address.
+        uint256 primaryBps;
+        uint256 rwaBps;
+        uint256 protoBps;
+        uint256 agentBps;
         bool foundPrimary;
+        bool foundRwa;
         bool foundProto;
         bool foundAgent;
         for (uint256 i = 0; i < dV.length; i++) {
-            if (dV[i] == address(primaryVault)) foundPrimary = true;
-            else if (dV[i] == d.protocolVault) foundProto = true;
-            else if (dV[i] == d.agentTokenVault) foundAgent = true;
+            if (dV[i] == address(primaryVault)) {
+                foundPrimary = true;
+                primaryBps = dB[i];
+            } else if (dV[i] == d.rwaVault) {
+                foundRwa = true;
+                rwaBps = dB[i];
+            } else if (dV[i] == d.protocolVault) {
+                foundProto = true;
+                protoBps = dB[i];
+            } else if (dV[i] == d.agentTokenVault) {
+                foundAgent = true;
+                agentBps = dB[i];
+            }
         }
         assertTrue(foundPrimary, "primary vault must be in default vector");
+        assertTrue(foundRwa, "rmRWA must be in default vector");
         assertTrue(foundProto, "rmPROTO must be in default vector");
         assertTrue(foundAgent, "rmAGENT must be in default vector");
 
+        // Assert the exact 8500/500/500/500 bps split (issue #621).
+        assertEq(primaryBps, 8_500, "primary must hold 8500 bps");
+        assertEq(rwaBps, 500, "rmRWA must hold 500 bps");
+        assertEq(protoBps, 500, "rmPROTO must hold 500 bps");
+        assertEq(agentBps, 500, "rmAGENT must hold 500 bps");
+
         // Registry router-eligible count matches the default vector length.
-        assertEq(registry.routerEligibleCount(), 3, "three router-eligible vaults");
+        assertEq(registry.routerEligibleCount(), 4, "four router-eligible vaults");
 
         // Represent the "no governance activity" (below-quorum) state: the
         // voted vector is not in effect. The demo also seeds a voted vector
@@ -125,9 +150,9 @@ contract DeployDemoExtraVaultsTest is Test {
         router.clearVotedWeights();
         assertFalse(router.votedWeightsActive());
 
-        // previewDeposit routes across all three vaults.
+        // previewDeposit routes across all four vaults.
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(1_000e6);
-        assertEq(legs.length, 3, "preview must have three legs");
+        assertEq(legs.length, 4, "preview must have four legs");
         uint256 totalBps;
         uint256 totalAmt;
         for (uint256 i = 0; i < legs.length; i++) {
@@ -317,36 +342,44 @@ contract DeployDemoExtraVaultsTest is Test {
         );
     }
 
-    /// @notice The deSPXA RWA vault is NOT router-eligible per ADR-0006 §1
-    ///         (direct-seed-only; Chronicle oracle gates totalAssets). Issue #562 AC2.
-    function test_rwaVault_is_not_router_eligible() public {
+    /// @notice The deSPXA RWA vault IS router-eligible at 500 bps per issue #621
+    ///         (ADR-0006 §1 amended 2026-06-05 — product owner confirmed).
+    function test_rwaVault_is_router_eligible() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
-        assertFalse(
+        assertTrue(
             registry.isRouterEligible(d.rwaVault),
-            "rmRWA must NOT be router-eligible (direct-seed-only per ADR-0006)"
+            "rmRWA must be router-eligible at 500 bps (ADR-0006 S1 amended, issue #621)"
         );
     }
 
-    /// @notice The rmRWA vault is NOT included in the router defaultWeights vector
-    ///         (primary + rmPROTO + rmAGENT are in the three-way split). Issue #562 AC2.
-    function test_rwaVault_not_in_defaultWeights() public {
+    /// @notice The rmRWA vault IS included in the router defaultWeights vector at
+    ///         500 bps (issue #621, ADR-0006 §1 amended 2026-06-05).
+    function test_rwaVault_in_defaultWeights() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
-        (address[] memory dV,) = router.getDefaultWeights();
+        (address[] memory dV, uint256[] memory dB) = router.getDefaultWeights();
+        bool found = false;
+        uint256 rwaBps;
         for (uint256 i = 0; i < dV.length; i++) {
-            assertNotEq(dV[i], d.rwaVault, "rmRWA must NOT appear in defaultWeights");
+            if (dV[i] == d.rwaVault) {
+                found = true;
+                rwaBps = dB[i];
+                break;
+            }
         }
+        assertTrue(found, "rmRWA must appear in defaultWeights (issue #621)");
+        assertEq(rwaBps, 500, "rmRWA must carry exactly 500 bps");
     }
 
     // ─── Four-vault real-TVL end state (issue #592) ─────────────────────────
 
     /// @notice The full four-vault PRD §11 end state: after the demo seed, all
-    ///         four vaults are registered Active, the three router-eligible
-    ///         vaults (§11.1 primary, §11.2 rmPROTO, §11.3 rmAGENT) are funded
-    ///         by a single routed deposit, the §11.4 deSPXA RWA vault is funded
-    ///         by a direct deposit (ADR-0006 §1 — never router-weighted), and
-    ///         every one of the four reports non-zero `totalAssets`. This is the
-    ///         forge-layer mirror of the smoke-test four-vault TVL invariant the
-    ///         dapp tiles depend on (issue #592).
+    ///         four vaults are registered Active, all four are router-eligible
+    ///         (issue #621 — rmRWA is now router-eligible at 500 bps per ADR-0006
+    ///         §1 amended 2026-06-05), and a single routed deposit via the default
+    ///         8500/500/500/500 bps vector funds all four vaults. Every vault
+    ///         reports non-zero `totalAssets`. This is the forge-layer mirror of
+    ///         the smoke-test four-vault TVL invariant the dapp tiles depend on
+    ///         (issues #592, #621).
     function test_four_vaults_all_active_with_nonzero_totalAssets() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
 
@@ -363,30 +396,22 @@ contract DeployDemoExtraVaultsTest is Test {
             );
         }
 
-        // 2) Exactly three of the four are router-eligible; the RWA vault is
-        //    Active but direct-seed-only (ADR-0006 §1).
-        assertEq(registry.routerEligibleCount(), 3, "three router-eligible vaults");
+        // 2) All four vaults are router-eligible (issue #621 — rmRWA added at 500 bps).
+        assertEq(registry.routerEligibleCount(), 4, "four router-eligible vaults");
         assertTrue(registry.isRouterEligible(d.protocolVault), "rmPROTO router-eligible");
         assertTrue(registry.isRouterEligible(d.agentTokenVault), "rmAGENT router-eligible");
         assertTrue(registry.isRouterEligible(address(primaryVault)), "primary router-eligible");
-        assertFalse(registry.isRouterEligible(d.rwaVault), "rmRWA NOT router-eligible");
+        assertTrue(registry.isRouterEligible(d.rwaVault), "rmRWA router-eligible at 500 bps");
 
-        // 3) A single routed deposit funds the three router-eligible vaults.
-        //    Use the seeded default vector (no governance activity) so the
-        //    router splits across primary + rmPROTO + rmAGENT.
+        // 3) A single routed deposit funds all four router-eligible vaults via
+        //    the 8500/500/500/500 bps default vector (issue #621).
         router.clearVotedWeights();
-        uint256 routedAmount = 900e6; // divisible by 3 for the equal split
+        uint256 routedAmount = 10_000e6; // 10000 USDC — large enough to split meaningfully
         usdc.mint(address(this), routedAmount);
         usdc.approve(address(router), routedAmount);
         router.deposit(routedAmount, new uint256[](0));
 
-        // 4) A direct deposit funds the §11.4 RWA vault (Chronicle-priced).
-        uint256 rwaAmount = 1_000e6;
-        usdc.mint(address(this), rwaAmount);
-        usdc.approve(d.rwaVault, rwaAmount);
-        RwaVault(d.rwaVault).deposit(rwaAmount, address(this));
-
-        // 5) Every one of the four vaults now reports non-zero totalAssets.
+        // 4) Every one of the four vaults now reports non-zero totalAssets.
         for (uint256 i = 0; i < 4; i++) {
             assertGt(
                 IERC4626Min(vaults[i]).totalAssets(),

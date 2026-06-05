@@ -1,15 +1,16 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/409d003e7840e5cca4a5a03ebbc053080a81a5b7/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e2c936763868ac281d428b1ab176ecdd042ef467/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
 
 Integration test for the demo seed path: after `DeployDemoExtraVaults`
-runs, rmPROTO (issue #559) and rmAGENT (issue #560) are both router-eligible,
-the router carries a three-vault default weight vector (primary + rmPROTO +
-rmAGENT at ~3334/3333/3333 bps), and a routed deposit reaches all three vaults.
-ADR-0002; issues #559, #560. Also: deSPXA RWA vault is registered Active
-and NOT router-eligible (direct-seed-only per ADR-0006; issue #562).
+runs, rmPROTO (issue #559), rmAGENT (issue #560), and rmRWA (issue #621)
+are all router-eligible, the router carries a four-vault default weight
+vector (primary 8500 bps + rmRWA/rmPROTO/rmAGENT at 500 bps each), and
+a routed deposit reaches all four vaults.
+ADR-0002; issues #559, #560, #621. Also: deSPXA RWA vault is registered
+Active and router-eligible at 500 bps (ADR-0006 §1 amended 2026-06-05).
 
 
 ## State Variables
@@ -72,9 +73,10 @@ function _runScript() internal returns (DeployDemoExtraVaults.Deployed memory d)
 
 ### test_demo_seed_populates_defaultWeights
 
-After the demo seed runs, rmPROTO and rmAGENT are router-eligible and the
-router default vector is a three-leg ~equal split (3334/3333/3333 bps).
-Registry router-eligible count = 3.
+After the demo seed runs, rmPROTO, rmAGENT, and rmRWA are all
+router-eligible and the router default vector is a four-leg
+8500/500/500/500 bps split (primary + rmRWA + rmPROTO + rmAGENT).
+Registry router-eligible count = 4. Issue #621.
 
 
 ```solidity
@@ -201,36 +203,36 @@ demo seed — no Paused placeholder remains (issue #562 AC1).
 function test_rwaVault_is_Active_after_demo_seed() public;
 ```
 
-### test_rwaVault_is_not_router_eligible
+### test_rwaVault_is_router_eligible
 
-The deSPXA RWA vault is NOT router-eligible per ADR-0006 §1
-(direct-seed-only; Chronicle oracle gates totalAssets). Issue #562 AC2.
+The deSPXA RWA vault IS router-eligible at 500 bps per issue #621
+(ADR-0006 §1 amended 2026-06-05 — product owner confirmed).
 
 
 ```solidity
-function test_rwaVault_is_not_router_eligible() public;
+function test_rwaVault_is_router_eligible() public;
 ```
 
-### test_rwaVault_not_in_defaultWeights
+### test_rwaVault_in_defaultWeights
 
-The rmRWA vault is NOT included in the router defaultWeights vector
-(primary + rmPROTO + rmAGENT are in the three-way split). Issue #562 AC2.
+The rmRWA vault IS included in the router defaultWeights vector at
+500 bps (issue #621, ADR-0006 §1 amended 2026-06-05).
 
 
 ```solidity
-function test_rwaVault_not_in_defaultWeights() public;
+function test_rwaVault_in_defaultWeights() public;
 ```
 
 ### test_four_vaults_all_active_with_nonzero_totalAssets
 
 The full four-vault PRD §11 end state: after the demo seed, all
-four vaults are registered Active, the three router-eligible
-vaults (§11.1 primary, §11.2 rmPROTO, §11.3 rmAGENT) are funded
-by a single routed deposit, the §11.4 deSPXA RWA vault is funded
-by a direct deposit (ADR-0006 §1 — never router-weighted), and
-every one of the four reports non-zero `totalAssets`. This is the
-forge-layer mirror of the smoke-test four-vault TVL invariant the
-dapp tiles depend on (issue #592).
+four vaults are registered Active, all four are router-eligible
+(issue #621 — rmRWA is now router-eligible at 500 bps per ADR-0006
+§1 amended 2026-06-05), and a single routed deposit via the default
+8500/500/500/500 bps vector funds all four vaults. Every vault
+reports non-zero `totalAssets`. This is the forge-layer mirror of
+the smoke-test four-vault TVL invariant the dapp tiles depend on
+(issues #592, #621).
 
 
 ```solidity

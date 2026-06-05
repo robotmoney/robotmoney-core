@@ -368,7 +368,7 @@ contract DemoAgentBatchDeployer {
 ///         Registers all three additions in `VaultRegistry`, seeds the basket
 ///         vaults with devnet stand-in tokens, seeds the RWA vault with the
 ///         deSPXA stub + Chronicle oracle stub, and resets the router weight
-///         vector to two-vault 50/50 (Primary + rmAGENT).
+///         vector to a four-vault 8500/500/500/500 bps split.
 ///
 ///         Why this exists: to exercise the full PRD vault catalog end to end
 ///         (Portfolio Explorer, /v1/vaults TVL, Router Governance weights) the
@@ -377,16 +377,17 @@ contract DemoAgentBatchDeployer {
 ///         devnet basket stubs; `RwaVault` (PRD §11.4) holds the deSPXA stub
 ///         + a demo Chronicle oracle that always returns a fresh price.
 ///
-///         Router eligibility (issues #559, #560, ADR-0006 §1):
+///         Router eligibility (issues #559, #560, #621, ADR-0006 §1 as amended):
 ///           - rmPROTO (§11.2) is router-eligible (issue #559). DemoV3SwapRouter
-///             stubs satisfy the V3 deposit path on devnet. ~3333 bps leg.
+///             stubs satisfy the V3 deposit path on devnet. 500 bps leg.
 ///           - rmAGENT (§11.3) is router-eligible (issue #560). Multi-DEX stubs
-///             (V3/V4/Aerodrome) satisfy all three deposit legs on devnet. ~3333 bps.
-///           - rmRWA (§11.4) is registered Active but NOT router-eligible per
-///             ADR-0006 §1 — direct-deposit-only (Chronicle oracle gates totalAssets).
-///           - The primary `RobotMoneyVault` (§11.1) holds ~3334 bps (one-third).
-///           - Default + voted weight vectors: 3334 / 3333 / 3333 bps (primary /
-///             rmPROTO / rmAGENT) summing to 10 000 bps.
+///             (V3/V4/Aerodrome) satisfy all three deposit legs on devnet. 500 bps.
+///           - rmRWA (§11.4) is router-eligible at 500 bps (issue #621, ADR-0006
+///             §1 amended 2026-06-05 — product owner confirmed). The Aerodrome
+///             swap stub and demo Chronicle oracle satisfy the deposit path on devnet.
+///           - The primary `RobotMoneyVault` (§11.1) holds 8500 bps (~85%).
+///           - Default + voted weight vectors: 8500 / 500 / 500 / 500 bps
+///             (primary / rmRWA / rmPROTO / rmAGENT) summing to 10 000 bps.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS               — receives ADMIN_ROLE on the new vaults
@@ -426,9 +427,9 @@ contract DeployDemoExtraVaults is Script {
         /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
         ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
         address[] agentTokens;
-        /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active, NOT router-eligible
-        ///      (direct-deposit-only per ADR-0006 §1; Chronicle oracle gates totalAssets).
-        ///      Not in the router weight vector. The dapp renders it as a live vault tile.
+        /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
+        ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
+        ///      stub and demo Chronicle oracle satisfy the deposit path on devnet.
         address rwaVault;
         /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
         address v4Adapter;
@@ -655,28 +656,30 @@ contract DeployDemoExtraVaults is Script {
         registry.setRouterEligible(v.agentVault, true);
 
         // 3. Seed the RWA vault (PRD §11.4) with the deSPXA stand-in asset and
-        //    register it Active. NOT router-eligible per ADR-0006 §1:
-        //    the Chronicle oracle staleness check in totalAssets() gates every
-        //    price-sensitive operation; routing a deposit through PortfolioRouter
-        //    adds no value for a single-asset vault whose entry path is a direct
-        //    Aerodrome secondary swap. The dapp renders rmRWA as a live Active
-        //    tile; deposits are direct (not routed). isRouterEligible() remains
-        //    false (registry default).
+        //    register it Active. Router-eligible at 500 bps per issue #621
+        //    (ADR-0006 §1 amended 2026-06-05 — product owner confirmed). The
+        //    Aerodrome swap stub and demo Chronicle oracle satisfy the deposit
+        //    path on devnet. Set router-eligible before setRouter is called so
+        //    the VaultRegistry stale-length guard is inactive.
         _seedRwaVault(RwaVault(v.rwaVault), DemoRwaStubDeployer(v.rwaStubs));
         _registerIfAbsent(registry, v.rwaVault, p.usdc, p.rwaName);
+        // Set rmRWA router-eligible (issue #621, ADR-0006 §1 amended).
+        registry.setRouterEligible(v.rwaVault, true);
 
         // 4. Refresh the router default (below-quorum fallback, ADR-0002) and
-        //    voted weight vectors. Three vaults are now router-eligible: PRIMARY_VAULT
-        //    (§11.1), protocolVault (§11.2, issue #559), and agentTokenVault
-        //    (§11.3, issue #560). Equal three-way split (~3334/3333/3333 bps).
-        //    Both setRouterEligible calls above happened before setRouter, so the
+        //    voted weight vectors. All four vaults are now router-eligible:
+        //    PRIMARY_VAULT (§11.1), rwaVault (§11.4, issue #621), protocolVault
+        //    (§11.2, issue #559), and agentTokenVault (§11.3, issue #560).
+        //    Conservative stablecoin-heavy split: 8500 bps primary + 500 bps each
+        //    for the three remaining vaults (summing to 10 000 bps).
+        //    All setRouterEligible calls above happened before setRouter, so the
         //    stale-length guard was inactive. Link the router first (idempotent),
-        //    then set the three-vault weight vector.
+        //    then set the four-vault weight vector.
         if (address(registry.router()) != p.router) {
             registry.setRouter(p.router);
         }
-        _applyThreeVaultWeights(
-            PortfolioRouter(p.router), p.primaryVault, d.protocolVault, v.agentVault
+        _applyFourVaultWeights(
+            PortfolioRouter(p.router), p.primaryVault, v.rwaVault, d.protocolVault, v.agentVault
         );
     }
 
@@ -765,23 +768,27 @@ contract DeployDemoExtraVaults is Script {
 
     /// @dev Refresh both the voted weight vector (used by the AC3 smoke test
     ///      which reads `getWeights()`) and the on-chain default (below-quorum
-    ///      fallback, ADR-0002). Three router-eligible vaults: primary (§11.1),
-    ///      rmPROTO (§11.2, issue #559), and rmAGENT (§11.3, issue #560).
-    ///      Approximately equal three-way split: 3334/3333/3333 bps = 10000 total.
-    function _applyThreeVaultWeights(
+    ///      fallback, ADR-0002). All four router-eligible vaults: primary (§11.1),
+    ///      rmRWA (§11.4, issue #621), rmPROTO (§11.2, issue #559), and rmAGENT
+    ///      (§11.3, issue #560). Conservative stablecoin-heavy split:
+    ///      8500 / 500 / 500 / 500 bps = 10 000 total.
+    function _applyFourVaultWeights(
         PortfolioRouter router,
         address primary,
+        address rwaVault,
         address proto,
         address agentVault
     ) internal {
-        address[] memory vaults = new address[](3);
+        address[] memory vaults = new address[](4);
         vaults[0] = primary;
-        vaults[1] = proto;
-        vaults[2] = agentVault;
-        uint256[] memory bps = new uint256[](3);
-        bps[0] = 3_334;
-        bps[1] = 3_333;
-        bps[2] = 3_333;
+        vaults[1] = rwaVault;
+        vaults[2] = proto;
+        vaults[3] = agentVault;
+        uint256[] memory bps = new uint256[](4);
+        bps[0] = 8_500;
+        bps[1] = 500;
+        bps[2] = 500;
+        bps[3] = 500;
         router.setWeights(vaults, bps);
         router.setDefaultWeights(vaults, bps);
     }
@@ -846,7 +853,7 @@ contract DeployDemoExtraVaults is Script {
         console2.log("  v4Adapter     :", d.v4Adapter);
         console2.log("  aeroAdapter   :", d.aeroAdapter);
         console2.log(
-            "  rwaVault      :", d.rwaVault, "(Active, direct-seed-only, deSPXA/Chronicle)"
+            "  rwaVault      :", d.rwaVault, "(Active, router-eligible 500 bps, deSPXA/Chronicle)"
         );
     }
 
