@@ -56,10 +56,12 @@ struct Cli {
     #[arg(long, env = "INDEXER_ROUTER_GOVERNANCE")]
     router_governance: Option<String>,
 
-    /// Optional PortfolioRouter contract address.
+    /// Optional PortfolioRouter contract address (may differ from RouterGovernance).
     /// When set, the indexer ingests WeightsSet and DefaultWeightsSet events
     /// emitted by direct admin calls to setWeights() / setDefaultWeights()
-    /// (the demo-seed path, distinct from governance-executed weight changes).
+    /// (the demo-seed path), and watches RouterDeposit events to take a fresh
+    /// TVL snapshot of all registered vaults in any block where a router
+    /// deposit is processed.
     #[arg(long, env = "INDEXER_PORTFOLIO_ROUTER")]
     portfolio_router: Option<String>,
 
