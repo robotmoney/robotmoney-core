@@ -7,19 +7,31 @@
  * derived from each vault's on-chain `status` surfaced by the `/v1/vaults`
  * indexer read — not a hard-coded per-vault constant.
  *
- * All assertions use the `fetchImpl` injection point — no network or wallet.
+ * VaultCards reads data from ExplorerContext (shared polling loop). Tests wrap
+ * it in ExplorerProvider with a mocked fetchImpl that routes /v1/vaults and
+ * /v1/stats separately — no network or wallet required.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, waitFor, within } from "./helpers/render";
 import { VaultCards } from "../../src/components/VaultCards";
-import type { FetchLike, VaultsResponse } from "../../src/lib/explorerApi";
+import { ExplorerProvider } from "../../src/lib/ExplorerContext";
+import type { FetchLike, VaultsResponse, StatsResponse } from "../../src/lib/explorerApi";
 
-function makeFetch(body: unknown, ok = true, status = 200): FetchLike {
-  return vi.fn(async () => ({
-    ok,
-    status,
-    json: async () => body,
-  })) as unknown as FetchLike;
+/** URL-routing fetchImpl for ExplorerProvider: vaults → vaultsFixture, stats → statsFixture. */
+function makeExplorerFetch(vaults: VaultsResponse, stats: StatsResponse | null = null): FetchLike {
+  return vi.fn(async (url: string) => {
+    const isStats = typeof url === "string" && url.includes("/v1/stats");
+    const body = isStats
+      ? (stats ?? {
+          total_tvl: "0",
+          unique_depositors: 0,
+          activity_feed: [],
+          block_number: 1,
+          indexed_at: "",
+        })
+      : vaults;
+    return { ok: true as const, status: 200, json: async () => body };
+  }) as unknown as FetchLike;
 }
 
 // Four-vault demo set: three Active router vaults plus the non-Active
@@ -78,7 +90,9 @@ const fourVaultFixture: VaultsResponse = {
 describe("VaultCards — four-vault layout (issue #479)", () => {
   it("renders one tile per registered vault", async () => {
     const { findAllByTestId } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(fourVaultFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
     const cards = await findAllByTestId("landing-vault-card");
     expect(cards).toHaveLength(4);
@@ -86,7 +100,9 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
 
   it("renders the non-Active RWA tile in its inactive presentation, sourced from status", async () => {
     const { findAllByTestId } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(fourVaultFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
     const cards = await findAllByTestId("landing-vault-card");
 
@@ -108,7 +124,9 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
 
   it("keeps Active tiles showing their live status and TVL stats", async () => {
     const { findAllByTestId } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(fourVaultFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
     const cards = await findAllByTestId("landing-vault-card");
     const active = cards.filter((c) => c.getAttribute("data-vault-active") === "true");
@@ -121,7 +139,9 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
   it("renders the empty state when no vaults are registered", async () => {
     const empty: VaultsResponse = { vaults: [], block_number: 1, indexed_at: "x" };
     const { findByTestId } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(empty)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(empty)}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
     await waitFor(async () => {
       expect(await findByTestId("landing-vault-cards-empty")).toBeTruthy();
@@ -151,15 +171,23 @@ function makeVault(total_assets: string | null): VaultsResponse {
 }
 
 describe("VaultCards — TVL display and polling", () => {
-  it("renders total_assets null as — and total_assets '0' as 0", async () => {
-    const { findByTestId, rerender } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={makeFetch(makeVault(null))} />,
+  it("renders total_assets null as —", async () => {
+    const { findByTestId } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVault(null))}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
     await waitFor(async () => {
       expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("—");
     });
+  });
 
-    rerender(<VaultCards apiUrl="http://api" fetchImpl={makeFetch(makeVault("0"))} />);
+  it("renders total_assets '0' as 0", async () => {
+    const { findByTestId } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVault("0"))}>
+        <VaultCards />
+      </ExplorerProvider>,
+    );
     await waitFor(async () => {
       expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
     });
@@ -167,23 +195,40 @@ describe("VaultCards — TVL display and polling", () => {
 
   it("re-fetches on the poll interval and updates TVL from '0' to non-zero without a page reload", async () => {
     let callCount = 0;
-    const fetchImpl: FetchLike = vi.fn(async () => ({
-      ok: true as const,
-      status: 200,
-      json: async () => (callCount++ === 0 ? makeVault("0") : makeVault("5000000000")),
-    })) as unknown as FetchLike;
+    const fetchImpl: FetchLike = vi.fn(async (url: string) => {
+      const isStats = typeof url === "string" && url.includes("/v1/stats");
+      if (isStats) {
+        return {
+          ok: true as const,
+          status: 200,
+          json: async () => ({
+            total_tvl: "0",
+            unique_depositors: 0,
+            activity_feed: [],
+            block_number: 1,
+            indexed_at: "",
+          }),
+        };
+      }
+      return {
+        ok: true as const,
+        status: 200,
+        json: async () => (callCount++ === 0 ? makeVault("0") : makeVault("5000000000")),
+      };
+    }) as unknown as FetchLike;
 
     // Use a short real interval so the test completes quickly without fake timers
     // (fake timers block RTL's waitFor polling in browser mode).
     const { findByTestId } = render(
-      <VaultCards apiUrl="http://api" fetchImpl={fetchImpl} pollInterval={50} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={fetchImpl} pollInterval={50}>
+        <VaultCards />
+      </ExplorerProvider>,
     );
 
     // Initial fetch shows "0".
     await waitFor(async () => {
       expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     // After one poll interval the component re-fetches and displays the non-zero TVL.
     await waitFor(
@@ -192,6 +237,5 @@ describe("VaultCards — TVL display and polling", () => {
       },
       { timeout: 2_000 },
     );
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

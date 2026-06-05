@@ -5,6 +5,10 @@
  * All components are tested with mocked API responses via the `fetchImpl`
  * injection point — no real network or wallet required.
  *
+ * VaultList and ProtocolStats now consume ExplorerContext (single polling
+ * loop), so tests wrap them in ExplorerProvider with a URL-routing fetchImpl
+ * that returns different fixtures for /v1/vaults vs /v1/stats.
+ *
  * Backs issue #318 acceptance criterion:
  *   "suite-09: RTL unit tests for VaultList, VaultDetail, RouterView,
  *    ProtocolStats with mocked API responses"
@@ -15,6 +19,7 @@ import { VaultList } from "../../src/components/VaultList";
 import { VaultDetail } from "../../src/components/VaultDetail";
 import { RouterView } from "../../src/components/RouterView";
 import { ProtocolStats } from "../../src/components/ProtocolStats";
+import { ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type {
   FetchLike,
   VaultsResponse,
@@ -153,6 +158,20 @@ const statsFixture: StatsResponse = {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
+/** URL-routing fetchImpl for ExplorerProvider: vaults → vaultsFixture, stats → statsFixture. */
+function makeExplorerFetch(
+  vaults: VaultsResponse | null = vaultsFixture,
+  stats: StatsResponse | null = statsFixture,
+  ok = true,
+  status = 200,
+): FetchLike {
+  return vi.fn(async (url: string) => {
+    const isStats = typeof url === "string" && url.includes("/v1/stats");
+    const body = isStats ? (stats ?? {}) : (vaults ?? {});
+    return { ok, status, json: async () => body };
+  }) as unknown as FetchLike;
+}
+
 function makeFetch(body: unknown, ok = true, status = 200): FetchLike {
   return vi.fn(async () => ({
     ok,
@@ -179,7 +198,9 @@ function makeRouterFetch(): FetchLike {
 describe("VaultList", () => {
   it("renders a row per vault with correct fields", async () => {
     const { getByTestId, getAllByTestId, container } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
     );
 
     await waitFor(() => {
@@ -204,14 +225,18 @@ describe("VaultList", () => {
     // structural assertion via rendering — if it mounted wagmi hooks
     // without a WagmiProvider it would throw.
     const { getByTestId } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
     );
     await waitFor(() => expect(getByTestId("vault-list-table")).toBeTruthy());
   });
 
   it("renders headroom for vault with total_assets", async () => {
     const { getAllByTestId } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
     );
     await waitFor(() => getAllByTestId("vault-list-row-headroom"));
 
@@ -224,7 +249,9 @@ describe("VaultList", () => {
 
   it("shows risk_label per vault", async () => {
     const { getAllByTestId } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
     );
     await waitFor(() => getAllByTestId("vault-list-row-risk"));
 
@@ -239,20 +266,28 @@ describe("VaultList", () => {
       block_number: 0,
       indexed_at: "2026-01-01T00:00:00Z",
     };
-    const { getByTestId } = render(<VaultList apiUrl="http://api" fetchImpl={makeFetch(empty)} />);
+    const { getByTestId } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(empty)}>
+        <VaultList />
+      </ExplorerProvider>,
+    );
     await waitFor(() => expect(getByTestId("vault-list-empty")).toBeTruthy());
   });
 
   it("shows error on non-2xx response", async () => {
     const { getByTestId } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch({}, false, 503)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(null, null, false, 503)}>
+        <VaultList />
+      </ExplorerProvider>,
     );
     await waitFor(() => expect(getByTestId("vault-list-error").textContent).toContain("503"));
   });
 
   it("shows freshness block number", async () => {
     const { getByTestId } = render(
-      <VaultList apiUrl="http://api" fetchImpl={makeFetch(vaultsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <VaultList />
+      </ExplorerProvider>,
     );
     await waitFor(() => {
       expect(getByTestId("vault-list-freshness").textContent).toContain("1000");
@@ -388,7 +423,9 @@ describe("RouterView", () => {
 describe("ProtocolStats", () => {
   it("renders aggregate TVL and depositor count", async () => {
     const { getByTestId } = render(
-      <ProtocolStats apiUrl="http://api" fetchImpl={makeFetch(statsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <ProtocolStats />
+      </ExplorerProvider>,
     );
     await waitFor(() => {
       expect(getByTestId("protocol-stats-tvl").textContent).toBe("99999999");
@@ -398,7 +435,9 @@ describe("ProtocolStats", () => {
 
   it("renders recent activity event list", async () => {
     const { getAllByTestId } = render(
-      <ProtocolStats apiUrl="http://api" fetchImpl={makeFetch(statsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <ProtocolStats />
+      </ExplorerProvider>,
     );
     await waitFor(() => getAllByTestId("protocol-stats-activity-item"));
 
@@ -412,7 +451,9 @@ describe("ProtocolStats", () => {
 
   it("shows error on non-2xx response", async () => {
     const { getByTestId } = render(
-      <ProtocolStats apiUrl="http://api" fetchImpl={makeFetch({}, false, 500)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(null, null, false, 500)}>
+        <ProtocolStats />
+      </ExplorerProvider>,
     );
     await waitFor(() => expect(getByTestId("protocol-stats-error").textContent).toContain("500"));
   });
@@ -421,14 +462,18 @@ describe("ProtocolStats", () => {
     // ProtocolStats must not use wagmi — if it did, it would throw without
     // WagmiProvider. A clean mount is the assertion.
     const { getByTestId } = render(
-      <ProtocolStats apiUrl="http://api" fetchImpl={makeFetch(statsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <ProtocolStats />
+      </ExplorerProvider>,
     );
     await waitFor(() => expect(getByTestId("protocol-stats-tvl")).toBeTruthy());
   });
 
   it("shows freshness block number", async () => {
     const { getByTestId } = render(
-      <ProtocolStats apiUrl="http://api" fetchImpl={makeFetch(statsFixture)} />,
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch()}>
+        <ProtocolStats />
+      </ExplorerProvider>,
     );
     await waitFor(() => {
       expect(getByTestId("protocol-stats-freshness").textContent).toContain("1000");
