@@ -21,7 +21,7 @@
  * mirrors the BalancesPanelView pattern (docs/development/react-guide.md
  * §Layout).
  */
-import { useBlockNumber, useChainId, useReadContract } from "wagmi";
+import { useChainId, useReadContract } from "wagmi";
 import {
   PRICE_STRIP_PAIRS,
   resolvePoolConfig,
@@ -29,6 +29,7 @@ import {
   type PoolConfig,
 } from "../lib/dexPools";
 import { UNISWAP_V3_POOL_SLOT0_ABI, sqrtPriceX96ToPrice } from "../lib/uniswapV3";
+import { useExplorer } from "../lib/ExplorerContext";
 
 /** One cell's resolved state for the pure view. */
 export interface PriceCellState {
@@ -157,16 +158,21 @@ function usePoolPrice(pair: PairMeta, config: PoolConfig | undefined): PriceCell
  * Container: wires one independent `useReadContract` per configured pool on the
  * dapp's current chain and renders the pure view. Hook calls over the static
  * `PRICE_STRIP_PAIRS` array keep call order stable (Rules of Hooks).
+ *
+ * Block number is sourced from ExplorerContext (the indexer's latest processed
+ * block) rather than wagmi's useBlockNumber (chain head). This keeps the
+ * freshness stamp here in sync with the VaultCards freshness chip — both
+ * sections always display the same indexed block_number, eliminating
+ * mixed-block state when the indexer lags behind the chain (issue #612).
  */
 export function LandingPriceStrip() {
   const chainId = useChainId();
-  const { data: blockData } = useBlockNumber({ watch: true });
+  const { blockNumber } = useExplorer();
 
   const cells = PRICE_STRIP_PAIRS.map((pair) =>
     // eslint-disable-next-line react-hooks/rules-of-hooks -- PRICE_STRIP_PAIRS is a static, fixed-length config array; iteration order never changes.
     usePoolPrice(pair, resolvePoolConfig(pair.id, chainId)),
   );
 
-  const blockNumber = blockData != null ? Number(blockData) : null;
   return <LandingPriceStripView cells={cells} blockNumber={blockNumber} />;
 }

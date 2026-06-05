@@ -1,57 +1,35 @@
 // Canonical: docs/architecture.md §5.3 — Human Dapp
 
 /**
- * ProtocolStats — reads GET /v1/stats and renders the protocol stats bar.
+ * ProtocolStats — renders the protocol stats bar from ExplorerContext.
  *
  * Shows aggregate TVL, depositor count, and the most recent activity events.
  * Works without a connected wallet.
  *
+ * Data comes from ExplorerContext (shared polling loop in main.tsx), keeping
+ * the displayed block_number in sync with VaultCards and VaultList.
+ *
  * issue #318 — protocol layer.
  */
-import { useEffect, useState } from "react";
-import type { FetchLike, StatsResponse } from "../lib/explorerApi";
-import { fetchStats } from "../lib/explorerApi";
+import { useExplorer } from "../lib/ExplorerContext";
 
-interface ProtocolStatsProps {
-  apiUrl: string;
-  fetchImpl?: FetchLike;
-}
+export function ProtocolStats() {
+  const { stats, statsLoading, statsError } = useExplorer();
 
-type State =
-  | { phase: "loading" }
-  | { phase: "error"; message: string }
-  | { phase: "ok"; stats: StatsResponse };
-
-export function ProtocolStats({ apiUrl, fetchImpl }: ProtocolStatsProps) {
-  const [state, setState] = useState<State>({ phase: "loading" });
-
-  useEffect(() => {
-    const ac = new AbortController();
-    fetchStats(apiUrl, { fetchImpl, signal: ac.signal })
-      .then((stats) => setState({ phase: "ok", stats }))
-      .catch((err: unknown) => {
-        if (ac.signal.aborted) return;
-        setState({ phase: "error", message: String(err) });
-      });
-    return () => ac.abort();
-  }, [apiUrl, fetchImpl]);
-
-  if (state.phase === "loading") {
+  if (statsLoading) {
     return (
       <section data-testid="protocol-stats">
         <p data-testid="protocol-stats-loading">Loading stats…</p>
       </section>
     );
   }
-  if (state.phase === "error") {
+  if (statsError || stats == null) {
     return (
       <section data-testid="protocol-stats">
-        <p data-testid="protocol-stats-error">{state.message}</p>
+        <p data-testid="protocol-stats-error">{statsError ?? "No stats available."}</p>
       </section>
     );
   }
-
-  const { stats } = state;
 
   return (
     <section data-testid="protocol-stats" className="protocol-stats">

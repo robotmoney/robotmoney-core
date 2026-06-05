@@ -1,5 +1,5 @@
 /**
- * Component + lib tests — LandingPriceStrip (issue #482).
+ * Component + lib tests — LandingPriceStrip (issue #482, #612).
  *
  * Covers acceptance criteria (mocked complement to the fork tests):
  *   - Decimal-math conversion is correct for every pair's decimal delta
@@ -10,21 +10,44 @@
  *   - Pool addresses are read from config/dex-pools.json, not hardcoded in TS,
  *     and the devnet override map is honored for the devnet chain id (AC §3).
  *   - data-testid attributes follow the landing-* convention (AC §11).
+ *   - LandingPriceStrip container reads blockNumber from ExplorerContext
+ *     rather than wagmi useBlockNumber, keeping freshness in sync with
+ *     VaultCards (issue #612).
  *
  * The pure LandingPriceStripView is rendered directly — no wagmi/QueryClient
  * fixture — so decimal-math and error isolation are tested without RPC. The
  * forked-chain integration + Playwright tests are the primary verification path
  * for live prices (they must NOT mock RPC); these are the complement.
+ *
+ * Container tests wrap LandingPriceStrip in ExplorerProvider with a mocked
+ * fetchImpl — asserting the freshness chip reflects the indexer block number.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "./helpers/render";
 import {
+  LandingPriceStrip,
   LandingPriceStripView,
   cellTestId,
   type PriceCellState,
 } from "../../src/components/LandingPriceStrip";
+import { ExplorerContext } from "../../src/lib/ExplorerContext";
 import { sqrtPriceX96ToPrice } from "../../src/lib/uniswapV3";
 import { DEVNET_CHAIN_ID, PRICE_STRIP_PAIRS, resolvePoolConfig } from "../../src/lib/dexPools";
+
+// Wagmi mock — applies to the container tests that render LandingPriceStrip
+// directly. The pure LandingPriceStripView tests are unaffected because the
+// view component imports no wagmi hooks. The real WagmiProvider in
+// render.tsx/TestProviders is preserved via vi.importActual (see render.tsx).
+vi.mock("wagmi", () => ({
+  useChainId: () => 8453,
+  useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
+  // Stubs for transitively-imported wagmi symbols in lib/wagmi.ts:
+  createConfig: () => ({}),
+  http: () => ({}),
+  fallback: (...args: unknown[]) => args[0],
+  unstable_connector: () => ({}),
+}));
+
 
 // A sqrtPriceX96 with rawRatio (token1/token0) == 1 exactly:
 // sqrt(1) * 2^96 == 2^96.
@@ -180,5 +203,49 @@ describe("LandingPriceStrip reads pool addresses from config", () => {
 
   it("returns undefined for an unknown pair so the cell can isolate", () => {
     expect(resolvePoolConfig("does-not-exist", 8453)).toBeUndefined();
+  });
+});
+
+// ─── Container wiring tests (issue #612) ──────────────────────────────────────
+//
+// These tests mount the LandingPriceStrip container (not the pure view) with a
+// controlled ExplorerContext value, asserting that the freshness chip reflects
+// the indexer's block_number rather than wagmi's chain-head block.
+//
+// ExplorerContext is injected directly via <ExplorerContext.Provider value={...}>
+// so tests control blockNumber precisely without a running ExplorerProvider or
+// live /v1/vaults fetch. The wagmi hooks (useChainId, useReadContract) are
+// handled by the TestProviders wrapper in render.tsx and return stub data —
+// cells show "…" which is acceptable; the block number chip is the focus.
+
+const EXPLORER_NULL_VALUE: import("../../src/lib/ExplorerContext").ExplorerContextValue = {
+  vaults: [],
+  stats: null,
+  blockNumber: null,
+  vaultsLoading: false,
+  statsLoading: false,
+  vaultsError: null,
+  statsError: null,
+};
+
+describe("LandingPriceStrip container — ExplorerContext blockNumber wiring (issue #612)", () => {
+  it("shows 'Block 99999' in the freshness chip when ExplorerContext.blockNumber is 99999", () => {
+    render(
+      <ExplorerContext.Provider value={{ ...EXPLORER_NULL_VALUE, blockNumber: 99999 }}>
+        <LandingPriceStrip />
+      </ExplorerContext.Provider>,
+    );
+    expect(screen.getByTestId("landing-price-strip-freshness").textContent).toBe("Block 99999");
+  });
+
+  it("shows 'Block —' in the freshness chip when ExplorerContext.blockNumber is null", () => {
+    // blockNumber: null means the indexer has not yet returned data.
+    // The freshness chip must render "Block —" (matching VaultCards behaviour).
+    render(
+      <ExplorerContext.Provider value={EXPLORER_NULL_VALUE}>
+        <LandingPriceStrip />
+      </ExplorerContext.Provider>,
+    );
+    expect(screen.getByTestId("landing-price-strip-freshness").textContent).toBe("Block —");
   });
 });

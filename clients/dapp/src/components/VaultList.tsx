@@ -7,15 +7,14 @@
  * risk_label, status badge, TVL (total_assets), exit_fee_bps, and
  * deposit_cap_headroom (deposit_cap − total_assets when both are present).
  *
- * Accepts an optional `fetchImpl` for unit-test injection (same pattern
- * as HistoryPane). Accepts an optional `onSelectVault` callback so the
- * parent can route to VaultDetail.
+ * Data comes from ExplorerContext (shared polling loop in main.tsx), so this
+ * component always displays the same block_number as VaultCards — no
+ * mixed-block state between the landing page and the Portfolio Explorer tab.
  *
  * issue #318 — protocol layer.
  */
-import { useEffect, useState } from "react";
-import type { FetchLike, VaultRow } from "../lib/explorerApi";
-import { fetchVaults } from "../lib/explorerApi";
+import type { VaultRow } from "../lib/explorerApi";
+import { useExplorer } from "../lib/ExplorerContext";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -24,15 +23,8 @@ const STATUS_LABEL: Record<number, string> = {
 };
 
 interface VaultListProps {
-  apiUrl: string;
-  fetchImpl?: FetchLike;
   onSelectVault?: (address: string) => void;
 }
-
-type State =
-  | { phase: "loading" }
-  | { phase: "error"; message: string }
-  | { phase: "ok"; vaults: readonly VaultRow[]; block_number: number };
 
 function headroom(vault: VaultRow): string | null {
   if (vault.total_assets == null) return null;
@@ -46,36 +38,23 @@ function headroom(vault: VaultRow): string | null {
   }
 }
 
-export function VaultList({ apiUrl, fetchImpl, onSelectVault }: VaultListProps) {
-  const [state, setState] = useState<State>({ phase: "loading" });
+export function VaultList({ onSelectVault }: VaultListProps) {
+  const { vaults, blockNumber, vaultsLoading, vaultsError } = useExplorer();
 
-  useEffect(() => {
-    const ac = new AbortController();
-    fetchVaults(apiUrl, { fetchImpl, signal: ac.signal })
-      .then((res) => setState({ phase: "ok", vaults: res.vaults, block_number: res.block_number }))
-      .catch((err: unknown) => {
-        if (ac.signal.aborted) return;
-        setState({ phase: "error", message: String(err) });
-      });
-    return () => ac.abort();
-  }, [apiUrl, fetchImpl]);
-
-  if (state.phase === "loading") {
+  if (vaultsLoading) {
     return (
       <section data-testid="vault-list">
         <p data-testid="vault-list-loading">Loading vaults…</p>
       </section>
     );
   }
-  if (state.phase === "error") {
+  if (vaultsError) {
     return (
       <section data-testid="vault-list">
-        <p data-testid="vault-list-error">{state.message}</p>
+        <p data-testid="vault-list-error">{vaultsError}</p>
       </section>
     );
   }
-
-  const { vaults, block_number } = state;
 
   return (
     <section data-testid="vault-list" className="vault-list">
@@ -116,7 +95,9 @@ export function VaultList({ apiUrl, fetchImpl, onSelectVault }: VaultListProps) 
           </tbody>
         </table>
       )}
-      <p data-testid="vault-list-freshness">Block {block_number}</p>
+      {blockNumber != null && (
+        <p data-testid="vault-list-freshness">Block {blockNumber}</p>
+      )}
     </section>
   );
 }
