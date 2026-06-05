@@ -14,12 +14,12 @@
  * Registration is decided by useAgentRegistration — see that file for the
  * agent-authorized localStorage flag and the vault-share-balance check.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAccount, useConnect } from "wagmi";
 import type { Address } from "viem";
 import { AdminFlow } from "./AdminFlow";
 import { OnboardingWizard } from "./OnboardingWizard";
-import { useAgentRegistration } from "../lib/useVaultRegistration";
+import { useAgentRegistration, markOnboardingDismissed, isOnboardingDismissed } from "../lib/useVaultRegistration";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import type { PreviewContext } from "../lib/preview";
 import { getInjectedProvider, syncDevnetChain } from "../lib/syncDevnetChain";
@@ -40,11 +40,32 @@ type Props = Readonly<{
 }>;
 
 export function AgentsPanel(props: Props) {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const { connect, connectors } = useConnect();
   const status = useAgentRegistration(props.vaultAddress);
   const [networkSyncError, setNetworkSyncError] = useState<string | undefined>(undefined);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
+
+  // localStorage-backed dismiss flag, keyed per wallet address.
+  // Initialised synchronously from localStorage so there is no wizard flash on
+  // subsequent page loads. Updated via storage events for cross-tab consistency.
+  const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(() => {
+    if (!address) return false;
+    return isOnboardingDismissed(address);
+  });
+  useEffect(() => {
+    if (!address) {
+      setOnboardingDismissed(false);
+      return;
+    }
+    const read = () => setOnboardingDismissed(isOnboardingDismissed(address));
+    read();
+    window.addEventListener("rm:onboarding-dismissed-changed", read);
+    window.addEventListener("storage", read);
+    return () => {
+      window.removeEventListener("rm:onboarding-dismissed-changed", read);
+      window.removeEventListener("storage", read);
+    };
+  }, [address]);
   // `VITE_FORCE_ONBOARDING=1` (build-time) is the documented operator
   // override; `?force-onboarding=1` (URL query) is the dapp-side hook
   // the issue-#261 Playwright e2e suite uses to drive the onboarding
@@ -115,7 +136,10 @@ export function AgentsPanel(props: Props) {
         ctx={ctx}
         env={props.flagEnv}
         now={props.now}
-        onDismiss={() => setOnboardingDismissed(true)}
+        onDismiss={() => {
+            if (address) markOnboardingDismissed(address);
+            setOnboardingDismissed(true);
+          }}
       />
     );
   }
