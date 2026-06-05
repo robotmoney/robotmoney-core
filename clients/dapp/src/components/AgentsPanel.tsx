@@ -19,7 +19,11 @@ import { useAccount, useConnect } from "wagmi";
 import type { Address } from "viem";
 import { AdminFlow } from "./AdminFlow";
 import { OnboardingWizard } from "./OnboardingWizard";
-import { useAgentRegistration, markOnboardingDismissed, isOnboardingDismissed } from "../lib/useVaultRegistration";
+import {
+  useAgentRegistration,
+  markOnboardingDismissed,
+  isOnboardingDismissed,
+} from "../lib/useVaultRegistration";
 import type { VerificationState } from "../lib/useGatewayVerifier";
 import type { PreviewContext } from "../lib/preview";
 import { getInjectedProvider, syncDevnetChain } from "../lib/syncDevnetChain";
@@ -137,9 +141,9 @@ export function AgentsPanel(props: Props) {
         env={props.flagEnv}
         now={props.now}
         onDismiss={() => {
-            if (address) markOnboardingDismissed(address);
-            setOnboardingDismissed(true);
-          }}
+          if (address) markOnboardingDismissed(address);
+          setOnboardingDismissed(true);
+        }}
       />
     );
   }
