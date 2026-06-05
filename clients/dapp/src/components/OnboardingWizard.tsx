@@ -365,7 +365,8 @@ export function OnboardingWizard(props: Props) {
                       {usdcDripStatus.kind === "pending" && "USDC: dripping…"}
                       {usdcDripStatus.kind === "success" &&
                         `USDC: sent (tx ${usdcDripStatus.hash})`}
-                      {usdcDripStatus.kind === "error" && `USDC: failed — ${usdcDripStatus.message}`}
+                      {usdcDripStatus.kind === "error" &&
+                        `USDC: failed — ${usdcDripStatus.message}`}
                     </p>
                   )}
                   {ethDripStatus.kind !== "idle" && (
