@@ -18,13 +18,18 @@ import { ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type { FetchLike, VaultsResponse, StatsResponse } from "../../src/lib/explorerApi";
 
 /** URL-routing fetchImpl for ExplorerProvider: vaults → vaultsFixture, stats → statsFixture. */
-function makeExplorerFetch(
-  vaults: VaultsResponse,
-  stats: StatsResponse | null = null,
-): FetchLike {
+function makeExplorerFetch(vaults: VaultsResponse, stats: StatsResponse | null = null): FetchLike {
   return vi.fn(async (url: string) => {
     const isStats = typeof url === "string" && url.includes("/v1/stats");
-    const body = isStats ? (stats ?? { total_tvl: "0", unique_depositors: 0, activity_feed: [], block_number: 1, indexed_at: "" }) : vaults;
+    const body = isStats
+      ? (stats ?? {
+          total_tvl: "0",
+          unique_depositors: 0,
+          activity_feed: [],
+          block_number: 1,
+          indexed_at: "",
+        })
+      : vaults;
     return { ok: true as const, status: 200, json: async () => body };
   }) as unknown as FetchLike;
 }
@@ -193,7 +198,17 @@ describe("VaultCards — TVL display and polling", () => {
     const fetchImpl: FetchLike = vi.fn(async (url: string) => {
       const isStats = typeof url === "string" && url.includes("/v1/stats");
       if (isStats) {
-        return { ok: true as const, status: 200, json: async () => ({ total_tvl: "0", unique_depositors: 0, activity_feed: [], block_number: 1, indexed_at: "" }) };
+        return {
+          ok: true as const,
+          status: 200,
+          json: async () => ({
+            total_tvl: "0",
+            unique_depositors: 0,
+            activity_feed: [],
+            block_number: 1,
+            indexed_at: "",
+          }),
+        };
       }
       return {
         ok: true as const,

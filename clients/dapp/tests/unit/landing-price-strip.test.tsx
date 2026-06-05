@@ -48,7 +48,6 @@ vi.mock("wagmi", () => ({
   unstable_connector: () => ({}),
 }));
 
-
 // A sqrtPriceX96 with rawRatio (token1/token0) == 1 exactly:
 // sqrt(1) * 2^96 == 2^96.
 const SQRT_RATIO_ONE = 2n ** 96n;

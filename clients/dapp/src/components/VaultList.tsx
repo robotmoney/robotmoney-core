@@ -95,9 +95,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
           </tbody>
         </table>
       )}
-      {blockNumber != null && (
-        <p data-testid="vault-list-freshness">Block {blockNumber}</p>
-      )}
+      {blockNumber != null && <p data-testid="vault-list-freshness">Block {blockNumber}</p>}
     </section>
   );
 }
