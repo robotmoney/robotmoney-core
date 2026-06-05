@@ -54,15 +54,21 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
       fetchProposals(apiUrl, opts),
       fetchVaults(apiUrl, opts),
     ])
-      .then(([weights, proposals, vaultsResp]: [RouterWeightsResponse, ProposalsResponse, VaultsResponse]) => {
-        const pendingProposal = proposals.proposals.find((p) => p.status === "open") ?? null;
-        // Build a map from lower-cased vault address → display name.
-        const vaultNames: Record<string, string> = {};
-        for (const v of vaultsResp.vaults) {
-          vaultNames[v.address.toLowerCase()] = v.name;
-        }
-        setState({ phase: "ok", weights, pendingProposal, vaultNames });
-      })
+      .then(
+        ([weights, proposals, vaultsResp]: [
+          RouterWeightsResponse,
+          ProposalsResponse,
+          VaultsResponse,
+        ]) => {
+          const pendingProposal = proposals.proposals.find((p) => p.status === "open") ?? null;
+          // Build a map from lower-cased vault address → display name.
+          const vaultNames: Record<string, string> = {};
+          for (const v of vaultsResp.vaults) {
+            vaultNames[v.address.toLowerCase()] = v.name;
+          }
+          setState({ phase: "ok", weights, pendingProposal, vaultNames });
+        },
+      )
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
         setState({ phase: "error", message: String(err) });
@@ -107,8 +113,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
    * Weight source label: "Effective (voted)" when a governance proposal
    * is active (status == "open"); "Effective (default)" otherwise.
    */
-  const weightSourceLabel =
-    pendingProposal != null ? "Effective (voted)" : "Effective (default)";
+  const weightSourceLabel = pendingProposal != null ? "Effective (voted)" : "Effective (default)";
 
   return (
     <section data-testid="router-view" className="router-view">
@@ -133,9 +138,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
             <tbody>
               {weights.current_weights.map((w) => (
                 <tr key={w.vault} data-testid="router-view-weight-row">
-                  <td data-testid="router-view-weight-vault">
-                    {resolveVaultName(w.vault)}
-                  </td>
+                  <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
                   <td data-testid="router-view-weight-bps">
                     <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
                     {" bps ("}
@@ -203,8 +206,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                 <td>
                   {entry.weights
                     .map(
-                      (w) =>
-                        `${resolveVaultName(w.vault)}: ${w.bps}bps (${bpsToPercent(w.bps)})`,
+                      (w) => `${resolveVaultName(w.vault)}: ${w.bps}bps (${bpsToPercent(w.bps)})`,
                     )
                     .join(", ")}
                 </td>

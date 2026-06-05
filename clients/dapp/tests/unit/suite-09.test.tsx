@@ -475,10 +475,7 @@ describe("RouterView", () => {
       indexed_at: "2026-01-01T12:00:00Z",
     };
     const { getByTestId, queryByTestId } = render(
-      <RouterView
-        apiUrl="http://api"
-        fetchImpl={makeRouterFetch(emptyWeights)}
-      />,
+      <RouterView apiUrl="http://api" fetchImpl={makeRouterFetch(emptyWeights)} />,
     );
     await waitFor(() => expect(getByTestId("router-view-weights-empty")).toBeTruthy());
     expect(queryByTestId("router-view-weights-table")).toBeNull();
