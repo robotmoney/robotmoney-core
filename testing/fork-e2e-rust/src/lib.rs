@@ -542,8 +542,9 @@ impl ForkFixture {
     }
 
     /// Connect to a shared Geth+Lighthouse devnet at `url`. No anvil is spawned.
-    /// USDC storage is pre-seeded in the genesis alloc so `apply_usdc_storage_seed`
-    /// is a no-op (admin slot already non-zero).
+    /// USDC storage is pre-seeded in the genesis alloc (genesis-alloc.json loaded
+    /// via docker-compose.alloc.yaml), so `apply_usdc_storage_seed` is NOT called
+    /// — Geth does not support `anvil_setStorageAt`.
     fn new_testnet(url: &str) -> Result<Self, HarnessError> {
         let rpc = Rpc::new(url);
         let block = rpc.block_number()?;
@@ -551,18 +552,14 @@ impl ForkFixture {
             block,
             source: PinSource::LatestMinusN,
         };
-        let fx = ForkFixture {
+        Ok(ForkFixture {
             backend: None,
             rpc_url: url.to_string(),
             rpc_label: sanitize_rpc_label(url),
             pin,
             rpc,
             tx_hashes: Mutex::new(Vec::new()),
-        };
-        // apply_usdc_storage_seed is a no-op when the admin slot is already set
-        // (which it is on a devnet booted from genesis-alloc.json).
-        fx.apply_usdc_storage_seed()?;
-        Ok(fx)
+        })
     }
 
     /// Fund `to` with ETH and USDC by sending signed transactions from

@@ -110,11 +110,13 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Boot Geth+Lighthouse devnet
+      - name: Boot Geth+Lighthouse devnet (with genesis alloc overlay)
         working-directory: testing/ethereum-testnet/config
+        env:
+          SMOKE_GENESIS_ALLOC_FILE: ${{ github.workspace }}/testing/fixtures/fork-state/genesis-alloc.json
         run: |
           BOOT_START=$(date +%s)
-          docker compose up -d
+          docker compose -f docker-compose.yaml -f docker-compose.alloc.yaml up -d
           echo "Waiting for Geth RPC to be ready..."
           until curl -sf -X POST -H 'Content-Type: application/json' \
             --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
