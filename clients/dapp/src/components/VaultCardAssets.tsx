@@ -128,22 +128,19 @@ export function VaultCardAssets({ vaultAddress, riskLabel, status }: VaultCardAs
       >
         Assets
       </button>
-      {expanded && (
-        <>
-          {isBasket ? (
-            <BasketShortlistPanel vaultAddress={vaultAddress} />
-          ) : isStableYield ? (
-            <ul data-testid="vault-card-assets-panel">
-              <AssetRow token="0x0000000000000000000000000000000000000000" label="USDC" />
-            </ul>
-          ) : (
-            /* Inactive SPECULATIVE (RWA placeholder) */
-            <ul data-testid="vault-card-assets-panel">
-              <AssetRow token="0x0000000000000000000000000000000000000000" label="deSPXA" />
-            </ul>
-          )}
-        </>
-      )}
+      {expanded &&
+        (isBasket ? (
+          <BasketShortlistPanel vaultAddress={vaultAddress} />
+        ) : isStableYield ? (
+          <ul data-testid="vault-card-assets-panel">
+            <AssetRow token="0x0000000000000000000000000000000000000000" label="USDC" />
+          </ul>
+        ) : (
+          /* Inactive SPECULATIVE (RWA placeholder) */
+          <ul data-testid="vault-card-assets-panel">
+            <AssetRow token="0x0000000000000000000000000000000000000000" label="deSPXA" />
+          </ul>
+        ))}
     </div>
   );
 }
