@@ -100,13 +100,11 @@ export function FaucetTabView(props: Props) {
 
   const harnessRmFunded =
     props.harnessRmBalance !== undefined && props.harnessRmBalance >= FAUCET_DRIP_AMOUNT_RM;
-  const canDripRm =
-    validRecipient && harnessRmFunded && !harnessBusy && !!props.rmTokenAddress;
+  const canDripRm = validRecipient && harnessRmFunded && !harnessBusy && !!props.rmTokenAddress;
 
   const harnessEthFunded =
     props.harnessEthBalance !== undefined && props.harnessEthBalance >= FAUCET_DRIP_AMOUNT_ETH;
-  const canDripEth =
-    validRecipient && harnessEthFunded && !harnessBusy && !!props.dripEth;
+  const canDripEth = validRecipient && harnessEthFunded && !harnessBusy && !!props.dripEth;
 
   const onDrip = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -164,13 +162,12 @@ export function FaucetTabView(props: Props) {
     setHarnessBusy(true);
     const recipient = getAddress(selected);
     harnessQueueRef.current = harnessQueueRef.current.then(() =>
-      props
-        .dripEth!({
-          recipient,
-          provider,
-          harnessPrivateKey: props.harnessPrivateKey as Hex,
-          chainId: props.chainId,
-        })
+      props.dripEth!({
+        recipient,
+        provider,
+        harnessPrivateKey: props.harnessPrivateKey as Hex,
+        chainId: props.chainId,
+      })
         .then((hash) => {
           setEthStatus({ kind: "success", hash });
           setHarnessBusy(false);
@@ -204,14 +201,13 @@ export function FaucetTabView(props: Props) {
     const recipient = getAddress(selected);
     const rmTokenAddress = props.rmTokenAddress;
     harnessQueueRef.current = harnessQueueRef.current.then(() =>
-      props
-        .dripRm!({
-          rmTokenAddress,
-          recipient,
-          provider,
-          harnessPrivateKey: props.harnessPrivateKey as Hex,
-          chainId: props.chainId,
-        })
+      props.dripRm!({
+        rmTokenAddress,
+        recipient,
+        provider,
+        harnessPrivateKey: props.harnessPrivateKey as Hex,
+        chainId: props.chainId,
+      })
         .then((hash) => {
           setRmStatus({ kind: "success", hash });
           setHarnessBusy(false);

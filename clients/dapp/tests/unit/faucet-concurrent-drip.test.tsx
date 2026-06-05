@@ -22,10 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "./helpers/render";
 import type { Hex } from "viem";
 import { FaucetTabView } from "../../src/components/FaucetTabView";
-import {
-  FAUCET_DRIP_AMOUNT_ETH,
-  FAUCET_DRIP_AMOUNT_USDC,
-} from "../../src/lib/chainClassifier";
+import { FAUCET_DRIP_AMOUNT_ETH, FAUCET_DRIP_AMOUNT_USDC } from "../../src/lib/chainClassifier";
 import type { DripEthArgs, DripUsdcArgs } from "../../src/lib/faucetClient";
 
 const USDC = "0x4444444444444444444444444444444444444444" as const;
