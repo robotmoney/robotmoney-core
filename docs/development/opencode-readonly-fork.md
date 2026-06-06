@@ -4,7 +4,7 @@
 > (Phase 4, Agent-Harness Installation and Skill Loading).
 > ADR: [`docs/technical/mcp-decision.md`](../technical/mcp-decision.md) — MCP
 > deferred; harnesses run `rmpc` as a process-per-call shell command.
-> Skill package: [`plugins/robotmoney-cli/`](../../plugins/robotmoney-cli/).
+> Skill package: [`plugins/robotmoney-user/`](../../plugins/robotmoney-user/).
 > Implements: issue #53.
 >
 > Every command, flag, and config field referenced in this document is
@@ -15,7 +15,7 @@
 > before opening a PR — drift fails CI.
 
 This walkthrough sets up [OpenCode](https://github.com/sst/opencode) with
-the Robot Money skill (`plugins/robotmoney-cli/`) and runs a read-only
+the Robot Money skill (`plugins/robotmoney-user/`) and runs a read-only
 inspection against a forked Base mainnet anvil. It also exercises the
 documented refusal envelope so you know what failure looks like before you
 ever sign a write.
@@ -112,10 +112,10 @@ than crashing. This is the **expected** read-only fork shape.
 ## Step 4 — Register the skill with OpenCode
 
 OpenCode loads skill packages from a configured plugins directory.
-Register `plugins/robotmoney-cli/` and start an OpenCode session:
+Register `plugins/robotmoney-user/` and start an OpenCode session:
 
 ```bash
-opencode --plugin "$PWD/plugins/robotmoney-cli"
+opencode --plugin "$PWD/plugins/robotmoney-user"
 ```
 
 If OpenCode is not installed, skip to step 5 and run the commands
@@ -129,7 +129,7 @@ shell-tool execution.
 
 Use this prompt with OpenCode (or paste the commands into your shell):
 
-> **Prompt:** "Using the robotmoney-cli skill, inspect the Robot Money
+> **Prompt:** "Using the robotmoney-user skill, inspect the Robot Money
 > vault on the configured fork. Run `get-vault` and `get-gateway` with
 > `--config ./rmpc-fork.toml --pretty`. Do not propose any writes; this
 > is a read-only inspection."
@@ -156,7 +156,7 @@ Expected envelope shape (per
 ## Step 6 — Trigger the documented refusal case
 
 The skill's safety story (see
-[`plugins/robotmoney-cli/skills/robotmoney-cli/references/safety.md`](../../plugins/robotmoney-cli/skills/robotmoney-cli/references/safety.md))
+[`plugins/robotmoney-user/skills/robotmoney-user/references/safety.md`](../../plugins/robotmoney-user/skills/robotmoney-user/references/safety.md))
 promises a structured refusal envelope when an unsupported subcommand is
 invoked. Confirm it directly:
 
@@ -192,7 +192,7 @@ a Rust test crate that runs in CI on every PR via
 |---|---|
 | `opencode_parity::every_documented_subcommand_exists_in_rmpc_help` | Every `rmpc <sub>` token in this doc resolves against `rmpc --help`. |
 | `opencode_parity::every_documented_flag_exists_on_some_rmpc_subcommand` | Every `--flag` in this doc resolves against some `rmpc` subcommand. |
-| `opencode_parity::skill_package_referenced_and_files_exist` | This doc points at `plugins/robotmoney-cli/` and the referenced files exist. |
+| `opencode_parity::skill_package_referenced_and_files_exist` | This doc points at `plugins/robotmoney-user/` and the referenced files exist. |
 | `opencode_config::fixture_parses_with_rmpc_config_loader` | The `rmpc-fork.toml.template` shipped under `fixtures/opencode/` deserializes with `rust_payment_client::config::Config`. |
 | `opencode_refusal::unknown_subcommand_refuses_with_nonzero_exit` | `rmpc not-a-real-subcommand` exits non-zero with stderr text — the structured refusal contract step 6 documents. |
 | `opencode_read_only::get_vault_against_fork` *(skip-clean without `RMPC_FORK_RPC_URL`)* | Boots anvil against the same fork URL, runs `rmpc get-vault` against it, asserts the envelope contract (`chain_id`, `block_number`, `source`). |

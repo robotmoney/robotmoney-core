@@ -48,7 +48,7 @@ on:
     branches: [main, dev]
     paths:
       - "testing/openclaw-config/**"
-      - "plugins/robotmoney-cli/**"
+      - "plugins/robotmoney-user/**"
       - "docs/development/openclaw-config.md"
       - ".github/workflows/suite-12-openclaw.yml"
   workflow_dispatch:

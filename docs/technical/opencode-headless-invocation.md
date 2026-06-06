@@ -116,7 +116,7 @@ ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
 ```bash
 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
   opencode run \
-    "Using the robotmoney-cli skill, run: rmpc --help. Print the subcommand list and exit." \
+    "Using the robotmoney-user skill, run: rmpc --help. Print the subcommand list and exit." \
     --format json \
     --model anthropic/claude-sonnet-4-5 \
     --dangerously-skip-permissions \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run-tests.sh — offline CI tests for the regime-classifier plugin.
+# run-tests.sh — offline CI tests for the robotmoney-analyst plugin.
 #
-# Canonical docs: plugins/regime-classifier/skills/regime-classifier/SKILL.md
+# Canonical docs: plugins/robotmoney-analyst/skills/robotmoney-analyst/SKILL.md
 #
 # Runs without network access. All tests use fixture files under test/fixtures/.
 # Exit code 0 iff all tests pass.
@@ -19,16 +19,16 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-echo "=== regime-classifier tests ==="
+echo "=== robotmoney-analyst tests ==="
 
 # ---------- 1. plugin.json parses and name is correct ----------
 echo ""
-echo "--- test: plugin.json valid JSON and name=regime-classifier ---"
+echo "--- test: plugin.json valid JSON and name=robotmoney-analyst ---"
 plugin_name=$(jq -r '.name' "$PLUGIN_DIR/plugin.json" 2>/dev/null) || { fail "plugin.json does not parse as JSON"; }
-if [[ "$plugin_name" == "regime-classifier" ]]; then
-  pass "plugin name is 'regime-classifier'"
+if [[ "$plugin_name" == "robotmoney-analyst" ]]; then
+  pass "plugin name is 'robotmoney-analyst'"
 else
-  fail "plugin name is '$plugin_name', expected 'regime-classifier'"
+  fail "plugin name is '$plugin_name', expected 'robotmoney-analyst'"
 fi
 
 # ---------- 2. shellcheck ----------

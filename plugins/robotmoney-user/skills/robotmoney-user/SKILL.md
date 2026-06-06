@@ -1,5 +1,5 @@
 ---
-name: robotmoney-cli
+name: robotmoney-user
 description: >
   Use the `rmpc` Rust client to interact with the Robot Money vault and policy
   gateway from an agent runtime. Use this skill when the user asks to:
@@ -18,7 +18,7 @@ description: >
   pause) does not pass.
 ---
 
-# robotmoney-cli (`rmpc`)
+# robotmoney-user (`rmpc`)
 
 > **Experimental — pre-v1.0.** Command syntax, flags, and output shapes can
 > change. Verify every transaction. Default to fork/devnet; mainnet must be an

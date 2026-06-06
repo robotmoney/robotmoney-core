@@ -274,7 +274,7 @@ def assert_final_report_refused(report_path: Path, expected_reason: str) -> list
 # ── Plugin-provenance assertion (issue #461) ──────────────────────────────────
 
 
-PLUGIN_DIR_NAME = "plugins/robotmoney-cli"
+PLUGIN_DIR_NAME = "plugins/robotmoney-user"
 
 # Path fragments that identify ambient/global opencode plugin installs.
 # These are the locations opencode and bun use by convention; any plugin
@@ -292,14 +292,14 @@ AMBIENT_PLUGIN_PATTERNS: list[str] = [
 
 def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
     """Walk a parsed JSON event and collect every string value that mentions
-    ``plugins/robotmoney-cli`` (the in-repo plugin manifest directory).
+    ``plugins/robotmoney-user`` (the in-repo plugin manifest directory).
 
     OpenCode's NDJSON schema is not formally versioned, so we accept any field
     name. The fixture and CI integration expect a session/startup-style event
     such as ``{"type": "session.created", "plugin_paths": ["..."]}`` or a
     dedicated ``{"type": "plugin.loaded", "path": "..."}`` event; either form
     satisfies provenance as long as one collected string resolves to
-    ``$GITHUB_WORKSPACE/plugins/robotmoney-cli``.
+    ``$GITHUB_WORKSPACE/plugins/robotmoney-user``.
     """
     if isinstance(obj, str):
         if PLUGIN_DIR_NAME in obj:
@@ -316,10 +316,10 @@ def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
 
 def assert_plugin_provenance(events: list[dict]) -> list[str]:
     """Assert that the transcript carries a plugin-load event whose resolved
-    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-cli``.
+    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-user``.
 
     Outside CI ``GITHUB_WORKSPACE`` may be unset; in that case we accept any
-    absolute path whose trailing segment is ``plugins/robotmoney-cli``. This
+    absolute path whose trailing segment is ``plugins/robotmoney-user``. This
     keeps developer-machine reruns workable while still rejecting ambient
     plugin paths in CI (where ``GITHUB_WORKSPACE`` is always populated).
     """
@@ -337,8 +337,8 @@ def assert_plugin_provenance(events: list[dict]) -> list[str]:
         failures.append(
             "FAIL (P): no event references the in-repo plugin path "
             f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
-            '--plugin "$PWD/plugins/robotmoney-cli" so CI exercises the '
-            "manifest at plugins/robotmoney-cli/plugin.json instead of an "
+            '--plugin "$PWD/plugins/robotmoney-user" so CI exercises the '
+            "manifest at plugins/robotmoney-user/plugin.json instead of an "
             "ambient/global opencode plugin."
         )
         return failures
@@ -353,7 +353,7 @@ def assert_plugin_provenance(events: list[dict]) -> list[str]:
                     f"opencode plugin location {pattern!r}. The opencode "
                     "session must load the plugin from the in-repo "
                     f"{PLUGIN_DIR_NAME} directory via "
-                    '--plugin "$PWD/plugins/robotmoney-cli", not from a '
+                    '--plugin "$PWD/plugins/robotmoney-user", not from a '
                     "global install."
                 )
                 break
@@ -461,7 +461,7 @@ def main() -> int:
                 f"and contains {args.expect_refusal!r}."
             )
         print("OK: no forbidden explorer/dapp hosts in transcript.")
-        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
+        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
 
     else:
         # ── Happy-path mode (issue #137) ───────────────────────────────────────
@@ -485,7 +485,7 @@ def main() -> int:
         if args.final_report is not None:
             print("OK: final-report.json outcome=deposited, tx_hash is non-null hex.")
         print("OK: no forbidden explorer/dapp hosts in transcript.")
-        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
+        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
 
     return 0
 

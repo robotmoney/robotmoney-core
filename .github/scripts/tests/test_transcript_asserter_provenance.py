@@ -74,9 +74,9 @@ def test_read_ambient_plugin_fails() -> None:
 
 def test_deposit_workspace_strict_match() -> None:
     """When GITHUB_WORKSPACE is set, a path outside it must be rejected even
-    though it ends in ``plugins/robotmoney-cli``.
+    though it ends in ``plugins/robotmoney-user``.
     """
-    # The repo fixture path is /workspace/plugins/robotmoney-cli; setting
+    # The repo fixture path is /workspace/plugins/robotmoney-user; setting
     # GITHUB_WORKSPACE to a different root should fail the strict match.
     result = _run(
         DEPOSIT,

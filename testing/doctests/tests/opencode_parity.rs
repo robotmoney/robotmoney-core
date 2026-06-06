@@ -11,7 +11,7 @@
 //! 2. Every `--flag` token mentioned in formatted code inside the
 //!    walkthrough must exist on some `rmpc` subcommand's `--help`.
 //! 3. The walkthrough must reference the skill package at
-//!    `plugins/robotmoney-cli/`, and every relative-path file it links
+//!    `plugins/robotmoney-user/`, and every relative-path file it links
 //!    to must exist on disk.
 
 use std::collections::BTreeSet;
@@ -285,17 +285,17 @@ fn every_documented_flag_exists_on_some_rmpc_subcommand() {
 fn skill_package_referenced_and_files_exist() {
     let text = doc_text();
     assert!(
-        text.contains("plugins/robotmoney-cli/"),
-        "walkthrough must reference plugins/robotmoney-cli/"
+        text.contains("plugins/robotmoney-user/"),
+        "walkthrough must reference plugins/robotmoney-user/"
     );
 
-    // Pull every `plugins/robotmoney-cli/...` and `testing/...` path
+    // Pull every `plugins/robotmoney-user/...` and `testing/...` path
     // mention out of the doc text and assert each exists on disk.
     let cleaned = text.replace('`', "");
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for tok in cleaned.split(|c: char| c.is_whitespace() || "()[]<>".contains(c)) {
         let stripped = tok.trim_end_matches(|c: char| ".,;:!?\"'".contains(c));
-        for prefix in ["plugins/robotmoney-cli/", "testing/doctests/"] {
+        for prefix in ["plugins/robotmoney-user/", "testing/doctests/"] {
             if let Some(_rest) = stripped.strip_prefix(prefix) {
                 if stripped.contains('.') || stripped.ends_with('/') {
                     paths.insert(stripped.to_string());
