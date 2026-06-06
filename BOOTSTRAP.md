@@ -37,11 +37,94 @@ rmpc --version
 
 ## 2. Register the Robot Money skill with your agent runtime
 
-The plugin lives at `plugins/robotmoney-cli/` in the repo. Register it the way your runtime expects:
+The Robot Money skill packages live under `plugins/` in this repo. Choose the block
+for your runtime and run it verbatim — no manual config-file editing is needed.
 
-- **OpenCode:** the skill is a SKILL.md + references bundle loaded via the Skill tool. Clone the repo so the agent can read `plugins/robotmoney-cli/skills/robotmoney-cli/SKILL.md` and its `references/` directory. No plugin registration command is needed — the agent references the skill files directly.
-- **Claude Code:** add `plugins/robotmoney-cli` as a plugin in your Claude Code config (no separate clone needed if you already built from source).
-- **OpenClaw:** set `RMPC_BIN` to the installed `rmpc` path so the default harness resolves it; the plugin is not loaded the same way — the harness invokes `rmpc` directly.
+There are two plugins:
+
+- **`robotmoney-user`** — depositor agent: vault/gateway reads, deposit, and self-check.
+  Install this unless you are setting up an investment-committee (analyst) agent.
+- **`robotmoney-analyst`** — analyst agent: regime snapshot, governance reads, and
+  proposal/vote stubs. Install this when setting up an investment-committee agent.
+
+The blocks below install `robotmoney-user`. Replace every occurrence of
+`robotmoney-user` with `robotmoney-analyst` in all commands and paths if you are
+setting up an analyst agent.
+
+### OpenCode
+
+```bash
+# From the repo root — registers the local plugin directory and writes the entry
+# into .opencode/opencode.json in the current directory.
+opencode plugin "file:./plugins/robotmoney-user"
+```
+
+`opencode plugin "file:<path>"` reads `plugins/robotmoney-user/package.json` and
+the skill bundle under `skills/`, writes the plugin entry into the local
+`.opencode/opencode.json`, and makes the skill available in the next OpenCode
+session. The command exits 0 on success.
+
+### Claude Code
+
+```bash
+# From the repo root — registers the plugin dir for this Claude Code session.
+# For a persistent (user-scoped) install, append --scope user.
+claude --plugin-dir ./plugins/robotmoney-user
+```
+
+Alternatively, to register once and persist across all future sessions:
+
+```bash
+claude plugin marketplace add . --sparse plugins/robotmoney-user --scope user
+claude plugin install robotmoney-user --scope user
+```
+
+The `marketplace add` step reads `.claude-plugin/plugin.json` from the plugin
+directory and registers this repo as a local marketplace. `plugin install` then
+installs the named plugin. Both commands exit 0 on success.
+
+### OpenClaw
+
+```bash
+# Set RMPC_BIN to the installed rmpc binary, then start the harness.
+export RMPC_BIN="$(which rmpc)"
+export RMPC_CONFIG=/etc/openclaw/rmpc.toml
+export RMPC_NETWORK=fork
+bash testing/openclaw-config/openclaw_harness.sh
+```
+
+OpenClaw invokes `rmpc` directly; there is no plugin install command. The
+`RMPC_BIN` variable tells the harness where the binary lives. The skill's
+`SKILL.md` (at `plugins/robotmoney-user/skills/robotmoney-user/SKILL.md`) is the
+reference document for the session — point OpenClaw at that path if your harness
+supports an explicit skill-file argument.
+
+## 2.1 Verify the skill is callable (self-check)
+
+Run the block for your runtime immediately after §2 completes. Exit code 0 means
+the skill resolved and `rmpc` is reachable; non-zero means a step above failed.
+
+```bash
+# Works for all three runtimes — rmpc must be on PATH (§1).
+# Substitute the correct config filename from §3.
+rmpc --version
+# Expected: prints "rmpc <version>" and exits 0.
+# Non-zero exit or "command not found" → rmpc is not on PATH; recheck §1.
+echo "rmpc on PATH: $?"
+```
+
+For Claude Code and OpenCode you can also verify skill resolution directly:
+
+```bash
+# Claude Code — confirm the skill is listed.
+claude plugin list | grep robotmoney-user
+# Exits 0 and prints the plugin name when installed; non-zero when absent.
+
+# OpenCode — confirm the plugin appears in the loaded config.
+grep -q "robotmoney-user" .opencode/opencode.json && echo "skill registered" || echo "MISSING: re-run §2 OpenCode block"
+```
+
+A runtime that completes §2 and passes the §2.1 checks is ready for §3.
 
 ## 3. Write the operator config
 
