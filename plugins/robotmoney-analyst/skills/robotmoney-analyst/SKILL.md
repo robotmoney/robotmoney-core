@@ -40,6 +40,43 @@ history, or on-chain state — use the `robotmoney-user` skill for those.
 | JSON snapshot | https://www.robotmoney.net/data/regime-snapshot.json |
 | Update cadence | Daily (UTC midnight) |
 
+## Research datasources
+
+The skill uses two external datasources when evaluating or creating governance
+proposals. See [references/research-datasources.md](references/research-datasources.md)
+for field-level schema, update frequencies, stability annotations, and
+governance-decision interpretation guidance for each source.
+
+### when to consult
+
+#### https://www.robotmoney.net/regime
+
+- **Required before every `propose` transaction.** Fetch the regime page to
+  obtain the current regime bucket (`risk_on`, `neutral`, `risk_off`),
+  composite score, and sub-regime labels. Cite these fields verbatim in the
+  proposal rationale.
+- When the user asks about current market conditions or whether a weight
+  rebalance is appropriate.
+- When evaluating a third-party governance proposal — verify the cited regime
+  matches the current snapshot.
+
+#### https://analytics.robotmoney.net/projects
+
+- **Required before every `propose` transaction.** Check for active research
+  threads relevant to the vaults or signals targeted by the proposal. Cite any
+  relevant threads in the proposal rationale. If none apply, state "No active
+  research threads identified for the targeted vaults."
+- When the user asks about the analytical basis for a past or proposed weight
+  change.
+- When evaluating a third-party governance proposal — verify cited methodology
+  notes are consistent with the analytics page.
+
+## Worked examples
+
+See [references/examples.md](references/examples.md) for a complete trace:
+regime fetch → regime signal extraction → governance-proposal reasoning citing
+both datasources.
+
 ## Fetch helper
 
 Run the fetch helper to get the current snapshot:
