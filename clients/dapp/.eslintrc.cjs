@@ -20,15 +20,21 @@ module.exports = {
     // Types (guide §Types)
     "@typescript-eslint/no-explicit-any": "error",
     "@typescript-eslint/no-non-null-assertion": "error",
-    "@typescript-eslint/ban-ts-comment": ["error", {
-      "ts-ignore": true,
-      "ts-nocheck": true,
-      "ts-expect-error": "allow-with-description",
-    }],
-    "@typescript-eslint/consistent-type-assertions": ["error", {
-      assertionStyle: "as",
-      objectLiteralTypeAssertions: "never",
-    }],
+    "@typescript-eslint/ban-ts-comment": [
+      "error",
+      {
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "ts-expect-error": "allow-with-description",
+      },
+    ],
+    "@typescript-eslint/consistent-type-assertions": [
+      "error",
+      {
+        assertionStyle: "as",
+        objectLiteralTypeAssertions: "never",
+      },
+    ],
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
 
     // React (guide §Components, §Rendering)
@@ -48,45 +54,93 @@ module.exports = {
     // Components / banned patterns (guide §Components, §Dependencies)
     "no-restricted-syntax": [
       "error",
-      { selector: "TSEnumDeclaration", message: "Use string-literal unions, not enums (react-guide §Types)." },
-      { selector: "ExportDefaultDeclaration", message: "Named exports only (react-guide §Components)." },
-      { selector: "TSTypeReference[typeName.name='FC']", message: "Do not use React.FC (react-guide §Components)." },
-      { selector: "TSQualifiedName[left.name='React'][right.name='FC']", message: "Do not use React.FC (react-guide §Components)." },
-      { selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']", message: "dangerouslySetInnerHTML is banned (react-guide §Components)." },
-      { selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']", message: "No Math.random in render path; inject (react-guide §Prime directives)." },
-      { selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']", message: "No Date.now in render path; inject (react-guide §Prime directives)." },
+      {
+        selector: "TSEnumDeclaration",
+        message: "Use string-literal unions, not enums (react-guide §Types).",
+      },
+      {
+        selector: "ExportDefaultDeclaration",
+        message: "Named exports only (react-guide §Components).",
+      },
+      {
+        selector: "TSTypeReference[typeName.name='FC']",
+        message: "Do not use React.FC (react-guide §Components).",
+      },
+      {
+        selector: "TSQualifiedName[left.name='React'][right.name='FC']",
+        message: "Do not use React.FC (react-guide §Components).",
+      },
+      {
+        selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+        message: "dangerouslySetInnerHTML is banned (react-guide §Components).",
+      },
+      {
+        selector: "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+        message: "No Math.random in render path; inject (react-guide §Prime directives).",
+      },
+      {
+        selector: "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+        message: "No Date.now in render path; inject (react-guide §Prime directives).",
+      },
     ],
 
     // Dependencies (guide §Dependencies — banned)
-    "no-restricted-imports": ["error", {
-      paths: [
-        { name: "lodash", message: "Banned; write the one fn in lib/ (react-guide §Dependencies)." },
-        { name: "date-fns", message: "Banned; write the one fn in lib/ (react-guide §Dependencies)." },
-        { name: "redux", message: "Banned; use TanStack Query + useState (react-guide §Dependencies)." },
-        { name: "@reduxjs/toolkit", message: "Banned (react-guide §Dependencies)." },
-        { name: "zustand", message: "Banned (react-guide §Dependencies)." },
-        { name: "jotai", message: "Banned (react-guide §Dependencies)." },
-        { name: "mobx", message: "Banned (react-guide §Dependencies)." },
-        { name: "react-hook-form", message: "Banned; use native <form> (react-guide §Dependencies)." },
-        { name: "formik", message: "Banned; use native <form> (react-guide §Dependencies)." },
-        { name: "react-router", message: "Banned without an issue (react-guide §Dependencies)." },
-        { name: "react-router-dom", message: "Banned without an issue (react-guide §Dependencies)." },
-        { name: "@mui/material", message: "No UI kits (react-guide §Dependencies)." },
-        { name: "@chakra-ui/react", message: "No UI kits (react-guide §Dependencies)." },
-        { name: "@radix-ui/react", message: "No UI kits (react-guide §Dependencies)." },
-        { name: "framer-motion", message: "No animation libs (react-guide §Dependencies)." },
-      ],
-      patterns: [
-        { group: ["lodash/*"], message: "Banned (react-guide §Dependencies)." },
-        { group: ["@mui/*", "@chakra-ui/*", "@radix-ui/*", "@headlessui/*"], message: "No UI kits (react-guide §Dependencies)." },
-      ],
-    }],
+    "no-restricted-imports": [
+      "error",
+      {
+        paths: [
+          {
+            name: "lodash",
+            message: "Banned; write the one fn in lib/ (react-guide §Dependencies).",
+          },
+          {
+            name: "date-fns",
+            message: "Banned; write the one fn in lib/ (react-guide §Dependencies).",
+          },
+          {
+            name: "redux",
+            message: "Banned; use TanStack Query + useState (react-guide §Dependencies).",
+          },
+          { name: "@reduxjs/toolkit", message: "Banned (react-guide §Dependencies)." },
+          { name: "zustand", message: "Banned (react-guide §Dependencies)." },
+          { name: "jotai", message: "Banned (react-guide §Dependencies)." },
+          { name: "mobx", message: "Banned (react-guide §Dependencies)." },
+          {
+            name: "react-hook-form",
+            message: "Banned; use native <form> (react-guide §Dependencies).",
+          },
+          { name: "formik", message: "Banned; use native <form> (react-guide §Dependencies)." },
+          { name: "react-router", message: "Banned without an issue (react-guide §Dependencies)." },
+          {
+            name: "react-router-dom",
+            message: "Banned without an issue (react-guide §Dependencies).",
+          },
+          { name: "@mui/material", message: "No UI kits (react-guide §Dependencies)." },
+          { name: "@chakra-ui/react", message: "No UI kits (react-guide §Dependencies)." },
+          { name: "@radix-ui/react", message: "No UI kits (react-guide §Dependencies)." },
+          { name: "framer-motion", message: "No animation libs (react-guide §Dependencies)." },
+        ],
+        patterns: [
+          { group: ["lodash/*"], message: "Banned (react-guide §Dependencies)." },
+          {
+            group: ["@mui/*", "@chakra-ui/*", "@radix-ui/*", "@headlessui/*"],
+            message: "No UI kits (react-guide §Dependencies).",
+          },
+        ],
+      },
+    ],
   },
   overrides: [
     {
       // Playwright requires a default export for globalSetup.
       // Vitest workspace/config files also use default exports (Vitest convention).
-      files: ["tests/e2e/**/*.ts", "playwright.config.ts", "vite.config.ts", "vitest.config.ts", "vitest.workspace.ts"],
+      files: [
+        "tests/e2e/**/*.ts",
+        "playwright.config.ts",
+        "vite.config.ts",
+        "vitest.config.ts",
+        "vitest.workspace.ts",
+      ],
       rules: { "no-restricted-syntax": "off" },
     },
     {
