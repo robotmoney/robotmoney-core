@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/690ce3eb1d770c8624dfe2b7c8dc1fb69a34bcd3/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9e808f2f7800c85e3ff24c369198d3b25293db1f/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -352,6 +352,12 @@ Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST 
 ```solidity
 function maxWithdraw(address owner) public view override returns (uint256);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`owner`|`address`|The address whose share balance determines the withdrawal cap.|
+
 
 ### maxDeposit
 
@@ -372,6 +378,12 @@ Maximum shares that can be minted for `receiver` given current vault state.
 ```solidity
 function maxMint(address receiver) public view override returns (uint256);
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receiver`|`address`|The address that would receive the minted shares.|
+
 
 ### _grossToNet
 

@@ -1,5 +1,5 @@
 # _ISafeSetup
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/690ce3eb1d770c8624dfe2b7c8dc1fb69a34bcd3/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9e808f2f7800c85e3ff24c369198d3b25293db1f/contracts/test/SafeIntegration.t.sol)
 
 Used only to generate the `setup(...)` calldata for SafeProxyFactory.
 Not imported from a Safe library to keep the test self-contained.
