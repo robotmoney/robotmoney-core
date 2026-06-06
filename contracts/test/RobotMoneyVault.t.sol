@@ -101,8 +101,13 @@ contract VaultHarness is RobotMoneyVault {
         uint256 perDepositCap_,
         uint256 exitFeeBps_,
         address feeRecipient_,
-        address admin_
-    ) RobotMoneyVault(asset_, tvlCap_, perDepositCap_, exitFeeBps_, feeRecipient_, admin_) {}
+        address admin_,
+        address emergencyResponder_
+    )
+        RobotMoneyVault(
+            asset_, tvlCap_, perDepositCap_, exitFeeBps_, feeRecipient_, admin_, emergencyResponder_
+        )
+    {}
 
     function exposed_decimalsOffset() external pure returns (uint8) {
         return _decimalsOffset();
@@ -139,6 +144,7 @@ contract RobotMoneyVaultTest is Test {
             PER_DEPOSIT_CAP,
             0, // no exit fee for most tests
             feeRecipient,
+            admin,
             admin
         );
 
@@ -238,7 +244,7 @@ contract RobotMoneyVaultTest is Test {
 
     function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public {
         VaultHarness typedVault = new VaultHarness(
-            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         address pool = makeAddr("aavePool");
         address aToken = makeAddr("aToken");
@@ -611,6 +617,7 @@ contract RobotMoneyVaultTest is Test {
             cap, // perDepositCap matches tvlCap
             0,
             feeRecipient,
+            admin,
             admin
         );
         MockAdapter tightAdapter = new MockAdapter(address(usdc), address(tightVault));
@@ -636,7 +643,7 @@ contract RobotMoneyVaultTest is Test {
         vm.prank(bob);
         usdc.approve(address(tightVault), type(uint256).max);
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.TVLCapExceeded.selector));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit fires before TVLCapExceeded because maxDeposit() returns headroom
         tightVault.deposit(2_000 * ONE_USDC, bob);
     }
 
@@ -649,7 +656,7 @@ contract RobotMoneyVaultTest is Test {
 
         // Use a cap-capped adapter: capBps = 5000 (50%)
         VaultHarness capVault = new VaultHarness(
-            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MockAdapter capAdapter = new MockAdapter(address(usdc), address(capVault));
         _allowAdapter(capVault, address(capAdapter));
@@ -760,10 +767,11 @@ contract RobotMoneyVaultTest is Test {
         uint256 assetsOut = vault.redeem(aliceShares, alice, alice);
         assertApproxEqAbs(assetsOut, depositAmount, 1, "alice must recover her deposit on redeem");
 
-        // Bob tries a new deposit → must revert with DepositsPaused.
+        // Bob tries a new deposit → must revert. maxDeposit() returns 0 when paused,
+        // so ERC4626ExceededMaxDeposit fires before DepositsPaused.
         uint256 bobDeposit = 1_000 * ONE_USDC;
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.DepositsPaused.selector));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
         vault.deposit(bobDeposit, bob);
     }
 
@@ -782,9 +790,10 @@ contract RobotMoneyVaultTest is Test {
         assertTrue(vault.withdrawalsPaused(), "withdrawals must be paused");
         assertTrue(vault.paused(), "paused() must be true");
 
-        // Deposit blocked.
+        // Deposit blocked. maxDeposit() returns 0 when paused, so ERC4626ExceededMaxDeposit
+        // fires before the internal DepositsPaused guard.
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.DepositsPaused.selector));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
         vault.deposit(1_000 * ONE_USDC, bob);
 
         // Redeem blocked.

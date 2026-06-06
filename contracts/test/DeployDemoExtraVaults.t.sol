@@ -55,7 +55,7 @@ contract DeployDemoExtraVaultsTest is Test {
         // Deploy + wire the primary vault the same way Deploy.s.sol does on
         // the devnet (passthrough adapter), register it, and opt it in.
         primaryVault = new RobotMoneyVault(
-            IERC20(address(usdc)), 10_000_000 * 1e6, 1_000_000 * 1e6, 0, admin, admin
+            IERC20(address(usdc)), 10_000_000 * 1e6, 1_000_000 * 1e6, 0, admin, admin, admin
         );
         PassthroughAdapter adapter = new PassthroughAdapter(address(usdc), address(primaryVault));
         AdapterBytecodeGuard.requireNoDelegatecall(address(adapter));

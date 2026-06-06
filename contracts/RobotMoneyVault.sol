@@ -264,12 +264,16 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 _perDepositCap,
         uint256 _exitFeeBps,
         address _feeRecipient,
-        address _admin
+        address _admin,
+        address _emergencyResponder
     ) ERC4626(_asset) ERC20("Robot Money USDC", "rmUSDC") {
-        if (_feeRecipient == address(0) || _admin == address(0)) {
+        if (
+            _feeRecipient == address(0) || _admin == address(0) || _emergencyResponder == address(0)
+        ) {
             revert ZeroAddress();
         }
         if (_exitFeeBps > MAX_EXIT_FEE_BPS) revert InvalidFee();
+        if (_tvlCap > 0 && _perDepositCap > _tvlCap) revert InvalidParam();
 
         tvlCap = _tvlCap;
         perDepositCap = _perDepositCap;
@@ -284,7 +288,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         _setRoleAdmin(KEEPER_ROLE, ADMIN_ROLE);
 
         _grantRole(ADMIN_ROLE, _admin);
-        _grantRole(EMERGENCY_ROLE, _admin);
+        _grantRole(EMERGENCY_ROLE, _emergencyResponder);
         // KEEPER_ROLE intentionally NOT granted
     }
 
@@ -413,10 +417,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     function _allocateTo(uint256 i, uint256 amount) internal {
-        _requireAdapterEligible(address(adapters[i].adapter));
-        IERC20(asset()).safeTransfer(address(adapters[i].adapter), amount);
-        adapters[i].adapter.deploy(amount);
-        emit Allocated(i, address(adapters[i].adapter), amount);
+        IStrategyAdapter adpt = adapters[i].adapter;
+        address adptAddr = address(adpt);
+        _requireAdapterEligible(adptAddr);
+        IERC20(asset()).safeTransfer(adptAddr, amount);
+        adpt.deploy(amount);
+        emit Allocated(i, adptAddr, amount);
     }
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
@@ -433,6 +439,36 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     function previewWithdraw(uint256 assets) public view override returns (uint256) {
         uint256 grossAssets = _netToGross(assets);
         return _convertToShares(grossAssets, Math.Rounding.Ceil);
+    }
+
+    /// @notice Maximum USDC a user can withdraw in a single call (net of exit fee).
+    ///         Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert.
+    /// @param owner The address whose share balance determines the withdrawal cap.
+    function maxWithdraw(address owner) public view override returns (uint256) {
+        return previewRedeem(balanceOf(owner));
+    }
+
+    /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
+    ///         Returns 0 when deposits are paused, the vault is shutdown, no adapters are active,
+    ///         or the TVL cap has been reached.
+    function maxDeposit(address) public view override returns (uint256) {
+        if (depositsPaused || shutdown) return 0;
+        if (_activeAdapterCount() == 0) return 0;
+        if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
+            return type(uint256).max;
+        }
+        uint256 current = totalAssets();
+        if (current >= tvlCap) return 0;
+        uint256 headroom = tvlCap - current;
+        return perDepositCap < headroom ? perDepositCap : headroom;
+    }
+
+    /// @notice Maximum shares that can be minted for `receiver` given current vault state.
+    /// @param receiver The address that would receive the minted shares.
+    function maxMint(address receiver) public view override returns (uint256) {
+        uint256 assets = maxDeposit(receiver);
+        if (assets == type(uint256).max) return type(uint256).max;
+        return _convertToShares(assets, Math.Rounding.Floor);
     }
 
     function _grossToNet(uint256 gross) internal view returns (uint256) {
@@ -485,7 +521,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             return;
         }
 
-        uint256 totalInAdapters = 0;
+        uint256 totalInAdapters;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (adapters[i].active) totalInAdapters += adapters[i].adapter.totalAssets();
@@ -505,18 +541,20 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!adapters[i].active) continue;
             lastActiveIdx = i;
-            uint256 adapterBalance = adapters[i].adapter.totalAssets();
+            IStrategyAdapter adpt = adapters[i].adapter;
+            uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
             if (pull == 0) continue;
-            uint256 actual = adapters[i].adapter.withdraw(pull);
+            uint256 actual = adpt.withdraw(pull);
             remaining -= actual;
-            emit Pulled(i, address(adapters[i].adapter), actual);
+            emit Pulled(i, address(adpt), actual);
         }
 
         if (remaining > 0 && lastActiveIdx != type(uint256).max) {
-            uint256 actual = adapters[lastActiveIdx].adapter.withdraw(remaining);
-            emit Pulled(lastActiveIdx, address(adapters[lastActiveIdx].adapter), actual);
+            IStrategyAdapter lastAdpt = adapters[lastActiveIdx].adapter;
+            uint256 actual = lastAdpt.withdraw(remaining);
+            emit Pulled(lastActiveIdx, address(lastAdpt), actual);
         }
     }
 
@@ -539,6 +577,11 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
     /// @param adapter_ Adapter address whose eligibility should change.
     /// @param allowed_ True to allow onboarding/allocation, false to revoke future allocations.
+    /// @dev Revoking the allowlist does NOT affect adapters already registered and active in the
+    ///      registry. To fully quarantine an adapter, callers must separately call
+    ///      `emergencyWithdrawAdapter` (to drain assets) followed by `removeAdapter` or
+    ///      `forceRemoveAdapter` (to deactivate the registry entry). Setting `allowed_ = false`
+    ///      only blocks future deposit allocations and new `addAdapter` calls for this address.
     function setAdapterAllowed(address adapter_, bool allowed_) external onlyRole(ADMIN_ROLE) {
         if (adapter_ == address(0)) revert ZeroAddress();
         adapterAllowed[adapter_] = allowed_;
@@ -586,13 +629,16 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (!hasRole(ADMIN_ROLE, msg.sender) && !hasRole(KEEPER_ROLE, msg.sender)) {
             revert UnauthorizedRebalancer();
         }
-        if (block.timestamp < lastRebalanceAt + minRebalanceInterval) revert RebalanceTooSoon();
-        if (_activeAdapterCount() == 0) revert NoActiveAdapters();
+        if (!isRebalanceAvailable()) revert RebalanceTooSoon();
+        uint256 activeCount = _activeAdapterCount();
+        if (activeCount == 0) revert NoActiveAdapters();
 
-        uint256 targetBps = _targetBpsFor();
+        lastRebalanceAt = block.timestamp;
+
+        uint256 targetBps = MAX_BPS / activeCount;
         uint256 totalAssetsCached = totalAssets();
         uint256 maxMovePerCall = (totalAssetsCached * maxRebalanceBpsPerCall) / MAX_BPS;
-        uint256 totalMoved = 0;
+        uint256 totalMoved;
 
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
@@ -613,10 +659,6 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle > 0) _routeDeposit(idle);
 
-        // slither-disable-next-line reentrancy-eth
-        // Justification: `rebalance` is `nonReentrant`; the state write after
-        // external calls is safe because reentry is blocked by the OZ guard.
-        lastRebalanceAt = block.timestamp;
         emit Rebalanced(totalMoved);
     }
 
@@ -704,12 +746,14 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (!adapters[i].active) continue;
-            uint256 balance = adapters[i].adapter.totalAssets();
+            IStrategyAdapter adpt = adapters[i].adapter;
+            address adptAddr = address(adpt);
+            uint256 balance = adpt.totalAssets();
             if (balance == 0) continue;
-            try adapters[i].adapter.withdraw(balance) returns (uint256 actual) {
-                emit EmergencyWithdrawAdapterCalled(i, address(adapters[i].adapter), actual, true);
+            try adpt.withdraw(balance) returns (uint256 actual) {
+                emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
             } catch {
-                emit EmergencyWithdrawAdapterCalled(i, address(adapters[i].adapter), 0, false);
+                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
             }
         }
         emit EmergencyWithdrawCalled();
@@ -723,7 +767,9 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {
-        if (index >= adapters.length) revert AdapterNotFound();
+        if (index >= adapters.length || !adapters[index].active) {
+            revert AdapterNotFound();
+        }
         _setDepositsPaused(true);
         uint256 balance = adapters[index].adapter.totalAssets();
         if (balance == 0) {
@@ -762,6 +808,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Update the TVL cap. Restricted to `ADMIN_ROLE`.
     /// @param newCap New maximum total assets in 6-decimal USDC units.
     function setTvlCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
+        if (newCap > 0 && perDepositCap > newCap) revert InvalidParam();
         uint256 old = tvlCap;
         tvlCap = newCap;
         emit TvlCapUpdated(old, newCap);
@@ -770,6 +817,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Update the per-deposit cap. Restricted to `ADMIN_ROLE`.
     /// @param newCap New maximum single-deposit amount in 6-decimal USDC units.
     function setPerDepositCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
+        if (tvlCap > 0 && newCap > tvlCap) revert InvalidParam();
         uint256 old = perDepositCap;
         perDepositCap = newCap;
         emit PerDepositCapUpdated(old, newCap);
@@ -856,7 +904,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     function _activeAdapterCount() internal view returns (uint256) {
-        uint256 count = 0;
+        uint256 count;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (adapters[i].active) count++;
@@ -940,7 +988,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     /// @notice Whether `minRebalanceInterval` has elapsed since the last rebalance.
-    function isRebalanceAvailable() external view returns (bool) {
+    function isRebalanceAvailable() public view returns (bool) {
         return block.timestamp >= lastRebalanceAt + minRebalanceInterval;
     }
 
