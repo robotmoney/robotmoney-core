@@ -443,6 +443,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
 
     /// @notice Maximum USDC a user can withdraw in a single call (net of exit fee).
     ///         Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert.
+    /// @param owner The address whose share balance determines the withdrawal cap.
     function maxWithdraw(address owner) public view override returns (uint256) {
         return previewRedeem(balanceOf(owner));
     }
@@ -463,6 +464,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     /// @notice Maximum shares that can be minted for `receiver` given current vault state.
+    /// @param receiver The address that would receive the minted shares.
     function maxMint(address receiver) public view override returns (uint256) {
         uint256 assets = maxDeposit(receiver);
         if (assets == type(uint256).max) return type(uint256).max;
