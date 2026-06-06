@@ -2524,6 +2524,11 @@ export const robotMoneyVaultAbiGenerated = [
         type: "address",
         internalType: "address",
       },
+      {
+        name: "_emergencyResponder",
+        type: "address",
+        internalType: "address",
+      },
     ],
     stateMutability: "nonpayable",
   },
@@ -3194,7 +3199,7 @@ export const robotMoneyVaultAbiGenerated = [
     name: "maxMint",
     inputs: [
       {
-        name: "",
+        name: "receiver",
         type: "address",
         internalType: "address",
       },

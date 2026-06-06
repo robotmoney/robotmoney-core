@@ -84,9 +84,6 @@ impl CountTable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChainId(pub i64);
-
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, DbError> {
         let pool = PgPoolOptions::new()
