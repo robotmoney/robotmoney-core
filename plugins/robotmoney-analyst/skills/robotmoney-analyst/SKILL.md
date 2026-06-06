@@ -1,5 +1,5 @@
 ---
-name: regime-classifier
+name: robotmoney-analyst
 description: >
   Fetch the current Robot Money macro + on-chain regime snapshot from
   https://www.robotmoney.net/data/regime-snapshot.json and surface
@@ -12,7 +12,7 @@ description: >
   read-only and performs no on-chain action.
 ---
 
-# regime-classifier
+# robotmoney-analyst
 
 > **Read-only.** This skill fetches a public JSON snapshot. It does not call
 > `rmpc`, does not submit transactions, and does not modify any vault or
@@ -30,7 +30,7 @@ Invoke this skill when the user asks any of the following (or synonyms):
 - "What is the composite score today?"
 
 Do **not** invoke this skill for questions about vault balances, deposit
-history, or on-chain state — use the `robotmoney-cli` skill for those.
+history, or on-chain state — use the `robotmoney-user` skill for those.
 
 ## Snapshot source
 
@@ -45,7 +45,7 @@ history, or on-chain state — use the `robotmoney-cli` skill for those.
 Run the fetch helper to get the current snapshot:
 
 ```bash
-plugins/regime-classifier/scripts/fetch-regime-snapshot.sh
+plugins/robotmoney-analyst/scripts/fetch-regime-snapshot.sh
 ```
 
 Optional flags:
@@ -102,3 +102,65 @@ value.
 - Parsing the full historical time series (only the latest snapshot is used
   by default)
 - Persisting cache anywhere other than `/tmp`
+
+## Governance read commands
+
+The following governance read commands are thin stubs that delegate to `rmpc`
+read subcommands. They are read-only and require a valid `--config` path.
+
+### get-proposals
+
+Fetch the active or most-recent governance proposal from the `RouterGovernance`
+contract. Delegates to:
+
+```bash
+rmpc get-governance --config <CONFIG> --pretty
+```
+
+Surface the `active_proposal` field (if present) and the `cadence_params`
+block. If no proposal is active, report that explicitly.
+
+### get-weights
+
+Read the current vault weight allocations from the `PortfolioRouter`. Delegates
+to:
+
+```bash
+rmpc get-router --config <CONFIG> --pretty
+```
+
+Surface the `vault_addresses`, `weight_bps`, and `router_cap` fields.
+Weight basis-points (`weight_bps`) sum to 10 000 (100 %).
+
+### get-router
+
+Read full `PortfolioRouter` state including vault list, weight bps, and router
+cap. Delegates to:
+
+```bash
+rmpc get-router --config <CONFIG> --pretty
+```
+
+Surface all top-level fields in the response envelope. Use this when the user
+asks for the full router state rather than a weights-only summary.
+
+## Governance write commands (not yet implemented)
+
+The following commands are planned but **not yet implemented**. Do not attempt
+to invoke them — surface a clear "not yet implemented" message to the user.
+
+### propose
+
+Submit a new weight-reallocation proposal to `RouterGovernance`. **Not yet
+implemented.** When the user asks to submit a governance proposal, respond:
+
+> This action is not yet implemented. Governance write commands (propose, vote)
+> are planned for a future release.
+
+### vote
+
+Cast a vote on an active governance proposal. **Not yet implemented.** When
+the user asks to vote on a proposal, respond:
+
+> This action is not yet implemented. Governance write commands (propose, vote)
+> are planned for a future release.

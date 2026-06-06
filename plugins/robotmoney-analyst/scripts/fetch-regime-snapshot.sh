@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fetch-regime-snapshot.sh — fetch and validate the Robot Money regime snapshot.
 #
-# Canonical docs: plugins/regime-classifier/skills/regime-classifier/SKILL.md
+# Canonical docs: plugins/robotmoney-analyst/skills/robotmoney-analyst/SKILL.md
 # Snapshot source: https://www.robotmoney.net/data/regime-snapshot.json
 #
 # Usage:

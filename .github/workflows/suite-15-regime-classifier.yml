@@ -1,7 +1,7 @@
-# Canonical: plugins/regime-classifier/skills/regime-classifier/SKILL.md
+# Canonical: plugins/robotmoney-analyst/skills/robotmoney-analyst/SKILL.md
 #
 # WHY THIS SUITE EXISTS
-# The regime-classifier plugin is a read-only Claude skill that fetches
+# The robotmoney-analyst plugin is a read-only Claude skill that fetches
 # https://www.robotmoney.net/data/regime-snapshot.json and surfaces regime
 # context for deposit decisions. The plugin has no contract or Rust dependencies
 # but must be tested against offline fixtures to guarantee: (a) the plugin.json
@@ -23,11 +23,11 @@
 # tests but still misbehave at runtime. shellcheck catches these statically.
 #
 # WHY paths: FILTER IS USED HERE (unlike suite-13)
-# This suite only verifies regime-classifier plugin artifacts and the helper script.
+# This suite only verifies robotmoney-analyst plugin artifacts and the helper script.
 # It does not check cross-cutting repo invariants. Restricting to plugin paths keeps
 # the suite fast and avoids running it on every unrelated change.
 
-name: regime-classifier-plugin-checks
+name: robotmoney-analyst-plugin-checks
 
 on:
   push:
@@ -45,8 +45,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  regime-classifier:
-    name: regime-classifier
+  robotmoney-analyst:
+    name: robotmoney-analyst
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -57,5 +57,5 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq shellcheck
 
-      - name: Run regime-classifier tests
-        run: bash plugins/regime-classifier/test/run-tests.sh
+      - name: Run robotmoney-analyst tests
+        run: bash plugins/robotmoney-analyst/test/run-tests.sh
