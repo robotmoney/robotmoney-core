@@ -63,7 +63,11 @@ pub struct IndexerConfig {
     /// Optional PortfolioRouter contract address (may differ from
     /// `router_governance`).  When set, the indexer ingests `WeightsSet`
     /// and `DefaultWeightsSet` events emitted by direct admin calls to
-    /// `setWeights()` / `setDefaultWeights()` (the demo-seed path).
+    /// `setWeights()` / `setDefaultWeights()` (the demo-seed path), and
+    /// watches `RouterDeposit` events to take a fresh TVL snapshot of every
+    /// registered vault in any block where a router deposit is processed —
+    /// ensuring deposits via the router are reflected in the TVL index without
+    /// waiting for the SNAPSHOT_HEARTBEAT_BLOCKS interval.
     pub portfolio_router: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
@@ -309,19 +313,8 @@ async fn run_inner(
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
     }
 
-    // State snapshots — event-driven (one per touched vault contract per
-    // touched block). Heartbeat handled below.
-    for (bn, contract) in &event_blocks_per_contract {
-        if *contract == cfg.vault {
-            rows_inserted +=
-                snapshot_vault_address(db, rpc, cfg.chain_id, cfg.vault, *bn).await? as i64;
-        }
-    }
-
-    // Heartbeat snapshots — cover the legacy configured vault and every
-    // active vault learned from VaultRegistry events. The PK on
-    // (chain_id, contract, block_number) deduplicates against event-driven
-    // snapshots.
+    // Collect all registered vaults from the DB. Used in both the
+    // event-driven snapshot (router-deposit path) and the heartbeat.
     let mut heartbeat_vaults = vec![cfg.vault];
     let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
@@ -330,7 +323,7 @@ async fn run_inner(
     .fetch_all(db.pool())
     .await
     .map_err(DbError::from)?;
-    for vault in registered_vaults {
+    for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
             let address = Address::from(bytes);
             if !heartbeat_vaults.contains(&address) {
@@ -339,17 +332,65 @@ async fn run_inner(
         }
     }
 
+    // State snapshots — event-driven (one per touched vault contract per
+    // touched block). Heartbeat handled below.
+    //
+    // For the primary vault: snapshot whenever it had an event.
+    // For registered extra vaults: snapshot whenever the PortfolioRouter
+    // had an event in that block — router deposits update TVL in extra
+    // vaults that are not individually watched, so piggybacking on the
+    // router's event blocks keeps their total_assets current without
+    // waiting for the SNAPSHOT_HEARTBEAT_BLOCKS interval.
+    let router_event_blocks: BTreeSet<u64> = match cfg.portfolio_router {
+        Some(router) => event_blocks_per_contract
+            .iter()
+            .filter(|(_, c)| *c == router)
+            .map(|(bn, _)| *bn)
+            .collect(),
+        None => BTreeSet::new(),
+    };
+    for (bn, contract) in &event_blocks_per_contract {
+        if *contract == cfg.vault {
+            rows_inserted +=
+                snapshot_vault_address(db, rpc, cfg.chain_id, cfg.vault, *bn).await? as i64;
+        }
+    }
+    // Snapshot all registered vaults for every block where the router processed deposits.
+    for bn in &router_event_blocks {
+        for vault in &heartbeat_vaults {
+            rows_inserted +=
+                snapshot_vault_address(db, rpc, cfg.chain_id, *vault, *bn).await? as i64;
+        }
+    }
+
+    // Heartbeat snapshots — cover the legacy configured vault and every
+    // active vault learned from VaultRegistry events. The PK on
+    // (chain_id, contract, block_number) deduplicates against event-driven
+    // snapshots.
+
     for vault in heartbeat_vaults {
-        let last_vault_snap: Option<i64> = sqlx::query_scalar(
-            "SELECT MAX(block_number) FROM vault_snapshots WHERE chain_id = $1 AND contract = $2",
+        // Fetch both the last snapshot block and whether its total_assets was
+        // zero so we can force a re-snapshot for vaults that were registered
+        // before deposits arrived (e.g. extra demo vaults seeded via the
+        // PortfolioRouter after an indexer that didn't watch it).
+        let last_snap: Option<(i64, String)> = sqlx::query_as(
+            "SELECT block_number, CAST(total_assets AS text) FROM vault_snapshots \
+             WHERE chain_id = $1 AND contract = $2 \
+             ORDER BY block_number DESC LIMIT 1",
         )
         .bind(cfg.chain_id)
         .bind(&vault.into_array()[..])
-        .fetch_one(db.pool())
+        .fetch_optional(db.pool())
         .await
         .map_err(DbError::from)?;
-        let needs_heartbeat = match last_vault_snap {
-            Some(prev) => (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64,
+        let needs_heartbeat = match &last_snap {
+            Some((prev, total_assets)) => {
+                let behind = (target as i64 - prev) >= SNAPSHOT_HEARTBEAT_BLOCKS as i64;
+                // Re-snapshot more aggressively when TVL shows zero — the
+                // vault may have received deposits since the last snapshot.
+                let zero_tvl = total_assets == "0" || total_assets.is_empty();
+                behind || zero_tvl
+            }
             None => true,
         };
         if needs_heartbeat {
@@ -838,9 +879,9 @@ async fn call_bool(
 /// field is a future improvement.
 fn risk_label_from_vault_name(name: &str) -> &'static str {
     match name {
-        "Robot Money USDC" => "STABLE_YIELD",
-        "Robot Money Protocol" => "VOLATILE",
-        "Robot Money Agent Tokens" | "Robot Money RWA / Thematic" => "SPECULATIVE",
+        "RM USDC" => "STABLE_YIELD",
+        "RM Protocol" => "VOLATILE",
+        "RM Agent Tokens" | "RM RWA / Thematic" => "SPECULATIVE",
         _ => "STABLE_YIELD",
     }
 }

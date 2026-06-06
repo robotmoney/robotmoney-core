@@ -99,6 +99,26 @@ const fourVaultFixture: VaultsResponse = {
   indexed_at: "2026-01-01T12:00:00Z",
 };
 
+function makeVaultFixture(total_assets: string | null): VaultsResponse {
+  return {
+    vaults: [
+      {
+        chain_id: 8453,
+        address: "0x1111111111111111111111111111111111111111",
+        name: "Robot Money USDC",
+        risk_label: "STABLE_YIELD",
+        status: 0,
+        deposit_cap: "10000000000000",
+        total_assets,
+        exit_fee_bps: 10,
+        indexed_at: "2026-01-01T12:00:00Z",
+      },
+    ],
+    block_number: 100,
+    indexed_at: "2026-01-01T12:00:00Z",
+  };
+}
+
 describe("VaultCards — four-vault layout (issue #479)", () => {
   it("renders one tile per registered vault", async () => {
     const { findAllByTestId } = render(
@@ -161,31 +181,10 @@ describe("VaultCards — four-vault layout (issue #479)", () => {
   });
 });
 
-// Minimal single-vault fixture helpers for TVL rendering / polling tests.
-function makeVault(total_assets: string | null): VaultsResponse {
-  return {
-    vaults: [
-      {
-        chain_id: 8453,
-        address: "0x1111111111111111111111111111111111111111",
-        name: "Robot Money USDC",
-        risk_label: "STABLE_YIELD",
-        status: 0,
-        deposit_cap: "10000000000000",
-        total_assets,
-        exit_fee_bps: 10,
-        indexed_at: "2026-01-01T12:00:00Z",
-      },
-    ],
-    block_number: 100,
-    indexed_at: "2026-01-01T12:00:00Z",
-  };
-}
-
 describe("VaultCards — TVL display and polling", () => {
   it("renders total_assets null as —", async () => {
     const { findByTestId } = render(
-      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVault(null))}>
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVaultFixture(null))}>
         <VaultCards />
       </ExplorerProvider>,
     );
@@ -195,13 +194,13 @@ describe("VaultCards — TVL display and polling", () => {
   });
 
   it("renders total_assets '0' as 0", async () => {
-    const { findByTestId } = render(
-      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVault("0"))}>
+    const { findByTestId: findByTestId2 } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(makeVaultFixture("0"))}>
         <VaultCards />
       </ExplorerProvider>,
     );
     await waitFor(async () => {
-      expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
+      expect((await findByTestId2("landing-vault-card-tvl")).textContent).toBe("0");
     });
   });
 
@@ -222,15 +221,12 @@ describe("VaultCards — TVL display and polling", () => {
           }),
         };
       }
-      return {
-        ok: true as const,
-        status: 200,
-        json: async () => (callCount++ === 0 ? makeVault("0") : makeVault("5000000000")),
-      };
+      const vaults = callCount++ === 0 ? makeVaultFixture("0") : makeVaultFixture("5000000000");
+      return { ok: true as const, status: 200, json: async () => vaults };
     }) as unknown as FetchLike;
 
-    // Use a short real interval so the test completes quickly without fake timers
-    // (fake timers block RTL's waitFor polling in browser mode).
+    // Use a short real interval so the test completes quickly without fake
+    // timers (fake timers block RTL's waitFor polling in browser mode).
     const { findByTestId } = render(
       <ExplorerProvider apiUrl="http://api" fetchImpl={fetchImpl} pollInterval={50}>
         <VaultCards />
@@ -242,7 +238,7 @@ describe("VaultCards — TVL display and polling", () => {
       expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("0");
     });
 
-    // After one poll interval the component re-fetches and displays the non-zero TVL.
+    // After one poll interval the context re-fetches and VaultCards displays the non-zero TVL.
     await waitFor(
       async () => {
         expect((await findByTestId("landing-vault-card-tvl")).textContent).toBe("5000000000");
