@@ -246,6 +246,7 @@ contract AgentTokenVaultTest is Test {
             1_000_000 * ONE_USDC,
             0,
             deployer,
+            deployer,
             deployer
         );
         registry.registerVault(

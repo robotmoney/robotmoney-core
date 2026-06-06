@@ -43,7 +43,8 @@ contract PassthroughAdapterTest is Test {
             1_000_000 * ONE_USDC, // perDepositCap
             0, // exitFeeBps
             admin, // feeRecipient
-            admin // ADMIN_ROLE
+            admin, // ADMIN_ROLE
+            admin // EMERGENCY_ROLE
         );
         // Deploy adapter and wire into vault
         adapter = new PassthroughAdapter(address(usdc), address(vault));

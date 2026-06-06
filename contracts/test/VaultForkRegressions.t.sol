@@ -124,6 +124,7 @@ contract VaultForkRegressions is Test {
             PER_DEPOSIT_CAP,
             0, // no exit fee
             feeRecipient,
+            admin,
             admin
         );
 
@@ -208,7 +209,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
@@ -236,7 +237,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
 
@@ -263,7 +264,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         CompoundV3Adapter compoundAdapter =
             new CompoundV3Adapter(COMPOUND_COMET, BASE_USDC, address(vault_));
@@ -293,7 +294,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));
@@ -337,6 +338,7 @@ contract VaultForkRegressions is Test {
             tightCap, // perDepositCap = tvlCap so deposit can fill the whole cap
             0,
             feeRecipient,
+            admin,
             admin
         );
         AaveV3Adapter aaveAdapter =
@@ -379,7 +381,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         // 50% cap: half of any deposit will be unroutable on first call.
         AaveV3Adapter aaveAdapter =
@@ -431,7 +433,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         MorphoAdapter morphoAdapter = new MorphoAdapter(MORPHO_VAULT, BASE_USDC, address(vault_));
         _allowAdapter(vault_, address(morphoAdapter));
@@ -483,7 +485,7 @@ contract VaultForkRegressions is Test {
         if (!_setUp()) return; // skip: no FORK_RPC_URL
 
         RobotMoneyVault vault_ = new RobotMoneyVault(
-            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin
+            IERC20(BASE_USDC), TVL_CAP, PER_DEPOSIT_CAP, 0, feeRecipient, admin, admin
         );
         AaveV3Adapter aaveAdapter =
             new AaveV3Adapter(AAVE_POOL, BASE_USDC, AAVE_A_TOKEN, address(vault_));

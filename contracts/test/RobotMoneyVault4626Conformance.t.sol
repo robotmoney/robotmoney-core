@@ -35,7 +35,8 @@ contract RobotMoneyVault4626Conformance is ERC4626Test {
             type(uint256).max, // perDepositCap — unbounded for fuzzing
             0, // exitFeeBps — zero so vanilla 4626 props hold
             address(this), // feeRecipient (unused at zero fee)
-            address(this) // admin — this test contract
+            address(this), // admin — this test contract
+            address(this) // emergencyResponder — this test contract
         );
 
         PassthroughAdapter adapter = new PassthroughAdapter(address(underlying), address(vault));

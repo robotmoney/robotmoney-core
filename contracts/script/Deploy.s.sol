@@ -312,7 +312,8 @@ contract Deploy is Script {
             perDepositCap,
             0, // exitFeeBps = 0
             d.admin, // feeRecipient (fees are 0, any non-zero addr)
-            d.admin // vaultAdmin — receives ADMIN_ROLE
+            d.admin, // vaultAdmin — receives ADMIN_ROLE
+            d.admin // emergencyResponder — receives EMERGENCY_ROLE (separate in prod)
         );
         // Deploy adapters wired to the new vault.
         // Registration (addAdapter) is done by the callers of _doDeploy —

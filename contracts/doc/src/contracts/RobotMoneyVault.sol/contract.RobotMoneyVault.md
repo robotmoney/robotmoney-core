@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/e2c936763868ac281d428b1ab176ecdd042ef467/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/690ce3eb1d770c8624dfe2b7c8dc1fb69a34bcd3/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -222,7 +222,8 @@ constructor(
     uint256 _perDepositCap,
     uint256 _exitFeeBps,
     address _feeRecipient,
-    address _admin
+    address _admin,
+    address _emergencyResponder
 ) ERC4626(_asset) ERC20("Robot Money USDC", "rmUSDC");
 ```
 
@@ -342,6 +343,36 @@ function previewWithdraw(uint256 assets) public view override returns (uint256);
 |`assets`|`uint256`|Target net USDC to receive.|
 
 
+### maxWithdraw
+
+Maximum USDC a user can withdraw in a single call (net of exit fee).
+Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert.
+
+
+```solidity
+function maxWithdraw(address owner) public view override returns (uint256);
+```
+
+### maxDeposit
+
+Maximum assets that can be deposited for `receiver` given current vault state.
+Returns 0 when deposits are paused, the vault is shutdown, no adapters are active,
+or the TVL cap has been reached.
+
+
+```solidity
+function maxDeposit(address) public view override returns (uint256);
+```
+
+### maxMint
+
+Maximum shares that can be minted for `receiver` given current vault state.
+
+
+```solidity
+function maxMint(address receiver) public view override returns (uint256);
+```
+
 ### _grossToNet
 
 
@@ -395,6 +426,12 @@ function addAdapter(address adapter_, uint16 capBps_) external onlyRole(ADMIN_RO
 ### setAdapterAllowed
 
 Approve or revoke an exact adapter instance for this vault. Restricted to `ADMIN_ROLE`.
+
+Revoking the allowlist does NOT affect adapters already registered and active in the
+registry. To fully quarantine an adapter, callers must separately call
+`emergencyWithdrawAdapter` (to drain assets) followed by `removeAdapter` or
+`forceRemoveAdapter` (to deactivate the registry entry). Setting `allowed_ = false`
+only blocks future deposit allocations and new `addAdapter` calls for this address.
 
 
 ```solidity
@@ -808,7 +845,7 @@ Whether `minRebalanceInterval` has elapsed since the last rebalance.
 
 
 ```solidity
-function isRebalanceAvailable() external view returns (bool);
+function isRebalanceAvailable() public view returns (bool);
 ```
 
 ### nextRebalanceAt

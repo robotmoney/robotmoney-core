@@ -204,6 +204,7 @@ contract SafeIntegrationTest is Test {
             type(uint256).max, // perDepositCap
             0, // exitFeeBps
             makeAddr("feeRecipient"),
+            deployer,
             deployer
         );
 

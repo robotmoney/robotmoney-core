@@ -87,7 +87,8 @@ contract DeployTimelockTest is Test {
             type(uint256).max, // perDepositCap
             0, // exitFeeBps
             safe, // feeRecipient (non-zero; reuses the safe test address)
-            address(script) // admin — script must hold ADMIN_ROLE to wire timelock
+            address(script), // admin — script must hold ADMIN_ROLE to wire timelock
+            address(script) // emergencyResponder
         );
         gateway = new RobotMoneyGateway(
             usdc,
