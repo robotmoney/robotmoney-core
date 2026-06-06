@@ -1,0 +1,8 @@
+{
+  "name": "robotmoney-analyst",
+  "description": "Read the current Robot Money macro + on-chain regime snapshot and surface regime, composite score, and sub-regime labels as session context for investment decisions.",
+  "author": {
+    "name": "Robot Money",
+    "email": "ops@robotmoney.net"
+  }
+}

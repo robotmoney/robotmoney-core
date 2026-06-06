@@ -1,0 +1,8 @@
+{
+  "name": "robotmoney-user",
+  "description": "Use the rmpc Rust client to read Robot Money vault/gateway state and submit guarded deposits.",
+  "author": {
+    "name": "Robot Money",
+    "email": "ops@robotmoney.net"
+  }
+}
