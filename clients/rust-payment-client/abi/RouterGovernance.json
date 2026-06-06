@@ -81,7 +81,17 @@
         "internalType": "uint256"
       },
       {
+        "name": "snapshotQuorum",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
         "name": "executed",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "cancelled",
         "type": "bool",
         "internalType": "bool"
       }
@@ -105,5 +115,180 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "hasVoted",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "voter",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "propose",
+    "inputs": [
+      {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
+        "name": "bps",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "vote",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "ProposalCreated",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256",
+        "indexed": true
+      },
+      {
+        "name": "proposer",
+        "type": "address",
+        "internalType": "address",
+        "indexed": true
+      },
+      {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]",
+        "indexed": false
+      },
+      {
+        "name": "bps",
+        "type": "uint256[]",
+        "internalType": "uint256[]",
+        "indexed": false
+      },
+      {
+        "name": "votingDeadline",
+        "type": "uint64",
+        "internalType": "uint64",
+        "indexed": false
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VoteCast",
+    "inputs": [
+      {
+        "name": "proposalId",
+        "type": "uint256",
+        "internalType": "uint256",
+        "indexed": true
+      },
+      {
+        "name": "voter",
+        "type": "address",
+        "internalType": "address",
+        "indexed": true
+      },
+      {
+        "name": "power",
+        "type": "uint256",
+        "internalType": "uint256",
+        "indexed": false
+      },
+      {
+        "name": "totalFor",
+        "type": "uint256",
+        "internalType": "uint256",
+        "indexed": false
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AlreadyVoted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoActiveProposal",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProposalNotActive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoVotingPower",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ActiveProposalExists",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidWeightSum",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "LengthMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "VaultNotEligible",
+    "inputs": [
+      {
+        "name": "vault",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   }
 ]

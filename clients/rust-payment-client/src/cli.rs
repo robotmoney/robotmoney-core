@@ -204,6 +204,63 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Submit a new weight-reallocation proposal to RouterGovernance.propose()
+    /// (issue #632). Requires `governance_address` in the operator config and
+    /// a production-grade (or software-fallback) signer. Returns
+    /// `{ok:true,result:{proposal_id,tx_hash,block_number}}` on success.
+    Propose {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Comma-separated vault addresses, 0x-prefixed hex.
+        /// Example: `--vaults 0xAAA...,0xBBB...`
+        #[arg(long, value_delimiter = ',')]
+        vaults: Vec<String>,
+        /// Comma-separated weight bps values (must sum to 10 000).
+        /// Example: `--weights-bps 6000,4000`
+        #[arg(long = "weights-bps", value_delimiter = ',')]
+        weights_bps: Vec<u64>,
+        /// Gas limit for the propose tx envelope. Default 500 000.
+        #[arg(long = "gas-limit", default_value_t = 500_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Cast a vote on an active RouterGovernance proposal (issue #632).
+    /// Uses `RouterGovernance.vote(proposalId)` for `--choice yes`;
+    /// `no` and `abstain` are client-side no-ops (contract supports FOR only).
+    /// Idempotent: re-casting the same choice exits 0; a different choice
+    /// after an on-chain `yes` exits 2 with ErrVoteAlreadyCast.
+    Vote {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Proposal id to vote on (decimal integer).
+        #[arg(long = "proposal-id")]
+        proposal_id: String,
+        /// Vote direction: `yes`, `no`, or `abstain`.
+        #[arg(long)]
+        choice: String,
+        /// Gas limit for the vote tx envelope. Default 200 000.
+        #[arg(long = "gas-limit", default_value_t = 200_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Redeem vault shares through the gateway (agent-initiated redemption).
     ///
     /// Performs preflight reads (gateway paused, agent policy, vault paused,

@@ -705,6 +705,7 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
         RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
         RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
+        RmpcError::ErrVoteAlreadyCast { .. } => "ErrVoteAlreadyCast",
         RmpcError::ErrConfig(_) => "ErrConfig",
         RmpcError::ErrIo(_) => "ErrIo",
         RmpcError::ErrTomlParse(_) => "ErrTomlParse",

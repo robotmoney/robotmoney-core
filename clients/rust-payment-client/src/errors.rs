@@ -91,6 +91,14 @@ pub enum RmpcError {
     #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdrawal log (tx_hash={tx_hash})")]
     ErrAgentWithdrawLogMissing { tx_hash: String },
 
+    /// Caller has already voted on this proposal with a different choice.
+    /// On-chain the contract only records a single FOR vote per address;
+    /// attempting to re-cast with a different direction is refused.
+    #[error(
+        "ErrVoteAlreadyCast: a different vote direction was already cast for proposal_id={proposal_id}"
+    )]
+    ErrVoteAlreadyCast { proposal_id: String },
+
     #[error("ErrConfig: configuration error: {0}")]
     ErrConfig(String),
 
@@ -154,6 +162,12 @@ mod tests {
                     tx_hash: "0x00".into(),
                 },
                 "ErrOrderIdAlreadySubmitted",
+            ),
+            (
+                RmpcError::ErrVoteAlreadyCast {
+                    proposal_id: "1".into(),
+                },
+                "ErrVoteAlreadyCast",
             ),
         ];
         for (err, name) in cases {

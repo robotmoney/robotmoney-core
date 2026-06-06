@@ -43,14 +43,24 @@ pub struct WeightEntry {
 /// Optional proposal summary.
 #[derive(Debug, Serialize)]
 pub struct ProposalSummary {
-    pub id: String,
+    /// Proposal id (decimal string).
+    pub proposal_id: String,
     pub proposer: String,
     pub proposed_vaults: Vec<String>,
     pub proposed_bps: Vec<u64>,
+    /// Block timestamp when voting ends.
     pub voting_deadline: u64,
     pub executable_after: u64,
+    /// Total voting power cast FOR (decimal string).
     pub votes_for: DecimalU256,
+    /// Total voting power cast AGAINST. Always "0" — this contract only
+    /// supports FOR votes; included for API completeness.
+    pub votes_against: DecimalU256,
+    /// Total voting power abstained. Always "0" — this contract only
+    /// supports FOR votes; included for API completeness.
+    pub votes_abstain: DecimalU256,
     pub executed: bool,
+    pub cancelled: bool,
 }
 
 /// `data` payload for `rmpc get-governance`.
@@ -303,14 +313,17 @@ async fn call_active_proposal(
         .map_err(|e| format!("abi decode: {e}"))?;
 
     Ok(ProposalSummary {
-        id: r.id.to_string(),
+        proposal_id: r.id.to_string(),
         proposer: format!("{:#x}", r.proposer),
         proposed_vaults: r.vaults.iter().map(|v| format!("{v:#x}")).collect(),
         proposed_bps: r.bps.iter().map(|b| b.saturating_to::<u64>()).collect(),
         voting_deadline: r.votingDeadline,
         executable_after: r.executableAfter,
         votes_for: DecimalU256(r.votesFor),
+        votes_against: DecimalU256(U256::ZERO),
+        votes_abstain: DecimalU256(U256::ZERO),
         executed: r.executed,
+        cancelled: r.cancelled,
     })
 }
 
