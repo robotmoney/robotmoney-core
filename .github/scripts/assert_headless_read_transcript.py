@@ -160,7 +160,7 @@ def assert_get_gateway(events: list[dict]) -> list[str]:
     return failures
 
 
-PLUGIN_DIR_NAME = "plugins/robotmoney-cli"
+PLUGIN_DIR_NAME = "plugins/robotmoney-user"
 
 # Path fragments that identify ambient/global opencode plugin installs.
 AMBIENT_PLUGIN_PATTERNS: list[str] = [
@@ -176,7 +176,7 @@ AMBIENT_PLUGIN_PATTERNS: list[str] = [
 
 def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
     """Walk a parsed JSON event and collect every string value that mentions
-    ``plugins/robotmoney-cli`` (the in-repo plugin manifest directory).
+    ``plugins/robotmoney-user`` (the in-repo plugin manifest directory).
 
     OpenCode's NDJSON schema is not formally versioned; we accept any field
     name and match by substring. See the deposit asserter for the matching
@@ -197,7 +197,7 @@ def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
 
 def assert_plugin_provenance(events: list[dict]) -> list[str]:
     """Assert that the transcript carries a plugin-load event whose resolved
-    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-cli`` (issue #461).
+    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-user`` (issue #461).
     """
     failures: list[str] = []
     workspace = os.environ.get("GITHUB_WORKSPACE")
@@ -213,8 +213,8 @@ def assert_plugin_provenance(events: list[dict]) -> list[str]:
         failures.append(
             "FAIL (P): no event references the in-repo plugin path "
             f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
-            '--plugin "$PWD/plugins/robotmoney-cli" so CI exercises the '
-            "manifest at plugins/robotmoney-cli/plugin.json instead of an "
+            '--plugin "$PWD/plugins/robotmoney-user" so CI exercises the '
+            "manifest at plugins/robotmoney-user/plugin.json instead of an "
             "ambient/global opencode plugin."
         )
         return failures
@@ -227,7 +227,7 @@ def assert_plugin_provenance(events: list[dict]) -> list[str]:
                     f"opencode plugin location {pattern!r}. The opencode "
                     "session must load the plugin from the in-repo "
                     f"{PLUGIN_DIR_NAME} directory via "
-                    '--plugin "$PWD/plugins/robotmoney-cli".'
+                    '--plugin "$PWD/plugins/robotmoney-user".'
                 )
                 break
 
@@ -325,7 +325,7 @@ def main() -> int:
     print("OK: rmpc get-vault called with exit 0, valid JSON envelope.")
     print("OK: rmpc get-gateway called with exit 0, partial: true.")
     print("OK: no forbidden explorer/dapp hosts in transcript.")
-    print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-cli.")
+    print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
     return 0
 
 

@@ -175,7 +175,7 @@ triggers so operators can install from published artifacts.
 - [x] CI: dapp Docker image published to GHCR (`.github/workflows/release-dapp.yml`)
 - [ ] CI: run all suites unconditionally on push to `dev` — suite-01-02 and others still gated by `paths:` filters
 - [x] CI: `workflow_dispatch` inputs (tag, commit, dry_run) on release workflows
-- [x] Remove deprecated Anvil demo suite — `demo.sh` never existed in this repo; suite-15 is the regime-classifier plugin test (not an Anvil demo, keep it)
+- [x] Remove deprecated Anvil demo suite — `demo.sh` never existed in this repo; suite-15 is the robotmoney-analyst plugin test (not an Anvil demo, keep it)
 - [ ] Audit suite-05 (Anvil mainnet-fork) for necessity vs. suite-06 duplication
 
 ### Docs and onboarding

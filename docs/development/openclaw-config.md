@@ -192,7 +192,7 @@ CI workflow: `.github/workflows/openclaw-config.yml`.
 ## 8. Skill registration
 
 The Robot Money skill package lives at
-`plugins/robotmoney-cli/skills/robotmoney-cli/`. Loading it into
+`plugins/robotmoney-user/skills/robotmoney-user/`. Loading it into
 OpenClaw is harness-specific configuration — point OpenClaw at the
 skill directory and at the `rmpc` binary path. The skill's
 `SKILL.md`, `references/read.md`, `references/write.md`,

@@ -354,7 +354,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 ### 12. OpenClaw integration tests
 **Suggested file:** `.github/workflows/openclaw.yml`
 **Environment:** `devnet`
-**Trigger paths:** `testing/openclaw-config/**`, `plugins/robotmoney-cli/**`, `docs/development/openclaw-config.md`
+**Trigger paths:** `testing/openclaw-config/**`, `plugins/robotmoney-user/**`, `docs/development/openclaw-config.md`
 
 **Jobs:**
 - `safety` — shellcheck, mainnet gate, secret handling; runs immediately; no chain required
@@ -497,7 +497,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `openclaw-safety-walkthrough` | quick | |
 | `doc-adr-runbook-migration-checks` | quick | |
 | `smoke-test-devnet-boot-teardown` | heavy | devnet matrix (`cli_meta`, `fixture_meta`, `demo_seeding`/four-vault) |
-| `regime-classifier-plugin-checks` | quick | |
+| `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
 | `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |

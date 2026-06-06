@@ -43,7 +43,7 @@ on:
   pull_request:
     branches: [main, dev]
     paths:
-      - "plugins/robotmoney-cli/**"
+      - "plugins/robotmoney-user/**"
       - "clients/rust-payment-client/**"
       - "docs/development/openclaw-config.md"
       - "docs/development/opencode-readonly-fork.md"
@@ -81,7 +81,7 @@ jobs:
 
       - name: Validate plugin.json
         run: |
-          python3 -m json.tool plugins/robotmoney-cli/plugin.json > /dev/null
+          python3 -m json.tool plugins/robotmoney-user/plugin.json > /dev/null
           echo "plugin.json is valid JSON."
 
       - name: Assert required plugin.json fields
@@ -89,7 +89,7 @@ jobs:
           python3 - <<'EOF'
           import json, sys
           REQUIRED = ["name", "version", "description", "skills"]
-          with open("plugins/robotmoney-cli/plugin.json") as f:
+          with open("plugins/robotmoney-user/plugin.json") as f:
               d = json.load(f)
           missing = [k for k in REQUIRED if k not in d]
           if missing:
@@ -105,9 +105,9 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os, sys
-          with open("plugins/robotmoney-cli/plugin.json") as f:
+          with open("plugins/robotmoney-user/plugin.json") as f:
               d = json.load(f)
-          base = "plugins/robotmoney-cli/skills"
+          base = "plugins/robotmoney-user/skills"
           errors = [f"  missing: {os.path.join(base, s, 'SKILL.md')}"
                     for s in d["skills"]
                     if not os.path.isfile(os.path.join(base, s, "SKILL.md"))]
@@ -122,7 +122,7 @@ jobs:
         run: |
           python3 - <<'EOF'
           import os, sys
-          ref_dir = "plugins/robotmoney-cli/references"
+          ref_dir = "plugins/robotmoney-user/references"
           if not os.path.isdir(ref_dir):
               print(f"No references dir at {ref_dir}; skipping.")
               sys.exit(0)
