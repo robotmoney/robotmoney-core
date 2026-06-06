@@ -144,23 +144,72 @@ rmpc get-router --config <CONFIG> --pretty
 Surface all top-level fields in the response envelope. Use this when the user
 asks for the full router state rather than a weights-only summary.
 
-## Governance write commands (not yet implemented)
-
-The following commands are planned but **not yet implemented**. Do not attempt
-to invoke them — surface a clear "not yet implemented" message to the user.
+## Governance write commands
 
 ### propose
 
-Submit a new weight-reallocation proposal to `RouterGovernance`. **Not yet
-implemented.** When the user asks to submit a governance proposal, respond:
+Submit a new weight-reallocation proposal to `RouterGovernance.propose()`.
+Requires `governance_address` in the operator config and a configured signer.
 
-> This action is not yet implemented. Governance write commands (propose, vote)
-> are planned for a future release.
+**Preflight**: verify `governance_address` is set in config and `RMPC_KEYSTORE_PASSPHRASE`
+is available before calling.
+
+```bash
+rmpc propose --config <CONFIG> \
+  --vaults <ADDR1>,<ADDR2> \
+  --weights-bps <BPS1>,<BPS2> \
+  --pretty
+```
+
+Parameters:
+- `--vaults` — comma-separated vault addresses (must be router-eligible)
+- `--weights-bps` — comma-separated bps values summing to 10 000
+
+Output envelope on success:
+```json
+{
+  "ok": true,
+  "result": {
+    "proposal_id": "1",
+    "tx_hash": "0x...",
+    "block_number": 12345
+  }
+}
+```
+
+Exit codes: 0 success, 2 refusal (fee-cap, lock, broadcast), 3 startup failure
+(missing `governance_address`, uninitialized signer).
 
 ### vote
 
-Cast a vote on an active governance proposal. **Not yet implemented.** When
-the user asks to vote on a proposal, respond:
+Cast a vote on an active governance proposal.
 
-> This action is not yet implemented. Governance write commands (propose, vote)
-> are planned for a future release.
+```bash
+rmpc vote --config <CONFIG> \
+  --proposal-id <ID> \
+  --choice yes \
+  --pretty
+```
+
+Parameters:
+- `--proposal-id` — decimal proposal id from `get-governance` output
+- `--choice` — `yes`, `no`, or `abstain` (`yes` submits on-chain; `no`/`abstain` are client-side no-ops)
+
+Idempotency: re-calling with the same choice exits 0 (no-op). A different
+direction after an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
+
+Example trace (get-governance → propose → vote):
+
+```bash
+# Read current state
+rmpc get-governance --config rmpc.toml --pretty
+
+# Submit proposal
+rmpc propose --config rmpc.toml --vaults 0xA...,0xB... --weights-bps 6000,4000
+
+# Vote in favour
+rmpc vote --config rmpc.toml --proposal-id 1 --choice yes
+
+# Confirm vote recorded
+rmpc get-governance --config rmpc.toml --pretty
+```
