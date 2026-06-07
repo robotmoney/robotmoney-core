@@ -135,6 +135,9 @@ contract DemoV4SwapRouter {
 
 /// @notice Minimal Aerodrome router stub for demo purposes. Records swaps at
 ///         a 1:1 rate, minting output token to the recipient. Demo-only.
+///         Used by AgentTokenVault for its ROBOTMONEY leg, where the pool TWAP
+///         also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
+///         totalAssets ≈ totalDeposits and no share inflation occurs.
 contract DemoAerodromeRouter {
     function swapExactTokensForTokens(
         uint256 amountIn,
@@ -149,6 +152,64 @@ contract DemoAerodromeRouter {
         amounts = new uint256[](2);
         amounts[0] = amountIn;
         amounts[1] = amountIn;
+    }
+
+    function defaultFactory() external pure returns (address) {
+        return address(0);
+    }
+}
+
+/// @notice Price-aware Aerodrome router stub for the RWA vault demo.
+///         Unlike DemoAerodromeRouter (which swaps 1:1), this stub mirrors the
+///         ChronicleOracleAdapter conversion formula so that `totalAssets` stays
+///         in sync with `totalSupply` after every deposit. Without this, each
+///         deposit into the RWA vault would leave near-zero USDC-denominated
+///         assets in the vault (because the Chronicle oracle values deSPXA at
+///         5000 USDC each, not 1:1), causing exponential share inflation that
+///         overflows uint256 after a handful of deposits.
+///
+///         Conversion mirrors ChronicleOracleAdapter exactly:
+///           USDC → RWA: amountOut = (amountIn * 1e12) * WAD / DEMO_PRICE
+///           RWA → USDC: amountOut = amountIn * DEMO_PRICE / (WAD * 1e12)
+///
+///         Demo-only; never deployed on mainnet.
+contract DemoRwaAerodromeRouter {
+    /// @dev Must match DemoChronicleOracle.DEMO_PRICE so swaps are consistent
+    ///      with the oracle NAV. 5000 USD per deSPXA in 18-decimal WAD format.
+    uint256 public constant DEMO_PRICE = 5_000e18;
+    uint256 private constant WAD = 1e18;
+
+    address public immutable USDC;
+
+    constructor(address usdc_) {
+        USDC = usdc_;
+    }
+
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256, /* amountOutMin */
+        IAerodromeRouter.Route[] calldata routes,
+        address to,
+        uint256 /* deadline */
+    ) external returns (uint256[] memory amounts) {
+        require(routes.length > 0, "no routes");
+        IERC20(routes[0].from).transferFrom(msg.sender, address(this), amountIn);
+
+        uint256 amountOut;
+        if (routes[0].from == USDC) {
+            // USDC (6 dec) → RWA (18 dec): matches ChronicleOracleAdapter USDC→RWA
+            // quoteAmount = (baseAmount * 1e12) * WAD / DEMO_PRICE
+            amountOut = (amountIn * 1e12) * WAD / DEMO_PRICE;
+        } else {
+            // RWA (18 dec) → USDC (6 dec): matches ChronicleOracleAdapter RWA→USDC
+            // quoteAmount = amountIn * DEMO_PRICE / (WAD * 1e12)
+            amountOut = amountIn * DEMO_PRICE / (WAD * 1e12);
+        }
+
+        DemoBasketToken(routes[0].to).mint(to, amountOut);
+        amounts = new uint256[](2);
+        amounts[0] = amountIn;
+        amounts[1] = amountOut;
     }
 
     function defaultFactory() external pure returns (address) {
@@ -188,19 +249,24 @@ contract DemoRwaStubDeployer {
     DemoBasketToken public immutable despxaToken;
     DemoUsdcPool public immutable pool;
     DemoChronicleOracle public immutable chronicle;
-    DemoAerodromeRouter public immutable aeroRouter;
+    DemoRwaAerodromeRouter public immutable aeroRouter;
     ChronicleOracleAdapter public immutable chronicleAdapter;
 
     constructor(address usdc) {
         despxaToken = new DemoBasketToken("Demo deSPXA", "deSPXA");
         pool = new DemoUsdcPool(address(despxaToken), usdc);
         chronicle = new DemoChronicleOracle();
-        // Deploy a dedicated Aerodrome router stub for the RWA vault.
-        // The same stub address is used as both the router and factory
-        // (ChronicleOracleAdapter requires factory != address(0); on devnet
-        // the factory is embedded in the Route struct but never validated by
-        // the stub swap implementation). Demo-only.
-        aeroRouter = new DemoAerodromeRouter();
+        // Deploy the price-aware RWA router stub. Uses DemoRwaAerodromeRouter
+        // instead of DemoAerodromeRouter so that USDC→deSPXA swaps apply the
+        // Chronicle NAV price (5000 USD/deSPXA) rather than a 1:1 rate.
+        // A 1:1 rate leaves near-zero totalAssets after each deposit (the
+        // Chronicle oracle values the minted atoms at ~0 USDC), causing
+        // exponential share inflation that overflows uint256 within a handful
+        // of deposits. The same stub address is used as both router and factory
+        // (ChronicleOracleAdapter requires factory != address(0); on devnet the
+        // factory is embedded in the Route struct but never validated by the
+        // stub swap implementation). Demo-only.
+        aeroRouter = new DemoRwaAerodromeRouter(usdc);
         chronicleAdapter = new ChronicleOracleAdapter(
             address(aeroRouter),
             address(aeroRouter), // factory — non-zero stub; demo only
