@@ -18,6 +18,12 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Sign and broadcast a USDC deposit through the gateway.
+    ///
+    /// When `--destination` is supplied the call encodes
+    /// `gateway.depositTo(orderId, amount, deadline, idempotencyKey,
+    /// destination, minSharesPerLeg)`, routing the deposit through the
+    /// PortfolioRouter at that address. Without `--destination` the
+    /// existing single-vault `gateway.deposit()` path is used unchanged.
     Deposit {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -50,6 +56,16 @@ pub enum Command {
         /// field and the per-chain default for any chain id.
         #[arg(long = "fee-cap")]
         fee_cap: Option<u64>,
+        /// Router-deposit destination: 0x-prefixed address of the
+        /// PortfolioRouter to route through. When provided the command
+        /// calls `gateway.depositTo()` instead of `gateway.deposit()`.
+        #[arg(long)]
+        destination: Option<String>,
+        /// Per-leg minimum shares for the router deposit (repeatable or
+        /// comma-separated decimal U256 values). Only meaningful together
+        /// with `--destination`; defaults to an empty slice when omitted.
+        #[arg(long = "min-shares-per-leg", value_delimiter = ',', num_args = 0..)]
+        min_shares_per_leg: Vec<String>,
         /// Pretty-print the JSON output (multi-line, indented).
         #[arg(long)]
         pretty: bool,

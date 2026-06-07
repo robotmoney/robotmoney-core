@@ -80,6 +80,13 @@ pub struct Args {
     /// When `Some(_)` it wins over both `[fees].max_fee_per_gas_cap` in
     /// TOML and the per-chain default table.
     pub fee_cap_wei: Option<u64>,
+    /// When `Some(_)`, the deposit is routed through `gateway.depositTo()`
+    /// targeting this PortfolioRouter address. When `None` the existing
+    /// single-vault `gateway.deposit()` path is used.
+    pub destination: Option<String>,
+    /// Per-leg minimum shares forwarded to `gateway.depositTo()`.
+    /// Ignored when `destination` is `None`.
+    pub min_shares_per_leg: Vec<String>,
     pub pretty: bool,
 }
 
@@ -480,13 +487,51 @@ pub fn run(args: Args) -> i32 {
     };
 
     // -- Build + sign envelope -------------------------------------------
-    let calldata = RobotMoneyGateway::depositCall {
-        orderId: order_id,
-        amount,
-        deadline,
-        idempotencyKey: idempotency_key,
-    }
-    .abi_encode();
+    // Branch: router-deposit (depositTo) vs. single-vault deposit.
+    let calldata = if let Some(ref dest_str) = args.destination {
+        // Parse the destination router address.
+        let destination = match Address::from_str(dest_str) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("rmpc deposit: --destination is not a valid address: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        // Parse per-leg minimum shares (decimal U256 strings).
+        let mut min_shares: Vec<U256> = Vec::with_capacity(args.min_shares_per_leg.len());
+        for s in &args.min_shares_per_leg {
+            match U256::from_str(s) {
+                Ok(v) => min_shares.push(v),
+                Err(e) => {
+                    log::error!(
+                        "rmpc deposit: --min-shares-per-leg value {s:?} is not a decimal U256: {e}"
+                    );
+                    return EXIT_STARTUP_FAIL;
+                }
+            }
+        }
+        log::info!(
+            "deposit: router path: destination={destination:#x} legs={}",
+            min_shares.len()
+        );
+        RobotMoneyGateway::depositToCall {
+            orderId: order_id,
+            amount,
+            deadline,
+            idempotencyKey: idempotency_key,
+            destination,
+            minSharesPerLeg: min_shares,
+        }
+        .abi_encode()
+    } else {
+        RobotMoneyGateway::depositCall {
+            orderId: order_id,
+            amount,
+            deadline,
+            idempotencyKey: idempotency_key,
+        }
+        .abi_encode()
+    };
 
     let tx = build_eip1559(Eip1559Inputs {
         chain_id: cfg.chain_id,
