@@ -94,6 +94,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 
 **Jobs:**
 - `lint` — fmt and clippy across all crates; runs immediately
+- `audit` — dependency vulnerability scan; runs in parallel with `lint` (independent of build cache)
 - `doc-coverage` — build and rustdoc threshold check; **needs `lint`** (avoids running a full build on code that fails style checks)
 
 **Steps — `lint` job:**
@@ -102,6 +103,12 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 3. Cargo cache
 4. `cargo fmt --check` — formatting across all crates
 5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced
+
+**Steps — `audit` job:**
+1. Checkout repository
+2. Install Rust toolchain
+3. `cargo install cargo-audit --locked` — install the advisory scanner
+4. `cargo audit` — scans `Cargo.lock` against the rustsec/advisory-db; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Advisory deny/ignore configuration is read from `.cargo/audit.toml`. To accept a known low-risk advisory temporarily, add it to the `[ignore]` section in that file with a dated justification and expiry comment.
 
 **Steps — `doc-coverage` job:**
 1. Checkout repository
@@ -240,13 +247,14 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 
 **Steps:**
 1. Checkout repository
-2. Setup pnpm + Node 22
-3. `pnpm install --frozen-lockfile`
-4. `pnpm fmt` — Prettier check
-5. `pnpm lint` — ESLint
-6. `pnpm exec tsc -b` — TypeScript type check
-7. `pnpm test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
-8. `pnpm build` — verify production build succeeds
+2. Setup Bun + Node 22
+3. `bun install --frozen-lockfile`
+4. `bun run fmt` — Prettier check
+5. `bun run lint` — ESLint
+6. `bunx tsc -b` — TypeScript type check
+7. `bun run test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
+8. `bun run build` — verify production build succeeds
+9. `npm audit --audit-level=high` — dependency vulnerability scan; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `npm audit` because it accepts `--audit-level`; npm is available from the Node 22 setup step. To accept a known advisory temporarily, document the justification in an inline comment alongside any `--ignore` flag. Do not lower `--audit-level`.
 
 ---
 
@@ -486,12 +494,12 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 |------------------|------|-------|
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` quick on feature PRs; the `forge-coverage-gate` job is heavy and `if:`-gated to push / `dev-phase-*` |
 | `solidity-fmt-natspec-slither` | quick | |
-| `rust-fmt-clippy-doc-coverage` | quick | |
+| `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
 | `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
-| `dapp-lint-typecheck-vitest-build` | quick | |
+| `dapp-lint-typecheck-vitest-build` | quick | includes npm audit --audit-level=high step |
 | `dapp-e2e` | heavy | full-devnet Playwright suite |
 | `opencode-plugin-validate-walkthrough-offline` | quick | |
 | `openclaw-safety-walkthrough` | quick | |

@@ -21,6 +21,12 @@
 # dependencies on every CI run, making builds non-reproducible and masking
 # dependency-introduced regressions.
 #
+# WHY bun audit --audit-level=high
+# The dApp handles key generation in the browser; a compromised dependency could silently
+# exfiltrate key material. Auditing at high severity (CVSS >= 7.0) catches supply-chain
+# attacks before they reach users. --audit-level=high matches the threshold used by
+# cargo audit and avoids noise from informational/low findings in dev tooling.
+#
 # GOTCHAS
 # - pnpm fmt runs Prettier in check mode. If a developer commits auto-formatted code
 #   from an IDE that uses a different Prettier version, this step will fail with a diff.
@@ -30,6 +36,9 @@
 #   suite 10 cover runtime correctness.
 # - Node 22 is pinned. If a dependency drops Node 22 support, this step will fail at
 #   install time with a peer dependency error, not at test time.
+# - bun audit exits non-zero if any high/critical vulnerability is found. To accept a
+#   known advisory temporarily, document the exception in a comment alongside the
+#   npm audit --ignore flag or by patching the dependency. Do not lower --audit-level.
 
 name: dapp-lint-typecheck-vitest-build
 
@@ -88,3 +97,11 @@ jobs:
 
       - name: Production build
         run: bun run build
+
+      - name: Dependency vulnerability audit
+        # Scans for high and critical severity advisories (CVSS >= 7.0).
+        # Uses npm audit because bun does not yet expose --audit-level directly;
+        # npm is available via the Node 22 setup step above.
+        # To accept a known advisory temporarily, document the justification
+        # alongside any --ignore flag used. Do not lower --audit-level.
+        run: npm audit --audit-level=high

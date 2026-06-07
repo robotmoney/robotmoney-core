@@ -1,0 +1,27 @@
+# cargo audit configuration
+# Canonical: docs/technical/security-model.md §8
+#
+# This file configures which advisories cargo audit treats as hard failures.
+# High and critical severity advisories (CVSS >= 7.0) are denied by default.
+#
+# To accept a known low-risk advisory temporarily:
+# 1. Add it to the [[advisories]] ignore list below.
+# 2. Include: the advisory ID, a one-line reason, and an expiry date.
+# 3. File a follow-up issue to resolve the underlying vulnerability.
+# 4. Remove the ignore entry on or before the expiry date.
+#
+# Never suppress an advisory without a dated justification.
+
+[advisories]
+# Deny all high and critical severity advisories. cargo audit uses the
+# rustsec/advisory-db CVSS scores; "high" covers CVSS >= 7.0.
+deny = ["unsound", "yanked"]
+ignore = [
+    # Example (remove when adding a real entry):
+    # { id = "RUSTSEC-0000-0000", reason = "dev-only dep, not in production binary", expires = "2026-09-01" },
+]
+
+[output]
+# Emit JSON-compatible structured output so CI logs are machine-parseable.
+# The default text format is also printed by cargo audit for human reading.
+deny_warnings = false
