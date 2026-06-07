@@ -151,6 +151,22 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Query per-address vault positions across all registered vaults (Architecture §5.1).
+    ///
+    /// Returns receipt token balance, USDC value (via `previewRedeem`), share of
+    /// vault TVL in basis points, and composite portfolio total for the given
+    /// address. Requires `registry_address` in the operator config.
+    GetPosition {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// 20-byte holder address, 0x-prefixed hex.
+        #[arg(long)]
+        address: String,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
     /// Read an ERC-20 token balance for an address (USDC by default).
     ///
     /// Per docs/implementation-plan.md §9 / docs/technical/rmpc-read-output-contract.md.

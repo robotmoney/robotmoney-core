@@ -58,9 +58,12 @@ Goal: `rmpc` can answer vault health, agent position, gateway state, and tx
 status without any block-explorer API.
 
 Status: **Complete.** All read commands (`get-vault`, `get-balance`, `get-agent`,
-`get-gateway`, `get-deposit`, `get-tx`, `get-allowance`, `get-roles`) plus the
-shared `Envelope<T>` output contract and `DecimalU256` newtypes are implemented.
-`rmpc status` output is normalized into the same envelope shape.
+`get-gateway`, `get-deposit`, `get-tx`, `get-allowance`, `get-roles`,
+`get-position`) plus the shared `Envelope<T>` output contract and `DecimalU256`
+newtypes are implemented. `rmpc status` output is normalized into the same
+envelope shape. `get-position` (issue #666) enumerates all registered vaults for
+a holder address, reporting receipt token balance, `previewRedeem`-derived USDC
+value, share-of-TVL in basis points, and composite `portfolio_total_usdc`.
 
 ### Phase 4 — Agent-Harness Installation and Skill Loading
 Goal: Install and exercise Robot Money inside OpenCode and OpenClaw runtimes.

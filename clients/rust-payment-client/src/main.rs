@@ -33,6 +33,7 @@ fn main() {
         Command::GetGateway { config, .. } => Some(config.as_path()),
         Command::GetAgent { config, .. } => Some(config.as_path()),
         Command::GetRoles { config, .. } => Some(config.as_path()),
+        Command::GetPosition { config, .. } => Some(config.as_path()),
         Command::GetBalance { config, .. } => Some(config.as_path()),
         Command::GetAllowance { config, .. } => Some(config.as_path()),
         Command::GetDeposit { config, .. } => Some(config.as_path()),
@@ -91,6 +92,11 @@ fn main() {
             address,
             pretty,
         } => commands::get_roles::run(&config, &address, pretty),
+        Command::GetPosition {
+            config,
+            address,
+            pretty,
+        } => commands::get_position::run(&config, &address, pretty),
         Command::GetBalance {
             config,
             address,

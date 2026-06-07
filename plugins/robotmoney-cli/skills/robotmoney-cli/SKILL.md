@@ -4,7 +4,8 @@ description: >
   Complete rmpc CLI reference. Use this skill when you need the full command
   surface for the Robot Money Rust payment client, including read commands
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
-  get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
+  get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock,
+  get-position),
   write commands (deposit, withdraw, status, self-check), and governance write
   commands (propose, vote). Covers all flags, output shapes, preflight rules,
   and the get-governance → propose → vote example trace.
@@ -30,7 +31,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   subcommand: `deposit`, `withdraw`, `status`, `self-check`, `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `propose`, `vote`.
+  `get-tx`, `get-position`, `propose`, `vote`.
 
 ## Command surface
 
@@ -50,6 +51,7 @@ rmpc get-gateway     Read gateway state directly from chain
 rmpc get-agent       Read an agent's authorization + window usage
 rmpc get-roles       Read role membership on the gateway for a target address
 rmpc get-balance     Read an ERC-20 token balance for an address (USDC by default)
+rmpc get-position    Query per-address vault positions across all registered vaults
 rmpc get-allowance   Read an ERC-20 allowance(owner, spender) on the configured USDC
 rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash

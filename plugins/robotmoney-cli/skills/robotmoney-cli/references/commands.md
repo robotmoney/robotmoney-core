@@ -81,6 +81,20 @@ Read role membership on the gateway for a target address.
 rmpc get-roles --config <CONFIG> --address <ADDR> [--pretty]
 ```
 
+### `rmpc get-position`
+
+Query per-address vault positions across all registered vaults (Architecture §5.1).
+
+Returns receipt token balance, USDC value (via `previewRedeem`), share of vault TVL
+in basis points, and composite `portfolio_total_usdc` for the given address.
+Requires `registry_address` in the operator config.
+
+```
+rmpc get-position --config <CONFIG> --address <ADDR> [--pretty]
+```
+
+Exit codes: 0 — success (including partial); 2 — malformed `--address`; 3 — config/RPC/registry failure.
+
 ### `rmpc get-balance`
 
 Read an ERC-20 token balance for an address (USDC by default).
