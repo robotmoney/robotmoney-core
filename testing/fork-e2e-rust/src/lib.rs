@@ -905,6 +905,44 @@ sol! {
         function decimals() external view returns (uint8);
         function activeAdapterCount() external view returns (uint256);
     }
+
+    /// Basket vault interface — shared ERC-4626 surface of
+    /// `ProtocolAssetVault` and `AgentTokenVault` that the fork-e2e
+    /// round-trip test exercises. Selectors match `BasketVault` (the
+    /// common base) and the two thin subclasses.
+    ///
+    /// Source: contracts/vaults/BasketVault.sol,
+    ///         contracts/vaults/ProtocolAssetVault.sol,
+    ///         contracts/vaults/AgentTokenVault.sol
+    #[allow(missing_docs)]
+    interface IBasketVault {
+        /// ERC-4626 deposit: pull `assets` USDC from caller, mint shares to
+        /// `receiver`. The vault swaps the USDC into the basket during deposit.
+        function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+        /// ERC-4626 redeem: burn `shares` owned by `owner` and deliver USDC to
+        /// `receiver` after selling the proportional basket back to USDC.
+        function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+        /// ERC-20 share balance.
+        function balanceOf(address account) external view returns (uint256);
+        /// Total USDC-denominated NAV of all held assets (TWAP-priced).
+        function totalAssets() external view returns (uint256);
+        /// Worst-case USDC floor for redeeming `shares` (TWAP × slippage × exit-fee).
+        function previewRedeem(uint256 shares) external view returns (uint256);
+        /// Maximum shares `owner` can redeem (returns `balanceOf(owner)` for
+        /// BasketVault — no per-user cap beyond TVL and pause state).
+        function maxRedeem(address owner) external view returns (uint256);
+        /// ERC-4626 asset = USDC.
+        function asset() external view returns (address);
+        /// Exit fee in basis points (≤ 100, i.e. ≤ 1%).
+        function exitFeeBps() external view returns (uint256);
+        /// Maximum slippage in basis points applied to every swap leg.
+        function maxSlippageBps() external view returns (uint256);
+        /// Number of active basket assets.
+        function activeAssetCount() external view returns (uint256);
+        /// Register a new basket asset. ADMIN_ROLE only.
+        /// `venue_` = 0 for Uniswap V3 (the only venue used in fork-e2e tests).
+        function addAsset(address token_, address pool_, uint24 swapFee_, address adapter_, uint8 venue_) external;
+    }
 }
 
 // -- JSON-RPC client ----------------------------------------------
