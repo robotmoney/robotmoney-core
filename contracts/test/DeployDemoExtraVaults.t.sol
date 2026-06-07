@@ -421,6 +421,42 @@ contract DeployDemoExtraVaultsTest is Test {
         }
     }
 
+    /// @notice Multiple sequential router deposits + direct RWA deposits must
+    ///         not overflow uint256 in _convertToShares. Regression for the
+    ///         DemoAerodromeRouter 1:1 swap bug: the old router minted deSPXA
+    ///         1:1 with USDC atoms, but the Chronicle oracle prices deSPXA at
+    ///         5000 USD each, so each deposit left totalAssets ~0 while
+    ///         totalSupply grew exponentially. This caused MathOverflowedMulDiv
+    ///         after ~7 deposits — the smoke-test devnet seeds 4 depositors x 2
+    ///         paths (8 deposits into RWA), reliably hitting it.
+    function test_rwaVault_multi_deposit_does_not_overflow() public {
+        DeployDemoExtraVaults.Deployed memory d = _runScript();
+        RwaVault rwaVault = RwaVault(d.rwaVault);
+
+        // 4 depositors x (50 USDC router leg + 1000 USDC direct) = smoke-test scenario.
+        uint256 perRouterLeg = 50e6;
+        uint256 perDirect = 1_000e6;
+        uint256 depositors = 4;
+
+        for (uint256 i = 0; i < depositors; i++) {
+            usdc.mint(address(this), perRouterLeg);
+            usdc.approve(address(rwaVault), perRouterLeg);
+            rwaVault.deposit(perRouterLeg, address(this));
+
+            usdc.mint(address(this), perDirect);
+            usdc.approve(address(rwaVault), perDirect);
+            rwaVault.deposit(perDirect, address(this));
+        }
+
+        uint256 totalDeposited = depositors * (perRouterLeg + perDirect);
+        uint256 ta = rwaVault.totalAssets();
+        assertGt(ta, 0, "totalAssets must be non-zero after RWA deposits");
+        // Chronicle prices deSPXA correctly so totalAssets ~= total deposited (within 1%).
+        assertApproxEqRel(
+            ta, totalDeposited, 0.01e18, "totalAssets must approximate total deposited"
+        );
+    }
+
     /// @notice The rmRWA vault holds exactly one basket asset (deSPXA stub),
     ///         wired with Venue.Aerodrome and a ChronicleOracleAdapter. Issue #562 AC1.
     function test_rwaVault_holds_deSPXA_asset_Aerodrome_venue() public {
