@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -45,6 +45,39 @@ no longer be revealed and the depositor must re-commit.
 
 ```solidity
 uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
+```
+
+
+### OP_KIND_DEPOSIT_TO
+Op-kind discriminator byte for `depositTo` paymentId hash.
+
+Scout stub — issue #679 incorporates this constant into the paymentId hash.
+
+
+```solidity
+uint8 public constant OP_KIND_DEPOSIT_TO = 0x01
+```
+
+
+### OP_KIND_DEPOSIT
+Op-kind discriminator byte for `deposit` paymentId hash.
+
+Scout stub — issue #679 incorporates this constant into the paymentId hash.
+
+
+```solidity
+uint8 public constant OP_KIND_DEPOSIT = 0x02
+```
+
+
+### OP_KIND_WITHDRAW
+Op-kind discriminator byte for `withdraw` paymentId hash.
+
+Scout stub — issue #679 incorporates this constant into the paymentId hash.
+
+
+```solidity
+uint8 public constant OP_KIND_WITHDRAW = 0x03
 ```
 
 

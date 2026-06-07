@@ -1,5 +1,5 @@
-# TestUSDC
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/test/RobotMoneyVault.t.sol)
+# LossAcceptanceUSDC
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/test/ForceRemoveAdapterLossAcceptance.t.sol)
 
 **Inherits:**
 ERC20

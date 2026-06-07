@@ -1,12 +1,8 @@
-# MockAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/test/RobotMoneyVault.t.sol)
+# InsolventMockAdapter
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/test/ForceRemoveAdapterLossAcceptance.t.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
-
-Holds USDC in the adapter (simulates deployed yield position).
-Supports direct "donation" by crediting extra assets without going
-through the vault — modelling the Aave / Morpho / Compound donation path.
 
 
 ## Constants
@@ -25,12 +21,13 @@ address public immutable VAULT
 
 
 ## State Variables
-### donatedAmount
-Extra USDC credited directly (simulates protocol-level donation).
+### reportedAssets
+Simulated insolvent balance — what the adapter reports via
+`totalAssets()` even though the funds are gone.
 
 
 ```solidity
-uint256 public donatedAmount
+uint256 public reportedAssets
 ```
 
 
@@ -49,19 +46,29 @@ modifier onlyVault() ;
 constructor(address usdc_, address vault_) ;
 ```
 
+### setReportedAssets
+
+Set the amount the adapter claims it holds (decoupled from
+actual balance to simulate insolvency).
+
+
+```solidity
+function setReportedAssets(uint256 amount) external;
+```
+
 ### deploy
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
 
 
 ```solidity
-function deploy(uint256 amount) external onlyVault;
+function deploy(uint256) external onlyVault;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`amount`|`uint256`|Amount of USDC (6-decimal units) to deploy into the protocol.|
+|`<none>`|`uint256`||
 
 
 ### withdraw
@@ -70,19 +77,19 @@ Withdraw `amount` USDC from the underlying protocol and return it to the vault.
 
 
 ```solidity
-function withdraw(uint256 amount) external onlyVault returns (uint256);
+function withdraw(uint256) external onlyVault returns (uint256 recovered);
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`amount`|`uint256`|Amount of USDC to withdraw; pass `type(uint256).max` to withdraw all.|
+|`<none>`|`uint256`||
 
 **Returns**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`<none>`|`uint256`|actual The amount of USDC actually withdrawn (may be ≤ amount on shortfall).|
+|`recovered`|`uint256`|actual The amount of USDC actually withdrawn (may be ≤ amount on shortfall).|
 
 
 ### totalAssets
@@ -109,17 +116,6 @@ function rescueTokens(address, address) external onlyVault;
 |`<none>`|`address`||
 |`<none>`|`address`||
 
-
-### donateFromAttacker
-
-Simulate a protocol-level donation: credits USDC directly to the adapter
-without going through the vault (models Aave `supply(onBehalfOf=adapter)`,
-Morpho `deposit(receiver=adapter)`, or Compound `supply` to adapter).
-
-
-```solidity
-function donateFromAttacker(address attacker, uint256 amount) external;
-```
 
 ## Errors
 ### OnlyVault

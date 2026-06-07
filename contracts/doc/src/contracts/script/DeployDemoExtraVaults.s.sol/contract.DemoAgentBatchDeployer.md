@@ -1,5 +1,5 @@
 # DemoAgentBatchDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
 Split from the former `DemoAgentRwaBatchDeployer` to keep each

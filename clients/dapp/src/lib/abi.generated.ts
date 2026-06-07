@@ -106,6 +106,45 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "OP_KIND_DEPOSIT",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint8",
+        internalType: "uint8",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "OP_KIND_DEPOSIT_TO",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint8",
+        internalType: "uint8",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "OP_KIND_WITHDRAW",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint8",
+        internalType: "uint8",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "PAUSER_ROLE",
     inputs: [],
     outputs: [

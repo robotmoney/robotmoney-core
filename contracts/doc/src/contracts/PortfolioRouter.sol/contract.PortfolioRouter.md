@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/fd1e1fc4dc2a5a456dd5a95f2ef21cdd86bf1dfa/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -141,6 +141,22 @@ uint256[] private _defaultWeightBps
 
 
 ## Functions
+### _requireAuditGatedEligibility
+
+Scout stub — no-op. Issue #692 will add the audit-certification
+check body. Callers: `_requireRouterEligible` (post-registry check).
+
+
+```solidity
+function _requireAuditGatedEligibility(address vault) internal view;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Vault whose audit-gated certification will be checked.|
+
+
 ### constructor
 
 

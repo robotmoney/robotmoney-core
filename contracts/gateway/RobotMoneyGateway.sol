@@ -142,16 +142,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     //
     // Canonical: docs/technical/security-model.md §10, issue #679.
 
-    /// @dev Scout stub — op-kind discriminator byte for `depositTo` paymentId.
-    ///      Issue #679 incorporates this constant into the paymentId hash.
+    /// @notice Op-kind discriminator byte for `depositTo` paymentId hash.
+    /// @dev Scout stub — issue #679 incorporates this constant into the paymentId hash.
     uint8 public constant OP_KIND_DEPOSIT_TO = 0x01;
 
-    /// @dev Scout stub — op-kind discriminator byte for `deposit` paymentId.
-    ///      Issue #679 incorporates this constant into the paymentId hash.
+    /// @notice Op-kind discriminator byte for `deposit` paymentId hash.
+    /// @dev Scout stub — issue #679 incorporates this constant into the paymentId hash.
     uint8 public constant OP_KIND_DEPOSIT = 0x02;
 
-    /// @dev Scout stub — op-kind discriminator byte for `withdraw` paymentId.
-    ///      Issue #679 incorporates this constant into the paymentId hash.
+    /// @notice Op-kind discriminator byte for `withdraw` paymentId hash.
+    /// @dev Scout stub — issue #679 incorporates this constant into the paymentId hash.
     uint8 public constant OP_KIND_WITHDRAW = 0x03;
 
     // -------------------------------------------------------------------
