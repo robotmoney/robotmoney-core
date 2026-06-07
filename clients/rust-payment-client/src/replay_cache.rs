@@ -1,10 +1,12 @@
 //! Canonical: docs/architecture.md §10 — Local State (submitted-order cache)
 //!
 //! Client-side replay cache keyed on the gateway-equivalent `paymentId`,
-//! which is `keccak256(abi.encode(chain_id, gateway, agent, order_id,
-//! amount, idempotency_key))`.  The deadline is intentionally excluded
-//! from the key — this mirrors the on-chain formula in
+//! which is `keccak256(abi.encode(OP_DEPOSIT, chain_id, gateway, agent,
+//! order_id, amount, idempotency_key))`.  The deadline is intentionally
+//! excluded from the key — this mirrors the on-chain formula in
 //! `RobotMoneyGateway.deposit` (comment "DEADLINE INTENTIONALLY EXCLUDED").
+//! The `OP_DEPOSIT = 1u8` prefix namespaces deposit ids away from withdrawal
+//! ids (which use `OP_WITHDRAW = 2u8`) — see PAYMENTID-001 / issue #679.
 //!
 //! Audit finding M3 (priority-fee cap + replay cache half). The gateway
 //! contract enforces idempotency on-chain via the paymentId derived from
@@ -40,8 +42,8 @@ pub const REPLAY_CACHE_FILENAME: &str = "submitted_order_ids.json";
 /// Inputs used to derive the gateway-equivalent paymentId cache key.
 ///
 /// Mirrors the on-chain formula:
-/// `keccak256(abi.encode(chain_id, gateway, agent, order_id, amount,
-/// idempotency_key))`.
+/// `keccak256(abi.encode(OP_DEPOSIT, chain_id, gateway, agent, order_id,
+/// amount, idempotency_key))`.
 pub struct PaymentIdInputs<'a> {
     pub chain_id: u64,
     pub gateway: Address,
@@ -55,11 +57,19 @@ pub struct PaymentIdInputs<'a> {
     pub tx_hash: &'a str,
 }
 
-/// Compute the gateway-equivalent paymentId from the given inputs.
+/// Op-kind prefix for deposit paymentIds — mirrors `OP_DEPOSIT = 1` in
+/// `RobotMoneyGateway.sol`.
+pub const OP_DEPOSIT: u8 = 1;
+
+/// Op-kind prefix for withdrawal paymentIds — mirrors `OP_WITHDRAW = 2` in
+/// `RobotMoneyGateway.sol`.
+pub const OP_WITHDRAW: u8 = 2;
+
+/// Compute the gateway-equivalent paymentId for a deposit.
 ///
-/// Formula: `keccak256(abi.encode(chain_id, gateway, agent, order_id,
-/// amount, idempotency_key))`.  The deadline is intentionally excluded —
-/// matching the on-chain definition in `RobotMoneyGateway`.
+/// Formula: `keccak256(abi.encode(OP_DEPOSIT, chain_id, gateway, agent,
+/// order_id, amount, idempotency_key))`.  The deadline is intentionally
+/// excluded — matching the on-chain definition in `RobotMoneyGateway`.
 pub fn compute_payment_id(
     chain_id: u64,
     gateway: Address,
@@ -68,9 +78,11 @@ pub fn compute_payment_id(
     amount: U256,
     idempotency_key: B256,
 ) -> B256 {
-    // abi.encode(uint256(chain_id), address(gateway), address(agent),
-    //            bytes32(order_id), uint256(amount), bytes32(idempotency_key))
+    // abi.encode(uint8(OP_DEPOSIT), uint256(chain_id), address(gateway),
+    //            address(agent), bytes32(order_id), uint256(amount),
+    //            bytes32(idempotency_key))
     let encoded = (
+        U256::from(OP_DEPOSIT),
         U256::from(chain_id),
         gateway,
         agent,

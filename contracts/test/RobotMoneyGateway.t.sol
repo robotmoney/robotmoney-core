@@ -570,8 +570,9 @@ contract RobotMoneyGatewayTest is Test {
         bytes32 idem = keccak256("idem-1");
         uint64 deadline = uint64(block.timestamp + 60);
 
-        bytes32 expectedPaymentId =
-            keccak256(abi.encode(block.chainid, address(gateway), agent, orderId, amount, idem));
+        bytes32 expectedPaymentId = keccak256(
+            abi.encode(uint8(1), block.chainid, address(gateway), agent, orderId, amount, idem)
+        );
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
         vm.expectEmit(true, true, true, true, address(gateway));
@@ -1327,8 +1328,9 @@ contract GatewayWithdrawTest is Test {
         uint64 deadline = uint64(block.timestamp + 60);
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
-        bytes32 expectedPaymentId =
-            keccak256(abi.encode(block.chainid, address(gateway), agent, orderId, shares, idem));
+        bytes32 expectedPaymentId = keccak256(
+            abi.encode(uint8(2), block.chainid, address(gateway), agent, orderId, shares, idem)
+        );
 
         vm.expectEmit(true, true, true, true, address(gateway));
         emit IGateway.AgentWithdrawal(
