@@ -119,6 +119,41 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         no longer be revealed and the depositor must re-commit.
     uint256 public constant COMMIT_EXPIRY_BLOCKS = 256;
 
+    // ── Scout stub: paymentId op-kind discriminator (#679) ───────────────────
+    //
+    // SEAM: `OP_KIND_*` constants are the integration point for issue #679
+    // (add op-kind discriminator to gateway paymentId hash).
+    //
+    // When #679 is implemented the paymentId hash in `depositTo`, `deposit`,
+    // and `withdraw` must include the relevant `OP_KIND_*` byte so that
+    // identical (orderId, amount, idempotencyKey) tuples across operation
+    // types hash to distinct paymentIds and can never collide.
+    //
+    // Current hash (no discriminator):
+    //   keccak256(abi.encode(block.chainid, address(this), msg.sender,
+    //                        orderId, amount, idempotencyKey))
+    //
+    // Target hash (#679):
+    //   keccak256(abi.encode(OP_KIND_*, block.chainid, address(this),
+    //                        msg.sender, orderId, amount, idempotencyKey))
+    //
+    // Risk: Without the discriminator a replay attack across operation kinds
+    // is theoretically possible. See docs/technical/security-model.md §10.
+    //
+    // Canonical: docs/technical/security-model.md §10, issue #679.
+
+    /// @dev Scout stub — op-kind discriminator byte for `depositTo` paymentId.
+    ///      Issue #679 incorporates this constant into the paymentId hash.
+    uint8 public constant OP_KIND_DEPOSIT_TO = 0x01;
+
+    /// @dev Scout stub — op-kind discriminator byte for `deposit` paymentId.
+    ///      Issue #679 incorporates this constant into the paymentId hash.
+    uint8 public constant OP_KIND_DEPOSIT = 0x02;
+
+    /// @dev Scout stub — op-kind discriminator byte for `withdraw` paymentId.
+    ///      Issue #679 incorporates this constant into the paymentId hash.
+    uint8 public constant OP_KIND_WITHDRAW = 0x03;
+
     // -------------------------------------------------------------------
     // Immutables
     // -------------------------------------------------------------------

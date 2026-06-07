@@ -206,6 +206,41 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @param vault The vault address that lacks the eligibility flag.
     error VaultNotRouterEligible(address vault);
 
+    // ─── Scout stub: audit-gated eligibility (#692) ──────────────────────────
+    //
+    // SEAM: `_requireAuditGatedEligibility` is the integration point for
+    // issue #692 (production audit-gated router eligibility for basket vaults).
+    //
+    // When #692 is implemented this stub must:
+    //   1. Be called from `_requireRouterEligible` after the registry flag check.
+    //   2. Verify that the vault passed the Architecture §4.1 certification
+    //      checklist (pool cardinality, per-asset TWAP windows, intra-vault
+    //      rebalancing model) before it ever receives USDC from the router.
+    //   3. Gate activation on a dedicated deploy script
+    //      `DeployProtocolAssetVault.s.sol` that calls
+    //      `VaultRegistry.setRouterEligible` only once the audit is satisfied.
+    //
+    // The stub is intentionally a no-op so existing tests pass unchanged.
+    // Replace the body with real certification-state reads from VaultRegistry
+    // (or a separate AuditRegistry contract) once #692 delivers the interface.
+    //
+    // Risk: A ProtocolAssetVault or AgentTokenVault could be whitelisted before
+    // its pool cardinality and TWAP-window configuration is certified — see
+    // docs/technical/security-model.md §9 (circuit breakers & monitoring).
+    //
+    // Canonical: docs/architecture.md §4.1, issue #692.
+    /// @dev Scout stub — no-op. Issue #692 will add the audit-certification
+    ///      check body. Callers: `_requireRouterEligible` (post-registry check).
+    /// @param vault Vault whose audit-gated certification will be checked.
+    // solhint-disable-next-line no-empty-blocks
+    function _requireAuditGatedEligibility(address vault) internal view {
+        // STUB (issue #701): intentional no-op.
+        // Issue #692 replaces this body with audit-certification state reads.
+        // The `vault` parameter is referenced here to suppress the unused-param
+        // compiler warning while the stub is in place.
+        (vault); // no-op reference
+    }
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
