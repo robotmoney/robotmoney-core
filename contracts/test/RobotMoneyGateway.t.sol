@@ -969,13 +969,37 @@ contract RobotMoneyGatewayTest is Test {
         uint256 shares = amount;
 
         bytes32 depositId = keccak256(
-            abi.encode(uint8(1), block.chainid, address(gateway), address(this), orderId, amount, idempotencyKey)
+            abi.encode(
+                uint8(1),
+                block.chainid,
+                address(gateway),
+                address(this),
+                orderId,
+                amount,
+                idempotencyKey
+            )
         );
         bytes32 depositToId = keccak256(
-            abi.encode(uint8(3), block.chainid, address(gateway), address(this), orderId, amount, idempotencyKey)
+            abi.encode(
+                uint8(3),
+                block.chainid,
+                address(gateway),
+                address(this),
+                orderId,
+                amount,
+                idempotencyKey
+            )
         );
         bytes32 withdrawId = keccak256(
-            abi.encode(uint8(2), block.chainid, address(gateway), address(this), orderId, shares, idempotencyKey)
+            abi.encode(
+                uint8(2),
+                block.chainid,
+                address(gateway),
+                address(this),
+                orderId,
+                shares,
+                idempotencyKey
+            )
         );
 
         assertTrue(depositId != depositToId, "deposit and depositTo must not collide");
