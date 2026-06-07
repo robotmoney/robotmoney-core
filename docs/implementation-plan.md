@@ -303,7 +303,7 @@ deploy-script wiring and registry registration remain.
 - [x] TWAP oracle in both basket vaults — `ProtocolAssetVault` and `AgentTokenVault` are thin subclasses of `BasketVault` and inherit `_twapUsdcValue()`, `twapWindow`, and the full TWAP oracle; no separate implementation needed
 - [x] Rebalancing model ADR + `rebalance()` implementation — `docs/adr/` (#545), `contracts/src/vaults/BasketVault.sol` (#550)
 - [x] Agent-token shortlist governance — ADR (#546), `AgentTokenVault` shortlist mechanism (#552)
-- [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
+- [ ] Router eligibility: register both basket vaults once ADRs resolved + audited (drawdown policy resolved: [ADR-0008](adr/ADR-0008-basket-vault-drawdown-redemption-policy.md))
 
 ### Phase: Real four-vault demo
 Goal: All four PRD §11 vaults hold real Base-mainnet assets and show real depositors at startup — production-grade, no placeholders. Resolve basket-vault router-eligibility ADRs, add Aerodrome + Uniswap V4 multi-DEX support, ingest real DEX pools into the fork, stand up the deSPXA RWA vault, seed all four vaults, and prove it at every test-pyramid layer. Tracked as Plan #109 phase (issues #541–#568).

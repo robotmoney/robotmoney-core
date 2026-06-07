@@ -42,7 +42,9 @@ Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigge
 
 **Depositor migration on vault retirement (§3.5).** Retirement is a one-way status and existing depositors can still withdraw, but there is no forced or assisted migration path out of a retiring vault. Decide whether one is needed.
 
-**Basket-vault drawdown redemption policy (§3.7).** Specify the redemption policy when a basket vault is in drawdown — forced sale vs. queued withdrawal vs. NAV haircut — before ADMIN_ROLE marks any basket vault router-eligible.
+**Basket-vault drawdown redemption policy (§3.7).** **Resolved** — see [ADR-0008](../adr/ADR-0008-basket-vault-drawdown-redemption-policy.md) (2026-06-07).
+
+Decision: NAV haircut at TWAP. Depositors redeem at the current TWAP-priced NAV (after `maxSlippageBps` and `exitFeeBps`); no forced sale, no withdrawal queue, no gating. `BasketVault.previewRedeem` already implements this floor; no new contract code is required. NatSpec disclosure added to `previewRedeem`. `EMERGENCY_ROLE` may invoke `emergencyUnwind()` to convert basket assets to idle USDC if pool liquidity deteriorates severely. Unblocks `VaultRegistry.setRouterEligible` for `ProtocolAssetVault` and `AgentTokenVault` (once audits and oracle hardening are complete).
 
 > **Research questions** (open-ended modeling and assurance, not product/engineering decisions) live in `docs/technical/research-questions.md` — currently the inclusion-attack economic bounds (§3.8) and protocol-agent resilience (§3.10).
 

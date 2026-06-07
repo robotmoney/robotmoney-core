@@ -423,6 +423,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         Documented as a floor, not an exact quote — actual proceeds will
     ///         typically exceed this value when swap depth is healthy.
     ///         See docs/technical/basket-vault-gap-report.md §3, §5.
+    ///
+    /// @notice Drawdown policy (ADR-0008): this vault uses a NAV-haircut redemption
+    ///         model. During a drawdown event basket asset prices may be below deposit
+    ///         value; `previewRedeem` returns the TWAP-priced NAV floor (after
+    ///         maxSlippageBps and exitFeeBps). The protocol does not queue, gate, or
+    ///         force-sell assets to protect depositor principal — depositors accept
+    ///         current NAV on exit. Redemptions are always synchronous; the
+    ///         `EMERGENCY_ROLE` may invoke `emergencyUnwind()` to convert basket
+    ///         assets to idle USDC if pool liquidity deteriorates severely.
+    ///         See docs/adr/ADR-0008-basket-vault-drawdown-redemption-policy.md.
     function previewRedeem(uint256 shares) public view override returns (uint256) {
         uint256 gross = _convertToAssets(shares, Math.Rounding.Floor);
         // Apply slippage floor: worst-case swap proceeds = TWAP NAV * (1 - maxSlippageBps).
