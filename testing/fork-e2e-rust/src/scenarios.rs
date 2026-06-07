@@ -13,7 +13,7 @@
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 
-use crate::{Account, Bytes, ForkFixture, HarnessError, IRobotMoneyVault, Receipt, IERC20};
+use crate::{Account, Bytes, ForkFixture, HarnessError, IBasketVault, IRobotMoneyVault, Receipt, IERC20};
 
 /// Read a `uint256`-returning view function on the vault. The
 /// caller must know the function actually returns a single
@@ -112,4 +112,54 @@ pub fn vault_redeem(
         owner,
     };
     account.send(crate::addresses::VAULT, &call, U256::ZERO, 1_200_000)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Basket vault helpers (ProtocolAssetVault / AgentTokenVault)
+// These target an arbitrary vault address so the caller can pass a
+// freshly-deployed basket vault address from the fork-e2e test.
+// ──────────────────────────────────────────────────────────────────────
+
+/// Read a `uint256`-returning view function on any basket vault at `vault`.
+/// See [`vault_read_u256`] for the rationale on unbounded `SolCall`.
+pub fn basket_read_u256<C: alloy_sol_types::SolCall>(
+    caller: &Account<'_>,
+    vault: Address,
+    call: &C,
+) -> Result<U256, HarnessError> {
+    let bytes: Bytes = caller.call(vault, call)?;
+    decode_u256(&bytes)
+}
+
+/// Deposit `assets` USDC into the basket vault at `vault_addr`.
+/// Gas is set higher than for `RobotMoneyVault` because each basket
+/// deposit executes one Uniswap V3 swap per active asset.
+pub fn basket_deposit(
+    account: &Account<'_>,
+    vault_addr: Address,
+    assets: U256,
+    receiver: Address,
+) -> Result<Receipt, HarnessError> {
+    let call = IBasketVault::depositCall { assets, receiver };
+    // 2.5M gas: covers USDC pull + up to 2 Uniswap V3 exactInputSingle hops.
+    account.send(vault_addr, &call, U256::ZERO, 2_500_000)
+}
+
+/// Redeem `shares` from the basket vault at `vault_addr`.
+/// Gas is set higher than for `RobotMoneyVault` because each basket
+/// redeem executes one Uniswap V3 swap per active asset.
+pub fn basket_redeem(
+    account: &Account<'_>,
+    vault_addr: Address,
+    shares: U256,
+    receiver: Address,
+    owner: Address,
+) -> Result<Receipt, HarnessError> {
+    let call = IBasketVault::redeemCall {
+        shares,
+        receiver,
+        owner,
+    };
+    // 2.5M gas: covers share burn + up to 2 Uniswap V3 exactInputSingle hops.
+    account.send(vault_addr, &call, U256::ZERO, 2_500_000)
 }
