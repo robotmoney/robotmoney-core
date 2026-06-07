@@ -86,7 +86,13 @@ contract DeployProtocolAssetVault is Script {
 
         vm.startBroadcast();
         d = _deployAndRegister(
-            admin, emergencyResponder, swapRouter, usdc, tvlCap, perDepositCap, exitFeeBps,
+            admin,
+            emergencyResponder,
+            swapRouter,
+            usdc,
+            tvlCap,
+            perDepositCap,
+            exitFeeBps,
             feeRecipient
         );
         vm.stopBroadcast();
@@ -178,17 +184,14 @@ contract DeployProtocolAssetVault is Script {
             }
         }
         registry.registerVault(
-            vault,
-            VaultRegistry.VaultMetadata({name: VAULT_NAME, asset: asset, registeredAt: 0})
+            vault, VaultRegistry.VaultMetadata({name: VAULT_NAME, asset: asset, registeredAt: 0})
         );
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
         string memory outPath = _envStringOrDefault(
             "DEPLOYMENT_OUT",
-            string.concat(
-                "deployments/protocol-asset-vault-", vm.toString(block.chainid), ".json"
-            )
+            string.concat("deployments/protocol-asset-vault-", vm.toString(block.chainid), ".json")
         );
         string memory obj = "protocol_asset_vault_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);

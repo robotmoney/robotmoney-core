@@ -155,9 +155,7 @@ contract DeployProtocolAssetVaultTest is Test {
 
     function test_reverts_on_zero_swapRouter() public {
         vm.expectRevert(bytes("swapRouter=0"));
-        script.runInProcessWith(
-            admin, emergencyResponder, address(0), address(usdc), address(0)
-        );
+        script.runInProcessWith(admin, emergencyResponder, address(0), address(usdc), address(0));
     }
 
     function test_reverts_on_zero_usdc() public {

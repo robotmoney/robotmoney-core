@@ -5,8 +5,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {ActivateBasketVaultEligibility} from
-    "../script/ActivateBasketVaultEligibility.s.sol";
+import {ActivateBasketVaultEligibility} from "../script/ActivateBasketVaultEligibility.s.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
@@ -43,17 +42,13 @@ contract ActivateBasketVaultEligibilityTest is Test {
         registry.registerVault(
             protocolVault,
             VaultRegistry.VaultMetadata({
-                name: "Robot Money Protocol",
-                asset: address(usdc),
-                registeredAt: 0
+                name: "Robot Money Protocol", asset: address(usdc), registeredAt: 0
             })
         );
         registry.registerVault(
             agentVault,
             VaultRegistry.VaultMetadata({
-                name: "Robot Money Agent Tokens",
-                asset: address(usdc),
-                registeredAt: 0
+                name: "Robot Money Agent Tokens", asset: address(usdc), registeredAt: 0
             })
         );
     }
@@ -64,9 +59,7 @@ contract ActivateBasketVaultEligibilityTest is Test {
     ///         This exercises the safety gate that prevents accidental activation
     ///         before the Architecture §4.1 certification checklist is satisfied.
     function test_reverts_when_auditComplete_false() public {
-        vm.expectRevert(
-            bytes("BASKET_VAULT_AUDIT_COMPLETE not set - activation blocked")
-        );
+        vm.expectRevert(bytes("BASKET_VAULT_AUDIT_COMPLETE not set - activation blocked"));
         script.runInProcessWith(address(registry), protocolVault, agentVault, false);
     }
 
@@ -76,8 +69,7 @@ contract ActivateBasketVaultEligibilityTest is Test {
         bool protoBefore = registry.isRouterEligible(protocolVault);
         bool agentBefore = registry.isRouterEligible(agentVault);
 
-        try script.runInProcessWith(address(registry), protocolVault, agentVault, false) {}
-            catch {}
+        try script.runInProcessWith(address(registry), protocolVault, agentVault, false) {} catch {}
 
         assertEq(registry.isRouterEligible(protocolVault), protoBefore, "proto eligibility changed");
         assertEq(registry.isRouterEligible(agentVault), agentBefore, "agent eligibility changed");
