@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0022dd72468d0cc7a1589793fbb689e66e79f20c/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -307,6 +307,16 @@ proceeds are always ≥ that floor (or the swap reverts).
 Documented as a floor, not an exact quote — actual proceeds will
 typically exceed this value when swap depth is healthy.
 See docs/technical/basket-vault-gap-report.md §3, §5.
+
+Drawdown policy (ADR-0008): this vault uses a NAV-haircut redemption
+model. During a drawdown event basket asset prices may be below deposit
+value; `previewRedeem` returns the TWAP-priced NAV floor (after
+maxSlippageBps and exitFeeBps). The protocol does not queue, gate, or
+force-sell assets to protect depositor principal — depositors accept
+current NAV on exit. Redemptions are always synchronous; the
+`EMERGENCY_ROLE` may invoke `emergencyUnwind()` to convert basket
+assets to idle USDC if pool liquidity deteriorates severely.
+See docs/adr/ADR-0008-basket-vault-drawdown-redemption-policy.md.
 
 
 ```solidity
