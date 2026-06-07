@@ -126,9 +126,44 @@ sol! {
         function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
             external returns (bytes32 paymentId, uint256 sharesMinted);
 
+        function depositTo(
+            bytes32 orderId,
+            uint256 amount,
+            uint64 deadline,
+            bytes32 idempotencyKey,
+            address destination,
+            uint256[] calldata minSharesPerLeg
+        ) external returns (bytes32 paymentId);
+
+        function withdrawFromRouter(
+            bytes32 orderId,
+            uint256[] calldata sharesPerLeg,
+            uint64 deadline,
+            bytes32 idempotencyKey
+        ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
+
         // Issue #449: rolling-window withdrawal accounting.
         function effectiveWithdrawWindowGross(address agent)
             external view returns (uint256);
+    }
+
+    /// VaultRegistry minimal interface for router withdrawal tests.
+    #[allow(missing_docs)]
+    interface IVaultRegistry {
+        enum VaultStatus { Active, Paused, Retired }
+        struct VaultMetadata { string name; address asset; uint256 registeredAt; }
+        function registerVault(address vault, VaultMetadata calldata metadata) external;
+        function setRouterEligible(address vault, bool eligible) external;
+    }
+
+    /// PortfolioRouter minimal interface for router withdrawal tests.
+    #[allow(missing_docs)]
+    interface IPortfolioRouter {
+        function setWeights(address[] calldata vaults, uint256[] calldata bps) external;
+        function depositFor(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
+            external returns (uint256[] memory sharesPerLeg);
+        function getEffectiveWeights()
+            external view returns (address[] memory vaults, uint256[] memory bps);
     }
 }
 
@@ -676,4 +711,296 @@ fn agent_withdrawal_window_cap() {
     );
 
     eprintln!("[agent_withdrawal_window_cap] passed");
+}
+
+// ── Scenario 4: router withdrawal round-trip ─────────────────────────────────
+
+/// router_withdrawal
+///
+/// 1. Deploy VaultRegistry + two MockVaults + PortfolioRouter (60/40) + Gateway (wired to router).
+/// 2. Authorize an agent whose policy enables withdrawal and includes router as a destination.
+/// 3. Agent deposits USDC via gateway.depositTo(router) — shares split 60/40 to shareReceiver.
+/// 4. shareReceiver approves gateway for each vault's share token.
+/// 5. Agent calls gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey).
+/// 6. Assert: USDC lands at assetRecipient, gateway holds zero residual vault receipts,
+///    AgentWithdrawalRouted event is emitted.
+#[test]
+fn router_withdrawal() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    eprintln!("[router_withdrawal] {}", fx.summary_line());
+
+    let usdc = rmpc_fork_e2e::addresses::USDC;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let deposit_amount = U256::from(100_000_000u64); // 100 USDC
+
+    // Admin deploys everything; agent executes.
+    let admin = fx
+        .ephemeral(one_eth * U256::from(5u64), U256::ZERO)
+        .expect("fund admin");
+    let pauser = fx.ephemeral(one_eth, U256::ZERO).expect("fund pauser");
+    let agent = fx
+        .ephemeral(one_eth * U256::from(2u64), deposit_amount)
+        .expect("fund agent with USDC");
+    // shareReceiver: holds vault receipts after deposit; approves gateway for withdrawal.
+    let share_receiver = fx.ephemeral(one_eth, U256::ZERO).expect("fund shareReceiver");
+    // assetRecipient: receives USDC on withdrawal.
+    let asset_recipient: Address = "0x000000000000000000000000000000000000CAFE"
+        .parse()
+        .unwrap();
+
+    // ── Deploy infrastructure ────────────────────────────────────────────────
+
+    // VaultRegistry
+    let registry = {
+        let mut code = load_initcode("VaultRegistry.sol", "VaultRegistry").to_vec();
+        code.extend_from_slice(&encode_address_arg(admin.address));
+        admin
+            .deploy(Bytes::from(code), 3_000_000)
+            .expect("deploy VaultRegistry")
+    };
+
+    // Two 1:1 MockVaults
+    let vault_a = {
+        let mut code = load_initcode("MockVault.sol", "MockVault").to_vec();
+        code.extend_from_slice(&encode_address_arg(usdc));
+        admin.deploy(Bytes::from(code), 2_000_000).expect("deploy vaultA")
+    };
+    let vault_b = {
+        let mut code = load_initcode("MockVault.sol", "MockVault").to_vec();
+        code.extend_from_slice(&encode_address_arg(usdc));
+        admin.deploy(Bytes::from(code), 2_000_000).expect("deploy vaultB")
+    };
+
+    // Register vaults and mark them router-eligible.
+    {
+        // registerVault(address, VaultMetadata(name, asset, registeredAt))
+        // VaultMetadata is a struct: (string, address, uint256)
+        // ABI-encode manually: offset to string, asset, registeredAt, string data.
+        let register_a = IVaultRegistry::registerVaultCall {
+            vault: vault_a,
+            metadata: IVaultRegistry::VaultMetadata {
+                name: "Vault A".to_string(),
+                asset: usdc,
+                registeredAt: U256::ZERO,
+            },
+        };
+        admin
+            .send(registry, &register_a, U256::ZERO, 300_000)
+            .expect("registerVault A");
+
+        let register_b = IVaultRegistry::registerVaultCall {
+            vault: vault_b,
+            metadata: IVaultRegistry::VaultMetadata {
+                name: "Vault B".to_string(),
+                asset: usdc,
+                registeredAt: U256::ZERO,
+            },
+        };
+        admin
+            .send(registry, &register_b, U256::ZERO, 300_000)
+            .expect("registerVault B");
+
+        admin
+            .send(
+                registry,
+                &IVaultRegistry::setRouterEligibleCall { vault: vault_a, eligible: true },
+                U256::ZERO,
+                100_000,
+            )
+            .expect("setRouterEligible A");
+        admin
+            .send(
+                registry,
+                &IVaultRegistry::setRouterEligibleCall { vault: vault_b, eligible: true },
+                U256::ZERO,
+                100_000,
+            )
+            .expect("setRouterEligible B");
+    }
+
+    // PortfolioRouter (60/40 split)
+    let router = {
+        let mut code = load_initcode("PortfolioRouter.sol", "PortfolioRouter").to_vec();
+        let mut args = [0u8; 96];
+        args[12..32].copy_from_slice(usdc.as_slice());
+        args[44..64].copy_from_slice(registry.as_slice());
+        args[76..96].copy_from_slice(admin.address.as_slice());
+        code.extend_from_slice(&args);
+        admin
+            .deploy(Bytes::from(code), 4_000_000)
+            .expect("deploy PortfolioRouter")
+    };
+
+    // Set 60/40 weights.
+    admin
+        .send(
+            router,
+            &IPortfolioRouter::setWeightsCall {
+                vaults: vec![vault_a, vault_b],
+                bps: vec![U256::from(6000u64), U256::from(4000u64)],
+            },
+            U256::ZERO,
+            300_000,
+        )
+        .expect("setWeights");
+
+    // RobotMoneyGateway (with router)
+    // Constructor: (usdc, vault, admin, pauser, router) — 5 × address.
+    // `vault` arg: use vault_a as the pinned vault (single-vault path still needs one).
+    let gateway = {
+        let mut code = load_initcode("RobotMoneyGateway.sol", "RobotMoneyGateway").to_vec();
+        let mut args = [0u8; 160];
+        args[12..32].copy_from_slice(usdc.as_slice());
+        args[44..64].copy_from_slice(vault_a.as_slice()); // pinned vault
+        args[76..96].copy_from_slice(admin.address.as_slice());
+        args[108..128].copy_from_slice(pauser.address.as_slice());
+        args[140..160].copy_from_slice(router.as_slice());
+        code.extend_from_slice(&args);
+        admin
+            .deploy(Bytes::from(code), 5_000_000)
+            .expect("deploy RobotMoneyGateway")
+    };
+
+    eprintln!(
+        "[router_withdrawal] vaultA={vault_a:#x} vaultB={vault_b:#x} router={router:#x} gateway={gateway:#x}"
+    );
+
+    // ── Authorize agent ──────────────────────────────────────────────────────
+    let now_secs: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let policy = IGateway::AgentPolicy {
+        active: true,
+        validUntil: now_secs + 3600,
+        maxPerPayment: deposit_amount,
+        maxPerWindow: deposit_amount * U256::from(10u64),
+        shareReceiver: share_receiver.address,
+        allowedDestinations: vec![router],
+        assetRecipient: asset_recipient,
+        maxWithdrawPerPayment: deposit_amount,
+        maxWithdrawPerWindow: deposit_amount * U256::from(10u64),
+        allowedSourceVaults: vec![],
+    };
+    admin
+        .send(
+            gateway,
+            &IGateway::authorizeAgentCall { agent: agent.address, p: policy },
+            U256::ZERO,
+            500_000,
+        )
+        .expect("authorizeAgent");
+
+    // ── Deposit via router ───────────────────────────────────────────────────
+    // Agent approves gateway for USDC.
+    agent
+        .send(
+            usdc,
+            &IUSDC::approveCall { spender: gateway, amount: deposit_amount },
+            U256::ZERO,
+            100_000,
+        )
+        .expect("USDC.approve gateway");
+
+    let deadline = now_secs + 300;
+    let deposit_receipt = agent
+        .send(
+            gateway,
+            &IGateway::depositToCall {
+                orderId: alloy_primitives::B256::from([50u8; 32]),
+                amount: deposit_amount,
+                deadline,
+                idempotencyKey: alloy_primitives::B256::from([51u8; 32]),
+                destination: router,
+                minSharesPerLeg: vec![],
+            },
+            U256::ZERO,
+            1_500_000,
+        )
+        .expect("gateway.depositTo(router)");
+    assert_eq!(deposit_receipt.status, 1, "depositTo must succeed");
+
+    // Verify shareReceiver holds vault shares (60/40 split).
+    let shares_a = vault_balance_of(&admin, vault_a, share_receiver.address);
+    let shares_b = vault_balance_of(&admin, vault_b, share_receiver.address);
+    let expected_a = deposit_amount * U256::from(6000u64) / U256::from(10000u64);
+    let expected_b = deposit_amount * U256::from(4000u64) / U256::from(10000u64);
+    assert_eq!(shares_a, expected_a, "shareReceiver vaultA shares");
+    assert_eq!(shares_b, expected_b, "shareReceiver vaultB shares");
+
+    eprintln!(
+        "[router_withdrawal] shares deposited: vaultA={shares_a} vaultB={shares_b}"
+    );
+
+    // ── Approve gateway to pull vault shares ─────────────────────────────────
+    approve_vault_shares(&share_receiver, vault_a, gateway, shares_a);
+    approve_vault_shares(&share_receiver, vault_b, gateway, shares_b);
+
+    // ── Pre-withdrawal: assetRecipient has zero USDC ─────────────────────────
+    let pre_bal = usdc_balance_of(&agent, usdc, asset_recipient);
+    assert_eq!(pre_bal, U256::ZERO, "assetRecipient starts with 0 USDC");
+
+    // ── Call withdrawFromRouter ──────────────────────────────────────────────
+    let withdraw_deadline = now_secs + 300;
+    let shares_per_leg = vec![shares_a, shares_b];
+    let withdraw_receipt = agent
+        .send(
+            gateway,
+            &IGateway::withdrawFromRouterCall {
+                orderId: alloy_primitives::B256::from([60u8; 32]),
+                sharesPerLeg: shares_per_leg,
+                deadline: withdraw_deadline,
+                idempotencyKey: alloy_primitives::B256::from([61u8; 32]),
+            },
+            U256::ZERO,
+            1_500_000,
+        )
+        .expect("gateway.withdrawFromRouter");
+    assert_eq!(withdraw_receipt.status, 1, "withdrawFromRouter must succeed");
+    eprintln!(
+        "[router_withdrawal] withdrawFromRouter tx {:?} gasUsed={}",
+        withdraw_receipt.tx_hash, withdraw_receipt.gas_used
+    );
+
+    // ── Assert USDC landed at assetRecipient ─────────────────────────────────
+    let post_bal = usdc_balance_of(&agent, usdc, asset_recipient);
+    assert_eq!(
+        post_bal, deposit_amount,
+        "assetRecipient must receive full deposit_amount USDC (1:1 MockVaults)"
+    );
+
+    // ── Assert gateway holds zero vault shares ────────────────────────────────
+    let gw_shares_a = vault_balance_of(&agent, vault_a, gateway);
+    let gw_shares_b = vault_balance_of(&agent, vault_b, gateway);
+    assert_eq!(gw_shares_a, U256::ZERO, "gateway must hold 0 vaultA shares");
+    assert_eq!(gw_shares_b, U256::ZERO, "gateway must hold 0 vaultB shares");
+
+    // ── Assert shareReceiver holds zero vault shares ──────────────────────────
+    let sr_shares_a = vault_balance_of(&admin, vault_a, share_receiver.address);
+    let sr_shares_b = vault_balance_of(&admin, vault_b, share_receiver.address);
+    assert_eq!(sr_shares_a, U256::ZERO, "shareReceiver must hold 0 vaultA shares");
+    assert_eq!(sr_shares_b, U256::ZERO, "shareReceiver must hold 0 vaultB shares");
+
+    // ── Assert AgentWithdrawalRouted event was emitted ───────────────────────
+    let topic0 = keccak256(
+        b"AgentWithdrawalRouted(bytes32,bytes32,address,address,address,uint256[],uint256[],address,uint64)",
+    );
+    let routed_log = withdraw_receipt
+        .logs
+        .iter()
+        .find(|l| l.topics.first() == Some(&topic0) && l.address == gateway);
+    assert!(
+        routed_log.is_some(),
+        "AgentWithdrawalRouted event not found in receipt; logs={:?}",
+        withdraw_receipt.logs
+    );
+    let log = routed_log.unwrap();
+    // topic3 = indexed agent address.
+    assert!(log.topics.len() >= 4, "AgentWithdrawalRouted must have at least 4 topics");
+    let agent_from_log = Address::from_slice(&log.topics[3].as_slice()[12..]);
+    assert_eq!(agent_from_log, agent.address, "topic3 agent mismatch");
+
+    eprintln!("[router_withdrawal] passed");
 }

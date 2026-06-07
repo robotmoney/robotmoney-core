@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/c0d4238a10e4713dcd22a198e26f12c204c1371e/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -147,17 +147,6 @@ function test_deploy_revertsWhenAdminEqualsAgent() public;
 
 ```solidity
 function test_deploy_revertsWhenPauserEqualsAgent() public;
-```
-
-### test_deploy_seedDepositAmount_isOneThousandUsdc
-
-SEED_DEPOSIT_AMOUNT constant equals 1,000 USDC (1_000_000_000 wei).
-This is a pure unit check — no protocol interaction required.
-The fork-level post-conditions are in DeploySeedDeposit.t.sol.
-
-
-```solidity
-function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
 ```
 
 ### test_deploy_envDriven_runInProcessSucceeds

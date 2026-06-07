@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/41d10069f3131869b5f2aee11bc920913e4ab3a6/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -500,5 +500,138 @@ same threshold when given equivalent policies.
 
 ```solidity
 function test_depositTo_and_deposit_enforceIdenticalWindowCap() public;
+```
+
+### _policyWithRouterWithdrawal
+
+Helper: policy with withdrawal enabled from router vaults.
+
+
+```solidity
+function _policyWithRouterWithdrawal() internal returns (IGateway.AgentPolicy memory);
+```
+
+### _routerDepositAndGetShares
+
+Deposit via router and return the shares minted per leg.
+
+
+```solidity
+function _routerDepositAndGetShares(address who, uint256 amount)
+    internal
+    returns (uint256 sharesA, uint256 sharesB);
+```
+
+### test_withdrawFromRouter_happyPath
+
+router: happy path — deposit via router, withdraw via router, USDC lands at assetRecipient.
+
+
+```solidity
+function test_withdrawFromRouter_happyPath() public;
+```
+
+### test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted
+
+router: allowedSourceVaults enforced — vault not in list reverts.
+
+
+```solidity
+function test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted() public;
+```
+
+### test_withdrawFromRouter_revertsOnPerPaymentCapExceeded
+
+router: per-payment cap enforced (totalShares > maxWithdrawPerPayment).
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnPerPaymentCapExceeded() public;
+```
+
+### test_withdrawFromRouter_revertsOnWindowCapExceeded
+
+router: window cap enforced — second call in same window reverts.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnWindowCapExceeded() public;
+```
+
+### test_withdrawFromRouter_revertsOnReplay
+
+router: idempotency enforced — same orderId+idempotencyKey reverts on replay.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnReplay() public;
+```
+
+### test_withdrawFromRouter_revertsWhenWithdrawalDisabled
+
+router: withdrawal disabled when maxWithdrawPerPayment == 0.
+
+
+```solidity
+function test_withdrawFromRouter_revertsWhenWithdrawalDisabled() public;
+```
+
+### test_withdrawFromRouter_revertsWhenRouterNotConfigured
+
+router: reverts when router not configured.
+
+
+```solidity
+function test_withdrawFromRouter_revertsWhenRouterNotConfigured() public;
+```
+
+### test_withdrawFromRouter_revertsOnLegLengthMismatch
+
+router: reverts when sharesPerLeg length mismatches router leg count.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnLegLengthMismatch() public;
+```
+
+### test_withdrawFromRouter_revertsWhenPaused
+
+router: paused gateway reverts.
+
+
+```solidity
+function test_withdrawFromRouter_revertsWhenPaused() public;
+```
+
+### test_withdrawFromRouter_revertsOnZeroTotalShares
+
+router: zero totalShares reverts.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnZeroTotalShares() public;
+```
+
+### test_withdrawFromRouter_emitsAgentWithdrawalRoutedEvent
+
+router: AgentWithdrawalRouted event is emitted with correct indexed topics.
+
+
+```solidity
+function test_withdrawFromRouter_emitsAgentWithdrawalRoutedEvent() public;
+```
+
+### _assertWithdrawalRoutedLog
+
+Extract AgentWithdrawalRouted log and assert indexed topics.
+Separated to avoid stack-too-deep in the parent test function.
+
+
+```solidity
+function _assertWithdrawalRoutedLog(
+    Vm.Log[] memory logs,
+    bytes32 orderId,
+    address expectedAgent
+) internal view;
 ```
 

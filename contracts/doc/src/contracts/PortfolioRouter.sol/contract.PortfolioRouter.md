@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/41d10069f3131869b5f2aee11bc920913e4ab3a6/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -322,6 +322,40 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 |`receiver`|`address`|         Address that receives minted vault shares.|
 |`amount`|`uint256`|           Total USDC to deposit. Must be pre-approved.|
 |`minSharesPerLeg`|`uint256[]`|  Minimum shares the caller accepts per leg. Length must equal the number of active legs (non- paused, non-retired). Pass an empty array to skip slippage protection.|
+
+
+### redeemFor
+
+Redeem vault shares proportionally from multiple vaults. For each
+leg the router calls `vault.redeem(sharesPerLeg[i], assetRecipient,
+shareHolder)`, routing USDC directly to `assetRecipient`. The caller
+(typically the gateway) must have obtained ERC-20 approvals from
+`shareHolder` on each vault's share token before calling this
+function, or must hold the shares itself.
+All legs must succeed (all-or-revert). No intermediate USDC custody
+is created in the router — each vault sends USDC directly to
+`assetRecipient`.
+
+
+```solidity
+function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
+    external
+    nonReentrant
+    returns (uint256[] memory assetsPerLeg);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`shareHolder`|`address`|      Address whose vault shares are redeemed (the `owner` passed to `vault.redeem`). Must have approved the caller (the gateway) for each vault's share token, which then must have approved this router, OR the gateway pulls shares from shareHolder and holds them temporarily during the call frame.|
+|`assetRecipient`|`address`|   Address that receives redeemed USDC. The router forwards each leg's USDC here; it never custodies USDC.|
+|`sharesPerLeg`|`uint256[]`|     Shares to redeem per leg (parallel to effective weight vector). Length must match the effective vault list. Zero-share legs are accepted (and skipped) so the caller can specify partial positions.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`assetsPerLeg`|`uint256[]`|    USDC received per leg (parallel to `sharesPerLeg`).|
 
 
 ### _depositTo
