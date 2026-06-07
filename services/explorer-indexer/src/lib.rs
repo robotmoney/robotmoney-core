@@ -35,6 +35,13 @@ pub use indexer::{run_once, IndexerConfig, IndexerOutcome};
 pub use rpc::JsonRpc;
 
 /// Confirmations before a block is considered safe to ingest. ADR §3.3.
+///
+/// This is an **indexer-internal block-ingestion safety margin** — it prevents
+/// the indexer from storing blocks that might be reorged away before they
+/// settle. It is NOT the per-operation-class confirmation-depth policy that
+/// governs `rmpc` finality reporting. That policy is defined in
+/// `clients/rust-payment-client/src/confirmation_policy.rs` and documented in
+/// `docs/technical/security-model.md §12 — Confirmation-depth policy table`.
 pub const CONFIRMATIONS: u64 = 5;
 
 /// Heartbeat interval (in blocks) for state snapshots when no event

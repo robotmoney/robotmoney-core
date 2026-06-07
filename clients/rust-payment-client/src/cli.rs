@@ -193,6 +193,12 @@ pub enum Command {
         pretty: bool,
     },
     /// Look up a transaction's receipt status by hash.
+    ///
+    /// The response includes a `finality` object (security-model.md §12)
+    /// with `status`, `confirmations`, `required_confirmations`, and
+    /// `op_class` fields. Use `--op-class` to select the operation's
+    /// confirmation-depth policy; use `--require-finality` to exit
+    /// non-zero when the threshold has not been met.
     GetTx {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -200,6 +206,17 @@ pub enum Command {
         /// 32-byte transaction hash, 0x-prefixed hex.
         #[arg(long = "tx-hash")]
         tx_hash: String,
+        /// Operation class for the finality policy lookup.
+        /// One of: deposit, withdraw, vault_rebalance, admin_governance.
+        /// Default: deposit.
+        #[arg(long = "op-class", default_value = "deposit")]
+        op_class: String,
+        /// Require a minimum finality level before exiting 0.
+        /// One of: l2_included, l1_finalized.
+        /// When set and the threshold is not met, exits with code 5
+        /// (ErrFinalityNotMet). The JSON output is still emitted.
+        #[arg(long = "require-finality")]
+        require_finality: Option<String>,
         /// Pretty-print the JSON output.
         #[arg(long)]
         pretty: bool,

@@ -10,6 +10,7 @@
 
 pub mod cli;
 pub mod commands;
+pub mod confirmation_policy;
 pub mod config;
 pub mod errors;
 pub mod fees;
