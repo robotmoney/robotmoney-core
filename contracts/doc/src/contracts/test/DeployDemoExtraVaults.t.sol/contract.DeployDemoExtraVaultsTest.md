@@ -1,5 +1,5 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/9e808f2f7800c85e3ff24c369198d3b25293db1f/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
@@ -237,6 +237,22 @@ the smoke-test four-vault TVL invariant the dapp tiles depend on
 
 ```solidity
 function test_four_vaults_all_active_with_nonzero_totalAssets() public;
+```
+
+### test_rwaVault_multi_deposit_does_not_overflow
+
+Multiple sequential router deposits + direct RWA deposits must
+not overflow uint256 in _convertToShares. Regression for the
+DemoAerodromeRouter 1:1 swap bug: the old router minted deSPXA
+1:1 with USDC atoms, but the Chronicle oracle prices deSPXA at
+5000 USD each, so each deposit left totalAssets ~0 while
+totalSupply grew exponentially. This caused MathOverflowedMulDiv
+after ~7 deposits — the smoke-test devnet seeds 4 depositors x 2
+paths (8 deposits into RWA), reliably hitting it.
+
+
+```solidity
+function test_rwaVault_multi_deposit_does_not_overflow() public;
 ```
 
 ### test_rwaVault_holds_deSPXA_asset_Aerodrome_venue
