@@ -452,7 +452,9 @@ contract DeployDemoExtraVaultsTest is Test {
         uint256 ta = rwaVault.totalAssets();
         assertGt(ta, 0, "totalAssets must be non-zero after RWA deposits");
         // Chronicle prices deSPXA correctly so totalAssets ~= total deposited (within 1%).
-        assertApproxEqRel(ta, totalDeposited, 0.01e18, "totalAssets must approximate total deposited");
+        assertApproxEqRel(
+            ta, totalDeposited, 0.01e18, "totalAssets must approximate total deposited"
+        );
     }
 
     /// @notice The rmRWA vault holds exactly one basket asset (deSPXA stub),
