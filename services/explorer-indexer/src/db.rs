@@ -13,6 +13,8 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::str::FromStr;
 use std::time::Duration;
+// Used by AccountHistoryRow (dev-scout stub — issue #703).
+use serde_json;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -708,6 +710,275 @@ impl Db {
         let row: (i64,) = sqlx::query_as(&q).fetch_one(&self.pool).await?;
         Ok(row.0)
     }
+
+    // -----------------------------------------------------------------------
+    // Dev-scout stubs — issue #703
+    // -----------------------------------------------------------------------
+    // The function signatures below are the integration points for the four
+    // data-layer issues that extend this service.  Each stub is annotated
+    // with the implementing issue number, the migration file that creates its
+    // target table, and the query pattern it must execute.
+    //
+    // All stubs compile, panic at runtime if called, and will be replaced by
+    // real implementations in their respective feature branches.
+    // -----------------------------------------------------------------------
+
+    /// Insert a row into `account_history_events` for a non-Deposit event.
+    ///
+    /// # Target issue: #654 — account history endpoint
+    ///
+    /// Implementing issue: `feat(indexer): account history endpoint missing
+    /// withdrawals, fee events, policy changes, and governance votes`.
+    ///
+    /// Called by the indexer's `handle_log` branch for each of:
+    /// - `IGatewayEvents::AgentWithdrawal` → event_kind = "withdrawal"
+    /// - `IVaultEvents::ExitFeeCharged`    → event_kind = "fee_charged"
+    /// - `IGatewayEvents::AgentRevoked`    → event_kind = "policy_change"
+    /// - `IRouterGovernanceEvents::VoteCast` → event_kind = "governance_vote"
+    ///
+    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
+    /// Table: `account_history_events (chain_id, block_number, log_index)`
+    ///
+    /// Explorer API consumer:
+    ///   `GET /v1/accounts/:address/history` — `clients/explorer-api/src/routes.rs`
+    ///   Joins `account_history_events` with `agent_deposits` by block_number,
+    ///   returns all kinds interleaved in ascending block_number order.
+    #[allow(dead_code, unused_variables)]
+    pub async fn insert_account_history_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        account: [u8; 20],
+        event_kind: &str,
+        payload: serde_json::Value,
+    ) -> Result<u64, DbError> {
+        // STUB — replaced by issue #654.
+        // Real implementation:
+        //   INSERT INTO account_history_events
+        //     (chain_id, block_number, log_index, tx_hash, account, event_kind, payload)
+        //   VALUES ($1, $2, $3, $4, $5, $6, $7)
+        //   ON CONFLICT (chain_id, block_number, log_index) DO NOTHING
+        unimplemented!("stub — implement in issue #654")
+    }
+
+    /// Query all account history events for an address, ordered by block_number ASC.
+    ///
+    /// # Target issue: #654 — account history endpoint
+    ///
+    /// Returns rows from both `agent_deposits` (kind = "deposit") and
+    /// `account_history_events` (all other kinds), UNION'd and ordered by
+    /// (block_number, log_index).
+    ///
+    /// The explorer API calls this from `get_account_history` to replace the
+    /// deposits-only query at `clients/explorer-api/src/routes.rs` line ~1031.
+    #[allow(dead_code, unused_variables)]
+    pub async fn list_account_history(
+        &self,
+        chain_id: i64,
+        account: [u8; 20],
+        limit: i64,
+    ) -> Result<Vec<AccountHistoryRow>, DbError> {
+        // STUB — replaced by issue #654.
+        // Real implementation: UNION of agent_deposits and account_history_events
+        // ordered by (block_number ASC, log_index ASC), with LIMIT.
+        unimplemented!("stub — implement in issue #654")
+    }
+
+    /// Insert a row into `adapter_allocations` from a Vault Allocated/Pulled/Rebalanced event.
+    ///
+    /// # Target issue: #675 — vault detail endpoint
+    ///
+    /// Implementing issue: `feat(indexer): vault detail endpoint missing adapter
+    /// allocation history, deposit/withdrawal log, and fee collection history`.
+    ///
+    /// Called by the indexer's `handle_log` branch for:
+    /// - `IVaultEvents::Allocated`   → event_kind = "allocated"
+    /// - `IVaultEvents::Pulled`      → event_kind = "pulled"
+    /// - `IVaultEvents::Rebalanced`  → event_kind = "rebalanced", adapter = None
+    ///
+    /// These events currently return `Ok(0)` in `indexer.rs` (~line 595).
+    /// Issue #675 replaces those stubs with calls to this function.
+    ///
+    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
+    /// Table: `adapter_allocations (chain_id, block_number, log_index)`
+    #[allow(dead_code, unused_variables)]
+    pub async fn insert_adapter_allocation(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        adapter: Option<[u8; 20]>,
+        event_kind: &str,
+        amount: U256,
+    ) -> Result<u64, DbError> {
+        // STUB — replaced by issue #675.
+        unimplemented!("stub — implement in issue #675")
+    }
+
+    /// Insert a row into `vault_fee_events` from an ExitFeeCharged event.
+    ///
+    /// # Target issue: #675 — vault detail endpoint
+    ///
+    /// Currently the `ExitFeeCharged` event triggers a vault snapshot
+    /// (`indexer.rs` handle_log) but the fee row itself is not stored.
+    /// Issue #675 adds a call to this function alongside the snapshot.
+    ///
+    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
+    /// Table: `vault_fee_events (chain_id, block_number, log_index)`
+    #[allow(dead_code, unused_variables)]
+    pub async fn insert_vault_fee_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        owner: [u8; 20],
+        receiver: [u8; 20],
+        gross_assets: U256,
+        fee: U256,
+        net_assets: U256,
+    ) -> Result<u64, DbError> {
+        // STUB — replaced by issue #675.
+        unimplemented!("stub — implement in issue #675")
+    }
+
+    /// Insert a row into `vault_transfer_events` from an ERC-4626 Deposit or Withdraw event.
+    ///
+    /// # Target issue: #675 — vault detail endpoint
+    ///
+    /// The ERC-4626 `Deposit` and `Withdraw` events are already watched by the
+    /// indexer for snapshot triggers. Issue #675 additionally stores them here
+    /// so the `GET /v1/vaults/:address` deposit_withdrawal_log array is non-empty.
+    ///
+    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
+    /// Table: `vault_transfer_events (chain_id, block_number, log_index)`
+    #[allow(dead_code, unused_variables)]
+    pub async fn insert_vault_transfer_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        caller: [u8; 20],
+        owner: [u8; 20],
+        receiver: Option<[u8; 20]>,
+        assets: U256,
+        shares: U256,
+        event_kind: &str,
+    ) -> Result<u64, DbError> {
+        // STUB — replaced by issue #675.
+        unimplemented!("stub — implement in issue #675")
+    }
+
+    /// Insert an agent policy row, including the `owner` and `window_usage_to_date`
+    /// fields added by migration 0007 (issue #661).
+    ///
+    /// # Target issue: #661 — GET /v1/accounts/:address/policies endpoint
+    ///
+    /// The existing `insert_agent_policy` (above) does not accept `owner` or
+    /// `window_usage_to_date`. Issue #661 adds those columns to the migration
+    /// and updates the existing function signature — OR adds a new
+    /// `insert_agent_policy_v2` — to pass them.
+    ///
+    /// This stub documents the *intended* extended signature so issue #661
+    /// implementors have a concrete target.
+    ///
+    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
+    ///   ALTER TABLE agent_policies ADD COLUMN IF NOT EXISTS owner BYTEA
+    ///   ALTER TABLE agent_policies ADD COLUMN IF NOT EXISTS window_usage_to_date NUMERIC(78,0)
+    ///
+    /// Explorer API consumer:
+    ///   `GET /v1/accounts/:address/policies` (new route, issue #661)
+    ///   Query: SELECT … FROM agent_policies WHERE chain_id = $1 AND owner = $2
+    ///           ORDER BY block_number DESC
+    #[allow(dead_code, unused_variables)]
+    pub async fn insert_agent_policy_with_owner(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        agent: [u8; 20],
+        owner: [u8; 20],
+        revoked: bool,
+        valid_until: Option<i64>,
+        max_per_payment: Option<U256>,
+        max_per_window: Option<U256>,
+        window_usage_to_date: Option<U256>,
+        share_receiver: Option<[u8; 20]>,
+    ) -> Result<u64, DbError> {
+        // STUB — replaced by issue #661.
+        // Real implementation inserts owner and window_usage_to_date into
+        // the agent_policies row. Issue #661 may choose to:
+        //   (a) add parameters to the existing insert_agent_policy, or
+        //   (b) keep this as a separate function for the AgentAuthorized-with-owner path.
+        // The ABI drift fix in issue #366 is a prerequisite: AgentAuthorized currently
+        // drops `address indexed owner` (abi.rs drift map, § IGatewayEvents).
+        unimplemented!("stub — implement in issue #661 (requires issue #366 ABI fix first)")
+    }
+
+    /// List all agent policies owned by a depositor address.
+    ///
+    /// # Target issue: #661 — GET /v1/accounts/:address/policies endpoint
+    ///
+    /// Query pattern (after issue #661's migration lands):
+    ///   SELECT DISTINCT ON (chain_id, agent) * FROM agent_policies
+    ///   WHERE chain_id = $1 AND owner = $2
+    ///   ORDER BY chain_id, agent, block_number DESC
+    ///
+    /// Returns the latest policy state per agent for the given owner.
+    #[allow(dead_code, unused_variables)]
+    pub async fn list_policies_by_owner(
+        &self,
+        chain_id: i64,
+        owner: [u8; 20],
+    ) -> Result<Vec<AgentPolicyRow>, DbError> {
+        // STUB — replaced by issue #661.
+        unimplemented!("stub — implement in issue #661")
+    }
+}
+
+/// Stub row type for `list_account_history` — issue #654.
+///
+/// The real implementation will use a concrete struct (or a per-kind enum)
+/// derived from the UNION of `agent_deposits` and `account_history_events`.
+/// This placeholder satisfies the `list_account_history` return type so the
+/// stub compiles without requiring the table to exist yet.
+#[derive(Debug, Clone)]
+pub struct AccountHistoryRow {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: Vec<u8>,
+    pub account: Vec<u8>,
+    pub event_kind: String,
+    pub payload: serde_json::Value,
+}
+
+/// Stub row type for `list_policies_by_owner` — issue #661.
+///
+/// The real implementation extends the existing `agent_policies` columns with
+/// `owner` and `window_usage_to_date` from migration 0007.
+#[derive(Debug, Clone)]
+pub struct AgentPolicyRow {
+    pub chain_id: i64,
+    pub block_number: i64,
+    pub log_index: i32,
+    pub tx_hash: Vec<u8>,
+    pub agent: Vec<u8>,
+    pub owner: Option<Vec<u8>>,
+    pub revoked: bool,
+    pub valid_until: Option<i64>,
+    pub max_per_payment: Option<BigDecimal>,
+    pub max_per_window: Option<BigDecimal>,
+    pub window_usage_to_date: Option<BigDecimal>,
+    pub share_receiver: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
