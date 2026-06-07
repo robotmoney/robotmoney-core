@@ -15,6 +15,7 @@ import { FaucetTab } from "./FaucetTab";
 import { PauseFlow } from "./PauseFlow";
 import { HistoryPane } from "./HistoryPane";
 import { ConfigExportPanel } from "./ConfigExportPanel";
+import { TimelockPanel } from "./TimelockPanel";
 import { classifyChain } from "../lib/chainClassifier";
 import { readHarnessPrivateKey } from "../lib/faucetClient";
 
@@ -58,6 +59,12 @@ export type BuildAdminTabsArgs = Readonly<{
    * Defaults to an empty string when not yet verified.
    */
   gatewayRuntimeHash?: string;
+  /**
+   * TimelockController address (issue #647 / architecture §4.5).
+   * When provided, the Timelock tab is inserted in the admin area.
+   * When absent the tab is still rendered in the error/missing-config state.
+   */
+  timelockAddress?: Address;
 }>;
 
 export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
@@ -146,6 +153,15 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
         envClass={a.ctx.envClass}
       />
     ),
+  });
+
+  // Timelock tab — always inserted so operators can observe the
+  // TimelockController state (architecture §4.5). The panel itself renders
+  // a config-missing message when timelockAddress is undefined.
+  tabs.push({
+    id: "timelock",
+    label: "Timelock",
+    content: <TimelockPanel timelockAddress={a.timelockAddress} />,
   });
 
   // History tab — only when an explorer API URL and a plausible agent
