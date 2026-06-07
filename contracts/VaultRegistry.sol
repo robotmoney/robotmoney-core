@@ -40,6 +40,17 @@ contract VaultRegistry is AccessControl {
     enum VaultStatus {
         Active,
         Paused,
+        /// @notice One-way terminal state. No on-chain or protocol-assisted
+        ///         migration path exists from a retired vault to a successor.
+        ///         Depositors retain full ERC-4626 redemption rights and may
+        ///         call `redeem` directly at any time. `PortfolioRouter` will
+        ///         not route new deposits into a Retired vault. Operator
+        ///         communication (dapp notice, rmpc CLI, `VaultStatusChanged`
+        ///         event) is the intended migration UX: depositors self-select
+        ///         into the successor vault using the standard deposit flow.
+        ///
+        ///         No-migration decision: ADR-0007 (2026-06-07).
+        ///         See `docs/adr/ADR-0007-vault-retirement-no-assisted-migration.md`.
         Retired
     }
 

@@ -40,7 +40,9 @@ Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigge
 
 ### 1.C Vault lifecycle and redemption
 
-**Depositor migration on vault retirement (§3.5).** Retirement is a one-way status and existing depositors can still withdraw, but there is no forced or assisted migration path out of a retiring vault. Decide whether one is needed.
+**Depositor migration on vault retirement (§3.5).** **Resolved** — see [ADR-0007](../adr/ADR-0007-vault-retirement-no-assisted-migration.md) (2026-06-07).
+
+Decision: no assisted migration path is implemented. The current withdraw-only behavior is acceptable for production use of `VaultRegistry.Retired`. Depositors in a retired vault retain full ERC-4626 redemption rights and may exit at any time via `redeem`. The `PortfolioRouter` rejects new deposits into a retired vault. Operator communication (dapp notice, rmpc CLI, `VaultStatusChanged` event indexing) is the appropriate migration UX — depositors self-select into the successor vault using the standard deposit flow. A gateway-routed redeem-and-redeposit helper adds unjustified complexity, a transient USDC balance in the gateway, a successor-registry governance surface, and an expanded MEV surface for the MVP. See ADR-0007 for full rationale and consequences.
 
 **Basket-vault drawdown redemption policy (§3.7).** Specify the redemption policy when a basket vault is in drawdown — forced sale vs. queued withdrawal vs. NAV haircut — before ADMIN_ROLE marks any basket vault router-eligible.
 
