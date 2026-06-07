@@ -1,5 +1,5 @@
 # DeployAgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d751c1df87b9f345a0aca6169509add45cf2cb27/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:**
 Script
@@ -173,11 +173,6 @@ Result returned to in-process callers (e.g. forge tests).
 struct Deployed {
     address vault;
     address[] tokens;
-    /// @dev True when the vault was registered in VaultRegistry during this
-    ///      run (REGISTRY_ADDRESS was set and the vault was not already
-    ///      registered). Router eligibility is NOT activated here — see
-    ///      ActivateBasketVaultEligibility.s.sol.
-    bool registered;
 }
 ```
 

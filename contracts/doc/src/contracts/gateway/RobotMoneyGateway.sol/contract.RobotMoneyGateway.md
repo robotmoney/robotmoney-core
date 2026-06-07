@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d751c1df87b9f345a0aca6169509add45cf2cb27/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -45,6 +45,24 @@ no longer be revealed and the depositor must re-commit.
 
 ```solidity
 uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
+```
+
+
+### OP_DEPOSIT
+Op-kind discriminators prepended to every `paymentId` hash to
+prevent cross-operation replay (deposit id ≠ withdrawal id even
+when all other inputs are identical).
+
+
+```solidity
+uint8 internal constant OP_DEPOSIT = 1
+```
+
+
+### OP_WITHDRAW
+
+```solidity
+uint8 internal constant OP_WITHDRAW = 2
 ```
 
 
