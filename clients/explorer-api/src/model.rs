@@ -414,24 +414,50 @@ pub struct AccountPositionsResponse {
 // ─── GET /v1/accounts/:address/history ───────────────────────────────────────
 
 /// Kinds of events that appear in the per-account history feed.
+///
+/// Architecture §5.4: "deposits, withdrawals, fee events, policy changes,
+/// and governance votes."
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Deposit,
+    Withdrawal,
+    FeeCharged,
+    PolicyChange,
+    GovernanceVote,
+}
+
+impl EventKind {
+    /// Parse the `kind` text column stored in `account_history_events`.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "withdrawal" => Self::Withdrawal,
+            "fee_charged" => Self::FeeCharged,
+            "policy_change" => Self::PolicyChange,
+            "governance_vote" => Self::GovernanceVote,
+            _ => Self::Deposit,
+        }
+    }
 }
 
 /// A single entry in the per-account chronological history.
 #[derive(Debug, Serialize)]
 pub struct AccountHistoryEntry {
+    /// Discriminant for the event type (see `EventKind`).
     pub kind: EventKind,
     pub chain_id: i64,
     pub block_number: i64,
     pub log_index: i32,
     pub tx_hash: String,
-    /// Vault that received the deposit (contract address).
-    pub vault: String,
-    pub agent: String,
-    pub amount: String,
+    /// Vault contract address for deposit/withdrawal/fee events.
+    /// `null` for policy_change and governance_vote events.
+    pub vault: Option<String>,
+    /// Agent address for deposit and policy_change events.
+    /// `null` for withdrawal, fee_charged, and governance_vote events.
+    pub agent: Option<String>,
+    /// USDC amount for deposit, withdrawal, and fee_charged events.
+    /// `null` for policy_change and governance_vote events.
+    pub amount: Option<String>,
     pub indexed_at: DateTime<Utc>,
 }
 

@@ -1159,22 +1159,40 @@ async fn get_account_positions(
     }))
 }
 
-/// GET /v1/accounts/:address/history — chronological deposit event log.
+/// GET /v1/accounts/:address/history — chronological event log (issue #654).
 ///
-/// Returns all agent_deposits where share_receiver = address, ordered
-/// by block ascending (chronological).  Includes up to 500 rows.
-/// Chain-scoped to state.chain_id.
+/// Returns all events from `account_history_events` where `account = address`,
+/// covering all five architecture §5.4 event types: deposits, withdrawals,
+/// fee events, policy changes, and governance votes.  Ordered by block
+/// ascending (chronological).  Includes up to 500 rows.  Chain-scoped to
+/// state.chain_id.
+///
+/// The response `kind` discriminant allows callers to filter by event type.
+/// Existing `Deposit` entries continue to appear with `kind: "deposit"` —
+/// no regression for deposit-only consumers.
 async fn get_account_history(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> ApiResult<Json<AccountHistoryResponse>> {
     let address_bytes = decode_address_param(&address)?;
 
-    let rows: Vec<DepositFeedRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, \
-                COALESCE(vault, share_receiver) AS vault, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits \
-         WHERE chain_id = $1 AND share_receiver = $2 \
+    // (chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at)
+    type HistoryRow = (
+        i64,
+        i64,
+        i32,
+        Vec<u8>,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<BigDecimal>,
+        DateTime<Utc>,
+    );
+
+    let rows: Vec<HistoryRow> = sqlx::query_as(
+        "SELECT chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at \
+         FROM account_history_events \
+         WHERE chain_id = $1 AND account = $2 \
          ORDER BY block_number ASC, log_index ASC \
          LIMIT 500",
     )
@@ -1186,26 +1204,16 @@ async fn get_account_history(
     let events: Vec<AccountHistoryEntry> = rows
         .into_iter()
         .map(
-            |(
-                chain_id,
-                block_number,
-                log_index,
-                tx_hash,
-                vault,
-                agent,
-                _share_receiver,
-                amount,
-                indexed_at,
-            )| {
+            |(chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at)| {
                 AccountHistoryEntry {
-                    kind: EventKind::Deposit,
+                    kind: EventKind::from_str(&kind),
                     chain_id,
                     block_number,
                     log_index,
                     tx_hash: hash_to_hex(&tx_hash),
-                    vault: addr_to_hex(&vault),
-                    agent: addr_to_hex(&agent),
-                    amount: dec_to_string(&amount),
+                    vault: vault.as_deref().map(addr_to_hex),
+                    agent: agent.as_deref().map(addr_to_hex),
+                    amount: amount.as_ref().map(dec_to_string),
                     indexed_at,
                 }
             },
