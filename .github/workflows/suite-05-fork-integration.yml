@@ -91,6 +91,7 @@ jobs:
               --test gas_estimate_reality_check
               --test landing_price_strip_fork
               --test vault_deposit_redeem_smoke
+              --test basket_vault_round_trip
             devnet: true
           # Governance slot: uses anvil + checked-in fixture for evm_increaseTime.
           # RMPC_TESTNET_RPC_URL is intentionally NOT set so ForkFixture falls back
