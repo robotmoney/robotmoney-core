@@ -2,12 +2,11 @@
 
 > Companion to `docs/architecture.md` and `docs/prd.md`. This plan covers the
 > full initiative from foundational infrastructure through production readiness.
-> As of 2026-05-30, the product layer (Vault registry, Portfolio Router,
-> Router-weight governance MVP, Gateway agent withdrawal, multi-vault explorer
-> and dapp, demo seeding, and all contract security hardening) is shipped on
-> `dev`. The remaining work is concentrated in: a handful of CI/infra gaps,
-> the multi-vault devnet default-adapter switch, and the basket-vault
-> production-path ADRs.
+> As of 2026-06-07, the real four-vault demo phase is complete (all four PRD §11
+> vaults seeded with real assets). The remaining work is concentrated in: the
+> multi-vault devnet default-adapter switch (`Fixture::new` still sets
+> `USE_PASSTHROUGH_ADAPTER=true`), basket-vault deploy-script wiring and registry
+> registration, and a handful of CI/docs gaps.
 >
 > **Relationship to the product.** Robot Money is a multi-vault ERC-4626 yield
 > system (stable-yield, protocol-asset, agent-token vaults) with a
@@ -297,13 +296,18 @@ Status: **Complete.**
 ### Phase: Basket vault production path
 Goal: Resolve open ADRs blocking basket-vault router eligibility.
 
+Status: **Substantially complete.** ADRs and implementations are shipped; final
+deploy-script wiring and registry registration remain.
+
 - [x] dev-scout audit + gap report — `docs/technical/basket-vault-gap-report.md`
 - [x] TWAP oracle in both basket vaults — `ProtocolAssetVault` and `AgentTokenVault` are thin subclasses of `BasketVault` and inherit `_twapUsdcValue()`, `twapWindow`, and the full TWAP oracle; no separate implementation needed
-- [ ] Rebalancing model ADR + `rebalance()` implementation
-- [ ] Agent-token shortlist governance — mechanism per `docs/development/open-questions.md` §1.3
+- [x] Rebalancing model ADR + `rebalance()` implementation — `docs/adr/` (#545), `contracts/src/vaults/BasketVault.sol` (#550)
+- [x] Agent-token shortlist governance — ADR (#546), `AgentTokenVault` shortlist mechanism (#552)
 - [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
 
 ### Phase: Real four-vault demo
 Goal: All four PRD §11 vaults hold real Base-mainnet assets and show real depositors at startup — production-grade, no placeholders. Resolve basket-vault router-eligibility ADRs, add Aerodrome + Uniswap V4 multi-DEX support, ingest real DEX pools into the fork, stand up the deSPXA RWA vault, seed all four vaults, and prove it at every test-pyramid layer. Tracked as Plan #109 phase (issues #541–#568).
 
-- [ ] dev-scout: seam map — `docs/technical/real-four-vault-demo-seams.md` (issue #541)
+Status: **Complete.** All issues #541–#568 and follow-on hardening (#592–#633) merged.
+
+- [x] dev-scout: seam map — `docs/technical/real-four-vault-demo-seams.md` (issue #541)
