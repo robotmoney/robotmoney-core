@@ -277,7 +277,7 @@ basket-vault ADRs.
 - [x] Fork e2e: deposit/withdrawal round-trip against real adapter stack (Aave/Compound/Morpho)
 - [ ] Deploy scripts: add `ProtocolAssetVault` + `AgentTokenVault` once basket ADRs resolved
 - [ ] Fixture surfaces basket vault addresses once devnet-deployed
-- [ ] Fork e2e: multi-vault round-trip including basket vaults
+- [x] Fork e2e: multi-vault round-trip including basket vaults — `testing/fork-e2e-rust/tests/basket_vault_round_trip.rs` (issue #690)
 
 ### Phase: Demo seeding
 Goal: Wire a presentable end-to-end demo on top of the smoke-test devnet:
