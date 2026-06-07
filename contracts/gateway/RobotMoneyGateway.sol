@@ -120,10 +120,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     uint256 public constant COMMIT_EXPIRY_BLOCKS = 256;
 
     /// @notice Op-kind discriminators prepended to every `paymentId` hash to
-    ///         prevent cross-operation replay (deposit id ≠ withdrawal id even
-    ///         when all other inputs are identical).
+    ///         prevent cross-operation replay (deposit id ≠ depositTo id ≠
+    ///         withdrawal id even when all other inputs are identical).
     uint8 internal constant OP_DEPOSIT = 1;
     uint8 internal constant OP_WITHDRAW = 2;
+    uint8 internal constant OP_DEPOSIT_TO = 3;
 
     // -------------------------------------------------------------------
     // Immutables
@@ -627,10 +628,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
         // 6. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
-        //    OP_DEPOSIT prefix namespaces deposit ids away from withdrawal ids.
+        //    OP_DEPOSIT_TO prefix namespaces depositTo ids away from deposit
+        //    and withdrawal ids so the same (orderId, amount, idempotencyKey)
+        //    tuple cannot be replayed across operation kinds.
         paymentId = keccak256(
             abi.encode(
-                OP_DEPOSIT,
+                OP_DEPOSIT_TO,
                 block.chainid,
                 address(this),
                 msg.sender,

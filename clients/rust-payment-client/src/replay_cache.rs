@@ -6,7 +6,8 @@
 //! excluded from the key — this mirrors the on-chain formula in
 //! `RobotMoneyGateway.deposit` (comment "DEADLINE INTENTIONALLY EXCLUDED").
 //! The `OP_DEPOSIT = 1u8` prefix namespaces deposit ids away from withdrawal
-//! ids (which use `OP_WITHDRAW = 2u8`) — see PAYMENTID-001 / issue #679.
+//! ids (which use `OP_WITHDRAW = 2u8`) and depositTo ids (which use
+//! `OP_DEPOSIT_TO = 3u8`) — see PAYMENTID-001 / issue #679.
 //!
 //! Audit finding M3 (priority-fee cap + replay cache half). The gateway
 //! contract enforces idempotency on-chain via the paymentId derived from
@@ -64,6 +65,11 @@ pub const OP_DEPOSIT: u8 = 1;
 /// Op-kind prefix for withdrawal paymentIds — mirrors `OP_WITHDRAW = 2` in
 /// `RobotMoneyGateway.sol`.
 pub const OP_WITHDRAW: u8 = 2;
+
+/// Op-kind prefix for depositTo paymentIds — mirrors `OP_DEPOSIT_TO = 3` in
+/// `RobotMoneyGateway.sol`. Keeps depositTo ids disjoint from deposit ids
+/// even when all other hash inputs are identical.
+pub const OP_DEPOSIT_TO: u8 = 3;
 
 /// Compute the gateway-equivalent paymentId for a deposit.
 ///

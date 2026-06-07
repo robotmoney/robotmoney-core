@@ -179,7 +179,9 @@ interface IGateway {
     /// @param amount           Gross USDC amount, in 6-decimal base units.
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       Hash committing chain/contract/agent/order/amount/key.
+    /// @return paymentId       keccak256(abi.encode(OP_DEPOSIT=1, chainId, gateway, agent,
+    ///                         orderId, amount, idempotencyKey)) — op-kind prefix ensures
+    ///                         deposit ids are disjoint from depositTo and withdraw ids.
     /// @return sharesMinted    Vault shares minted to `shareReceiver`.
     function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idempotencyKey)
         external
@@ -201,7 +203,9 @@ interface IGateway {
     /// @param destination      Vault address or Portfolio Router address.
     /// @param minSharesPerLeg  Per-leg slippage floor (router path only). Pass
     ///                         empty array when routing to a single vault.
-    /// @return paymentId       Hash committing chain/contract/agent/order/amount/key.
+    /// @return paymentId       keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,
+    ///                         orderId, amount, idempotencyKey)) — op-kind prefix ensures
+    ///                         depositTo ids are disjoint from deposit and withdraw ids.
     function depositTo(
         bytes32 orderId,
         uint256 amount,
@@ -225,7 +229,9 @@ interface IGateway {
     /// @param sourceVault      Vault address to redeem from.
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       Hash committing chain/contract/agent/order/shares/key.
+    /// @return paymentId       keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent,
+    ///                         orderId, shares, idempotencyKey)) — op-kind prefix ensures
+    ///                         withdraw ids are disjoint from deposit and depositTo ids.
     /// @return assetsOut       USDC transferred to `assetRecipient`.
     function withdraw(
         bytes32 orderId,

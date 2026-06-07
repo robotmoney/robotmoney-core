@@ -240,7 +240,7 @@ contract GatewayRouterTest is Test {
         uint64 deadline = uint64(block.timestamp + 60);
 
         bytes32 expectedPaymentId = keccak256(
-            abi.encode(uint8(1), block.chainid, address(gateway), agent, orderId, amount, idem)
+            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
         );
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
@@ -449,7 +449,7 @@ contract GatewayRouterTest is Test {
         uint256[] memory emptyMin = new uint256[](0);
 
         bytes32 expectedPaymentId = keccak256(
-            abi.encode(uint8(1), block.chainid, address(gateway), agent, orderId, amount, idem)
+            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
         );
 
         vm.recordLogs();

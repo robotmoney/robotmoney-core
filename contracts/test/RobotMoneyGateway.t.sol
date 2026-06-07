@@ -950,6 +950,38 @@ contract RobotMoneyGatewayTest is Test {
             bytes32("outer-order"), amount, uint64(block.timestamp + 60), bytes32("outer-idem")
         );
     }
+
+    // -------------------------------------------------------------------
+    // Op-kind discriminator fuzz test
+    // -------------------------------------------------------------------
+
+    /// @dev For any (orderId, amount, shares, idempotencyKey) with amount == shares,
+    ///      the three paymentId namespaces are pairwise distinct:
+    ///        depositPaymentId != depositToPaymentId
+    ///        depositPaymentId != withdrawPaymentId
+    ///        depositToPaymentId != withdrawPaymentId
+    function testFuzz_paymentId_opKindDiscriminates(
+        bytes32 orderId,
+        uint256 amount,
+        bytes32 idempotencyKey
+    ) public view {
+        // Use the same value for amount and shares to maximise collision risk.
+        uint256 shares = amount;
+
+        bytes32 depositId = keccak256(
+            abi.encode(uint8(1), block.chainid, address(gateway), address(this), orderId, amount, idempotencyKey)
+        );
+        bytes32 depositToId = keccak256(
+            abi.encode(uint8(3), block.chainid, address(gateway), address(this), orderId, amount, idempotencyKey)
+        );
+        bytes32 withdrawId = keccak256(
+            abi.encode(uint8(2), block.chainid, address(gateway), address(this), orderId, shares, idempotencyKey)
+        );
+
+        assertTrue(depositId != depositToId, "deposit and depositTo must not collide");
+        assertTrue(depositId != withdrawId, "deposit and withdraw must not collide");
+        assertTrue(depositToId != withdrawId, "depositTo and withdraw must not collide");
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
