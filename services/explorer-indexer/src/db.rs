@@ -66,6 +66,12 @@ pub enum CountTable {
     RouterWeightSnapshots,
     /// Added in migration 0006 — per-leg data from RouterDeposit events (issue #373).
     RouterDepositLegs,
+    /// Added in migration 0007 — adapter allocation history (issue #675).
+    AdapterAllocations,
+    /// Added in migration 0007 — exit fee event log (issue #675).
+    VaultFeeEvents,
+    /// Added in migration 0007 — ERC-4626 deposit/withdrawal event log (issue #675).
+    VaultTransferEvents,
 }
 
 impl CountTable {
@@ -86,6 +92,9 @@ impl CountTable {
             CountTable::GovernanceVotes => "governance_votes",
             CountTable::RouterWeightSnapshots => "router_weight_snapshots",
             CountTable::RouterDepositLegs => "router_deposit_legs",
+            CountTable::AdapterAllocations => "adapter_allocations",
+            CountTable::VaultFeeEvents => "vault_fee_events",
+            CountTable::VaultTransferEvents => "vault_transfer_events",
         }
     }
 }
@@ -239,6 +248,9 @@ impl Db {
             "governance_proposals",
             "router_weight_snapshots",
             "router_deposit_legs",
+            "adapter_allocations",
+            "vault_fee_events",
+            "vault_transfer_events",
             "transactions",
             "blocks",
         ] {
@@ -733,6 +745,127 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// Insert a row into `adapter_allocations` from a `VaultAllocated`,
+    /// `VaultPulled`, or `VaultRebalanced` event.
+    /// Uses `ON CONFLICT DO NOTHING` for idempotency (issue #57 AC).
+    ///
+    /// `adapter` and `adapter_index` may be `None` for `Rebalanced` events
+    /// (which carry only a `totalMoved` amount).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_adapter_allocation(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        adapter: Option<[u8; 20]>,
+        adapter_index: Option<i64>,
+        amount: U256,
+        event_kind: &str,
+    ) -> Result<u64, DbError> {
+        let adapter_bytes: Option<&[u8]> = adapter.as_ref().map(|a| &a[..]);
+        let r = sqlx::query(
+            "INSERT INTO adapter_allocations \
+             (chain_id, block_number, log_index, tx_hash, vault, adapter, adapter_index, amount, event_kind) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&vault[..])
+        .bind(adapter_bytes)
+        .bind(adapter_index)
+        .bind(u256_to_decimal(amount))
+        .bind(event_kind)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Insert a row into `vault_fee_events` from an `ExitFeeCharged` event.
+    /// Uses `ON CONFLICT DO NOTHING` for idempotency (issue #57 AC).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_vault_fee_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        owner: [u8; 20],
+        receiver: [u8; 20],
+        gross_assets: U256,
+        fee_amount: U256,
+        net_assets: U256,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO vault_fee_events \
+             (chain_id, block_number, log_index, tx_hash, vault, owner, receiver, \
+              gross_assets, fee_amount, net_assets) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&vault[..])
+        .bind(&owner[..])
+        .bind(&receiver[..])
+        .bind(u256_to_decimal(gross_assets))
+        .bind(u256_to_decimal(fee_amount))
+        .bind(u256_to_decimal(net_assets))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Insert a row into `vault_transfer_events` from an ERC-4626
+    /// `Deposit` or `Withdraw` event emitted by a vault contract.
+    /// Uses `ON CONFLICT DO NOTHING` for idempotency (issue #57 AC).
+    ///
+    /// `direction` must be `"deposit"` or `"withdrawal"`.
+    /// `owner_or_receiver` is the `owner` field for Deposit events and
+    /// the `receiver` field for Withdraw events.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_vault_transfer_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        vault: [u8; 20],
+        direction: &str,
+        caller: [u8; 20],
+        owner_or_receiver: [u8; 20],
+        assets: U256,
+        shares: U256,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO vault_transfer_events \
+             (chain_id, block_number, log_index, tx_hash, vault, direction, \
+              caller, owner_or_receiver, assets, shares) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&vault[..])
+        .bind(direction)
+        .bind(&caller[..])
+        .bind(&owner_or_receiver[..])
+        .bind(u256_to_decimal(assets))
+        .bind(u256_to_decimal(shares))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
     }
 
     /// Row count for any of the nine §11 tables.
