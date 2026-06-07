@@ -13,7 +13,9 @@
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 
-use crate::{Account, Bytes, ForkFixture, HarnessError, IBasketVault, IRobotMoneyVault, Receipt, IERC20};
+use crate::{
+    Account, Bytes, ForkFixture, HarnessError, IBasketVault, IRobotMoneyVault, Receipt, IERC20,
+};
 
 /// Read a `uint256`-returning view function on the vault. The
 /// caller must know the function actually returns a single

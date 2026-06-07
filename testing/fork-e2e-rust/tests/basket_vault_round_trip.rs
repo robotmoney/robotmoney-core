@@ -36,12 +36,7 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use rmpc_fork_e2e::{
-    addresses,
-    scenarios,
-    skip_if_no_mainnet_fork,
-    ForkFixture,
-    IBasketVault,
-    IERC20,
+    addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IBasketVault, IERC20,
 };
 
 // 50 USDC (6 decimals).
@@ -77,6 +72,7 @@ fn load_bytecode(contract_name: &str) -> Option<Vec<u8>> {
 ///   `(address usdc_, address swapRouter_, uint256 tvlCap_,
 ///     uint256 perDepositCap_, uint256 exitFeeBps_, address feeRecipient_,
 ///     address admin_, address emergencyResponder_)`
+#[allow(clippy::too_many_arguments)]
 fn encode_basket_constructor(
     usdc: Address,
     swap_router: Address,
@@ -240,8 +236,7 @@ fn basket_round_trip(
     scenarios::approve_usdc(&admin, vault_addr, deposit).expect("approve USDC");
 
     // ── Deposit ────────────────────────────────────────────────────────
-    scenarios::basket_deposit(&admin, vault_addr, deposit, admin.address)
-        .expect("basket deposit");
+    scenarios::basket_deposit(&admin, vault_addr, deposit, admin.address).expect("basket deposit");
 
     // ── Assert shares > 0 ─────────────────────────────────────────────
     let shares = scenarios::basket_read_u256(
@@ -273,7 +268,11 @@ fn basket_round_trip(
     );
 
     // ── Redeem ────────────────────────────────────────────────────────
-    let to_redeem = if max_redeem < shares { max_redeem } else { shares };
+    let to_redeem = if max_redeem < shares {
+        max_redeem
+    } else {
+        shares
+    };
     scenarios::basket_redeem(&admin, vault_addr, to_redeem, admin.address, admin.address)
         .expect("basket redeem");
 
@@ -287,19 +286,13 @@ fn basket_round_trip(
     )
     .expect("USDC.balanceOf after redeem");
 
-    let exit_fee = scenarios::basket_read_u256(
-        &admin,
-        vault_addr,
-        &IBasketVault::exitFeeBpsCall {},
-    )
-    .expect("exitFeeBps");
+    let exit_fee =
+        scenarios::basket_read_u256(&admin, vault_addr, &IBasketVault::exitFeeBpsCall {})
+            .expect("exitFeeBps");
 
-    let max_slippage = scenarios::basket_read_u256(
-        &admin,
-        vault_addr,
-        &IBasketVault::maxSlippageBpsCall {},
-    )
-    .expect("maxSlippageBps");
+    let max_slippage =
+        scenarios::basket_read_u256(&admin, vault_addr, &IBasketVault::maxSlippageBpsCall {})
+            .expect("maxSlippageBps");
 
     let loss = usdc_before - usdc_after;
     // Tolerance: (exitFeeBps + maxSlippageBps + 10 bps slack) × deposit / 10_000 + 1 wei.
