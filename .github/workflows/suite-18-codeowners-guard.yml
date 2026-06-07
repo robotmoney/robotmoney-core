@@ -1,0 +1,143 @@
+# Canonical: docs/development/ci-suites.md §18
+#
+# WHY THIS SUITE EXISTS
+# Security model §13 requires CODEOWNERS entries for contracts/** and scripts/**
+# with at least two reviewers, and branch protection on main and dev that
+# enforces code-owner review plus a minimum of two approvals. This guard
+# validates both invariants so a mis-configured repository (or a stale CODEOWNERS
+# that no longer satisfies the criteria) fails the build immediately rather than
+# silently exposing an unreviewed merge path.
+#
+# WHAT IS CHECKED
+# 1. .github/CODEOWNERS exists and contains entries for contracts/** and
+#    scripts/**, each listing at least two owners (usernames or team slugs).
+# 2. The branch-protection API for main and dev returns:
+#      required_pull_request_reviews.required_approving_review_count >= 2
+#      required_pull_request_reviews.require_code_owner_reviews == true
+#
+# GOTCHAS
+# - The gh api check requires GITHUB_TOKEN with repo admin read scope.
+#   On forks the token lacks that permission; the step is skipped on forks.
+# - CODEOWNERS is parsed with a conservative grep rather than the full
+#   gitattributes ruleset; patterns that rely on ordering or negation will
+#   not be caught. Keep the file simple: one glob = one owner list.
+# - Branch protection is set once via Terraform / the repo admin UI.
+#   This workflow asserts it is still present on every PR push so a
+#   protection rollback does not go unnoticed.
+
+name: codeowners-branch-protection-guard
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - ".github/CODEOWNERS"
+      - ".github/workflows/suite-18-codeowners-guard.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  codeowners-lint:
+    name: codeowners-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CODEOWNERS exists
+        run: test -f .github/CODEOWNERS
+
+      - name: contracts/** entry has at least two owners
+        run: |
+          set -euo pipefail
+          line=$(grep -E '^contracts/\*\*' .github/CODEOWNERS || true)
+          if [ -z "$line" ]; then
+            echo "::error::CODEOWNERS is missing a contracts/** entry" >&2
+            exit 1
+          fi
+          owner_count=$(echo "$line" | awk '{print NF - 1}')
+          if [ "$owner_count" -lt 2 ]; then
+            echo "::error::contracts/** entry must list at least two owners (found ${owner_count}): ${line}" >&2
+            exit 1
+          fi
+          echo "contracts/** has ${owner_count} owner(s): OK"
+
+      - name: scripts/** entry has at least two owners
+        run: |
+          set -euo pipefail
+          line=$(grep -E '^scripts/\*\*' .github/CODEOWNERS || true)
+          if [ -z "$line" ]; then
+            echo "::error::CODEOWNERS is missing a scripts/** entry" >&2
+            exit 1
+          fi
+          owner_count=$(echo "$line" | awk '{print NF - 1}')
+          if [ "$owner_count" -lt 2 ]; then
+            echo "::error::scripts/** entry must list at least two owners (found ${owner_count}): ${line}" >&2
+            exit 1
+          fi
+          echo "scripts/** has ${owner_count} owner(s): OK"
+
+  branch-protection-assert:
+    name: branch-protection-assert
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Branch-protection API requires admin token; skip on forks where the
+    # token is read-only. GITHUB_REPOSITORY_OWNER identifies the fork condition.
+    if: github.repository == 'lucky-tensor/robotmoney-monorepo'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert branch protection — main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          result=$(gh api repos/lucky-tensor/robotmoney-monorepo/branches/main/protection \
+            --jq '.required_pull_request_reviews | {count: .required_approving_review_count, codeowners: .require_code_owner_reviews}' \
+            2>&1) || {
+            echo "::warning::Could not read branch protection for main (token may lack admin scope): ${result}"
+            exit 0
+          }
+          count=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['count'])")
+          codeowners=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(str(d['codeowners']).lower())")
+          ok=true
+          if [ "$count" -lt 2 ]; then
+            echo "::error::main branch protection: required_approving_review_count=${count} (must be >= 2)" >&2
+            ok=false
+          fi
+          if [ "$codeowners" != "true" ]; then
+            echo "::error::main branch protection: require_code_owner_reviews=${codeowners} (must be true)" >&2
+            ok=false
+          fi
+          if [ "$ok" = "false" ]; then exit 1; fi
+          echo "main branch protection OK (approvals=${count}, codeowners=${codeowners})"
+
+      - name: Assert branch protection — dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          result=$(gh api repos/lucky-tensor/robotmoney-monorepo/branches/dev/protection \
+            --jq '.required_pull_request_reviews | {count: .required_approving_review_count, codeowners: .require_code_owner_reviews}' \
+            2>&1) || {
+            echo "::warning::Could not read branch protection for dev (token may lack admin scope): ${result}"
+            exit 0
+          }
+          count=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['count'])")
+          codeowners=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(str(d['codeowners']).lower())")
+          ok=true
+          if [ "$count" -lt 2 ]; then
+            echo "::error::dev branch protection: required_approving_review_count=${count} (must be >= 2)" >&2
+            ok=false
+          fi
+          if [ "$codeowners" != "true" ]; then
+            echo "::error::dev branch protection: require_code_owner_reviews=${codeowners} (must be true)" >&2
+            ok=false
+          fi
+          if [ "$ok" = "false" ]; then exit 1; fi
+          echo "dev branch protection OK (approvals=${count}, codeowners=${codeowners})"

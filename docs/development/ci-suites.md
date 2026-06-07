@@ -501,6 +501,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
 | `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
+| `codeowners-branch-protection-guard` | quick | asserts CODEOWNERS entries and branch-protection settings for main and dev (security model §13) |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
@@ -524,3 +525,4 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
+| 18 | `suite-18-codeowners-guard.yml` | `codeowners-lint` \| `branch-protection-assert` | `none` |

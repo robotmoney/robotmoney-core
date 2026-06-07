@@ -1,0 +1,21 @@
+# CODEOWNERS — security model §13
+#
+# At least two reviewers are required to merge any change to contracts/** or
+# scripts/** on any branch that can reach production (main and dev).
+#
+# Branch protection (require_code_owner_reviews: true,
+# required_approving_review_count >= 2) is asserted in CI by suite-18
+# (.github/workflows/suite-18-codeowners-guard.yml).
+#
+# When the team @lucky-tensor/security-reviewers is populated, GitHub
+# will require approval from the team in addition to @lucky-tensor,
+# satisfying the two-reviewer requirement imposed by branch protection.
+
+# Global fallback: any push requires owner review
+*                           @lucky-tensor
+
+# Smart-contract source and test code — two reviewers required
+contracts/**                @lucky-tensor @lucky-tensor/security-reviewers
+
+# Deployment and utility scripts — two reviewers required
+scripts/**                  @lucky-tensor @lucky-tensor/security-reviewers
