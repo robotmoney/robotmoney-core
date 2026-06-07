@@ -59,6 +59,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -88,6 +90,9 @@ jobs:
 
       - name: Four-vault reference invariant (issue #479)
         run: python3 .github/scripts/check_four_vault_references.py
+
+      - name: Bug bounty scope freshness
+        run: bash scripts/check-bounty-scope.sh
 
   schema-validators:
     name: schema-validators

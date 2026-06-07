@@ -183,6 +183,7 @@ Goal: Publish security review, streamline agent-vendor onboarding, document
 devnet configuration, and offer a tunnel-based hosted devnet demo path.
 
 - [ ] Publish 2026-05-09 security review document
+- [x] Publish pre-launch bug-bounty scope, disclosure intake, and deployment-scope freshness gate for issue #644 (`docs/bug-bounty.md`, `SECURITY.md`, `scripts/check-bounty-scope.sh`, suite-13 doc checks)
 - [x] Create `BOOTSTRAP.md` and simplify `README` to a single agent-onboarding pointer
 - [x] Add agent-vendor bootstrap prompts (OpenCode, OpenClaw, Claude Code) — `BOOTSTRAP.md` §OpenCode / §OpenClaw / §Claude-Code sections
 - [ ] Tunnel hosted devnet demo + wallet-routed dapp reads

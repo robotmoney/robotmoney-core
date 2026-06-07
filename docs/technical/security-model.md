@@ -286,10 +286,10 @@ This section maps onto `docs/architecture.md` §15.
 |---|---|
 | Selectively audited surface | An audit-scope ledger must be maintained in `docs/audits.md` mapping every contract to its audit report(s). No contract may ship to production without a completed audit or an explicit documented exception approved by the team. |
 | Economic vs. code-only audits (YieldBlox-class) | An economic-model audit is required before any bucket-B/C basket vault enters production. The audit must cover composition logic, oracle assumptions, and rebalancing model. |
-| Bug-bounty exclusion of new high-risk contract | A bug-bounty program with a published scope must be live before the public dapp launch. Scope and exclusions must be updated within 72 hours of any new contract deployment. |
+| Bug-bounty exclusion of new high-risk contract | A bug-bounty program with a published scope must be live before the public dapp launch. Scope and exclusions must be updated within 72 hours of any new contract deployment. The canonical scope is `docs/bug-bounty.md`, and CI enforces the 72-hour deployment freshness gate through `scripts/check-bounty-scope.sh`. |
 | Pattern repetition across deployments | Every audit finding must be cross-referenced against all contracts in the codebase, not only the audited one. The finding register in `docs/audits.md` must include a "checked against" field for each finding. |
 | Near-miss dismissal | Any finding that is dismissed rather than fixed must be reviewed by a second team member and logged with an explicit rationale. Dismissed findings must be revisited before any major change to the relevant code path. |
-| Disclosure-handling failure | `SECURITY.md` must exist at the repo root with a disclosure address and a maximum response-time commitment. The disclosure address must be monitored with an on-call rotation. |
+| Disclosure-handling failure | `SECURITY.md` must exist at the repo root with a disclosure address and a maximum response-time commitment. The disclosure address must be monitored with an on-call rotation. The root `SECURITY.md` is the canonical disclosure intake document. |
 
 ---
 
