@@ -424,6 +424,15 @@ being satisfied and formally certified for a given deployment:
 Until all four gates are certified for a given deployment, the vault
 subclass must not be added to the Portfolio Router weight vector.
 
+**Non-goal — autonomous agent trading.** `AgentTokenVault` does not and
+will not contain autonomous trading logic (agent-driven swaps, on-chain
+trading strategy, position-sizing rules, stop-loss enforcement, or
+real-time NAV loss reporting) at any planned roadmap horizon. This is a
+custody-and-rebalance vault only. See
+[ADR-0007](adr/ADR-0007-agent-token-vault-trading-authority.md) for the
+closed decision record. Any future initiative to introduce agent trading
+must produce a successor ADR before implementation begins.
+
 ### 11.4 RWA / Thematic Vault
 
 | Property | Value |

@@ -32,7 +32,9 @@ Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay
 
 ### 1.B Agent-token vault internals
 
-**Trading authority and strategy (§3.2).** Specify trading strategy, position-sizing rules, stop-loss enforcement, and real-time NAV loss reporting *if* an agent component is reintroduced to the agent-token vault. Not live in the MVP shortlist model (admin-curated, equal-weighted, no agent trading); question needs reframing with the product owner before any engineering work.
+**Trading authority and strategy (§3.2).** **Resolved** — see [ADR-0007](../adr/ADR-0007-agent-token-vault-trading-authority.md) (2026-06-07).
+
+Decision: trading authority and strategy inside `AgentTokenVault` is a **non-goal at all current roadmap horizons**. The vault holds an admin-curated basket of agent-economy tokens and rebalances on new deposits only (equal-weight, no autonomous trading). Any future initiative reintroducing an agent component must open a new ADR specifying trading authority model, strategy type, position-sizing rules, stop-loss enforcement mechanism, and NAV loss reporting surface before any code is written. This closes §1.B permanently.
 
 **Intra-vault rebalancing (§3.15).** **Resolved** — see [ADR-0003](../adr/ADR-0003-basketvault-rebalancing-model.md) (2026-06-02).
 
@@ -53,4 +55,4 @@ Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigge
 1. **Router default-weight vector on-chain** — implement the admin-settable fallback per ADR-0002 and close §3.9.
 2. **Intra-vault rebalancing transparency** — ~~pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15~~ **Closed** by ADR-0003.
 3. **Vault lifecycle residuals** — depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7); only the latter blocks marking a basket vault router-eligible.
-4. **Trading authority reframe (§3.2)** — product to reframe before any engineering work.
+4. ~~**Trading authority reframe (§3.2)** — product to reframe before any engineering work.~~ **Closed** by ADR-0007 (non-goal).

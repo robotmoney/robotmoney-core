@@ -15,3 +15,4 @@ File names follow `ADR-NNNN-short-kebab-title.md`.
 | 0004 | [Agent-token shortlist governance mechanism enabling rmAGENT router-eligibility](ADR-0004-agent-token-shortlist-governance.md) | Accepted |
 | 0005 | [BasketVault multi-DEX routing — per-asset venue abstraction for Aerodrome and Uniswap V4](ADR-0005-basketvault-multi-dex-routing.md) | Accepted |
 | 0006 | [deSPXA RWA vault — asset, Chronicle oracle, Aerodrome swap-only entry/exit, freeze risk](ADR-0006-despxa-rwa-vault-design.md) | Accepted |
+| 0007 | [AgentTokenVault trading authority and strategy — deferred indefinitely (non-goal)](ADR-0007-agent-token-vault-trading-authority.md) | Accepted |
