@@ -50,8 +50,9 @@ pub const MULTI_VAULT_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0003_multi_vault_schema.sql");
 
 /// Migration 0004: router weight snapshots table.
-pub const ROUTER_WEIGHT_SNAPSHOTS_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0004_add_router_weight_snapshots.sql");
+pub const ROUTER_WEIGHT_SNAPSHOTS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0004_add_router_weight_snapshots.sql"
+);
 
 /// Migration 0005: adds the `governance_proposals`, `governance_votes`, and
 /// `router_weight_snapshots` tables (issue #307 and #316).
@@ -62,8 +63,9 @@ pub const GOVERNANCE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0005_add_governance_tables.sql");
 
 /// Migration 0006: agent_deposits vault column + router_deposit_legs table (issue #373).
-pub const ROUTER_LEGS_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0006_agent_deposit_vault_and_router_legs.sql");
+pub const ROUTER_LEGS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0006_agent_deposit_vault_and_router_legs.sql"
+);
 
 /// Migration 0007: vault detail event tables — adapter_allocations,
 /// vault_fee_events, vault_transfer_events (issue #675).
@@ -567,8 +569,7 @@ async fn seed_fixture(pool: &PgPool) {
     // three §5.4 data sets.
     let adapter_addr = hex_bytes("cccccccccccccccccccccccccccccccccccccccc");
     let owner_addr = vault_a_addr.clone(); // reuse vault_a_addr as the fee owner
-    let detail_tx =
-        hex_bytes("efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef");
+    let detail_tx = hex_bytes("efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef");
 
     // adapter_allocations: one Allocated event at block 600.
     sqlx::query(

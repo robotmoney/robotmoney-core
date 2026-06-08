@@ -130,13 +130,39 @@ type ProposalRow = (
 type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
 
 // (block_number, tx_hash, adapter BYTEA NULL, adapter_index BIGINT NULL, amount, event_kind, indexed_at)
-type AdapterAllocationRow = (i64, Vec<u8>, Option<Vec<u8>>, Option<i64>, BigDecimal, String, DateTime<Utc>);
+type AdapterAllocationRow = (
+    i64,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<i64>,
+    BigDecimal,
+    String,
+    DateTime<Utc>,
+);
 
 // (block_number, tx_hash, direction, caller BYTEA, owner_or_receiver BYTEA, assets, shares, indexed_at)
-type VaultTransferRow = (i64, Vec<u8>, String, Vec<u8>, Vec<u8>, BigDecimal, BigDecimal, DateTime<Utc>);
+type VaultTransferRow = (
+    i64,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    Vec<u8>,
+    BigDecimal,
+    BigDecimal,
+    DateTime<Utc>,
+);
 
 // (block_number, tx_hash, owner BYTEA, receiver BYTEA, gross_assets, fee_amount, net_assets, indexed_at)
-type VaultFeeRow = (i64, Vec<u8>, Vec<u8>, Vec<u8>, BigDecimal, BigDecimal, BigDecimal, DateTime<Utc>);
+type VaultFeeRow = (
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    DateTime<Utc>,
+);
 
 // Row types for the new multi-vault endpoints.
 
@@ -599,17 +625,19 @@ async fn get_vault(
 
     let adapter_allocation_history: Vec<AdapterAllocationEntry> = alloc_rows
         .into_iter()
-        .map(|(block_number, tx_hash, adapter, adapter_index, amount, event_kind, ia)| {
-            AdapterAllocationEntry {
-                block_number,
-                tx_hash: hash_to_hex(&tx_hash),
-                adapter: adapter.as_deref().map(addr_to_hex),
-                adapter_index,
-                amount: dec_to_string(&amount),
-                event_kind,
-                indexed_at: ia,
-            }
-        })
+        .map(
+            |(block_number, tx_hash, adapter, adapter_index, amount, event_kind, ia)| {
+                AdapterAllocationEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    adapter: adapter.as_deref().map(addr_to_hex),
+                    adapter_index,
+                    amount: dec_to_string(&amount),
+                    event_kind,
+                    indexed_at: ia,
+                }
+            },
+        )
         .collect();
 
     // Fetch deposit/withdrawal log — up to 500 rows ascending by block.
@@ -627,18 +655,20 @@ async fn get_vault(
 
     let deposit_withdrawal_log: Vec<VaultTransferEntry> = transfer_rows
         .into_iter()
-        .map(|(block_number, tx_hash, direction, caller, owner_or_receiver, assets, shares, ia)| {
-            VaultTransferEntry {
-                block_number,
-                tx_hash: hash_to_hex(&tx_hash),
-                direction,
-                caller: addr_to_hex(&caller),
-                owner_or_receiver: addr_to_hex(&owner_or_receiver),
-                assets: dec_to_string(&assets),
-                shares: dec_to_string(&shares),
-                indexed_at: ia,
-            }
-        })
+        .map(
+            |(block_number, tx_hash, direction, caller, owner_or_receiver, assets, shares, ia)| {
+                VaultTransferEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    direction,
+                    caller: addr_to_hex(&caller),
+                    owner_or_receiver: addr_to_hex(&owner_or_receiver),
+                    assets: dec_to_string(&assets),
+                    shares: dec_to_string(&shares),
+                    indexed_at: ia,
+                }
+            },
+        )
         .collect();
 
     // Fetch fee collection history — up to 500 rows ascending by block.
@@ -656,18 +686,20 @@ async fn get_vault(
 
     let fee_history: Vec<VaultFeeEntry> = fee_rows
         .into_iter()
-        .map(|(block_number, tx_hash, owner, receiver, gross_assets, fee_amount, net_assets, ia)| {
-            VaultFeeEntry {
-                block_number,
-                tx_hash: hash_to_hex(&tx_hash),
-                owner: addr_to_hex(&owner),
-                receiver: addr_to_hex(&receiver),
-                gross_assets: dec_to_string(&gross_assets),
-                fee_amount: dec_to_string(&fee_amount),
-                net_assets: dec_to_string(&net_assets),
-                indexed_at: ia,
-            }
-        })
+        .map(
+            |(block_number, tx_hash, owner, receiver, gross_assets, fee_amount, net_assets, ia)| {
+                VaultFeeEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    owner: addr_to_hex(&owner),
+                    receiver: addr_to_hex(&receiver),
+                    gross_assets: dec_to_string(&gross_assets),
+                    fee_amount: dec_to_string(&fee_amount),
+                    net_assets: dec_to_string(&net_assets),
+                    indexed_at: ia,
+                }
+            },
+        )
         .collect();
 
     // Freshness is taken from the most recent TVL point if available,

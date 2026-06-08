@@ -123,7 +123,9 @@ fn encode_rebalanced_log(
     use alloy_primitives::LogData;
     use alloy_sol_types::SolEvent as _;
 
-    let event = IVaultEvents::Rebalanced { totalMoved: total_moved };
+    let event = IVaultEvents::Rebalanced {
+        totalMoved: total_moved,
+    };
     let log_data: LogData = event.encode_log_data();
     let topics: Vec<String> = log_data
         .topics()
@@ -273,10 +275,7 @@ async fn adapter_allocation_allocated_rows_written() {
         "eth_blockNumber",
         serde_json::Value::String("0x46".into()), // 70
     );
-    stub.set(
-        "eth_getLogs",
-        serde_json::Value::Array(vec![allocated_log]),
-    );
+    stub.set("eth_getLogs", serde_json::Value::Array(vec![allocated_log]));
     stub.set(
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
@@ -291,7 +290,10 @@ async fn adapter_allocation_allocated_rows_written() {
     stub.shutdown();
 
     let count = fx.db.count(CountTable::AdapterAllocations).await.unwrap();
-    assert_eq!(count, 1, "adapter_allocations must have one row after Allocated event");
+    assert_eq!(
+        count, 1,
+        "adapter_allocations must have one row after Allocated event"
+    );
 
     // Verify event_kind and amount.
     let row: (String, bigdecimal::BigDecimal, Option<Vec<u8>>) = sqlx::query_as(
@@ -326,10 +328,7 @@ async fn adapter_allocation_pulled_rows_written() {
     );
 
     let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()),
-    );
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
     stub.set("eth_getLogs", serde_json::Value::Array(vec![pulled_log]));
     stub.set(
         "eth_call",
@@ -345,7 +344,10 @@ async fn adapter_allocation_pulled_rows_written() {
     stub.shutdown();
 
     let count = fx.db.count(CountTable::AdapterAllocations).await.unwrap();
-    assert_eq!(count, 1, "adapter_allocations must have one row after Pulled event");
+    assert_eq!(
+        count, 1,
+        "adapter_allocations must have one row after Pulled event"
+    );
 
     let row: (String,) =
         sqlx::query_as("SELECT event_kind FROM adapter_allocations WHERE chain_id = $1")
@@ -366,19 +368,11 @@ async fn adapter_allocation_rebalanced_rows_written() {
 
     let vault_addr = Address::from([0xAAu8; 20]);
 
-    let rebalanced_log = encode_rebalanced_log(
-        vault_addr,
-        U256::from(300_000u64),
-        50u64,
-        [0x33u8; 32],
-        0,
-    );
+    let rebalanced_log =
+        encode_rebalanced_log(vault_addr, U256::from(300_000u64), 50u64, [0x33u8; 32], 0);
 
     let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()),
-    );
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
     stub.set(
         "eth_getLogs",
         serde_json::Value::Array(vec![rebalanced_log]),
@@ -443,10 +437,7 @@ async fn fee_charged_rows_written() {
     );
 
     let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()),
-    );
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
     stub.set("eth_getLogs", serde_json::Value::Array(vec![fee_log]));
     stub.set(
         "eth_call",
@@ -502,10 +493,7 @@ async fn erc4626_deposit_rows_written() {
     );
 
     let stub = StubRpcServer::start().await;
-    stub.set(
-        "eth_blockNumber",
-        serde_json::Value::String("0x46".into()),
-    );
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
     stub.set("eth_getLogs", serde_json::Value::Array(vec![deposit_log]));
     stub.set(
         "eth_call",

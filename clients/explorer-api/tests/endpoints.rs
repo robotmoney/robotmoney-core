@@ -491,7 +491,9 @@ async fn get_vault_detail_includes_all_four_data_sets() {
     assert!(!tvl.is_empty(), "tvl_history must be non-empty");
 
     // adapter_allocation_history — must contain the seeded Allocated event.
-    let alloc = body["vault"]["adapter_allocation_history"].as_array().unwrap();
+    let alloc = body["vault"]["adapter_allocation_history"]
+        .as_array()
+        .unwrap();
     assert!(
         !alloc.is_empty(),
         "adapter_allocation_history must be non-empty (one Allocated event seeded)"
