@@ -224,6 +224,11 @@ contract Deploy is Script {
     /// @notice In-process variant for fork tests. Like `runInProcessWith` but also
     ///         executes the mandatory seed deposit (requires real protocol state).
     ///         The caller must ensure `admin_` has ≥ SEED_DEPOSIT_AMOUNT of `usdc_`.
+    /// @param admin_         Address to receive `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    /// @param pauser_        Address to receive `PAUSER_ROLE`.
+    /// @param agent_         Address to receive `AGENT_ROLE`.
+    /// @param shareReceiver_ Address that will receive minted vault shares.
+    /// @param usdc_          Address of the USDC token to bind to the gateway.
     /// @return d Struct containing all deployed contract addresses and key parameters.
     function runInProcessWithSeed(
         address admin_,
