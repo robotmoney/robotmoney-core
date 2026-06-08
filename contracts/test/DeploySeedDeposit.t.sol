@@ -124,9 +124,7 @@ contract DeploySeedDeposit is Test {
         Deploy.Deployed memory d = _runDeploy();
 
         assertGt(
-            d.vault.totalSupply(),
-            0,
-            "vault.totalSupply must be > 0 before any public deposit"
+            d.vault.totalSupply(), 0, "vault.totalSupply must be > 0 before any public deposit"
         );
     }
 
@@ -139,11 +137,7 @@ contract DeploySeedDeposit is Test {
 
         Deploy.Deployed memory d = _runDeploy();
 
-        assertGt(
-            d.vault.balanceOf(admin),
-            0,
-            "admin must hold seed shares after deploy"
-        );
+        assertGt(d.vault.balanceOf(admin), 0, "admin must hold seed shares after deploy");
     }
 
     /// @notice A public deposit made immediately after deploy mints fair shares.
@@ -179,5 +173,4 @@ contract DeploySeedDeposit is Test {
             "first public depositor must recover >= 90% of deposit value"
         );
     }
-
 }
