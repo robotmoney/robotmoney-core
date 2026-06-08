@@ -746,10 +746,15 @@ fn router_withdrawal() {
     let share_receiver = fx
         .ephemeral(one_eth, U256::ZERO)
         .expect("fund shareReceiver");
-    // assetRecipient: receives USDC on withdrawal.
-    let asset_recipient: Address = "0x000000000000000000000000000000000000CAFE"
-        .parse()
-        .unwrap();
+    // assetRecipient: receives USDC on withdrawal. Use a fresh ephemeral address
+    // (no ETH, no USDC) rather than a hardcoded constant, so the zero-balance
+    // precondition holds regardless of which other tests ran against the shared
+    // fork (e.g. `agent_withdrawal_window_cap` also routes USDC to a hardcoded
+    // recipient).
+    let asset_recipient: Address = fx
+        .ephemeral(U256::ZERO, U256::ZERO)
+        .expect("fresh assetRecipient")
+        .address;
 
     // ── Deploy infrastructure ────────────────────────────────────────────────
 
@@ -986,7 +991,8 @@ fn router_withdrawal() {
     // ── Assert USDC landed at assetRecipient ─────────────────────────────────
     let post_bal = usdc_balance_of(&agent, usdc, asset_recipient);
     assert_eq!(
-        post_bal, deposit_amount,
+        post_bal - pre_bal,
+        deposit_amount,
         "assetRecipient must receive full deposit_amount USDC (1:1 MockVaults)"
     );
 
