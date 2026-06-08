@@ -14,6 +14,40 @@ fn rmpc() -> Command {
     Command::cargo_bin("rmpc").expect("rmpc binary built")
 }
 
+// ------------------------------------------------------------------
+// withdraw-router subcommand parser tests
+// ------------------------------------------------------------------
+
+#[test]
+fn withdraw_router_requires_config_and_order_id() {
+    // No flags at all — clap must reject before any I/O.
+    // (--shares-per-leg is a Vec<String> so clap accepts zero entries;
+    //  it is validated at runtime rather than parse time.)
+    rmpc()
+        .args(["withdraw-router"])
+        .assert()
+        .failure()
+        .stderr(contains("--config"))
+        .stderr(contains("--order-id"));
+}
+
+#[test]
+fn withdraw_router_help_includes_confirm_and_deadline_flags() {
+    let out = rmpc()
+        .args(["withdraw-router", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert!(s.contains("--confirm"), "{s}");
+    assert!(s.contains("--deadline-secs"), "{s}");
+    assert!(s.contains("--receipt-timeout-secs"), "{s}");
+    assert!(s.contains("--gas-limit"), "{s}");
+    assert!(s.contains("--pretty"), "{s}");
+    assert!(s.contains("--idempotency-key"), "{s}");
+}
+
 #[test]
 fn deposit_subcommand_requires_config_amount_and_order_id() {
     // No flags at all — clap must reject before any I/O.

@@ -137,6 +137,25 @@ rmpc withdraw --config <CONFIG> --shares <N> --source-vault <ADDR>
   [--pretty]
 ```
 
+### `rmpc withdraw-router`
+
+Redeem vault shares via the Portfolio Router (multi-vault proportional
+redemption, agent-initiated). Calls
+`gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey)`.
+USDC lands at the policy-configured `assetRecipient`; no shares pass through
+the gateway. Requires `--confirm` to proceed past the preview.
+
+Run `rmpc get-router` first to inspect the router's current vault order and
+decide per-leg share amounts.
+
+```
+rmpc withdraw-router --config <CONFIG>
+  --shares-per-leg <N,N,...> --order-id <HEX>
+  [--idempotency-key <HEX>] [--deadline-secs <N>]
+  [--receipt-timeout-secs <N>] [--gas-limit <N>] [--fee-cap <WEI>]
+  --confirm [--pretty]
+```
+
 ### `rmpc status`
 
 Look up a previously submitted payment by its on-chain `paymentId`.

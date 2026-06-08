@@ -301,4 +301,52 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Redeem vault shares via the Portfolio Router (multi-vault proportional
+    /// redemption, agent-initiated).
+    ///
+    /// Reads the router's effective weight vector, distributes the requested
+    /// per-leg shares across all active router vaults, and calls
+    /// `gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey)`.
+    /// USDC lands at the policy-configured `assetRecipient`; no shares pass
+    /// through the gateway. Re-run with `--get-router` first to preview the
+    /// router's current vault order.
+    ///
+    /// Requires `--confirm` to proceed past the preview.
+    WithdrawRouter {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        /// Comma-separated share amounts per router leg (decimal, one per
+        /// vault in the router's effective weight vector order).
+        /// Example: `--shares-per-leg 60000000,40000000`
+        #[arg(long = "shares-per-leg", value_delimiter = ',')]
+        shares_per_leg: Vec<String>,
+        /// 32-byte order id, 0x-prefixed hex.
+        #[arg(long = "order-id")]
+        order_id: String,
+        /// 32-byte idempotency key, 0x-prefixed hex. Defaults to
+        /// `--order-id` when omitted.
+        #[arg(long = "idempotency-key")]
+        idempotency_key: Option<String>,
+        /// Deadline horizon in seconds from now. Capped at 600. Default 300.
+        #[arg(long = "deadline-secs", default_value_t = 300)]
+        deadline_secs: u64,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Gas limit for the withdraw-router tx. Default 750_000 (covers
+        /// N-leg vault redemption with cold storage writes).
+        #[arg(long = "gas-limit", default_value_t = 750_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+        /// Proceed past the preview and sign + broadcast the transaction.
+        /// Without this flag the command prints a preview and exits 2.
+        #[arg(long)]
+        confirm: bool,
+        /// Pretty-print the JSON output.
+        #[arg(long)]
+        pretty: bool,
+    },
 }

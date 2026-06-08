@@ -241,29 +241,46 @@ output contract (`docs/technical/rmpc-read-output-contract.md`).
 
 ## 5. Router-Position Withdrawal Scope
 
-### Decision
+### Decision (updated — issue #669, shipped)
 
-Router-position withdrawal (proportional multi-vault redeem coordinated
-by a router withdrawal helper) is **deferred past MVP**.
+Router-position withdrawal is implemented as
+`gateway.withdrawFromRouter(orderId, sharesPerLeg[], deadline, idempotencyKey)`.
 
-### Rationale
+### Design
 
-The Portfolio Router does not yet exist as a deployed contract. A router
-withdrawal helper would require the router to be deployed first, the
-multi-vault proportional math to be specified, and additional gateway
-check surfaces for multi-vault operation. These dependencies push the
-scope well beyond the current phase.
+`withdrawFromRouter` applies all existing gateway policy checks (pause,
+agent active, valid-until, per-payment cap, rolling window cap,
+`allowedSourceVaults` whitelist, idempotency key) then delegates
+execution to `PortfolioRouter.redeemFor(shareHolder, assetRecipient, sharesPerLeg)`.
 
-For MVP, `gateway.withdraw()` operates against a single named vault
-(`sourceVault` parameter). An agent holding receipts across multiple
-vaults calls `withdraw` once per vault. This is sufficient for the
-initial agent-withdrawal use case and avoids coupling gateway withdrawal
-to the undeployed Portfolio Router.
+Key invariants:
 
-The router withdrawal helper remains an open implementation issue for
-the Portfolio Router phase. When it is implemented it must preserve the
-same gateway permission checks and must not create hidden custody or an
-unobservable outer claim, per `docs/architecture.md` §5.2.
+- **No outer share custody in gateway**: the gateway never mints or holds
+  the pool's share token. `redeemFor` calls `vault.redeem(shares, assetRecipient, shareHolder)`
+  directly per leg; USDC flows straight to the policy-configured `assetRecipient`.
+- **`allowedSourceVaults` gate**: when the agent's policy has a non-empty
+  `allowedSourceVaults` list, `withdrawFromRouter` rejects any router leg
+  whose vault address is not in that list, before any vault interaction.
+- **Total shares for cap accounting**: the per-payment and window cap
+  checks use `sum(sharesPerLeg)` as the single cap-consumed amount,
+  consistent with single-vault `withdraw`.
+- **Idempotency**: the derived `paymentId = keccak256(idempotencyKey, agent)`
+  is recorded in `usedPaymentIds` on first use; re-submission reverts with
+  `PaymentIdAlreadyUsed`.
+- **CEI + nonReentrant**: state mutations (window accrual, paymentId mark)
+  precede the external call to the router; `nonReentrant` guards the entry.
+
+Stack-depth management: the outer function collects policy inputs into a
+`RouterWithdrawArgs` struct; external calls are delegated to a separate
+`_executeRouterWithdraw` internal helper.
+
+The `AgentWithdrawalRouted` event captures `paymentId`, `orderId`,
+`agent`, `router`, `shareHolder`, `sharesPerLeg[]`, `assetsPerLeg[]`,
+`assetRecipient`, and `windowId` for complete audit coverage.
+
+`rmpc withdraw-router` is the CLI entry point (see
+`clients/rust-payment-client/src/commands/withdraw_router.rs`). It
+requires `--confirm` to proceed past the preview.
 
 ---
 

@@ -898,4 +898,183 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             windowId
         );
     }
+
+    // -------------------------------------------------------------------
+    // Router Withdrawal
+    // -------------------------------------------------------------------
+
+    /// @notice Error: `withdrawFromRouter()` called but no router is configured
+    ///         (`routerContract == address(0)`).
+    error RouterNotConfigured();
+
+    /// @notice Error: `sharesPerLeg` length does not match the router's current
+    ///         effective weight vector length.
+    error RouterLegLengthMismatch();
+
+    /// @dev Internal args struct to avoid stack-too-deep in `withdrawFromRouter`.
+    struct RouterWithdrawArgs {
+        bytes32 paymentId;
+        bytes32 orderId;
+        address shareHolder;
+        address assetRecipient;
+        uint256 totalShares;
+        uint64 windowId;
+        address[] vaultList;
+    }
+
+    /// @inheritdoc IGateway
+    /// @dev Proportional multi-vault redemption through the Portfolio Router.
+    ///      All legs must succeed (all-or-revert). No outer share token is
+    ///      minted; the gateway temporarily holds each vault's shares during the
+    ///      call frame and passes them to the router's `redeemFor`, which calls
+    ///      `vault.redeem` per leg and delivers USDC directly to `assetRecipient`.
+    ///      CEI pattern: all state effects written before external calls.
+    ///      `nonReentrant` provides defense-in-depth.
+    function withdrawFromRouter(
+        bytes32 orderId,
+        uint256[] calldata sharesPerLeg,
+        uint64 deadline,
+        bytes32 idempotencyKey
+    )
+        external
+        nonReentrant
+        onlyRole(AGENT_ROLE)
+        returns (bytes32 paymentId, uint256[] memory assetsPerLeg)
+    {
+        if (_paused) revert PausedError();
+
+        // 1. Router must be configured.
+        if (address(routerContract) == address(0)) revert RouterNotConfigured();
+
+        // Build args struct early to collapse locals onto the heap.
+        RouterWithdrawArgs memory args;
+        args.orderId = orderId;
+
+        {
+            AgentPolicy memory p = agents[msg.sender];
+
+            // 2. Withdrawal must be enabled for this agent.
+            if (p.maxWithdrawPerPayment == 0) revert WithdrawalNotEnabled();
+
+            // 3. deadline window.
+            if (block.timestamp > deadline) revert DeadlineExpired();
+            if (deadline > block.timestamp + MAX_DEADLINE_SKEW) revert DeadlineTooFar();
+
+            // 4. policy active and not expired.
+            // coverage:unreachable
+            if (!p.active) revert AgentNotAuthorized();
+            if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
+
+            // 5. Validate leg array against router's effective weight vector.
+            (args.vaultList,) = routerContract.getEffectiveWeights();
+            if (sharesPerLeg.length != args.vaultList.length) revert RouterLegLengthMismatch();
+
+            // 5a. allowedSourceVaults check: every vault with non-zero shares
+            //     must be in the policy allowlist (when non-empty).
+            uint256 slen = p.allowedSourceVaults.length;
+            if (slen > 0) {
+                for (uint256 i = 0; i < args.vaultList.length; i++) {
+                    if (sharesPerLeg[i] == 0) continue;
+                    address vaultAddr = args.vaultList[i];
+                    bool found;
+                    for (uint256 j = 0; j < slen && !found; j++) {
+                        found = p.allowedSourceVaults[j] == vaultAddr;
+                    }
+                    if (!found) revert InvalidSourceVault();
+                }
+            }
+
+            // 6. Compute totalShares for cap accounting.
+            for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+                args.totalShares += sharesPerLeg[i];
+            }
+            if (args.totalShares == 0) revert InvalidAmount();
+            if (args.totalShares > p.maxWithdrawPerPayment) {
+                revert SharesExceedWithdrawPerPaymentCap();
+            }
+
+            // 7. Rolling-window cap (#449).
+            _accrueRollingWithdraw(msg.sender, args.totalShares, p.maxWithdrawPerWindow);
+
+            // Capture policy fields into args to avoid p being live across
+            // external calls (stack frame shrinks, helps viaIR codegen).
+            args.shareHolder = p.shareReceiver;
+            args.assetRecipient = p.assetRecipient;
+        }
+
+        // 8. windowId — informational only.
+        args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
+
+        // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        args.paymentId = keccak256(
+            abi.encode(
+                block.chainid, address(this), msg.sender, orderId, args.totalShares, idempotencyKey
+            )
+        );
+        if (usedPaymentIds[args.paymentId]) revert PaymentIdAlreadyUsed();
+
+        // 10. EFFECTS: paymentId reservation.
+        usedPaymentIds[args.paymentId] = true;
+
+        // 11–14. Execute the multi-leg redemption in a separate frame to
+        //        stay within EVM stack-depth limits.
+        assetsPerLeg = _executeRouterWithdraw(args, sharesPerLeg);
+
+        paymentId = args.paymentId;
+
+        // 15. Event — emit from the outer frame so indexed args are available.
+        emit AgentWithdrawalRouted(
+            args.paymentId,
+            args.orderId,
+            msg.sender,
+            address(routerContract),
+            args.shareHolder,
+            sharesPerLeg,
+            assetsPerLeg,
+            args.assetRecipient,
+            args.windowId
+        );
+    }
+
+    /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,
+    ///      approve router, call redeemFor, clear allowances, verify custody.
+    ///      Separated to avoid stack-too-deep in `withdrawFromRouter`.
+    function _executeRouterWithdraw(RouterWithdrawArgs memory args, uint256[] calldata sharesPerLeg)
+        internal
+        returns (uint256[] memory assetsPerLeg)
+    {
+        // slither-disable-start reentrancy-balance
+        // Justification: all state effects (paymentId, rolling window) are written
+        // in the calling frame before this function is called (CEI). `nonReentrant`
+        // on the outer function provides defense-in-depth. AGENT_ROLE gate limits
+        // callers. The share-pull loop below temporarily custodies shares within the
+        // call frame and passes them through to the router within the same frame.
+
+        // 11. Pull each vault's shares from shareHolder into the gateway,
+        //     then approve the router to spend them on behalf of the gateway.
+        for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+            if (sharesPerLeg[i] == 0) continue;
+            IERC20(args.vaultList[i])
+                .safeTransferFrom(args.shareHolder, address(this), sharesPerLeg[i]);
+            IERC20(args.vaultList[i]).forceApprove(address(routerContract), sharesPerLeg[i]);
+        }
+
+        // 12. Call router.redeemFor — router calls vault.redeem per leg with
+        //     the gateway as `owner`. USDC goes directly to assetRecipient.
+        assetsPerLeg = routerContract.redeemFor(address(this), args.assetRecipient, sharesPerLeg);
+
+        // 13. Clear residual vault share approvals (defense-in-depth).
+        for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+            if (sharesPerLeg[i] == 0) continue;
+            IERC20(args.vaultList[i]).forceApprove(address(routerContract), 0);
+        }
+
+        // 14. Post-call custody invariant: gateway must hold zero vault shares.
+        for (uint256 i = 0; i < args.vaultList.length; i++) {
+            if (IERC20(args.vaultList[i]).balanceOf(address(this)) != 0) {
+                revert ShareCustodyInvariantViolated();
+            }
+        }
+        // slither-disable-end reentrancy-balance
+    }
 }

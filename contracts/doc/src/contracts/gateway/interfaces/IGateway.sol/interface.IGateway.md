@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/41d10069f3131869b5f2aee11bc920913e4ab3a6/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -134,6 +134,50 @@ function withdraw(
 |----|----|-----------|
 |`paymentId`|`bytes32`|      keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent, orderId, shares, idempotencyKey)) — op-kind prefix ensures withdraw ids are disjoint from deposit and depositTo ids.|
 |`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
+
+
+### withdrawFromRouter
+
+Redeem vault shares proportionally across all Portfolio Router
+legs. Enforces the same policy checks (valid-until, per-payment
+cap, window cap, allowed-source-vaults, pause, idempotency,
+recipient) as single-vault `withdraw`. Each leg's vault must
+appear in `policy.allowedSourceVaults` (when non-empty). USDC
+is forwarded exclusively to the policy-configured `assetRecipient`.
+`policy.shareReceiver` (the share holder) must have approved the
+gateway for each vault's share token prior to calling. The
+gateway temporarily holds the shares during the call frame and
+passes them through to the router — no outer share token is
+minted and no intermediate custody persists beyond the call.
+
+Restricted to `AGENT_ROLE`. Reverts when paused. `totalShares` is
+the sum of `sharesPerLeg` and is checked against
+`maxWithdrawPerPayment` and the rolling window cap.
+
+
+```solidity
+function withdrawFromRouter(
+    bytes32 orderId,
+    uint256[] calldata sharesPerLeg,
+    uint64 deadline,
+    bytes32 idempotencyKey
+) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
+|`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per router leg (parallel to the router's effective weight vector).|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/key.|
+|`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
 
 
 ### commitAuthorization
@@ -572,6 +616,38 @@ event AgentWithdrawal(
 |`shares`|`uint256`|         Vault shares burned.|
 |`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
 |`assetRecipient`|`address`| Address that received the redeemed USDC.|
+|`windowId`|`uint64`|       Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).|
+
+### AgentWithdrawalRouted
+Emitted on every successful router withdrawal (multi-vault proportional redeem).
+
+
+```solidity
+event AgentWithdrawalRouted(
+    bytes32 indexed paymentId,
+    bytes32 indexed orderId,
+    address indexed agent,
+    address router,
+    address shareHolder,
+    uint256[] sharesPerLeg,
+    uint256[] assetsPerLeg,
+    address assetRecipient,
+    uint64 windowId
+);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Replay-protection hash for this payment.|
+|`orderId`|`bytes32`|        Caller-supplied order identifier.|
+|`agent`|`address`|          Agent address that initiated the withdrawal.|
+|`router`|`address`|         Portfolio Router address used.|
+|`shareHolder`|`address`|    Address whose vault shares were redeemed.|
+|`sharesPerLeg`|`uint256[]`|   Vault shares redeemed per leg (parallel to router weight list).|
+|`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
+|`assetRecipient`|`address`| Address that received all redeemed USDC.|
 |`windowId`|`uint64`|       Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).|
 
 ## Structs

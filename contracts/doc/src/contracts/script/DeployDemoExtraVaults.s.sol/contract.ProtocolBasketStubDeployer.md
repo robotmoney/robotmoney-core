@@ -1,5 +1,5 @@
 # ProtocolBasketStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/41d10069f3131869b5f2aee11bc920913e4ab3a6/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the ProtocolAssetVault devnet basket
 stand-ins (PRD §11.2 — wETH, cbBTC, wSOL). Mirrors the
