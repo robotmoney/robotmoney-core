@@ -828,4 +828,75 @@ contract RobotMoneyVaultTest is Test {
         uint256 bobShares = vault.deposit(1_000 * ONE_USDC, bob);
         assertGt(bobShares, 0, "bob must receive shares after unpause");
     }
+
+    // ─── forceRemoveAdapter — loss-acceptance semantics ──────────────────────
+
+    /// @notice EMERGENCY_ROLE can force-remove an adapter with assets; active flag becomes false
+    ///         and AdapterForceRemoved is emitted with the correct lossAmount.
+    function test_forceRemoveAdapter_deactivatesAdapterAndEmitsCorrectLoss() public {
+        // Alice deposits so the adapter holds non-zero assets.
+        uint256 depositAmount = 5_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+
+        // Confirm the adapter holds assets before force-remove.
+        uint256 assetsBefore = adapter.totalAssets();
+        assertGt(assetsBefore, 0, "adapter must hold non-zero assets before force-remove");
+
+        // Confirm adapter is currently active (index 0).
+        (,, bool activeBefore) = vault.adapters(0);
+        assertTrue(activeBefore, "adapter must be active before force-remove");
+
+        // Expect the AdapterForceRemoved event with matching lossAmount.
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit RobotMoneyVault.AdapterForceRemoved(0, address(adapter), assetsBefore);
+
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+
+        // Active flag must now be false.
+        (,, bool activeAfter) = vault.adapters(0);
+        assertFalse(activeAfter, "adapter must be inactive after force-remove");
+
+        // Assets remain in the adapter (not withdrawn) — the loss is accepted.
+        assertEq(
+            adapter.totalAssets(),
+            assetsBefore,
+            "adapter assets must remain untouched (loss accepted)"
+        );
+    }
+
+    /// @notice Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.
+    function test_forceRemoveAdapter_revertsWhenCallerLacksEmergencyRole() public {
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", alice, emergencyRole
+            )
+        );
+        vm.prank(alice);
+        vault.forceRemoveAdapter(0);
+    }
+
+    /// @notice Calling forceRemoveAdapter with an out-of-range index must revert with AdapterNotFound.
+    function test_forceRemoveAdapter_revertsOnOutOfRangeIndex() public {
+        uint256 outOfRange = 999;
+
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.AdapterNotFound.selector));
+        vm.prank(admin);
+        vault.forceRemoveAdapter(outOfRange);
+    }
+
+    /// @notice Calling forceRemoveAdapter on an already-inactive adapter must revert with AdapterNotFound.
+    function test_forceRemoveAdapter_revertsOnAlreadyInactiveAdapter() public {
+        // First, force-remove the adapter to deactivate it.
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+
+        // Second call on the now-inactive adapter must revert.
+        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.AdapterNotFound.selector));
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+    }
 }
