@@ -13,8 +13,6 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::str::FromStr;
 use std::time::Duration;
-// Used by AccountHistoryRow (dev-scout stub — issue #703).
-use serde_json;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -66,12 +64,14 @@ pub enum CountTable {
     RouterWeightSnapshots,
     /// Added in migration 0006 — per-leg data from RouterDeposit events (issue #373).
     RouterDepositLegs,
-    /// Added in migration 0007 — adapter allocation history (issue #675).
+    /// Added in migration 0008 — adapter allocation history (issue #675).
     AdapterAllocations,
-    /// Added in migration 0007 — exit fee event log (issue #675).
+    /// Added in migration 0008 — exit fee event log (issue #675).
     VaultFeeEvents,
-    /// Added in migration 0007 — ERC-4626 deposit/withdrawal event log (issue #675).
+    /// Added in migration 0008 — ERC-4626 deposit/withdrawal event log (issue #675).
     VaultTransferEvents,
+    /// Added in migration 0009 — full account history events (issue #654).
+    AccountHistoryEvents,
 }
 
 impl CountTable {
@@ -95,6 +95,7 @@ impl CountTable {
             CountTable::AdapterAllocations => "adapter_allocations",
             CountTable::VaultFeeEvents => "vault_fee_events",
             CountTable::VaultTransferEvents => "vault_transfer_events",
+            CountTable::AccountHistoryEvents => "account_history_events",
         }
     }
 }
@@ -128,6 +129,10 @@ impl TryFrom<&str> for CountTable {
             "governance_votes" => Ok(CountTable::GovernanceVotes),
             "router_weight_snapshots" => Ok(CountTable::RouterWeightSnapshots),
             "router_deposit_legs" => Ok(CountTable::RouterDepositLegs),
+            "adapter_allocations" => Ok(CountTable::AdapterAllocations),
+            "vault_fee_events" => Ok(CountTable::VaultFeeEvents),
+            "vault_transfer_events" => Ok(CountTable::VaultTransferEvents),
+            "account_history_events" => Ok(CountTable::AccountHistoryEvents),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -251,6 +256,7 @@ impl Db {
             "adapter_allocations",
             "vault_fee_events",
             "vault_transfer_events",
+            "account_history_events",
             "transactions",
             "blocks",
         ] {
@@ -686,6 +692,48 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Insert a row into `account_history_events` (issue #654).
+    ///
+    /// One row per source log, keyed by `(chain_id, block_number, log_index)`.
+    /// `ON CONFLICT DO NOTHING` keeps re-indexing idempotent.
+    ///
+    /// `kind` must be one of: `"deposit"`, `"withdrawal"`, `"fee_charged"`,
+    /// `"policy_change"`, `"governance_vote"`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_history_event(
+        &self,
+        chain_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        account: [u8; 20],
+        kind: &str,
+        vault: Option<[u8; 20]>,
+        agent: Option<[u8; 20]>,
+        amount: Option<U256>,
+    ) -> Result<u64, DbError> {
+        let vault_bytes: Option<&[u8]> = vault.as_ref().map(|a| &a[..]);
+        let agent_bytes: Option<&[u8]> = agent.as_ref().map(|a| &a[..]);
+        let r = sqlx::query(
+            "INSERT INTO account_history_events \
+             (chain_id, block_number, log_index, tx_hash, account, kind, vault, agent, amount) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&account[..])
+        .bind(kind)
+        .bind(vault_bytes)
+        .bind(agent_bytes)
+        .bind(amount.map(u256_to_decimal))
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
     /// Open a new `indexer_runs` row, return the surrogate `run_id`.
     pub async fn start_run(&self, chain_id: i64, from_block: i64) -> Result<i64, DbError> {
         let row: (i64,) = sqlx::query_as(
@@ -894,68 +942,13 @@ impl Db {
     // real implementations in their respective feature branches.
     // -----------------------------------------------------------------------
 
-    /// Insert a row into `account_history_events` for a non-Deposit event.
-    ///
-    /// # Target issue: #654 — account history endpoint
-    ///
-    /// Implementing issue: `feat(indexer): account history endpoint missing
-    /// withdrawals, fee events, policy changes, and governance votes`.
-    ///
-    /// Called by the indexer's `handle_log` branch for each of:
-    /// - `IGatewayEvents::AgentWithdrawal` → event_kind = "withdrawal"
-    /// - `IVaultEvents::ExitFeeCharged`    → event_kind = "fee_charged"
-    /// - `IGatewayEvents::AgentRevoked`    → event_kind = "policy_change"
-    /// - `IRouterGovernanceEvents::VoteCast` → event_kind = "governance_vote"
-    ///
-    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
-    /// Table: `account_history_events (chain_id, block_number, log_index)`
-    ///
-    /// Explorer API consumer:
-    ///   `GET /v1/accounts/:address/history` — `clients/explorer-api/src/routes.rs`
-    ///   Joins `account_history_events` with `agent_deposits` by block_number,
-    ///   returns all kinds interleaved in ascending block_number order.
-    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
-    pub async fn insert_account_history_event(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        account: [u8; 20],
-        event_kind: &str,
-        payload: serde_json::Value,
-    ) -> Result<u64, DbError> {
-        // STUB — replaced by issue #654.
-        // Real implementation:
-        //   INSERT INTO account_history_events
-        //     (chain_id, block_number, log_index, tx_hash, account, event_kind, payload)
-        //   VALUES ($1, $2, $3, $4, $5, $6, $7)
-        //   ON CONFLICT (chain_id, block_number, log_index) DO NOTHING
-        unimplemented!("stub — implement in issue #654")
-    }
-
-    /// Query all account history events for an address, ordered by block_number ASC.
-    ///
-    /// # Target issue: #654 — account history endpoint
-    ///
-    /// Returns rows from both `agent_deposits` (kind = "deposit") and
-    /// `account_history_events` (all other kinds), UNION'd and ordered by
-    /// (block_number, log_index).
-    ///
-    /// The explorer API calls this from `get_account_history` to replace the
-    /// deposits-only query at `clients/explorer-api/src/routes.rs` line ~1031.
-    #[allow(dead_code, unused_variables)]
-    pub async fn list_account_history(
-        &self,
-        chain_id: i64,
-        account: [u8; 20],
-        limit: i64,
-    ) -> Result<Vec<AccountHistoryRow>, DbError> {
-        // STUB — replaced by issue #654.
-        // Real implementation: UNION of agent_deposits and account_history_events
-        // ordered by (block_number ASC, log_index ASC), with LIMIT.
-        unimplemented!("stub — implement in issue #654")
-    }
+    // NOTE: The dev-scout (#703) provided #654 stubs for
+    // `insert_account_history_event` and `list_account_history` here. Issue #654
+    // (this PR) implements account history for real: rows are written via
+    // `insert_history_event` (above) and read by the explorer API's raw query in
+    // `clients/explorer-api/src/routes.rs` (`get_account_history`). The scout
+    // stubs and their placeholder `AccountHistoryRow` type were removed during
+    // the rebase to avoid dead, schema-stale definitions.
 
     // NOTE: The dev-scout (#703) provided #675 stubs for
     // `insert_adapter_allocation`, `insert_vault_fee_event`, and
@@ -1029,23 +1022,6 @@ impl Db {
         // STUB — replaced by issue #661.
         unimplemented!("stub — implement in issue #661")
     }
-}
-
-/// Stub row type for `list_account_history` — issue #654.
-///
-/// The real implementation will use a concrete struct (or a per-kind enum)
-/// derived from the UNION of `agent_deposits` and `account_history_events`.
-/// This placeholder satisfies the `list_account_history` return type so the
-/// stub compiles without requiring the table to exist yet.
-#[derive(Debug, Clone)]
-pub struct AccountHistoryRow {
-    pub chain_id: i64,
-    pub block_number: i64,
-    pub log_index: i32,
-    pub tx_hash: Vec<u8>,
-    pub account: Vec<u8>,
-    pub event_kind: String,
-    pub payload: serde_json::Value,
 }
 
 /// Stub row type for `list_policies_by_owner` — issue #661.

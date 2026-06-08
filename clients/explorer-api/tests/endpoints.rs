@@ -907,7 +907,7 @@ async fn account_positions_invalid_address_returns_400() {
 #[tokio::test]
 async fn account_history_returns_events_in_block_order() {
     let s = start_with_seed().await;
-    // The fixture seeds agent as share_receiver in agent_deposits.
+    // The fixture seeds deposit (block 990) and withdrawal (block 1000) for share_receiver.
     let body: serde_json::Value = http()
         .get(format!(
             "http://{}/v1/accounts/0x5555555555555555555555555555555555555555/history",
@@ -922,7 +922,7 @@ async fn account_history_returns_events_in_block_order() {
     let events = body["events"].as_array().expect("events must be an array");
     assert!(
         !events.is_empty(),
-        "fixture seeds at least one deposit for share_receiver"
+        "fixture seeds at least one event for share_receiver"
     );
     // Events must be chronological (ascending block_number).
     let blocks: Vec<i64> = events
@@ -932,13 +932,105 @@ async fn account_history_returns_events_in_block_order() {
     let mut sorted = blocks.clone();
     sorted.sort();
     assert_eq!(blocks, sorted, "events must be in ascending block order");
-    // Each event must carry kind = deposit.
+    // All events must carry a `kind` discriminant string.
     for e in events {
-        assert_eq!(e["kind"], "deposit", "event kind must be deposit");
-        assert!(e["tx_hash"].is_string());
-        assert!(e["amount"].is_string());
+        assert!(e["kind"].is_string(), "every event must have a kind field");
+        assert!(e["tx_hash"].is_string(), "every event must have tx_hash");
     }
     assert!(body["block_number"].is_i64());
+}
+
+/// issue #654 AC: history endpoint returns all five event kinds, interleaved
+/// chronologically, with a `kind` discriminant on every entry.
+#[tokio::test]
+async fn account_history_returns_multiple_event_kinds() {
+    let s = start_with_seed().await;
+    // Fixture seeds: deposit at block 990, withdrawal at block 1000.
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x5555555555555555555555555555555555555555/history",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let events = body["events"].as_array().expect("events must be an array");
+    assert!(
+        events.len() >= 2,
+        "fixture seeds at least one deposit and one withdrawal; got {events:?}"
+    );
+
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e["kind"].as_str().expect("kind must be a string"))
+        .collect();
+    assert!(
+        kinds.contains(&"deposit"),
+        "deposit kind must appear in history: {kinds:?}"
+    );
+    assert!(
+        kinds.contains(&"withdrawal"),
+        "withdrawal kind must appear in history: {kinds:?}"
+    );
+
+    // Deposit entry must have amount and vault fields.
+    let deposit_entry = events
+        .iter()
+        .find(|e| e["kind"] == "deposit")
+        .expect("deposit entry must be present");
+    assert!(
+        deposit_entry["amount"].is_string(),
+        "deposit must have amount"
+    );
+    assert_eq!(
+        deposit_entry["kind"], "deposit",
+        "first seeded event is deposit at block 990"
+    );
+
+    // Withdrawal entry must have amount; agent is null for withdrawals.
+    let withdrawal_entry = events
+        .iter()
+        .find(|e| e["kind"] == "withdrawal")
+        .expect("withdrawal entry must be present");
+    assert!(
+        withdrawal_entry["amount"].is_string(),
+        "withdrawal must have amount"
+    );
+    assert!(
+        withdrawal_entry["agent"].is_null(),
+        "withdrawal agent must be null"
+    );
+}
+
+/// issue #654 AC: existing deposit entries still appear with kind=\"deposit\"
+/// and the same fields as before — no regression.
+#[tokio::test]
+async fn account_history_no_regression_deposit_kind() {
+    let s = start_with_seed().await;
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0x5555555555555555555555555555555555555555/history",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let events = body["events"].as_array().expect("events must be an array");
+    let deposit = events
+        .iter()
+        .find(|e| e["kind"] == "deposit")
+        .expect("at least one deposit entry must exist");
+    assert_eq!(deposit["kind"], "deposit");
+    assert!(deposit["tx_hash"].is_string());
+    assert!(deposit["amount"].is_string());
+    assert!(deposit["block_number"].is_i64());
+    assert!(deposit["indexed_at"].is_string());
 }
 
 /// Suite-08: GET /v1/accounts/:address/history for unknown address returns

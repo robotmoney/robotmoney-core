@@ -457,7 +457,7 @@ async fn handle_log(
     if topic0 == topics.agent_deposit {
         let decoded = IGatewayEvents::AgentDeposit::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("AgentDeposit: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_agent_deposit(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -472,6 +472,20 @@ async fn handle_log(
                 decoded.windowId as i64,
                 // Single-vault path: the deposit went to the gateway's pinned vault.
                 Some(cfg.vault.into_array()),
+            )
+            .await?;
+        // Store in account_history_events for the share_receiver.
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.shareReceiver.into_array(),
+                "deposit",
+                Some(cfg.vault.into_array()),
+                Some(decoded.agent.into_array()),
+                Some(decoded.amount),
             )
             .await?;
         return Ok(r);
@@ -489,7 +503,7 @@ async fn handle_log(
             .iter()
             .copied()
             .fold(U256::ZERO, |acc, s| acc.saturating_add(s));
-        let r = db
+        let mut r = db
             .insert_agent_deposit(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -506,13 +520,50 @@ async fn handle_log(
                 None,
             )
             .await?;
+        // Store in account_history_events for the share_receiver (vault=NULL for routed).
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.shareReceiver.into_array(),
+                "deposit",
+                None,
+                Some(decoded.agent.into_array()),
+                Some(decoded.amount),
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // AgentWithdrawal — gateway-level withdrawal (IGateway.sol:139).
+    // Stores a withdrawal history row for the agent address.
+    // The ERC-4626 Withdraw event (emitted by the vault in the same tx)
+    // is stored separately — both coexist because they have distinct log_index values.
+    if topic0 == topics.agent_withdrawal {
+        let decoded = IGatewayEvents::AgentWithdrawal::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("AgentWithdrawal: {e}")))?;
+        let r = db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.agent.into_array(),
+                "withdrawal",
+                Some(decoded.sourceVault.into_array()),
+                Some(decoded.agent.into_array()),
+                Some(decoded.assetsOut),
+            )
+            .await?;
         return Ok(r);
     }
 
     if topic0 == topics.agent_authorized {
         let decoded = IGatewayEvents::AgentAuthorized::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("AgentAuthorized: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_agent_policy(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -526,13 +577,27 @@ async fn handle_log(
                 Some(decoded.shareReceiver.into_array()),
             )
             .await?;
+        // Store policy change in account history for the agent.
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.agent.into_array(),
+                "policy_change",
+                None,
+                Some(decoded.agent.into_array()),
+                None,
+            )
+            .await?;
         return Ok(r);
     }
 
     if topic0 == topics.agent_revoked {
         let decoded = IGatewayEvents::AgentRevoked::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("AgentRevoked: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_agent_policy(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -543,6 +608,20 @@ async fn handle_log(
                 None,
                 None,
                 None,
+                None,
+            )
+            .await?;
+        // Store policy change (revocation) in account history for the agent.
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.agent.into_array(),
+                "policy_change",
+                None,
+                Some(decoded.agent.into_array()),
                 None,
             )
             .await?;
@@ -576,6 +655,28 @@ async fn handle_log(
                 decoded.amount,
                 decoded.shares,
                 decoded.weightBps,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ERC-4626 Withdraw — store as withdrawal history for the owner (issue #654).
+    // The Withdraw event carries (caller, receiver, owner, assets, shares).
+    // We attribute the history row to the `owner` address per §5.4.
+    if topic0 == topics.erc4626_withdraw {
+        let decoded = IVaultEvents::Withdraw::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Withdraw: {e}")))?;
+        let r = db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.owner.into_array(),
+                "withdrawal",
+                Some(log.address.into_array()),
+                None,
+                Some(decoded.assets),
             )
             .await?;
         return Ok(r);
@@ -647,11 +748,15 @@ async fn handle_log(
 
     // ExitFeeCharged — ExitFeeCharged(address indexed owner, address indexed receiver,
     //                                 uint256 grossAssets, uint256 fee, uint256 netAssets).
-    // Persists a vault_fee_events row for the fee collection history (issue #675 AC-2).
+    // One event drives two tables:
+    //   * vault_fee_events — fee collection history for the vault detail API
+    //     (issue #675 AC-2).
+    //   * account_history_events — a 'fee_charged' row attributed to the owner
+    //     so the per-account history feed surfaces the fee (issue #654, §5.4).
     if topic0 == topics.vault_exit_fee_charged {
         let decoded = IVaultEvents::ExitFeeCharged::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("ExitFeeCharged: {e}")))?;
-        let r = db
+        let fee_rows = db
             .insert_vault_fee_event(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -665,7 +770,20 @@ async fn handle_log(
                 decoded.netAssets,
             )
             .await?;
-        return Ok(r);
+        let history_rows = db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.owner.into_array(),
+                "fee_charged",
+                Some(log.address.into_array()),
+                None,
+                Some(decoded.fee),
+            )
+            .await?;
+        return Ok(fee_rows + history_rows);
     }
 
     // Paused / Unpaused — only drive state snapshots; no dedicated table row.
@@ -747,7 +865,7 @@ async fn handle_log(
     if topic0 == topics.vote_cast {
         let decoded = IRouterGovernanceEvents::VoteCast::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("VoteCast: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_vote(
                 cfg.chain_id,
                 decoded.proposalId.try_into().unwrap_or(i64::MAX),
@@ -757,6 +875,20 @@ async fn handle_log(
                 log.tx_hash.0,
                 true, // support bool removed; governance only records FOR votes
                 decoded.power,
+            )
+            .await?;
+        // Store governance_vote in account history for the voter.
+        r += db
+            .insert_history_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                decoded.voter.into_array(),
+                "governance_vote",
+                None,
+                None,
+                None,
             )
             .await?;
         return Ok(r);
