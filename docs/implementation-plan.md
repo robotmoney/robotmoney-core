@@ -135,6 +135,7 @@ See also: `docs/technical/dapp-browser-keygen-review.md` (browser-keygen securit
 - [x] Explorer API: CORS via `EXPLORER_API_ALLOW_ORIGINS` env (`clients/explorer-api/src/main.rs`)
 - [x] Dapp: verify gateway bytecode hash before admin writes (`clients/dapp/src/lib/gatewayVerifier.ts`)
 - [x] Dapp: exported config directly loadable by `rmpc` (`clients/dapp/src/lib/configExport.ts`)
+- [x] Dapp: strict CSP (no inline scripts / eval) enforced in CI before public launch — meta tag + preview header via `clients/dapp/src/lib/csp.ts`, asserted by `clients/dapp/scripts/check-csp.sh` in suite-09 (#665)
 
 ### Full-stack integration
 Goal: Complete and harden the smoke-test + devnet stack so the full application

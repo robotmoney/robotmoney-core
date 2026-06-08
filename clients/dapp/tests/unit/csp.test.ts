@@ -1,0 +1,63 @@
+// Verifies the strict Content Security Policy (issue #665): no inline scripts,
+// no eval, and a meta tag injected into the built index.html.
+import { describe, it, expect } from "vitest";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { CSP_POLICY, cspPlugin } from "../../src/lib/csp";
+
+describe("CSP policy", () => {
+  it("defines script-src 'self' without unsafe-inline or unsafe-eval", () => {
+    expect(CSP_POLICY).toMatch(/script-src[^;]*'self'/);
+    const scriptSrc = CSP_POLICY.split(";")
+      .map((d) => d.trim())
+      .find((d) => d.startsWith("script-src"));
+    expect(scriptSrc).toBeDefined();
+    expect(scriptSrc).not.toMatch(/unsafe-inline/);
+    expect(scriptSrc).not.toMatch(/unsafe-eval/);
+  });
+
+  it("never allows 'unsafe-eval' in any directive", () => {
+    expect(CSP_POLICY).not.toMatch(/unsafe-eval/);
+  });
+
+  it("locks down object-src, base-uri, and frame-ancestors", () => {
+    expect(CSP_POLICY).toContain("object-src 'none'");
+    expect(CSP_POLICY).toContain("base-uri 'self'");
+    expect(CSP_POLICY).toContain("frame-ancestors 'none'");
+  });
+
+  it("injects a CSP meta tag via transformIndexHtml", () => {
+    const plugin = cspPlugin();
+    const transform = plugin.transformIndexHtml;
+    const hook = typeof transform === "function" ? transform : undefined;
+    expect(hook).toBeDefined();
+    const result = (
+      hook as (
+        html: string,
+        ctx: unknown,
+      ) => { tags?: Array<{ tag: string; attrs?: Record<string, string> }> }
+    )("<html><head></head><body></body></html>", {
+      path: "/",
+      filename: "index.html",
+    });
+    const tags = result.tags ?? [];
+    const meta = tags.find(
+      (t) => t.tag === "meta" && t.attrs?.["http-equiv"] === "Content-Security-Policy",
+    );
+    expect(meta).toBeDefined();
+    expect(meta?.attrs?.content).toBe(CSP_POLICY);
+  });
+
+  it("emits the CSP meta tag into the production build output when present", () => {
+    const distIndex = fileURLToPath(new URL("../../dist/index.html", import.meta.url));
+    // In CI the production build runs before vitest, so dist/ exists. Locally
+    // it may be absent; skip rather than trigger a slow build inside the test.
+    if (!existsSync(distIndex)) {
+      return;
+    }
+    const html = readFileSync(distIndex, "utf8");
+    expect(html).toMatch(/http-equiv="Content-Security-Policy"/);
+    expect(html).not.toMatch(/script-src[^"]*unsafe-inline/);
+    expect(html).not.toMatch(/unsafe-eval/);
+  });
+});
