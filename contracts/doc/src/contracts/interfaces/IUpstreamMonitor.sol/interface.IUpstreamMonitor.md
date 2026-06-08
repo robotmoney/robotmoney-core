@@ -1,5 +1,5 @@
 # IUpstreamMonitor
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6372f5d7c82b3321bbec1389ba964300e31b1e99/contracts/interfaces/IUpstreamMonitor.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/7d2312dd62356bbc767599853c696d24039f091e/contracts/interfaces/IUpstreamMonitor.sol)
 
 **Title:**
 IUpstreamMonitor
