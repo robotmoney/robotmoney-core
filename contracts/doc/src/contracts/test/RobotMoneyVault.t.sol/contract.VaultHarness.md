@@ -1,5 +1,5 @@
 # VaultHarness
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 [RobotMoneyVault](/contracts/RobotMoneyVault.sol/contract.RobotMoneyVault.md)

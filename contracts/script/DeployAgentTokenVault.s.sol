@@ -2,6 +2,13 @@
 // Canonical: docs/adr/ADR-0001-mvp-agent-token-shortlist.md;
 //            docs/prd.md §11.3 — Agent Token Vault;
 //            docs/architecture.md §4.1 — Vault Family (agent-token basket)
+//
+// This script deploys `AgentTokenVault` and registers it in `VaultRegistry`.
+// It intentionally does NOT call `setRouterEligible`: that step is separated into
+// `ActivateBasketVaultEligibility.s.sol` and is gated behind a
+// `BASKET_VAULT_AUDIT_COMPLETE` env flag that must be set only after the
+// Architecture §4.1 certification checklist is satisfied and the contract has
+// passed audit.
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
@@ -71,6 +78,11 @@ contract DeployAgentTokenVault is Script {
     struct Deployed {
         address vault;
         address[] tokens;
+        /// @dev True when the vault was registered in VaultRegistry during this
+        ///      run (REGISTRY_ADDRESS was set and the vault was not already
+        ///      registered). Router eligibility is NOT activated here — see
+        ///      ActivateBasketVaultEligibility.s.sol.
+        bool registered;
     }
 
     /// @notice Broadcast entrypoint. Deploys the vault, seeds the six-token
@@ -131,6 +143,7 @@ contract DeployAgentTokenVault is Script {
         address registry = _envAddressOrZero("REGISTRY_ADDRESS");
         if (registry != address(0)) {
             _registerIfAbsent(VaultRegistry(registry), address(vault), usdc);
+            d.registered = true;
         }
     }
 
