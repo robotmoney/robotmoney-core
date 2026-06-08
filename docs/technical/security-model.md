@@ -108,7 +108,7 @@ go through explicit approval.
 | TWAP / VWAP poisoning | No TWAP or VWAP may be consumed by any vault unless a manipulation-resistance analysis is published, a minimum TWAP window is specified, and a circuit breaker is in place. |
 | Stale-price oracle | Adapters that depend on upstream oracles (Compound v3, Aave v3) must document the oracle freshness requirement and the upstream circuit-breaker behavior. This is an accepted upstream-trust assumption. |
 | Single-source oracle | Any adapter that introduces a new price source must use at least two independent oracle sources or a TWAP with documented staleness tolerance. |
-| Dead-market pricing without circuit breaker (YieldBlox-class) | Accepted as an upstream venue risk for Compound v3 and Aave v3. A monitoring alert must exist for each venue going offline. |
+| Dead-market pricing without circuit breaker (YieldBlox-class) | Accepted as an upstream venue risk for Compound v3 and Aave v3. A monitoring alert must exist for each venue going offline. Implemented by the venue-liveness monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#venue-offline). |
 | Cross-chain oracle desync | Not applicable while the product is deployed on a single chain. Must be re-evaluated before any multi-chain expansion. |
 
 ### 5.1 BasketVault TWAP configuration (issue #451)
@@ -195,8 +195,8 @@ source. The manipulation-resistance posture is:
 | Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
-| Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. |
-| Token-rebase or fee-on-transfer upstream change | USDC is upgradeable by Circle. A monitoring process must alert on Circle upgrade proposals. The vault must have a documented pause-and-review procedure if USDC semantics change. |
+| Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
+| Token-rebase or fee-on-transfer upstream change | USDC is upgradeable by Circle. A monitoring process must alert on Circle upgrade proposals. The vault must have a documented pause-and-review procedure if USDC semantics change. Implemented by the USDC-upgrade monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#usdc-upgrade). |
 
 ---
 

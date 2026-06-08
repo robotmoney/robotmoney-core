@@ -1,0 +1,95 @@
+# Canonical: docs/technical/upstream-monitoring-runbook.md §5
+#
+# WHY THIS SUITE EXISTS
+# docs/technical/security-model.md §5 and §8 mandate three monitoring processes
+# for accepted upstream-trust assumptions:
+#   1. Venue offline   — Compound v3 / Aave v3 going down (§5).
+#   2. Governance       — upstream proposals that touch our adapter contracts (§8).
+#   3. USDC upgrade     — Circle upgrading the USDC proxy on Base (§8).
+# Each is implemented as a self-contained shell monitor under scripts/ that emits
+# structured JSON and exits non-zero on alert. This suite is the only automated
+# signal that those monitors still fire correctly and runs them against live RPC.
+#
+# TWO MODES
+#   - mock-tests: runs on every push/PR/dispatch. No RPC required; uses MOCK_*
+#     env vars to drive each alert path and asserts the alert JSON + exit code.
+#   - live-monitor: runs nightly (and on dispatch) against Base mainnet. Requires
+#     the BASE_RPC_URL secret. If the secret is absent the live steps are skipped
+#     so forks and the mock path are never blocked on it.
+
+name: upstream-contract-monitoring
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+  schedule:
+    # Nightly at 03:00 UTC.
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mock-tests:
+    name: mock-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run upstream monitoring mock tests
+        run: bash .github/scripts/tests/test_upstream_monitoring.sh
+
+  live-monitor:
+    name: live-monitor
+    # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
+    # push/PR so contributor CI never depends on the BASE_RPC_URL secret.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Venue liveness (Compound v3 / Aave v3)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live venue-liveness check"
+            exit 0
+          fi
+          bash scripts/monitor-venue-liveness.sh
+
+      - name: Governance proposals (Compound / Aave)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live governance check"
+            exit 0
+          fi
+          bash scripts/monitor-governance-proposals.sh
+
+      - name: USDC upgrade (Circle)
+        env:
+          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [[ -z "${RPC_URL:-}" ]]; then
+            echo "::warning::BASE_RPC_URL not set — skipping live USDC upgrade check"
+            exit 0
+          fi
+          bash scripts/monitor-usdc-upgrade.sh

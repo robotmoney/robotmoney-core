@@ -123,6 +123,7 @@ Status: **Complete.** All findings remediated.
 - [x] Fork regression tests — `contracts/test/VaultForkRegressions.t.sol`
 - [x] ERC-4626 property-based conformance tests — `contracts/test/RobotMoneyVault4626Conformance.t.sol`
 - [x] Test pyramid for timelocked multisig enforcement — `contracts/test/DeployTimelock.t.sol`, dead TimelockPanel removed (#420)
+- [x] Upstream contract monitoring: venue-offline (Compound v3 / Aave v3), upstream governance proposals, and Circle USDC upgrade alerts — `scripts/monitor-*.sh`, `.github/workflows/suite-18-upstream-monitoring.yml`, runbook `docs/technical/upstream-monitoring-runbook.md` (security-model §5/§8)
 
 ### Backend and dapp hardening
 Goal: Fix indexer SQL surface, explorer-API CORS gap, and dapp security gaps.
