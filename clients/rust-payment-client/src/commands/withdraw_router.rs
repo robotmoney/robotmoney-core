@@ -156,7 +156,9 @@ pub fn run(args: Args) -> i32 {
         Some(s) => match B256::from_str(s) {
             Ok(b) => b,
             Err(e) => {
-                log::error!("rmpc withdraw-router: --idempotency-key is not a 32-byte hex string: {e}");
+                log::error!(
+                    "rmpc withdraw-router: --idempotency-key is not a 32-byte hex string: {e}"
+                );
                 return EXIT_STARTUP_FAIL;
             }
         },
@@ -365,13 +367,17 @@ pub fn run(args: Args) -> i32 {
             "rmpc withdraw-router: preview — {} legs, total_shares={total_shares}. Re-run with --confirm to proceed.",
             shares_per_leg.len()
         );
-        record_audit(&audit.build(AuditDecision::Refused, Some("ErrConfirmNotProvided".to_string())));
+        record_audit(&audit.build(
+            AuditDecision::Refused,
+            Some("ErrConfirmNotProvided".to_string()),
+        ));
         emit_refusal(
             &WithdrawRouterFailure {
                 status: "refused",
                 error: "ErrConfirmNotProvided".to_string(),
                 message: Some(
-                    "Pass --confirm to execute. Inspect --get-router first to verify leg amounts.".to_string(),
+                    "Pass --confirm to execute. Inspect --get-router first to verify leg amounts."
+                        .to_string(),
                 ),
                 agent: Some(format!("{agent_address:#x}")),
                 order_id: Some(format!("{order_id:#x}")),
@@ -545,9 +551,10 @@ pub fn run(args: Args) -> i32 {
         Some(l) => l,
         None => {
             log::error!("rmpc withdraw-router: AgentWithdrawalRouted event not found in receipt");
-            record_audit(
-                &audit.build(AuditDecision::Refused, Some("ErrRouterWithdrawLogMissing".to_string())),
-            );
+            record_audit(&audit.build(
+                AuditDecision::Refused,
+                Some("ErrRouterWithdrawLogMissing".to_string()),
+            ));
             emit_refusal(
                 &WithdrawRouterFailure {
                     status: "refused",
@@ -674,7 +681,10 @@ mod tests {
         };
         let encoded = call.abi_encode();
         // Must start with the 4-byte selector.
-        assert_eq!(&encoded[..4], RobotMoneyGateway::withdrawFromRouterCall::SELECTOR);
+        assert_eq!(
+            &encoded[..4],
+            RobotMoneyGateway::withdrawFromRouterCall::SELECTOR
+        );
         assert!(encoded.len() > 4, "encoded call must have non-trivial body");
     }
 }

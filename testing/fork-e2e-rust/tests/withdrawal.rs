@@ -743,7 +743,9 @@ fn router_withdrawal() {
         .ephemeral(one_eth * U256::from(2u64), deposit_amount)
         .expect("fund agent with USDC");
     // shareReceiver: holds vault receipts after deposit; approves gateway for withdrawal.
-    let share_receiver = fx.ephemeral(one_eth, U256::ZERO).expect("fund shareReceiver");
+    let share_receiver = fx
+        .ephemeral(one_eth, U256::ZERO)
+        .expect("fund shareReceiver");
     // assetRecipient: receives USDC on withdrawal.
     let asset_recipient: Address = "0x000000000000000000000000000000000000CAFE"
         .parse()
@@ -764,12 +766,16 @@ fn router_withdrawal() {
     let vault_a = {
         let mut code = load_initcode("MockVault.sol", "MockVault").to_vec();
         code.extend_from_slice(&encode_address_arg(usdc));
-        admin.deploy(Bytes::from(code), 2_000_000).expect("deploy vaultA")
+        admin
+            .deploy(Bytes::from(code), 2_000_000)
+            .expect("deploy vaultA")
     };
     let vault_b = {
         let mut code = load_initcode("MockVault.sol", "MockVault").to_vec();
         code.extend_from_slice(&encode_address_arg(usdc));
-        admin.deploy(Bytes::from(code), 2_000_000).expect("deploy vaultB")
+        admin
+            .deploy(Bytes::from(code), 2_000_000)
+            .expect("deploy vaultB")
     };
 
     // Register vaults and mark them router-eligible.
@@ -804,7 +810,10 @@ fn router_withdrawal() {
         admin
             .send(
                 registry,
-                &IVaultRegistry::setRouterEligibleCall { vault: vault_a, eligible: true },
+                &IVaultRegistry::setRouterEligibleCall {
+                    vault: vault_a,
+                    eligible: true,
+                },
                 U256::ZERO,
                 100_000,
             )
@@ -812,7 +821,10 @@ fn router_withdrawal() {
         admin
             .send(
                 registry,
-                &IVaultRegistry::setRouterEligibleCall { vault: vault_b, eligible: true },
+                &IVaultRegistry::setRouterEligibleCall {
+                    vault: vault_b,
+                    eligible: true,
+                },
                 U256::ZERO,
                 100_000,
             )
@@ -887,7 +899,10 @@ fn router_withdrawal() {
     admin
         .send(
             gateway,
-            &IGateway::authorizeAgentCall { agent: agent.address, p: policy },
+            &IGateway::authorizeAgentCall {
+                agent: agent.address,
+                p: policy,
+            },
             U256::ZERO,
             500_000,
         )
@@ -898,7 +913,10 @@ fn router_withdrawal() {
     agent
         .send(
             usdc,
-            &IUSDC::approveCall { spender: gateway, amount: deposit_amount },
+            &IUSDC::approveCall {
+                spender: gateway,
+                amount: deposit_amount,
+            },
             U256::ZERO,
             100_000,
         )
@@ -930,9 +948,7 @@ fn router_withdrawal() {
     assert_eq!(shares_a, expected_a, "shareReceiver vaultA shares");
     assert_eq!(shares_b, expected_b, "shareReceiver vaultB shares");
 
-    eprintln!(
-        "[router_withdrawal] shares deposited: vaultA={shares_a} vaultB={shares_b}"
-    );
+    eprintln!("[router_withdrawal] shares deposited: vaultA={shares_a} vaultB={shares_b}");
 
     // ── Approve gateway to pull vault shares ─────────────────────────────────
     approve_vault_shares(&share_receiver, vault_a, gateway, shares_a);
@@ -958,7 +974,10 @@ fn router_withdrawal() {
             1_500_000,
         )
         .expect("gateway.withdrawFromRouter");
-    assert_eq!(withdraw_receipt.status, 1, "withdrawFromRouter must succeed");
+    assert_eq!(
+        withdraw_receipt.status, 1,
+        "withdrawFromRouter must succeed"
+    );
     eprintln!(
         "[router_withdrawal] withdrawFromRouter tx {:?} gasUsed={}",
         withdraw_receipt.tx_hash, withdraw_receipt.gas_used
@@ -980,8 +999,16 @@ fn router_withdrawal() {
     // ── Assert shareReceiver holds zero vault shares ──────────────────────────
     let sr_shares_a = vault_balance_of(&admin, vault_a, share_receiver.address);
     let sr_shares_b = vault_balance_of(&admin, vault_b, share_receiver.address);
-    assert_eq!(sr_shares_a, U256::ZERO, "shareReceiver must hold 0 vaultA shares");
-    assert_eq!(sr_shares_b, U256::ZERO, "shareReceiver must hold 0 vaultB shares");
+    assert_eq!(
+        sr_shares_a,
+        U256::ZERO,
+        "shareReceiver must hold 0 vaultA shares"
+    );
+    assert_eq!(
+        sr_shares_b,
+        U256::ZERO,
+        "shareReceiver must hold 0 vaultB shares"
+    );
 
     // ── Assert AgentWithdrawalRouted event was emitted ───────────────────────
     let topic0 = keccak256(
@@ -998,7 +1025,10 @@ fn router_withdrawal() {
     );
     let log = routed_log.unwrap();
     // topic3 = indexed agent address.
-    assert!(log.topics.len() >= 4, "AgentWithdrawalRouted must have at least 4 topics");
+    assert!(
+        log.topics.len() >= 4,
+        "AgentWithdrawalRouted must have at least 4 topics"
+    );
     let agent_from_log = Address::from_slice(&log.topics[3].as_slice()[12..]);
     assert_eq!(agent_from_log, agent.address, "topic3 agent mismatch");
 
