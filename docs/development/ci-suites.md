@@ -509,6 +509,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
 | `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
+| `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
@@ -532,3 +533,4 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
+| 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |

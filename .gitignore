@@ -9,6 +9,17 @@ coverage/
 !.env.example
 .ows/
 
+# Secrets, keystores, and credential files (security-model.md §13)
+*.pem
+*.key
+!*.pub.key
+keystore/
+*.keystore
+*.keyfile
+secrets.json
+credentials.json
+*.credentials
+
 # Foundry
 out/
 cache/

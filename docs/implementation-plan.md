@@ -167,6 +167,7 @@ artifacts, and close remaining CI wiring gaps.
 - [x] CI: e2e artifacts uploaded (`suite-10-dapp-e2e.yml`)
 - [x] CI: opencode-refusal job wired to `testing/doctests` (`suite-11b-opencode-headless.yml`)
 - [ ] CI: slim suite-05 by migrating duplicate tests into suite-06
+- [x] CI: secrets-scanning step on every PR (security-model.md §13) — gitleaks pinned in `suite-18-secrets-scan.yml`, allowlist in `.gitleaks.toml`
 
 ### Release infrastructure
 Goal: Ship `rmpc` binary releases, a dapp Docker image, and reliable CI
