@@ -743,7 +743,7 @@ impl Db {
     ///   `GET /v1/accounts/:address/history` — `clients/explorer-api/src/routes.rs`
     ///   Joins `account_history_events` with `agent_deposits` by block_number,
     ///   returns all kinds interleaved in ascending block_number order.
-    #[allow(dead_code, unused_variables)]
+    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
     pub async fn insert_account_history_event(
         &self,
         chain_id: i64,
@@ -803,7 +803,7 @@ impl Db {
     ///
     /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
     /// Table: `adapter_allocations (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables)]
+    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
     pub async fn insert_adapter_allocation(
         &self,
         chain_id: i64,
@@ -829,7 +829,7 @@ impl Db {
     ///
     /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
     /// Table: `vault_fee_events (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables)]
+    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
     pub async fn insert_vault_fee_event(
         &self,
         chain_id: i64,
@@ -857,7 +857,7 @@ impl Db {
     ///
     /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
     /// Table: `vault_transfer_events (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables)]
+    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
     pub async fn insert_vault_transfer_event(
         &self,
         chain_id: i64,
@@ -897,7 +897,7 @@ impl Db {
     ///   `GET /v1/accounts/:address/policies` (new route, issue #661)
     ///   Query: SELECT … FROM agent_policies WHERE chain_id = $1 AND owner = $2
     ///           ORDER BY block_number DESC
-    #[allow(dead_code, unused_variables)]
+    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
     pub async fn insert_agent_policy_with_owner(
         &self,
         chain_id: i64,
