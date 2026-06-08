@@ -859,7 +859,11 @@ contract RobotMoneyVaultTest is Test {
         assertFalse(activeAfter, "adapter must be inactive after force-remove");
 
         // Assets remain in the adapter (not withdrawn) — the loss is accepted.
-        assertEq(adapter.totalAssets(), assetsBefore, "adapter assets must remain untouched (loss accepted)");
+        assertEq(
+            adapter.totalAssets(),
+            assetsBefore,
+            "adapter assets must remain untouched (loss accepted)"
+        );
     }
 
     /// @notice Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.
@@ -868,9 +872,7 @@ contract RobotMoneyVaultTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSignature(
-                "AccessControlUnauthorizedAccount(address,bytes32)",
-                alice,
-                emergencyRole
+                "AccessControlUnauthorizedAccount(address,bytes32)", alice, emergencyRole
             )
         );
         vm.prank(alice);
