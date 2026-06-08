@@ -105,12 +105,24 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      - name: cargo audit (high/critical severity)
-        # Reads deny/ignore config from .cargo/audit.toml.
-        # Exits non-zero on any high or critical advisory (CVSS >= 7.0).
-        # To accept a known low-risk advisory temporarily, add it to the
-        # [ignore] section in .cargo/audit.toml with a dated justification.
-        run: cargo audit
+      - name: cargo audit (all workspace lockfiles)
+        # Scans every Cargo.lock in the repo for RustSec advisories. cargo audit
+        # exits non-zero on any vulnerability advisory; pre-existing sub-high
+        # findings are suppressed via the dated ignore list in .cargo/audit.toml,
+        # so the gate has a green baseline and blocks merges on any NEW advisory.
+        # To accept a known low-risk advisory temporarily, add its RUSTSEC id to
+        # the [advisories] ignore list in .cargo/audit.toml with a dated reason.
+        # cargo audit auto-discovers .cargo/audit.toml from the working directory
+        # (the repo root here), so the ignore list applies to every lockfile.
+        run: |
+          set -euo pipefail
+          status=0
+          for lock in $(find . -name Cargo.lock -not -path '*/target/*' | sort); do
+            echo "::group::cargo audit $lock"
+            cargo audit -f "$lock" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
 
   doc-coverage:
     name: rust-doc-coverage

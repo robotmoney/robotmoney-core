@@ -36,9 +36,10 @@
 #   suite 10 cover runtime correctness.
 # - Node 22 is pinned. If a dependency drops Node 22 support, this step will fail at
 #   install time with a peer dependency error, not at test time.
-# - bun audit exits non-zero if any high/critical vulnerability is found. To accept a
-#   known advisory temporarily, document the exception in a comment alongside the
-#   npm audit --ignore flag or by patching the dependency. Do not lower --audit-level.
+# - bun audit exits non-zero if any high/critical vulnerability is found. The audit
+#   runs via scripts/audit-deps.sh, which carries a dated allowlist of pre-existing
+#   advisories. To accept a known advisory temporarily, add its GHSA id to that
+#   allowlist with a reason and expiry. Do not lower --audit-level.
 
 name: dapp-lint-typecheck-vitest-build
 
@@ -99,9 +100,10 @@ jobs:
         run: bun run build
 
       - name: Dependency vulnerability audit
-        # Scans for high and critical severity advisories (CVSS >= 7.0).
-        # Uses npm audit because bun does not yet expose --audit-level directly;
-        # npm is available via the Node 22 setup step above.
-        # To accept a known advisory temporarily, document the justification
-        # alongside any --ignore flag used. Do not lower --audit-level.
-        run: npm audit --audit-level=high
+        # Scans for high and critical severity advisories (CVSS >= 7.0) via
+        # `bun audit --audit-level=high`. We use bun (not npm) because the
+        # lockfile is bun.lock; npm audit fails with ENOLOCK here.
+        # Pre-existing advisories that cannot yet be upgraded are suppressed in
+        # scripts/audit-deps.sh with dated justifications. Any NEW high/critical
+        # advisory fails the build. Do not lower the audit level.
+        run: bash scripts/audit-deps.sh

@@ -108,7 +108,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 1. Checkout repository
 2. Install Rust toolchain
 3. `cargo install cargo-audit --locked` — install the advisory scanner
-4. `cargo audit` — scans `Cargo.lock` against the rustsec/advisory-db; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Advisory deny/ignore configuration is read from `.cargo/audit.toml`. To accept a known low-risk advisory temporarily, add it to the `[ignore]` section in that file with a dated justification and expiry comment.
+4. `cargo audit` — runs over **every** `Cargo.lock` in the repo (root workspace plus the standalone `services/explorer-indexer`, `testing/doctests`, `testing/ethereum-testnet/e2e-rust`, and `testing/fork-e2e-rust` lockfiles) against the rustsec/advisory-db; exits non-zero on any vulnerability advisory. Ignore configuration is read from `.cargo/audit.toml`, which suppresses pre-existing sub-high advisories with dated justifications so the gate has a green baseline and blocks merges on any new advisory. To accept a known low-risk advisory temporarily, add its RUSTSEC id to the `ignore` list in that file with a reason and expiry comment.
 
 **Steps — `doc-coverage` job:**
 1. Checkout repository
@@ -254,7 +254,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 6. `bunx tsc -b` — TypeScript type check
 7. `bun run test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
 8. `bun run build` — verify production build succeeds
-9. `npm audit --audit-level=high` — dependency vulnerability scan; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `npm audit` because it accepts `--audit-level`; npm is available from the Node 22 setup step. To accept a known advisory temporarily, document the justification in an inline comment alongside any `--ignore` flag. Do not lower `--audit-level`.
+9. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, and the dev-only vitest UI advisory) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
 
 ---
 
@@ -499,7 +499,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
-| `dapp-lint-typecheck-vitest-build` | quick | includes npm audit --audit-level=high step |
+| `dapp-lint-typecheck-vitest-build` | quick | includes bun audit --audit-level=high step (scripts/audit-deps.sh) |
 | `dapp-e2e` | heavy | full-devnet Playwright suite |
 | `opencode-plugin-validate-walkthrough-offline` | quick | |
 | `openclaw-safety-walkthrough` | quick | |
