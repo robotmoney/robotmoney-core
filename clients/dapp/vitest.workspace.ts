@@ -29,6 +29,7 @@ export default defineWorkspace([
         "node_modules/**",
         "tests/unit/env-example-warning.test.ts",
         "tests/unit/faucet-shared-amount.test.ts",
+        "tests/unit/csp.test.ts",
       ],
     },
   },
@@ -42,6 +43,7 @@ export default defineWorkspace([
       include: [
         "tests/unit/env-example-warning.test.ts",
         "tests/unit/faucet-shared-amount.test.ts",
+        "tests/unit/csp.test.ts",
       ],
     },
   },

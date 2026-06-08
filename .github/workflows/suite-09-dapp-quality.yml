@@ -107,3 +107,10 @@ jobs:
         # scripts/audit-deps.sh with dated justifications. Any NEW high/critical
         # advisory fails the build. Do not lower the audit level.
         run: bash scripts/audit-deps.sh
+
+      # Issue #665: enforce the strict CSP before public launch. Serves the
+      # built bundle via `vite preview` and asserts the Content-Security-Policy
+      # response header contains script-src and neither unsafe-inline nor
+      # unsafe-eval. See clients/dapp/scripts/check-csp.sh.
+      - name: Enforce strict CSP
+        run: bash scripts/check-csp.sh

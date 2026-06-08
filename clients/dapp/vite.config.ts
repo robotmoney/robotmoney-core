@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { validateFaucetKeyForBuild } from "./src/lib/buildEnvValidation";
+import { cspPlugin } from "./src/lib/csp";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
@@ -35,7 +36,7 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), cspPlugin()],
     define: {
       __DAPP_VERSION__: JSON.stringify(packageJson.version ?? "0.0.0"),
       __GIT_COMMIT__: JSON.stringify(gitCommit),
