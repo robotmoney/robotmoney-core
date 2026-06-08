@@ -1102,10 +1102,7 @@ mod count_guard_tests {
                         "error payload must echo back the rejected string"
                     );
                 }
-                Ok(v) => panic!(
-                    "expected Err for {s:?} but got Ok({:?})",
-                    v.as_str()
-                ),
+                Ok(v) => panic!("expected Err for {s:?} but got Ok({:?})", v.as_str()),
                 Err(other) => panic!("unexpected error variant for {s:?}: {other}"),
             }
         }
