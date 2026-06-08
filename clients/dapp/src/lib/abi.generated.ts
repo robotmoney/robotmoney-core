@@ -946,6 +946,45 @@ export const gatewayAbiGenerated = [
     stateMutability: "nonpayable",
   },
   {
+    type: "function",
+    name: "withdrawFromRouter",
+    inputs: [
+      {
+        name: "orderId",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "sharesPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+      {
+        name: "deadline",
+        type: "uint64",
+        internalType: "uint64",
+      },
+      {
+        name: "idempotencyKey",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [
+      {
+        name: "paymentId",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "assetsPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
     type: "event",
     name: "AgentAuthorized",
     inputs: [
@@ -1150,6 +1189,67 @@ export const gatewayAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
+      },
+      {
+        name: "assetRecipient",
+        type: "address",
+        indexed: false,
+        internalType: "address",
+      },
+      {
+        name: "windowId",
+        type: "uint64",
+        indexed: false,
+        internalType: "uint64",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "AgentWithdrawalRouted",
+    inputs: [
+      {
+        name: "paymentId",
+        type: "bytes32",
+        indexed: true,
+        internalType: "bytes32",
+      },
+      {
+        name: "orderId",
+        type: "bytes32",
+        indexed: true,
+        internalType: "bytes32",
+      },
+      {
+        name: "agent",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "router",
+        type: "address",
+        indexed: false,
+        internalType: "address",
+      },
+      {
+        name: "shareHolder",
+        type: "address",
+        indexed: false,
+        internalType: "address",
+      },
+      {
+        name: "sharesPerLeg",
+        type: "uint256[]",
+        indexed: false,
+        internalType: "uint256[]",
+      },
+      {
+        name: "assetsPerLeg",
+        type: "uint256[]",
+        indexed: false,
+        internalType: "uint256[]",
       },
       {
         name: "assetRecipient",
@@ -1488,6 +1588,16 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "RoleSeparationViolated",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "RouterLegLengthMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "RouterNotConfigured",
     inputs: [],
   },
   {
@@ -5794,6 +5904,35 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "redeemFor",
+    inputs: [
+      {
+        name: "shareHolder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "assetRecipient",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "sharesPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    outputs: [
+      {
+        name: "assetsPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",

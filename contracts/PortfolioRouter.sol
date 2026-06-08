@@ -443,6 +443,65 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         return _depositTo(receiver, amount, minSharesPerLeg);
     }
 
+    /// @notice Redeem vault shares proportionally from multiple vaults. For each
+    ///         leg the router calls `vault.redeem(sharesPerLeg[i], assetRecipient,
+    ///         shareHolder)`, routing USDC directly to `assetRecipient`. The caller
+    ///         (typically the gateway) must have obtained ERC-20 approvals from
+    ///         `shareHolder` on each vault's share token before calling this
+    ///         function, or must hold the shares itself.
+    ///
+    ///         All legs must succeed (all-or-revert). No intermediate USDC custody
+    ///         is created in the router — each vault sends USDC directly to
+    ///         `assetRecipient`.
+    ///
+    /// @param shareHolder       Address whose vault shares are redeemed (the `owner`
+    ///                          passed to `vault.redeem`). Must have approved the
+    ///                          caller (the gateway) for each vault's share token,
+    ///                          which then must have approved this router, OR the
+    ///                          gateway pulls shares from shareHolder and holds them
+    ///                          temporarily during the call frame.
+    /// @param assetRecipient    Address that receives redeemed USDC. The router
+    ///                          forwards each leg's USDC here; it never custodies USDC.
+    /// @param sharesPerLeg      Shares to redeem per leg (parallel to effective weight
+    ///                          vector). Length must match the effective vault list.
+    ///                          Zero-share legs are accepted (and skipped) so the
+    ///                          caller can specify partial positions.
+    /// @return assetsPerLeg     USDC received per leg (parallel to `sharesPerLeg`).
+    function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
+        external
+        nonReentrant
+        returns (uint256[] memory assetsPerLeg)
+    {
+        if (shareHolder == address(0)) revert ZeroAddress();
+        if (assetRecipient == address(0)) revert ZeroAddress();
+
+        (address[] memory vaultList,) = _effectiveWeightsMemory();
+        uint256 n = vaultList.length;
+        if (n == 0) revert NoWeightsSet();
+        if (sharesPerLeg.length != n) revert LengthMismatch();
+
+        assetsPerLeg = new uint256[](n);
+
+        for (uint256 i = 0; i < n; i++) {
+            uint256 shares = sharesPerLeg[i];
+            if (shares == 0) continue;
+
+            address vault = vaultList[i];
+
+            // Registry status: must be Active to redeem.
+            (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
+            if (vaultStatus != VaultRegistry.VaultStatus.Active) {
+                revert VaultNotActive(vault, vaultStatus);
+            }
+
+            // Redeem: shareHolder must have approved msg.sender (the gateway) to
+            // spend their vault shares; the gateway is the `owner` caller here.
+            // vault.redeem sends USDC directly to assetRecipient.
+            uint256 assetsOut = IERC4626(vault).redeem(shares, assetRecipient, shareHolder);
+            assetsPerLeg[i] = assetsOut;
+        }
+    }
+
     /// @dev Internal allocation logic shared by `deposit` and `depositFor`.
     function _depositTo(address receiver, uint256 amount, uint256[] calldata minSharesPerLeg)
         internal

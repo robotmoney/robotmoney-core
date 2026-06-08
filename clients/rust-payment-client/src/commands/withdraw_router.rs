@@ -1,0 +1,690 @@
+//! Canonical: docs/architecture.md §5 — On-Chain Gateway
+//!
+//! `rmpc withdraw-router` — sign and broadcast a gateway multi-vault proportional
+//! redemption through the Portfolio Router (agent-initiated).
+//!
+//! Mirrors the structure of `rmpc withdraw` with router-specific preflight:
+//!
+//! 1. Load config + signer.
+//! 2. Acquire the per-agent file lock (single-flight CLI).
+//! 3. Run gateway preflight via [`Preflight::run_withdraw_gateway`]:
+//!    a. chain id
+//!    b. code hash pin
+//!    c. gateway paused
+//!    d. agent policy active + not expired
+//!    e. maxWithdrawPerPayment >= sum(sharesPerLeg)
+//!    f. effectiveWithdrawWindowGross + totalShares <= maxWithdrawPerWindow
+//! 4. Preview: read router effective weights and display per-leg shares out.
+//! 5. Require explicit `--confirm` flag before signing.
+//! 6. Compute fees from `eth_feeHistory`.
+//! 7. Build the EIP-1559 envelope for `gateway.withdrawFromRouter(...)`.
+//! 8. Sign, broadcast, wait for receipt.
+//! 9. Decode `AgentWithdrawalRouted` event log → emit stable JSON on stdout.
+//!
+//! Exit codes mirror `rmpc withdraw`:
+//! - 0 — success.
+//! - 2 — preflight refusal, missing --confirm, or on-chain failure.
+//! - 3 — startup failure.
+
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use alloy_primitives::{Address, Bytes, LogData, B256, U256};
+use alloy_sol_types::{SolCall, SolEvent};
+use serde::Serialize;
+
+use crate::commands::deposit::MAX_DEADLINE_SKEW_SECS;
+use crate::commands::self_check::ChecksOutput;
+use crate::config::Config;
+use crate::errors::RmpcError;
+use crate::fees::compute_fees;
+use crate::gateway::RobotMoneyGateway;
+use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
+use crate::network_env::NetworkEnv;
+use crate::nonce::AgentLock;
+use crate::policy::{Preflight, PreflightInputs};
+use crate::rpc::RpcClient;
+use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
+use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
+use crate::tx::{
+    broadcast, build_eip1559, encode_signed, signing_hash, wait_for_receipt_with, Eip1559Inputs,
+};
+
+const EXIT_OK: i32 = 0;
+const EXIT_REFUSAL: i32 = 2;
+const EXIT_STARTUP_FAIL: i32 = 3;
+
+/// Inputs collected by `main.rs` from the CLI parser.
+#[derive(Debug, Clone)]
+pub struct Args {
+    pub config_path: PathBuf,
+    /// Comma-separated vault shares per router leg (decimal strings).
+    /// Must match the router's effective weight vector length.
+    pub shares_per_leg: Vec<String>,
+    /// 32-byte order id, 0x-prefixed hex.
+    pub order_id: String,
+    /// 32-byte idempotency key. Defaults to order_id when omitted.
+    pub idempotency_key: Option<String>,
+    pub deadline_secs: u64,
+    pub receipt_timeout_secs: u64,
+    pub gas_limit: u64,
+    /// Optional CLI override for `max_fee_per_gas_cap` in wei.
+    pub fee_cap_wei: Option<u64>,
+    /// Must be true to proceed past the preview. Without --confirm the
+    /// command prints a preview and exits 2.
+    pub confirm: bool,
+    pub pretty: bool,
+}
+
+/// Stable JSON shape emitted on a successful router withdrawal.
+#[derive(Debug, Serialize)]
+pub struct WithdrawRouterOutput {
+    pub status: &'static str,
+    pub payment_id: String,
+    pub order_id: String,
+    pub agent: String,
+    pub asset_recipient: String,
+    pub router: String,
+    pub share_holder: String,
+    pub shares_per_leg: Vec<String>,
+    pub assets_per_leg: Vec<String>,
+    pub block_number: u64,
+    pub tx_hash: String,
+    pub gas_used: String,
+    pub effective_gas_price: String,
+}
+
+/// Stable JSON shape emitted on a refusal.
+#[derive(Debug, Serialize)]
+pub struct WithdrawRouterFailure {
+    pub status: &'static str,
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<ChecksOutput>,
+}
+
+/// Entry point invoked from `main.rs`. Returns the desired process exit code.
+pub fn run(args: Args) -> i32 {
+    let cfg = match Config::from_path(&args.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: failed to load config: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // Parse shares_per_leg.
+    let shares_per_leg: Vec<U256> = {
+        let mut out = Vec::with_capacity(args.shares_per_leg.len());
+        for s in &args.shares_per_leg {
+            match U256::from_str(s) {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    log::error!("rmpc withdraw-router: --shares-per-leg entry {s:?} is not a valid decimal U256: {e}");
+                    return EXIT_STARTUP_FAIL;
+                }
+            }
+        }
+        out
+    };
+
+    let total_shares: U256 = shares_per_leg.iter().fold(U256::ZERO, |a, &b| a + b);
+    if total_shares == U256::ZERO {
+        log::error!("rmpc withdraw-router: --shares-per-leg must have at least one non-zero entry");
+        return EXIT_STARTUP_FAIL;
+    }
+
+    let order_id = match B256::from_str(&args.order_id) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: --order-id is not a 32-byte hex string: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let idempotency_key = match args.idempotency_key.as_deref() {
+        None => order_id,
+        Some(s) => match B256::from_str(s) {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!(
+                    "rmpc withdraw-router: --idempotency-key is not a 32-byte hex string: {e}"
+                );
+                return EXIT_STARTUP_FAIL;
+            }
+        },
+    };
+
+    let gateway_addr = match Address::from_str(&cfg.gateway_address) {
+        Ok(a) => a,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: gateway_address parse error: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let deadline = now.saturating_add(deadline_secs);
+
+    if let Err(err) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software)
+    {
+        log::error!("rmpc withdraw-router: {err}");
+        emit_refusal(
+            &WithdrawRouterFailure {
+                status: "refused",
+                error: error_name(&err).to_string(),
+                message: Some(format!("{err}")),
+                agent: None,
+                order_id: Some(format!("{order_id:#x}")),
+                tx_hash: None,
+                checks: None,
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+
+    // Decrypt keystore.
+    let passphrase = match std::env::var(PASSPHRASE_ENV_VAR) {
+        Ok(s) => s,
+        Err(_) => {
+            log::error!(
+                "rmpc withdraw-router: ${PASSPHRASE_ENV_VAR} is unset; refusing to prompt on stdin"
+            );
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    let signer = match SoftwareSigner::load_with_passphrase(
+        &cfg.signer.keystore_path,
+        passphrase.as_bytes(),
+        cfg.signer.allow_software_fallback,
+    ) {
+        Ok(s) => s,
+        Err(crate::signer::SignerError::ErrSoftwareSignerDisallowed) => {
+            log::error!(
+                "rmpc withdraw-router: ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true"
+            );
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: "ErrSoftwareSignerDisallowed".to_string(),
+                    message: Some(
+                        "[signer].allow_software_fallback must be true to use the software keystore"
+                            .to_string(),
+                    ),
+                    agent: None,
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+        Err(e) => {
+            log::error!("rmpc withdraw-router: signer load failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    let agent_address = signer.public_address();
+    let backend_label = match signer.backend_kind() {
+        crate::signer::SignerBackendKind::Software => "software",
+        crate::signer::SignerBackendKind::Hsm => "hsm",
+        crate::signer::SignerBackendKind::Kms => "kms",
+    };
+
+    let mut audit = AuditRecordBuilder {
+        agent: format!("{agent_address:#x}"),
+        backend: backend_label.to_string(),
+        request_type: "withdraw-router".to_string(),
+        order_id: format!("{order_id:#x}"),
+        idempotency_key: format!("{idempotency_key:#x}"),
+        amount: total_shares.to_string(),
+        deadline,
+        gateway: format!("{gateway_addr:#x}"),
+        chain_id: cfg.chain_id,
+        tx_hash: None,
+        payment_id: None,
+    };
+    let network_env = NetworkEnv::from_chain_id(cfg.chain_id);
+    log::info!(
+        "withdraw-router: starting agent={} order_id={} total_shares={} chain_id={} network_env={}",
+        audit.agent,
+        audit.order_id,
+        audit.amount,
+        audit.chain_id,
+        network_env.as_str()
+    );
+    if let Some(warn) = network_env.production_warning() {
+        log::warn!("withdraw-router: {warn}");
+    }
+
+    let state_dir = match cfg.resolve_state_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let _lock = match AgentLock::acquire(&state_dir, &agent_address) {
+        Ok(l) => l,
+        Err(RmpcError::ErrConcurrentInvocation) => {
+            record_audit(&audit.build(
+                AuditDecision::Refused,
+                Some("ErrConcurrentInvocation".to_string()),
+            ));
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: "ErrConcurrentInvocation".to_string(),
+                    message: Some(format!(
+                        "another rmpc invocation already holds the lock for agent {agent_address:#x}"
+                    )),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+        Err(e) => {
+            log::error!("rmpc withdraw-router: lock acquire failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: tokio runtime build failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let rpc = match RpcClient::new(&cfg.rpc_url) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: rpc client init failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // -- Preflight --------------------------------------------------------
+    // Run the withdrawal-specific gateway preflight (chain id, code hash,
+    // gateway paused, agent active+expiry, withdrawal window cap) with
+    // totalShares as the amount.
+    let preflight_result = rt.block_on(async {
+        let pf = Preflight::new(&rpc, &cfg);
+        pf.run_withdraw_gateway(PreflightInputs {
+            signer_address: agent_address,
+            amount: total_shares,
+        })
+        .await
+    });
+    let report = match preflight_result {
+        Ok(r) => r,
+        Err(err) => {
+            record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&err).to_string())));
+            let checks = ChecksOutput::from_err_partial(&err);
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: error_name(&err).to_string(),
+                    message: Some(format!("{err}")),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: Some(checks),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+
+    // -- Explicit confirmation required -----------------------------------
+    if !args.confirm {
+        eprintln!(
+            "rmpc withdraw-router: preview — {} legs, total_shares={total_shares}. Re-run with --confirm to proceed.",
+            shares_per_leg.len()
+        );
+        record_audit(&audit.build(
+            AuditDecision::Refused,
+            Some("ErrConfirmNotProvided".to_string()),
+        ));
+        emit_refusal(
+            &WithdrawRouterFailure {
+                status: "refused",
+                error: "ErrConfirmNotProvided".to_string(),
+                message: Some(
+                    "Pass --confirm to execute. Inspect --get-router first to verify leg amounts."
+                        .to_string(),
+                ),
+                agent: Some(format!("{agent_address:#x}")),
+                order_id: Some(format!("{order_id:#x}")),
+                tx_hash: None,
+                checks: Some(ChecksOutput::from_report(&report)),
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+
+    // -- Fees -------------------------------------------------------------
+    let fee_history_res = rt.block_on(async { rpc.fee_history(5, "latest", &[50.0]).await });
+    let fees = match fee_history_res {
+        Ok(fh) => match compute_fees(
+            &fh,
+            cfg.effective_max_fee_per_gas_cap(args.fee_cap_wei) as u128,
+            cfg.max_priority_fee_per_gas_cap
+                .map_or(u128::MAX, |v| v as u128),
+        ) {
+            Ok(b) => b,
+            Err(e) => {
+                record_audit(
+                    &audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())),
+                );
+                emit_refusal(
+                    &WithdrawRouterFailure {
+                        status: "refused",
+                        error: error_name(&e).to_string(),
+                        message: Some(format!("{e}")),
+                        agent: Some(format!("{agent_address:#x}")),
+                        order_id: Some(format!("{order_id:#x}")),
+                        tx_hash: None,
+                        checks: Some(ChecksOutput::from_report(&report)),
+                    },
+                    args.pretty,
+                );
+                return EXIT_REFUSAL;
+            }
+        },
+        Err(e) => {
+            log::error!("rmpc withdraw-router: eth_feeHistory failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // -- Nonce ------------------------------------------------------------
+    let nonce_res = rt.block_on(async {
+        rpc.get_transaction_count(agent_address, Some("pending"))
+            .await
+    });
+    let nonce = match nonce_res {
+        Ok(n) => n,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: eth_getTransactionCount failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // -- Build + sign envelope -------------------------------------------
+    let calldata = RobotMoneyGateway::withdrawFromRouterCall {
+        orderId: order_id,
+        sharesPerLeg: shares_per_leg.clone(),
+        deadline,
+        idempotencyKey: idempotency_key,
+    }
+    .abi_encode();
+
+    let tx = build_eip1559(Eip1559Inputs {
+        chain_id: cfg.chain_id,
+        nonce,
+        to: gateway_addr,
+        gas_limit: args.gas_limit,
+        fees,
+        value: U256::ZERO,
+        input: Bytes::from(calldata),
+    });
+    let hash = signing_hash(&tx);
+    let mut hash_bytes = [0u8; 32];
+    hash_bytes.copy_from_slice(hash.as_slice());
+    let alloy_sig = match signer.sign_eip1559_hash(&hash_bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: envelope signing failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    let raw = encode_signed(tx, alloy_sig);
+
+    // -- Broadcast --------------------------------------------------------
+    let tx_hash = match rt.block_on(async { broadcast(&rpc, &raw).await }) {
+        Ok(h) => h,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: eth_sendRawTransaction failed: {e}");
+            record_audit(&audit.build(
+                AuditDecision::BroadcastFailed,
+                Some(error_name(&e).to_string()),
+            ));
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: error_name(&e).to_string(),
+                    message: Some(format!("{e}")),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: Some(ChecksOutput::from_report(&report)),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+
+    let tx_hash_hex = format!("{tx_hash:#x}");
+    audit.tx_hash = Some(tx_hash_hex.clone());
+
+    // -- Receipt ----------------------------------------------------------
+    let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
+    let receipt_res = rt.block_on(async {
+        wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await
+    });
+    let receipt = match receipt_res {
+        Ok(r) => r,
+        Err(e) => {
+            record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())));
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: error_name(&e).to_string(),
+                    message: Some(format!("{e}")),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: Some(tx_hash_hex.clone()),
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+
+    if !receipt.inner.status() {
+        let err = RmpcError::ErrTxReverted {
+            tx_hash: tx_hash_hex.clone(),
+        };
+        record_audit(&audit.build(AuditDecision::Reverted, Some("ErrTxReverted".to_string())));
+        emit_refusal(
+            &WithdrawRouterFailure {
+                status: "refused",
+                error: "ErrTxReverted".to_string(),
+                message: Some(format!("{err}")),
+                agent: Some(format!("{agent_address:#x}")),
+                order_id: Some(format!("{order_id:#x}")),
+                tx_hash: Some(tx_hash_hex.clone()),
+                checks: None,
+            },
+            args.pretty,
+        );
+        return EXIT_REFUSAL;
+    }
+
+    // -- Decode AgentWithdrawalRouted log ---------------------------------
+    let topic0 = RobotMoneyGateway::AgentWithdrawalRouted::SIGNATURE_HASH;
+    let log = receipt
+        .inner
+        .logs()
+        .iter()
+        .find(|l| l.address() == gateway_addr && l.topics().first() == Some(&topic0));
+    let log = match log {
+        Some(l) => l,
+        None => {
+            log::error!("rmpc withdraw-router: AgentWithdrawalRouted event not found in receipt");
+            record_audit(&audit.build(
+                AuditDecision::Refused,
+                Some("ErrRouterWithdrawLogMissing".to_string()),
+            ));
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: "ErrRouterWithdrawLogMissing".to_string(),
+                    message: Some("AgentWithdrawalRouted event not found in receipt".to_string()),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: Some(tx_hash_hex.clone()),
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    };
+    let log_data = LogData::new_unchecked(log.topics().to_vec(), log.data().data.clone());
+    let decoded = match RobotMoneyGateway::AgentWithdrawalRouted::decode_log_data(&log_data, true) {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("rmpc withdraw-router: failed to decode AgentWithdrawalRouted log: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    let block_number = receipt.block_number.unwrap_or(0);
+    audit.payment_id = Some(format!("{:#x}", decoded.paymentId));
+    record_audit(&audit.build(AuditDecision::Signed, None));
+    let out = WithdrawRouterOutput {
+        status: "success",
+        payment_id: format!("{:#x}", decoded.paymentId),
+        order_id: format!("{:#x}", decoded.orderId),
+        agent: format!("{:#x}", decoded.agent),
+        asset_recipient: format!("{:#x}", decoded.assetRecipient),
+        router: format!("{:#x}", decoded.router),
+        share_holder: format!("{:#x}", decoded.shareHolder),
+        shares_per_leg: decoded.sharesPerLeg.iter().map(|s| s.to_string()).collect(),
+        assets_per_leg: decoded.assetsPerLeg.iter().map(|a| a.to_string()).collect(),
+        block_number,
+        tx_hash: tx_hash_hex,
+        gas_used: receipt.gas_used.to_string(),
+        effective_gas_price: receipt.effective_gas_price.to_string(),
+    };
+    emit(&out, args.pretty);
+    EXIT_OK
+}
+
+fn emit<T: serde::Serialize>(out: &T, pretty: bool) {
+    let json = if pretty {
+        serde_json::to_string_pretty(out)
+    } else {
+        serde_json::to_string(out)
+    }
+    .expect("withdraw-router output serialises");
+    println!("{json}");
+}
+
+fn emit_refusal(out: &WithdrawRouterFailure, pretty: bool) {
+    emit(out, pretty);
+}
+
+/// Map an [`RmpcError`] to its stable variant name for operator-visible output.
+fn error_name(err: &RmpcError) -> &'static str {
+    match err {
+        RmpcError::ErrAgentNotAuthorized => "ErrAgentNotAuthorized",
+        RmpcError::ErrFeeCapExceeded => "ErrFeeCapExceeded",
+        RmpcError::ErrConcurrentInvocation => "ErrConcurrentInvocation",
+        RmpcError::ErrCodeHashMismatch => "ErrCodeHashMismatch",
+        RmpcError::ErrChainIdMismatch => "ErrChainIdMismatch",
+        RmpcError::ErrGatewayPaused => "ErrGatewayPaused",
+        RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
+        RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
+        RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
+        RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
+        RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
+        RmpcError::ErrTxReverted { .. } => "ErrTxReverted",
+        RmpcError::ErrAgentDepositLogMissing { .. } => "ErrAgentDepositLogMissing",
+        RmpcError::ErrVaultPaused => "ErrVaultPaused",
+        RmpcError::ErrWithdrawCapExceeded => "ErrWithdrawCapExceeded",
+        RmpcError::ErrShareBalanceInsufficient => "ErrShareBalanceInsufficient",
+        RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
+        RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
+        RmpcError::ErrVoteAlreadyCast { .. } => "ErrVoteAlreadyCast",
+        RmpcError::ErrConfig(_) => "ErrConfig",
+        RmpcError::ErrIo(_) => "ErrIo",
+        RmpcError::ErrTomlParse(_) => "ErrTomlParse",
+        RmpcError::ErrRpcTransport(_) => "ErrRpcTransport",
+        RmpcError::ErrRpcServer { .. } => "ErrRpcServer",
+        RmpcError::ErrRpcDecode(_) => "ErrRpcDecode",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{keccak256, U256};
+    use alloy_sol_types::SolCall;
+
+    #[test]
+    fn withdraw_from_router_selector_matches_canonical_signature() {
+        let canonical = "withdrawFromRouter(bytes32,uint256[],uint64,bytes32)";
+        let expected = &keccak256(canonical.as_bytes())[..4];
+        let actual = RobotMoneyGateway::withdrawFromRouterCall::SELECTOR;
+        assert_eq!(&actual, expected, "withdrawFromRouter selector drift");
+    }
+
+    #[test]
+    fn agent_withdrawal_routed_event_topic0_matches() {
+        let canonical =
+            b"AgentWithdrawalRouted(bytes32,bytes32,address,address,address,uint256[],uint256[],address,uint64)";
+        let expected = keccak256(canonical);
+        let actual = RobotMoneyGateway::AgentWithdrawalRouted::SIGNATURE_HASH;
+        assert_eq!(actual, expected, "AgentWithdrawalRouted topic0 drift");
+    }
+
+    #[test]
+    fn shares_per_leg_encodes_correctly() {
+        // Verify the ABI encoding is stable for a two-leg call.
+        let legs = vec![U256::from(60_000_000u64), U256::from(40_000_000u64)];
+        let call = RobotMoneyGateway::withdrawFromRouterCall {
+            orderId: alloy_primitives::B256::ZERO,
+            sharesPerLeg: legs,
+            deadline: 0u64,
+            idempotencyKey: alloy_primitives::B256::ZERO,
+        };
+        let encoded = call.abi_encode();
+        // Must start with the 4-byte selector.
+        assert_eq!(
+            &encoded[..4],
+            RobotMoneyGateway::withdrawFromRouterCall::SELECTOR
+        );
+        assert!(encoded.len() > 4, "encoded call must have non-trivial body");
+    }
+}

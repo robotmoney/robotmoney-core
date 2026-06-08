@@ -167,6 +167,28 @@ interface IGateway {
         uint64 windowId
     );
 
+    /// @notice Emitted on every successful router withdrawal (multi-vault proportional redeem).
+    /// @param paymentId       Replay-protection hash for this payment.
+    /// @param orderId         Caller-supplied order identifier.
+    /// @param agent           Agent address that initiated the withdrawal.
+    /// @param router          Portfolio Router address used.
+    /// @param shareHolder     Address whose vault shares were redeemed.
+    /// @param sharesPerLeg    Vault shares redeemed per leg (parallel to router weight list).
+    /// @param assetsPerLeg    USDC received per leg.
+    /// @param assetRecipient  Address that received all redeemed USDC.
+    /// @param windowId        Rolling window identifier (`block.timestamp / WINDOW_SECONDS`).
+    event AgentWithdrawalRouted(
+        bytes32 indexed paymentId,
+        bytes32 indexed orderId,
+        address indexed agent,
+        address router,
+        address shareHolder,
+        uint256[] sharesPerLeg,
+        uint256[] assetsPerLeg,
+        address assetRecipient,
+        uint64 windowId
+    );
+
     // -------------------------------------------------------------------
     // State-changing functions
     // -------------------------------------------------------------------
@@ -240,6 +262,36 @@ interface IGateway {
         uint64 deadline,
         bytes32 idempotencyKey
     ) external returns (bytes32 paymentId, uint256 assetsOut);
+
+    /// @notice Redeem vault shares proportionally across all Portfolio Router
+    ///         legs. Enforces the same policy checks (valid-until, per-payment
+    ///         cap, window cap, allowed-source-vaults, pause, idempotency,
+    ///         recipient) as single-vault `withdraw`. Each leg's vault must
+    ///         appear in `policy.allowedSourceVaults` (when non-empty). USDC
+    ///         is forwarded exclusively to the policy-configured `assetRecipient`.
+    ///
+    ///         `policy.shareReceiver` (the share holder) must have approved the
+    ///         gateway for each vault's share token prior to calling. The
+    ///         gateway temporarily holds the shares during the call frame and
+    ///         passes them through to the router — no outer share token is
+    ///         minted and no intermediate custody persists beyond the call.
+    ///
+    /// @dev Restricted to `AGENT_ROLE`. Reverts when paused. `totalShares` is
+    ///      the sum of `sharesPerLeg` and is checked against
+    ///      `maxWithdrawPerPayment` and the rolling window cap.
+    /// @param orderId          Caller-supplied order identifier (echoed in event).
+    /// @param sharesPerLeg     Vault shares to redeem per router leg (parallel to
+    ///                         the router's effective weight vector).
+    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
+    /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
+    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/key.
+    /// @return assetsPerLeg    USDC received per leg.
+    function withdrawFromRouter(
+        bytes32 orderId,
+        uint256[] calldata sharesPerLeg,
+        uint64 deadline,
+        bytes32 idempotencyKey
+    ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
 
     /// @notice Phase-1 of the two-phase commit/reveal agent authorization.
     ///         Submit `commitHash = keccak256(abi.encode(agent, msg.sender, salt))`
