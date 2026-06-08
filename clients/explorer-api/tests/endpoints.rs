@@ -467,6 +467,60 @@ async fn get_vault_invalid_address_returns_400() {
     assert_eq!(resp.status(), 400);
 }
 
+/// Suite-08 AC (issue #675): GET /v1/vaults/:address response includes all
+/// four §5.4 data sets — tvl_history, adapter_allocation_history,
+/// deposit_withdrawal_log, and fee_history.
+/// Test plan: `cargo test -p explorer-api -- get_vault_detail`
+#[tokio::test]
+async fn get_vault_detail_includes_all_four_data_sets() {
+    let s = start_with_seed().await;
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/vaults/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    // tvl_history — must be non-empty (seeded in common::seed_fixture).
+    let tvl = body["vault"]["tvl_history"].as_array().unwrap();
+    assert!(!tvl.is_empty(), "tvl_history must be non-empty");
+
+    // adapter_allocation_history — must contain the seeded Allocated event.
+    let alloc = body["vault"]["adapter_allocation_history"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !alloc.is_empty(),
+        "adapter_allocation_history must be non-empty (one Allocated event seeded)"
+    );
+    assert_eq!(alloc[0]["event_kind"], "allocated");
+    assert_eq!(alloc[0]["amount"], "500000");
+
+    // deposit_withdrawal_log — must contain the seeded ERC-4626 Deposit event.
+    let transfers = body["vault"]["deposit_withdrawal_log"].as_array().unwrap();
+    assert!(
+        !transfers.is_empty(),
+        "deposit_withdrawal_log must be non-empty (one Deposit event seeded)"
+    );
+    assert_eq!(transfers[0]["direction"], "deposit");
+    assert_eq!(transfers[0]["assets"], "1000000");
+
+    // fee_history — must contain the seeded ExitFeeCharged event.
+    let fees = body["vault"]["fee_history"].as_array().unwrap();
+    assert!(
+        !fees.is_empty(),
+        "fee_history must be non-empty (one ExitFeeCharged event seeded)"
+    );
+    assert_eq!(fees[0]["fee_amount"], "5000");
+    assert_eq!(fees[0]["gross_assets"], "1000000");
+    assert_eq!(fees[0]["net_assets"], "995000");
+}
+
 // ─── Governance endpoint tests (issue #307) ────────────────────────────────
 
 /// GET /v1/router/weights — current weight vector and history.

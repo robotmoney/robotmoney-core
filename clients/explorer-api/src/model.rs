@@ -164,6 +164,50 @@ pub struct VaultTvlPoint {
     pub indexed_at: DateTime<Utc>,
 }
 
+/// One adapter allocation/pull/rebalance event from `adapter_allocations`.
+/// Canonical: docs/architecture.md §5.4 — vault detail adapter allocation history.
+#[derive(Debug, Serialize)]
+pub struct AdapterAllocationEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub adapter: Option<String>,
+    pub adapter_index: Option<i64>,
+    pub amount: String,
+    /// "allocated" | "pulled" | "rebalanced"
+    pub event_kind: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// One deposit or withdrawal event from `vault_transfer_events`.
+/// Canonical: docs/architecture.md §5.4 — vault detail deposit/withdrawal log.
+#[derive(Debug, Serialize)]
+pub struct VaultTransferEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    /// "deposit" | "withdrawal"
+    pub direction: String,
+    pub caller: String,
+    /// owner (for deposits) or receiver (for withdrawals)
+    pub owner_or_receiver: String,
+    pub assets: String,
+    pub shares: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// One exit-fee event from `vault_fee_events`.
+/// Canonical: docs/architecture.md §5.4 — vault detail fee collection history.
+#[derive(Debug, Serialize)]
+pub struct VaultFeeEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub owner: String,
+    pub receiver: String,
+    pub gross_assets: String,
+    pub fee_amount: String,
+    pub net_assets: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
 /// Detailed single-vault response for GET /v1/vaults/:address.
 #[derive(Debug, Serialize)]
 pub struct VaultDetail {
@@ -176,6 +220,12 @@ pub struct VaultDetail {
     pub deposit_cap: String,
     /// TVL history from vault_snapshots (up to 500 rows, ascending by block).
     pub tvl_history: Vec<VaultTvlPoint>,
+    /// Adapter allocation history from adapter_allocations (up to 500 rows, ascending by block).
+    pub adapter_allocation_history: Vec<AdapterAllocationEntry>,
+    /// Deposit/withdrawal event log from vault_transfer_events (up to 500 rows, ascending by block).
+    pub deposit_withdrawal_log: Vec<VaultTransferEntry>,
+    /// Fee collection history from vault_fee_events (up to 500 rows, ascending by block).
+    pub fee_history: Vec<VaultFeeEntry>,
     pub indexed_at: DateTime<Utc>,
 }
 
