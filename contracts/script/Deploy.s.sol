@@ -134,6 +134,12 @@ contract Deploy is Script {
     /// @notice Default policy lifetime (30 days).
     uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days;
 
+    /// @notice Minimum seed deposit required before the vault is opened to the public.
+    ///         Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
+    ///         even with `_decimalsOffset() == 18`.
+    ///         See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+    uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6; // 1,000 USDC (6 decimals)
+
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
     /// @return d Struct containing all deployed contract addresses and key parameters.
     function run() external returns (Deployed memory d) {
@@ -145,6 +151,17 @@ contract Deploy is Script {
         // the addAdapter calls is d.admin which holds ADMIN_ROLE.  No vm.prank
         // is required — and vm.prank is prohibited inside startBroadcast.
         _approveAndRegisterAdapters(d);
+        // Seed deposit: the deployer (broadcaster) approves and deposits ≥ 1,000 USDC
+        // before the vault is opened to the public.  This is required by
+        // docs/technical/security-model.md §3 to prevent the share-price
+        // inflation attack on a zero-supply vault.  In broadcast mode the
+        // broadcaster IS d.admin so no vm.prank is needed.
+        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
+        uint256 seedShares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        require(d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT, "seed deposit: totalAssets too low");
+        require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
+        console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
+        console2.log("  seed shares minted :", seedShares);
         vm.stopBroadcast();
 
         _writeDeploymentJson(d);
@@ -152,6 +169,8 @@ contract Deploy is Script {
 
     /// @notice In-process variant for forge tests. Caller sets up `vm.prank`
     ///         or test-account context. No JSON is written.
+    ///         Does NOT perform the seed deposit — use runInProcessWithSeed()
+    ///         or the broadcast `run()` entrypoint for that.
     /// @return d Struct containing all deployed contract addresses and key parameters.
     function runInProcess() external returns (Deployed memory d) {
         Params memory p = _readEnvParams();
@@ -197,6 +216,43 @@ contract Deploy is Script {
         vm.startPrank(d.admin);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
+        // Note: no seed deposit here — runInProcessWith is used by Deploy.t.sol
+        // unit tests where real protocol adapters are not available.
+        // Use runInProcessWithSeed() in fork tests that have real protocol state.
+    }
+
+    /// @notice In-process variant for fork tests. Like `runInProcessWith` but also
+    ///         executes the mandatory seed deposit (requires real protocol state).
+    ///         The caller must ensure `admin_` has ≥ SEED_DEPOSIT_AMOUNT of `usdc_`.
+    /// @param admin_         Address to receive `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.
+    /// @param pauser_        Address to receive `PAUSER_ROLE`.
+    /// @param agent_         Address to receive `AGENT_ROLE`.
+    /// @param shareReceiver_ Address that will receive minted vault shares.
+    /// @param usdc_          Address of the USDC token to bind to the gateway.
+    /// @return d Struct containing all deployed contract addresses and key parameters.
+    function runInProcessWithSeed(
+        address admin_,
+        address pauser_,
+        address agent_,
+        address shareReceiver_,
+        address usdc_
+    ) external returns (Deployed memory d) {
+        Params memory p;
+        p.admin = admin_;
+        p.pauser = pauser_;
+        p.agent = agent_;
+        p.shareReceiver = shareReceiver_;
+        p.validUntil = uint64(block.timestamp + DEFAULT_VALID_UNTIL_OFFSET);
+        p.maxPerPayment = DEFAULT_MAX_PER_PAYMENT;
+        p.maxPerWindow = DEFAULT_MAX_PER_WINDOW;
+        p.maxWithdrawPerPayment = DEFAULT_MAX_WITHDRAW_PER_PAYMENT;
+        p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
+        p.usdcAddress = usdc_;
+        d = _doDeploy(p);
+        vm.startPrank(d.admin);
+        _approveAndRegisterAdapters(d);
+        vm.stopPrank();
+        _executeSeedDeposit(d);
     }
 
     struct Params {
@@ -245,6 +301,26 @@ contract Deploy is Script {
             d.vault.addAdapter(address(d.compoundAdapter), 3_333);
             d.vault.addAdapter(address(d.morphoAdapter), 3_333);
         }
+    }
+
+    /// @dev Executes the mandatory seed deposit of SEED_DEPOSIT_AMOUNT USDC from
+    ///      d.admin into the vault before it is opened to the public.
+    ///      Used by the in-process test variants (runInProcess / runInProcessWith)
+    ///      where vm.prank is available.  The broadcast variant (run()) inlines the
+    ///      same logic without prank since vm.startPrank is prohibited inside
+    ///      vm.startBroadcast.
+    ///
+    ///      See docs/technical/security-model.md §3 and
+    ///      docs/technical/smart-contracts.md §8.3.
+    function _executeSeedDeposit(Deployed memory d) internal {
+        vm.startPrank(d.admin);
+        IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
+        uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
+        vm.stopPrank();
+        require(d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT, "seed deposit: totalAssets too low");
+        require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
+        console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
+        console2.log("  seed shares minted :", shares);
     }
 
     /// @dev Approves `adapter_` on `vault_` after asserting the no-proxy

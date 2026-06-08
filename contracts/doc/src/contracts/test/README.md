@@ -38,6 +38,7 @@
 - [DeployPortfolioRouterTest](DeployPortfolioRouter.t.sol/contract.DeployPortfolioRouterTest.md)
 - [StubSwapRouter](DeployProtocolAssetVault.t.sol/contract.StubSwapRouter.md)
 - [DeployProtocolAssetVaultTest](DeployProtocolAssetVault.t.sol/contract.DeployProtocolAssetVaultTest.md)
+- [DeploySeedDeposit](DeploySeedDeposit.t.sol/contract.DeploySeedDeposit.md)
 - [DeployTimelockTest](DeployTimelock.t.sol/contract.DeployTimelockTest.md)
 - [MockHighThresholdSafe](DeployTimelock.t.sol/contract.MockHighThresholdSafe.md)
 - [MockLowThresholdSafe](DeployTimelock.t.sol/contract.MockLowThresholdSafe.md)
