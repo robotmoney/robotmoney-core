@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/7d2312dd62356bbc767599853c696d24039f091e/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/41d10069f3131869b5f2aee11bc920913e4ab3a6/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -412,5 +412,42 @@ After emergencyWithdraw, split-pause state is correctly set; full unpause restor
 
 ```solidity
 function test_emergencyWithdraw_thenUnpause_restoresFullFunctionality() public;
+```
+
+### test_forceRemoveAdapter_deactivatesAdapterAndEmitsCorrectLoss
+
+EMERGENCY_ROLE can force-remove an adapter with assets; active flag becomes false
+and AdapterForceRemoved is emitted with the correct lossAmount.
+
+
+```solidity
+function test_forceRemoveAdapter_deactivatesAdapterAndEmitsCorrectLoss() public;
+```
+
+### test_forceRemoveAdapter_revertsWhenCallerLacksEmergencyRole
+
+Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.
+
+
+```solidity
+function test_forceRemoveAdapter_revertsWhenCallerLacksEmergencyRole() public;
+```
+
+### test_forceRemoveAdapter_revertsOnOutOfRangeIndex
+
+Calling forceRemoveAdapter with an out-of-range index must revert with AdapterNotFound.
+
+
+```solidity
+function test_forceRemoveAdapter_revertsOnOutOfRangeIndex() public;
+```
+
+### test_forceRemoveAdapter_revertsOnAlreadyInactiveAdapter
+
+Calling forceRemoveAdapter on an already-inactive adapter must revert with AdapterNotFound.
+
+
+```solidity
+function test_forceRemoveAdapter_revertsOnAlreadyInactiveAdapter() public;
 ```
 
