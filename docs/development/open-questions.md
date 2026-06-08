@@ -32,7 +32,9 @@ Decision: admin multisig (Safe ≥2-of-3) + mandatory `TimelockController` delay
 
 ### 1.B Agent-token vault internals
 
-**Trading authority and strategy (§3.2).** Specify trading strategy, position-sizing rules, stop-loss enforcement, and real-time NAV loss reporting *if* an agent component is reintroduced to the agent-token vault. Not live in the MVP shortlist model (admin-curated, equal-weighted, no agent trading); question needs reframing with the product owner before any engineering work.
+**Trading authority and strategy (§3.2).** **Resolved** — see [ADR-0008](../adr/ADR-0008-agent-token-vault-trading-authority.md) (2026-06-08).
+
+Decision: in-vault trading authority and strategy is an explicit non-goal, deferred indefinitely. `AgentTokenVault` remains custody-and-rebalance only (admin-curated, equal-weighted, no autonomous trading). Any future reintroduction requires a separate, independently-audited module and a successor ADR resolving trading authority, strategy, position-sizing, stop-loss, and NAV-loss reporting before any code is written.
 
 **Intra-vault rebalancing (§3.15).** **Resolved** — see [ADR-0003](../adr/ADR-0003-basketvault-rebalancing-model.md) (2026-06-02).
 
@@ -40,9 +42,13 @@ Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigge
 
 ### 1.C Vault lifecycle and redemption
 
-**Depositor migration on vault retirement (§3.5).** Retirement is a one-way status and existing depositors can still withdraw, but there is no forced or assisted migration path out of a retiring vault. Decide whether one is needed.
+**Depositor migration on vault retirement (§3.5).** **Resolved** — see [ADR-0009](../adr/ADR-0009-vault-retirement-no-assisted-migration.md) (2026-06-08).
 
-**Basket-vault drawdown redemption policy (§3.7).** Specify the redemption policy when a basket vault is in drawdown — forced sale vs. queued withdrawal vs. NAV haircut — before ADMIN_ROLE marks any basket vault router-eligible.
+Decision: no on-chain migration. Retired vaults keep standard ERC-4626 `redeem` (withdraw-only is the production behavior); there is deliberately no admin-driven forced or assisted migration. Any assisted migration must be a user-initiated, user-signed redeem-then-deposit flow at the app layer — no contract changes, no admin power over funds.
+
+**Basket-vault drawdown redemption policy (§3.7).** **Resolved** — see [ADR-0007](../adr/ADR-0007-basket-vault-drawdown-redemption-policy.md) (2026-06-08).
+
+Decision: NAV haircut at current per-share NAV. Depositors always redeem at the current per-share NAV (already reflecting drawdown via the slippage-adjusted `previewRedeem`); no forced sale, no withdrawal queue. A bounded-slippage / minimum-haircut cap prevents thin-liquidity redemptions from being sandwiched into catastrophic loss. This unblocks marking the basket vaults router-eligible (subject to any remaining audit gate).
 
 > **Research questions** (open-ended modeling and assurance, not product/engineering decisions) live in `docs/technical/research-questions.md` — currently the inclusion-attack economic bounds (§3.8) and protocol-agent resilience (§3.10).
 
@@ -52,5 +58,5 @@ Decision: new-deposits-only rebalancing (no global `rebalance()` in MVP). Trigge
 
 1. **Router default-weight vector on-chain** — implement the admin-settable fallback per ADR-0002 and close §3.9.
 2. **Intra-vault rebalancing transparency** — ~~pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15~~ **Closed** by ADR-0003.
-3. **Vault lifecycle residuals** — depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7); only the latter blocks marking a basket vault router-eligible.
-4. **Trading authority reframe (§3.2)** — product to reframe before any engineering work.
+3. **Vault lifecycle residuals** — ~~depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7)~~ **Closed**: migration by ADR-0009, drawdown policy by ADR-0007. The drawdown policy unblocks marking a basket vault router-eligible.
+4. **Trading authority reframe (§3.2)** — ~~product to reframe before any engineering work~~ **Closed** by ADR-0008 (explicit non-goal).

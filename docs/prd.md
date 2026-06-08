@@ -178,7 +178,13 @@ Common edge cases:
 ## 6. Entity Lifecycle
 
 - **Vault.** Proposed -> active -> paused -> active; active -> retired;
-  retired -> redeemable archive when redemptions remain available.
+  retired -> redeemable archive when redemptions remain available. A retired
+  vault remains withdraw-only: existing depositors keep standard ERC-4626
+  redemption at any time, the router routes no new deposits into it, and the
+  protocol performs no forced or assisted on-chain migration of depositor funds.
+  Any migration to a successor vault is user-initiated and user-signed at the app
+  layer (redeem, then deposit) — the protocol never moves a depositor's funds
+  without that depositor's own transaction.
 - **Portfolio Router allocation.** Draft weights -> active vote ->
   approved weights -> applied weights; active vote -> rejected or
   expired.
@@ -367,6 +373,13 @@ admin-configured per-asset window; `slot0` is not consulted on hot
 paths. Swap slippage means actual withdrawal proceeds may differ from
 the preview by up to the configured slippage bound.
 
+Redemption policy: depositors always redeem at the current per-share NAV.
+Drawdowns are borne pro-rata by the redeeming depositor — the per-share NAV
+already reflects any decline in basket asset prices — bounded by the slippage
+cap. There is no forced sale and no withdrawal queue; redemption is synchronous,
+pro-rata, and instant. A redemption that cannot clear within the slippage cap
+reverts rather than settling at a catastrophic price.
+
 Router eligibility is gated on all of the following hardening criteria
 being satisfied and formally certified for a given deployment:
 
@@ -407,6 +420,15 @@ only; see ADR-0001). Changes flow through the Safe → Timelock →
 membership in the MVP. The production model (bribery-based or RM-token
 inclusion vote) is deferred past MVP. TWAP pricing is shipped via the
 basket-vault base.
+
+This vault has no in-vault agent trading authority or strategy: it is an
+admin-curated, equal-weight custody-and-rebalance basket, not a discretionary
+trading vehicle. Autonomous on-chain trading (strategy, position-sizing,
+stop-loss, NAV-loss reporting) is an explicit non-goal of this product.
+
+Redemption policy: identical to rmPROTO (§11.2) — depositors redeem at the
+current per-share NAV, drawdowns are borne pro-rata and bounded by the slippage
+cap, and there is no forced sale or withdrawal queue.
 
 Router eligibility is gated on all of the following hardening criteria
 being satisfied and formally certified for a given deployment:
