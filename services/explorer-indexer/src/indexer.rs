@@ -23,7 +23,7 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IGatewayEvents, IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultReads,
+    IGatewayEvents, IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
     IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError};
@@ -581,17 +581,95 @@ async fn handle_log(
         return Ok(r);
     }
 
-    // Vault event triggers — we intentionally do not store these as
-    // their own rows in Phase 5; they only drive state snapshots
-    // (handled by the caller). Returning 0 here preserves the row
-    // count.
-    if topic0 == topics.vault_allocated
-        || topic0 == topics.vault_pulled
-        || topic0 == topics.vault_rebalanced
-        || topic0 == topics.vault_exit_fee_charged
-        || topic0 == topics.paused
-        || topic0 == topics.unpaused
-    {
+    // VaultAllocated — Allocated(uint256 indexed index, address indexed adapter, uint256 amount).
+    // Persists an adapter_allocations row so the vault detail API can surface
+    // per-adapter allocation history (issue #675 AC-2).
+    if topic0 == topics.vault_allocated {
+        let decoded = IVaultEvents::Allocated::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Allocated: {e}")))?;
+        let r = db
+            .insert_adapter_allocation(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                Some(decoded.adapter.into_array()),
+                Some(decoded.index.try_into().unwrap_or(i64::MAX)),
+                decoded.amount,
+                "allocated",
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // VaultPulled — Pulled(uint256 indexed index, address indexed adapter, uint256 amount).
+    // Mirrors VaultAllocated but records a withdrawal from the adapter back to the vault.
+    if topic0 == topics.vault_pulled {
+        let decoded = IVaultEvents::Pulled::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Pulled: {e}")))?;
+        let r = db
+            .insert_adapter_allocation(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                Some(decoded.adapter.into_array()),
+                Some(decoded.index.try_into().unwrap_or(i64::MAX)),
+                decoded.amount,
+                "pulled",
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // VaultRebalanced — Rebalanced(uint256 totalMoved).
+    // No adapter address in this event; adapter and adapter_index are NULL.
+    if topic0 == topics.vault_rebalanced {
+        let decoded = IVaultEvents::Rebalanced::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("Rebalanced: {e}")))?;
+        let r = db
+            .insert_adapter_allocation(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                None,
+                None,
+                decoded.totalMoved,
+                "rebalanced",
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ExitFeeCharged — ExitFeeCharged(address indexed owner, address indexed receiver,
+    //                                 uint256 grossAssets, uint256 fee, uint256 netAssets).
+    // Persists a vault_fee_events row for the fee collection history (issue #675 AC-2).
+    if topic0 == topics.vault_exit_fee_charged {
+        let decoded = IVaultEvents::ExitFeeCharged::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("ExitFeeCharged: {e}")))?;
+        let r = db
+            .insert_vault_fee_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                decoded.owner.into_array(),
+                decoded.receiver.into_array(),
+                decoded.grossAssets,
+                decoded.fee,
+                decoded.netAssets,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // Paused / Unpaused — only drive state snapshots; no dedicated table row.
+    if topic0 == topics.paused || topic0 == topics.unpaused {
         return Ok(0);
     }
 
@@ -777,6 +855,54 @@ async fn handle_log(
                 log.tx_hash.0,
                 vault_addresses,
                 bps_values,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ERC-4626 Deposit — Deposit(address indexed caller, address indexed owner,
+    //                            uint256 assets, uint256 shares).
+    // Persists a vault_transfer_events row for the deposit/withdrawal log
+    // (issue #675 AC-2). The event-driven snapshot is still handled by the
+    // caller via `event_blocks_per_contract`.
+    if topic0 == topics.erc4626_deposit {
+        let decoded = IVaultEvents::Deposit::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("ERC4626 Deposit: {e}")))?;
+        let r = db
+            .insert_vault_transfer_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                "deposit",
+                decoded.caller.into_array(),
+                decoded.owner.into_array(),
+                decoded.assets,
+                decoded.shares,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    // ERC-4626 Withdraw — Withdraw(address indexed caller, address indexed receiver,
+    //                              address indexed owner, uint256 assets, uint256 shares).
+    // Persists a vault_transfer_events row with direction='withdrawal'.
+    if topic0 == topics.erc4626_withdraw {
+        let decoded = IVaultEvents::Withdraw::decode_log(&into_alloy_log(log), true)
+            .map_err(|e| IndexerError::Decode(format!("ERC4626 Withdraw: {e}")))?;
+        let r = db
+            .insert_vault_transfer_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                "withdrawal",
+                decoded.caller.into_array(),
+                decoded.receiver.into_array(),
+                decoded.assets,
+                decoded.shares,
             )
             .await?;
         return Ok(r);
