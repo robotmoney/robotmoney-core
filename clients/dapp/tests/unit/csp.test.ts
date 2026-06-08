@@ -57,7 +57,10 @@ describe("CSP policy", () => {
     }
     const html = readFileSync(distIndex, "utf8");
     expect(html).toMatch(/http-equiv="Content-Security-Policy"/);
-    expect(html).not.toMatch(/script-src[^"]*unsafe-inline/);
+    // Scope the unsafe-inline check to the script-src directive only: the policy
+    // legitimately allows 'unsafe-inline' for style-src, so a directive-blind
+    // match would false-positive across the ';' separator.
+    expect(html).not.toMatch(/script-src[^";]*unsafe-inline/);
     expect(html).not.toMatch(/unsafe-eval/);
   });
 });
