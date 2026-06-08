@@ -113,9 +113,10 @@ jobs:
   # Splitting them into a matrix gives one runner per binary, each booting + tearing
   # down its OWN stack with `if: always()`, removing the shared-port-8545 contention
   # (suite ~38m -> ~18m). fail-fast: false keeps every binary's signal independent.
-  #   - cli_meta:      boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
-  #   - fixture_meta:  boots devnet, deploys contracts, asserts RPC + block production
-  #   - demo_seeding:  boots the four-vault catalog and asserts all four vaults seed
+  #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
+  #   - fixture_meta:        boots devnet, deploys contracts, asserts RPC + block production
+  #   - demo_seeding:        boots the four-vault catalog and asserts all four vaults seed
+  #   - full_stack_demo_tvl: boots full compose stack, asserts all four PRD §11 vaults report non-zero TVL
   devnet:
     name: smoke-test-devnet-${{ matrix.binary }}
     runs-on: ubuntu-latest
@@ -129,7 +130,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [cli_meta, fixture_meta, demo_seeding]
+        binary: [cli_meta, fixture_meta, demo_seeding, full_stack_demo_tvl]
     steps:
       - uses: actions/checkout@v4
         with:
