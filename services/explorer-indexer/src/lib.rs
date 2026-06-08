@@ -29,6 +29,8 @@ pub mod db;
 pub mod feature_flags;
 pub mod indexer;
 pub mod rpc;
+/// Dev-scout seam map (issue #703) — documentation-only, no runtime code.
+pub mod schema;
 
 pub use db::Db;
 pub use indexer::{run_once, IndexerConfig, IndexerOutcome};
