@@ -1,5 +1,5 @@
 # IRouterDefaultWeights
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/7d2312dd62356bbc767599853c696d24039f091e/contracts/VaultRegistry.sol)
 
 Minimal view the registry needs from `PortfolioRouter` to keep the
 default weight vector's length consistent with router eligibility.

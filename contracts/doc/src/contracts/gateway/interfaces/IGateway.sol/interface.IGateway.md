@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/7d2312dd62356bbc767599853c696d24039f091e/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -49,7 +49,7 @@ function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idemp
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/amount/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_DEPOSIT=1, chainId, gateway, agent, orderId, amount, idempotencyKey)) — op-kind prefix ensures deposit ids are disjoint from depositTo and withdraw ids.|
 |`sharesMinted`|`uint256`|   Vault shares minted to `shareReceiver`.|
 
 
@@ -92,7 +92,7 @@ function depositTo(
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/amount/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent, orderId, amount, idempotencyKey)) — op-kind prefix ensures depositTo ids are disjoint from deposit and withdraw ids.|
 
 
 ### withdraw
@@ -132,7 +132,7 @@ function withdraw(
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/shares/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent, orderId, shares, idempotencyKey)) — op-kind prefix ensures withdraw ids are disjoint from deposit and depositTo ids.|
 |`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
 
 

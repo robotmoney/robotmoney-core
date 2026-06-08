@@ -119,6 +119,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///         no longer be revealed and the depositor must re-commit.
     uint256 public constant COMMIT_EXPIRY_BLOCKS = 256;
 
+    /// @notice Op-kind discriminators prepended to every `paymentId` hash to
+    ///         prevent cross-operation replay (deposit id ≠ depositTo id ≠
+    ///         withdrawal id even when all other inputs are identical).
+    uint8 internal constant OP_DEPOSIT = 1;
+    uint8 internal constant OP_WITHDRAW = 2;
+    uint8 internal constant OP_DEPOSIT_TO = 3;
+
     // -------------------------------------------------------------------
     // Immutables
     // -------------------------------------------------------------------
@@ -501,8 +508,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
         // 5. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        //    OP_DEPOSIT prefix namespaces deposit ids away from withdrawal ids.
         paymentId = keccak256(
-            abi.encode(block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey)
+            abi.encode(
+                OP_DEPOSIT,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                amount,
+                idempotencyKey
+            )
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
@@ -612,8 +628,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
         // 6. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        //    OP_DEPOSIT_TO prefix namespaces depositTo ids away from deposit
+        //    and withdrawal ids so the same (orderId, amount, idempotencyKey)
+        //    tuple cannot be replayed across operation kinds.
         paymentId = keccak256(
-            abi.encode(block.chainid, address(this), msg.sender, orderId, amount, idempotencyKey)
+            abi.encode(
+                OP_DEPOSIT_TO,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                amount,
+                idempotencyKey
+            )
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
@@ -812,8 +839,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         _accrueRollingWithdraw(msg.sender, shares, p.maxWithdrawPerWindow);
 
         // 8. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        //    OP_WITHDRAW prefix namespaces withdrawal ids away from deposit ids.
         paymentId = keccak256(
-            abi.encode(block.chainid, address(this), msg.sender, orderId, shares, idempotencyKey)
+            abi.encode(
+                OP_WITHDRAW,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                shares,
+                idempotencyKey
+            )
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 

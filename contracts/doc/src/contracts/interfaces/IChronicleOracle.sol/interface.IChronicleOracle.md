@@ -1,5 +1,5 @@
 # IChronicleOracle
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/54c7918eefdea420a15bda61e204c809879c6e71/contracts/interfaces/IChronicleOracle.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/7d2312dd62356bbc767599853c696d24039f091e/contracts/interfaces/IChronicleOracle.sol)
 
 **Title:**
 IChronicleOracle
