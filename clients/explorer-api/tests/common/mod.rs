@@ -82,8 +82,9 @@ pub const VAULT_DETAIL_MIGRATION: &str =
 
 /// Migration 0009: real account_history_events table — drops the scout stub and
 /// recreates it with typed columns (issue #654).
-pub const ACCOUNT_HISTORY_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0009_account_history_events.sql");
+pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0009_account_history_events.sql"
+);
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet

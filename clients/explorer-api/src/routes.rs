@@ -1204,9 +1204,19 @@ async fn get_account_history(
     let events: Vec<AccountHistoryEntry> = rows
         .into_iter()
         .map(
-            |(chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at)| {
+            |(
+                chain_id,
+                block_number,
+                log_index,
+                tx_hash,
+                kind,
+                vault,
+                agent,
+                amount,
+                indexed_at,
+            )| {
                 AccountHistoryEntry {
-                    kind: EventKind::from_str(&kind),
+                    kind: EventKind::from_db_kind(&kind),
                     chain_id,
                     block_number,
                     log_index,

@@ -429,7 +429,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Parse the `kind` text column stored in `account_history_events`.
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_db_kind(s: &str) -> Self {
         match s {
             "withdrawal" => Self::Withdrawal,
             "fee_charged" => Self::FeeCharged,

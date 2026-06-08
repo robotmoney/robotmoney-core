@@ -171,10 +171,7 @@ async fn account_history_withdrawal_event_indexed() {
 
     let stub = common::StubRpcServer::start().await;
     stub.set("eth_blockNumber", serde_json::Value::String("0x0f".into())); // 15
-    stub.set(
-        "eth_getLogs",
-        serde_json::Value::Array(vec![withdraw_log]),
-    );
+    stub.set("eth_getLogs", serde_json::Value::Array(vec![withdraw_log]));
     stub.set(
         "eth_call",
         serde_json::Value::String(format!("0x{}", "00".repeat(32))),
@@ -252,7 +249,10 @@ async fn account_history_fee_charged_event_indexed() {
             .fetch_one(fx.db.pool())
             .await
             .unwrap();
-    assert_eq!(count, 1, "one fee_charged history row expected, got {count}");
+    assert_eq!(
+        count, 1,
+        "one fee_charged history row expected, got {count}"
+    );
 }
 
 /// AC-4: AgentAuthorized event is stored as `kind="policy_change"` in
@@ -426,7 +426,7 @@ async fn account_history_deposit_and_withdrawal_chronological() {
             windowId: 1u64,
         },
         gateway,
-        8u64,  // lower block
+        8u64, // lower block
         [0x77u8; 32],
         0,
     );
@@ -492,7 +492,10 @@ async fn account_history_deposit_and_withdrawal_chronological() {
     .await
     .unwrap();
 
-    assert_eq!(rows[0].1, "deposit", "first event must be deposit at block 8");
+    assert_eq!(
+        rows[0].1, "deposit",
+        "first event must be deposit at block 8"
+    );
     assert_eq!(
         rows[1].1, "withdrawal",
         "second event must be withdrawal at block 10"
@@ -542,8 +545,14 @@ async fn account_history_insert_is_idempotent() {
         )
         .await
         .unwrap();
-    assert_eq!(second, 0, "second insert must be a no-op (ON CONFLICT DO NOTHING)");
+    assert_eq!(
+        second, 0,
+        "second insert must be a no-op (ON CONFLICT DO NOTHING)"
+    );
 
     let count = fx.db.count(CountTable::AccountHistoryEvents).await.unwrap();
-    assert_eq!(count, 1, "exactly one row must be in account_history_events");
+    assert_eq!(
+        count, 1,
+        "exactly one row must be in account_history_events"
+    );
 }
