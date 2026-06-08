@@ -131,7 +131,7 @@ Goal: Fix indexer SQL surface, explorer-API CORS gap, and dapp security gaps.
 See also: `docs/technical/dapp-browser-keygen-review.md` (browser-keygen security ADR — in-browser keygen path withdrawn; see §3.1 of `docs/technical/dapp-credential-decisions.md`).
 
 - [ ] dev-scout: map backend hardening seams — partially absorbed into `docs/technical/security-hardening-seams.md`; no dedicated backend scout doc
-- [ ] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion
+- [x] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion (`CountTable::try_from` allowlist guard, `services/explorer-indexer/src/db.rs`)
 - [x] Explorer API: CORS via `EXPLORER_API_ALLOW_ORIGINS` env (`clients/explorer-api/src/main.rs`)
 - [x] Dapp: verify gateway bytecode hash before admin writes (`clients/dapp/src/lib/gatewayVerifier.ts`)
 - [x] Dapp: exported config directly loadable by `rmpc` (`clients/dapp/src/lib/configExport.ts`)

@@ -22,6 +22,10 @@ pub enum DbError {
     Sqlx(#[from] sqlx::Error),
     #[error("migrate: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
+    /// Returned by [`CountTable::try_from`] when the caller supplies a
+    /// string that is not in the known-good identifier allowlist.
+    #[error("unknown table identifier: {0:?}")]
+    UnknownTable(String),
 }
 
 #[derive(Clone)]
@@ -82,6 +86,40 @@ impl CountTable {
             CountTable::GovernanceVotes => "governance_votes",
             CountTable::RouterWeightSnapshots => "router_weight_snapshots",
             CountTable::RouterDepositLegs => "router_deposit_legs",
+        }
+    }
+}
+
+/// Runtime allowlist check: parse a raw string identifier into a
+/// [`CountTable`] variant.  Any string not in the known-good set is
+/// rejected with [`DbError::UnknownTable`], preventing callers that
+/// receive table names from external sources (config files, HTTP
+/// query parameters, etc.) from accidentally expanding the SQL query
+/// surface.
+///
+/// The compile-time path (passing a [`CountTable`] literal directly to
+/// [`Db::count`]) is always preferred.  This impl exists for code paths
+/// where the table name is only known at runtime.
+impl TryFrom<&str> for CountTable {
+    type Error = DbError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "chains" => Ok(CountTable::Chains),
+            "contracts" => Ok(CountTable::Contracts),
+            "blocks" => Ok(CountTable::Blocks),
+            "transactions" => Ok(CountTable::Transactions),
+            "agent_deposits" => Ok(CountTable::AgentDeposits),
+            "agent_policies" => Ok(CountTable::AgentPolicies),
+            "vault_snapshots" => Ok(CountTable::VaultSnapshots),
+            "wallet_positions" => Ok(CountTable::WalletPositions),
+            "indexer_runs" => Ok(CountTable::IndexerRuns),
+            "vaults" => Ok(CountTable::Vaults),
+            "governance_proposals" => Ok(CountTable::GovernanceProposals),
+            "governance_votes" => Ok(CountTable::GovernanceVotes),
+            "router_weight_snapshots" => Ok(CountTable::RouterWeightSnapshots),
+            "router_deposit_legs" => Ok(CountTable::RouterDepositLegs),
+            other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
 }
@@ -1000,4 +1038,73 @@ fn u256_to_decimal(v: U256) -> BigDecimal {
     // U256::to_string is the decimal representation; BigDecimal parses
     // it losslessly.
     BigDecimal::from_str(&v.to_string()).expect("U256 always parses as BigDecimal")
+}
+
+#[cfg(test)]
+mod count_guard_tests {
+    //! Unit tests for the `CountTable` type-guard / allowlist (issue #695).
+    //!
+    //! These tests run without a live Postgres connection — they only exercise
+    //! the pure-Rust allowlist logic.
+
+    use super::{CountTable, DbError};
+
+    /// Every known table name round-trips: `CountTable::try_from(name)` succeeds
+    /// and `as_str()` returns the same name.
+    #[test]
+    fn known_tables_round_trip() {
+        let known = [
+            "chains",
+            "contracts",
+            "blocks",
+            "transactions",
+            "agent_deposits",
+            "agent_policies",
+            "vault_snapshots",
+            "wallet_positions",
+            "indexer_runs",
+            "vaults",
+            "governance_proposals",
+            "governance_votes",
+            "router_weight_snapshots",
+            "router_deposit_legs",
+        ];
+        for name in known {
+            let variant = CountTable::try_from(name)
+                .unwrap_or_else(|_| panic!("known table {name:?} was rejected by allowlist"));
+            assert_eq!(
+                variant.as_str(),
+                name,
+                "as_str() for {name:?} must match the input"
+            );
+        }
+    }
+
+    /// An arbitrary / user-controlled string must be rejected with
+    /// `DbError::UnknownTable` — it must never reach the SQL formatter.
+    #[test]
+    fn unknown_table_returns_err() {
+        let adversarial = [
+            "DROP TABLE chains",
+            "chains; DROP TABLE blocks --",
+            "wallets",
+            "users",
+            "pg_tables",
+            "",
+            " chains",
+            "CHAINS",
+        ];
+        for s in adversarial {
+            match CountTable::try_from(s) {
+                Err(DbError::UnknownTable(rejected)) => {
+                    assert_eq!(
+                        rejected, s,
+                        "error payload must echo back the rejected string"
+                    );
+                }
+                Ok(v) => panic!("expected Err for {s:?} but got Ok({:?})", v.as_str()),
+                Err(other) => panic!("unexpected error variant for {s:?}: {other}"),
+            }
+        }
+    }
 }
