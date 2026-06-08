@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/0644bb692200e6c188fa3a9ae22cf13a257ecf20/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -152,6 +152,18 @@ uint64 public constant DEFAULT_VALID_UNTIL_OFFSET = 30 days
 ```
 
 
+### SEED_DEPOSIT_AMOUNT
+Minimum seed deposit required before the vault is opened to the public.
+Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
+even with `_decimalsOffset() == 18`.
+See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+
+
+```solidity
+uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6
+```
+
+
 ## Functions
 ### run
 
@@ -172,6 +184,8 @@ function run() external returns (Deployed memory d);
 
 In-process variant for forge tests. Caller sets up `vm.prank`
 or test-account context. No JSON is written.
+Does NOT perform the seed deposit — use runInProcessWithSeed()
+or the broadcast `run()` entrypoint for that.
 
 
 ```solidity
@@ -218,6 +232,39 @@ function runInProcessWith(
 |`d`|`Deployed`|Struct containing all deployed contract addresses and key parameters.|
 
 
+### runInProcessWithSeed
+
+In-process variant for fork tests. Like `runInProcessWith` but also
+executes the mandatory seed deposit (requires real protocol state).
+The caller must ensure `admin_` has ≥ SEED_DEPOSIT_AMOUNT of `usdc_`.
+
+
+```solidity
+function runInProcessWithSeed(
+    address admin_,
+    address pauser_,
+    address agent_,
+    address shareReceiver_,
+    address usdc_
+) external returns (Deployed memory d);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`admin_`|`address`|        Address to receive `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE`.|
+|`pauser_`|`address`|       Address to receive `PAUSER_ROLE`.|
+|`agent_`|`address`|        Address to receive `AGENT_ROLE`.|
+|`shareReceiver_`|`address`|Address that will receive minted vault shares.|
+|`usdc_`|`address`|         Address of the USDC token to bind to the gateway.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`d`|`Deployed`|Struct containing all deployed contract addresses and key parameters.|
+
+
 ### _readEnvParams
 
 
@@ -230,6 +277,22 @@ function _readEnvParams() internal view returns (Params memory p);
 
 ```solidity
 function _approveAndRegisterAdapters(Deployed memory d) internal;
+```
+
+### _executeSeedDeposit
+
+Executes the mandatory seed deposit of SEED_DEPOSIT_AMOUNT USDC from
+d.admin into the vault before it is opened to the public.
+Used by the in-process test variants (runInProcess / runInProcessWith)
+where vm.prank is available.  The broadcast variant (run()) inlines the
+same logic without prank since vm.startPrank is prohibited inside
+vm.startBroadcast.
+See docs/technical/security-model.md §3 and
+docs/technical/smart-contracts.md §8.3.
+
+
+```solidity
+function _executeSeedDeposit(Deployed memory d) internal;
 ```
 
 ### _approveAdapter
