@@ -1,0 +1,141 @@
+# Canonical: docs/development/ci-suites.md §19 (planned — issue #702 dev-scout stub)
+#
+# WHY THIS SUITE EXISTS
+# Two complementary test-matrix expansion concerns live here:
+#
+# 1. ERC-4626 PRECONDITION TESTS
+#    The a16z erc4626-tests suite (contracts/test/RobotMoneyVault4626Conformance.t.sol)
+#    runs in suite-01-02 but only covers the vanilla (zero-fee) path. The real vaults
+#    launch with non-zero exitFeeBps and a live strategy adapter. Precondition tests
+#    assert that the a16z suite's setUp invariants (vault.asset() == underlying, share
+#    minting is 1:1 before yield accrual, etc.) hold across all exit-fee tiers and
+#    adapter configurations before the property-based tests run. Without preconditions,
+#    the property suite can produce misleading "all tests pass" output even when a
+#    setUp assumption is violated.
+#
+# 2. DEMO-TVL MATRIX
+#    The full_stack_demo_tvl smoke test (testing/smoke-test/tests/full_stack_demo_tvl.rs)
+#    is NOT run by any CI workflow (see agent-warnings.md). This suite adds a
+#    matrix trigger so the four-vault real-TVL invariant runs on staging branches
+#    without requiring a local Docker + Foundry environment. Runs HEAVY tier only
+#    (dev-phase-* branches and dev/main) to keep ordinary PR cycles fast.
+#
+# WHY THIS IS A STUB (issue #702 dev-scout)
+# The ERC-4626 precondition test helpers and the CI trigger wiring for full_stack_demo_tvl
+# are downstream implementation work. This stub registers the seams so implementers
+# can drop in test helpers and un-disable the matrix without changing the trigger surface.
+#
+# INTEGRATION POINTS DISCOVERED BY SCOUT (issue #702)
+# - ERC-4626 precondition tests:
+#     Forge contract: contracts/test/ERC4626PreconditionChecks.t.sol (does not exist yet).
+#     Should inherit from Test and assert vault.asset(), decimals(), and empty-vault
+#     share-price invariants for each exitFeeBps tier (0, 30, 100) × adapter
+#     (passthrough, aave, compound, morpho).
+#     Risk: a16z erc4626-tests relies on a specific `_delta_` tolerance — non-zero
+#     exit fees violate vanilla preview ↔ redeem parity. Precondition tests MUST
+#     document which a16z properties are intentionally skipped under non-zero fees,
+#     or CI will permanently report failures on the fee-enabled vaults.
+#
+# - demo-tvl CI trigger:
+#     full_stack_demo_tvl boots DappStack (chain + dapp + indexer + explorer-api).
+#     The DappStack type lives in testing/smoke-test/src/lib.rs; it requires docker,
+#     forge, and bun on the runner. GitHub-hosted ubuntu-latest has docker and forge
+#     but NOT bun — the dapp-build step needs `npm install -g bun` or the bun action.
+#     Risk: the DappStack boot + seed_demo_depositors can take 25-35 min on slow
+#     GitHub runners; the suite-14 devnet job uses a 45-min budget. This suite should
+#     set timeout-minutes: 60 to account for the extra dapp compose services.
+#
+# - Explorer-API readiness:
+#     full_stack_demo_tvl polls GET /v1/vaults on the explorer-api. If the indexer
+#     takes >60s to index the deposit txs, the poll times out. The current
+#     integration uses a retry loop (testing/smoke-test/tests/full_stack_demo_tvl.rs),
+#     but the timeout ceiling should be reviewed when landing CI wiring.
+#
+# DOWNSTREAM ISSUES TO UPDATE AFTER SCOUT:
+# - Add ERC4626PreconditionChecks.t.sol to suite-01-02 path filter when created.
+# - Remove `if: false` from demo-tvl job when DappStack bun dependency is solved.
+
+name: erc4626-demo-tvl-matrix-stub
+
+on:
+  # DISABLED: triggers commented out until implementation lands.
+  # The demo-tvl job is HEAVY tier; un-disable only for dev-phase-* + dev + main.
+  # push:
+  #   branches: [main, dev, "dev-phase-*"]
+  # pull_request:
+  #   branches: ["dev-phase-*"]
+  #   paths:
+  #     - "contracts/test/ERC4626PreconditionChecks.t.sol"
+  #     - "testing/smoke-test/tests/full_stack_demo_tvl.rs"
+  #     - ".github/workflows/suite-19-erc4626-demo-tvl-matrix.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── ERC-4626 precondition checks ───────────────────────────────────────────
+  # Seam: forge test ERC4626PreconditionChecks.t.sol across exit-fee tiers.
+  # Implementation TODO (downstream issue):
+  #   - Create contracts/test/ERC4626PreconditionChecks.t.sol.
+  #   - Add to suite-01-02 path filter OR keep here as a standalone fast job.
+  #   - Matrix: exitFeeBps in [0, 30, 100] × adapter in [passthrough, aave, compound, morpho].
+  erc4626-precondition:
+    name: erc4626-precondition-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: false # disabled until ERC4626PreconditionChecks.t.sol is created
+    strategy:
+      fail-fast: false
+      matrix:
+        exit_fee_bps: [0, 30, 100]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: "[STUB] forge test ERC-4626 preconditions (exitFeeBps=${{ matrix.exit_fee_bps }})"
+        run: echo "TODO run forge test --match-contract ERC4626PreconditionChecks with EXIT_FEE_BPS=${{ matrix.exit_fee_bps }}"
+
+  # ── Full-stack demo-TVL ────────────────────────────────────────────────────
+  # Seam: run full_stack_demo_tvl smoke test on HEAVY-tier branches.
+  # Implementation TODO (downstream issue):
+  #   - Install bun on the runner (use oven-sh/setup-bun action).
+  #   - Wire cargo test -p smoke-test --release --test full_stack_demo_tvl.
+  #   - Set timeout-minutes: 60 (DappStack boot + seed can take 35 min).
+  #   - Add safety-net teardown (if: always()) for the dapp compose stack.
+  demo-tvl:
+    name: demo-tvl-full-stack-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: false # disabled until bun runner dependency is resolved
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify Docker is available
+        run: docker version && docker compose version
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: "[STUB] Install bun (needed by DappStack dapp-build step)"
+        run: echo "TODO use oven-sh/setup-bun@v2"
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+      - name: cargo build (smoke-test crate)
+        working-directory: testing/smoke-test
+        run: cargo build -p smoke-test
+      - name: "[STUB] cargo test full_stack_demo_tvl"
+        working-directory: testing/smoke-test
+        run: echo "TODO cargo test -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture"
+      - name: Safety-net teardown (always)
+        if: always()
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose down -v --remove-orphans || true

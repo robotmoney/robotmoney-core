@@ -28,6 +28,7 @@
     - [IUniswapV3Pool](contracts/interfaces/IUniswapV3Pool.sol/interface.IUniswapV3Pool.md)
     - [IUniswapV4Pool](contracts/interfaces/IUniswapV4Pool.sol/interface.IUniswapV4Pool.md)
     - [IUniswapV4SwapRouter](contracts/interfaces/IUniswapV4SwapRouter.sol/interface.IUniswapV4SwapRouter.md)
+    - [IUpstreamMonitor](contracts/interfaces/IUpstreamMonitor.sol/interface.IUpstreamMonitor.md)
   - [❱ lib](contracts/lib/README.md)
     - [TickMath](contracts/lib/TickMath.sol/library.TickMath.md)
   - [❱ script](contracts/script/README.md)

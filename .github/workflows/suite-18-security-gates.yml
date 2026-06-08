@@ -1,0 +1,129 @@
+# Canonical: docs/development/ci-suites.md §18 (planned — issue #702 dev-scout stub)
+#
+# WHY THIS SUITE EXISTS
+# Security gate checks that run fast and require no chain: cargo audit scans Rust
+# dependency advisories, bun audit scans JS/TS dependency advisories, secrets-scanning
+# prevents credential commits, and the dapp Content-Security-Policy (CSP) gate asserts
+# that the production bundle's meta-CSP header is not weakened by dependency upgrades.
+# These gates run on every PR so a vulnerable dependency or a weakened CSP is caught
+# before review, not after deployment.
+#
+# WHY THIS IS A STUB (issue #702 dev-scout)
+# The gate implementations (advisory databases, CSP extraction script, secrets patterns)
+# are the implementation work of downstream issues in the CI/testing infrastructure
+# phase. This stub registers the seams — workflow name, trigger paths, and job
+# placeholders — so the downstream issues can replace TODO blocks with real steps
+# without changing the workflow trigger surface or job IDs.
+#
+# INTEGRATION POINTS DISCOVERED BY SCOUT (issue #702)
+# - cargo audit:     needs `cargo install cargo-audit`; DB lives at ~/.cargo/advisory-db.
+#                    Relevant: crates/*, clients/rust-payment-client/*, Cargo.lock.
+#                    No existing `deny.toml` or `.cargo/audit.toml` in the repo as of scout.
+#                    Risk: advisory DB fetch is network-bound; use --db cache or the
+#                    rustsec/audit-check GitHub Action to avoid rate limits.
+# - bun audit:       `bun audit` reads clients/dapp/package.json and its lock.
+#                    Bun's audit exits non-zero on any HIGH/CRITICAL — confirm exit
+#                    code semantics before wiring to CI (bun audit --level moderate).
+# - secrets-scanning: gitleaks is the standard OSS tool; truffleHog is the alternative.
+#                    Recommend `gitleaks detect --source . --config .gitleaks.toml`.
+#                    A `.gitleaks.toml` allowlist is needed for test private keys in
+#                    testing/smoke-test/src/lib.rs (DEPLOYER_PRIVATE_KEY_HEX etc.) and
+#                    clients/dapp/src/lib/keyring/*.ts (well-known test vectors).
+# - CSP gate:        The dapp's Vite build writes Content-Security-Policy into
+#                    clients/dapp/dist/index.html (meta tag). Extraction: grep the meta
+#                    tag, parse the header, assert no 'unsafe-inline' / 'unsafe-eval'
+#                    in script-src. Script does not exist yet — add as scripts/ci/check-csp.sh.
+#
+# DOWNSTREAM ISSUES TO UPDATE AFTER SCOUT:
+# None identified yet — downstream implementation issues should be created from the
+# plan as the CI/testing infrastructure phase opens.
+
+name: security-gates-stub
+
+on:
+  # DISABLED: all triggers are commented out until gate implementations land.
+  # Uncomment and refine paths when implementing each gate (issue #702 downstream).
+  # push:
+  #   branches: [main, dev]
+  # pull_request:
+  #   branches: [main, dev]
+  #   paths:
+  #     - "Cargo.lock"
+  #     - "clients/dapp/bun.lock"
+  #     - "clients/dapp/package.json"
+  #     - ".github/workflows/suite-18-security-gates.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── Cargo audit ────────────────────────────────────────────────────────────
+  # Seam: scan Cargo.lock for Rust advisory database (RustSec) hits.
+  # Implementation TODO (downstream issue):
+  #   - Use `actions-rs/audit-check` or `cargo install cargo-audit && cargo audit`.
+  #   - Wire `--ignore RUSTSEC-*` for known-safe advisories via deny.toml.
+  #   - Block on CRITICAL/HIGH; warn on MEDIUM/LOW.
+  cargo-audit:
+    name: cargo-audit-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: false # disabled until implementation lands
+    steps:
+      - uses: actions/checkout@v4
+      - name: "[STUB] cargo audit — implementation pending (issue #702 downstream)"
+        run: echo "TODO implement cargo audit gate"
+
+  # ── Bun audit ──────────────────────────────────────────────────────────────
+  # Seam: scan clients/dapp package manifest for JS advisory (npm) hits.
+  # Implementation TODO (downstream issue):
+  #   - Run `bun audit` from clients/dapp/.
+  #   - Confirm exit-code semantics (bun audit exits 1 on any hit).
+  #   - Use `--level moderate` or `--level high` depending on policy.
+  bun-audit:
+    name: bun-audit-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: false # disabled until implementation lands
+    steps:
+      - uses: actions/checkout@v4
+      - name: "[STUB] bun audit — implementation pending (issue #702 downstream)"
+        run: echo "TODO implement bun audit gate"
+
+  # ── Secrets scanning ───────────────────────────────────────────────────────
+  # Seam: detect committed credential strings before they reach main.
+  # Implementation TODO (downstream issue):
+  #   - Install gitleaks (v8+): https://github.com/gitleaks/gitleaks
+  #   - Add .gitleaks.toml allowlist for test private keys in:
+  #       testing/smoke-test/src/lib.rs  (DEPLOYER_PRIVATE_KEY_HEX et al.)
+  #       clients/dapp/src/lib/keyring/  (well-known test vectors)
+  #   - Run `gitleaks detect --source . --config .gitleaks.toml --redact`.
+  secrets-scanning:
+    name: secrets-scanning-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: false # disabled until implementation lands
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks needs full history for git-log mode
+      - name: "[STUB] secrets scanning — implementation pending (issue #702 downstream)"
+        run: echo "TODO implement gitleaks secrets scan gate"
+
+  # ── CSP gate ───────────────────────────────────────────────────────────────
+  # Seam: assert the dapp production bundle does not weaken the Content-Security-Policy.
+  # Implementation TODO (downstream issue):
+  #   - Build the dapp: `bun install --frozen-lockfile && bun run build` from clients/dapp/.
+  #   - Extract CSP meta tag from clients/dapp/dist/index.html.
+  #   - Assert script-src contains no 'unsafe-inline' or 'unsafe-eval'.
+  #   - Script path: scripts/ci/check-csp.sh (does not exist yet — create when implementing).
+  csp-gate:
+    name: csp-gate-stub
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: false # disabled until implementation lands
+    steps:
+      - uses: actions/checkout@v4
+      - name: "[STUB] CSP gate — implementation pending (issue #702 downstream)"
+        run: echo "TODO implement dapp CSP header extraction and assertion"
