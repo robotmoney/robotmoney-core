@@ -18,6 +18,19 @@
 --     log without joining agent_deposits.
 --
 -- All uint256 values remain NUMERIC(78, 0) per ADR §3.1.
+--
+-- Reconciliation with dev-scout migration 0007
+-- (0007_account_history_and_vault_detail_stubs.sql):
+--   The scout created no-op STUB versions of these three tables with a
+--   placeholder column shape (e.g. `fee` instead of `fee_amount`, separate
+--   `owner`/`receiver`/`event_kind` instead of `direction`/`owner_or_receiver`,
+--   and no `adapter_index`). The scout never writes rows to them. This
+--   migration drops the stub tables and recreates them with the real schema
+--   that the db.rs query layer and the GET /v1/vaults/:address API depend on.
+
+DROP TABLE IF EXISTS adapter_allocations;
+DROP TABLE IF EXISTS vault_fee_events;
+DROP TABLE IF EXISTS vault_transfer_events;
 
 -- ── 1. adapter_allocations ───────────────────────────────────────────────────
 --

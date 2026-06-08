@@ -957,95 +957,11 @@ impl Db {
         unimplemented!("stub — implement in issue #654")
     }
 
-    /// Insert a row into `adapter_allocations` from a Vault Allocated/Pulled/Rebalanced event.
-    ///
-    /// # Target issue: #675 — vault detail endpoint
-    ///
-    /// Implementing issue: `feat(indexer): vault detail endpoint missing adapter
-    /// allocation history, deposit/withdrawal log, and fee collection history`.
-    ///
-    /// Called by the indexer's `handle_log` branch for:
-    /// - `IVaultEvents::Allocated`   → event_kind = "allocated"
-    /// - `IVaultEvents::Pulled`      → event_kind = "pulled"
-    /// - `IVaultEvents::Rebalanced`  → event_kind = "rebalanced", adapter = None
-    ///
-    /// These events currently return `Ok(0)` in `indexer.rs` (~line 595).
-    /// Issue #675 replaces those stubs with calls to this function.
-    ///
-    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
-    /// Table: `adapter_allocations (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
-    pub async fn insert_adapter_allocation(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        vault: [u8; 20],
-        adapter: Option<[u8; 20]>,
-        event_kind: &str,
-        amount: U256,
-    ) -> Result<u64, DbError> {
-        // STUB — replaced by issue #675.
-        unimplemented!("stub — implement in issue #675")
-    }
-
-    /// Insert a row into `vault_fee_events` from an ExitFeeCharged event.
-    ///
-    /// # Target issue: #675 — vault detail endpoint
-    ///
-    /// Currently the `ExitFeeCharged` event triggers a vault snapshot
-    /// (`indexer.rs` handle_log) but the fee row itself is not stored.
-    /// Issue #675 adds a call to this function alongside the snapshot.
-    ///
-    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
-    /// Table: `vault_fee_events (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
-    pub async fn insert_vault_fee_event(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        vault: [u8; 20],
-        owner: [u8; 20],
-        receiver: [u8; 20],
-        gross_assets: U256,
-        fee: U256,
-        net_assets: U256,
-    ) -> Result<u64, DbError> {
-        // STUB — replaced by issue #675.
-        unimplemented!("stub — implement in issue #675")
-    }
-
-    /// Insert a row into `vault_transfer_events` from an ERC-4626 Deposit or Withdraw event.
-    ///
-    /// # Target issue: #675 — vault detail endpoint
-    ///
-    /// The ERC-4626 `Deposit` and `Withdraw` events are already watched by the
-    /// indexer for snapshot triggers. Issue #675 additionally stores them here
-    /// so the `GET /v1/vaults/:address` deposit_withdrawal_log array is non-empty.
-    ///
-    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
-    /// Table: `vault_transfer_events (chain_id, block_number, log_index)`
-    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
-    pub async fn insert_vault_transfer_event(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        vault: [u8; 20],
-        caller: [u8; 20],
-        owner: [u8; 20],
-        receiver: Option<[u8; 20]>,
-        assets: U256,
-        shares: U256,
-        event_kind: &str,
-    ) -> Result<u64, DbError> {
-        // STUB — replaced by issue #675.
-        unimplemented!("stub — implement in issue #675")
-    }
+    // NOTE: The dev-scout (#703) provided #675 stubs for
+    // `insert_adapter_allocation`, `insert_vault_fee_event`, and
+    // `insert_vault_transfer_event` here. Issue #675 implements them for real
+    // earlier in this impl block; the stubs were removed during the rebase to
+    // avoid duplicate definitions.
 
     /// Insert an agent policy row, including the `owner` and `window_usage_to_date`
     /// fields added by migration 0007 (issue #661).
