@@ -192,6 +192,7 @@ fn encode_exit_fee_charged_log(
 
 /// Encode an ERC-4626 `Deposit(address indexed caller, address indexed owner,
 /// uint256 assets, uint256 shares)` log.
+#[allow(clippy::too_many_arguments)]
 fn encode_erc4626_deposit_log(
     vault_addr: Address,
     caller: Address,

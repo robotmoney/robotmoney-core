@@ -67,10 +67,17 @@ pub const ROUTER_LEGS_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0006_agent_deposit_vault_and_router_legs.sql"
 );
 
-/// Migration 0007: vault detail event tables — adapter_allocations,
+/// Migration 0007: dev-scout no-op stubs for account history (#654) and vault
+/// detail (#675). Applied for ordering parity with the canonical migrator; the
+/// real vault detail tables are created by migration 0008.
+pub const VAULT_DETAIL_STUBS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0007_account_history_and_vault_detail_stubs.sql"
+);
+
+/// Migration 0008: vault detail event tables — adapter_allocations,
 /// vault_fee_events, vault_transfer_events (issue #675).
 pub const VAULT_DETAIL_MIGRATION: &str =
-    include_str!("../../../../services/explorer-indexer/migrations/0007_vault_detail_events.sql");
+    include_str!("../../../../services/explorer-indexer/migrations/0008_vault_detail_events.sql");
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
@@ -160,10 +167,14 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply router deposit legs migration (0006)");
+    sqlx::raw_sql(VAULT_DETAIL_STUBS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault detail stubs migration (0007)");
     sqlx::raw_sql(VAULT_DETAIL_MIGRATION)
         .execute(pool)
         .await
-        .expect("apply vault detail events migration (0007)");
+        .expect("apply vault detail events migration (0008)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
