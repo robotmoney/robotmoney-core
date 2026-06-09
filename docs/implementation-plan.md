@@ -287,6 +287,14 @@ basket-vault ADRs.
 - [ ] Fixture surfaces basket vault addresses once devnet-deployed
 - [x] Fork e2e: multi-vault round-trip including basket vaults — `testing/fork-e2e-rust/tests/basket_vault_round_trip.rs` (issue #690)
 
+### Phase: Operational safeguards
+Goal: Add mint/burn anomaly response and realistic real-adapter smoke coverage
+without coupling the service and devnet implementations.
+
+- [x] Dev-scout: compile-safe watchdog interfaces and real-adapter state-injection seam (issue #739)
+- [ ] Watchdog: threshold aggregation, validated configuration, pause/alert transports, and watchdog-owned tests (issue #658; owns `services/watchdog/` and watchdog-specific indexer query helpers)
+- [ ] Real-adapter smoke path: state injection, deploy selection, and per-adapter devnet round trips (issue #685; owns `testing/smoke-test/`, fork-state/genesis artifacts, `Deploy.s.sol`, and smoke workflow tests)
+
 ### Phase: Demo seeding
 Goal: Wire a presentable end-to-end demo on top of the smoke-test devnet:
 seeded vaults with simulated depositors, multi-vault router weights, wallet

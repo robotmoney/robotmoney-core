@@ -5,6 +5,7 @@ members = [
     "clients/rust-payment-client",
     "clients/explorer-api",
     "services/explorer-indexer",
+    "services/watchdog",
     "testing/test-utils",
     "testing/smoke-test",
     "testing/ethereum-testnet/e2e-rust",
