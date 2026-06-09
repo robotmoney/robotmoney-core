@@ -469,3 +469,45 @@ pub struct AccountHistoryResponse {
     #[serde(flatten)]
     pub freshness: Freshness,
 }
+
+// ─── GET /v1/accounts/:address/policies ──────────────────────────────────────
+
+/// A single agent-policy entry as returned by GET /v1/accounts/:address/policies.
+///
+/// Represents the latest-state snapshot for one agent authorized by `owner`.
+/// `revoked = true` rows are tombstones; consumers should filter them when
+/// showing only active authorizations.
+#[derive(Debug, Serialize)]
+pub struct AccountPolicy {
+    /// Agent address that was authorized.
+    pub agent: String,
+    /// Owner (depositor) address that called gateway.authorizeAgent.
+    pub owner: String,
+    /// True when the latest event for this agent is an AgentRevoked tombstone.
+    pub revoked: bool,
+    /// Block timestamp after which the authorization expires (Unix seconds).
+    /// Null for revoked tombstone rows.
+    pub valid_until: Option<i64>,
+    /// Maximum USDC amount per single payment, decimal string.
+    pub max_per_payment: Option<String>,
+    /// Maximum USDC amount per window period, decimal string.
+    pub max_per_window: Option<String>,
+    /// Running total consumed within the current window, decimal string.
+    /// Null when not tracked by the indexer.
+    pub window_usage_to_date: Option<String>,
+    /// Share-receiver address for this authorization.
+    pub share_receiver: Option<String>,
+    /// Transaction hash of the AgentAuthorized / AgentRevoked event.
+    pub tx_hash: String,
+}
+
+/// Response envelope for GET /v1/accounts/:address/policies.
+#[derive(Debug, Serialize)]
+pub struct AccountPoliciesResponse {
+    /// Queried owner address.
+    pub address: String,
+    /// One entry per agent authorized by this owner (latest state per agent).
+    pub policies: Vec<AccountPolicy>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
