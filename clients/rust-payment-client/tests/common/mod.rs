@@ -288,7 +288,9 @@ pub async fn install_happy_path_mocks(
         .await;
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getBlockByNumber"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getBlockByNumber"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result_raw(r#"{"timestamp":"0x64a9f4c0"}"#))
         .expect_at_least(0)

@@ -742,9 +742,9 @@ mod tests {
         // Mock eth_blockNumber → 0x100 (256)
         let _block_mock = server
             .mock("POST", "/")
-            .match_body(Matcher::AllOf(vec![
-                Matcher::PartialJson(json!({"method": "eth_blockNumber"})),
-            ]))
+            .match_body(Matcher::AllOf(vec![Matcher::PartialJson(
+                json!({"method": "eth_blockNumber"}),
+            )]))
             .with_status(200)
             .with_body(r#"{"jsonrpc":"2.0","id":1,"result":"0x100"}"#)
             .expect(1)
@@ -754,9 +754,9 @@ mod tests {
         // Mock eth_getBlockByNumber for 0x100 → timestamp 0x64a9f4c0
         let _ts_mock = server
             .mock("POST", "/")
-            .match_body(Matcher::AllOf(vec![
-                Matcher::PartialJson(json!({"method": "eth_getBlockByNumber"})),
-            ]))
+            .match_body(Matcher::AllOf(vec![Matcher::PartialJson(
+                json!({"method": "eth_getBlockByNumber"}),
+            )]))
             .with_status(200)
             .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x64a9f4c0"}}"#)
             .expect(1)
