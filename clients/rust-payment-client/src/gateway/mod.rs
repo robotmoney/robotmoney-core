@@ -85,6 +85,17 @@ mod tests {
         assert_eq!(&actual, expected, "deposit selector drift");
     }
 
+    /// The `depositTo` selector must match
+    /// `keccak256("depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])")[..4]`.
+    /// This cross-checks the router-deposit ABI binding added in issue #649.
+    #[test]
+    fn deposit_to_selector_matches_canonical_signature() {
+        let canonical = "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])";
+        let expected = &keccak256(canonical.as_bytes())[..4];
+        let actual = RobotMoneyGateway::depositToCall::SELECTOR;
+        assert_eq!(&actual, expected, "depositTo selector drift");
+    }
+
     /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))` —
     /// ensure the tuple layout matches the on-chain ABI (withdrawal fields added in #311).
     #[test]
