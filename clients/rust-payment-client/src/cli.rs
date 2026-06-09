@@ -8,6 +8,17 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+/// Planned `rmpc deposit` execution route.
+///
+/// Issue #649 owns adding this as a parsed CLI argument and routing `Router`
+/// through `RobotMoneyGateway.depositTo`. Keeping the enum unwired here avoids
+/// accepting a flag that still executes the existing vault-only path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DepositDestination {
+    Vault,
+    Router,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "rmpc", version, about = "Robot Money payment client")]
 pub struct Cli {

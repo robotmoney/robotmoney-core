@@ -12,6 +12,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{Result, RmpcError};
 
+/// Transaction classes that may require different confirmation guarantees.
+///
+/// Issue #676 owns config integration, defaults, and enforcement. These types
+/// are additive seams only and do not change current receipt handling.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationClass {
+    Deposit,
+    Withdraw,
+    AdminGovernance,
+    VaultRebalance,
+}
+
+/// Finality level required before a client reports an operation as final.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredFinality {
+    L2Included,
+    L1Finalized,
+}
+
+/// Planned per-operation confirmation policy entry.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConfirmationDepthPolicy {
+    pub operation_class: OperationClass,
+    pub minimum_confirmations: u64,
+    pub required_finality: RequiredFinality,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
