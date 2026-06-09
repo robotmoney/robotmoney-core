@@ -1,6 +1,6 @@
 # `rmpc-fork-e2e` — Phase 2 Forked Smart-Contract E2E
 
-> Canonical: [`docs/implementation-plan.md`](../../docs/implementation-plan.md) §8.
+> Canonical: Plan tracking issue #109 (formerly `docs/implementation-plan.md` §8).
 > Decision record: [`docs/technical/fork-e2e-decisions.md`](../../docs/technical/fork-e2e-decisions.md) (issue #47).
 > Implements: issue #48.
 

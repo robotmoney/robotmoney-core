@@ -1,4 +1,4 @@
-# Canonical: docs/implementation-plan.md §Release & distribution
+# Canonical: Plan tracking issue #109 (formerly docs/implementation-plan.md §Release & distribution)
 #
 # WHY THIS WORKFLOW EXISTS
 # The dapp Dockerfile already exists but there was no automated path to publish the
