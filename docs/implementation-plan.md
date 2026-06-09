@@ -214,7 +214,8 @@ Status: **Complete.**
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/registry.rs`
 
 ### Phase: Portfolio Router contract
-Status: **Complete.**
+Status: **Substantially complete.** Contract and devnet deployment are done;
+audit sign-off and Base mainnet deployment remain.
 
 - [x] dev-scout — `docs/technical/portfolio-router-decisions.md`
 - [x] `PortfolioRouter.sol` — weight-based USDC split, all-or-revert, caps, `RouterDeposit` event
@@ -222,9 +223,12 @@ Status: **Complete.**
 - [x] Gateway extended to allow router destination
 - [x] Deploy script — `contracts/script/DeployPortfolioRouter.s.sol`
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/router.rs`
+- [ ] External audit sign-off on `PortfolioRouter.sol` — no findings above medium severity
+- [ ] Base mainnet deployment of `PortfolioRouter` — non-zero address recorded in `deployments/full-stack.json`
 
 ### Phase: Router-weight governance
-Status: **Complete (MVP).** Per PR #391, `RouterGovernance` is currently an
+Status: **Substantially complete.** Contract and devnet deployment are done;
+Base mainnet deployment remains. Per PR #391, `RouterGovernance` is currently an
 admin-weighted MVP mock; full RM-token-weighted voting is deferred until token
 launch (out of scope per Non-goals).
 
@@ -236,6 +240,7 @@ launch (out of scope per Non-goals).
 - [x] `rmpc get-router`
 - [x] `rmpc get-governance`
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/governance.rs`
+- [ ] Base mainnet deployment of `RouterGovernance` — non-zero address recorded in `deployments/full-stack.json`
 
 ### Phase: Gateway agent withdrawal
 Status: **Complete.**
@@ -307,6 +312,23 @@ deploy-script wiring and registry registration remain.
 - [x] Rebalancing model ADR + `rebalance()` implementation — `docs/adr/` (#545), `contracts/src/vaults/BasketVault.sol` (#550)
 - [x] Agent-token shortlist governance — ADR (#546), `AgentTokenVault` shortlist mechanism (#552)
 - [x] Router eligibility: register both basket vaults once ADRs resolved + audited — drawdown redemption-policy prerequisite resolved by [ADR-0007](adr/ADR-0007-basket-vault-drawdown-redemption-policy.md) (NAV haircut); the remaining audit gate still applies before registration
+
+### Phase: Mainnet admin timelock
+Goal: Transfer ADMIN_ROLE on all five protocol contracts (RobotMoneyVault,
+RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance) from the
+deployer EOA to a deployed OZ TimelockController backed by a Safe multisig
+(≥ 2-of-N). No EOA may hold ADMIN_ROLE directly in production (architecture §8,
+§10). Prerequisite: PortfolioRouter and RouterGovernance mainnet deployments.
+
+Status: **Not started.** Script exists (`contracts/script/DeployTimelock.s.sol`,
+fully tested — `contracts/test/DeployTimelock.t.sol`); mainnet execution requires
+a live Safe multisig and the admin EOA private key.
+
+- [ ] Provision a production Safe multisig (≥ 2-of-N) for the PROPOSER + EXECUTOR roles
+- [ ] Run `DeployTimelock.s.sol` against Base mainnet — record `timelock_controller` address in `deployments/full-stack.json`
+- [ ] Verify `hasRole(ADMIN_ROLE, timelock_controller)` returns `true` on all five contracts
+- [ ] Verify no EOA holds ADMIN_ROLE on any of the five contracts after migration
+- [ ] Record timelock address and Safe address in `deployments/full-stack.json` and `docs/architecture.md` §8/§10
 
 ### Phase: Real four-vault demo
 Goal: All four PRD §11 vaults hold real Base-mainnet assets and show real depositors at startup — production-grade, no placeholders. Resolve basket-vault router-eligibility ADRs, add Aerodrome + Uniswap V4 multi-DEX support, ingest real DEX pools into the fork, stand up the deSPXA RWA vault, seed all four vaults, and prove it at every test-pyramid layer. Tracked as Plan #109 phase (issues #541–#568).
