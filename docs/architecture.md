@@ -617,6 +617,42 @@ as `paused`, `vault_disabled`, `cap_exceeded`, `expired_policy`,
 `insufficient_allowance`, `insufficient_balance`, `unavailable_leg`,
 `fee_cap_exceeded`, and `slippage_bound_exceeded`.
 
+### 7.2.1 Client Stability Integration Seams
+
+The stable dapp contract is `ProductReasonCode` in
+`clients/dapp/src/lib/productReasonCode.ts`. It includes the nine product
+codes above plus `unknown_revert` as the only catch-all. Issue #670 owns
+mapping contract custom errors, JSON-RPC error data, and existing preview
+refusals to that union. Mapping must inspect structured revert data before
+message text; provider-specific messages are diagnostic context, not stable
+API values.
+
+The Rust boundary remains `RmpcError` in
+`clients/rust-payment-client/src/errors.rs`. Product failures use named
+variants whose `Display` prefixes are operator-visible contracts. Issue #670
+owns the explicit `RmpcError` to product-code mapping; RPC transport, decode,
+and unknown server errors must not be misclassified as known contract
+refusals.
+
+Router deposits reserve `DepositDestination` in
+`clients/rust-payment-client/src/cli.rs`. Issue #649 owns exposing it as a CLI
+argument and routing only the router variant through `depositTo`; until then,
+the existing deposit command remains vault-only. Deadline computation in
+#672 must land before #649 edits the shared deposit path.
+
+Confirmation policy reserves `OperationClass`, `RequiredFinality`, and
+`ConfirmationDepthPolicy` in `clients/rust-payment-client/src/config.rs`.
+Issue #676 owns defaults, TOML integration, `get-tx` enforcement, and dapp
+status copy. Its config and CLI work follows #667 so multi-RPC config changes
+do not race on the same structures.
+
+Policy-state reads have two distinct authorities. `rmpc get-agent` and the
+future `get-position` command (#666) use live chain reads for signing and
+treasury decisions. The Explorer API owner lookup (#661) is an indexed,
+historical account view and must remain explicitly non-authoritative. Dapp
+work in #647 and #652 is isolated from the Rust hot-file lane and may proceed
+in parallel after this scout.
+
 ## 7.3 Single Production Codebase
 
 There is one production codebase. The same compiled artifacts deploy
