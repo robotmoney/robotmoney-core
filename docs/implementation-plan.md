@@ -262,6 +262,7 @@ Status: **Substantially complete.**
 - [x] Explorer API `GET /v1/stats` — aggregate TVL / depositor count / global activity feed (`clients/explorer-api/src/routes.rs`)
 - [x] Explorer API `GET /v1/accounts/:address/positions`
 - [x] Explorer API `GET /v1/accounts/:address/history`
+- [x] Explorer API `GET /v1/accounts/:address/policies`
 - [x] Fork e2e — multi-vault indexer + API round-trip
 
 ### Phase: Multi-vault dapp
