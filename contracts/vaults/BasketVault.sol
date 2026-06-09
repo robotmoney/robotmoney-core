@@ -765,7 +765,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
     ///      stale configuration being exploited by a sandwich attacker.
     ///      Reverts when any router leg cannot satisfy its effective floor.
-    function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
+    function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pauseIfNotPaused();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
@@ -793,7 +793,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      `EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
     ///      override is enabled.
     function emergencyUnwindWithOverride(address[] calldata tokens)
-        external
+        public
+        virtual
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {
