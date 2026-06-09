@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::gateway::TimelockController;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -100,7 +100,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-timelock: rpc client init failed: {e}");
@@ -127,7 +127,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 }
 
 async fn read_timelock(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
 ) -> crate::errors::Result<Envelope<TimelockData>> {
     let chain_id = rpc.chain_id().await?;
@@ -219,7 +219,7 @@ async fn read_timelock(
 }
 
 async fn call_get_min_delay(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     block_tag: &str,
 ) -> crate::errors::Result<u64> {
@@ -241,7 +241,7 @@ async fn call_get_min_delay(
 }
 
 async fn call_proposer_role(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     block_tag: &str,
 ) -> crate::errors::Result<B256> {
@@ -263,7 +263,7 @@ async fn call_proposer_role(
 }
 
 async fn call_executor_role(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     block_tag: &str,
 ) -> crate::errors::Result<B256> {
@@ -292,7 +292,7 @@ async fn call_executor_role(
 /// - topic[1] = role hash
 /// - topic[2] = account (padded to 32 bytes)
 async fn fetch_role_members(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     role: B256,
     granted_topic0: B256,
@@ -353,7 +353,7 @@ async fn fetch_role_members(
 /// `getTimestamp(id)` for each. Operations with timestamp > 1 (DONE sentinel)
 /// and non-zero are pending.
 async fn fetch_pending_ops(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     scheduled_topic0: B256,
     block_tag: &str,
@@ -403,7 +403,7 @@ async fn fetch_pending_ops(
 }
 
 async fn call_get_timestamp(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     timelock: Address,
     block_tag: &str,
     id: B256,
