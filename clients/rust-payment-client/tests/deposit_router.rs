@@ -29,12 +29,9 @@ fn rmpc() -> Command {
 /// A PortfolioRouter address used as the `--destination` in tests.
 const ROUTER: Address = address!("0000000000000000000000000000000000000e00");
 
-const ORDER_ID: B256 =
-    b256!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-const PAYMENT_ID: B256 =
-    b256!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
-const TX_HASH: B256 =
-    b256!("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+const ORDER_ID: B256 = b256!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+const PAYMENT_ID: B256 = b256!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+const TX_HASH: B256 = b256!("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
 
 fn fee_history_body() -> String {
     r#"{
