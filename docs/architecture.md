@@ -5,7 +5,7 @@
 > `docs/technical/smart-contracts.md`, and accepted ADRs under
 > `docs/technical/`. This document describes how Robot Money is built.
 > Product promises and user workflows live in the PRD; delivery order
-> lives in `docs/implementation-plan.md`.
+> lives on the Plan tracking issue (#109).
 
 ## 1. Overview
 
@@ -96,7 +96,7 @@ an open decision.
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
 | Stable-yield venues | Morpho Gauntlet USDC Prime, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
-| Agent command client | Rust binary `rmpc` | Builds known calldata, signs through constrained backends, performs direct JSON-RPC reads, and emits stable JSON. | `docs/implementation-plan.md` §4; `docs/technical/rmpc-read-output-contract.md` §3 |
+| Agent command client | Rust binary `rmpc` | Builds known calldata, signs through constrained backends, performs direct JSON-RPC reads, and emits stable JSON. | `docs/technical/rmpc-read-output-contract.md` §3 |
 | Rust workspace | Cargo workspace, Tokio, reqwest, Alloy, sqlx where applicable | Existing Rust clients, indexer, tests, and shared logging use this stack. | root `Cargo.toml`; client and service `Cargo.toml` files |
 | Human dapp | React 18, Vite, TypeScript, wagmi/viem, TanStack Query, Tailwind, Playwright | Current dapp package and ADRs target wallet signing, calldata preview, config export, and browser tests. | `clients/dapp/package.json`; `docs/technical/dapp-credential-decisions.md` §3 |
 | Explorer API | Rust Axum service over Postgres | Read-only HTTP API for indexed history and display data. | `clients/explorer-api/Cargo.toml`; `docs/technical/explorer-schema-decisions.md` §3 |
@@ -177,7 +177,7 @@ replaces the previous in-contract `isPrototype()` /
 the same contracts ship into every environment with no per-environment
 code variant. The router is not yet on the production mainnet
 deployment manifest; the contract surface is in place, audit and
-mainnet onboarding remain implementation-plan work.
+mainnet onboarding remain planned work on the Plan tracking issue (#109).
 
 ### 4.3 Vault Adapters
 
@@ -617,6 +617,42 @@ as `paused`, `vault_disabled`, `cap_exceeded`, `expired_policy`,
 `insufficient_allowance`, `insufficient_balance`, `unavailable_leg`,
 `fee_cap_exceeded`, and `slippage_bound_exceeded`.
 
+### 7.2.1 Client Stability Integration Seams
+
+The stable dapp contract is `ProductReasonCode` in
+`clients/dapp/src/lib/productReasonCode.ts`. It includes the nine product
+codes above plus `unknown_revert` as the only catch-all. Issue #670 owns
+mapping contract custom errors, JSON-RPC error data, and existing preview
+refusals to that union. Mapping must inspect structured revert data before
+message text; provider-specific messages are diagnostic context, not stable
+API values.
+
+The Rust boundary remains `RmpcError` in
+`clients/rust-payment-client/src/errors.rs`. Product failures use named
+variants whose `Display` prefixes are operator-visible contracts. Issue #670
+owns the explicit `RmpcError` to product-code mapping; RPC transport, decode,
+and unknown server errors must not be misclassified as known contract
+refusals.
+
+Router deposits reserve `DepositDestination` in
+`clients/rust-payment-client/src/cli.rs`. Issue #649 owns exposing it as a CLI
+argument and routing only the router variant through `depositTo`; until then,
+the existing deposit command remains vault-only. Deadline computation in
+#672 must land before #649 edits the shared deposit path.
+
+Confirmation policy reserves `OperationClass`, `RequiredFinality`, and
+`ConfirmationDepthPolicy` in `clients/rust-payment-client/src/config.rs`.
+Issue #676 owns defaults, TOML integration, `get-tx` enforcement, and dapp
+status copy. Its config and CLI work follows #667 so multi-RPC config changes
+do not race on the same structures.
+
+Policy-state reads have two distinct authorities. `rmpc get-agent` and the
+future `get-position` command (#666) use live chain reads for signing and
+treasury decisions. The Explorer API owner lookup (#661) is an indexed,
+historical account view and must remain explicitly non-authoritative. Dapp
+work in #647 and #652 is isolated from the Rust hot-file lane and may proceed
+in parallel after this scout.
+
 ## 7.3 Single Production Codebase
 
 There is one production codebase. The same compiled artifacts deploy
@@ -687,7 +723,7 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | `docs/implementation-plan.md` §0 |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | retired `docs/implementation-plan.md` §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 
 ## 10. Open Decisions
@@ -721,4 +757,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| `docs/implementation-plan.md` | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |
+| retired `docs/implementation-plan.md` (git history; live plan: Plan tracking issue #109) | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |

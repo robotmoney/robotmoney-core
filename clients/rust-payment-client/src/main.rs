@@ -41,6 +41,7 @@ fn main() {
         Command::Propose { config, .. } => Some(config.as_path()),
         Command::Vote { config, .. } => Some(config.as_path()),
         Command::Withdraw { config, .. } => Some(config.as_path()),
+        Command::WithdrawRouter { config, .. } => Some(config.as_path()),
     };
     init_logging_best_effort(config_path);
 
@@ -54,6 +55,8 @@ fn main() {
             receipt_timeout_secs,
             gas_limit,
             fee_cap,
+            destination,
+            min_shares_per_leg,
             pretty,
         } => commands::deposit::run(commands::deposit::Args {
             config_path: config,
@@ -64,6 +67,8 @@ fn main() {
             receipt_timeout_secs,
             gas_limit,
             fee_cap_wei: fee_cap,
+            destination,
+            min_shares_per_leg,
             pretty,
         }),
         Command::SelfCheck { config, pretty } => commands::self_check::run(&config, pretty),
@@ -184,6 +189,29 @@ fn main() {
             receipt_timeout_secs,
             gas_limit,
             fee_cap_wei: fee_cap,
+            pretty,
+        }),
+        Command::WithdrawRouter {
+            config,
+            shares_per_leg,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            fee_cap,
+            confirm,
+            pretty,
+        } => commands::withdraw_router::run(commands::withdraw_router::Args {
+            config_path: config,
+            shares_per_leg,
+            order_id,
+            idempotency_key,
+            deadline_secs,
+            receipt_timeout_secs,
+            gas_limit,
+            fee_cap_wei: fee_cap,
+            confirm,
             pretty,
         }),
     };

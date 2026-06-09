@@ -37,7 +37,7 @@ use crate::errors::RmpcError;
 use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::policy::{Preflight, PreflightInputs, PreflightReport};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{backend_is_production_grade, AgentSigner, SignerBackendKind};
 
@@ -201,7 +201,7 @@ impl WithdrawalExposure {
 /// `WithdrawalExposure::unknown()` because self-check must not refuse
 /// just because the withdrawal-surfacing read failed.
 async fn read_withdrawal_exposure(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     cfg: &Config,
     agent: Address,
 ) -> WithdrawalExposure {
@@ -321,7 +321,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc self-check: rpc client init failed: {e}");
@@ -449,6 +449,10 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrGatewayPaused => "ErrGatewayPaused",
         RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
+        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
+        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
+        RmpcError::ErrUnavailableLeg => "ErrUnavailableLeg",
+        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
         RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
         RmpcError::ErrConfig(_) => "ErrConfig",

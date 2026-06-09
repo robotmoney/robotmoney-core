@@ -11,14 +11,71 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{Result, RmpcError};
+use crate::rpc::FailoverRpcClient;
+
+/// Transaction classes that may require different confirmation guarantees.
+///
+/// Issue #676 owns config integration, defaults, and enforcement. These types
+/// are additive seams only and do not change current receipt handling.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationClass {
+    Deposit,
+    Withdraw,
+    AdminGovernance,
+    VaultRebalance,
+}
+
+/// Finality level required before a client reports an operation as final.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredFinality {
+    L2Included,
+    L1Finalized,
+}
+
+/// Planned per-operation confirmation policy entry.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ConfirmationDepthPolicy {
+    pub operation_class: OperationClass,
+    pub minimum_confirmations: u64,
+    pub required_finality: RequiredFinality,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// EIP-155 chain id the daemon is allowed to sign for.
     pub chain_id: u64,
-    /// JSON-RPC endpoint URL.
-    pub rpc_url: String,
+    /// Primary JSON-RPC endpoint URL (single-endpoint, backward-compatible).
+    ///
+    /// Kept for backward-compatibility. When `rpc_urls` is also set,
+    /// `rpc_urls` takes precedence and this field is ignored.
+    /// At least one of `rpc_url` or `rpc_urls` must be set; both omitted
+    /// is rejected by `validate()`.
+    ///
+    /// **Recommended redundancy (security-model.md §12):** configure at
+    /// least two endpoints from different RPC providers (e.g. one from
+    /// Alchemy and one from Infura) in `rpc_urls` so that a single
+    /// provider outage does not take down the payment client.
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+    /// Ordered list of JSON-RPC endpoint URLs for automatic failover.
+    ///
+    /// When set, `rmpc` tries each URL in order for every JSON-RPC call,
+    /// moving to the next endpoint on any transport or server error.
+    /// A request only fails if every listed endpoint fails.
+    ///
+    /// **Recommended minimum:** two endpoints from different providers.
+    /// Example:
+    /// ```toml
+    /// rpc_urls = [
+    ///   "https://base-mainnet.g.alchemy.com/v2/YOUR_KEY",
+    ///   "https://mainnet.base.org",
+    /// ]
+    /// ```
+    #[serde(default)]
+    pub rpc_urls: Option<Vec<String>>,
     /// Deployed `RobotMoneyGateway` address (0x-prefixed hex).
     pub gateway_address: String,
     /// USDC token address on `chain_id`.
@@ -203,6 +260,41 @@ impl Config {
         crate::fees::UNKNOWN_CHAIN_FEE_CAP_FALLBACK_WEI
     }
 
+    /// Resolve the effective ordered list of RPC endpoint URLs.
+    ///
+    /// Resolution order:
+    ///   1. `rpc_urls` if set (and non-empty) — the full failover list.
+    ///   2. `rpc_url` if set (single-endpoint backward-compat).
+    ///   3. Otherwise: `ErrConfig` (at least one must be set).
+    ///
+    /// The returned `Vec` always contains at least one element.
+    pub fn effective_rpc_urls(&self) -> Result<Vec<String>> {
+        if let Some(urls) = &self.rpc_urls {
+            if !urls.is_empty() {
+                return Ok(urls.clone());
+            }
+            return Err(RmpcError::ErrConfig(
+                "rpc_urls is set but empty: provide at least one endpoint URL".to_string(),
+            ));
+        }
+        if let Some(url) = &self.rpc_url {
+            return Ok(vec![url.clone()]);
+        }
+        Err(RmpcError::ErrConfig(
+            "no RPC endpoint configured: set `rpc_url` (single) or `rpc_urls` (list) in the config TOML".to_string(),
+        ))
+    }
+
+    /// Build a [`FailoverRpcClient`] from the effective RPC URL list.
+    ///
+    /// Fails fast on bad URLs (same eagerness as `RpcClient::new`). This is
+    /// the preferred construction site; callers should not build `RpcClient`
+    /// directly from `cfg.rpc_url`.
+    pub fn rpc_client(&self) -> Result<FailoverRpcClient> {
+        let urls = self.effective_rpc_urls()?;
+        FailoverRpcClient::new(urls)
+    }
+
     /// Resolve the active state directory.
     ///
     /// Lookup order: `RMPC_STATE_DIR` env var → `[state_dir]` from
@@ -250,7 +342,7 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
     fn parses_full_config() {
         let cfg = Config::from_str(SAMPLE).expect("parses");
         assert_eq!(cfg.chain_id, 31337);
-        assert_eq!(cfg.rpc_url, "http://127.0.0.1:8545");
+        assert_eq!(cfg.rpc_url, Some("http://127.0.0.1:8545".to_string()));
         assert_eq!(
             cfg.gateway_address,
             "0x0000000000000000000000000000000000000001"
@@ -465,5 +557,103 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
         assert_eq!(log.dir, PathBuf::from("/tmp/rmpc-test-logs"));
         std::env::remove_var("RMPC_LOG_LEVEL");
         std::env::remove_var("RMPC_LOG_DIR");
+    }
+
+    // -- issue #667 — multi-RPC failover ----------------------------------
+
+    const SAMPLE_NO_RPC: &str = r#"
+chain_id              = 31337
+gateway_address       = "0x0000000000000000000000000000000000000001"
+usdc_address          = "0x0000000000000000000000000000000000000002"
+vault_address         = "0x0000000000000000000000000000000000000003"
+gateway_runtime_hash  = "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "/var/lib/rmpc/keystore.enc"
+"#;
+
+    /// Single `rpc_url` (backward-compat) produces a one-element URL list.
+    #[test]
+    fn effective_rpc_urls_single_rpc_url_backward_compat() {
+        let cfg = Config::from_str(SAMPLE).expect("parses");
+        // SAMPLE has `rpc_url` and no `rpc_urls`
+        assert_eq!(cfg.rpc_urls, None);
+        let urls = cfg.effective_rpc_urls().expect("should resolve");
+        assert_eq!(urls, vec!["http://127.0.0.1:8545".to_string()]);
+    }
+
+    /// `rpc_urls` list takes precedence over `rpc_url`.
+    #[test]
+    fn effective_rpc_urls_list_beats_single_url() {
+        let body = SAMPLE_NO_RPC.replace(
+            "[signer]",
+            "rpc_urls = [\"http://node1:8545\", \"http://node2:8545\"]\n\n[signer]",
+        );
+        let cfg = Config::from_str(&body).expect("parses");
+        assert_eq!(cfg.rpc_url, None);
+        let urls = cfg.effective_rpc_urls().expect("should resolve");
+        assert_eq!(
+            urls,
+            vec!["http://node1:8545".to_string(), "http://node2:8545".to_string()]
+        );
+    }
+
+    /// When `rpc_urls` is set but empty, validation returns an error.
+    #[test]
+    fn effective_rpc_urls_rejects_empty_list() {
+        // toml array: rpc_urls = []
+        let body = SAMPLE_NO_RPC.replace(
+            "[signer]",
+            "rpc_urls = []\n\n[signer]",
+        );
+        let cfg = Config::from_str(&body).expect("TOML parses");
+        let err = cfg.effective_rpc_urls().expect_err("must error");
+        let msg = format!("{err}");
+        assert!(msg.contains("rpc_urls"), "{msg}");
+    }
+
+    /// Neither `rpc_url` nor `rpc_urls` set → error.
+    #[test]
+    fn effective_rpc_urls_rejects_neither_set() {
+        let cfg = Config::from_str(SAMPLE_NO_RPC).expect("TOML parses");
+        let err = cfg.effective_rpc_urls().expect_err("must error");
+        let msg = format!("{err}");
+        assert!(msg.contains("rpc_url"), "{msg}");
+    }
+
+    /// `rpc_client()` builds a `FailoverRpcClient` from a valid single-URL config.
+    #[test]
+    fn rpc_client_builds_from_single_url() {
+        let cfg = Config::from_str(SAMPLE).expect("parses");
+        // Must not error; URL is structurally valid.
+        cfg.rpc_client().expect("rpc_client() should succeed");
+    }
+
+    /// `rpc_client()` builds a `FailoverRpcClient` from a multi-URL config.
+    #[test]
+    fn rpc_client_builds_from_multi_url() {
+        let body = SAMPLE_NO_RPC.replace(
+            "[signer]",
+            "rpc_urls = [\"http://node1:8545\", \"http://node2:8545\"]\n\n[signer]",
+        );
+        let cfg = Config::from_str(&body).expect("parses");
+        cfg.rpc_client().expect("rpc_client() should succeed");
+    }
+
+    /// Both `rpc_url` and `rpc_urls` set — `rpc_urls` wins (no config error).
+    #[test]
+    fn rpc_urls_takes_precedence_when_both_set() {
+        let body = SAMPLE.replace(
+            "[signer]",
+            "rpc_urls = [\"http://node1:8545\"]\n\n[signer]",
+        );
+        let cfg = Config::from_str(&body).expect("parses");
+        // Both fields populated
+        assert!(cfg.rpc_url.is_some());
+        assert!(cfg.rpc_urls.is_some());
+        // rpc_urls must win
+        let urls = cfg.effective_rpc_urls().expect("should resolve");
+        assert_eq!(urls, vec!["http://node1:8545".to_string()]);
     }
 }

@@ -1,5 +1,5 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -521,5 +521,22 @@ function test_deposit_revertsOnPostCallUsdcCustodyInvariant() public;
 
 ```solidity
 function test_deposit_revertsOnReentrancyAttempt() public;
+```
+
+### testFuzz_paymentId_opKindDiscriminates
+
+For any (orderId, amount, shares, idempotencyKey) with amount == shares,
+the three paymentId namespaces are pairwise distinct:
+depositPaymentId != depositToPaymentId
+depositPaymentId != withdrawPaymentId
+depositToPaymentId != withdrawPaymentId
+
+
+```solidity
+function testFuzz_paymentId_opKindDiscriminates(
+    bytes32 orderId,
+    uint256 amount,
+    bytes32 idempotencyKey
+) public view;
 ```
 

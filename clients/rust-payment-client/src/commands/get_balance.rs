@@ -24,7 +24,7 @@ use crate::config::Config;
 use crate::gateway::Erc20;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_INPUT_FAIL: i32 = 2;
@@ -81,7 +81,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-balance: rpc client init failed: {e}");
@@ -132,7 +132,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
 }
 
 async fn call_balance_of(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     token: Address,
     holder: Address,
 ) -> Result<U256, crate::errors::RmpcError> {

@@ -34,7 +34,7 @@ use crate::fees::compute_fees;
 use crate::gateway::RouterGovernance;
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
@@ -266,7 +266,7 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc vote: rpc client init failed: {e}");
@@ -479,7 +479,7 @@ pub fn run(args: Args) -> i32 {
 
 /// `eth_call` to `RouterGovernance.hasVoted(proposalId, voter)`.
 async fn call_has_voted(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
     proposal_id: U256,
     voter: Address,

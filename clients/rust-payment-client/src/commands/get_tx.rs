@@ -34,7 +34,6 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU128, DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::RpcClient;
 
 const EXIT_OK: i32 = 0;
 const EXIT_INPUT_FAIL: i32 = 2;
@@ -93,7 +92,7 @@ pub fn run(config_path: &Path, tx_hash_hex: &str, pretty: bool) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-tx: rpc client init failed: {e}");

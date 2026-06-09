@@ -1,5 +1,5 @@
 # RouterMockVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 ERC20
@@ -56,5 +56,18 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 
 ```solidity
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+### redeem
+
+ERC-4626-style redeem (1:1 no exit fee). Burns `shares` from
+`owner`; transfers `assets == shares` to `receiver`. Enforces
+`_spendAllowance` when `owner != msg.sender`, mirroring MockVault.
+
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+    external
+    returns (uint256 assets);
 ```
 

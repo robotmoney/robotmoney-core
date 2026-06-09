@@ -78,5 +78,8 @@ COPY --from=builder /build/node_modules ./node_modules
 # import must resolve when `vite preview` loads the config at runtime,
 # even though the validator itself is a no-op for `command === "serve"`.
 COPY --from=builder /build/src/lib/buildEnvValidation.ts ./src/lib/buildEnvValidation.ts
+# vite.config.ts also imports ./src/lib/csp (issue #665) to set the strict CSP
+# response header on the preview server. It must resolve at runtime.
+COPY --from=builder /build/src/lib/csp.ts ./src/lib/csp.ts
 EXPOSE 5173
 CMD ["bun", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]

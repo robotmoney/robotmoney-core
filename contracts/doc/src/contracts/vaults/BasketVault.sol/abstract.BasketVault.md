@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/29a6b0a3488522b2001095b39bc04eabd642f8f6/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -307,6 +307,16 @@ proceeds are always ≥ that floor (or the swap reverts).
 Documented as a floor, not an exact quote — actual proceeds will
 typically exceed this value when swap depth is healthy.
 See docs/technical/basket-vault-gap-report.md §3, §5.
+Drawdown redemption policy (ADR-0007): this vault uses a NAV-haircut
+model. Depositors always redeem at the current per-share NAV, which
+already reflects any drawdown via this slippage-adjusted floor.
+Drawdown losses are borne pro-rata by the redeeming depositor; there
+is NO forced sale and NO withdrawal queue. The `maxSlippageBps`
+floor acts as the bounded-slippage / minimum-haircut cap: a
+redemption that cannot clear within that bound reverts rather than
+settling at a sandwiched, catastrophic price. ERC-4626 only
+guarantees `redeem >= previewRedeem`, not `previewRedeem >= deposit`.
+See docs/adr/ADR-0007-basket-vault-drawdown-redemption-policy.md.
 
 
 ```solidity

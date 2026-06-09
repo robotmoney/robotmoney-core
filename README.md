@@ -45,14 +45,14 @@ cargo run -p smoke-test -- --full-stack
 
 ## Status
 
-The MVP is merged on `dev`. See `docs/implementation-plan.md` for the build plan and PRs #22–#41 for the delivery history.
+The MVP is merged on `dev`. The live plan is the [Plan tracking issue (#109)](https://github.com/lucky-tensor/robotmoney-monorepo/issues/109); PRs #22–#41 hold the MVP delivery history.
 
 The pre-pivot TypeScript CLI (`@robotmoney/cli`) and its surrounding pnpm workspace lived on this repo's `main` branch and on `origin/main`; an archival copy together with its security review is preserved at `archive/ts-cli-security-review` (locked from deletion and force-push).
 
 ## Quick links
 
 - [Architecture proposal](docs/architecture.md)
-- [MVP implementation plan](docs/implementation-plan.md)
+- [Plan tracking issue](https://github.com/lucky-tensor/robotmoney-monorepo/issues/109)
 - [Smart-contract reference](docs/technical/smart-contracts.md)
 - [Testing strategy](docs/development/testing-strategy-ethereum.md)
 - Vault on BaseScan: https://basescan.org/address/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd

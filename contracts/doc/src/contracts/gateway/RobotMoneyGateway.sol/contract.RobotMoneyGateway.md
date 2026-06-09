@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -45,6 +45,31 @@ no longer be revealed and the depositor must re-commit.
 
 ```solidity
 uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
+```
+
+
+### OP_DEPOSIT
+Op-kind discriminators prepended to every `paymentId` hash to
+prevent cross-operation replay (deposit id ≠ depositTo id ≠
+withdrawal id even when all other inputs are identical).
+
+
+```solidity
+uint8 internal constant OP_DEPOSIT = 1
+```
+
+
+### OP_WITHDRAW
+
+```solidity
+uint8 internal constant OP_WITHDRAW = 2
+```
+
+
+### OP_DEPOSIT_TO
+
+```solidity
+uint8 internal constant OP_DEPOSIT_TO = 3
 ```
 
 
@@ -465,7 +490,7 @@ function deposit(bytes32 orderId, uint256 amount, uint64 deadline, bytes32 idemp
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/amount/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_DEPOSIT=1, chainId, gateway, agent, orderId, amount, idempotencyKey)) — op-kind prefix ensures deposit ids are disjoint from depositTo and withdraw ids.|
 |`sharesMinted`|`uint256`|   Vault shares minted to `shareReceiver`.|
 
 
@@ -510,7 +535,7 @@ function depositTo(
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/amount/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent, orderId, amount, idempotencyKey)) — op-kind prefix ensures depositTo ids are disjoint from deposit and withdraw ids.|
 
 
 ### _validateDestination
@@ -598,9 +623,74 @@ function withdraw(
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/shares/key.|
+|`paymentId`|`bytes32`|      keccak256(abi.encode(OP_WITHDRAW=2, chainId, gateway, agent, orderId, shares, idempotencyKey)) — op-kind prefix ensures withdraw ids are disjoint from deposit and depositTo ids.|
 |`assetsOut`|`uint256`|      USDC transferred to `assetRecipient`.|
 
+
+### withdrawFromRouter
+
+Redeem vault shares proportionally across all Portfolio Router
+legs. Enforces the same policy checks (valid-until, per-payment
+cap, window cap, allowed-source-vaults, pause, idempotency,
+recipient) as single-vault `withdraw`. Each leg's vault must
+appear in `policy.allowedSourceVaults` (when non-empty). USDC
+is forwarded exclusively to the policy-configured `assetRecipient`.
+`policy.shareReceiver` (the share holder) must have approved the
+gateway for each vault's share token prior to calling. The
+gateway temporarily holds the shares during the call frame and
+passes them through to the router — no outer share token is
+minted and no intermediate custody persists beyond the call.
+
+Proportional multi-vault redemption through the Portfolio Router.
+All legs must succeed (all-or-revert). No outer share token is
+minted; the gateway temporarily holds each vault's shares during the
+call frame and passes them to the router's `redeemFor`, which calls
+`vault.redeem` per leg and delivers USDC directly to `assetRecipient`.
+CEI pattern: all state effects written before external calls.
+`nonReentrant` provides defense-in-depth.
+
+
+```solidity
+function withdrawFromRouter(
+    bytes32 orderId,
+    uint256[] calldata sharesPerLeg,
+    uint64 deadline,
+    bytes32 idempotencyKey
+)
+    external
+    nonReentrant
+    onlyRole(AGENT_ROLE)
+    returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
+|`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per router leg (parallel to the router's effective weight vector).|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/key.|
+|`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
+
+
+### _executeRouterWithdraw
+
+Execute the multi-leg router withdrawal: pull shares from shareHolder,
+approve router, call redeemFor, clear allowances, verify custody.
+Separated to avoid stack-too-deep in `withdrawFromRouter`.
+
+
+```solidity
+function _executeRouterWithdraw(RouterWithdrawArgs memory args, uint256[] calldata sharesPerLeg)
+    internal
+    returns (uint256[] memory assetsPerLeg);
+```
 
 ## Errors
 ### ZeroAddress
@@ -858,6 +948,24 @@ indicating a malicious or fee-on-transfer vault.
 error UnexpectedAssetsReceived();
 ```
 
+### RouterNotConfigured
+Error: `withdrawFromRouter()` called but no router is configured
+(`routerContract == address(0)`).
+
+
+```solidity
+error RouterNotConfigured();
+```
+
+### RouterLegLengthMismatch
+Error: `sharesPerLeg` length does not match the router's current
+effective weight vector length.
+
+
+```solidity
+error RouterLegLengthMismatch();
+```
+
 ## Structs
 ### Commitment
 Pending authorization commitment. Stored by commitHash to allow
@@ -945,6 +1053,22 @@ struct DepositArgs {
     /// @dev Captured from the in-memory policy snapshot so the rolling-window
     ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
     uint256 maxPerWindow;
+}
+```
+
+### RouterWithdrawArgs
+Internal args struct to avoid stack-too-deep in `withdrawFromRouter`.
+
+
+```solidity
+struct RouterWithdrawArgs {
+    bytes32 paymentId;
+    bytes32 orderId;
+    address shareHolder;
+    address assetRecipient;
+    uint256 totalShares;
+    uint64 windowId;
+    address[] vaultList;
 }
 ```
 

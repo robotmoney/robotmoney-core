@@ -164,6 +164,50 @@ pub struct VaultTvlPoint {
     pub indexed_at: DateTime<Utc>,
 }
 
+/// One adapter allocation/pull/rebalance event from `adapter_allocations`.
+/// Canonical: docs/architecture.md §5.4 — vault detail adapter allocation history.
+#[derive(Debug, Serialize)]
+pub struct AdapterAllocationEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub adapter: Option<String>,
+    pub adapter_index: Option<i64>,
+    pub amount: String,
+    /// "allocated" | "pulled" | "rebalanced"
+    pub event_kind: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// One deposit or withdrawal event from `vault_transfer_events`.
+/// Canonical: docs/architecture.md §5.4 — vault detail deposit/withdrawal log.
+#[derive(Debug, Serialize)]
+pub struct VaultTransferEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    /// "deposit" | "withdrawal"
+    pub direction: String,
+    pub caller: String,
+    /// owner (for deposits) or receiver (for withdrawals)
+    pub owner_or_receiver: String,
+    pub assets: String,
+    pub shares: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// One exit-fee event from `vault_fee_events`.
+/// Canonical: docs/architecture.md §5.4 — vault detail fee collection history.
+#[derive(Debug, Serialize)]
+pub struct VaultFeeEntry {
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub owner: String,
+    pub receiver: String,
+    pub gross_assets: String,
+    pub fee_amount: String,
+    pub net_assets: String,
+    pub indexed_at: DateTime<Utc>,
+}
+
 /// Detailed single-vault response for GET /v1/vaults/:address.
 #[derive(Debug, Serialize)]
 pub struct VaultDetail {
@@ -176,6 +220,12 @@ pub struct VaultDetail {
     pub deposit_cap: String,
     /// TVL history from vault_snapshots (up to 500 rows, ascending by block).
     pub tvl_history: Vec<VaultTvlPoint>,
+    /// Adapter allocation history from adapter_allocations (up to 500 rows, ascending by block).
+    pub adapter_allocation_history: Vec<AdapterAllocationEntry>,
+    /// Deposit/withdrawal event log from vault_transfer_events (up to 500 rows, ascending by block).
+    pub deposit_withdrawal_log: Vec<VaultTransferEntry>,
+    /// Fee collection history from vault_fee_events (up to 500 rows, ascending by block).
+    pub fee_history: Vec<VaultFeeEntry>,
     pub indexed_at: DateTime<Utc>,
 }
 
@@ -364,24 +414,50 @@ pub struct AccountPositionsResponse {
 // ─── GET /v1/accounts/:address/history ───────────────────────────────────────
 
 /// Kinds of events that appear in the per-account history feed.
+///
+/// Architecture §5.4: "deposits, withdrawals, fee events, policy changes,
+/// and governance votes."
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Deposit,
+    Withdrawal,
+    FeeCharged,
+    PolicyChange,
+    GovernanceVote,
+}
+
+impl EventKind {
+    /// Parse the `kind` text column stored in `account_history_events`.
+    pub fn from_db_kind(s: &str) -> Self {
+        match s {
+            "withdrawal" => Self::Withdrawal,
+            "fee_charged" => Self::FeeCharged,
+            "policy_change" => Self::PolicyChange,
+            "governance_vote" => Self::GovernanceVote,
+            _ => Self::Deposit,
+        }
+    }
 }
 
 /// A single entry in the per-account chronological history.
 #[derive(Debug, Serialize)]
 pub struct AccountHistoryEntry {
+    /// Discriminant for the event type (see `EventKind`).
     pub kind: EventKind,
     pub chain_id: i64,
     pub block_number: i64,
     pub log_index: i32,
     pub tx_hash: String,
-    /// Vault that received the deposit (contract address).
-    pub vault: String,
-    pub agent: String,
-    pub amount: String,
+    /// Vault contract address for deposit/withdrawal/fee events.
+    /// `null` for policy_change and governance_vote events.
+    pub vault: Option<String>,
+    /// Agent address for deposit and policy_change events.
+    /// `null` for withdrawal, fee_charged, and governance_vote events.
+    pub agent: Option<String>,
+    /// USDC amount for deposit, withdrawal, and fee_charged events.
+    /// `null` for policy_change and governance_vote events.
+    pub amount: Option<String>,
     pub indexed_at: DateTime<Utc>,
 }
 
@@ -390,6 +466,48 @@ pub struct AccountHistoryEntry {
 pub struct AccountHistoryResponse {
     pub address: String,
     pub events: Vec<AccountHistoryEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+// ─── GET /v1/accounts/:address/policies ──────────────────────────────────────
+
+/// A single agent-policy entry as returned by GET /v1/accounts/:address/policies.
+///
+/// Represents the latest-state snapshot for one agent authorized by `owner`.
+/// `revoked = true` rows are tombstones; consumers should filter them when
+/// showing only active authorizations.
+#[derive(Debug, Serialize)]
+pub struct AccountPolicy {
+    /// Agent address that was authorized.
+    pub agent: String,
+    /// Owner (depositor) address that called gateway.authorizeAgent.
+    pub owner: String,
+    /// True when the latest event for this agent is an AgentRevoked tombstone.
+    pub revoked: bool,
+    /// Block timestamp after which the authorization expires (Unix seconds).
+    /// Null for revoked tombstone rows.
+    pub valid_until: Option<i64>,
+    /// Maximum USDC amount per single payment, decimal string.
+    pub max_per_payment: Option<String>,
+    /// Maximum USDC amount per window period, decimal string.
+    pub max_per_window: Option<String>,
+    /// Running total consumed within the current window, decimal string.
+    /// Null when not tracked by the indexer.
+    pub window_usage_to_date: Option<String>,
+    /// Share-receiver address for this authorization.
+    pub share_receiver: Option<String>,
+    /// Transaction hash of the AgentAuthorized / AgentRevoked event.
+    pub tx_hash: String,
+}
+
+/// Response envelope for GET /v1/accounts/:address/policies.
+#[derive(Debug, Serialize)]
+pub struct AccountPoliciesResponse {
+    /// Queried owner address.
+    pub address: String,
+    /// One entry per agent authorized by this owner (latest state per agent).
+    pub policies: Vec<AccountPolicy>,
     #[serde(flatten)]
     pub freshness: Freshness,
 }

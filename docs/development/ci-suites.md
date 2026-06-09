@@ -94,6 +94,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 
 **Jobs:**
 - `lint` — fmt and clippy across all crates; runs immediately
+- `audit` — dependency vulnerability scan; runs in parallel with `lint` (independent of build cache)
 - `doc-coverage` — build and rustdoc threshold check; **needs `lint`** (avoids running a full build on code that fails style checks)
 
 **Steps — `lint` job:**
@@ -102,6 +103,12 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 3. Cargo cache
 4. `cargo fmt --check` — formatting across all crates
 5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced
+
+**Steps — `audit` job:**
+1. Checkout repository
+2. Install Rust toolchain
+3. `cargo install cargo-audit --locked` — install the advisory scanner
+4. `cargo audit` — runs over **every** `Cargo.lock` in the repo (root workspace plus the standalone `services/explorer-indexer`, `testing/doctests`, `testing/ethereum-testnet/e2e-rust`, and `testing/fork-e2e-rust` lockfiles) against the rustsec/advisory-db; exits non-zero on any vulnerability advisory. Ignore configuration is read from `.cargo/audit.toml`, which suppresses pre-existing sub-high advisories with dated justifications so the gate has a green baseline and blocks merges on any new advisory. To accept a known low-risk advisory temporarily, add its RUSTSEC id to the `ignore` list in that file with a reason and expiry comment.
 
 **Steps — `doc-coverage` job:**
 1. Checkout repository
@@ -240,13 +247,14 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 
 **Steps:**
 1. Checkout repository
-2. Setup pnpm + Node 22
-3. `pnpm install --frozen-lockfile`
-4. `pnpm fmt` — Prettier check
-5. `pnpm lint` — ESLint
-6. `pnpm exec tsc -b` — TypeScript type check
-7. `pnpm test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
-8. `pnpm build` — verify production build succeeds
+2. Setup Bun + Node 22
+3. `bun install --frozen-lockfile`
+4. `bun run fmt` — Prettier check
+5. `bun run lint` — ESLint
+6. `bunx tsc -b` — TypeScript type check
+7. `bun run test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
+8. `bun run build` — verify production build succeeds
+9. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, and the dev-only vitest UI advisory) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
 
 ---
 
@@ -486,12 +494,12 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 |------------------|------|-------|
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` quick on feature PRs; the `forge-coverage-gate` job is heavy and `if:`-gated to push / `dev-phase-*` |
 | `solidity-fmt-natspec-slither` | quick | |
-| `rust-fmt-clippy-doc-coverage` | quick | |
+| `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
 | `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
-| `dapp-lint-typecheck-vitest-build` | quick | |
+| `dapp-lint-typecheck-vitest-build` | quick | includes bun audit --audit-level=high step (scripts/audit-deps.sh) |
 | `dapp-e2e` | heavy | full-devnet Playwright suite |
 | `opencode-plugin-validate-walkthrough-offline` | quick | |
 | `openclaw-safety-walkthrough` | quick | |
@@ -501,6 +509,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
 | `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
+| `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
@@ -524,3 +533,4 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
+| 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |

@@ -1,13 +1,13 @@
 # IPortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/gateway/interfaces/IPortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/gateway/interfaces/IPortfolioRouter.sol)
 
 **Title:**
 IPortfolioRouter
 
 Minimal interface for PortfolioRouter used by RobotMoneyGateway.
 
-The gateway only needs `depositFor`; the full router surface is in
-contracts/PortfolioRouter.sol.
+The gateway needs `depositFor` and `redeemFor`; the full router
+surface is in contracts/PortfolioRouter.sol.
 
 
 ## Functions
@@ -35,5 +35,54 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 |Name|Type|Description|
 |----|----|-----------|
 |`sharesPerLeg`|`uint256[]`|    Vault shares minted per leg (parallel to weight list).|
+
+
+### redeemFor
+
+Redeem vault shares proportionally across all vaults in the
+current weight vector. Pulls shares from `shareHolder` via ERC-20
+`transferFrom` (shareHolder must approve the router for each vault
+share token), calls `vault.redeem` on each leg, and forwards
+USDC only to `assetRecipient`.
+
+
+```solidity
+function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
+    external
+    returns (uint256[] memory assetsPerLeg);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`shareHolder`|`address`|      Address whose vault shares are redeemed (must have approved the router to spend shares per vault).|
+|`assetRecipient`|`address`|   Address that receives the redeemed USDC per leg.|
+|`sharesPerLeg`|`uint256[]`|     Vault shares to redeem per leg (parallel to weight list). Length must match the current weight vector.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`assetsPerLeg`|`uint256[]`|    USDC received per leg (parallel to `sharesPerLeg`).|
+
+
+### getEffectiveWeights
+
+Return the currently active vault list used for deposit/redeem
+routing (the voted vector when active, otherwise the default).
+
+
+```solidity
+function getEffectiveWeights()
+    external
+    view
+    returns (address[] memory vaults, uint256[] memory bps);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| Ordered vault addresses in the effective weight vector.|
+|`bps`|`uint256[]`|    Parallel weight array in basis points.|
 
 
