@@ -31,7 +31,7 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use alloy_primitives::{Address, Bytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
@@ -166,11 +166,6 @@ pub fn run(args: Args) -> i32 {
     };
 
     let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let deadline = now.saturating_add(deadline_secs);
 
     if let Err(err) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software)
     {
@@ -246,7 +241,7 @@ pub fn run(args: Args) -> i32 {
         order_id: format!("{order_id:#x}"),
         idempotency_key: format!("{idempotency_key:#x}"),
         amount: shares.to_string(),
-        deadline,
+        deadline: 0,
         gateway: format!("{gateway_addr:#x}"),
         chain_id: cfg.chain_id,
         tx_hash: None,
@@ -317,6 +312,22 @@ pub fn run(args: Args) -> i32 {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc withdraw: rpc client init failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // -- Deadline from block timestamp ------------------------------------
+    let deadline = match rt.block_on(async {
+        let block_number = rpc.block_number().await?;
+        rpc.block_timestamp(block_number).await
+    }) {
+        Ok(ts) => {
+            let d = ts.saturating_add(deadline_secs);
+            audit.deadline = d;
+            d
+        }
+        Err(e) => {
+            log::error!("rmpc withdraw: failed to fetch block timestamp for deadline: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
