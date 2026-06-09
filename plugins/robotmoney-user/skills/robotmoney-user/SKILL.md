@@ -164,4 +164,4 @@ This skill makes no assumptions about a specific harness. `rmpc` is a plain
 binary that reads JSON config and writes JSON to stdout. Any harness that can
 run a subprocess and parse JSON can use it. Harness-specific install steps
 (OpenCode, OpenClaw) are documented separately under
-`docs/implementation-plan.md` §10.
+the retired `docs/implementation-plan.md` §10 (git history).

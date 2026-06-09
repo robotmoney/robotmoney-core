@@ -1,4 +1,4 @@
-# Canonical: docs/implementation-plan.md §Release & distribution
+# Canonical: Plan tracking issue #109 (formerly docs/implementation-plan.md §Release & distribution)
 #
 # WHY THIS WORKFLOW EXISTS
 # Operators and developers need pre-built rmpc binaries without building from source.

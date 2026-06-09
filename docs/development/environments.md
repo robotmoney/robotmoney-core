@@ -11,7 +11,7 @@ in development, testing, and production. It covers:
 Each section lists: required env vars, startup command, contract address source,
 data persistence behaviour, and teardown command.
 
-Canonical: `docs/implementation-plan.md`. Related design docs:
+Canonical: Plan tracking issue #109 (formerly `docs/implementation-plan.md`). Related design docs:
 `docs/technical/full-stack-devnet.md`, `docs/development/smoke-test-design.md`,
 `docs/technical/fork-e2e-decisions.md`. The principle these modes embody —
 one production codebase, environments differing only by configuration and
