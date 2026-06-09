@@ -1,0 +1,100 @@
+# rmpc operator configuration — example
+#
+# Copy this file to rmpc.toml and fill in your values.
+# All unknown fields are rejected (deny_unknown_fields), so any typo will
+# produce a startup error.
+#
+# Canonical reference: clients/rust-payment-client/src/config.rs
+
+# ── Chain ─────────────────────────────────────────────────────────────────────
+
+# EIP-155 chain id.  Base mainnet = 8453, Base Sepolia = 84532.
+chain_id = 8453
+
+# ── RPC endpoints ─────────────────────────────────────────────────────────────
+#
+# RECOMMENDED: configure at least two endpoints from different providers so
+# that a single provider outage does not take down the payment client.
+# (security-model.md §12 — RPC provider outage)
+#
+# Use rpc_urls (list) for automatic failover across multiple endpoints.
+# rmpc tries each URL in order; the first successful response wins.
+# A request only fails after every listed endpoint has been tried.
+#
+# Example with two providers (Alchemy + public fallback):
+rpc_urls = [
+  "https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY",
+  "https://mainnet.base.org",
+]
+
+# Single-endpoint (backward-compatible) alternative.  Use rpc_url if you only
+# have one provider; note this offers no failover protection.
+#
+# rpc_url = "https://base-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY"
+
+# ── Contracts ─────────────────────────────────────────────────────────────────
+
+# Deployed RobotMoneyGateway address (0x-prefixed checksummed hex).
+gateway_address = "0xYOUR_GATEWAY_ADDRESS"
+
+# USDC token address on chain_id.
+usdc_address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+# Vault that receives deposits.
+vault_address = "0xYOUR_VAULT_ADDRESS"
+
+# keccak256(eth_getCode(gateway_address)) pinned at deploy time (0x-hex).
+# Obtain with: cast keccak $(cast code $GATEWAY_ADDRESS)
+gateway_runtime_hash = "0xYOUR_GATEWAY_RUNTIME_HASH"
+
+# ── Optional contract addresses ───────────────────────────────────────────────
+
+# VaultRegistry — required for `rmpc get-vaults` / `rmpc get-vault`.
+# registry_address = "0xYOUR_REGISTRY_ADDRESS"
+
+# PortfolioRouter — required for `rmpc get-router`.
+# router_address = "0xYOUR_ROUTER_ADDRESS"
+
+# RouterGovernance — required for `rmpc get-governance`.
+# governance_address = "0xYOUR_GOVERNANCE_ADDRESS"
+
+# TimelockController — required for `rmpc get-timelock`.
+# timelock_address = "0xYOUR_TIMELOCK_ADDRESS"
+
+# ── Gas / fee caps ─────────────────────────────────────────────────────────────
+
+# Hard ceiling on maxFeePerGas in wei.  Per-chain defaults apply when omitted;
+# set explicitly to silence the warn log on unknown chains.
+# Base mainnet default: 1_000_000_000 (1 gwei)
+# Ethereum mainnet default: 100_000_000_000 (100 gwei)
+# max_fee_per_gas_cap = 1_000_000_000
+
+# Hard ceiling on maxPriorityFeePerGas in wei.  No cap by default.
+# max_priority_fee_per_gas_cap = 1_000_000_000
+
+# ── State directory ──────────────────────────────────────────────────────────
+
+# Directory for agent lock files and the replay cache.
+# Overridden by $RMPC_STATE_DIR at runtime.
+state_dir = "/var/lib/rmpc/state"
+
+# ── Signer ────────────────────────────────────────────────────────────────────
+
+[signer]
+# Set to true only for non-production environments.  Production (Base mainnet)
+# requires a hardware or KMS-backed signer.
+allow_software_fallback = false
+# Path to the encrypted-at-rest keystore file.
+keystore_path = "/var/lib/rmpc/keystore.enc"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+[log]
+# Log level: error | warn | info | debug | trace.  Overridden by $RMPC_LOG_LEVEL.
+level = "info"
+# Directory for rotating diagnostic log and audit log.  Overridden by $RMPC_LOG_DIR.
+dir = "/var/log/rmpc"
+# Per-file size limit before rotation (MiB).
+rotate_size_mb = 10
+# Number of rolled log files to retain.
+keep_files = 14
