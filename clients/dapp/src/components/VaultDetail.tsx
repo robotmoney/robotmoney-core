@@ -132,12 +132,11 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
           <strong>Issuer Freeze-Control Risk Disclosure</strong>
           <p>
             This vault holds deSPXA, which is subject to issuer controls by{" "}
-            <strong>Centrifuge</strong> and <strong>Janus Henderson</strong>. The issuer
-            may freeze or restrict transfers of the underlying token at any time, which
-            would block vault entry and exit independently of Aerodrome liquidity. This
-            is a known, accepted risk for this SPECULATIVE-category vault. Depositors
-            should understand that a freeze event could prevent withdrawals until the
-            issuer lifts the restriction.
+            <strong>Centrifuge</strong> and <strong>Janus Henderson</strong>. The issuer may freeze
+            or restrict transfers of the underlying token at any time, which would block vault entry
+            and exit independently of Aerodrome liquidity. This is a known, accepted risk for this
+            SPECULATIVE-category vault. Depositors should understand that a freeze event could
+            prevent withdrawals until the issuer lifts the restriction.
           </p>
         </div>
       )}

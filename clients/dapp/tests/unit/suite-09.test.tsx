@@ -383,9 +383,7 @@ describe("VaultDetail", () => {
         fetchImpl={makeFetch(speculativeFixture)}
       />,
     );
-    await waitFor(() =>
-      expect(getByTestId("vault-detail-issuer-freeze-disclosure")).toBeTruthy(),
-    );
+    await waitFor(() => expect(getByTestId("vault-detail-issuer-freeze-disclosure")).toBeTruthy());
     const disclosure = getByTestId("vault-detail-issuer-freeze-disclosure");
     expect(disclosure.textContent).toContain("freeze");
     expect(disclosure.textContent).toContain("Centrifuge");
@@ -400,9 +398,7 @@ describe("VaultDetail", () => {
         fetchImpl={makeFetch(vaultDetailFixture)}
       />,
     );
-    await waitFor(() =>
-      expect(queryByTestId("vault-detail-name")).toBeTruthy(),
-    );
+    await waitFor(() => expect(queryByTestId("vault-detail-name")).toBeTruthy());
     // vaultDetailFixture has risk_label "stable-yield" — disclosure must be absent
     expect(queryByTestId("vault-detail-issuer-freeze-disclosure")).toBeNull();
   });
