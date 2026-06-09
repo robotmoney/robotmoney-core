@@ -21,6 +21,12 @@
 # dependencies on every CI run, making builds non-reproducible and masking
 # dependency-introduced regressions.
 #
+# WHY bun audit --audit-level=high
+# The dApp handles key generation in the browser; a compromised dependency could silently
+# exfiltrate key material. Auditing at high severity (CVSS >= 7.0) catches supply-chain
+# attacks before they reach users. --audit-level=high matches the threshold used by
+# cargo audit and avoids noise from informational/low findings in dev tooling.
+#
 # GOTCHAS
 # - pnpm fmt runs Prettier in check mode. If a developer commits auto-formatted code
 #   from an IDE that uses a different Prettier version, this step will fail with a diff.
@@ -30,6 +36,10 @@
 #   suite 10 cover runtime correctness.
 # - Node 22 is pinned. If a dependency drops Node 22 support, this step will fail at
 #   install time with a peer dependency error, not at test time.
+# - bun audit exits non-zero if any high/critical vulnerability is found. The audit
+#   runs via scripts/audit-deps.sh, which carries a dated allowlist of pre-existing
+#   advisories. To accept a known advisory temporarily, add its GHSA id to that
+#   allowlist with a reason and expiry. Do not lower --audit-level.
 
 name: dapp-lint-typecheck-vitest-build
 
@@ -38,9 +48,6 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
-    paths:
-      - "clients/dapp/**"
-      - ".github/workflows/suite-09-dapp-quality.yml"
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -88,3 +95,19 @@ jobs:
 
       - name: Production build
         run: bun run build
+
+      - name: Dependency vulnerability audit
+        # Scans for high and critical severity advisories (CVSS >= 7.0) via
+        # `bun audit --audit-level=high`. We use bun (not npm) because the
+        # lockfile is bun.lock; npm audit fails with ENOLOCK here.
+        # Pre-existing advisories that cannot yet be upgraded are suppressed in
+        # scripts/audit-deps.sh with dated justifications. Any NEW high/critical
+        # advisory fails the build. Do not lower the audit level.
+        run: bash scripts/audit-deps.sh
+
+      # Issue #665: enforce the strict CSP before public launch. Serves the
+      # built bundle via `vite preview` and asserts the Content-Security-Policy
+      # response header contains script-src and neither unsafe-inline nor
+      # unsafe-eval. See clients/dapp/scripts/check-csp.sh.
+      - name: Enforce strict CSP
+        run: bash scripts/check-csp.sh

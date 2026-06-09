@@ -1,0 +1,53 @@
+# Canonical: docs/technical/security-model.md §13 (CI secrets-scanning control)
+#
+# Gitleaks configuration for the suite-18 secrets-scan CI gate. Extends the
+# upstream default ruleset (the curated set of provider credential regexes
+# shipped with the pinned gitleaks release) and layers repo-specific allowlist
+# entries on top. The CI job fails non-zero if any unallowlisted secret pattern
+# is detected on a PR commit, blocking merge.
+#
+# ALLOWLIST POLICY (security-model.md §13)
+# Every allowlist entry MUST be justified by a comment naming the known-safe test
+# fixture it covers. Real credentials are never allowlisted. When a fixture is
+# removed, delete its allowlist entry too.
+
+# Inherit gitleaks' built-in provider rules (AWS, GCP, GitHub, Stripe, private
+# keys, etc.) instead of redefining them, so upstream rule improvements flow in
+# automatically when the pinned action version is bumped.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe test fixtures and example placeholders (security-model.md §13)"
+
+# regexTarget = "match" so the patterns below are tested against the matched
+# secret value itself (not the surrounding line), keeping the allowlist precise.
+regexTarget = "match"
+regexes = [
+  # Hardhat/anvil deterministic test account #0 private key. Published in the
+  # Hardhat docs and baked into every local devnet; it guards nothing on any real
+  # network and appears throughout fixtures and devnet bootstrap scripts.
+  '''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+  # Public on-chain ERC-20 / contract addresses are 20-byte (40-hex) values the
+  # generic-api-key heuristic flags whenever a nearby key contains "token"
+  # (config/dex-pools.json, config/agent-token-shortlist.json, contracts/**
+  # address constants). Ethereum addresses are public identifiers, never secrets.
+  # Range 38-40 hex covers canonical 40-hex addresses plus a few devnet stand-in
+  # fixtures in config/dex-pools.json with leading-zero-trimmed 38/39-hex
+  # addresses. Capped at 40 so 64-hex private keys are NOT covered.
+  '''\b0x[a-fA-F0-9]{38,40}\b''',
+]
+
+# Path allowlist: known-safe files that intentionally contain placeholder or
+# fixture material.
+#   - *.env.example / example.env: documented placeholder env files committed so
+#     operators know which variables to set; they hold no live secrets.
+#   - package lockfiles: carry long integrity hashes that trip the entropy
+#     heuristic but contain no credentials.
+#   - ABI/bytecode fixtures: long hex blobs flagged by entropy, never secrets.
+paths = [
+  '''\.env\.example$''',
+  '''(^|/)example\.env$''',
+  '''(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock)$''',
+  '''\.abi\.json$''',
+]

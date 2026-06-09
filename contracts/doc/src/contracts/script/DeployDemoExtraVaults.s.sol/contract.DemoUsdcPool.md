@@ -1,5 +1,5 @@
 # DemoUsdcPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Uniswap V3 pool stub exposing `token0()`/`token1()` and
 `slot0()`. `BasketVault.addAsset` verifies that the pool pairs the

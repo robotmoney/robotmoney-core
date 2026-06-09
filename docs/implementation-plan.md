@@ -123,6 +123,7 @@ Status: **Complete.** All findings remediated.
 - [x] Fork regression tests — `contracts/test/VaultForkRegressions.t.sol`
 - [x] ERC-4626 property-based conformance tests — `contracts/test/RobotMoneyVault4626Conformance.t.sol`
 - [x] Test pyramid for timelocked multisig enforcement — `contracts/test/DeployTimelock.t.sol`, dead TimelockPanel removed (#420)
+- [x] Upstream contract monitoring: venue-offline (Compound v3 / Aave v3), upstream governance proposals, and Circle USDC upgrade alerts — `scripts/monitor-*.sh`, `.github/workflows/suite-18-upstream-monitoring.yml`, runbook `docs/technical/upstream-monitoring-runbook.md` (security-model §5/§8)
 
 ### Backend and dapp hardening
 Goal: Fix indexer SQL surface, explorer-API CORS gap, and dapp security gaps.
@@ -130,10 +131,11 @@ Goal: Fix indexer SQL surface, explorer-API CORS gap, and dapp security gaps.
 See also: `docs/technical/dapp-browser-keygen-review.md` (browser-keygen security ADR — in-browser keygen path withdrawn; see §3.1 of `docs/technical/dapp-credential-decisions.md`).
 
 - [ ] dev-scout: map backend hardening seams — partially absorbed into `docs/technical/security-hardening-seams.md`; no dedicated backend scout doc
-- [ ] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion
+- [x] Indexer: restrict or type-guard `db::count()` to prevent dynamic SQL expansion (`CountTable::try_from` allowlist guard, `services/explorer-indexer/src/db.rs`)
 - [x] Explorer API: CORS via `EXPLORER_API_ALLOW_ORIGINS` env (`clients/explorer-api/src/main.rs`)
 - [x] Dapp: verify gateway bytecode hash before admin writes (`clients/dapp/src/lib/gatewayVerifier.ts`)
 - [x] Dapp: exported config directly loadable by `rmpc` (`clients/dapp/src/lib/configExport.ts`)
+- [x] Dapp: strict CSP (no inline scripts / eval) enforced in CI before public launch — meta tag + preview header via `clients/dapp/src/lib/csp.ts`, asserted by `clients/dapp/scripts/check-csp.sh` in suite-09 (#665)
 
 ### Full-stack integration
 Goal: Complete and harden the smoke-test + devnet stack so the full application
@@ -165,6 +167,7 @@ artifacts, and close remaining CI wiring gaps.
 - [x] CI: e2e artifacts uploaded (`suite-10-dapp-e2e.yml`)
 - [x] CI: opencode-refusal job wired to `testing/doctests` (`suite-11b-opencode-headless.yml`)
 - [ ] CI: slim suite-05 by migrating duplicate tests into suite-06
+- [x] CI: secrets-scanning step on every PR (security-model.md §13) — gitleaks pinned in `suite-18-secrets-scan.yml`, allowlist in `.gitleaks.toml`
 
 ### Release infrastructure
 Goal: Ship `rmpc` binary releases, a dapp Docker image, and reliable CI
@@ -172,7 +175,7 @@ triggers so operators can install from published artifacts.
 
 - [x] CI: `rmpc` binary release workflow (`.github/workflows/release-rmpc.yml`)
 - [x] CI: dapp Docker image published to GHCR (`.github/workflows/release-dapp.yml`)
-- [ ] CI: run all suites unconditionally on push to `dev` — suite-01-02 and others still gated by `paths:` filters
+- [x] CI: run all suites unconditionally on push to `dev` — suite-01-02 and others still gated by `paths:` filters
 - [x] CI: `workflow_dispatch` inputs (tag, commit, dry_run) on release workflows
 - [x] Remove deprecated Anvil demo suite — `demo.sh` never existed in this repo; suite-15 is the robotmoney-analyst plugin test (not an Anvil demo, keep it)
 - [ ] Audit suite-05 (Anvil mainnet-fork) for necessity vs. suite-06 duplication
@@ -211,7 +214,8 @@ Status: **Complete.**
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/registry.rs`
 
 ### Phase: Portfolio Router contract
-Status: **Complete.**
+Status: **Substantially complete.** Contract and devnet deployment are done;
+audit sign-off and Base mainnet deployment remain.
 
 - [x] dev-scout — `docs/technical/portfolio-router-decisions.md`
 - [x] `PortfolioRouter.sol` — weight-based USDC split, all-or-revert, caps, `RouterDeposit` event
@@ -219,9 +223,12 @@ Status: **Complete.**
 - [x] Gateway extended to allow router destination
 - [x] Deploy script — `contracts/script/DeployPortfolioRouter.s.sol`
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/router.rs`
+- [ ] External audit sign-off on `PortfolioRouter.sol` — no findings above medium severity
+- [ ] Base mainnet deployment of `PortfolioRouter` — non-zero address recorded in `deployments/full-stack.json`
 
 ### Phase: Router-weight governance
-Status: **Complete (MVP).** Per PR #391, `RouterGovernance` is currently an
+Status: **Substantially complete.** Contract and devnet deployment are done;
+Base mainnet deployment remains. Per PR #391, `RouterGovernance` is currently an
 admin-weighted MVP mock; full RM-token-weighted voting is deferred until token
 launch (out of scope per Non-goals).
 
@@ -233,6 +240,7 @@ launch (out of scope per Non-goals).
 - [x] `rmpc get-router`
 - [x] `rmpc get-governance`
 - [x] Fork e2e — `testing/fork-e2e-rust/tests/governance.rs`
+- [ ] Base mainnet deployment of `RouterGovernance` — non-zero address recorded in `deployments/full-stack.json`
 
 ### Phase: Gateway agent withdrawal
 Status: **Complete.**
@@ -275,9 +283,9 @@ basket-vault ADRs.
 - [x] Smoke-test `Fixture` surfaces all adapter addresses
 - [x] `RobotMoneyVault` registered in `VaultRegistry`; initial router weights set
 - [x] Fork e2e: deposit/withdrawal round-trip against real adapter stack (Aave/Compound/Morpho)
-- [ ] Deploy scripts: add `ProtocolAssetVault` + `AgentTokenVault` once basket ADRs resolved
+- [x] Deploy scripts: add `ProtocolAssetVault` + `AgentTokenVault` once basket ADRs resolved
 - [ ] Fixture surfaces basket vault addresses once devnet-deployed
-- [ ] Fork e2e: multi-vault round-trip including basket vaults
+- [x] Fork e2e: multi-vault round-trip including basket vaults — `testing/fork-e2e-rust/tests/basket_vault_round_trip.rs` (issue #690)
 
 ### Phase: Demo seeding
 Goal: Wire a presentable end-to-end demo on top of the smoke-test devnet:
@@ -303,7 +311,24 @@ deploy-script wiring and registry registration remain.
 - [x] TWAP oracle in both basket vaults — `ProtocolAssetVault` and `AgentTokenVault` are thin subclasses of `BasketVault` and inherit `_twapUsdcValue()`, `twapWindow`, and the full TWAP oracle; no separate implementation needed
 - [x] Rebalancing model ADR + `rebalance()` implementation — `docs/adr/` (#545), `contracts/src/vaults/BasketVault.sol` (#550)
 - [x] Agent-token shortlist governance — ADR (#546), `AgentTokenVault` shortlist mechanism (#552)
-- [ ] Router eligibility: register both basket vaults once ADRs resolved + audited
+- [x] Router eligibility: register both basket vaults once ADRs resolved + audited — drawdown redemption-policy prerequisite resolved by [ADR-0007](adr/ADR-0007-basket-vault-drawdown-redemption-policy.md) (NAV haircut); the remaining audit gate still applies before registration
+
+### Phase: Mainnet admin timelock
+Goal: Transfer ADMIN_ROLE on all five protocol contracts (RobotMoneyVault,
+RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance) from the
+deployer EOA to a deployed OZ TimelockController backed by a Safe multisig
+(≥ 2-of-N). No EOA may hold ADMIN_ROLE directly in production (architecture §8,
+§10). Prerequisite: PortfolioRouter and RouterGovernance mainnet deployments.
+
+Status: **Not started.** Script exists (`contracts/script/DeployTimelock.s.sol`,
+fully tested — `contracts/test/DeployTimelock.t.sol`); mainnet execution requires
+a live Safe multisig and the admin EOA private key.
+
+- [ ] Provision a production Safe multisig (≥ 2-of-N) for the PROPOSER + EXECUTOR roles
+- [ ] Run `DeployTimelock.s.sol` against Base mainnet — record `timelock_controller` address in `deployments/full-stack.json`
+- [ ] Verify `hasRole(ADMIN_ROLE, timelock_controller)` returns `true` on all five contracts
+- [ ] Verify no EOA holds ADMIN_ROLE on any of the five contracts after migration
+- [ ] Record timelock address and Safe address in `deployments/full-stack.json` and `docs/architecture.md` §8/§10
 
 ### Phase: Real four-vault demo
 Goal: All four PRD §11 vaults hold real Base-mainnet assets and show real depositors at startup — production-grade, no placeholders. Resolve basket-vault router-eligibility ADRs, add Aerodrome + Uniswap V4 multi-DEX support, ingest real DEX pools into the fork, stand up the deSPXA RWA vault, seed all four vaults, and prove it at every test-pyramid layer. Tracked as Plan #109 phase (issues #541–#568).

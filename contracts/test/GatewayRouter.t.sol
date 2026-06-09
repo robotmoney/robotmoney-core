@@ -51,6 +51,23 @@ contract RouterMockVault is ERC20 {
         shares = assets;
         _mint(receiver, shares);
     }
+
+    /// @notice ERC-4626-style redeem (1:1 no exit fee). Burns `shares` from
+    ///         `owner`; transfers `assets == shares` to `receiver`. Enforces
+    ///         `_spendAllowance` when `owner != msg.sender`, mirroring MockVault.
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets)
+    {
+        require(shares > 0, "zero shares");
+        require(receiver != address(0), "zero receiver");
+        if (owner != msg.sender) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+        _burn(owner, shares);
+        assets = shares;
+        assetToken.safeTransfer(receiver, assets);
+    }
 }
 
 /// @notice Mock router that underpulls USDC during deposit, leaving residual USDC
@@ -239,8 +256,9 @@ contract GatewayRouterTest is Test {
         bytes32 idem = keccak256("idem-r1");
         uint64 deadline = uint64(block.timestamp + 60);
 
-        bytes32 expectedPaymentId =
-            keccak256(abi.encode(block.chainid, address(gateway), agent, orderId, amount, idem));
+        bytes32 expectedPaymentId = keccak256(
+            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
+        );
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
         vm.expectEmit(true, true, true, false, address(gateway));
@@ -447,8 +465,9 @@ contract GatewayRouterTest is Test {
         bytes32 idem = keccak256("idem-evt");
         uint256[] memory emptyMin = new uint256[](0);
 
-        bytes32 expectedPaymentId =
-            keccak256(abi.encode(block.chainid, address(gateway), agent, orderId, amount, idem));
+        bytes32 expectedPaymentId = keccak256(
+            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
+        );
 
         vm.recordLogs();
         vm.prank(agent);
@@ -1246,5 +1265,399 @@ contract GatewayRouterTest is Test {
             address(vault),
             emptyMin
         );
+    }
+
+    // ─── Router withdrawal tests ──────────────────────────────────────────────
+
+    /// @dev Helper: policy with withdrawal enabled from router vaults.
+    function _policyWithRouterWithdrawal() internal returns (IGateway.AgentPolicy memory) {
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory noSources = new address[](0);
+        return IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("routerWithdrawRecipient"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: noSources
+        });
+    }
+
+    /// @dev Deposit via router and return the shares minted per leg.
+    function _routerDepositAndGetShares(address who, uint256 amount)
+        internal
+        returns (uint256 sharesA, uint256 sharesB)
+    {
+        _fundAndApprove(who, amount);
+        uint256[] memory emptyMin = new uint256[](0);
+        vm.prank(who);
+        gateway.depositTo(
+            keccak256("router-deposit-for-withdraw"),
+            amount,
+            uint64(block.timestamp + 60),
+            keccak256("router-deposit-idem"),
+            address(router),
+            emptyMin
+        );
+        sharesA = vaultA.balanceOf(shareReceiver);
+        sharesB = vaultB.balanceOf(shareReceiver);
+    }
+
+    /// @dev router: happy path — deposit via router, withdraw via router, USDC lands at assetRecipient.
+    function test_withdrawFromRouter_happyPath() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+        address assetRecipient = makeAddr("routerWithdrawRecipient");
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        // 60/40 split: vaultA=60, vaultB=40.
+        assertEq(sharesA, 60 * ONE_USDC, "vaultA pre-withdraw shares");
+        assertEq(sharesB, 40 * ONE_USDC, "vaultB pre-withdraw shares");
+
+        // shareReceiver approves gateway to pull vault A and vault B shares.
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        vm.prank(agent);
+        (bytes32 paymentId, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
+            keccak256("router-withdraw-order"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("router-withdraw-idem")
+        );
+
+        assertTrue(paymentId != bytes32(0), "paymentId non-zero");
+        assertEq(assetsPerLeg.length, 2, "two legs");
+        assertEq(assetsPerLeg[0], sharesA, "leg 0 assets (1:1)");
+        assertEq(assetsPerLeg[1], sharesB, "leg 1 assets (1:1)");
+
+        // USDC must go to assetRecipient.
+        assertEq(usdc.balanceOf(assetRecipient), amount, "USDC to assetRecipient");
+
+        // Gateway must hold zero of each vault's shares.
+        assertEq(IERC20(address(vaultA)).balanceOf(address(gateway)), 0, "gateway holds 0 vaultA");
+        assertEq(IERC20(address(vaultB)).balanceOf(address(gateway)), 0, "gateway holds 0 vaultB");
+
+        // shareReceiver shares must be zero.
+        assertEq(vaultA.balanceOf(shareReceiver), 0, "shareReceiver vaultA zero");
+        assertEq(vaultB.balanceOf(shareReceiver), 0, "shareReceiver vaultB zero");
+    }
+
+    /// @dev router: allowedSourceVaults enforced — vault not in list reverts.
+    function test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted() public {
+        // Policy restricts source vaults to vaultA only.
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory sources = new address[](1);
+        sources[0] = address(vaultA);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("routerWithdrawRecipient2"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: sources
+        });
+        _authorize(agent, p);
+
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        // sharesPerLeg[1] > 0 for vaultB, which is not in allowedSourceVaults.
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.InvalidSourceVault.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-list-o"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-list-i")
+        );
+    }
+
+    /// @dev router: per-payment cap enforced (totalShares > maxWithdrawPerPayment).
+    function test_withdrawFromRouter_revertsOnPerPaymentCapExceeded() public {
+        IGateway.AgentPolicy memory p = _policyWithRouterWithdrawal();
+        p.maxWithdrawPerPayment = 50 * ONE_USDC; // cap at 50
+        p.maxWithdrawPerWindow = 200 * ONE_USDC;
+        _authorize(agent, p);
+
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        // totalShares = 100 > 50 cap
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.SharesExceedWithdrawPerPaymentCap.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-cap-o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("rw-cap-i")
+        );
+    }
+
+    /// @dev router: window cap enforced — second call in same window reverts.
+    function test_withdrawFromRouter_revertsOnWindowCapExceeded() public {
+        IGateway.AgentPolicy memory p = _policyWithRouterWithdrawal();
+        p.maxWithdrawPerPayment = 100 * ONE_USDC;
+        p.maxWithdrawPerWindow = 100 * ONE_USDC; // window == payment
+        _authorize(agent, p);
+
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        // First call succeeds.
+        vm.prank(agent);
+        gateway.withdrawFromRouter(
+            keccak256("rw-win-o1"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-win-i1")
+        );
+
+        // Second call in same window — must revert (window exhausted).
+        // (Even with 0 shares in leg, totalShares > 0 check would apply.)
+        uint256[] memory zeroLeg = new uint256[](2);
+        zeroLeg[0] = 1;
+        zeroLeg[1] = 0;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-win-o2"), zeroLeg, uint64(block.timestamp + 60), keccak256("rw-win-i2")
+        );
+    }
+
+    /// @dev router: idempotency enforced — same orderId+idempotencyKey reverts on replay.
+    function test_withdrawFromRouter_revertsOnReplay() public {
+        // Policy with large window cap so two withdrawals fit.
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory noSources = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("routerWithdrawRecipient"),
+            maxWithdrawPerPayment: 200 * ONE_USDC,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: noSources
+        });
+        _authorize(agent, p);
+
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        bytes32 orderId = keccak256("rw-idm-o");
+        bytes32 idem = keccak256("rw-idm-i");
+
+        vm.prank(agent);
+        gateway.withdrawFromRouter(orderId, sharesPerLeg, uint64(block.timestamp + 60), idem);
+
+        // Deposit fresh shares to shareReceiver (same split → same amounts).
+        _fundAndApprove(agent, 100 * ONE_USDC);
+        uint256[] memory emptyMin = new uint256[](0);
+        vm.prank(agent);
+        gateway.depositTo(
+            keccak256("rw-idm-deposit2"),
+            100 * ONE_USDC,
+            uint64(block.timestamp + 60),
+            keccak256("rw-idm-idem2"),
+            address(router),
+            emptyMin
+        );
+        uint256 sharesA2 = vaultA.balanceOf(shareReceiver);
+        uint256 sharesB2 = vaultB.balanceOf(shareReceiver);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA2);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB2);
+
+        // Same totalShares → same paymentId → PaymentIdAlreadyUsed.
+        uint256[] memory sharesPerLeg2 = new uint256[](2);
+        sharesPerLeg2[0] = sharesA2;
+        sharesPerLeg2[1] = sharesB2;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.PaymentIdAlreadyUsed.selector);
+        gateway.withdrawFromRouter(orderId, sharesPerLeg2, uint64(block.timestamp + 60), idem);
+    }
+
+    /// @dev router: withdrawal disabled when maxWithdrawPerPayment == 0.
+    function test_withdrawFromRouter_revertsWhenWithdrawalDisabled() public {
+        _authorize(agent, _policyWithRouter()); // withdrawal disabled (maxWithdrawPerPayment == 0)
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = ONE_USDC;
+        sharesPerLeg[1] = ONE_USDC;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawalNotEnabled.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-dis-o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("rw-dis-i")
+        );
+    }
+
+    /// @dev router: reverts when router not configured.
+    function test_withdrawFromRouter_revertsWhenRouterNotConfigured() public {
+        RobotMoneyGateway noRouterGateway = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
+        address[] memory empty = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: empty,
+            assetRecipient: makeAddr("rcp"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: empty
+        });
+        vm.prank(depositor);
+        noRouterGateway.authorizeAgent(agent, p);
+
+        uint256[] memory sharesPerLeg = new uint256[](0);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.RouterNotConfigured.selector);
+        noRouterGateway.withdrawFromRouter(
+            keccak256("o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+        );
+    }
+
+    /// @dev router: reverts when sharesPerLeg length mismatches router leg count.
+    function test_withdrawFromRouter_revertsOnLegLengthMismatch() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        // router has 2 legs but we pass 1.
+        uint256[] memory sharesPerLeg = new uint256[](1);
+        sharesPerLeg[0] = ONE_USDC;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.RouterLegLengthMismatch.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-len-o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("rw-len-i")
+        );
+    }
+
+    /// @dev router: paused gateway reverts.
+    function test_withdrawFromRouter_revertsWhenPaused() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+        vm.prank(pauser);
+        gateway.pause();
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.PausedError.selector);
+        gateway.withdrawFromRouter(
+            keccak256("o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+        );
+    }
+
+    /// @dev router: zero totalShares reverts.
+    function test_withdrawFromRouter_revertsOnZeroTotalShares() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256[] memory sharesPerLeg = new uint256[](2); // both zero
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
+        gateway.withdrawFromRouter(
+            keccak256("o"), sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+        );
+    }
+
+    /// @dev router: AgentWithdrawalRouted event is emitted with correct indexed topics.
+    function test_withdrawFromRouter_emitsAgentWithdrawalRoutedEvent() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        bytes32 orderId = keccak256("rw-evt-o");
+        bytes32 idem = keccak256("rw-evt-i");
+
+        vm.recordLogs();
+        vm.prank(agent);
+        gateway.withdrawFromRouter(orderId, sharesPerLeg, uint64(block.timestamp + 60), idem);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        _assertWithdrawalRoutedLog(logs, orderId, agent);
+    }
+
+    /// @dev Extract AgentWithdrawalRouted log and assert indexed topics.
+    ///      Separated to avoid stack-too-deep in the parent test function.
+    function _assertWithdrawalRoutedLog(
+        Vm.Log[] memory logs,
+        bytes32 orderId,
+        address expectedAgent
+    ) internal view {
+        bytes32 sig = keccak256(
+            "AgentWithdrawalRouted(bytes32,bytes32,address,address,address,uint256[],uint256[],address,uint64)"
+        );
+        uint256 evtIdx = type(uint256).max;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == sig && logs[i].emitter == address(gateway)) {
+                evtIdx = i;
+                break;
+            }
+        }
+        assertTrue(evtIdx != type(uint256).max, "AgentWithdrawalRouted event not found");
+        assertEq(logs[evtIdx].topics[2], orderId, "orderId topic");
+        assertEq(address(uint160(uint256(logs[evtIdx].topics[3]))), expectedAgent, "agent topic");
     }
 }

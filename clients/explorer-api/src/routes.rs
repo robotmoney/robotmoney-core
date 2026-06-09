@@ -51,12 +51,13 @@ use serde::Deserialize;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
     dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
-    AccountPositionsResponse, ActivityEvent, AgentPolicy, AgentResponse, Contract,
-    ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness, Health,
-    ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
+    AccountPositionsResponse, ActivityEvent, AdapterAllocationEntry, AgentPolicy, AgentResponse,
+    Contract, ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness,
+    Health, ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
     RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
-    Vault, VaultDetail, VaultDetailResponse, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
-    VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
+    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
+    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
+    VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -127,6 +128,41 @@ type ProposalRow = (
 
 // (voter BYTEA, support, weight NUMERIC, block_number, tx_hash BYTEA)
 type VoteRow = (Vec<u8>, bool, BigDecimal, i64, Vec<u8>);
+
+// (block_number, tx_hash, adapter BYTEA NULL, adapter_index BIGINT NULL, amount, event_kind, indexed_at)
+type AdapterAllocationRow = (
+    i64,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    Option<i64>,
+    BigDecimal,
+    String,
+    DateTime<Utc>,
+);
+
+// (block_number, tx_hash, direction, caller BYTEA, owner_or_receiver BYTEA, assets, shares, indexed_at)
+type VaultTransferRow = (
+    i64,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    Vec<u8>,
+    BigDecimal,
+    BigDecimal,
+    DateTime<Utc>,
+);
+
+// (block_number, tx_hash, owner BYTEA, receiver BYTEA, gross_assets, fee_amount, net_assets, indexed_at)
+type VaultFeeRow = (
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    BigDecimal,
+    BigDecimal,
+    BigDecimal,
+    DateTime<Utc>,
+);
 
 // Row types for the new multi-vault endpoints.
 
@@ -574,6 +610,98 @@ async fn get_vault(
         )
         .collect();
 
+    // Fetch adapter allocation history — up to 500 rows ascending by block.
+    let alloc_rows: Vec<AdapterAllocationRow> = sqlx::query_as(
+        "SELECT block_number, tx_hash, adapter, adapter_index, amount, event_kind, indexed_at \
+         FROM adapter_allocations \
+         WHERE chain_id = $1 AND vault = $2 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let adapter_allocation_history: Vec<AdapterAllocationEntry> = alloc_rows
+        .into_iter()
+        .map(
+            |(block_number, tx_hash, adapter, adapter_index, amount, event_kind, ia)| {
+                AdapterAllocationEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    adapter: adapter.as_deref().map(addr_to_hex),
+                    adapter_index,
+                    amount: dec_to_string(&amount),
+                    event_kind,
+                    indexed_at: ia,
+                }
+            },
+        )
+        .collect();
+
+    // Fetch deposit/withdrawal log — up to 500 rows ascending by block.
+    let transfer_rows: Vec<VaultTransferRow> = sqlx::query_as(
+        "SELECT block_number, tx_hash, direction, caller, owner_or_receiver, assets, shares, indexed_at \
+         FROM vault_transfer_events \
+         WHERE chain_id = $1 AND vault = $2 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let deposit_withdrawal_log: Vec<VaultTransferEntry> = transfer_rows
+        .into_iter()
+        .map(
+            |(block_number, tx_hash, direction, caller, owner_or_receiver, assets, shares, ia)| {
+                VaultTransferEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    direction,
+                    caller: addr_to_hex(&caller),
+                    owner_or_receiver: addr_to_hex(&owner_or_receiver),
+                    assets: dec_to_string(&assets),
+                    shares: dec_to_string(&shares),
+                    indexed_at: ia,
+                }
+            },
+        )
+        .collect();
+
+    // Fetch fee collection history — up to 500 rows ascending by block.
+    let fee_rows: Vec<VaultFeeRow> = sqlx::query_as(
+        "SELECT block_number, tx_hash, owner, receiver, gross_assets, fee_amount, net_assets, indexed_at \
+         FROM vault_fee_events \
+         WHERE chain_id = $1 AND vault = $2 \
+         ORDER BY block_number ASC, log_index ASC \
+         LIMIT 500",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let fee_history: Vec<VaultFeeEntry> = fee_rows
+        .into_iter()
+        .map(
+            |(block_number, tx_hash, owner, receiver, gross_assets, fee_amount, net_assets, ia)| {
+                VaultFeeEntry {
+                    block_number,
+                    tx_hash: hash_to_hex(&tx_hash),
+                    owner: addr_to_hex(&owner),
+                    receiver: addr_to_hex(&receiver),
+                    gross_assets: dec_to_string(&gross_assets),
+                    fee_amount: dec_to_string(&fee_amount),
+                    net_assets: dec_to_string(&net_assets),
+                    indexed_at: ia,
+                }
+            },
+        )
+        .collect();
+
     // Freshness is taken from the most recent TVL point if available,
     // otherwise falls back to the indexer cursor.
     let freshness = match tvl_history.last() {
@@ -592,6 +720,9 @@ async fn get_vault(
         status,
         deposit_cap: dec_to_string(&deposit_cap),
         tvl_history,
+        adapter_allocation_history,
+        deposit_withdrawal_log,
+        fee_history,
         indexed_at,
     };
 
@@ -1028,22 +1159,40 @@ async fn get_account_positions(
     }))
 }
 
-/// GET /v1/accounts/:address/history — chronological deposit event log.
+/// GET /v1/accounts/:address/history — chronological event log (issue #654).
 ///
-/// Returns all agent_deposits where share_receiver = address, ordered
-/// by block ascending (chronological).  Includes up to 500 rows.
-/// Chain-scoped to state.chain_id.
+/// Returns all events from `account_history_events` where `account = address`,
+/// covering all five architecture §5.4 event types: deposits, withdrawals,
+/// fee events, policy changes, and governance votes.  Ordered by block
+/// ascending (chronological).  Includes up to 500 rows.  Chain-scoped to
+/// state.chain_id.
+///
+/// The response `kind` discriminant allows callers to filter by event type.
+/// Existing `Deposit` entries continue to appear with `kind: "deposit"` —
+/// no regression for deposit-only consumers.
 async fn get_account_history(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> ApiResult<Json<AccountHistoryResponse>> {
     let address_bytes = decode_address_param(&address)?;
 
-    let rows: Vec<DepositFeedRow> = sqlx::query_as(
-        "SELECT chain_id, block_number, log_index, tx_hash, \
-                COALESCE(vault, share_receiver) AS vault, agent, share_receiver, amount, indexed_at \
-         FROM agent_deposits \
-         WHERE chain_id = $1 AND share_receiver = $2 \
+    // (chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at)
+    type HistoryRow = (
+        i64,
+        i64,
+        i32,
+        Vec<u8>,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<BigDecimal>,
+        DateTime<Utc>,
+    );
+
+    let rows: Vec<HistoryRow> = sqlx::query_as(
+        "SELECT chain_id, block_number, log_index, tx_hash, kind, vault, agent, amount, indexed_at \
+         FROM account_history_events \
+         WHERE chain_id = $1 AND account = $2 \
          ORDER BY block_number ASC, log_index ASC \
          LIMIT 500",
     )
@@ -1060,21 +1209,21 @@ async fn get_account_history(
                 block_number,
                 log_index,
                 tx_hash,
+                kind,
                 vault,
                 agent,
-                _share_receiver,
                 amount,
                 indexed_at,
             )| {
                 AccountHistoryEntry {
-                    kind: EventKind::Deposit,
+                    kind: EventKind::from_db_kind(&kind),
                     chain_id,
                     block_number,
                     log_index,
                     tx_hash: hash_to_hex(&tx_hash),
-                    vault: addr_to_hex(&vault),
-                    agent: addr_to_hex(&agent),
-                    amount: dec_to_string(&amount),
+                    vault: vault.as_deref().map(addr_to_hex),
+                    agent: agent.as_deref().map(addr_to_hex),
+                    amount: amount.as_ref().map(dec_to_string),
                     indexed_at,
                 }
             },

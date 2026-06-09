@@ -1,0 +1,36 @@
+# cargo-audit configuration
+# Canonical: docs/technical/security-model.md §8
+#
+# cargo audit exits non-zero on any vulnerability advisory by default, which is
+# exactly the gate §8 requires: dependency CVEs must block merges. CI also
+# passes `--deny warnings` (see suite-04-rust-quality.yml) so that yanked crates
+# and unsound advisories are treated as hard failures too.
+#
+# To accept a known low-risk advisory temporarily:
+# 1. Add its RUSTSEC id to the `ignore` list below.
+# 2. Add a comment with a one-line reason and an expiry date.
+# 3. File a follow-up issue to resolve the underlying vulnerability.
+# 4. Remove the ignore entry on or before the expiry date.
+#
+# Never suppress an advisory without a dated justification.
+#
+# Schema: https://github.com/rustsec/rustsec/blob/main/cargo-audit/audit.toml.example
+
+[advisories]
+# RustSec ids to ignore. Each entry MUST carry a dated justification comment.
+# The §8 gate blocks merges on HIGH/CRITICAL (CVSS >= 7.0) advisories. The two
+# entries below are pre-existing transitive advisories scored BELOW high; they
+# are ignored so the gate has a green baseline. Re-evaluate at each expiry.
+ignore = [
+    # rsa Marvin timing side-channel. CVSS 5.9 (medium); pulled in transitively
+    # via sqlx-mysql, not used for attacker-controlled RSA ops. expires: 2026-12-01
+    "RUSTSEC-2023-0071",
+    # tokio-tar PAX header file-smuggling. No CVSS assigned; transitive, no
+    # untrusted-archive extraction in our binaries. expires: 2026-12-01
+    "RUSTSEC-2025-0111",
+]
+
+# Treat "unmaintained" crates as warnings rather than hard errors: an
+# unmaintained transitive dep is not itself a vulnerability and should not
+# permanently break CI. Genuine "vulnerability" advisories always fail.
+informational_warnings = ["unmaintained", "notice"]

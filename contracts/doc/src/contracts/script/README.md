@@ -1,6 +1,7 @@
 
 
 # Contents
+- [ActivateBasketVaultEligibility](ActivateBasketVaultEligibility.s.sol/contract.ActivateBasketVaultEligibility.md)
 - [AdapterBytecodeGuard](AdapterBytecodeGuard.sol/library.AdapterBytecodeGuard.md)
 - [Deploy](Deploy.s.sol/contract.Deploy.md)
 - [DeployAgentTokenVault](DeployAgentTokenVault.s.sol/contract.DeployAgentTokenVault.md)
@@ -20,6 +21,7 @@
 - [DeployDemoExtraVaults](DeployDemoExtraVaults.s.sol/contract.DeployDemoExtraVaults.md)
 - [DeployDemoUniswapV3Stubs](DeployDemoUniswapV3Stubs.s.sol/contract.DeployDemoUniswapV3Stubs.md)
 - [DeployPortfolioRouter](DeployPortfolioRouter.s.sol/contract.DeployPortfolioRouter.md)
+- [DeployProtocolAssetVault](DeployProtocolAssetVault.s.sol/contract.DeployProtocolAssetVault.md)
 - [DeployRmToken](DeployRmToken.s.sol/contract.DeployRmToken.md)
 - [DeployRouterGovernance](DeployRouterGovernance.s.sol/contract.DeployRouterGovernance.md)
 - [ISafeMinimal](DeployTimelock.s.sol/interface.ISafeMinimal.md)

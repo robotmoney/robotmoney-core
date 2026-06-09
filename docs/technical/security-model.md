@@ -70,7 +70,7 @@ go through explicit approval.
 
 | Attack | Required control |
 |---|---|
-| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. |
+| ERC-4626 inflation / first-depositor share-price attack | `RobotMoneyVault._decimalsOffset()` must return `18`, configuring OZ virtual shares to `10^18`. The deploy runbook must require a seed deposit of ≥ 1,000 USDC before the vault is opened to the public. This must be verified in CI fork tests. **CI coverage:** `Deploy.s.sol` includes a mandatory seed deposit step (`SEED_DEPOSIT_AMOUNT = 1_000_000_000`) in `run()` and `runInProcessWithSeed()`; `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit; this test is wired into the `forge-fork-vault-regressions` CI job in `suite-01-02-forge-tests.yml`. |
 | Donation-to-reserves bypass (Euler/Venus class) | `totalAssets()` must be defined and documented to prevent direct ERC-20 transfer manipulation. The accounting model must be published and verified via fork tests that show a large direct USDC donation does not materially advantage a subsequent depositor. |
 | Supply-cap bypass via direct transfer | `tvlCap` must be enforced on the deposit path. `totalAssets()` accounting must be shown to not allow a direct-transfer-inflated cap bypass. |
 | Per-deposit-cap bypass via splitting | `perDepositCap` is per-call by design for rate-shaping, not anti-Sybil. This is an accepted limitation; it must be documented in the public risk disclosure. |
@@ -108,7 +108,7 @@ go through explicit approval.
 | TWAP / VWAP poisoning | No TWAP or VWAP may be consumed by any vault unless a manipulation-resistance analysis is published, a minimum TWAP window is specified, and a circuit breaker is in place. |
 | Stale-price oracle | Adapters that depend on upstream oracles (Compound v3, Aave v3) must document the oracle freshness requirement and the upstream circuit-breaker behavior. This is an accepted upstream-trust assumption. |
 | Single-source oracle | Any adapter that introduces a new price source must use at least two independent oracle sources or a TWAP with documented staleness tolerance. |
-| Dead-market pricing without circuit breaker (YieldBlox-class) | Accepted as an upstream venue risk for Compound v3 and Aave v3. A monitoring alert must exist for each venue going offline. |
+| Dead-market pricing without circuit breaker (YieldBlox-class) | Accepted as an upstream venue risk for Compound v3 and Aave v3. A monitoring alert must exist for each venue going offline. Implemented by the venue-liveness monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#venue-offline). |
 | Cross-chain oracle desync | Not applicable while the product is deployed on a single chain. Must be re-evaluated before any multi-chain expansion. |
 
 ### 5.1 BasketVault TWAP configuration (issue #451)
@@ -195,8 +195,8 @@ source. The manipulation-resistance posture is:
 | Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
-| Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. |
-| Token-rebase or fee-on-transfer upstream change | USDC is upgradeable by Circle. A monitoring process must alert on Circle upgrade proposals. The vault must have a documented pause-and-review procedure if USDC semantics change. |
+| Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
+| Token-rebase or fee-on-transfer upstream change | USDC is upgradeable by Circle. A monitoring process must alert on Circle upgrade proposals. The vault must have a documented pause-and-review procedure if USDC semantics change. Implemented by the USDC-upgrade monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#usdc-upgrade). |
 
 ---
 
@@ -229,7 +229,7 @@ This section maps onto `docs/architecture.md` §15.
 | Replay of signed transaction across chains | Chain-id check must be present in `rmpc` and enforced by EIP-155 signing. |
 | Replay within chain (nonce reuse) | Per-agent nonce file lock must prevent concurrent invocation. `ErrConcurrentInvocation` must be the documented error path. |
 | Race between concurrent agent tasks | The nonce lock must be the single serialization point. No other coordination mechanism should be introduced without an explicit ADR. |
-| Idempotency domain collision | Gateway idempotency identifiers must domain-separate operation kind (`deposit`, `depositTo`, `withdraw`), chain id, gateway address, agent, order id, amount/shares, destination/source, receiver/recipient, and caller-provided idempotency key. A routed deposit and a withdrawal must never be able to consume each other's idempotency namespace. |
+| Idempotency domain collision | Gateway idempotency identifiers must domain-separate operation kind (`deposit`, `depositTo`, `withdraw`), chain id, gateway address, agent, order id, amount/shares, destination/source, receiver/recipient, and caller-provided idempotency key. A routed deposit and a withdrawal must never be able to consume each other's idempotency namespace. **Resolved in issue #679**: `OP_DEPOSIT=1`, `OP_WITHDRAW=2`, `OP_DEPOSIT_TO=3` constants prepended to all three hash computations in `RobotMoneyGateway`. |
 | Agent withdrawal redirect | Gateway-mediated withdrawals must verify source vault, receipt allowance, receipt balance, max shares per payment, max shares per window, previewed minimum assets out, deadline, and policy-configured asset recipient before signing and before execution. The agent must never choose the USDC recipient at execution time. |
 | Receipt-token allowance overhang | Dapp and `rmpc` must display current gateway receipt-token allowance and recommend bounded allowances aligned with the policy withdrawal cap. Revoking an agent policy must be paired in the UI/runbook with revoking any receipt-token allowance that could otherwise be reused if the agent is re-authorized. |
 | Signer-backend MITM | Trust collapses to the signer device. Hardware signer attestation is the accepted mitigation. |

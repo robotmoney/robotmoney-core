@@ -92,6 +92,38 @@ pub const POOL_CBBTC_USDC: Address = address!("fbb6eed8e7aa03b138556eedaf5d271a5
 /// Uniswap V3 wSOL/USDC pool on Base (Wormhole-wrapped SOL).
 pub const POOL_WSOL_USDC: Address = address!("c1bf8adf6e62cc9c56e2b246b03d3e74da45a0e1");
 
+// -- Basket vault asset addresses (ProtocolAssetVault + AgentTokenVault) ----
+// Canonical: config/dex-pools.json §basket_assets; docs/prd.md §11.2–11.3.
+// These are the underlying token and pool addresses used when deploying
+// basket vaults against a live Base-mainnet fork. The vault contracts are
+// NOT deployed on Base mainnet (deploy scripts exist but have not been run);
+// the fork-e2e test deploys them transiently on the fork under test.
+
+/// cbBTC (Coinbase-wrapped Bitcoin) ERC-20 on Base.
+/// Used as the single basket asset in the ProtocolAssetVault fork-e2e test.
+/// Source: config/dex-pools.json §basket_assets.cbbtc.token
+pub const CBBTC: Address = address!("cbb7c0000ab88b473b1f5afd9ef808440eed33bf");
+
+/// Uniswap V3 cbBTC/USDC 0.05% pool on Base — TWAP oracle + swap route for
+/// ProtocolAssetVault. Equal to [`POOL_CBBTC_USDC`]; aliased here for clarity.
+/// Source: config/dex-pools.json §basket_assets.cbbtc.pool (fee=500, confirmed).
+pub const BASKET_PROTO_POOL_CBBTC: Address = address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef");
+
+/// Uniswap V3 pool fee tier for the cbBTC/USDC pool (500 = 0.05%).
+pub const BASKET_PROTO_POOL_CBBTC_FEE: u32 = 500;
+
+/// JUNO ERC-20 on Base — a confirmed AgentTokenVault shortlist asset.
+/// Source: config/dex-pools.json §basket_assets.juno.token
+pub const JUNO: Address = address!("4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07");
+
+/// Uniswap V3 JUNO/USDC 1% pool on Base — TWAP oracle + swap route for
+/// AgentTokenVault. Source: config/dex-pools.json §basket_assets.juno.pool
+/// (fee=10000, confirmed, ~$6.5K TVL as of 2026-06-03).
+pub const BASKET_AGENT_POOL_JUNO: Address = address!("6f320f066d41e8896da5baee732ab7d8a6b4f62f");
+
+/// Uniswap V3 pool fee tier for the JUNO/USDC pool (10000 = 1%).
+pub const BASKET_AGENT_POOL_JUNO_FEE: u32 = 10_000;
+
 /// All Robot Money contract addresses in canonical order. Used to
 /// derive the address-set hash that scenarios print at the top of
 /// their output (ADR §3.2).
