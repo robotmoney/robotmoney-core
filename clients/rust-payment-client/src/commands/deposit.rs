@@ -816,7 +816,7 @@ mod tests {
             .create_async()
             .await;
 
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
         let deadline_secs = 300u64;
         let block_number = rpc.block_number().await.unwrap();
         let ts = rpc.block_timestamp(block_number).await.unwrap();

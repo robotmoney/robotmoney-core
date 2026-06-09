@@ -346,7 +346,10 @@ impl FailoverRpcClient {
             match client.chain_id().await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: chain_id failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: chain_id failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -361,7 +364,10 @@ impl FailoverRpcClient {
             match client.block_number().await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: block_number failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: block_number failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -380,7 +386,10 @@ impl FailoverRpcClient {
             match client.get_code(address, tag).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: get_code failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: get_code failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -399,7 +408,10 @@ impl FailoverRpcClient {
             match client.get_balance(address, tag).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: get_balance failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: get_balance failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -418,7 +430,10 @@ impl FailoverRpcClient {
             match client.get_transaction_count(address, tag).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: get_transaction_count failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: get_transaction_count failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -433,7 +448,10 @@ impl FailoverRpcClient {
             match client.gas_price().await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: gas_price failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: gas_price failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -450,10 +468,16 @@ impl FailoverRpcClient {
     ) -> crate::errors::Result<alloy_rpc_types::FeeHistory> {
         let mut last_err = None;
         for client in &self.endpoints {
-            match client.fee_history(block_count, newest_block, reward_percentiles).await {
+            match client
+                .fee_history(block_count, newest_block, reward_percentiles)
+                .await
+            {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: fee_history failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: fee_history failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -472,7 +496,10 @@ impl FailoverRpcClient {
             match client.eth_call(req, tag).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: eth_call failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: eth_call failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -490,7 +517,10 @@ impl FailoverRpcClient {
             match client.send_raw_transaction(raw).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: send_raw_transaction failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: send_raw_transaction failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -508,7 +538,10 @@ impl FailoverRpcClient {
             match client.get_transaction_receipt(tx_hash).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: get_transaction_receipt failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: get_transaction_receipt failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -517,16 +550,16 @@ impl FailoverRpcClient {
     }
 
     /// `eth_getLogs`.
-    pub async fn get_logs(
-        &self,
-        filter: serde_json::Value,
-    ) -> crate::errors::Result<Vec<RawLog>> {
+    pub async fn get_logs(&self, filter: serde_json::Value) -> crate::errors::Result<Vec<RawLog>> {
         let mut last_err = None;
         for client in &self.endpoints {
             match client.get_logs(filter.clone()).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: get_logs failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: get_logs failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -541,7 +574,10 @@ impl FailoverRpcClient {
             match client.block_timestamp(block_number).await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
-                    log::warn!("rmpc rpc: block_timestamp failed on {}, trying next; error: {e}", client.url());
+                    log::warn!(
+                        "rmpc rpc: block_timestamp failed on {}, trying next; error: {e}",
+                        client.url()
+                    );
                     last_err = Some(e);
                 }
             }
@@ -784,8 +820,7 @@ mod tests {
 
     #[test]
     fn failover_client_rejects_bad_url() {
-        let err =
-            FailoverRpcClient::new(vec!["not a url".to_string()]).unwrap_err();
+        let err = FailoverRpcClient::new(vec!["not a url".to_string()]).unwrap_err();
         assert!(matches!(err, RmpcError::ErrConfig(_)), "got {err:?}");
     }
 
@@ -826,11 +861,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = FailoverRpcClient::new(vec![
-            bad_server.url(),
-            good_server.url(),
-        ])
-        .unwrap();
+        let client = FailoverRpcClient::new(vec![bad_server.url(), good_server.url()]).unwrap();
 
         let chain_id = client.chain_id().await.unwrap();
         assert_eq!(chain_id, 1337);

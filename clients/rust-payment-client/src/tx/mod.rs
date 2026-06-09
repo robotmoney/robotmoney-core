@@ -158,7 +158,10 @@ pub async fn broadcast(rpc: &FailoverRpcClient, raw: &Bytes) -> Result<B256> {
 
 /// Poll for a receipt with the MVP defaults (see
 /// [`RECEIPT_POLL_INTERVAL_MS`] / [`RECEIPT_POLL_MAX_ATTEMPTS`]).
-pub async fn wait_for_receipt(rpc: &FailoverRpcClient, tx_hash: B256) -> Result<TransactionReceipt> {
+pub async fn wait_for_receipt(
+    rpc: &FailoverRpcClient,
+    tx_hash: B256,
+) -> Result<TransactionReceipt> {
     wait_for_receipt_with(
         rpc,
         tx_hash,
