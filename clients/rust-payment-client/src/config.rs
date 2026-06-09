@@ -595,7 +595,10 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
         let urls = cfg.effective_rpc_urls().expect("should resolve");
         assert_eq!(
             urls,
-            vec!["http://node1:8545".to_string(), "http://node2:8545".to_string()]
+            vec![
+                "http://node1:8545".to_string(),
+                "http://node2:8545".to_string()
+            ]
         );
     }
 
@@ -603,10 +606,7 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
     #[test]
     fn effective_rpc_urls_rejects_empty_list() {
         // toml array: rpc_urls = []
-        let body = SAMPLE_NO_RPC.replace(
-            "[signer]",
-            "rpc_urls = []\n\n[signer]",
-        );
+        let body = SAMPLE_NO_RPC.replace("[signer]", "rpc_urls = []\n\n[signer]");
         let cfg = Config::from_str(&body).expect("TOML parses");
         let err = cfg.effective_rpc_urls().expect_err("must error");
         let msg = format!("{err}");
@@ -644,10 +644,7 @@ keystore_path           = "/var/lib/rmpc/keystore.enc"
     /// Both `rpc_url` and `rpc_urls` set — `rpc_urls` wins (no config error).
     #[test]
     fn rpc_urls_takes_precedence_when_both_set() {
-        let body = SAMPLE.replace(
-            "[signer]",
-            "rpc_urls = [\"http://node1:8545\"]\n\n[signer]",
-        );
+        let body = SAMPLE.replace("[signer]", "rpc_urls = [\"http://node1:8545\"]\n\n[signer]");
         let cfg = Config::from_str(&body).expect("parses");
         // Both fields populated
         assert!(cfg.rpc_url.is_some());
