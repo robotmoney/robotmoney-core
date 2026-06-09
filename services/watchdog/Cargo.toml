@@ -1,0 +1,15 @@
+[package]
+name = "watchdog"
+version = "0.1.0"
+edition = "2021"
+description = "Compile-safe integration seams for Robot Money mint and burn monitoring."
+license = "MIT"
+publish = false
+
+# Canonical: docs/technical/security-model.md §9
+# Plan: docs/implementation-plan.md — Operational safeguards
+# Dev-scout: issue #739; runtime implementation belongs to issue #658.
+
+[lib]
+name = "watchdog"
+path = "src/lib.rs"

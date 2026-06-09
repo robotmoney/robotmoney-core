@@ -20,6 +20,8 @@
 pub mod fork_manifest;
 pub mod genesis_alloc;
 pub mod logging;
+/// Dev-scout map for the real-adapter state injection boundary (issue #739).
+pub mod real_adapter_state;
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
