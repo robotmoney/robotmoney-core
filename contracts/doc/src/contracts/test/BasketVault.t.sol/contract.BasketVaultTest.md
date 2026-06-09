@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -498,6 +498,28 @@ Deposit + withdrawal round-trip preserves correct token balances and zero allowa
 
 ```solidity
 function test_depositWithdrawRoundTrip_correctBalancesAndZeroAllowances() public;
+```
+
+### test_previewMint_grossesUpBySlippage
+
+previewMint grosses up raw NAV by the slippage factor so mint()
+charges the same haircut as deposit(). Without this override, mint()
+would undercharge relative to deposit(), enabling a value leak.
+
+
+```solidity
+function test_previewMint_grossesUpBySlippage() public;
+```
+
+### test_previewMint_notCheaperThanDeposit_dilutionPrevented
+
+Mint is not cheaper than deposit for the same share count.
+Depositing the assets that previewMint requires must yield at
+least targetShares (ERC-4626 symmetry with slippage haircut).
+
+
+```solidity
+function test_previewMint_notCheaperThanDeposit_dilutionPrevented() public;
 ```
 
 ## Events

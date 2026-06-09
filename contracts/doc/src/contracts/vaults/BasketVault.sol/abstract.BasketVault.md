@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/29a6b0a3488522b2001095b39bc04eabd642f8f6/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -339,6 +339,21 @@ See docs/technical/basket-vault-gap-report.md §3.
 
 ```solidity
 function previewDeposit(uint256 assets_) public view override returns (uint256);
+```
+
+### previewMint
+
+Worst-case assets required to mint `shares`.
+Grosses up the raw NAV by `MAX_BPS / (MAX_BPS - maxSlippageBps)` so that
+after the on-chain swap applies the same `maxSlippageBps` haircut, the vault
+captures the full proportional NAV. Without this override, `mint()` would
+undercharge relative to `deposit()`, allowing a permissionless value leak
+onto existing holders (see docs/code-review/smart-contract-vulnerability-audit-20260609.md H-1).
+Rounded up (Ceil) so the vault is never shortchanged.
+
+
+```solidity
+function previewMint(uint256 shares) public view override returns (uint256);
 ```
 
 ### previewWithdraw

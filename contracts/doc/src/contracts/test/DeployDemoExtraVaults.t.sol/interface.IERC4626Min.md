@@ -1,5 +1,5 @@
 # IERC4626Min
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/6972e43c539056c14fd6b78d1bee27347622bb81/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/DeployDemoExtraVaults.t.sol)
 
 Minimal ERC-4626 view surface shared by every PRD §11 vault
 (RobotMoneyVault + BasketVault subclasses) used to read TVL in a
