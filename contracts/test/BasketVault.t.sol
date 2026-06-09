@@ -1212,6 +1212,44 @@ contract BasketVaultTest is Test {
         );
         assertGt(usdc.balanceOf(stranger), 0, "stranger received USDC from redeem");
     }
+
+    // ─── previewMint slippage haircut (issue #746) ────────────────────
+
+    /// @notice previewMint grosses up raw NAV by the slippage factor so mint()
+    ///         charges the same haircut as deposit(). Without this override, mint()
+    ///         would undercharge relative to deposit(), enabling a value leak.
+    function test_previewMint_grossesUpBySlippage() public {
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+
+        uint256 targetShares = 100 * 1e18;
+        uint256 rawAssets = vault.convertToAssets(targetShares);
+        uint256 mintAssets = vault.previewMint(targetShares);
+
+        // mintAssets must exceed rawAssets (grossed up by slippage).
+        assertGt(mintAssets, rawAssets, "previewMint must gross up raw NAV by slippage");
+        // Verify the gross-up factor: rawAssets * MAX_BPS / (MAX_BPS - slip).
+        // Ceil rounding may add 1 wei.
+        uint256 expectedGrossUp = rawAssets * (10_000) / (10_000 - vault.maxSlippageBps());
+        assertApproxEqAbs(
+            mintAssets, expectedGrossUp, 1, "previewMint gross-up must match slippage factor"
+        );
+    }
+
+    /// @notice Mint is not cheaper than deposit for the same share count.
+    ///         Depositing the assets that previewMint requires must yield at
+    ///         least targetShares (ERC-4626 symmetry with slippage haircut).
+    function test_previewMint_notCheaperThanDeposit_dilutionPrevented() public {
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+
+        uint256 targetShares = 100 * 1e18;
+        uint256 mintAssets = vault.previewMint(targetShares);
+        uint256 depositShares = vault.previewDeposit(mintAssets);
+
+        // deposit path using the mint-required assets must yield >= targetShares.
+        assertGe(
+            depositShares, targetShares, "previewMint must not undercharge relative to deposit"
+        );
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────

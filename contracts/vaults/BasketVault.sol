@@ -461,6 +461,20 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return _convertToShares(effectiveAssets, Math.Rounding.Floor);
     }
 
+    /// @notice Worst-case assets required to mint `shares`.
+    ///
+    ///         Grosses up the raw NAV by `MAX_BPS / (MAX_BPS - maxSlippageBps)` so that
+    ///         after the on-chain swap applies the same `maxSlippageBps` haircut, the vault
+    ///         captures the full proportional NAV. Without this override, `mint()` would
+    ///         undercharge relative to `deposit()`, allowing a permissionless value leak
+    ///         onto existing holders (see docs/code-review/smart-contract-vulnerability-audit-20260609.md H-1).
+    ///
+    ///         Rounded up (Ceil) so the vault is never shortchanged.
+    function previewMint(uint256 shares) public view override returns (uint256) {
+        uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Ceil);
+        return grossAssets.mulDiv(MAX_BPS, MAX_BPS - maxSlippageBps, Math.Rounding.Ceil);
+    }
+
     /// @notice Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
     function previewWithdraw(uint256 assets_) public view override returns (uint256) {
         uint256 gross = exitFeeBps == 0
