@@ -161,7 +161,7 @@ export function buildAdminTabs(a: BuildAdminTabsArgs): TabDef[] {
   tabs.push({
     id: "timelock",
     label: "Timelock",
-    content: <TimelockPanel timelockAddress={a.timelockAddress} />,
+    content: <TimelockPanel timelockAddress={a.timelockAddress} now={a.now} />,
   });
 
   // History tab — only when an explorer API URL and a plausible agent

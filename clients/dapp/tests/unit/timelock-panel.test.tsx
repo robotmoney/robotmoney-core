@@ -45,6 +45,9 @@ const CANCELLER_ADDR = "0x3333333333333333333333333333333333333333" as Address;
 
 const MIN_DELAY = 172800n; // 2 days
 
+/** Stable clock value for deterministic tests. */
+const FAKE_NOW = 1_700_000_000_000;
+
 /** Scalar results: [minDelay, PROPOSER_ROLE hash, CANCELLER_ROLE hash, EXECUTOR_ROLE hash]. */
 function makeScalars(minDelay: bigint = MIN_DELAY) {
   return [
@@ -55,7 +58,7 @@ function makeScalars(minDelay: bigint = MIN_DELAY) {
     },
     {
       status: "success",
-      result: "0xfd643c72710c63c0180259aba6b2d05451e3591a24c503a6ecdfd9a79b77eded",
+      result: "0xfd643c72710c63c0180259aba6b2d05451e3591a24e58b62239378085726f783",
     },
     {
       status: "success",
@@ -78,47 +81,51 @@ function setupHappyPath({
   });
 
   // getLogs: return events for role members and scheduled ops.
-  mockGetLogs.mockImplementation(async (params: { args?: { role?: string }; event?: { name?: string } }) => {
-    const eventName = params.event?.name;
+  mockGetLogs.mockImplementation(
+    async (params: { args?: { role?: string }; event?: { name?: string } }) => {
+      const eventName = params.event?.name;
 
-    if (eventName === "RoleGranted") {
-      const role = params.args?.role;
-      // PROPOSER_ROLE grants.
-      if (role === "0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1") {
-        return proposers.map((addr) => ({ args: { role, account: addr } }));
+      if (eventName === "RoleGranted") {
+        const role = params.args?.role;
+        // PROPOSER_ROLE grants.
+        if (role === "0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1") {
+          return proposers.map((addr) => ({ args: { role, account: addr } }));
+        }
+        // CANCELLER_ROLE grants.
+        if (role === "0xfd643c72710c63c0180259aba6b2d05451e3591a24e58b62239378085726f783") {
+          return cancellers.map((addr) => ({ args: { role, account: addr } }));
+        }
+        // EXECUTOR_ROLE grants (none for open policy).
+        return [];
       }
-      // CANCELLER_ROLE grants.
-      if (role === "0xfd643c72710c63c0180259aba6b2d05451e3591a24c503a6ecdfd9a79b77eded") {
-        return cancellers.map((addr) => ({ args: { role, account: addr } }));
+
+      if (eventName === "RoleRevoked") {
+        return [];
       }
-      // EXECUTOR_ROLE grants (none for open policy).
+
+      if (eventName === "CallScheduled") {
+        return pendingOps.map((op) => ({ args: { id: op.id } }));
+      }
+
       return [];
-    }
-
-    if (eventName === "RoleRevoked") {
-      return [];
-    }
-
-    if (eventName === "CallScheduled") {
-      return pendingOps.map((op) => ({ args: { id: op.id } }));
-    }
-
-    return [];
-  });
+    },
+  );
 
   // readContract: hasRole(EXECUTOR_ROLE, address(0)) → isOpenExecutor.
   // getTimestamp(id) → op.ts.
-  mockReadContract.mockImplementation(async (params: { functionName?: string; args?: unknown[] }) => {
-    if (params.functionName === "hasRole") {
-      return isOpenExecutor;
-    }
-    if (params.functionName === "getTimestamp") {
-      const id = (params.args as [`0x${string}`])[0];
-      const op = pendingOps.find((o) => o.id === id);
-      return op ? op.ts : 0n;
-    }
-    return null;
-  });
+  mockReadContract.mockImplementation(
+    async (params: { functionName?: string; args?: unknown[] }) => {
+      if (params.functionName === "hasRole") {
+        return isOpenExecutor;
+      }
+      if (params.functionName === "getTimestamp") {
+        const id = (params.args as [`0x${string}`])[0];
+        const op = pendingOps.find((o) => o.id === id);
+        return op ? op.ts : 0n;
+      }
+      return null;
+    },
+  );
 }
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -138,8 +145,13 @@ beforeEach(() => {
 
 describe("TimelockPanel — loading state", () => {
   it("shows loading indicator while scalars are pending", () => {
-    (useReadContracts as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined, error: null });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    (useReadContracts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      error: null,
+    });
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     expect(getByTestId("timelock-loading")).toBeTruthy();
   });
 });
@@ -147,7 +159,7 @@ describe("TimelockPanel — loading state", () => {
 describe("TimelockPanel — error / missing-config state", () => {
   it("renders error when timelockAddress is undefined", async () => {
     (useReadContracts as ReturnType<typeof vi.fn>).mockReturnValue({ data: [], error: null });
-    const { getByTestId } = render(<TimelockPanel />);
+    const { getByTestId } = render(<TimelockPanel now={FAKE_NOW} />);
     await waitFor(() => {
       expect(getByTestId("timelock-error")).toBeTruthy();
     });
@@ -159,7 +171,9 @@ describe("TimelockPanel — error / missing-config state", () => {
       data: undefined,
       error: new Error("RPC connection refused"),
     });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-error")).toBeTruthy();
     });
@@ -176,7 +190,9 @@ describe("TimelockPanel — error / missing-config state", () => {
       ],
       error: null,
     });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-error")).toBeTruthy();
     });
@@ -187,7 +203,9 @@ describe("TimelockPanel — error / missing-config state", () => {
 describe("TimelockPanel — ready state: all six data fields", () => {
   it("renders the contract address", async () => {
     setupHappyPath();
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -196,7 +214,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
 
   it("renders the minimum delay in seconds and human-readable form", async () => {
     setupHappyPath({ minDelay: 172800n }); // 2 days
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -207,7 +227,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
 
   it("renders proposer addresses", async () => {
     setupHappyPath({ proposers: [PROPOSER_ADDR] });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -216,7 +238,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
 
   it("renders canceller addresses", async () => {
     setupHappyPath({ cancellers: [CANCELLER_ADDR] });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -225,7 +249,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
 
   it("renders open executor policy", async () => {
     setupHappyPath({ isOpenExecutor: true });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -238,28 +264,32 @@ describe("TimelockPanel — ready state: all six data fields", () => {
     setupHappyPath({ isOpenExecutor: false });
 
     // Override getLogs to also return EXECUTOR_ROLE grants for restricted policy.
-    mockGetLogs.mockImplementation(async (params: { args?: { role?: string }; event?: { name?: string } }) => {
-      const eventName = params.event?.name;
-      if (eventName === "RoleGranted") {
-        const role = params.args?.role;
-        if (role === "0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1") {
-          return [{ args: { role, account: PROPOSER_ADDR } }];
+    mockGetLogs.mockImplementation(
+      async (params: { args?: { role?: string }; event?: { name?: string } }) => {
+        const eventName = params.event?.name;
+        if (eventName === "RoleGranted") {
+          const role = params.args?.role;
+          if (role === "0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1") {
+            return [{ args: { role, account: PROPOSER_ADDR } }];
+          }
+          if (role === "0xfd643c72710c63c0180259aba6b2d05451e3591a24e58b62239378085726f783") {
+            return [{ args: { role, account: CANCELLER_ADDR } }];
+          }
+          // EXECUTOR_ROLE.
+          if (role === "0xd8aa0f3194971a2a116679f7c2090f6939c8d4e01a2a8d7e41d55e5351469e63") {
+            return [{ args: { role, account: EXECUTOR_ADDR } }];
+          }
+          return [];
         }
-        if (role === "0xfd643c72710c63c0180259aba6b2d05451e3591a24c503a6ecdfd9a79b77eded") {
-          return [{ args: { role, account: CANCELLER_ADDR } }];
-        }
-        // EXECUTOR_ROLE.
-        if (role === "0xd8aa0f3194971a2a116679f7c2090f6939c8d4e01a2a8d7e41d55e5351469e63") {
-          return [{ args: { role, account: EXECUTOR_ADDR } }];
-        }
+        if (eventName === "RoleRevoked") return [];
+        if (eventName === "CallScheduled") return [];
         return [];
-      }
-      if (eventName === "RoleRevoked") return [];
-      if (eventName === "CallScheduled") return [];
-      return [];
-    });
+      },
+    );
 
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -270,7 +300,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
 
   it("shows no-pending-ops message when there are none", async () => {
     setupHappyPath({ pendingOps: [] });
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-panel")).toBeTruthy();
     });
@@ -278,11 +310,13 @@ describe("TimelockPanel — ready state: all six data fields", () => {
   });
 
   it("renders pending operations with operation id, ETA, and status", async () => {
-    const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+    const nowSecs = BigInt(Math.floor(FAKE_NOW / 1000));
     const futureTs = nowSecs + 3600n; // 1 hour in the future → "waiting"
-    const pastTs = nowSecs - 60n;    // 1 minute in the past → "ready"
-    const OP_ID_1 = "0x1111111111111111111111111111111111111111111111111111111111111111" as `0x${string}`;
-    const OP_ID_2 = "0x2222222222222222222222222222222222222222222222222222222222222222" as `0x${string}`;
+    const pastTs = nowSecs - 60n; // 1 minute in the past → "ready"
+    const OP_ID_1 =
+      "0x1111111111111111111111111111111111111111111111111111111111111111" as `0x${string}`;
+    const OP_ID_2 =
+      "0x2222222222222222222222222222222222222222222222222222222222222222" as `0x${string}`;
 
     setupHappyPath({
       pendingOps: [
@@ -291,7 +325,9 @@ describe("TimelockPanel — ready state: all six data fields", () => {
       ],
     });
 
-    const { getByTestId } = render(<TimelockPanel timelockAddress={TIMELOCK_ADDR} />);
+    const { getByTestId } = render(
+      <TimelockPanel timelockAddress={TIMELOCK_ADDR} now={FAKE_NOW} />,
+    );
     await waitFor(() => {
       expect(getByTestId("timelock-pending-ops")).toBeTruthy();
     });

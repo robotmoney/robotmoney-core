@@ -36,22 +36,145 @@ import { keccak256, toBytes, zeroAddress } from "viem";
 import { timelockAbi, type TimelockState, type TimelockPendingOp } from "../lib/timelockApi";
 
 // ─── Role selectors (keccak256 of role name strings) ─────────────────────────
-// Computed once at module level — matches OZ TimelockController constants.
 const PROPOSER_ROLE = keccak256(toBytes("PROPOSER_ROLE")) as `0x${string}`;
 const CANCELLER_ROLE = keccak256(toBytes("CANCELLER_ROLE")) as `0x${string}`;
 const EXECUTOR_ROLE = keccak256(toBytes("EXECUTOR_ROLE")) as `0x${string}`;
 
-// Sentinel: OZ marks completed operations with getTimestamp == 1.
 const DONE_TIMESTAMP = 1n;
+
+// ─── Module-level async helpers ──────────────────────────────────────────────
+
+async function fetchRoleMembers(
+  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
+  timelockAddress: Address,
+  roleHash: `0x${string}`,
+): Promise<Address[]> {
+  const grantedLogs = await publicClient.getLogs({
+    address: timelockAddress,
+    event: {
+      type: "event",
+      name: "RoleGranted",
+      inputs: [
+        { name: "role", type: "bytes32", indexed: true },
+        { name: "account", type: "address", indexed: true },
+        { name: "sender", type: "address", indexed: true },
+      ],
+    },
+    args: { role: roleHash },
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+
+  const revokedLogs = await publicClient.getLogs({
+    address: timelockAddress,
+    event: {
+      type: "event",
+      name: "RoleRevoked",
+      inputs: [
+        { name: "role", type: "bytes32", indexed: true },
+        { name: "account", type: "address", indexed: true },
+        { name: "sender", type: "address", indexed: true },
+      ],
+    },
+    args: { role: roleHash },
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+
+  const members = new Set<Address>();
+  for (const log of grantedLogs) {
+    const account = (log.args as { account?: Address }).account;
+    if (account) members.add(account);
+  }
+  for (const log of revokedLogs) {
+    const account = (log.args as { account?: Address }).account;
+    if (account) members.delete(account);
+  }
+  return [...members].sort();
+}
+
+async function fetchPendingOps(
+  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
+  timelockAddress: Address,
+  nowSecs: bigint,
+): Promise<TimelockPendingOp[]> {
+  const scheduledLogs = await publicClient.getLogs({
+    address: timelockAddress,
+    event: {
+      type: "event",
+      name: "CallScheduled",
+      inputs: [
+        { name: "id", type: "bytes32", indexed: true },
+        { name: "index", type: "uint256", indexed: true },
+        { name: "target", type: "address", indexed: false },
+        { name: "value", type: "uint256", indexed: false },
+        { name: "data", type: "bytes", indexed: false },
+        { name: "predecessor", type: "bytes32", indexed: false },
+        { name: "delay", type: "uint256", indexed: false },
+      ],
+    },
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+
+  const opIds = new Set<`0x${string}`>();
+  for (const log of scheduledLogs) {
+    const id = (log.args as { id?: `0x${string}` }).id;
+    if (id) opIds.add(id);
+  }
+
+  const pending: TimelockPendingOp[] = [];
+  await Promise.all(
+    [...opIds].map(async (id) => {
+      try {
+        const ts = await publicClient.readContract({
+          address: timelockAddress,
+          abi: timelockAbi,
+          functionName: "getTimestamp",
+          args: [id],
+        });
+        const readyTs = ts as bigint;
+        if (readyTs > DONE_TIMESTAMP) {
+          pending.push({
+            operationId: id,
+            readyTimestamp: readyTs,
+            status: readyTs <= nowSecs ? "ready" : "waiting",
+          });
+        }
+      } catch {
+        // Skip unreadable operation ids.
+      }
+    }),
+  );
+
+  return pending.sort((a, b) => (a.readyTimestamp < b.readyTimestamp ? -1 : 1));
+}
+
+async function fetchExecutorPolicy(
+  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
+  timelockAddress: Address,
+): Promise<{ policy: "open" | "restricted"; executors: Address[] }> {
+  const isOpen = await publicClient.readContract({
+    address: timelockAddress,
+    abi: timelockAbi,
+    functionName: "hasRole",
+    args: [EXECUTOR_ROLE, zeroAddress],
+  });
+
+  if (isOpen as boolean) {
+    return { policy: "open", executors: [] };
+  }
+
+  const executors = await fetchRoleMembers(publicClient, timelockAddress, EXECUTOR_ROLE);
+  return { policy: "restricted", executors };
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface TimelockPanelProps {
-  /**
-   * 0x-prefixed TimelockController contract address.
-   * When undefined the panel renders the config-missing error state.
-   */
   readonly timelockAddress?: Address;
+  /** Wall-clock ms, injected from parent — never call Date.now in render. */
+  readonly now: number;
 }
 
 // ─── Internal state machine ───────────────────────────────────────────────────
@@ -63,11 +186,10 @@ type PanelState =
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
+export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: "loading" });
   const publicClient = usePublicClient();
 
-  // Phase 1 — read static scalar values (minDelay, role hashes).
   const { data: scalars, error: scalarsError } = useReadContracts({
     contracts: timelockAddress
       ? [
@@ -116,7 +238,6 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
       return;
     }
 
-    // Check for individual call errors.
     const minDelayResult = scalars[0];
     if (minDelayResult.status === "failure") {
       setState({
@@ -128,7 +249,6 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
 
     const minDelaySecs = minDelayResult.result as bigint;
 
-    // Kick off the async discovery of role members and pending operations.
     void (async () => {
       try {
         if (!publicClient) {
@@ -136,143 +256,13 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
           return;
         }
 
-        // ── Role member discovery via getLogs ──────────────────────────────
-
-        async function fetchRoleMembers(roleHash: `0x${string}`): Promise<Address[]> {
-          // RoleGranted(bytes32 indexed role, address indexed account, ...)
-          const grantedLogs = await publicClient!.getLogs({
-            address: timelockAddress!,
-            event: {
-              type: "event",
-              name: "RoleGranted",
-              inputs: [
-                { name: "role", type: "bytes32", indexed: true },
-                { name: "account", type: "address", indexed: true },
-                { name: "sender", type: "address", indexed: true },
-              ],
-            },
-            args: { role: roleHash },
-            fromBlock: 0n,
-            toBlock: "latest",
-          });
-
-          const revokedLogs = await publicClient!.getLogs({
-            address: timelockAddress!,
-            event: {
-              type: "event",
-              name: "RoleRevoked",
-              inputs: [
-                { name: "role", type: "bytes32", indexed: true },
-                { name: "account", type: "address", indexed: true },
-                { name: "sender", type: "address", indexed: true },
-              ],
-            },
-            args: { role: roleHash },
-            fromBlock: 0n,
-            toBlock: "latest",
-          });
-
-          const members = new Set<Address>();
-          for (const log of grantedLogs) {
-            const account = (log.args as { account?: Address }).account;
-            if (account) members.add(account);
-          }
-          for (const log of revokedLogs) {
-            const account = (log.args as { account?: Address }).account;
-            if (account) members.delete(account);
-          }
-          return [...members].sort();
-        }
-
-        // ── Pending operation discovery via CallScheduled logs ─────────────
-
-        async function fetchPendingOps(): Promise<TimelockPendingOp[]> {
-          const scheduledLogs = await publicClient!.getLogs({
-            address: timelockAddress!,
-            event: {
-              type: "event",
-              name: "CallScheduled",
-              inputs: [
-                { name: "id", type: "bytes32", indexed: true },
-                { name: "index", type: "uint256", indexed: true },
-                { name: "target", type: "address", indexed: false },
-                { name: "value", type: "uint256", indexed: false },
-                { name: "data", type: "bytes", indexed: false },
-                { name: "predecessor", type: "bytes32", indexed: false },
-                { name: "delay", type: "uint256", indexed: false },
-              ],
-            },
-            fromBlock: 0n,
-            toBlock: "latest",
-          });
-
-          // Collect unique operation ids.
-          const opIds = new Set<`0x${string}`>();
-          for (const log of scheduledLogs) {
-            const id = (log.args as { id?: `0x${string}` }).id;
-            if (id) opIds.add(id);
-          }
-
-          const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-
-          // Check each op's timestamp.
-          const pending: TimelockPendingOp[] = [];
-          await Promise.all(
-            [...opIds].map(async (id) => {
-              try {
-                const ts = await publicClient!.readContract({
-                  address: timelockAddress!,
-                  abi: timelockAbi,
-                  functionName: "getTimestamp",
-                  args: [id],
-                });
-                const readyTs = ts as bigint;
-                // ts == 0: cancelled/unknown; ts == 1 (DONE_TIMESTAMP): executed.
-                if (readyTs > DONE_TIMESTAMP) {
-                  pending.push({
-                    operationId: id,
-                    readyTimestamp: readyTs,
-                    status: readyTs <= nowSecs ? "ready" : "waiting",
-                  });
-                }
-              } catch {
-                // Skip unreadable operation ids.
-              }
-            }),
-          );
-
-          // Sort by readyTimestamp ascending (earliest ready first).
-          return pending.sort((a, b) => (a.readyTimestamp < b.readyTimestamp ? -1 : 1));
-        }
-
-        // ── Check executor policy ──────────────────────────────────────────
-
-        async function fetchExecutorPolicy(): Promise<{
-          policy: "open" | "restricted";
-          executors: Address[];
-        }> {
-          // Open policy: address(0) holds EXECUTOR_ROLE.
-          const isOpen = await publicClient!.readContract({
-            address: timelockAddress!,
-            abi: timelockAbi,
-            functionName: "hasRole",
-            args: [EXECUTOR_ROLE, zeroAddress],
-          });
-
-          if (isOpen as boolean) {
-            return { policy: "open", executors: [] };
-          }
-
-          // Restricted: discover actual executor members via logs.
-          const executors = await fetchRoleMembers(EXECUTOR_ROLE);
-          return { policy: "restricted", executors };
-        }
+        const nowSecs = BigInt(Math.floor(now / 1000));
 
         const [proposers, cancellers, executorInfo, pendingOps] = await Promise.all([
-          fetchRoleMembers(PROPOSER_ROLE),
-          fetchRoleMembers(CANCELLER_ROLE),
-          fetchExecutorPolicy(),
-          fetchPendingOps(),
+          fetchRoleMembers(publicClient, timelockAddress, PROPOSER_ROLE),
+          fetchRoleMembers(publicClient, timelockAddress, CANCELLER_ROLE),
+          fetchExecutorPolicy(publicClient, timelockAddress),
+          fetchPendingOps(publicClient, timelockAddress, nowSecs),
         ]);
 
         setState({
@@ -294,7 +284,7 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
         });
       }
     })();
-  }, [timelockAddress, scalars, scalarsError, publicClient]);
+  }, [timelockAddress, scalars, scalarsError, publicClient, now]);
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -338,8 +328,7 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
         {/* ── Min delay ── */}
         <dt>Minimum Delay</dt>
         <dd data-testid="timelock-min-delay">
-          {timelock.minDelaySecs.toString()} seconds (
-          {formatDelay(timelock.minDelaySecs)})
+          {timelock.minDelaySecs.toString()} seconds ({formatDelay(timelock.minDelaySecs)})
         </dd>
 
         {/* ── Proposers ── */}
@@ -379,8 +368,8 @@ export function TimelockPanel({ timelockAddress }: TimelockPanelProps) {
         <dd data-testid="timelock-executor-policy">
           {timelock.executorPolicy === "open" ? (
             <span>
-              Open — any address may execute after the delay (
-              <code>address(0)</code> holds EXECUTOR_ROLE)
+              Open — any address may execute after the delay (<code>address(0)</code> holds
+              EXECUTOR_ROLE)
             </span>
           ) : (
             <>
