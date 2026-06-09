@@ -276,4 +276,24 @@ pub async fn install_happy_path_mocks(
         .expect_at_least(0)
         .create_async()
         .await;
+
+    // Deadline uses rpc.block_number() + rpc.block_timestamp()
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result("0x100"))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getBlockByNumber"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result_raw(r#"{"timestamp":"0x64a9f4c0"}"#))
+        .expect_at_least(0)
+        .create_async()
+        .await;
 }
