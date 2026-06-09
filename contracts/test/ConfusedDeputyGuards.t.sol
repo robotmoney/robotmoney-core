@@ -193,7 +193,7 @@ contract ConfusedDeputyGuardsTest is Test {
     ///         confirms shares land at the policy-registered receiver even when a
     ///         different EOA is funding the deposit.
     function test_invariant1_deposit_sharesGoToPolicyReceiver() public {
-        _authorize(depositor, agent, _policy(shareReceiver));
+        _authorize(admin, agent, _policy(shareReceiver));
         _fund(agent, MAX_PER_PAYMENT);
 
         uint64 deadline = uint64(block.timestamp + 60);
@@ -226,7 +226,7 @@ contract ConfusedDeputyGuardsTest is Test {
             maxWithdrawPerWindow: MAX_PER_WINDOW,
             allowedSourceVaults: empty
         });
-        _authorize(depositor, agent, p);
+        _authorize(admin, agent, p);
 
         // Deposit first to have shares.
         _fund(agent, MAX_PER_PAYMENT);
@@ -268,7 +268,7 @@ contract ConfusedDeputyGuardsTest is Test {
         allowed[0] = address(vault);
         IGateway.AgentPolicy memory p = _policy(shareReceiver);
         p.allowedDestinations = allowed;
-        _authorize(depositor, agent, p);
+        _authorize(admin, agent, p);
         _fund(agent, MAX_PER_PAYMENT);
 
         address foreignVault = makeAddr("foreignVault");
@@ -301,7 +301,7 @@ contract ConfusedDeputyGuardsTest is Test {
             maxWithdrawPerWindow: MAX_PER_WINDOW,
             allowedSourceVaults: empty
         });
-        _authorize(depositor, agent, p);
+        _authorize(admin, agent, p);
 
         address foreignVault = makeAddr("foreignVault");
         uint64 dl = uint64(block.timestamp + 60);
@@ -317,19 +317,17 @@ contract ConfusedDeputyGuardsTest is Test {
     ///         setPolicy must revert with NotAgentOwner when the caller is not
     ///         the recorded agentOwner.
     function test_invariant5_setPolicy_requiresAgentOwner() public {
-        _authorize(depositor, agent, _policy(shareReceiver));
+        _authorize(admin, agent, _policy(shareReceiver));
 
         // attacker tries to update the policy to redirect shares to attackerReceiver
         vm.prank(attacker);
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.setPolicy(agent, _policy(attackerReceiver));
 
-        // Original policy is intact: the agentOwner is still the depositor (not the attacker),
+        // Original policy is intact: the agentOwner is still the admin (not the attacker),
         // which proves setPolicy did not execute for the attacker.
         assertEq(
-            gateway.agentOwner(agent),
-            depositor,
-            "agentOwner unchanged after failed setPolicy attack"
+            gateway.agentOwner(agent), admin, "agentOwner unchanged after failed setPolicy attack"
         );
     }
 
@@ -337,7 +335,7 @@ contract ConfusedDeputyGuardsTest is Test {
 
     /// @notice A third party cannot revoke another depositor's agent.
     function test_invariant6_revokeAgent_requiresAgentOwner() public {
-        _authorize(depositor, agent, _policy(shareReceiver));
+        _authorize(admin, agent, _policy(shareReceiver));
 
         vm.prank(attacker);
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
@@ -352,37 +350,36 @@ contract ConfusedDeputyGuardsTest is Test {
     /// @notice authorizeAgent on an already-owned agent reverts AgentAlreadyOwned.
     ///         A second caller cannot steal ownership of an existing agent.
     function test_invariant7_authorizeAgent_rejectsDoubleRegistration() public {
-        _authorize(depositor, agent, _policy(shareReceiver));
+        _authorize(admin, agent, _policy(shareReceiver));
 
-        // Another depositor attempts to re-authorize the same agent address to
-        // redirect its shareReceiver.
-        vm.prank(otherDepositor);
+        // Even admin calling again reverts with AgentAlreadyOwned.
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
         gateway.authorizeAgent(agent, _policy(attackerReceiver));
 
         // Original owner binding is intact.
-        assertEq(gateway.agentOwner(agent), depositor, "agentOwner unchanged");
+        assertEq(gateway.agentOwner(agent), admin, "agentOwner unchanged");
     }
 
     // ─── Invariant 7b: agentOwner binding is permanent until revoke ──────────
 
     /// @notice agentOwner[agent] is set to msg.sender at first authorize and
-    ///         can only change via the authorizing depositor calling revokeAgent.
+    ///         can only change via the recorded owner calling revokeAgent.
     function test_invariant7b_agentOwner_boundToFirstDepositor() public {
-        _authorize(depositor, agent, _policy(shareReceiver));
+        _authorize(admin, agent, _policy(shareReceiver));
 
-        assertEq(gateway.agentOwner(agent), depositor, "first depositor is owner");
+        assertEq(gateway.agentOwner(agent), admin, "admin is owner");
 
-        // The depositor can revoke and allow a fresh authorization.
-        vm.prank(depositor);
+        // The admin (recorded owner) can revoke and allow a fresh authorization.
+        vm.prank(admin);
         gateway.revokeAgent(agent);
 
         assertEq(gateway.agentOwner(agent), address(0), "owner cleared after revoke");
 
-        // Now a different depositor can authorize the same agent address.
-        vm.prank(otherDepositor);
+        // Now the same admin can authorize the same agent address again.
+        vm.prank(admin);
         gateway.authorizeAgent(agent, _policy(shareReceiver));
-        assertEq(gateway.agentOwner(agent), otherDepositor, "new owner after re-authorize");
+        assertEq(gateway.agentOwner(agent), admin, "owner after re-authorize");
     }
 }
 

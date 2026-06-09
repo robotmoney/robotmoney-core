@@ -380,7 +380,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function authorizeAgent(address agent, AgentPolicy calldata p) external {
+    function authorizeAgent(address agent, AgentPolicy calldata p)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         _authorizeAgentInternal(agent, p);
     }
 
