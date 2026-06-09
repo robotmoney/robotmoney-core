@@ -27,7 +27,7 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use alloy_primitives::{Address, Bytes, LogData, B256, U256};
 use alloy_sol_types::{SolCall, SolEvent};
@@ -175,11 +175,6 @@ pub fn run(args: Args) -> i32 {
     };
 
     let deadline_secs = args.deadline_secs.min(MAX_DEADLINE_SKEW_SECS);
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_secs(),
-        Err(_) => 0,
-    };
-    let deadline = now.saturating_add(deadline_secs);
 
     if let Err(err) = require_production_grade_for_write(cfg.chain_id, SignerBackendKind::Software)
     {
@@ -263,7 +258,7 @@ pub fn run(args: Args) -> i32 {
         order_id: format!("{order_id:#x}"),
         idempotency_key: format!("{idempotency_key:#x}"),
         amount: amount.to_string(),
-        deadline,
+        deadline: 0,
         gateway: format!("{gateway_addr:#x}"),
         chain_id: cfg.chain_id,
         tx_hash: None,
@@ -397,6 +392,22 @@ pub fn run(args: Args) -> i32 {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc deposit: rpc client init failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+
+    // -- Deadline from block timestamp ------------------------------------
+    let deadline = match rt.block_on(async {
+        let block_number = rpc.block_number().await?;
+        rpc.block_timestamp(block_number).await
+    }) {
+        Ok(ts) => {
+            let d = ts.saturating_add(deadline_secs);
+            audit.deadline = d;
+            d
+        }
+        Err(e) => {
+            log::error!("rmpc deposit: failed to fetch block timestamp for deadline: {e}");
             return EXIT_STARTUP_FAIL;
         }
     };
@@ -718,14 +729,47 @@ fn error_name(err: &RmpcError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockito::Matcher;
+    use serde_json::json;
 
-    #[test]
-    fn deadline_is_capped_at_max_skew() {
-        // Sanity: the capping logic is straightforward but load-bearing —
-        // the contract rejects deadlines beyond `MAX_DEADLINE_SKEW`.
-        let cap = MAX_DEADLINE_SKEW_SECS;
-        let too_big = cap + 100;
-        assert_eq!(too_big.min(cap), cap);
+    #[tokio::test]
+    async fn deadline_is_capped_at_max_skew() {
+        // Sanity: deadline uses block timestamp, not wall clock.
+        // Mock a block with known timestamp and verify the deadline
+        // is computed as timestamp + capped deadline_secs.
+        let mut server = mockito::Server::new_async().await;
+
+        // Mock eth_blockNumber → 0x100 (256)
+        let _block_mock = server
+            .mock("POST", "/")
+            .match_body(Matcher::AllOf(vec![Matcher::PartialJson(
+                json!({"method": "eth_blockNumber"}),
+            )]))
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":"0x100"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        // Mock eth_getBlockByNumber for 0x100 → timestamp 0x64a9f4c0
+        let _ts_mock = server
+            .mock("POST", "/")
+            .match_body(Matcher::AllOf(vec![Matcher::PartialJson(
+                json!({"method": "eth_getBlockByNumber"}),
+            )]))
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"timestamp":"0x64a9f4c0"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let rpc = RpcClient::new(server.url()).unwrap();
+        let deadline_secs = 300u64;
+        let block_number = rpc.block_number().await.unwrap();
+        let ts = rpc.block_timestamp(block_number).await.unwrap();
+        let deadline = ts.saturating_add(deadline_secs.min(MAX_DEADLINE_SKEW_SECS));
+        // 0x64a9f4c0 = 1_688_859_840 → + 300 deadline_secs → 1_688_860_140
+        assert_eq!(deadline, 1_688_860_140);
     }
 
     #[test]
