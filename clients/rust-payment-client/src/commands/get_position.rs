@@ -39,7 +39,7 @@ use crate::config::Config;
 use crate::gateway::{MockVault, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_INPUT_FAIL: i32 = 2;
@@ -117,7 +117,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-position: rpc client init failed: {e}");
@@ -147,7 +147,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
 /// (chain id, block number, `listVaults()`) propagate as `Err`; per-vault
 /// sub-read failures are captured via `record_err` on the builder.
 async fn read_position(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     holder: Address,
 ) -> crate::errors::Result<Envelope<PositionData>> {
@@ -246,7 +246,7 @@ async fn read_position(
 
 /// Call `VaultRegistry.listVaults()` and return the decoded `address[]`.
 async fn call_list_vaults(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     block_tag: &str,
 ) -> crate::errors::Result<Vec<Address>> {
@@ -269,7 +269,7 @@ async fn call_list_vaults(
 
 /// Call `VaultRegistry.getVault(address)` and return the decoded `VaultRecord`.
 async fn call_get_vault(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     vault: Address,
     block_tag: &str,
@@ -292,7 +292,7 @@ async fn call_get_vault(
 
 /// Call `vault.balanceOf(holder)` and return the decoded `U256`.
 async fn call_balance_of(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     holder: Address,
     block_tag: &str,
@@ -316,7 +316,7 @@ async fn call_balance_of(
 
 /// Call `vault.previewRedeem(shares)` and return the decoded `U256`.
 async fn call_preview_redeem(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     shares: U256,
     block_tag: &str,
@@ -340,7 +340,7 @@ async fn call_preview_redeem(
 
 /// Call `vault.totalAssets()` and return the decoded `U256`.
 async fn call_total_assets(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<U256, String> {
@@ -393,13 +393,15 @@ mod tests {
             vaults: vec![pos],
             portfolio_total_usdc: DecimalU256(U256::from(1_000_000u64)),
         };
-        let env: Envelope<PositionData> =
-            PartialBuilder::new(8453, 17_000_000, data).finish();
+        let env: Envelope<PositionData> = PartialBuilder::new(8453, 17_000_000, data).finish();
         let v: Value = serde_json::to_value(&env).unwrap();
 
         // Envelope header fields
         assert_eq!(v["chain_id"], 8453, "chain_id must be present");
-        assert_eq!(v["block_number"], 17_000_000, "block_number must be present");
+        assert_eq!(
+            v["block_number"], 17_000_000,
+            "block_number must be present"
+        );
         assert_eq!(v["source"], "json_rpc", "source must be json_rpc");
         assert_eq!(v["partial"], false, "partial must be false");
         assert!(
@@ -410,13 +412,22 @@ mod tests {
         // Data fields
         let d = &v["data"];
         assert_eq!(d["address"], "0x0000000000000000000000000000000000000002");
-        assert!(d["portfolio_total_usdc"].is_string(), "portfolio_total_usdc must be string");
+        assert!(
+            d["portfolio_total_usdc"].is_string(),
+            "portfolio_total_usdc must be string"
+        );
         assert_eq!(d["portfolio_total_usdc"], "1000000");
 
         // Vault entry
         let vault = &d["vaults"][0];
-        assert_eq!(vault["vault_address"], "0x0000000000000000000000000000000000000001");
-        assert_eq!(vault["receipt_token_address"], "0x0000000000000000000000000000000000000001");
+        assert_eq!(
+            vault["vault_address"],
+            "0x0000000000000000000000000000000000000001"
+        );
+        assert_eq!(
+            vault["receipt_token_address"],
+            "0x0000000000000000000000000000000000000001"
+        );
         assert!(
             vault["receipt_token_balance"].is_string(),
             "receipt_token_balance must be decimal string"
@@ -493,7 +504,11 @@ keystore_path           = "{ks}"
             ks = keystore.display(),
         );
         std::fs::write(&cfg_path, &toml).expect("write rmpc.toml");
-        let code = run(&cfg_path, "0x0000000000000000000000000000000000000001", false);
+        let code = run(
+            &cfg_path,
+            "0x0000000000000000000000000000000000000001",
+            false,
+        );
         assert_eq!(code, EXIT_STARTUP_FAIL);
     }
 
