@@ -110,3 +110,47 @@ jobs:
             VITE_ENV_CLASS=fork
             VITE_BROWSER_KEYGEN=false
             VITE_HISTORY_PANE=false
+
+  # Dev-scout seam only. Issue #660 owns splitting build from publish and making
+  # this protected-environment gate a real predecessor of all publication.
+  production-approval:
+    name: production-approval-seam
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Protected environment seam
+        run: |
+          printf '%s\n' "Issue #660 enables this approval gate before publication."
+
+  # Dev-scout seam only. Issue #659 exclusively owns contents/packages/id-token
+  # permissions needed for signed tags and keyless image provenance.
+  sign-and-attest:
+    name: sign-and-attest-dapp-seam
+    if: ${{ false }}
+    needs: [production-approval]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - name: Signing and provenance seam
+        run: |
+          printf '%s\n' "Issue #659 enables signed tags, SBOM, and provenance."
+
+  # Dev-scout seam only. Issue #671 owns the serving-layer and deployed-domain
+  # HSTS assertions after #662 establishes the deployment verification contract.
+  verify-dapp-headers:
+    name: verify-dapp-headers-seam
+    if: ${{ false }}
+    needs: [sign-and-attest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Post-deploy header verification seam
+        run: |
+          printf '%s\n' "Issue #671 enables container and production-domain HSTS checks."
