@@ -110,3 +110,68 @@ async fn vault_snapshot_insert_is_idempotent() {
         .unwrap();
     assert_eq!(second, 0);
 }
+
+#[tokio::test]
+async fn agent_policy_insert_roundtrip_with_owner() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    fx.db.upsert_chain(8453, "base", "test").await.unwrap();
+    let gateway = [0xaau8; 20];
+    fx.db
+        .upsert_contract(8453, gateway, "gateway", None)
+        .await
+        .unwrap();
+    fx.db
+        .insert_block(8453, 200, [0x21u8; 32], [0x20u8; 32], 1_700_000_100)
+        .await
+        .unwrap();
+
+    let agent = [0x77u8; 20];
+    let owner = [0x88u8; 20];
+    let tx_hash = [0x99u8; 32];
+
+    // First insert: authorization with owner and window_usage_to_date.
+    let first = fx
+        .db
+        .insert_agent_policy(
+            8453,
+            200,
+            0,
+            tx_hash,
+            agent,
+            Some(owner),
+            false,
+            Some(9_999_999_i64),
+            Some(U256::from(500_000_u64)),
+            Some(U256::from(1_000_000_u64)),
+            Some(U256::from(123_456_u64)),
+            Some(owner),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first, 1, "first insert lands");
+
+    // Second insert with same PK (chain_id, block_number, log_index) is a no-op.
+    let second = fx
+        .db
+        .insert_agent_policy(
+            8453,
+            200,
+            0,
+            tx_hash,
+            agent,
+            Some(owner),
+            false,
+            Some(9_999_999_i64),
+            Some(U256::from(500_000_u64)),
+            Some(U256::from(1_000_000_u64)),
+            Some(U256::from(123_456_u64)),
+            Some(owner),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second, 0, "second insert is a no-op (ON CONFLICT DO NOTHING)");
+
+    assert_eq!(fx.db.count(CountTable::AgentPolicies).await.unwrap(), 1);
+}

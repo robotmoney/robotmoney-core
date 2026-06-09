@@ -45,6 +45,15 @@ pub const CANONICAL_MIGRATION: &str =
 pub const VAULTS_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0002_add_vaults_table.sql");
 
+/// Migration 0003: multi-vault schema additions.
+pub const MULTI_VAULT_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0003_multi_vault_schema.sql");
+
+/// Migration 0004: router weight snapshots table.
+pub const ROUTER_WEIGHT_SNAPSHOTS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0004_add_router_weight_snapshots.sql"
+);
+
 /// Migration 0005: adds the `governance_proposals`, `governance_votes`, and
 /// `router_weight_snapshots` tables (issue #307 and #316).
 /// Renumbered from 0003 to resolve version conflict with migrations 0003
@@ -52,6 +61,30 @@ pub const VAULTS_MIGRATION: &str =
 /// #315 and #316 respectively.
 pub const GOVERNANCE_MIGRATION: &str =
     include_str!("../../../../services/explorer-indexer/migrations/0005_add_governance_tables.sql");
+
+/// Migration 0006: agent_deposits vault column + router_deposit_legs table (issue #373).
+pub const ROUTER_LEGS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0006_agent_deposit_vault_and_router_legs.sql"
+);
+
+/// Migration 0007: dev-scout no-op stubs for account history (#654) and vault
+/// detail (#675). Applied for ordering parity with the canonical migrator; the
+/// real vault detail tables are created by migration 0008 and the real account
+/// history table by migration 0009.
+pub const VAULT_DETAIL_STUBS_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0007_account_history_and_vault_detail_stubs.sql"
+);
+
+/// Migration 0008: vault detail event tables — adapter_allocations,
+/// vault_fee_events, vault_transfer_events (issue #675).
+pub const VAULT_DETAIL_MIGRATION: &str =
+    include_str!("../../../../services/explorer-indexer/migrations/0008_vault_detail_events.sql");
+
+/// Migration 0009: real account_history_events table — drops the scout stub and
+/// recreates it with typed columns (issue #654).
+pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0009_account_history_events.sql"
+);
 
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
@@ -125,10 +158,34 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply vaults migration (0002)");
+    sqlx::raw_sql(MULTI_VAULT_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply multi-vault migration (0003)");
+    sqlx::raw_sql(ROUTER_WEIGHT_SNAPSHOTS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply router weight snapshots migration (0004)");
     sqlx::raw_sql(GOVERNANCE_MIGRATION)
         .execute(pool)
         .await
-        .expect("apply governance migration (0003)");
+        .expect("apply governance migration (0005)");
+    sqlx::raw_sql(ROUTER_LEGS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply router deposit legs migration (0006)");
+    sqlx::raw_sql(VAULT_DETAIL_STUBS_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault detail stubs migration (0007)");
+    sqlx::raw_sql(VAULT_DETAIL_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply vault detail events migration (0008)");
+    sqlx::raw_sql(ACCOUNT_HISTORY_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply account history migration (0009)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -522,6 +579,126 @@ async fn seed_fixture(pool: &PgPool) {
     .bind(&exec_tx[..])
     .bind(true)
     .bind("1")
+    .bind(indexed_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- vault detail event tables (issue #675) ---
+    //
+    // Seed one row in each new table for vault_a_addr at block 600 so the
+    // GET /v1/vaults/:address response includes non-empty arrays for all
+    // three §5.4 data sets.
+    let adapter_addr = hex_bytes("cccccccccccccccccccccccccccccccccccccccc");
+    let owner_addr = vault_a_addr.clone(); // reuse vault_a_addr as the fee owner
+    let detail_tx = hex_bytes("efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef");
+
+    // adapter_allocations: one Allocated event at block 600.
+    sqlx::query(
+        "INSERT INTO adapter_allocations \
+         (chain_id, block_number, log_index, tx_hash, vault, adapter, adapter_index, amount, event_kind) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(600_i64)
+    .bind(0_i32)
+    .bind(&detail_tx[..])
+    .bind(&vault_a_addr[..])
+    .bind(Some(&adapter_addr[..]))
+    .bind(Some(0_i64))
+    .bind("500000")
+    .bind("allocated")
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // vault_fee_events: one ExitFeeCharged event at block 610.
+    sqlx::query(
+        "INSERT INTO vault_fee_events \
+         (chain_id, block_number, log_index, tx_hash, vault, owner, receiver, \
+          gross_assets, fee_amount, net_assets) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::NUMERIC, $9::NUMERIC, $10::NUMERIC)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(610_i64)
+    .bind(0_i32)
+    .bind(&detail_tx[..])
+    .bind(&vault_a_addr[..])
+    .bind(&owner_addr[..])
+    .bind(&agent[..])
+    .bind("1000000")
+    .bind("5000")
+    .bind("995000")
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // vault_transfer_events: one ERC-4626 Deposit event at block 620.
+    sqlx::query(
+        "INSERT INTO vault_transfer_events \
+         (chain_id, block_number, log_index, tx_hash, vault, direction, caller, \
+          owner_or_receiver, assets, shares) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(620_i64)
+    .bind(0_i32)
+    .bind(&detail_tx[..])
+    .bind(&vault_a_addr[..])
+    .bind("deposit")
+    .bind(&agent[..])
+    .bind(&agent[..])
+    .bind("1000000")
+    .bind("1000000")
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- account_history_events (issue #654 fixture) ---
+    //
+    // Seed a deposit event and a withdrawal event for share_receiver (0x5555...)
+    // so the history tests can assert both kinds are returned in block order.
+    //
+    // Also seed a deposit at a lower block number (990) and a withdrawal at a
+    // higher block number (1000) to assert ascending block order.
+    let withdrawal_tx =
+        hex_bytes("abababababababababababababababababababababababababababababababababab");
+
+    // Deposit history event for share_receiver at block 990.
+    sqlx::query(
+        "INSERT INTO account_history_events \
+         (chain_id, block_number, log_index, tx_hash, account, kind, vault, agent, amount, indexed_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(990_i64)
+    .bind(0_i32)
+    .bind(&tx_hash[..])
+    .bind(&share_receiver[..])
+    .bind("deposit")
+    .bind(Some(&gateway[..]))
+    .bind(Some(&agent[..]))
+    .bind(Some("1000000"))
+    .bind(indexed_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Withdrawal history event for share_receiver at block 1000.
+    sqlx::query(
+        "INSERT INTO account_history_events \
+         (chain_id, block_number, log_index, tx_hash, account, kind, vault, agent, amount, indexed_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10)",
+    )
+    .bind(PRIMARY_CHAIN_ID)
+    .bind(1000_i64)
+    .bind(1_i32) // log_index 1 to avoid PK collision with the deposit's tx_hash/block
+    .bind(&withdrawal_tx[..])
+    .bind(&share_receiver[..])
+    .bind("withdrawal")
+    .bind(Some(&gateway[..]))
+    .bind::<Option<&[u8]>>(None)
+    .bind(Some("800000"))
     .bind(indexed_at)
     .execute(pool)
     .await

@@ -33,10 +33,6 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
-    paths:
-      - "contracts/**"
-      - "foundry.toml"
-      - ".github/workflows/suite-01-02-forge-tests.yml"
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -166,6 +162,17 @@ jobs:
           FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
         run: |
           forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
+
+      - name: forge test (deploy seed deposit precondition — issue #656)
+        env:
+          # When RMPC_FORK_RPC_URL is set (secret available), the fork tests in
+          # DeploySeedDeposit.t.sol run against a live Base archive fork.  When the
+          # secret is absent (contributor fork / PR), the fork tests skip cleanly via
+          # the _setUp() guard — the job still passes.  The non-fork constant check
+          # (test_seedDepositConstant_matchesDocumentedMinimum) always runs.
+          FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+        run: |
+          forge test --match-contract "DeploySeedDeposit" -vvv
 
       - name: forge test (Safe multisig integration — issue 422)
         env:

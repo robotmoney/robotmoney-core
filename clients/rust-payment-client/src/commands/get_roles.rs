@@ -37,7 +37,7 @@ use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -103,7 +103,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-roles: rpc client init failed: {e}");
@@ -129,7 +129,7 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
 }
 
 async fn read_roles(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     target: Address,
 ) -> crate::errors::Result<Envelope<RolesData>> {
@@ -169,7 +169,7 @@ async fn read_roles(
 }
 
 async fn read_role_hash(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
     role: &str,
@@ -201,7 +201,7 @@ async fn read_role_hash(
 }
 
 async fn call_has_role(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
     role: B256,

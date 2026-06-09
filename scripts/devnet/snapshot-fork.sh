@@ -169,6 +169,79 @@ if [ ! -s "$DEPLOYMENT_OUT_TMP" ]; then
   exit 1
 fi
 
+# 3a-ext. Deploy VaultRegistry, PortfolioRouter, and RouterGovernance on top
+#         of the base deployment and merge their addresses into the JSON.
+#         These scripts are the same ones the smoke-test harness runs; running
+#         them here ensures the fork-state snapshot captures their bytecode and
+#         the full-stack deployment manifest includes their addresses.
+VAULT_ADDR=$(jq -r '.vault' "$DEPLOYMENT_OUT_TMP")
+USDC_ADDR=$(jq -r '.usdc' "$DEPLOYMENT_OUT_TMP")
+
+echo "[snapshot] running forge script DeployVaultRegistry"
+REG_OUT_TMP=$(mktemp -t deploy.registry.XXXXXX.json)
+export REGISTRY_ADDRESS=""  # will be populated below
+ADMIN_ADDRESS="$ADMIN_ADDRESS" \
+VAULT_ADDRESS="$VAULT_ADDR" \
+USDC_ADDRESS="$USDC_ADDR" \
+DEPLOYMENT_OUT="$REG_OUT_TMP" \
+forge script contracts/script/DeployVaultRegistry.s.sol:DeployVaultRegistry \
+  --rpc-url "$ANVIL_RPC" \
+  --private-key "$DEPLOYER_PK" \
+  --broadcast
+
+if [ ! -s "$REG_OUT_TMP" ]; then
+  echo "ERROR: forge script DeployVaultRegistry did not write deployment artifact" >&2
+  exit 1
+fi
+REGISTRY_ADDR=$(jq -r '.registry' "$REG_OUT_TMP")
+echo "[snapshot] VaultRegistry deployed at $REGISTRY_ADDR"
+
+echo "[snapshot] running forge script DeployPortfolioRouter"
+ROUTER_OUT_TMP=$(mktemp -t deploy.router.XXXXXX.json)
+ADMIN_ADDRESS="$ADMIN_ADDRESS" \
+REGISTRY_ADDRESS="$REGISTRY_ADDR" \
+VAULT_ADDRESS="$VAULT_ADDR" \
+USDC_ADDRESS="$USDC_ADDR" \
+DEPLOYMENT_OUT="$ROUTER_OUT_TMP" \
+forge script contracts/script/DeployPortfolioRouter.s.sol:DeployPortfolioRouter \
+  --rpc-url "$ANVIL_RPC" \
+  --private-key "$DEPLOYER_PK" \
+  --broadcast
+
+if [ ! -s "$ROUTER_OUT_TMP" ]; then
+  echo "ERROR: forge script DeployPortfolioRouter did not write deployment artifact" >&2
+  exit 1
+fi
+PORTFOLIO_ROUTER_ADDR=$(jq -r '.router' "$ROUTER_OUT_TMP")
+echo "[snapshot] PortfolioRouter deployed at $PORTFOLIO_ROUTER_ADDR"
+
+echo "[snapshot] running forge script DeployRouterGovernance"
+GOV_OUT_TMP=$(mktemp -t deploy.governance.XXXXXX.json)
+ADMIN_ADDRESS="$ADMIN_ADDRESS" \
+ROUTER_ADDRESS="$PORTFOLIO_ROUTER_ADDR" \
+DEPLOYMENT_OUT="$GOV_OUT_TMP" \
+forge script contracts/script/DeployRouterGovernance.s.sol:DeployRouterGovernance \
+  --rpc-url "$ANVIL_RPC" \
+  --private-key "$DEPLOYER_PK" \
+  --broadcast
+
+if [ ! -s "$GOV_OUT_TMP" ]; then
+  echo "ERROR: forge script DeployRouterGovernance did not write deployment artifact" >&2
+  exit 1
+fi
+ROUTER_GOVERNANCE_ADDR=$(jq -r '.governance' "$GOV_OUT_TMP")
+echo "[snapshot] RouterGovernance deployed at $ROUTER_GOVERNANCE_ADDR"
+
+# Merge router/governance/registry addresses into the primary deployment JSON.
+MERGED_TMP=$(mktemp -t deploy.merged.XXXXXX.json)
+jq --arg registry "$REGISTRY_ADDR" \
+   --arg portfolio_router "$PORTFOLIO_ROUTER_ADDR" \
+   --arg router_governance "$ROUTER_GOVERNANCE_ADDR" \
+   '. + {registry: $registry, portfolio_router: $portfolio_router, router_governance: $router_governance}' \
+   "$DEPLOYMENT_OUT_TMP" > "$MERGED_TMP"
+mv "$MERGED_TMP" "$DEPLOYMENT_OUT_TMP"
+rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP"
+
 # 3b. Warm well-known upstream addresses so their code+storage are
 #     cached in Anvil's state dump and `--load-state` consumers can
 #     read them WITHOUT contacting the upstream RPC.

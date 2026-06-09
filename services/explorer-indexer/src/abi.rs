@@ -36,9 +36,11 @@
 //! - **IGateway.sol:119** declares `AgentDepositRouted(...)` for multi-leg router deposits.
 //!   Not present in this file — add to `IGatewayEvents` when router path is ingested.
 //!
-//! ### `AgentWithdrawal` — MISSING (not indexed; add if needed)
-//! - **IGateway.sol:139** declares `AgentWithdrawal(...)` for agent-initiated withdrawals.
-//!   Not present in this file — add to `IGatewayEvents` when withdrawal path is ingested.
+//! ### `AgentWithdrawal` — added by issue #654
+//! - **IGateway.sol:139** declares `AgentWithdrawal(bytes32 indexed paymentId,
+//!   bytes32 indexed orderId, address indexed agent, address sourceVault,
+//!   uint256 shares, uint256 assetsOut, address assetRecipient, uint64 windowId)`.
+//!   Indexed in issue #654 — stores a withdrawal history row for the agent.
 //!
 //! ## IVaultRegistryEvents — `contracts/VaultRegistry.sol`
 //!
@@ -204,6 +206,17 @@ sol! {
             uint256 sharesMinted,
             uint64 windowId
         );
+        /// IGateway.sol:139 — emitted on every successful agent withdrawal.
+        event AgentWithdrawal(
+            bytes32 indexed paymentId,
+            bytes32 indexed orderId,
+            address indexed agent,
+            address sourceVault,
+            uint256 shares,
+            uint256 assetsOut,
+            address assetRecipient,
+            uint64  windowId
+        );
         /// IGateway.sol:119 — emitted for router-path deposits (multi-leg).
         event AgentDepositRouted(
             bytes32 indexed paymentId,
@@ -329,6 +342,8 @@ pub struct Topics {
     pub agent_authorized: B256,
     pub agent_revoked: B256,
     pub agent_deposit: B256,
+    /// Agent-initiated withdrawal emitted by IGateway.sol:139.
+    pub agent_withdrawal: B256,
     /// Multi-leg router deposit emitted by IGateway.sol:119.
     pub agent_deposit_routed: B256,
     pub paused: B256,
@@ -370,6 +385,9 @@ impl Topics {
             agent_deposit: keccak256(
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
             ),
+            agent_withdrawal: keccak256(
+                b"AgentWithdrawal(bytes32,bytes32,address,address,uint256,uint256,address,uint64)",
+            ),
             agent_deposit_routed: keccak256(
                 b"AgentDepositRouted(bytes32,bytes32,address,address,address,uint256,uint256[],uint64)",
             ),
@@ -408,6 +426,7 @@ impl Topics {
             self.agent_authorized,
             self.agent_revoked,
             self.agent_deposit,
+            self.agent_withdrawal,
             self.agent_deposit_routed,
             self.paused,
             self.unpaused,
@@ -453,6 +472,10 @@ mod tests {
         assert_eq!(
             t.agent_deposit_routed,
             IGatewayEvents::AgentDepositRouted::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.agent_withdrawal,
+            IGatewayEvents::AgentWithdrawal::SIGNATURE_HASH
         );
         assert_eq!(
             t.agent_authorized,
@@ -554,6 +577,12 @@ mod tests {
                 "AgentDeposit",
                 b"AgentDeposit(bytes32,bytes32,address,address,uint256,uint256,uint64)",
                 IGatewayEvents::AgentDeposit::SIGNATURE_HASH,
+            ),
+            // IGateway.sol:139
+            (
+                "AgentWithdrawal",
+                b"AgentWithdrawal(bytes32,bytes32,address,address,uint256,uint256,address,uint64)",
+                IGatewayEvents::AgentWithdrawal::SIGNATURE_HASH,
             ),
             // IGateway.sol:119
             (

@@ -77,6 +77,11 @@ pub struct CallRequest {
 }
 
 impl RpcClient {
+    /// Returns the endpoint URL (for logging).
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
     /// Construct a client. Validates the URL eagerly — passing garbage to
     /// `Client::new` would defer the error to the first request, and we'd
     /// like the daemon to fail fast on bad config.
@@ -261,6 +266,287 @@ impl RpcClient {
         let stripped = ts_hex.trim_start_matches("0x");
         u64::from_str_radix(stripped, 16)
             .map_err(|e| RmpcError::ErrRpcDecode(format!("timestamp hex: {e}")))
+    }
+}
+
+/// Multi-endpoint RPC client with automatic failover.
+///
+/// Wraps an ordered list of [`RpcClient`] instances. For every JSON-RPC
+/// call, `FailoverRpcClient` tries each endpoint in order, returning the
+/// first successful result. A call only fails if every configured endpoint
+/// returns an error.
+///
+/// This satisfies the security-model.md §12 requirement:
+/// > `rmpc` must support multiple RPC endpoints with automatic failover.
+///
+/// # Construction
+///
+/// Build via [`Config::rpc_client`] (preferred) or `FailoverRpcClient::new`.
+///
+/// # Failover behaviour
+///
+/// Transport errors (`ErrRpcTransport`) and HTTP non-2xx responses trigger
+/// failover. JSON-RPC server errors (`ErrRpcServer`) also trigger failover
+/// — different nodes may handle requests differently. Decode errors
+/// (`ErrRpcDecode`) also trigger failover in case the node is misbehaving.
+///
+/// The last error is returned if all endpoints fail.
+#[derive(Debug, Clone)]
+pub struct FailoverRpcClient {
+    endpoints: Vec<RpcClient>,
+}
+
+impl FailoverRpcClient {
+    /// Construct from an ordered list of URLs. At least one URL is required;
+    /// all URLs must be structurally valid (same check as [`RpcClient::new`]).
+    pub fn new(urls: Vec<String>) -> crate::errors::Result<Self> {
+        if urls.is_empty() {
+            return Err(crate::errors::RmpcError::ErrConfig(
+                "FailoverRpcClient requires at least one endpoint URL".to_string(),
+            ));
+        }
+        let endpoints = urls
+            .into_iter()
+            .map(RpcClient::new)
+            .collect::<crate::errors::Result<Vec<_>>>()?;
+        Ok(Self { endpoints })
+    }
+
+    /// Returns the number of configured endpoints.
+    pub fn endpoint_count(&self) -> usize {
+        self.endpoints.len()
+    }
+
+    /// Issue a raw JSON-RPC call, failing over to subsequent endpoints on error.
+    pub async fn call<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> crate::errors::Result<T> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.call(method, params.clone()).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!(
+                        "rmpc rpc: endpoint failed ({}), trying next; error: {e}",
+                        client.url()
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_chainId`.
+    pub async fn chain_id(&self) -> crate::errors::Result<u64> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.chain_id().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: chain_id failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_blockNumber`.
+    pub async fn block_number(&self) -> crate::errors::Result<u64> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.block_number().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: block_number failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getCode`.
+    pub async fn get_code(
+        &self,
+        address: alloy_primitives::Address,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<alloy_primitives::Bytes> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_code(address, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: get_code failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getBalance`.
+    pub async fn get_balance(
+        &self,
+        address: alloy_primitives::Address,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<alloy_primitives::U256> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_balance(address, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: get_balance failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getTransactionCount`.
+    pub async fn get_transaction_count(
+        &self,
+        address: alloy_primitives::Address,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<u64> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_transaction_count(address, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: get_transaction_count failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_gasPrice`.
+    pub async fn gas_price(&self) -> crate::errors::Result<alloy_primitives::U256> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.gas_price().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: gas_price failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_feeHistory`.
+    pub async fn fee_history(
+        &self,
+        block_count: u64,
+        newest_block: &str,
+        reward_percentiles: &[f64],
+    ) -> crate::errors::Result<alloy_rpc_types::FeeHistory> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.fee_history(block_count, newest_block, reward_percentiles).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: fee_history failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_call`.
+    pub async fn eth_call(
+        &self,
+        req: &CallRequest,
+        tag: Option<&str>,
+    ) -> crate::errors::Result<alloy_primitives::Bytes> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.eth_call(req, tag).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: eth_call failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_sendRawTransaction`.
+    pub async fn send_raw_transaction(
+        &self,
+        raw: &alloy_primitives::Bytes,
+    ) -> crate::errors::Result<alloy_primitives::B256> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.send_raw_transaction(raw).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: send_raw_transaction failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getTransactionReceipt`.
+    pub async fn get_transaction_receipt(
+        &self,
+        tx_hash: alloy_primitives::B256,
+    ) -> crate::errors::Result<Option<alloy_rpc_types::TransactionReceipt>> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_transaction_receipt(tx_hash).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: get_transaction_receipt failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getLogs`.
+    pub async fn get_logs(
+        &self,
+        filter: serde_json::Value,
+    ) -> crate::errors::Result<Vec<RawLog>> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.get_logs(filter.clone()).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: get_logs failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
+    }
+
+    /// `eth_getBlockByNumber` — returns block timestamp.
+    pub async fn block_timestamp(&self, block_number: u64) -> crate::errors::Result<u64> {
+        let mut last_err = None;
+        for client in &self.endpoints {
+            match client.block_timestamp(block_number).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    log::warn!("rmpc rpc: block_timestamp failed on {}, trying next; error: {e}", client.url());
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.expect("endpoints is non-empty"))
     }
 }
 
@@ -486,5 +772,108 @@ mod tests {
         let fh = c.fee_history(5, "latest", &[50.0]).await.unwrap();
         assert_eq!(fh.oldest_block, 1);
         m.assert_async().await;
+    }
+
+    // -- issue #667 — FailoverRpcClient tests --------------------------------
+
+    #[test]
+    fn failover_client_rejects_empty_url_list() {
+        let err = FailoverRpcClient::new(vec![]).unwrap_err();
+        assert!(matches!(err, RmpcError::ErrConfig(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn failover_client_rejects_bad_url() {
+        let err =
+            FailoverRpcClient::new(vec!["not a url".to_string()]).unwrap_err();
+        assert!(matches!(err, RmpcError::ErrConfig(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn failover_client_accepts_single_valid_url() {
+        let c = FailoverRpcClient::new(vec!["http://localhost:8545".to_string()]).unwrap();
+        assert_eq!(c.endpoint_count(), 1);
+    }
+
+    #[test]
+    fn failover_client_accepts_multi_url() {
+        let c = FailoverRpcClient::new(vec![
+            "http://node1:8545".to_string(),
+            "http://node2:8545".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(c.endpoint_count(), 2);
+    }
+
+    /// When the first endpoint returns an HTTP 500, the failover client should
+    /// try the second endpoint and succeed.
+    #[tokio::test]
+    async fn failover_client_retries_on_transport_error() {
+        let mut bad_server = mockito::Server::new_async().await;
+        let _bad_mock = bad_server
+            .mock("POST", "/")
+            .with_status(500)
+            .with_body("upstream down")
+            .create_async()
+            .await;
+
+        let mut good_server = mockito::Server::new_async().await;
+        let _good_mock = good_server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":"0x539"}"#)
+            .create_async()
+            .await;
+
+        let client = FailoverRpcClient::new(vec![
+            bad_server.url(),
+            good_server.url(),
+        ])
+        .unwrap();
+
+        let chain_id = client.chain_id().await.unwrap();
+        assert_eq!(chain_id, 1337);
+    }
+
+    /// When all endpoints fail, the last error is returned.
+    #[tokio::test]
+    async fn failover_client_returns_error_when_all_endpoints_fail() {
+        let mut s1 = mockito::Server::new_async().await;
+        let _m1 = s1
+            .mock("POST", "/")
+            .with_status(500)
+            .with_body("s1 down")
+            .create_async()
+            .await;
+
+        let mut s2 = mockito::Server::new_async().await;
+        let _m2 = s2
+            .mock("POST", "/")
+            .with_status(500)
+            .with_body("s2 down")
+            .create_async()
+            .await;
+
+        let client = FailoverRpcClient::new(vec![s1.url(), s2.url()]).unwrap();
+        let err = client.chain_id().await.unwrap_err();
+        assert!(matches!(err, RmpcError::ErrRpcTransport(_)), "got {err:?}");
+    }
+
+    /// Single-endpoint failover client works the same as a bare `RpcClient`.
+    #[tokio::test]
+    async fn failover_client_single_endpoint_success() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#)
+            .create_async()
+            .await;
+
+        let client = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let block = client.block_number().await.unwrap();
+        assert_eq!(block, 16);
     }
 }

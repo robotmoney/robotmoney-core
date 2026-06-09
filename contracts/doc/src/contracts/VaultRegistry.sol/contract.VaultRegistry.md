@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/be695f9205574cc581de5e47eb871a0721d805b7/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/29a6b0a3488522b2001095b39bc04eabd642f8f6/contracts/VaultRegistry.sol)
 
 **Inherits:**
 AccessControl
@@ -441,6 +441,13 @@ Lifecycle status of a registered vault.
 enum VaultStatus {
     Active,
     Paused,
+    /// @dev Retired: withdraw-only. Existing depositors keep standard
+    ///      ERC-4626 `redeem` at any time and `PortfolioRouter` routes no
+    ///      new deposits here. There is deliberately NO on-chain migration:
+    ///      the protocol never force- or admin-migrates depositor funds to a
+    ///      successor vault. Any migration is user-initiated and user-signed
+    ///      at the app layer (redeem, then deposit). See
+    ///      docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md.
     Retired
 }
 ```
