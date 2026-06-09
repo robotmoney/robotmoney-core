@@ -1748,11 +1748,11 @@ contract GatewayWithdrawTest is Test {
             keccak256("o-1"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-1")
         );
 
-        // Mid-window: depositor re-issues policy (e.g. bumps validUntil).
+        // Mid-window: owner re-issues policy (e.g. bumps validUntil).
         // Rolling state must persist; another full draw must still revert.
         IGateway.AgentPolicy memory p2 = p;
         p2.validUntil = uint64(block.timestamp + 365 days);
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.setPolicy(agent, p2);
 
         _mintSharesAndApprove(shares);
@@ -2054,7 +2054,7 @@ contract GatewayWithdrawTest is Test {
         );
 
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         uint256 shares = 100 * ONE_USDC;
