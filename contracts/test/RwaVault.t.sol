@@ -604,6 +604,81 @@ contract RwaVaultTest is Test {
         vault.setOracleHeartbeat(12 hours);
     }
 
+    // ─── Emergency stale override (issue #750) ──────────────────────────
+
+    /// @notice emergencyUnwind reverts with StalePriceFeed when the Chronicle
+    ///         feed is stale and the override flag is not set.
+    function test_emergencyUnwind_revertsOnStaleFeed() public {
+        uint256 oracleTs = chronicle.latestTimestamp();
+        vm.warp(block.timestamp + 25 hours);
+
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(RwaVault.StalePriceFeed.selector, oracleTs, 24 hours)
+        );
+        vault.emergencyUnwind();
+    }
+
+    /// @notice emergencyUnwindWithOverride reverts with StalePriceFeed when the
+    ///         Chronicle feed is stale and the override flag is not set.
+    function test_emergencyUnwindWithOverride_revertsOnStaleFeed() public {
+        uint256 oracleTs = chronicle.latestTimestamp();
+        vm.warp(block.timestamp + 25 hours);
+
+        address[] memory tokens = new address[](0);
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(RwaVault.StalePriceFeed.selector, oracleTs, 24 hours)
+        );
+        vault.emergencyUnwindWithOverride(tokens);
+    }
+
+    /// @notice emergencyUnwind succeeds when the override flag is set, even
+    ///         when the Chronicle feed is stale.
+    function test_emergencyUnwind_succeedsWithStaleOverride() public {
+        vm.startPrank(emergencyResponder);
+        vault.setEmergencyUnwindStaleOverride(true);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 25 hours);
+
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertTrue(vault.paused(), "vault paused by emergencyUnwind");
+    }
+
+    /// @notice emergencyUnwindWithOverride succeeds when the override flag is
+    ///         set, even when the Chronicle feed is stale.
+    function test_emergencyUnwindWithOverride_succeedsWithStaleOverride() public {
+        vm.prank(emergencyResponder);
+        vault.setEmergencyUnwindStaleOverride(true);
+
+        vm.warp(block.timestamp + 25 hours);
+
+        address[] memory tokens = new address[](0);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwindWithOverride(tokens);
+        assertTrue(vault.paused(), "vault paused by emergencyUnwindWithOverride");
+    }
+
+    /// @notice Only EMERGENCY_ROLE can set the stale override flag.
+    function test_emergencyUnwindStaleOverride_onlyEmergencyRole() public {
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.setEmergencyUnwindStaleOverride(true);
+    }
+
+    /// @notice Setting the stale override flag emits the expected event.
+    function test_emergencyUnwindStaleOverride_emitsEvent() public {
+        vm.prank(emergencyResponder);
+        vm.expectEmit(true, true, true, true);
+        emit RwaVault.EmergencyUnwindStaleOverrideUpdated(true);
+        vault.setEmergencyUnwindStaleOverride(true);
+
+        assertTrue(vault.emergencyUnwindStaleOverride(), "override flag set");
+    }
+
     // ─── ChronicleOracleAdapter: constructor validation ───────────────────────
 
     /// @notice ChronicleOracleAdapter rejects zero-address for router.
