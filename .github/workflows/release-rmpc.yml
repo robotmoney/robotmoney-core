@@ -228,3 +228,47 @@ jobs:
           files: artifacts/*.tar.gz
           draft: false
           fail_on_unmatched_files: true
+
+  # Dev-scout seam only. Issue #660 owns the protected environment and runner
+  # policy; it must split publication from build before enabling this job.
+  production-approval:
+    name: production-approval-seam
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Protected environment seam
+        run: |
+          printf '%s\n' "Issue #660 enables this approval gate before publication."
+
+  # Dev-scout seam only. Issue #659 exclusively owns contents/id-token
+  # permissions and the detached signature/provenance bundle contract.
+  sign-and-attest:
+    name: sign-and-attest-rmpc-seam
+    if: ${{ false }}
+    needs: [production-approval]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Signing and provenance seam
+        run: |
+          printf '%s\n' "Issue #659 enables signed tags and archive provenance."
+
+  # Dev-scout seam only. Issue #662 owns the reusable BaseScan assertion and
+  # the contract-deploy workflow. rmpc does not deploy contracts; this routing
+  # seam records the required predecessor without making release-rmpc a caller.
+  contract-source-verification:
+    name: contract-source-verification-seam
+    if: ${{ false }}
+    needs: [sign-and-attest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: BaseScan verification routing seam
+        run: |
+          printf '%s\n' "Issue #662 implements this gate in the contract-deploy workflow."
