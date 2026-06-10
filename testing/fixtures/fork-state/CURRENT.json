@@ -1,7 +1,7 @@
 {
-  "fixture": "base-46698556.json",
-  "state_file": "base-46698556.anvil-state",
-  "fork_block": 46698556,
+  "fixture": "base-47170704.json",
+  "state_file": "base-47170704.anvil-state",
+  "fork_block": 47170704,
   "chain_id": 8453,
-  "captured_at": "2026-05-31T00:17:49Z"
+  "captured_at": "2026-06-10T22:36:17Z"
 }

@@ -1,6 +1,6 @@
 {
   "$comment": "Canonical: docs/prd.md#112-protocol-asset-vault (issue #482). Expected Uniswap V3 mid prices for the landing-page price strip, pinned to the Base mainnet fork point recorded in testing/ethereum-testnet/config/fork-block.json. `fork_block` MUST equal that manifest's `block_number` — the CI guard `fork_block_aligns_with_expected_prices` in testing/smoke-test/src/fork_manifest.rs fails the build if the fork block changes without this fixture being refreshed in the same commit. The fork integration test (testing/fork-e2e-rust/tests/landing_price_strip_fork.rs) reads each pool's slot0 from the running forked-Base devnet, converts via the shared sqrtPriceX96 math, and asserts the result matches `expected_price` within `tolerance_pct`. The Playwright fork test asserts the rendered cells match these same values.",
-  "fork_block": 46698556,
+  "fork_block": 47170704,
   "chain": "base",
   "tolerance_pct": 0.01,
   "$capture_note": "expected_price values are captured by booting an Anvil fork at fork_block against a Base archive RPC (set RMPC_FORK_RPC_URL to an archive node — public RPCs like publicnode.com prune state older than ~128 blocks and will fail with 'state is pruned'). Run: cast call <pool> 'slot0()(uint160,int24,uint16,uint16,uint16,uint8,bool)' --rpc-url $RMPC_FORK_RPC_URL --block <fork_block> for each pair, decode sqrtPriceX96 using the sqrt_price_x96_to_price logic in testing/fork-e2e-rust/tests/landing_price_strip_fork.rs (rawRatio = (sqrtPriceX96/2^96)^2 * 10^(token0_decimals-token1_decimals), then invert if base_is_token0==false). Update each pair's expected_price and flip its captured flag to true. Also run scripts/devnet/snapshot-fork.sh to refresh the Anvil fork-state fixture when the fork block is bumped. The CI guard fork_block_aligns_with_expected_prices (testing/smoke-test/src/fork_manifest.rs) fails if fork_block drifts. When captured is false the fork integration test reads slot0 and records the live value but does not assert the magnitude (it still asserts the pool exists).",
@@ -16,7 +16,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 2020.74
+      "expected_price": 1615.91
     },
     {
       "id": "weth-usdc",
@@ -26,7 +26,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 2020.74
+      "expected_price": 1615.91
     },
     {
       "id": "cbbtc-usdc",
@@ -36,7 +36,7 @@
       "quote_decimals": 6,
       "base_is_token0": false,
       "captured": true,
-      "expected_price": 73813.96
+      "expected_price": 61329.92
     },
     {
       "id": "wsol-usdc",

@@ -159,6 +159,44 @@ export DEPLOYMENT_OUT="$DEPLOYMENT_OUT_TMP"
 # Foundry test mnemonic index 0 (matches devnet ADMIN_ADDRESS).
 DEPLOYER_PK="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
+# 3-pre. Advance the fork's next-block timestamp to wall-clock now.
+#
+#   Aave's `getReserveNormalizedIncome` computes
+#   `block.timestamp - reserve.lastUpdateTimestamp`.  anvil pins the
+#   *pending* block timestamp to the fork block's own timestamp, which can
+#   predate the reserve's last accrual (recorded in a later block),
+#   causing an arithmetic underflow/overflow and reverting every call that
+#   touches the reserve index — including Deploy.s.sol's mandatory seed
+#   deposit (issue #656) and the warming round-trip added in issue #685.
+#
+#   Advancing the timestamp to wall-clock now (always ≥ any on-chain
+#   lastUpdateTimestamp at the fork block) makes the interest math
+#   monotonic for the entire remainder of this session.
+NOW_TS=$(date +%s)
+echo "[snapshot] advancing fork timestamp to $NOW_TS (wall-clock now)"
+curl -sS -X POST -H 'content-type: application/json' \
+  --data "$(jq -n --arg t "$NOW_TS" '{jsonrpc:"2.0",id:1,method:"evm_setNextBlockTimestamp",params:[($t|tonumber)]}')" \
+  "$ANVIL_RPC" >/dev/null
+curl -sS -X POST -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"evm_mine","params":[]}' \
+  "$ANVIL_RPC" >/dev/null
+
+# 3-pre-usdc. Fund deployer with USDC before the forge deploy.
+#
+#   Deploy.s.sol run() executes a mandatory 1,000 USDC seed deposit from
+#   the broadcaster (issue #656). The deployer (ADMIN_ADDRESS, mnemonic
+#   index 0) holds no USDC in the fork state, so we write its balance slot
+#   directly to avoid whale-impersonation and keep the snapshot hermetic.
+#   FiatTokenV2_1 balances mapping lives at storage slot 9.
+SEED_USDC_UNITS=2000000000   # 2,000 USDC (6 decimals) — covers seed + warm
+DEPLOYER_BAL_SLOT=$(cast index address "$ADMIN_ADDRESS" 9)
+SEED_BAL_HEX=$(cast to-uint256 "$SEED_USDC_UNITS")
+echo "[snapshot] funding deployer with $SEED_USDC_UNITS USDC via storage slot write"
+curl -sS -X POST -H 'content-type: application/json' \
+  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$SEED_BAL_HEX" \
+    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
+  "$ANVIL_RPC" >/dev/null
+
 forge script contracts/script/Deploy.s.sol:Deploy \
   --rpc-url "$ANVIL_RPC" \
   --private-key "$DEPLOYER_PK" \
@@ -241,6 +279,80 @@ jq --arg registry "$REGISTRY_ADDR" \
    "$DEPLOYMENT_OUT_TMP" > "$MERGED_TMP"
 mv "$MERGED_TMP" "$DEPLOYMENT_OUT_TMP"
 rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP"
+
+# 3a-warm. Real-adapter storage warming (issue #685).
+#
+#   The smoke-test Geth+Lighthouse devnet boots its real Aave V3 /
+#   Compound V3 / Morpho adapters from the genesis alloc the ingester
+#   derives from THIS snapshot. anvil's `--dump-state` only serializes
+#   accounts/slots that were *modified* during the fork session; a slot
+#   that the protocol merely read-through-caches is dropped. Unless the
+#   snapshot actually executes a deposit→redeem through each adapter, the
+#   protocol contracts land in genesis with bytecode but no live reserve /
+#   index / position storage, so `balanceOf`/`accrue` style calls decode
+#   empty returndata and revert — which is exactly why the devnet was
+#   pinned to PassthroughAdapter before this issue.
+#
+#   Running one deposit and one partial redeem here forces anvil to fetch
+#   the reserve config, liquidity/borrow index, aToken supply, Comet base
+#   tracking, and Morpho market+position slots into the fork cache AND
+#   dirties every slot the round-trip writes, so the dump captures the
+#   working set the smoke-test adapter calls will later read.
+#
+#   Note: the fork timestamp was already advanced to wall-clock now in
+#   step 3-pre (before the forge deploy) so Aave interest math is already
+#   monotonic — no duplicate evm_setNextBlockTimestamp needed here.
+ADMIN_PK="$DEPLOYER_PK"
+VAULT_ADDR=$(jq -r '.vault // .Vault // empty' "$DEPLOYMENT_OUT_TMP")
+if [ -z "$VAULT_ADDR" ] || [ "$VAULT_ADDR" = "null" ]; then
+  echo "ERROR: deployment artifact missing vault address; cannot warm adapters" >&2
+  exit 1
+fi
+echo "[snapshot] warming real adapters via deposit→redeem round-trip (vault=$VAULT_ADDR)"
+
+# The deployer (admin, mnemonic index 0) is the depositor proxy on the
+# devnet. Mint it forked USDC by overwriting its balance slot directly
+# (no whale impersonation) so the round-trip funds itself hermetically.
+# Note: timestamp was already advanced to wall-clock now in step 3-pre
+# (before the forge deploy), so Aave interest math is already monotonic.
+WARM_DEPOSIT_UNITS=50000000 # 50 USDC (6 decimals)
+# FiatTokenV2_1 balances mapping lives at slot 9 (see genesis_alloc.rs).
+DEPLOYER_BAL_SLOT=$(cast index address "$ADMIN_ADDRESS" 9)
+WARM_BAL_HEX=$(cast to-uint256 "$WARM_DEPOSIT_UNITS")
+curl -sS -X POST -H 'content-type: application/json' \
+  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$DEPLOYER_BAL_SLOT" --arg v "$WARM_BAL_HEX" \
+    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
+  "$ANVIL_RPC" >/dev/null
+
+# Approve + deposit + partial redeem. Each call must mine so the slots
+# settle into anvil state before the dump.
+cast send "$USDC_ADDRESS" "approve(address,uint256)" "$VAULT_ADDR" "$WARM_DEPOSIT_UNITS" \
+  --rpc-url "$ANVIL_RPC" --private-key "$ADMIN_PK" >/dev/null
+cast send "$VAULT_ADDR" "deposit(uint256,address)" "$WARM_DEPOSIT_UNITS" "$ADMIN_ADDRESS" \
+  --rpc-url "$ANVIL_RPC" --private-key "$ADMIN_PK" >/dev/null
+WARM_SHARES=$(cast call "$VAULT_ADDR" "balanceOf(address)(uint256)" "$ADMIN_ADDRESS" \
+  --rpc-url "$ANVIL_RPC")
+WARM_SHARES_NUM=${WARM_SHARES%% *}
+echo "[snapshot]   deposit minted shares=$WARM_SHARES_NUM"
+if [ "$WARM_SHARES_NUM" = "0" ]; then
+  echo "ERROR: warming deposit minted 0 shares; real adapters did not accept funds" >&2
+  exit 1
+fi
+# Redeem half so the redeem path (adapter withdraw) is also warmed.
+WARM_REDEEM=$(cast call "$VAULT_ADDR" "maxRedeem(address)(uint256)" "$ADMIN_ADDRESS" \
+  --rpc-url "$ANVIL_RPC")
+WARM_REDEEM_NUM=${WARM_REDEEM%% *}
+if [ "$WARM_REDEEM_NUM" != "0" ]; then
+  HALF=$(cast call "$VAULT_ADDR" "maxRedeem(address)(uint256)" "$ADMIN_ADDRESS" \
+    --rpc-url "$ANVIL_RPC")
+  HALF_NUM=${HALF%% *}
+  HALF_NUM=$((HALF_NUM / 2))
+  if [ "$HALF_NUM" -gt 0 ]; then
+    cast send "$VAULT_ADDR" "redeem(uint256,address,address)" "$HALF_NUM" "$ADMIN_ADDRESS" "$ADMIN_ADDRESS" \
+      --rpc-url "$ANVIL_RPC" --private-key "$ADMIN_PK" >/dev/null
+    echo "[snapshot]   redeemed shares=$HALF_NUM (warming adapter withdraw path)"
+  fi
+fi
 
 # 3b. Warm well-known upstream addresses so their code+storage are
 #     cached in Anvil's state dump and `--load-state` consumers can
