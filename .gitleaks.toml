@@ -28,6 +28,11 @@ regexes = [
   # Hardhat docs and baked into every local devnet; it guards nothing on any real
   # network and appears throughout fixtures and devnet bootstrap scripts.
   '''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+  # Hardhat/anvil deterministic test account #1 private key. Same published
+  # devnet key family as account #0 above; it appeared as AGENT_PRIVKEY in the
+  # since-deleted clients/dapp/scripts/run-fork-roundtrip.sh (history commits
+  # 747128df / bd3ed5ee) and guards nothing on any real network.
+  '''0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d''',
   # Public on-chain ERC-20 / contract addresses are 20-byte (40-hex) values the
   # generic-api-key heuristic flags whenever a nearby key contains "token"
   # (config/dex-pools.json, config/agent-token-shortlist.json, contracts/**
