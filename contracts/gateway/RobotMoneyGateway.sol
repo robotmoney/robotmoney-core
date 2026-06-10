@@ -121,10 +121,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Op-kind discriminators prepended to every `paymentId` hash to
     ///         prevent cross-operation replay (deposit id ≠ depositTo id ≠
-    ///         withdrawal id even when all other inputs are identical).
+    ///         withdrawal id ≠ router-withdrawal id even when all other inputs
+    ///         are identical).
     uint8 internal constant OP_DEPOSIT = 1;
     uint8 internal constant OP_WITHDRAW = 2;
     uint8 internal constant OP_DEPOSIT_TO = 3;
+    uint8 internal constant OP_WITHDRAW_ROUTER = 4;
 
     // -------------------------------------------------------------------
     // Immutables
@@ -798,6 +800,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      forwards USDC only to `policy.assetRecipient`. CEI pattern: state
     ///      effects written before external calls. `nonReentrant` provides
     ///      defense-in-depth.
+    ///
+    ///      Share custody requirement (audit 2026-06-09, L-13 — intentional):
+    ///      this single-vault path pulls shares from the AGENT (`msg.sender`),
+    ///      while `deposit` mints shares to `policy.shareReceiver` and the
+    ///      router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
+    ///      Single-vault withdrawal therefore requires `agent == shareReceiver`,
+    ///      or the share holder to have transferred shares to the agent first.
+    ///      This matches the production client contract: rmpc preflights
+    ///      `vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
+    ///      (clients/rust-payment-client/src/commands/withdraw.rs) before
+    ///      submitting, so changing the pull source here would break the only
+    ///      production caller. No funds are at risk either way: USDC always
+    ///      settles to `policy.assetRecipient`.
     function withdraw(
         bytes32 orderId,
         uint256 shares,
@@ -1021,9 +1036,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
         // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        //    OP_WITHDRAW_ROUTER prefix namespaces router-withdrawal ids away
+        //    from the three sibling op kinds (audit 2026-06-09, L-12).
         args.paymentId = keccak256(
             abi.encode(
-                block.chainid, address(this), msg.sender, orderId, args.totalShares, idempotencyKey
+                OP_WITHDRAW_ROUTER,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                args.totalShares,
+                idempotencyKey
             )
         );
         if (usedPaymentIds[args.paymentId]) revert PaymentIdAlreadyUsed();

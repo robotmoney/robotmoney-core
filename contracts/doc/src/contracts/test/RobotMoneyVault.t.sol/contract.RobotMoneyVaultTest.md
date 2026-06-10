@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -148,18 +148,59 @@ function test_addAdapter_revertsWhenAdapterVaultMismatchesVault() public;
 function test_approvedProductionAndDevnetAdapterTypesCanBeAdded() public;
 ```
 
-### test_depositCannotAllocateToAdapterAfterApprovalRevoked
+### test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle
+
+Revoking an active adapter's allowlist entry must NOT brick deposits
+(audit 2026-06-09, L-4): `_routeDeposit` skips the ineligible adapter
+and the funds stay idle in the vault (UnroutedDeposit emitted).
 
 
 ```solidity
-function test_depositCannotAllocateToAdapterAfterApprovalRevoked() public;
+function test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle() public;
 ```
 
-### test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked
+### test_deposit_routesToRemainingEligibleAdapterAfterRevocation
+
+With two adapters, revoking one routes the full deposit into the
+remaining eligible adapter instead of reverting (audit L-4).
 
 
 ```solidity
-function test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked() public;
+function test_deposit_routesToRemainingEligibleAdapterAfterRevocation() public;
+```
+
+### test_withdraw_revertsWithInsufficientAdapterLiquidity_onAdapterShortfall
+
+`_pullProportional` reverts with the dedicated
+`InsufficientAdapterLiquidity` error (instead of an opaque ERC-20
+transfer revert) when the active adapters cannot deliver the
+requested withdrawal (audit 2026-06-09, L-2).
+
+
+```solidity
+function test_withdraw_revertsWithInsufficientAdapterLiquidity_onAdapterShortfall() public;
+```
+
+### test_withdraw_sweepCoversLastAdapterShortfall
+
+The leftover sweep distributes a shortfall across ALL active adapters
+instead of dumping it on the last one: a withdrawal that the honest
+adapter can cover succeeds even when the registry's last adapter
+under-delivers (audit 2026-06-09, L-2).
+
+
+```solidity
+function test_withdraw_sweepCoversLastAdapterShortfall() public;
+```
+
+### test_rebalance_skipsAdapterAfterApprovalRevoked
+
+Keeper `rebalance()` must NOT brick when an active adapter's allowlist
+entry is revoked (audit L-4): the routing pass skips it; idle funds remain.
+
+
+```solidity
+function test_rebalance_skipsAdapterAfterApprovalRevoked() public;
 ```
 
 ### test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked

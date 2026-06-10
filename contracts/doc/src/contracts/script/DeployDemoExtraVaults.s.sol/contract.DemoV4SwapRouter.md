@@ -1,5 +1,5 @@
 # DemoV4SwapRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Uniswap V4 router stub for demo purposes. Records swaps
 (USDC in → token out) at a 1:1 rate, minting the output token to the

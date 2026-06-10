@@ -255,6 +255,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @param expected This vault address.
     /// @param actual   Vault reported by the adapter's `VAULT()` view.
     error AdapterVaultMismatch(address adapter, address expected, address actual);
+    /// @notice Active adapters cannot deliver the USDC required for this withdrawal.
+    ///         Raised early (before any transfer) so callers see a clear error instead
+    ///         of an opaque downstream ERC-20 balance revert. (Audit 2026-06-09, L-2.)
+    /// @param requested USDC needed from adapters (after idle balance is applied).
+    /// @param available Total USDC the active adapters actually delivered or report holding.
+    error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -386,6 +392,11 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         // Pass 1: fill toward min(equal target, capBps)
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!adapters[i].active) continue;
+            // Skip adapters whose allowlist / codehash eligibility was revoked while
+            // still active in the registry — depositing must not brick when governance
+            // quarantines one adapter (audit 2026-06-09, L-4). `addAdapter` and
+            // `adminRebalance` keep the hard `_requireAdapterEligible` revert.
+            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
             uint256 effectiveTarget =
                 adapters[i].capBps < targetBps ? adapters[i].capBps : targetBps;
             uint256 currentBalance = adapters[i].adapter.totalAssets();
@@ -401,6 +412,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (remaining > 0) {
             for (uint256 i = 0; i < len && remaining > 0; i++) {
                 if (!adapters[i].active) continue;
+                if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
                 uint256 currentBalance = adapters[i].adapter.totalAssets();
                 uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
                 if (currentBalance >= capBalance) continue;
@@ -446,11 +458,23 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     ///         Uses floor rounding on the gross→net conversion so that
     ///         `_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
     ///         guaranteeing `previewWithdraw(maxWithdraw(owner)) <= balanceOf(owner)` even when `exitFeeBps > 0`.
+    ///         Returns 0 while withdrawals are paused, mirroring the deposit-side views
+    ///         (ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert; audit 2026-06-09, L-1).
     /// @param owner The address whose share balance determines the withdrawal cap.
     function maxWithdraw(address owner) public view override returns (uint256) {
+        if (withdrawalsPaused) return 0;
         uint256 shares = balanceOf(owner);
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         return grossAssets.mulDiv(MAX_BPS - exitFeeBps, MAX_BPS, Math.Rounding.Floor);
+    }
+
+    /// @notice Maximum shares a user can redeem in a single call.
+    ///         Returns 0 while withdrawals are paused so that `redeem(maxRedeem(owner))`
+    ///         never reverts, per ERC-4626 (audit 2026-06-09, L-1).
+    /// @param owner The address whose share balance determines the redemption cap.
+    function maxRedeem(address owner) public view override returns (uint256) {
+        if (withdrawalsPaused) return 0;
+        return balanceOf(owner);
     }
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
@@ -533,33 +557,50 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         }
 
         // Remaining amount that must come from adapters (after idle covers part of it).
+        // Fail fast with a dedicated error when the active adapters cannot deliver the
+        // requested amount — clamping here only converts the shortfall into an opaque
+        // downstream ERC-20 transfer revert (audit 2026-06-09, L-2).
         uint256 remainingNeeded = assetsNeeded - idleBalance;
-        if (totalInAdapters == 0) {
-            // All assets are idle in the vault — nothing left to pull from adapters.
-            return;
+        if (remainingNeeded > totalInAdapters) {
+            revert InsufficientAdapterLiquidity(remainingNeeded, totalInAdapters);
         }
-        if (remainingNeeded > totalInAdapters) remainingNeeded = totalInAdapters;
 
         uint256 remaining = remainingNeeded;
-        uint256 lastActiveIdx = type(uint256).max;
 
+        // Pass 1: proportional pulls, each capped at the adapter's reported balance.
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!adapters[i].active) continue;
-            lastActiveIdx = i;
             IStrategyAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
+            if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;
             uint256 actual = adpt.withdraw(pull);
-            remaining -= actual;
+            remaining = actual >= remaining ? 0 : remaining - actual;
             emit Pulled(i, address(adpt), actual);
         }
 
-        if (remaining > 0 && lastActiveIdx != type(uint256).max) {
-            IStrategyAdapter lastAdpt = adapters[lastActiveIdx].adapter;
-            uint256 actual = lastAdpt.withdraw(remaining);
-            emit Pulled(lastActiveIdx, address(lastAdpt), actual);
+        // Pass 2: sweep rounding leftovers across all active adapters, capping each
+        // pull at min(remaining, balance). Replaces the old behaviour of dumping the
+        // full leftover on the last active adapter regardless of its balance, which
+        // could DoS a withdrawal other adapters could cover (audit 2026-06-09, L-2).
+        for (uint256 i = 0; i < len && remaining > 0; i++) {
+            if (!adapters[i].active) continue;
+            IStrategyAdapter adpt = adapters[i].adapter;
+            uint256 adapterBalance = adpt.totalAssets();
+            uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
+            if (pull == 0) continue;
+            uint256 actual = adpt.withdraw(pull);
+            remaining = actual >= remaining ? 0 : remaining - actual;
+            emit Pulled(i, address(adpt), actual);
+        }
+
+        // Adapters under-delivered versus their reported balances (e.g. a buggy or
+        // lying adapter). Surface the typed error instead of letting the subsequent
+        // transfer to the receiver revert opaquely.
+        if (remaining > 0) {
+            revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
         }
     }
 
@@ -875,6 +916,26 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             withdrawalsPaused = paused_;
             emit WithdrawalsPausedChanged(paused_);
         }
+    }
+
+    /// @dev Non-reverting twin of `_requireAdapterEligible`, used by `_routeDeposit`
+    ///      to skip (rather than revert on) adapters whose eligibility was revoked
+    ///      while still active in the registry (audit 2026-06-09, L-4).
+    function _isAdapterEligible(address adapter_) internal view returns (bool) {
+        if (!adapterAllowed[adapter_]) return false;
+        if (!adapterCodeHashAllowed[adapter_.codehash]) return false;
+        (bool usdcOk, bytes memory usdcData) =
+            adapter_.staticcall(abi.encodeWithSignature("USDC()"));
+        if (!usdcOk || usdcData.length != 32 || abi.decode(usdcData, (address)) != asset()) {
+            return false;
+        }
+        (bool vaultOk, bytes memory vaultData) =
+            adapter_.staticcall(abi.encodeWithSignature("VAULT()"));
+        if (!vaultOk || vaultData.length != 32 || abi.decode(vaultData, (address)) != address(this))
+        {
+            return false;
+        }
+        return true;
     }
 
     function _requireAdapterEligible(address adapter_) internal view {

@@ -108,6 +108,11 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     ///      zero or outside the accepted [MIN_NAV, MAX_NAV] range.
     error BadNavPrice(uint256 navPrice);
 
+    /// @dev Raised when the Aerodrome Router returns an empty amounts array,
+    ///      which would otherwise underflow the output-index read
+    ///      (audit 2026-06-09, L-7).
+    error EmptyRouterAmounts();
+
     // ─── Constructor ─────────────────────────────────────────────────
 
     /// @param router_   Aerodrome Router address.
@@ -142,13 +147,16 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     /// @dev Routes via Aerodrome. The `fee` parameter is ignored (Aerodrome
     ///      derives fee from pool config). The swap reverts if the deSPXA
     ///      issuer has frozen transfers — see ADR-0006 §4 (freeze-control risk).
+    ///      The caller-chosen `deadline` is forwarded to the Aerodrome Router,
+    ///      which reverts when expired (audit 2026-06-09, L-5).
     function swap(
         address tokenIn,
         address tokenOut,
         uint24, /* fee — unused by Aerodrome */
         uint256 amountIn,
         uint256 minAmountOut,
-        address recipient
+        address recipient,
+        uint256 deadline
     ) external returns (uint256 amountOut) {
         if (tokenIn == address(0) || tokenOut == address(0)) revert ZeroAddress();
         if (amountIn == 0) return 0;
@@ -160,13 +168,14 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
         routes[0] =
             IAerodromeRouter.Route({from: tokenIn, to: tokenOut, stable: STABLE, factory: FACTORY});
 
-        uint256[] memory amounts = ROUTER.swapExactTokensForTokens(
-            amountIn, minAmountOut, routes, recipient, block.timestamp
-        );
+        uint256[] memory amounts =
+            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, routes, recipient, deadline);
 
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);
 
         // The router returns one amount per hop; the last element is the output.
+        // Guard the index read against a malformed empty return (audit L-7).
+        if (amounts.length == 0) revert EmptyRouterAmounts();
         amountOut = amounts[amounts.length - 1];
     }
 
