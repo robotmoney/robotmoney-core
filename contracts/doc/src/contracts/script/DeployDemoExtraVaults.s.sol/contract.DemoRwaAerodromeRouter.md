@@ -1,5 +1,5 @@
 # DemoRwaAerodromeRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Price-aware Aerodrome router stub for the RWA vault demo.
 Unlike DemoAerodromeRouter (which swaps 1:1), this stub mirrors the

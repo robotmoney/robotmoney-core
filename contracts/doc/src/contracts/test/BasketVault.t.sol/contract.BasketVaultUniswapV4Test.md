@@ -1,5 +1,5 @@
 # BasketVaultUniswapV4Test
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -193,6 +193,37 @@ UniswapV4SwapAdapter.swap() returns 0 for zero amountIn (no revert).
 
 ```solidity
 function test_UniswapV4SwapAdapter_swap_zeroAmountInReturnsZero() public;
+```
+
+### test_UniswapV4SwapAdapter_swap_revertsOnExpiredDeadline
+
+UniswapV4SwapAdapter.swap() enforces the caller-chosen deadline in the
+adapter (the V4 router params carry none) — audit 2026-06-09, L-5.
+
+
+```solidity
+function test_UniswapV4SwapAdapter_swap_revertsOnExpiredDeadline() public;
+```
+
+### test_UniswapV4SwapAdapter_swap_revertsOnUint128MinAmountOutOverflow
+
+UniswapV4SwapAdapter.swap() reverts (SafeCast) instead of silently
+truncating a minAmountOut above uint128 max, which would have
+weakened the slippage floor — audit 2026-06-09, L-6.
+
+
+```solidity
+function test_UniswapV4SwapAdapter_swap_revertsOnUint128MinAmountOutOverflow() public;
+```
+
+### test_UniswapV4SwapAdapter_swap_revertsOnUint128AmountInOverflow
+
+UniswapV4SwapAdapter.swap() reverts (SafeCast) for amountIn above
+uint128 max instead of wrapping — audit 2026-06-09, L-6.
+
+
+```solidity
+function test_UniswapV4SwapAdapter_swap_revertsOnUint128AmountInOverflow() public;
 ```
 
 ### test_UniswapV4SwapAdapter_twapPrice_returnsCorrectAtTickZero

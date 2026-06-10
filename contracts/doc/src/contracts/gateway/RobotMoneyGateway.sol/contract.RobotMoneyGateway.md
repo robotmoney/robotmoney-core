@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -51,7 +51,8 @@ uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
 ### OP_DEPOSIT
 Op-kind discriminators prepended to every `paymentId` hash to
 prevent cross-operation replay (deposit id ≠ depositTo id ≠
-withdrawal id even when all other inputs are identical).
+withdrawal id ≠ router-withdrawal id even when all other inputs
+are identical).
 
 
 ```solidity
@@ -70,6 +71,13 @@ uint8 internal constant OP_WITHDRAW = 2
 
 ```solidity
 uint8 internal constant OP_DEPOSIT_TO = 3
+```
+
+
+### OP_WITHDRAW_ROUTER
+
+```solidity
+uint8 internal constant OP_WITHDRAW_ROUTER = 4
 ```
 
 
@@ -601,6 +609,18 @@ before calling this function. The gateway pulls shares via
 forwards USDC only to `policy.assetRecipient`. CEI pattern: state
 effects written before external calls. `nonReentrant` provides
 defense-in-depth.
+Share custody requirement (audit 2026-06-09, L-13 — intentional):
+this single-vault path pulls shares from the AGENT (`msg.sender`),
+while `deposit` mints shares to `policy.shareReceiver` and the
+router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
+Single-vault withdrawal therefore requires `agent == shareReceiver`,
+or the share holder to have transferred shares to the agent first.
+This matches the production client contract: rmpc preflights
+`vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
+(clients/rust-payment-client/src/commands/withdraw.rs) before
+submitting, so changing the pull source here would break the only
+production caller. No funds are at risk either way: USDC always
+settles to `policy.assetRecipient`.
 
 
 ```solidity

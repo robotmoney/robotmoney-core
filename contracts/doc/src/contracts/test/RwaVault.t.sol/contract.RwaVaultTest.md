@@ -1,5 +1,5 @@
 # RwaVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/RwaVault.t.sol)
 
 **Inherits:**
 Test
@@ -236,7 +236,9 @@ function test_staleFeed_resumesAfterOracleRefresh() public;
 
 ### test_caps_perDepositCapEnforced
 
-Deposits above the per-deposit cap revert with PerDepositCapExceeded.
+Deposits above the per-deposit cap revert. Since BasketVault.maxDeposit
+now reflects the caps (audit 2026-06-09, L-16), OZ's ERC4626 entry-point
+check fires first with ERC4626ExceededMaxDeposit.
 AC-3: caps are enforced.
 
 
@@ -246,7 +248,9 @@ function test_caps_perDepositCapEnforced() public;
 
 ### test_caps_tvlCapEnforced
 
-Deposits above the TVL cap revert with TVLCapExceeded.
+Deposits above the TVL cap revert. Since BasketVault.maxDeposit now
+reflects TVL-cap headroom (audit 2026-06-09, L-16), OZ's ERC4626
+entry-point check fires first with ERC4626ExceededMaxDeposit.
 AC-3: caps are enforced.
 
 

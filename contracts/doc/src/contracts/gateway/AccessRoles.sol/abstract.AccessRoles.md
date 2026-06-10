@@ -1,5 +1,5 @@
 # AccessRoles
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/AccessRoles.sol)
 
 **Inherits:**
 AccessControl
@@ -24,6 +24,12 @@ roles, and an admin compromise cannot also rapid-DoS the gateway.
 Enforced by overriding `_grantRole` to revert on any overlap, and
 exposed via `_assertRoleSeparation` for use in deploy scripts and
 the gateway's `authorizeAgent`.
+`DEFAULT_ADMIN_ROLE` is treated as part of the ADMIN tier
+(audit 2026-06-09, L-14): it may coexist with `ADMIN_ROLE` (the gateway
+constructor grants both to the same admin address), but never with
+`PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
+holder could renounce `ADMIN_ROLE` and then self-grant `AGENT_ROLE`,
+silently bypassing the disjointness invariant.
 
 
 ## Constants
@@ -57,21 +63,33 @@ bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE")
 ## Functions
 ### _grantRole
 
-Override that enforces full pairwise separation among
-{ADMIN, PAUSER, AGENT} before any grant takes effect.
-Reverts on any overlap.
+Override that enforces full pairwise separation among the
+{ADMIN-tier, PAUSER, AGENT} role tiers before any grant takes
+effect, where the ADMIN tier is {ADMIN_ROLE, DEFAULT_ADMIN_ROLE}
+(audit 2026-06-09, L-14). Reverts on any cross-tier overlap;
+ADMIN_ROLE and DEFAULT_ADMIN_ROLE may coexist on one account.
 
 
 ```solidity
 function _grantRole(bytes32 role, address account) internal virtual override returns (bool);
 ```
 
+### _isAdminTier
+
+True when `account` holds either admin-tier role.
+
+
+```solidity
+function _isAdminTier(address account) internal view returns (bool);
+```
+
 ### _assertRoleSeparation
 
-Post-grant invariant check. Reverts if `account` holds any
-two of {ADMIN, PAUSER, AGENT} simultaneously. Intended for
-deploy scripts and the gateway's `authorizeAgent` to assert
-state explicitly.
+Post-grant invariant check. Reverts if `account` holds roles
+from any two of the {ADMIN-tier, PAUSER, AGENT} tiers
+simultaneously (ADMIN_ROLE + DEFAULT_ADMIN_ROLE together count
+as one tier). Intended for deploy scripts and the gateway's
+`authorizeAgent` to assert state explicitly.
 
 
 ```solidity

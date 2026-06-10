@@ -157,6 +157,63 @@ contract AccessRolesTest is Test {
         roles.grantRole(ADMIN, stranger);
     }
 
+    // --- DEFAULT_ADMIN_ROLE is part of the ADMIN tier (audit 2026-06-09, L-14) ---
+
+    function test_grantAgent_revertsIfAlreadyDefaultAdmin() public {
+        // Fresh account holding ONLY DEFAULT_ADMIN_ROLE (no ADMIN_ROLE) — the
+        // renounce-then-self-grant escalation path from the audit.
+        vm.prank(admin);
+        roles.grantRole(bytes32(0), stranger);
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(AGENT, stranger);
+    }
+
+    function test_grantPauser_revertsIfAlreadyDefaultAdmin() public {
+        vm.prank(admin);
+        roles.grantRole(bytes32(0), stranger);
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(PAUSER, stranger);
+    }
+
+    function test_grantDefaultAdmin_revertsIfAlreadyPauser() public {
+        vm.prank(admin);
+        roles.grantRole(PAUSER, pauser);
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(bytes32(0), pauser);
+    }
+
+    function test_grantDefaultAdmin_revertsIfAlreadyAgent() public {
+        vm.prank(admin);
+        roles.grantRole(AGENT, agent);
+
+        vm.prank(admin);
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.grantRole(bytes32(0), agent);
+    }
+
+    function test_defaultAdminAndAdmin_mayCoexistAsOneTier() public view {
+        // The constructor grants both to `admin`; they are one trust tier.
+        assertTrue(roles.hasRole(bytes32(0), admin), "admin holds DEFAULT_ADMIN_ROLE");
+        assertTrue(roles.hasRole(ADMIN, admin), "admin holds ADMIN_ROLE");
+        roles.exposed_assertRoleSeparation(admin);
+    }
+
+    function test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap() public {
+        // Defense in depth: a forged DEFAULT_ADMIN + AGENT overlap must be caught.
+        vm.prank(admin);
+        roles.grantRole(AGENT, agent);
+        roles.unsafe_forgeRole(bytes32(0), agent);
+
+        vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
+        roles.exposed_assertRoleSeparation(agent);
+    }
+
     // --- assertRoleSeparation helper ----------------------------------------
 
     function test_assertRoleSeparation_passesForAdminOnly() public view {

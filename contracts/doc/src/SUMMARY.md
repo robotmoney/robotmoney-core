@@ -127,6 +127,7 @@
     - [GatewayCommitRevealTest](contracts/test/RobotMoneyGateway.t.sol/contract.GatewayCommitRevealTest.md)
     - [TestUSDC](contracts/test/RobotMoneyVault.t.sol/contract.TestUSDC.md)
     - [MockAdapter](contracts/test/RobotMoneyVault.t.sol/contract.MockAdapter.md)
+    - [ShortfallAdapter](contracts/test/RobotMoneyVault.t.sol/contract.ShortfallAdapter.md)
     - [VaultHarness](contracts/test/RobotMoneyVault.t.sol/contract.VaultHarness.md)
     - [RobotMoneyVaultTest](contracts/test/RobotMoneyVault.t.sol/contract.RobotMoneyVaultTest.md)
     - [RobotMoneyVault4626Conformance](contracts/test/RobotMoneyVault4626Conformance.t.sol/contract.RobotMoneyVault4626Conformance.md)

@@ -1354,6 +1354,43 @@ contract GatewayRouterTest is Test {
         assertEq(vaultB.balanceOf(shareReceiver), 0, "shareReceiver vaultB zero");
     }
 
+    /// @dev router: the withdrawFromRouter paymentId preimage carries the
+    ///      OP_WITHDRAW_ROUTER (= 4) op-kind prefix so router-withdrawal ids are
+    ///      namespaced away from the three sibling op kinds (audit 2026-06-09, L-12).
+    function test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        bytes32 orderId = keccak256("router-withdraw-prefix-order");
+        bytes32 idem = keccak256("router-withdraw-prefix-idem");
+
+        vm.prank(agent);
+        (bytes32 paymentId,) =
+            gateway.withdrawFromRouter(orderId, sharesPerLeg, uint64(block.timestamp + 60), idem);
+
+        uint256 totalShares = sharesA + sharesB;
+        bytes32 expected = keccak256(
+            abi.encode(uint8(4), block.chainid, address(gateway), agent, orderId, totalShares, idem)
+        );
+        assertEq(paymentId, expected, "paymentId must use the OP_WITHDRAW_ROUTER prefix");
+
+        // And it must differ from the legacy un-prefixed preimage.
+        bytes32 legacy = keccak256(
+            abi.encode(block.chainid, address(gateway), agent, orderId, totalShares, idem)
+        );
+        assertTrue(paymentId != legacy, "id must differ from the un-prefixed legacy preimage");
+    }
+
     /// @dev router: allowedSourceVaults enforced — vault not in list reverts.
     function test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted() public {
         // Policy restricts source vaults to vaultA only.

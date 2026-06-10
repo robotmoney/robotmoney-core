@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -125,6 +125,74 @@ function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
 
 ```solidity
 function test_rescueTokens_succeedsForNonBasketAsset() public;
+```
+
+### test_rescueTokens_succeedsForInactiveBasketAsset
+
+A removed (inactive) basket asset's token is rescuable when a balance
+reappears later — `totalAssets`/`_sellProportional` skip inactive
+entries, so the balance would otherwise be stranded forever
+(audit 2026-06-09, L-15).
+
+
+```solidity
+function test_rescueTokens_succeedsForInactiveBasketAsset() public;
+```
+
+### test_maxDeposit_reflectsPerDepositCap
+
+
+```solidity
+function test_maxDeposit_reflectsPerDepositCap() public view;
+```
+
+### test_maxDeposit_zeroWhenPaused
+
+
+```solidity
+function test_maxDeposit_zeroWhenPaused() public;
+```
+
+### test_maxDeposit_zeroWhenShutdown
+
+
+```solidity
+function test_maxDeposit_zeroWhenShutdown() public;
+```
+
+### test_maxDeposit_zeroWhenNoActiveAssets
+
+
+```solidity
+function test_maxDeposit_zeroWhenNoActiveAssets() public;
+```
+
+### test_maxDeposit_reflectsTvlHeadroom
+
+
+```solidity
+function test_maxDeposit_reflectsTvlHeadroom() public;
+```
+
+### test_setMaxSlippageBps_revertsBelowPoolFeeFloor
+
+
+```solidity
+function test_setMaxSlippageBps_revertsBelowPoolFeeFloor() public;
+```
+
+### test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor
+
+
+```solidity
+function test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor() public;
+```
+
+### test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets
+
+
+```solidity
+function test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets() public;
 ```
 
 ### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap

@@ -406,20 +406,25 @@ contract RwaVaultTest is Test {
 
     // ─── AC-3: Caps ───────────────────────────────────────────────────────────
 
-    /// @notice Deposits above the per-deposit cap revert with PerDepositCapExceeded.
+    /// @notice Deposits above the per-deposit cap revert. Since BasketVault.maxDeposit
+    ///         now reflects the caps (audit 2026-06-09, L-16), OZ's ERC4626 entry-point
+    ///         check fires first with ERC4626ExceededMaxDeposit.
     ///         AC-3: caps are enforced.
     function test_caps_perDepositCapEnforced() public {
         // perDepositCap = 10k USDC; try to deposit 11k
         uint256 depositAmount = 11_000 * ONE_USDC;
+        assertEq(vault.maxDeposit(user), 10_000 * ONE_USDC, "maxDeposit reflects perDepositCap");
         usdc.mint(user, depositAmount);
         vm.startPrank(user);
         usdc.approve(address(vault), depositAmount);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("PerDepositCapExceeded()"))));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit)
         vault.deposit(depositAmount, user);
         vm.stopPrank();
     }
 
-    /// @notice Deposits above the TVL cap revert with TVLCapExceeded.
+    /// @notice Deposits above the TVL cap revert. Since BasketVault.maxDeposit now
+    ///         reflects TVL-cap headroom (audit 2026-06-09, L-16), OZ's ERC4626
+    ///         entry-point check fires first with ERC4626ExceededMaxDeposit.
     ///         AC-3: caps are enforced.
     function test_caps_tvlCapEnforced() public {
         // Seed the vault with deSPXA so TVL is just 6 USDC below the cap.
@@ -434,7 +439,7 @@ contract RwaVaultTest is Test {
         usdc.mint(user, depositAmount);
         vm.startPrank(user);
         usdc.approve(address(vault), depositAmount);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("TVLCapExceeded()"))));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, headroom)
         vault.deposit(depositAmount, user);
         vm.stopPrank();
     }

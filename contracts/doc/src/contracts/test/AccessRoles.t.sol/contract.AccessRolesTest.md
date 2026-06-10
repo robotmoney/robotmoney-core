@@ -1,5 +1,5 @@
 # AccessRolesTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/AccessRoles.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/AccessRoles.t.sol)
 
 **Inherits:**
 Test
@@ -156,6 +156,48 @@ function test_grantAdmin_revertsIfAlreadyPauser() public;
 
 ```solidity
 function test_adminAndPauser_cannotCoexistOnSameAccount() public;
+```
+
+### test_grantAgent_revertsIfAlreadyDefaultAdmin
+
+
+```solidity
+function test_grantAgent_revertsIfAlreadyDefaultAdmin() public;
+```
+
+### test_grantPauser_revertsIfAlreadyDefaultAdmin
+
+
+```solidity
+function test_grantPauser_revertsIfAlreadyDefaultAdmin() public;
+```
+
+### test_grantDefaultAdmin_revertsIfAlreadyPauser
+
+
+```solidity
+function test_grantDefaultAdmin_revertsIfAlreadyPauser() public;
+```
+
+### test_grantDefaultAdmin_revertsIfAlreadyAgent
+
+
+```solidity
+function test_grantDefaultAdmin_revertsIfAlreadyAgent() public;
+```
+
+### test_defaultAdminAndAdmin_mayCoexistAsOneTier
+
+
+```solidity
+function test_defaultAdminAndAdmin_mayCoexistAsOneTier() public view;
+```
+
+### test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap
+
+
+```solidity
+function test_assertRoleSeparation_revertsOnDefaultAdminAgentOverlap() public;
 ```
 
 ### test_assertRoleSeparation_passesForAdminOnly

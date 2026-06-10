@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -356,6 +356,33 @@ Rounded up (Ceil) so the vault is never shortchanged.
 function previewMint(uint256 shares) public view override returns (uint256);
 ```
 
+### maxDeposit
+
+Maximum USDC that can be deposited given current vault state.
+Returns 0 when the vault is paused or shut down, when no basket
+asset is active, or when the TVL cap is reached; otherwise
+min(perDepositCap, TVL-cap headroom). Overrides the OZ default
+(`type(uint256).max`) for ERC-4626 conformance: max* views MUST
+return 0 when deposits are disabled (audit 2026-06-09, L-16).
+
+
+```solidity
+function maxDeposit(address) public view override returns (uint256);
+```
+
+### maxMint
+
+Maximum shares that can be minted given current vault state.
+Derived from `maxDeposit` through the slippage-discounted share
+conversion (`previewDeposit`) so the implied asset charge of
+`mint(maxMint(receiver))` stays within the deposit caps
+(audit 2026-06-09, L-16).
+
+
+```solidity
+function maxMint(address receiver) public view override returns (uint256);
+```
+
 ### previewWithdraw
 
 Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
@@ -564,7 +591,11 @@ function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 
 ### rescueTokens
 
-Recover accidentally sent ERC-20 tokens (not USDC or basket assets). ADMIN_ROLE.
+Recover accidentally sent ERC-20 tokens (not USDC or active basket assets). ADMIN_ROLE.
+
+Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
+and `_sellProportional` skip them, so any balance that reappears after
+`removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
 
 
 ```solidity
@@ -601,9 +632,28 @@ function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 
 ### setMaxSlippageBps
 
+Update the worst-case slippage bound used for swap floors and previews.
+
+Bounded above by `MAX_SLIPPAGE_BPS` and below by `minSlippageFloorBps()`
+(the highest active asset's pool fee tier in bps) so a single admin write
+cannot set an unsatisfiable `amountOutMinimum` and brick all swaps
+(audit 2026-06-09, L-17).
+
 
 ```solidity
 function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+
+### minSlippageFloorBps
+
+Lower bound accepted by `setMaxSlippageBps`: the highest pool fee
+tier among active basket assets, expressed in basis points
+(`swapFee` is in hundredths of a bip, e.g. 3000 → 30 bps).
+Returns 0 when no asset is active (nothing can brick).
+
+
+```solidity
+function minSlippageFloorBps() public view returns (uint256 floorBps);
 ```
 
 ### setEmergencyUnwindGuard
@@ -760,6 +810,13 @@ function _emergencyUnwindAssetWithCap(AssetInfo memory assetInfo, uint256 applie
 Routes a swap through the per-asset adapter when set, or falls back
 to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
 management: forceApprove before the call, clear after.
+Deadline note (audit 2026-06-09, L-5): adapters take an explicit
+caller-chosen `deadline` instead of hardcoding `block.timestamp`.
+This vault's entry points are standard ERC-4626 (no deadline
+parameter), and every swap executes synchronously inside the
+caller's transaction, so the vault pins the deadline to the current
+block — equivalent protection to a tx-level deadline. External
+integrators calling adapters directly MUST supply a real deadline.
 
 
 ```solidity
@@ -999,6 +1056,18 @@ admin-set reference floor `minUsdcOut`.
 
 ```solidity
 error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+```
+
+### SlippageBelowPoolFeeFloor
+Raised when `setMaxSlippageBps` is called with a value below the
+pool-fee floor of the active basket. A slippage bound below the fee
+tier makes every swap's `amountOutMinimum` unsatisfiable (the fee
+alone consumes more than the allowance), bricking deposits and
+withdrawals (audit 2026-06-09, L-17).
+
+
+```solidity
+error SlippageBelowPoolFeeFloor(uint256 requestedBps, uint256 floorBps);
 ```
 
 ### InvalidTwapWindow

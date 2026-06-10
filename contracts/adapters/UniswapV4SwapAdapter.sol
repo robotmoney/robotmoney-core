@@ -20,6 +20,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {IUniswapV4Pool} from "../interfaces/IUniswapV4Pool.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
@@ -59,6 +60,10 @@ contract UniswapV4SwapAdapter is IBasketSwapAdapter {
     error PoolTokenMismatch();
     /// @dev Raised when the fee tier has no standard tick spacing mapping.
     error UnsupportedFeeTier(uint24 fee);
+    /// @dev Raised when the caller-chosen swap deadline has already passed.
+    ///      Enforced in the adapter because the V4 router params carry no
+    ///      deadline field (audit 2026-06-09, L-5).
+    error DeadlineExpired(uint256 deadline, uint256 blockTimestamp);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -76,15 +81,22 @@ contract UniswapV4SwapAdapter is IBasketSwapAdapter {
     ///      token address ordering (token0 < token1). Tokens are pulled from
     ///      `msg.sender` (BasketVault) via `transferFrom`; BasketVault approves this
     ///      adapter before calling and clears the approval after.
+    ///      The caller-chosen `deadline` is enforced here (the V4 router params
+    ///      carry no deadline field) — audit 2026-06-09, L-5. `amountIn` and
+    ///      `minAmountOut` are range-checked via `SafeCast.toUint128` so
+    ///      out-of-range inputs revert instead of silently wrapping and
+    ///      weakening the slippage floor — audit 2026-06-09, L-6.
     function swap(
         address tokenIn,
         address tokenOut,
         uint24 fee,
         uint256 amountIn,
         uint256 minAmountOut,
-        address recipient
+        address recipient,
+        uint256 deadline
     ) external returns (uint256 amountOut) {
         if (tokenIn == address(0) || tokenOut == address(0)) revert ZeroAddress();
+        if (block.timestamp > deadline) revert DeadlineExpired(deadline, block.timestamp);
         if (amountIn == 0) return 0;
 
         int24 tickSpacing = _tickSpacingForFee(fee);
@@ -107,8 +119,8 @@ contract UniswapV4SwapAdapter is IBasketSwapAdapter {
                     hooks: address(0)
                 }),
                 zeroForOne: zeroForOne,
-                amountIn: uint128(amountIn),
-                amountOutMinimum: uint128(minAmountOut),
+                amountIn: SafeCast.toUint128(amountIn),
+                amountOutMinimum: SafeCast.toUint128(minAmountOut),
                 sqrtPriceLimitX96: 0,
                 hookData: ""
             })
