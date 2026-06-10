@@ -1704,10 +1704,7 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.DeadlineExpired.selector);
         gateway.withdrawFromRouter(
-            keccak256("rw-exp-o"),
-            sharesPerLeg,
-            uint64(block.timestamp - 1),
-            keccak256("rw-exp-i")
+            keccak256("rw-exp-o"), sharesPerLeg, uint64(block.timestamp - 1), keccak256("rw-exp-i")
         );
     }
 
@@ -1831,8 +1828,11 @@ contract GatewayRouterTest is Test {
     /// @dev ShareCustodyInvariantViolated: router vault leaks one share back to
     ///      the gateway during redeemFor → post-call custody check fires.
     function test_withdrawFromRouter_revertsOnShareCustodyInvariant() public {
-        (RobotMoneyGateway leakyGateway, LeakyRedeemRouterVault leakyVault, PortfolioRouter leakyRouter) =
-            _buildLeakyGateway();
+        (
+            RobotMoneyGateway leakyGateway,
+            LeakyRedeemRouterVault leakyVault,
+            PortfolioRouter leakyRouter
+        ) = _buildLeakyGateway();
         _doLeakyWithdraw(leakyGateway, leakyVault, leakyRouter);
     }
 
