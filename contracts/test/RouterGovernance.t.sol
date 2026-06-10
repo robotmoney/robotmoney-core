@@ -405,6 +405,28 @@ contract RouterGovernanceTest is Test {
         assertEq(p.votesFor, ALICE_POWER);
     }
 
+    /// @notice Granting voting power after a proposal is created does not let
+    ///         the new voter affect that proposal — getPastVotes at the snapshot
+    ///         block returns 0 for newly-empowered addresses.
+    ///         Advance the block past the proposal creation so setVotingPower
+    ///         creates a checkpoint after voteSnapshot — the voter's past power
+    ///         at the snapshot was 0.
+    function test_vote_revertsIfPowerGrantedAfterProposal() public {
+        uint256 pid = _proposeValid();
+        uint256 snapBlock = block.number;
+
+        // Grant power to stranger in a later block.
+        vm.roll(snapBlock + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(stranger, ALICE_POWER);
+
+        // Stranger tries to vote — voteSnapshot = snapBlock, at which
+        // stranger had no checkpoint → getPastVotes returns 0.
+        vm.prank(stranger);
+        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
+        gov.vote(pid);
+    }
+
     // ─── vote() ──────────────────────────────────────────────────────────────
 
     function test_vote_success() public {

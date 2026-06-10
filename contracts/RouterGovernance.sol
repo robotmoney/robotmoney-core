@@ -102,11 +102,18 @@ contract RouterGovernance is AccessControl {
     /// @notice Minimum voting power that must vote FOR to reach quorum.
     uint256 public quorumThreshold;
 
-    /// @notice Voting power per address. Assigned by ADMIN_ROLE.
-    mapping(address => uint256) public votingPower;
-
     /// @notice Total voting power outstanding (sum of all assigned powers).
     uint256 public totalVotingPower;
+
+    /// @dev Checkpoint history for voting power. Each push records `(block, power)`.
+    ///      Enables getPastVotes queries against the proposal's voteSnapshot block.
+    struct VotingPowerCheckpoint {
+        uint64 fromBlock;
+        uint216 power;
+    }
+
+    /// @dev Voting power checkpoints per address. Assigned by ADMIN_ROLE.
+    mapping(address => VotingPowerCheckpoint[]) private _votingPowerCheckpoints;
 
     /// @dev Proposals by id (1-indexed; id 0 is never used).
     mapping(uint256 => Proposal) private _proposals;
@@ -204,6 +211,10 @@ contract RouterGovernance is AccessControl {
     ///         proposals that would revert on execute().
     /// @param vault The vault address that failed the router-eligibility check.
     error VaultNotEligible(address vault);
+    /// @notice Thrown by vote() when the proposal's snapshot block is more than
+    ///         256 blocks behind the current block — checkpoints beyond this
+    ///         depth are unavailable due to EVM blockhash limits.
+    error CheckpointTooOld();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -262,10 +273,19 @@ contract RouterGovernance is AccessControl {
     ///         from token holdings. Token-holder voting is a future goal.
     function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE) {
         if (voter == address(0)) revert ZeroAddress();
-        uint256 old = votingPower[voter];
+        uint256 old = votingPower(voter);
         totalVotingPower = totalVotingPower - old + power;
-        votingPower[voter] = power;
+        _votingPowerCheckpoints[voter].push(
+            VotingPowerCheckpoint(uint64(block.number), uint216(power))
+        );
         emit VotingPowerSet(voter, old, power);
+    }
+
+    /// @notice Return the current voting power for `voter` (latest checkpoint value).
+    function votingPower(address voter) public view returns (uint256) {
+        VotingPowerCheckpoint[] storage ckpts = _votingPowerCheckpoints[voter];
+        if (ckpts.length == 0) return 0;
+        return ckpts[ckpts.length - 1].power;
     }
 
     // ─── Admin: default (below-quorum fallback) weights ────────────────────────
@@ -352,7 +372,7 @@ contract RouterGovernance is AccessControl {
         p.executableAfter = execAfter;
         p.snapshotQuorum = quorumThreshold;
         p.voteSnapshot = block.number;
-        p.proposerPower = votingPower[msg.sender];
+        p.proposerPower = votingPower(msg.sender);
 
         // Copy arrays into storage.
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -387,13 +407,16 @@ contract RouterGovernance is AccessControl {
 
     /// @notice Cast a FOR vote on the currently active proposal.
     ///         Caller must have voting power assigned by ADMIN_ROLE.
+    ///         Voting power is read from the checkpoint at the proposal's
+    ///         voteSnapshot block, so mid-proposal power changes do not
+    ///         affect the tally.
     function vote(uint256 proposalId) external {
         Proposal storage p = _proposals[proposalId];
         if (p.id == 0) revert NoActiveProposal();
         if (_state(proposalId) != ProposalState.Active) revert ProposalNotActive();
         if (_hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
-        uint256 power = votingPower[msg.sender];
+        uint256 power = _getPastVotes(msg.sender, p.voteSnapshot);
         if (power == 0) revert NoVotingPower();
 
         _hasVoted[proposalId][msg.sender] = true;
@@ -478,7 +501,36 @@ contract RouterGovernance is AccessControl {
         return _hasVoted[proposalId][voter];
     }
 
+    /// @notice Return the voting power `voter` held at `blockNumber`.
+    ///         Reverts if blockNumber is more than 256 blocks behind the
+    ///         current tip (EVM checkpoint depth limitation).
+    function getPastVotes(address voter, uint256 blockNumber) external view returns (uint256) {
+        if (block.number > blockNumber + 256) revert CheckpointTooOld();
+        return _getPastVotes(voter, blockNumber);
+    }
+
     // ─── Internal helpers ────────────────────────────────────────────────────
+
+    /// @dev Binary search for a voter's power at the given block number.
+    ///      Returns 0 if no checkpoint exists at or before `blockNumber`.
+    function _getPastVotes(address voter, uint256 blockNumber) internal view returns (uint256) {
+        VotingPowerCheckpoint[] storage ckpts = _votingPowerCheckpoints[voter];
+        if (ckpts.length == 0) return 0;
+
+        uint256 low = 0;
+        uint256 high = ckpts.length;
+        while (low < high) {
+            uint256 mid = (low + high) / 2;
+            if (ckpts[mid].fromBlock <= blockNumber) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        if (low == 0) return 0;
+        return ckpts[low - 1].power;
+    }
 
     /// @dev Compute proposal state without requiring `id != 0`.
     function _state(uint256 proposalId) internal view returns (ProposalState) {
