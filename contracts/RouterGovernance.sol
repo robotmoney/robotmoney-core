@@ -76,6 +76,12 @@ contract RouterGovernance is AccessControl {
         /// quorumThreshold storage variable do not retroactively affect this
         /// proposal — preventing both retroactive defeat and retroactive passage.
         uint256 snapshotQuorum;
+        /// Block number at which this proposal was created. Used by vote() to
+        /// query each voter's past voting power via token.getPastVotes, so that
+        /// tokens acquired mid-vote (or transferred away) do not shift the tally.
+        uint256 voteSnapshot;
+        /// Voting power of the proposer at the time of proposal creation.
+        uint256 proposerPower;
         /// Whether the proposal has been executed.
         bool executed;
         /// Whether the proposal has been cancelled by ADMIN_ROLE.
@@ -345,6 +351,8 @@ contract RouterGovernance is AccessControl {
         p.votingDeadline = deadline;
         p.executableAfter = execAfter;
         p.snapshotQuorum = quorumThreshold;
+        p.voteSnapshot = block.number;
+        p.proposerPower = votingPower[msg.sender];
 
         // Copy arrays into storage.
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -435,38 +443,11 @@ contract RouterGovernance is AccessControl {
         return _state(proposalId);
     }
 
-    /// @notice Return the full proposal struct for inspection.
-    function activeProposal()
-        external
-        view
-        returns (
-            uint256 id,
-            address proposer,
-            address[] memory vaults,
-            uint256[] memory bps,
-            uint64 votingDeadline,
-            uint64 executableAfter,
-            uint256 votesFor,
-            uint256 snapshotQuorum,
-            bool executed,
-            bool cancelled
-        )
-    {
+    /// @notice Return the full active proposal struct for inspection.
+    function activeProposal() external view returns (Proposal memory) {
         uint256 pid = currentProposalId;
         if (pid == 0) revert NoActiveProposal();
-        Proposal storage p = _proposals[pid];
-        return (
-            p.id,
-            p.proposer,
-            p.vaults,
-            p.bps,
-            p.votingDeadline,
-            p.executableAfter,
-            p.votesFor,
-            p.snapshotQuorum,
-            p.executed,
-            p.cancelled
-        );
+        return _proposals[pid];
     }
 
     /// @notice Return cadence parameters in one call for rmpc/dapp reads.

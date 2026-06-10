@@ -369,6 +369,42 @@ contract RouterGovernanceTest is Test {
         assertEq(gov.currentProposalId(), 2);
     }
 
+    // ─── voteSnapshot — snapshot voting power at propose time ─────────────────
+
+    /// @notice propose() stores the block number as voteSnapshot.
+    function test_propose_snapshotsVoteSnapshot() public {
+        uint256 pid = _proposeValid();
+        RouterGovernance.Proposal memory p = gov.activeProposal();
+        assertEq(p.voteSnapshot, block.number);
+    }
+
+    /// @notice propose() stores the proposer's voting power as proposerPower.
+    ///         govAdmin has no voting power (0) — the test verifies the field
+    ///         is stored correctly rather than any specific non-zero value.
+    function test_propose_snapshotsProposerPower() public {
+        uint256 pid = _proposeValid();
+        RouterGovernance.Proposal memory p = gov.activeProposal();
+        assertEq(p.proposerPower, 0);
+    }
+
+    /// @notice Mid-proposal voting power changes do not retroactively affect
+    ///         already-cast votes. Alice votes with 600k power at vote time,
+    ///         then admin reduces Alice to 0 — her vote weight is preserved.
+    function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Admin reduces Alice's power to 0 mid-proposal.
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 0);
+
+        // Alice's vote still counts — votesFor was already incremented.
+        RouterGovernance.Proposal memory p = gov.activeProposal();
+        assertEq(p.votesFor, ALICE_POWER);
+    }
+
     // ─── vote() ──────────────────────────────────────────────────────────────
 
     function test_vote_success() public {
@@ -872,9 +908,9 @@ contract RouterGovernanceTest is Test {
         gov.setQuorumThreshold(originalThreshold * 2);
 
         // activeProposal() must expose the original snapshot.
-        (,,,,,, uint256 votesFor, uint256 snap,,) = gov.activeProposal();
-        assertEq(snap, originalThreshold);
-        assertEq(votesFor, 0);
+        RouterGovernance.Proposal memory p = gov.activeProposal();
+        assertEq(p.snapshotQuorum, originalThreshold);
+        assertEq(p.votesFor, 0);
         // Sanity: live threshold has changed.
         assertEq(gov.quorumThreshold(), originalThreshold * 2);
         // Suppress unused variable warning.
