@@ -240,6 +240,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      eligibility requirement (gap-report §1). Provide depth before
     ///      registering the asset.
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+    /// @dev Raised by withdraw() and previewWithdraw(). BasketVault cannot
+    ///      guarantee ERC-4626 exactness for proportional-swap exits — use
+    ///      redeem() instead, which returns actual swap proceeds.
+    error RedeemOnly();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -461,16 +465,31 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return _convertToShares(effectiveAssets, Math.Rounding.Floor);
     }
 
-    /// @notice Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
-    function previewWithdraw(uint256 assets_) public view override returns (uint256) {
-        uint256 gross = exitFeeBps == 0
-            ? assets_
-            : assets_.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
-        return _convertToShares(gross, Math.Rounding.Ceil);
+    /// @notice Worst-case assets required to mint `shares`.
+    ///
+    ///         Grosses up the raw NAV by `MAX_BPS / (MAX_BPS - maxSlippageBps)` so that
+    ///         after the on-chain swap applies the same `maxSlippageBps` haircut, the vault
+    ///         captures the full proportional NAV. Without this override, `mint()` would
+    ///         undercharge relative to `deposit()`, allowing a permissionless value leak
+    ///         onto existing holders (see docs/code-review/smart-contract-vulnerability-audit-20260609.md H-1).
+    ///
+    ///         Rounded up (Ceil) so the vault is never shortchanged.
+    function previewMint(uint256 shares) public view override returns (uint256) {
+        uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Ceil);
+        return grossAssets.mulDiv(MAX_BPS, MAX_BPS - maxSlippageBps, Math.Rounding.Ceil);
     }
 
-    /// @dev Ignores the ERC-4626 `assets` parameter because actual USDC received depends
-    ///      on swap execution. Users should use `redeem` for this vault type.
+    /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because
+    ///         the actual USDC delivered depends on proportional swap execution
+    ///         and variable on-chain slippage. Use `redeem()` instead — the ERC-4626
+    ///         redeem guarantee (actual ≥ previewRedeem) is enforced at the swap level.
+    function previewWithdraw(uint256) public view override returns (uint256) {
+        revert RedeemOnly();
+    }
+
+    /// @dev Performs a proportional-swap withdrawal. The `assets` parameter
+    ///      is intentionally unused because the actual USDC received depends on
+    ///      swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
     ///      Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
     function _withdraw(
         address caller,
@@ -751,7 +770,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
     ///      stale configuration being exploited by a sandwich attacker.
     ///      Reverts when any router leg cannot satisfy its effective floor.
-    function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant {
+    function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
         _pauseIfNotPaused();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
@@ -779,7 +798,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      `EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
     ///      override is enabled.
     function emergencyUnwindWithOverride(address[] calldata tokens)
-        external
+        public
+        virtual
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {

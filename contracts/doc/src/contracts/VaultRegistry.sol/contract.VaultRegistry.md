@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/29a6b0a3488522b2001095b39bc04eabd642f8f6/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/4b538399027636f20b316ae10f72d0d6c6960fb1/contracts/VaultRegistry.sol)
 
 **Inherits:**
 AccessControl

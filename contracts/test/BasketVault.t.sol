@@ -1212,6 +1212,77 @@ contract BasketVaultTest is Test {
         );
         assertGt(usdc.balanceOf(stranger), 0, "stranger received USDC from redeem");
     }
+
+    // ─── previewMint slippage haircut (issue #746) ────────────────────
+
+    /// @notice previewMint grosses up raw NAV by the slippage factor so mint()
+    ///         charges the same haircut as deposit(). Without this override, mint()
+    ///         would undercharge relative to deposit(), enabling a value leak.
+    function test_previewMint_grossesUpBySlippage() public {
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+
+        uint256 targetShares = 100 * 1e18;
+        uint256 rawAssets = vault.convertToAssets(targetShares);
+        uint256 mintAssets = vault.previewMint(targetShares);
+
+        // mintAssets must exceed rawAssets (grossed up by slippage).
+        assertGt(mintAssets, rawAssets, "previewMint must gross up raw NAV by slippage");
+        // Verify the gross-up factor: rawAssets * MAX_BPS / (MAX_BPS - slip).
+        // Ceil rounding may add 1 wei.
+        uint256 expectedGrossUp = rawAssets * (10_000) / (10_000 - vault.maxSlippageBps());
+        assertApproxEqAbs(
+            mintAssets, expectedGrossUp, 1, "previewMint gross-up must match slippage factor"
+        );
+    }
+
+    /// @notice Mint is not cheaper than deposit for the same share count.
+    ///         Depositing the assets that previewMint requires must yield at
+    ///         least targetShares (ERC-4626 symmetry with slippage haircut).
+    function test_previewMint_notCheaperThanDeposit_dilutionPrevented() public {
+        basketToken.mint(address(vault), 500 * ONE_USDC);
+
+        uint256 targetShares = 100 * 1e18;
+        uint256 mintAssets = vault.previewMint(targetShares);
+        uint256 depositShares = vault.previewDeposit(mintAssets);
+
+        // deposit path using the mint-required assets must yield >= targetShares.
+        assertGe(
+            depositShares, targetShares, "previewMint must not undercharge relative to deposit"
+        );
+    }
+
+    // ─── ERC-4626 withdraw exactness (issue #754) ──────────────────────
+
+    /// @notice withdraw() and previewWithdraw() revert with RedeemOnly because
+    ///         BasketVault proportional-swap exits cannot guarantee the ERC-4626
+    ///         exactness guarantee. Users must use redeem() instead.
+    function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public {
+        // Preview (no state needed — view function).
+        vm.expectRevert(BasketVault.RedeemOnly.selector);
+        vault.previewWithdraw(100);
+
+        // Stateful: deposit to get shares, then call withdraw.
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 basketOut = 995 * ONE_USDC;
+        usdc.mint(address(stranger), depositAmount);
+        basketToken.mint(address(router), basketOut);
+        router.setAmountOut(basketOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        vm.prank(stranger);
+        vm.expectRevert(BasketVault.RedeemOnly.selector);
+        vault.withdraw(100, stranger, stranger);
+
+        // redeem still works.
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+
+        assertGt(usdc.balanceOf(stranger), 0, "redeem still works");
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────
