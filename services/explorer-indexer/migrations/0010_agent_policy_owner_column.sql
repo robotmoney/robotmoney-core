@@ -13,6 +13,14 @@
 --
 -- The composite index (chain_id, owner, block_number DESC) supports the
 -- DISTINCT ON query pattern used by GET /v1/accounts/:address/policies.
+--
+-- RENUMBERED 0007 -> 0010: this file originally shipped as version 0007,
+-- colliding with 0007_account_history_and_vault_detail_stubs.sql (dev-scout
+-- PR #708). sqlx requires unique migration versions; the duplicate made
+-- MIGRATOR.run() fail with a _sqlx_migrations_pkey violation on every fresh
+-- database. The scout stubs migration already adds both columns and a partial
+-- agent_policies_owner_idx, so on databases where 0007 applied this migration
+-- is an idempotent no-op (IF NOT EXISTS throughout).
 
 ALTER TABLE agent_policies
     ADD COLUMN IF NOT EXISTS owner                BYTEA,

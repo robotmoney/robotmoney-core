@@ -963,92 +963,14 @@ impl Db {
     // earlier in this impl block; the stubs were removed during the rebase to
     // avoid duplicate definitions.
 
-    /// Insert an agent policy row, including the `owner` and `window_usage_to_date`
-    /// fields added by migration 0007 (issue #661).
-    ///
-    /// # Target issue: #661 — GET /v1/accounts/:address/policies endpoint
-    ///
-    /// The existing `insert_agent_policy` (above) does not accept `owner` or
-    /// `window_usage_to_date`. Issue #661 adds those columns to the migration
-    /// and updates the existing function signature — OR adds a new
-    /// `insert_agent_policy_v2` — to pass them.
-    ///
-    /// This stub documents the *intended* extended signature so issue #661
-    /// implementors have a concrete target.
-    ///
-    /// Migration: `0007_account_history_and_vault_detail_stubs.sql`
-    ///   ALTER TABLE agent_policies ADD COLUMN IF NOT EXISTS owner BYTEA
-    ///   ALTER TABLE agent_policies ADD COLUMN IF NOT EXISTS window_usage_to_date NUMERIC(78,0)
-    ///
-    /// Explorer API consumer:
-    ///   `GET /v1/accounts/:address/policies` (new route, issue #661)
-    ///   Query: SELECT … FROM agent_policies WHERE chain_id = $1 AND owner = $2
-    ///           ORDER BY block_number DESC
-    #[allow(dead_code, unused_variables, clippy::too_many_arguments)]
-    pub async fn insert_agent_policy_with_owner(
-        &self,
-        chain_id: i64,
-        block_number: i64,
-        log_index: i32,
-        tx_hash: [u8; 32],
-        agent: [u8; 20],
-        owner: [u8; 20],
-        revoked: bool,
-        valid_until: Option<i64>,
-        max_per_payment: Option<U256>,
-        max_per_window: Option<U256>,
-        window_usage_to_date: Option<U256>,
-        share_receiver: Option<[u8; 20]>,
-    ) -> Result<u64, DbError> {
-        // STUB — replaced by issue #661.
-        // Real implementation inserts owner and window_usage_to_date into
-        // the agent_policies row. Issue #661 may choose to:
-        //   (a) add parameters to the existing insert_agent_policy, or
-        //   (b) keep this as a separate function for the AgentAuthorized-with-owner path.
-        // The ABI drift fix in issue #366 is a prerequisite: AgentAuthorized currently
-        // drops `address indexed owner` (abi.rs drift map, § IGatewayEvents).
-        unimplemented!("stub — implement in issue #661 (requires issue #366 ABI fix first)")
-    }
-
-    /// List all agent policies owned by a depositor address.
-    ///
-    /// # Target issue: #661 — GET /v1/accounts/:address/policies endpoint
-    ///
-    /// Query pattern (after issue #661's migration lands):
-    ///   SELECT DISTINCT ON (chain_id, agent) * FROM agent_policies
-    ///   WHERE chain_id = $1 AND owner = $2
-    ///   ORDER BY chain_id, agent, block_number DESC
-    ///
-    /// Returns the latest policy state per agent for the given owner.
-    #[allow(dead_code, unused_variables)]
-    pub async fn list_policies_by_owner(
-        &self,
-        chain_id: i64,
-        owner: [u8; 20],
-    ) -> Result<Vec<AgentPolicyRow>, DbError> {
-        // STUB — replaced by issue #661.
-        unimplemented!("stub — implement in issue #661")
-    }
-}
-
-/// Stub row type for `list_policies_by_owner` — issue #661.
-///
-/// The real implementation extends the existing `agent_policies` columns with
-/// `owner` and `window_usage_to_date` from migration 0007.
-#[derive(Debug, Clone)]
-pub struct AgentPolicyRow {
-    pub chain_id: i64,
-    pub block_number: i64,
-    pub log_index: i32,
-    pub tx_hash: Vec<u8>,
-    pub agent: Vec<u8>,
-    pub owner: Option<Vec<u8>>,
-    pub revoked: bool,
-    pub valid_until: Option<i64>,
-    pub max_per_payment: Option<BigDecimal>,
-    pub max_per_window: Option<BigDecimal>,
-    pub window_usage_to_date: Option<BigDecimal>,
-    pub share_receiver: Option<Vec<u8>>,
+    // NOTE: The dev-scout (#703) also provided #661 stubs here
+    // (`insert_agent_policy_with_owner`, `list_policies_by_owner`, and a
+    // placeholder `AgentPolicyRow` type). Issue #661 chose option (a): the
+    // real `insert_agent_policy` (above) accepts `owner` and
+    // `window_usage_to_date` directly, and the owner lookup lives in the
+    // explorer API (`get_account_policies` in clients/explorer-api/src/routes.rs)
+    // as a raw DISTINCT ON query. The unimplemented!() stubs were removed once
+    // migration 0010 (renumbered from a colliding 0007) and the endpoint landed.
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
