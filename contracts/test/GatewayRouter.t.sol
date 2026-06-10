@@ -217,7 +217,7 @@ contract GatewayRouterTest is Test {
     }
 
     function _authorize(address who, IGateway.AgentPolicy memory p) internal {
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(who, p);
     }
 
@@ -418,7 +418,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         noRouterGateway.authorizeAgent(agent, p);
 
         usdc.mint(agent, 10 * ONE_USDC);
@@ -793,7 +793,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: noSources
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -857,7 +857,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: noSources2
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         fotGateway.authorizeAgent(agent, p);
 
         fotUsdc.mint(agent, 200 * ONE_USDC);
@@ -920,7 +920,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -960,7 +960,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -1136,11 +1136,11 @@ contract GatewayRouterTest is Test {
         address agentA = makeAddr("gasAgentA");
         address agentB = makeAddr("gasAgentB");
 
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentA, pDeposit);
 
         IGateway.AgentPolicy memory pDepositTo = _policyWithVaultOnly();
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentB, pDepositTo);
 
         uint256 amount = 100 * ONE_USDC;
@@ -1207,7 +1207,7 @@ contract GatewayRouterTest is Test {
             allowedSourceVaults: empty
         });
 
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentDeposit, pol);
 
         address[] memory vaultDests = new address[](1);
@@ -1224,7 +1224,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentDepositTo, polDepositTo);
 
         uint256 amount = MAX_PER_PAYMENT;
@@ -1559,7 +1559,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: MAX_PER_WINDOW,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         noRouterGateway.authorizeAgent(agent, p);
 
         uint256[] memory sharesPerLeg = new uint256[](0);

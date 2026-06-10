@@ -196,13 +196,12 @@ contract RobotMoneyGatewayTest is Test {
     }
 
     /// @dev Default owner used by `_authorize` when none is specified.
-    ///      Matches the pre-#269 admin-as-authorizer behavior at the test
-    ///      level while exercising the new permissionless path under the
-    ///      hood (any EOA may authorize; recorded owner == msg.sender).
+    ///      Now uses `admin` since `authorizeAgent` requires
+    ///      DEFAULT_ADMIN_ROLE (issue #753).
     address internal depositor = makeAddr("depositor");
 
     function _authorize(address who, IGateway.AgentPolicy memory p) internal {
-        _authorizeAs(depositor, who, p);
+        _authorizeAs(admin, who, p);
     }
 
     function _authorizeAs(address owner, address who, IGateway.AgentPolicy memory p) internal {
@@ -269,13 +268,13 @@ contract RobotMoneyGatewayTest is Test {
 
         vm.expectEmit(true, true, false, true, address(gateway));
         emit IGateway.AgentAuthorized(
-            agent, depositor, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver
+            agent, admin, p.validUntil, p.maxPerPayment, p.maxPerWindow, p.shareReceiver
         );
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agent, p);
 
         assertTrue(gateway.hasRole(agentRole, agent));
-        assertEq(gateway.agentOwner(agent), depositor);
+        assertEq(gateway.agentOwner(agent), admin);
 
         (bool active, uint64 validUntil, uint256 maxPay, uint256 maxWin, address recv,,,) =
             gateway.agents(agent);
@@ -286,43 +285,94 @@ contract RobotMoneyGatewayTest is Test {
         assertEq(recv, shareReceiver);
     }
 
-    /// @dev AC: a non-`ADMIN_ROLE` EOA calls `authorizeAgent` and the gateway
-    ///      records `(msg.sender, agent)` as the owner pair (issue #269).
+    /// @dev AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
+    ///      revert (issue #753 — commit/reveal is now the only permissionless
+    ///      first-time authorization path).
     function test_authorizeAgent_permissionless() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address eoa = makeAddr("random-depositor-eoa");
         assertFalse(gateway.hasRole(adminRole, eoa), "EOA must not hold ADMIN_ROLE");
+        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
         vm.prank(eoa);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                eoa,
+                defaultAdminRole
+            )
+        );
         gateway.authorizeAgent(agent, p);
-
-        assertEq(gateway.agentOwner(agent), eoa);
-        assertTrue(gateway.hasRole(agentRole, agent));
     }
 
-    /// @dev AC: calling `authorizeAgent` from an EOA holding no roles does
-    ///      not revert (issue #269).
+    /// @dev AC: commit/reveal is the permissionless alternative to the
+    ///      admin-only `authorizeAgent` (issue #753).
     function test_authorizeAgent_no_longer_requires_admin_role() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address rolelessEoa = makeAddr("roleless-eoa");
-        assertFalse(gateway.hasRole(adminRole, rolelessEoa), "no ADMIN_ROLE");
-        assertFalse(gateway.hasRole(pauserRole, rolelessEoa), "no PAUSER_ROLE");
-        assertFalse(gateway.hasRole(agentRole, rolelessEoa), "no AGENT_ROLE");
 
+        // Commit
+        bytes32 salt = bytes32(uint256(123));
+        bytes32 commitHash = keccak256(abi.encode(agent, rolelessEoa, salt));
         vm.prank(rolelessEoa);
+        gateway.commitAuthorization(commitHash);
+
+        // Reveal after one block
+        vm.roll(block.number + 2);
+        vm.prank(rolelessEoa);
+        gateway.revealAuthorization(agent, salt, p);
+
+        assertEq(gateway.agentOwner(agent), rolelessEoa);
+        assertTrue(gateway.hasRole(agentRole, agent));
+    }
+
+    /// @dev Front-run regression: an attacker observing a victim's
+    ///      `revealAuthorization` cannot pre-empt it via the direct
+    ///      `authorizeAgent` because that function now requires
+    ///      DEFAULT_ADMIN_ROLE (issue #753).
+    function test_authorizeAgent_frontRunProtection() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        address victim = makeAddr("victim");
+        address attacker = makeAddr("attacker");
+        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
+
+        // Victim commits
+        bytes32 salt = bytes32(uint256(456));
+        bytes32 commitHash = keccak256(abi.encode(agent, victim, salt));
+        vm.prank(victim);
+        gateway.commitAuthorization(commitHash);
+
+        vm.roll(block.number + 2);
+
+        // Attacker tries to front-run via direct authorizeAgent — reverts
+        vm.prank(attacker);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                attacker,
+                defaultAdminRole
+            )
+        );
         gateway.authorizeAgent(agent, p);
+
+        // Victim's reveal succeeds — agent belongs to victim
+        vm.prank(victim);
+        gateway.revealAuthorization(agent, salt, p);
+
+        assertEq(gateway.agentOwner(agent), victim);
+        assertTrue(gateway.hasRole(agentRole, agent));
     }
 
     function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(admin, p);
     }
 
     function test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToPauser() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(pauser, p);
     }
@@ -330,7 +380,7 @@ contract RobotMoneyGatewayTest is Test {
     function test_authorizeAgent_revertsOnZeroShareReceiver() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.shareReceiver = address(0);
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidShareReceiver.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -338,7 +388,7 @@ contract RobotMoneyGatewayTest is Test {
     function test_authorizeAgent_revertsOnInactivePolicy() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.active = false;
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidValidUntil.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -346,7 +396,7 @@ contract RobotMoneyGatewayTest is Test {
     function test_authorizeAgent_revertsOnZeroCaps() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.maxPerPayment = 0;
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -354,26 +404,32 @@ contract RobotMoneyGatewayTest is Test {
     function test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.maxPerPayment = p.maxPerWindow + 1;
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
         gateway.authorizeAgent(agent, p);
     }
 
     /// @dev Re-authorizing an already-owned agent is rejected; the owner
-    ///      must `setPolicy` (or `revokeAgent` first). Replaces the
-    ///      pre-#269 "admin re-authorizes" semantic.
+    ///      must `setPolicy` (or `revokeAgent` first).
     function test_authorizeAgent_revertsWhenAlreadyOwned() public {
         _authorize(agent, _defaultPolicy());
+        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
+        // Non-admin callers revert with access control error.
         address otherDepositor = makeAddr("other-depositor");
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(otherDepositor);
-        vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                otherDepositor,
+                defaultAdminRole
+            )
+        );
         gateway.authorizeAgent(agent, p);
 
-        // Even the original owner cannot re-authorize via this entrypoint
-        // — they must use `setPolicy`.
-        vm.prank(depositor);
+        // Admin calling again reverts AgentAlreadyOwned.
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -387,17 +443,17 @@ contract RobotMoneyGatewayTest is Test {
         vm.expectEmit(true, true, false, true, address(gateway));
         emit IGateway.AgentAuthorized(
             agent,
-            depositor,
+            admin,
             updated.validUntil,
             updated.maxPerPayment,
             updated.maxPerWindow,
             updated.shareReceiver
         );
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.setPolicy(agent, updated);
 
         assertTrue(gateway.hasRole(agentRole, agent));
-        assertEq(gateway.agentOwner(agent), depositor);
+        assertEq(gateway.agentOwner(agent), admin);
         (,, uint256 maxPay,,,,,) = gateway.agents(agent);
         assertEq(maxPay, 42 * ONE_USDC);
     }
@@ -415,17 +471,16 @@ contract RobotMoneyGatewayTest is Test {
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.setPolicy(agent, updated);
 
-        // Even ADMIN_ROLE holders have no authority over the depositor's
-        // agent — admin must revert with the same ownership error.
+        // Recorded owner (admin — issue #753) succeeds.
         vm.prank(admin);
-        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
-        gateway.setPolicy(agent, updated);
-
-        // Recorded owner succeeds.
-        vm.prank(depositor);
         gateway.setPolicy(agent, updated);
         (,, uint256 maxPay,,,,,) = gateway.agents(agent);
         assertEq(maxPay, 7 * ONE_USDC);
+
+        // Non-owner EOA cannot update.
+        vm.prank(depositor);
+        vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
+        gateway.setPolicy(agent, updated);
     }
 
     function test_setPolicy_revertsOnZeroAgent() public {
@@ -448,7 +503,7 @@ contract RobotMoneyGatewayTest is Test {
         IGateway.AgentPolicy memory bad = _defaultPolicy();
         bad.shareReceiver = address(0);
 
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidShareReceiver.selector);
         gateway.setPolicy(agent, bad);
     }
@@ -457,8 +512,8 @@ contract RobotMoneyGatewayTest is Test {
         _authorize(agent, _defaultPolicy());
 
         vm.expectEmit(true, true, false, false, address(gateway));
-        emit IGateway.AgentRevoked(agent, depositor);
-        vm.prank(depositor);
+        emit IGateway.AgentRevoked(agent, admin);
+        vm.prank(admin);
         gateway.revokeAgent(agent);
 
         assertFalse(gateway.hasRole(agentRole, agent));
@@ -468,7 +523,7 @@ contract RobotMoneyGatewayTest is Test {
     }
 
     /// @dev AC: only the recorded owner can revoke; a third-party caller
-    ///      reverts with the new ownership-check error (issue #269).
+    ///      reverts with NotAgentOwner (issue #269).
     function test_revokeAgent_requires_recorded_owner() public {
         _authorize(agent, _defaultPolicy());
 
@@ -476,29 +531,35 @@ contract RobotMoneyGatewayTest is Test {
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.revokeAgent(agent);
 
-        // ADMIN_ROLE no longer carries authority over agents.
+        // Recorded owner (admin — issue #753) succeeds.
+        vm.prank(admin);
+        gateway.revokeAgent(agent);
+        assertFalse(gateway.hasRole(agentRole, agent));
+
+        // After revoke, no one can revoke again (owner cleared).
         vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.NotAgentOwner.selector);
         gateway.revokeAgent(agent);
-
-        // Recorded owner succeeds.
-        vm.prank(depositor);
-        gateway.revokeAgent(agent);
-        assertFalse(gateway.hasRole(agentRole, agent));
     }
 
     /// @dev After revoke, the agent address is releasable: a fresh depositor
-    ///      can claim it via `authorizeAgent`. This is the round-trip
-    ///      property the dapp's onboarding wizard relies on.
+    ///      can claim it via commit/reveal (issue #753).
     function test_revokeAgent_then_authorizeAgent_by_different_owner() public {
         _authorize(agent, _defaultPolicy());
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.revokeAgent(agent);
 
         address freshDepositor = makeAddr("fresh-depositor");
         IGateway.AgentPolicy memory p = _defaultPolicy();
+        // After revoke, re-authorization must go through commit/reveal
+        // (authorizeAgent is admin-only as of issue #753).
+        bytes32 salt = bytes32(uint256(789));
+        bytes32 commitHash = keccak256(abi.encode(agent, freshDepositor, salt));
         vm.prank(freshDepositor);
-        gateway.authorizeAgent(agent, p);
+        gateway.commitAuthorization(commitHash);
+        vm.roll(block.number + 2);
+        vm.prank(freshDepositor);
+        gateway.revealAuthorization(agent, salt, p);
 
         assertEq(gateway.agentOwner(agent), freshDepositor);
     }
@@ -633,7 +694,7 @@ contract RobotMoneyGatewayTest is Test {
 
     function test_deposit_revertsAfterRevokeAgent() public {
         _authorize(agent, _defaultPolicy());
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.revokeAgent(agent);
 
         _fundAndApprove(agent, 100 * ONE_USDC);
@@ -758,7 +819,7 @@ contract RobotMoneyGatewayTest is Test {
         );
 
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         fotGateway.authorizeAgent(agent, p);
 
         fotUsdc.mint(agent, 200 * ONE_USDC);
@@ -809,12 +870,12 @@ contract RobotMoneyGatewayTest is Test {
         // ADMIN_ROLE holder cannot also hold AGENT_ROLE: authorizing them as
         // an agent must revert via the AccessRoles override.
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(admin, p);
 
         // PAUSER_ROLE holder cannot also hold AGENT_ROLE.
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(AccessRoles.RoleSeparationViolated.selector);
         gateway.authorizeAgent(pauser, p);
 
@@ -833,7 +894,7 @@ contract RobotMoneyGatewayTest is Test {
 
     function test_authorizeAgent_revertsOnZeroAgent() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
         gateway.authorizeAgent(address(0), p);
     }
@@ -843,7 +904,7 @@ contract RobotMoneyGatewayTest is Test {
         // validUntil strictly less than block.timestamp triggers
         // InvalidValidUntil on the second active-policy check.
         p.validUntil = uint64(block.timestamp - 1);
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidValidUntil.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -877,7 +938,7 @@ contract RobotMoneyGatewayTest is Test {
             IERC20(address(usdc)), IERC4626(address(leaky)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -897,7 +958,7 @@ contract RobotMoneyGatewayTest is Test {
             IERC20(address(usdc)), IERC4626(address(underPull)), admin, pauser, address(0)
         );
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -924,7 +985,7 @@ contract RobotMoneyGatewayTest is Test {
         reentrantVault.setGateway(gw);
 
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         // Fund agent with enough for two deposits; approve the gateway.
@@ -1069,7 +1130,7 @@ contract GatewayRollingDepositWindowTest is Test {
     }
 
     function _authorize(IGateway.AgentPolicy memory p) internal {
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agent, p);
     }
 
@@ -1352,7 +1413,7 @@ contract GatewayWithdrawTest is Test {
     }
 
     function _authorize(IGateway.AgentPolicy memory p) internal {
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agent, p);
     }
 
@@ -1687,11 +1748,11 @@ contract GatewayWithdrawTest is Test {
             keccak256("o-1"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-1")
         );
 
-        // Mid-window: depositor re-issues policy (e.g. bumps validUntil).
+        // Mid-window: owner re-issues policy (e.g. bumps validUntil).
         // Rolling state must persist; another full draw must still revert.
         IGateway.AgentPolicy memory p2 = p;
         p2.validUntil = uint64(block.timestamp + 365 days);
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.setPolicy(agent, p2);
 
         _mintSharesAndApprove(shares);
@@ -1846,7 +1907,7 @@ contract GatewayWithdrawTest is Test {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.assetRecipient = address(0);
         // maxWithdrawPerPayment > 0 but no assetRecipient — must revert.
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidAssetRecipient.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -1931,7 +1992,7 @@ contract GatewayWithdrawTest is Test {
     function test_authorizeAgent_revertsWhenWithdrawWindowCapIsZero() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.maxWithdrawPerWindow = 0; // payment cap > 0 but window cap = 0
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -1939,7 +2000,7 @@ contract GatewayWithdrawTest is Test {
     function test_authorizeAgent_revertsWhenPaymentCapExceedsWithdrawWindowCap() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         p.maxWithdrawPerPayment = MAX_WITHDRAW_PER_WINDOW + 1; // exceeds window cap
-        vm.prank(depositor);
+        vm.prank(admin);
         vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
         gateway.authorizeAgent(agent, p);
     }
@@ -1958,7 +2019,7 @@ contract GatewayWithdrawTest is Test {
 
         // Authorize agent with withdrawal-enabled policy.
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         // Mint shares to agent via badVault and approve gw.
@@ -1993,7 +2054,7 @@ contract GatewayWithdrawTest is Test {
         );
 
         IGateway.AgentPolicy memory p = _defaultPolicy();
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         uint256 shares = 100 * ONE_USDC;
