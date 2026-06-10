@@ -2,6 +2,13 @@
 //!
 //! Per-operation-class confirmation-depth policy for `rmpc`.
 //!
+//! Builds on the integration seam types from `crate::config`
+//! ([`OperationClass`], [`RequiredFinality`], [`ConfirmationDepthPolicy`])
+//! introduced by the client-stability seam-mapping pass: this module owns the
+//! defaults (the policy table) and the string parsing/formatting used by the
+//! `--op-class` / `--require-finality` CLI flags; `commands::get_tx` owns
+//! enforcement.
+//!
 //! # Policy table
 //!
 //! | Operation class    | Min confirmations | Required finality level |
@@ -15,7 +22,11 @@
 //! - Deposits and withdrawals: a single inclusion confirmation on L2 is
 //!   sufficient for day-to-day agent operations. Base's sequencer posts to L1
 //!   roughly every 12 minutes; reorg risk on already-included L2 blocks is
-//!   negligible for sub-$10k agent payment sizes.
+//!   negligible for sub-$10k agent payment sizes. The `deposit` class covers
+//!   BOTH gateway broadcast paths (issue #649): the single-vault
+//!   `gateway.deposit()` default and the router `gateway.depositTo()` path
+//!   (`rmpc deposit --destination <router>`) — router deposits are still
+//!   agent deposits with the same safety boundary.
 //! - Vault rebalance: involves ERC-4626 state transitions that affect share
 //!   accounting. 6 confirmations provides a safety margin against shallow
 //!   L2 reorgs without imposing the full L1-finality wait.
@@ -25,6 +36,10 @@
 //!   could unwind the L2 state has been resolved before the operation is
 //!   reported as irreversible.
 //!
+//! The table is fixed in code, not operator-tunable TOML: a security policy
+//! that an operator config could weaken would not satisfy security-model.md
+//! §12's "enforced by `rmpc`" requirement.
+//!
 //! # Integration with explorer-indexer
 //!
 //! The indexer's `CONFIRMATIONS = 5` in `services/explorer-indexer/src/lib.rs`
@@ -33,25 +48,9 @@
 //! the indexer does not ingest blocks that might be reorged away; this table
 //! ensures `rmpc` reports the correct finality status to callers.
 
-use serde::{Deserialize, Serialize};
+pub use crate::config::{ConfirmationDepthPolicy, OperationClass, RequiredFinality};
 
-/// Operation class — determines the minimum confirmation depth and required
-/// finality level. Passed via `--op-class` on `rmpc get-tx`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OpClass {
-    /// Agent deposit through the gateway.
-    Deposit,
-    /// Agent withdrawal (share redemption) through the gateway.
-    Withdraw,
-    /// Vault asset rebalancing / adapter allocation changes.
-    VaultRebalance,
-    /// Admin or governance operation (pause, role change, router proposal,
-    /// timelock execution). Requires `l1_finalized`.
-    AdminGovernance,
-}
-
-impl OpClass {
+impl OperationClass {
     /// Parse from a case-insensitive string matching the `--op-class` flag.
     pub fn from_str_ci(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
@@ -75,24 +74,13 @@ impl OpClass {
     }
 }
 
-impl std::fmt::Display for OpClass {
+impl std::fmt::Display for OperationClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-/// Required finality level for an operation class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RequiredFinalityLevel {
-    /// The transaction need only be included in an L2 block (sequencer-confirmed).
-    L2Included,
-    /// The transaction must be covered by a posted L1 batch that has
-    /// accumulated enough L1 confirmations to be considered irreversible.
-    L1Finalized,
-}
-
-impl RequiredFinalityLevel {
+impl RequiredFinality {
     /// Stable wire string.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -102,20 +90,10 @@ impl RequiredFinalityLevel {
     }
 }
 
-impl std::fmt::Display for RequiredFinalityLevel {
+impl std::fmt::Display for RequiredFinality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// Policy entry for a single operation class.
-#[derive(Debug, Clone, Copy)]
-pub struct PolicyEntry {
-    /// Minimum number of blocks that must have been mined on top of the
-    /// transaction's inclusion block before `rmpc` reports it as final.
-    pub min_confirmations: u64,
-    /// Required finality level (L2 or L1).
-    pub required_level: RequiredFinalityLevel,
 }
 
 /// Look up the confirmation policy for an operation class.
@@ -123,23 +101,27 @@ pub struct PolicyEntry {
 /// This is the authoritative policy table; changes here propagate to both
 /// the `rmpc get-tx` finality report and the `--require-finality` exit-code
 /// enforcement.
-pub fn policy_for(op_class: OpClass) -> PolicyEntry {
+pub fn policy_for(op_class: OperationClass) -> ConfirmationDepthPolicy {
     match op_class {
-        OpClass::Deposit => PolicyEntry {
-            min_confirmations: 1,
-            required_level: RequiredFinalityLevel::L2Included,
+        OperationClass::Deposit => ConfirmationDepthPolicy {
+            operation_class: op_class,
+            minimum_confirmations: 1,
+            required_finality: RequiredFinality::L2Included,
         },
-        OpClass::Withdraw => PolicyEntry {
-            min_confirmations: 1,
-            required_level: RequiredFinalityLevel::L2Included,
+        OperationClass::Withdraw => ConfirmationDepthPolicy {
+            operation_class: op_class,
+            minimum_confirmations: 1,
+            required_finality: RequiredFinality::L2Included,
         },
-        OpClass::VaultRebalance => PolicyEntry {
-            min_confirmations: 6,
-            required_level: RequiredFinalityLevel::L2Included,
+        OperationClass::VaultRebalance => ConfirmationDepthPolicy {
+            operation_class: op_class,
+            minimum_confirmations: 6,
+            required_finality: RequiredFinality::L2Included,
         },
-        OpClass::AdminGovernance => PolicyEntry {
-            min_confirmations: 64,
-            required_level: RequiredFinalityLevel::L1Finalized,
+        OperationClass::AdminGovernance => ConfirmationDepthPolicy {
+            operation_class: op_class,
+            minimum_confirmations: 64,
+            required_finality: RequiredFinality::L1Finalized,
         },
     }
 }
@@ -150,71 +132,78 @@ mod tests {
 
     #[test]
     fn op_class_from_str_ci_all_variants() {
-        assert_eq!(OpClass::from_str_ci("deposit"), Some(OpClass::Deposit));
-        assert_eq!(OpClass::from_str_ci("withdraw"), Some(OpClass::Withdraw));
         assert_eq!(
-            OpClass::from_str_ci("vault_rebalance"),
-            Some(OpClass::VaultRebalance)
+            OperationClass::from_str_ci("deposit"),
+            Some(OperationClass::Deposit)
         );
         assert_eq!(
-            OpClass::from_str_ci("vault-rebalance"),
-            Some(OpClass::VaultRebalance)
+            OperationClass::from_str_ci("withdraw"),
+            Some(OperationClass::Withdraw)
         );
         assert_eq!(
-            OpClass::from_str_ci("admin_governance"),
-            Some(OpClass::AdminGovernance)
+            OperationClass::from_str_ci("vault_rebalance"),
+            Some(OperationClass::VaultRebalance)
         );
         assert_eq!(
-            OpClass::from_str_ci("admin-governance"),
-            Some(OpClass::AdminGovernance)
+            OperationClass::from_str_ci("vault-rebalance"),
+            Some(OperationClass::VaultRebalance)
         );
-        assert_eq!(OpClass::from_str_ci("unknown"), None);
+        assert_eq!(
+            OperationClass::from_str_ci("admin_governance"),
+            Some(OperationClass::AdminGovernance)
+        );
+        assert_eq!(
+            OperationClass::from_str_ci("admin-governance"),
+            Some(OperationClass::AdminGovernance)
+        );
+        assert_eq!(OperationClass::from_str_ci("unknown"), None);
     }
 
     #[test]
     fn policy_deposit_requires_1_confirmation_l2() {
-        let p = policy_for(OpClass::Deposit);
-        assert_eq!(p.min_confirmations, 1);
-        assert_eq!(p.required_level, RequiredFinalityLevel::L2Included);
+        let p = policy_for(OperationClass::Deposit);
+        assert_eq!(p.operation_class, OperationClass::Deposit);
+        assert_eq!(p.minimum_confirmations, 1);
+        assert_eq!(p.required_finality, RequiredFinality::L2Included);
     }
 
     #[test]
     fn policy_withdraw_requires_1_confirmation_l2() {
-        let p = policy_for(OpClass::Withdraw);
-        assert_eq!(p.min_confirmations, 1);
-        assert_eq!(p.required_level, RequiredFinalityLevel::L2Included);
+        let p = policy_for(OperationClass::Withdraw);
+        assert_eq!(p.minimum_confirmations, 1);
+        assert_eq!(p.required_finality, RequiredFinality::L2Included);
     }
 
     #[test]
     fn policy_vault_rebalance_requires_6_confirmations_l2() {
-        let p = policy_for(OpClass::VaultRebalance);
-        assert_eq!(p.min_confirmations, 6);
-        assert_eq!(p.required_level, RequiredFinalityLevel::L2Included);
+        let p = policy_for(OperationClass::VaultRebalance);
+        assert_eq!(p.minimum_confirmations, 6);
+        assert_eq!(p.required_finality, RequiredFinality::L2Included);
     }
 
     #[test]
     fn policy_admin_governance_requires_64_confirmations_l1() {
-        let p = policy_for(OpClass::AdminGovernance);
-        assert_eq!(p.min_confirmations, 64);
-        assert_eq!(p.required_level, RequiredFinalityLevel::L1Finalized);
+        let p = policy_for(OperationClass::AdminGovernance);
+        assert_eq!(p.minimum_confirmations, 64);
+        assert_eq!(p.required_finality, RequiredFinality::L1Finalized);
     }
 
     #[test]
-    fn required_finality_level_serializes_as_snake_case() {
-        let l2 = serde_json::to_value(RequiredFinalityLevel::L2Included).unwrap();
+    fn required_finality_serializes_as_snake_case() {
+        let l2 = serde_json::to_value(RequiredFinality::L2Included).unwrap();
         assert_eq!(l2, "l2_included");
-        let l1 = serde_json::to_value(RequiredFinalityLevel::L1Finalized).unwrap();
+        let l1 = serde_json::to_value(RequiredFinality::L1Finalized).unwrap();
         assert_eq!(l1, "l1_finalized");
     }
 
     #[test]
     fn op_class_serializes_as_snake_case() {
         assert_eq!(
-            serde_json::to_value(OpClass::AdminGovernance).unwrap(),
+            serde_json::to_value(OperationClass::AdminGovernance).unwrap(),
             "admin_governance"
         );
         assert_eq!(
-            serde_json::to_value(OpClass::VaultRebalance).unwrap(),
+            serde_json::to_value(OperationClass::VaultRebalance).unwrap(),
             "vault_rebalance"
         );
     }

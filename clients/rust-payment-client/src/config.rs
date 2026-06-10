@@ -15,8 +15,10 @@ use crate::rpc::FailoverRpcClient;
 
 /// Transaction classes that may require different confirmation guarantees.
 ///
-/// Issue #676 owns config integration, defaults, and enforcement. These types
-/// are additive seams only and do not change current receipt handling.
+/// Defaults (the policy table) and `--op-class` string parsing live in
+/// [`crate::confirmation_policy`]; enforcement lives in `commands::get_tx`
+/// (`--require-finality`, exit code 5). Canonical policy table:
+/// docs/technical/security-model.md §12.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationClass {
@@ -34,7 +36,9 @@ pub enum RequiredFinality {
     L1Finalized,
 }
 
-/// Planned per-operation confirmation policy entry.
+/// Per-operation confirmation policy entry. Populated from the fixed table
+/// in [`crate::confirmation_policy::policy_for`] — not operator-tunable TOML,
+/// so operator config cannot weaken the security-model.md §12 policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ConfirmationDepthPolicy {
     pub operation_class: OperationClass,

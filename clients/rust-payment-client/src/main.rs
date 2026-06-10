@@ -11,7 +11,7 @@ use clap::Parser;
 use rust_payment_client::cli::{Cli, Command};
 use rust_payment_client::commands;
 use rust_payment_client::config::Config;
-use rust_payment_client::confirmation_policy::{OpClass, RequiredFinalityLevel};
+use rust_payment_client::confirmation_policy::{OperationClass, RequiredFinality};
 use rust_payment_client::logging;
 
 fn main() {
@@ -120,7 +120,7 @@ fn main() {
             require_finality,
             pretty,
         } => {
-            let op_class_parsed = match OpClass::from_str_ci(&op_class) {
+            let op_class_parsed = match OperationClass::from_str_ci(&op_class) {
                 Some(c) => c,
                 None => {
                     eprintln!(
@@ -132,8 +132,8 @@ fn main() {
             let require_finality_parsed = match require_finality {
                 None => None,
                 Some(ref s) => match s.as_str() {
-                    "l2_included" => Some(RequiredFinalityLevel::L2Included),
-                    "l1_finalized" => Some(RequiredFinalityLevel::L1Finalized),
+                    "l2_included" => Some(RequiredFinality::L2Included),
+                    "l1_finalized" => Some(RequiredFinality::L1Finalized),
                     other => {
                         eprintln!(
                             "rmpc get-tx: --require-finality must be one of: l2_included, l1_finalized (got {other:?})"

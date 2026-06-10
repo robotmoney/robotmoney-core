@@ -110,8 +110,17 @@ rmpc get-deposit --config <CONFIG> --deposit-id <ID> [--pretty]
 Look up a transaction's receipt status by hash.
 
 ```
-rmpc get-tx --config <CONFIG> --tx-hash <HASH> [--pretty]
+rmpc get-tx --config <CONFIG> --tx-hash <HASH>
+  [--op-class <CLASS>] [--require-finality <LEVEL>] [--pretty]
 ```
+
+The response includes a `finality` object (`status`, `confirmations`,
+`required_confirmations`, `op_class`) derived from the per-operation-class
+confirmation-depth policy (security-model.md §12). `--op-class` is one of
+`deposit` (default), `withdraw`, `vault_rebalance`, `admin_governance`.
+`--require-finality` (`l2_included` | `l1_finalized`) makes the command
+exit with code 5 (`ErrFinalityNotMet`) when the threshold has not been
+met; the JSON is still emitted.
 
 ## Write commands
 

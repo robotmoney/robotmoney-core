@@ -45,7 +45,7 @@ use alloy_primitives::B256;
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::confirmation_policy::{self, OpClass, RequiredFinalityLevel};
+use crate::confirmation_policy::{self, OperationClass, RequiredFinality};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU128, DecimalU256, Envelope, PartialBuilder};
 
@@ -97,7 +97,7 @@ pub struct FinalityInfo {
     /// (keyed by `--op-class`, default `deposit`).
     pub required_confirmations: u64,
     /// Operation class used to look up `required_confirmations`.
-    pub op_class: OpClass,
+    pub op_class: OperationClass,
 }
 
 /// `data` payload for `get-tx`. Captures only the §9-named fields plus
@@ -138,9 +138,9 @@ pub struct Args {
     /// 0x-prefixed 32-byte transaction hash.
     pub tx_hash: String,
     /// Operation class for the finality policy lookup. Default: `Deposit`.
-    pub op_class: OpClass,
+    pub op_class: OperationClass,
     /// When `Some`, exit non-zero if the required finality level hasn't been met.
-    pub require_finality: Option<RequiredFinalityLevel>,
+    pub require_finality: Option<RequiredFinality>,
     /// Pretty-print JSON output.
     pub pretty: bool,
 }
@@ -218,7 +218,7 @@ pub fn run(args: Args) -> i32 {
         let finality = FinalityInfo {
             status: finality_status,
             confirmations,
-            required_confirmations: policy.min_confirmations,
+            required_confirmations: policy.minimum_confirmations,
             op_class: args.op_class,
         };
 
@@ -254,13 +254,13 @@ pub fn run(args: Args) -> i32 {
             // Enforce --require-finality: exit non-zero when threshold not met.
             if let Some(required) = args.require_finality {
                 let met = match required {
-                    RequiredFinalityLevel::L2Included => {
+                    RequiredFinality::L2Included => {
                         matches!(
                             env.data.finality.status,
                             FinalityStatus::L2Included | FinalityStatus::L1Finalized
                         )
                     }
-                    RequiredFinalityLevel::L1Finalized => {
+                    RequiredFinality::L1Finalized => {
                         matches!(env.data.finality.status, FinalityStatus::L1Finalized)
                     }
                 };
@@ -309,24 +309,26 @@ pub fn run(args: Args) -> i32 {
 ///   status is `pending`.
 fn compute_finality_status(
     confirmations: u64,
-    policy: &confirmation_policy::PolicyEntry,
+    policy: &confirmation_policy::ConfirmationDepthPolicy,
 ) -> FinalityStatus {
-    use confirmation_policy::RequiredFinalityLevel as Rl;
+    use confirmation_policy::RequiredFinality as Rl;
 
     // L1_FINALIZED_DEPTH: the Base L1 finality horizon in blocks.
     // Base posts state roots to L1 approximately every 1 hour = ~300 L1 blocks;
     // 64 L2 blocks provides a conservative but practical threshold matching
     // Base's own safe-head definition for the MVP. This constant is the
     // authoritative value; the policy table in confirmation_policy.rs references
-    // this semantically (AdminGovernance uses 64 as its min_confirmations).
+    // this semantically (AdminGovernance uses 64 as its minimum_confirmations).
     const L1_FINALIZED_DEPTH: u64 = 64;
 
     if confirmations >= L1_FINALIZED_DEPTH {
         return FinalityStatus::L1Finalized;
     }
-    match policy.required_level {
+    match policy.required_finality {
         // L2-class operations: pending until the class minimum is met.
-        Rl::L2Included if confirmations >= policy.min_confirmations => FinalityStatus::L2Included,
+        Rl::L2Included if confirmations >= policy.minimum_confirmations => {
+            FinalityStatus::L2Included
+        }
         Rl::L2Included => FinalityStatus::Pending,
         // L1-class operations (high-value admin/governance): the tx is on L2
         // as soon as it has at least one confirmation, but it is not
@@ -349,7 +351,7 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::confirmation_policy::{policy_for, OpClass};
+    use crate::confirmation_policy::{policy_for, OperationClass};
     use alloy_primitives::U256;
 
     fn make_tx_data(block_number: u64, finality: FinalityInfo) -> TxData {
@@ -367,12 +369,12 @@ mod tests {
 
     #[test]
     fn tx_data_serializes_with_decimal_strings_and_optional_to() {
-        let policy = policy_for(OpClass::Deposit);
+        let policy = policy_for(OperationClass::Deposit);
         let finality = FinalityInfo {
             status: FinalityStatus::L2Included,
             confirmations: 1,
-            required_confirmations: policy.min_confirmations,
-            op_class: OpClass::Deposit,
+            required_confirmations: policy.minimum_confirmations,
+            op_class: OperationClass::Deposit,
         };
         let d = make_tx_data(17, finality);
         let v = serde_json::to_value(d).unwrap();
@@ -386,12 +388,12 @@ mod tests {
     /// Snapshot: finality envelope shape is present and correctly typed.
     #[test]
     fn finality_envelope_shape_and_types() {
-        let policy = policy_for(OpClass::Deposit);
+        let policy = policy_for(OperationClass::Deposit);
         let finality = FinalityInfo {
             status: FinalityStatus::L2Included,
             confirmations: 3,
-            required_confirmations: policy.min_confirmations,
-            op_class: OpClass::Deposit,
+            required_confirmations: policy.minimum_confirmations,
+            op_class: OperationClass::Deposit,
         };
         let d = make_tx_data(100, finality);
         let v = serde_json::to_value(&d).unwrap();
@@ -422,21 +424,21 @@ mod tests {
 
     #[test]
     fn finality_pending_when_below_min_confirmations() {
-        let policy = policy_for(OpClass::VaultRebalance); // requires 6
+        let policy = policy_for(OperationClass::VaultRebalance); // requires 6
         let status = compute_finality_status(3, &policy);
         assert_eq!(status, FinalityStatus::Pending);
     }
 
     #[test]
     fn finality_l2_included_when_at_min_confirmations() {
-        let policy = policy_for(OpClass::VaultRebalance); // requires 6
+        let policy = policy_for(OperationClass::VaultRebalance); // requires 6
         let status = compute_finality_status(6, &policy);
         assert_eq!(status, FinalityStatus::L2Included);
     }
 
     #[test]
     fn finality_l2_included_deposit_at_1_confirmation() {
-        let policy = policy_for(OpClass::Deposit); // requires 1
+        let policy = policy_for(OperationClass::Deposit); // requires 1
         let status = compute_finality_status(1, &policy);
         assert_eq!(status, FinalityStatus::L2Included);
     }
@@ -445,7 +447,7 @@ mod tests {
     fn finality_admin_governance_l2_included_below_64() {
         // High-value (l1_finalized-class) operations distinguish "L2 included"
         // from "L1 finalized": included but below the L1 horizon → l2_included.
-        let policy = policy_for(OpClass::AdminGovernance); // requires 64, l1_finalized
+        let policy = policy_for(OperationClass::AdminGovernance); // requires 64, l1_finalized
         let status = compute_finality_status(63, &policy);
         assert_eq!(status, FinalityStatus::L2Included);
     }
@@ -454,7 +456,7 @@ mod tests {
     fn finality_admin_governance_l2_included_at_1_confirmation() {
         // A high-value op at block N with tip = N+1 reports l2_included,
         // not l1_finalized and not pending.
-        let policy = policy_for(OpClass::AdminGovernance);
+        let policy = policy_for(OperationClass::AdminGovernance);
         let status = compute_finality_status(1, &policy);
         assert_eq!(status, FinalityStatus::L2Included);
     }
@@ -462,14 +464,14 @@ mod tests {
     #[test]
     fn finality_admin_governance_pending_at_0_confirmations() {
         // Tip == inclusion block: no blocks mined on top yet.
-        let policy = policy_for(OpClass::AdminGovernance);
+        let policy = policy_for(OperationClass::AdminGovernance);
         let status = compute_finality_status(0, &policy);
         assert_eq!(status, FinalityStatus::Pending);
     }
 
     #[test]
     fn finality_l1_finalized_admin_governance_at_64() {
-        let policy = policy_for(OpClass::AdminGovernance); // requires 64, l1_finalized
+        let policy = policy_for(OperationClass::AdminGovernance); // requires 64, l1_finalized
         let status = compute_finality_status(64, &policy);
         assert_eq!(status, FinalityStatus::L1Finalized);
     }
@@ -478,7 +480,7 @@ mod tests {
     fn finality_l1_finalized_supersedes_l2_included_at_64_blocks() {
         // Even a deposit (l2_included policy) at 64+ confirmations
         // should report l1_finalized.
-        let policy = policy_for(OpClass::Deposit);
+        let policy = policy_for(OperationClass::Deposit);
         let status = compute_finality_status(64, &policy);
         assert_eq!(status, FinalityStatus::L1Finalized);
     }

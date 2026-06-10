@@ -615,6 +615,13 @@ pub fn run(args: Args) -> i32 {
     // -- Receipt ----------------------------------------------------------
     // 1s polling cadence (RECEIPT_POLL_INTERVAL_MS) × the operator's
     // attempt budget. Issue #19 e2e harness sets this short on Anvil.
+    //
+    // Both broadcast paths (gateway.deposit and router gateway.depositTo)
+    // converge here; either way the tx is an agent deposit and falls under
+    // the `deposit` operation class of the confirmation-depth policy
+    // (security-model.md §12, crate::confirmation_policy). This wait only
+    // confirms L2 inclusion — finality status is assessed separately via
+    // `rmpc get-tx --op-class deposit [--require-finality …]`.
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
     let receipt_res = rt.block_on(async {
         wait_for_receipt_with(&rpc, tx_hash, Duration::from_secs(1), max_attempts.max(1)).await

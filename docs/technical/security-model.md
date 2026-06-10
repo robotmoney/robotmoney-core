@@ -261,6 +261,9 @@ This section maps onto `docs/architecture.md` §15.
 | Base sequencer censorship | Force-inclusion via L1 must be documented in the user playbook. This is an accepted Base L2 risk. |
 | Base sequencer reorg | A minimum confirmation-depth policy is documented per operation class in the table below and enforced by `rmpc` before reporting transaction finality. High-value admin and governance operations distinguish "L2 included" from "L1 finalized." |
 | L1 reorg affecting L2 finality | Same as above. The confirmation-depth policy accounts for L1 finality and is surfaced in `rmpc` JSON output (`finality.status`, `finality.confirmations`, `finality.required_confirmations`) and dapp `TxStatus` component. |
+| RPC provider outage | **Satisfied (issue #667).** `FailoverRpcClient` in `clients/rust-payment-client/src/rpc/mod.rs` retries every JSON-RPC call across an ordered list of endpoints; `Config.rpc_urls` (list) and the backward-compatible `Config.rpc_url` (single) are both accepted. `clients/rust-payment-client/config.example.toml` documents the minimum recommended redundancy (two endpoints from different providers). |
+| Mempool-leak exposing pending agent intents | Agent deposits are irreversible by design and carry no slippage surface on the vault leg; public mempool is accepted for MVP. When bucket-B/C legs ship, private orderflow submission must be evaluated. |
+| Time/clock skew on signer | Signing must use EVM block context, not wall time, for all deadline and expiry computations. |
 
 ### Confirmation-depth policy table
 
@@ -269,7 +272,7 @@ Enforced by `rmpc get-tx` via the `--op-class` flag and the `finality` JSON fiel
 
 | Operation class     | `--op-class` value   | Min confirmations | Required finality level | Rationale |
 |---------------------|----------------------|-------------------|-------------------------|-----------|
-| Agent deposit       | `deposit`            | 1                 | `l2_included`           | Single L2 inclusion is sufficient for sub-$10k agent payments; sequencer reorg risk is negligible. |
+| Agent deposit       | `deposit`            | 1                 | `l2_included`           | Single L2 inclusion is sufficient for sub-$10k agent payments; sequencer reorg risk is negligible. Covers both gateway broadcast paths: single-vault `deposit()` and router `depositTo()` (`rmpc deposit --destination <router>`, issue #649). |
 | Agent withdrawal    | `withdraw`           | 1                 | `l2_included`           | Same rationale as deposit; withdrawal amounts are bounded by per-agent caps. |
 | Vault rebalance     | `vault_rebalance`    | 6                 | `l2_included`           | ERC-4626 state transitions affect share accounting; 6 blocks provides a margin against shallow L2 reorgs. |
 | Admin / governance  | `admin_governance`   | 64                | `l1_finalized`          | Timelock-guarded, high-blast-radius operations (pause, role changes, router proposals). 64 L2 blocks ≈ 13 min matches Base's safe-head definition. |
@@ -277,9 +280,6 @@ Enforced by `rmpc get-tx` via the `--op-class` flag and the `finality` JSON fiel
 **`rmpc` enforcement:** `rmpc get-tx --op-class <class> [--require-finality l1_finalized]`
 exits with code 5 (`ErrFinalityNotMet`) when `--require-finality` is set and the
 confirmation threshold has not been met. The JSON output is always emitted.
-| RPC provider outage | **Satisfied (issue #667).** `FailoverRpcClient` in `clients/rust-payment-client/src/rpc/mod.rs` retries every JSON-RPC call across an ordered list of endpoints; `Config.rpc_urls` (list) and the backward-compatible `Config.rpc_url` (single) are both accepted. `clients/rust-payment-client/config.example.toml` documents the minimum recommended redundancy (two endpoints from different providers). |
-| Mempool-leak exposing pending agent intents | Agent deposits are irreversible by design and carry no slippage surface on the vault leg; public mempool is accepted for MVP. When bucket-B/C legs ship, private orderflow submission must be evaluated. |
-| Time/clock skew on signer | Signing must use EVM block context, not wall time, for all deadline and expiry computations. |
 
 ---
 

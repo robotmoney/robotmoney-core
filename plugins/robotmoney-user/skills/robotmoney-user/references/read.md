@@ -246,13 +246,22 @@ on-chain record after a successful broadcast.
 ## `get-tx`
 
 ```bash
-rmpc get-tx --config ./config.toml --tx-hash <0x...> [--pretty]
+rmpc get-tx --config ./config.toml --tx-hash <0x...> \
+  [--op-class <CLASS>] [--require-finality <LEVEL>] [--pretty]
 ```
 
 Returns the transaction receipt status (success/reverted), block number,
 gas used, and any decoded `AgentDeposit` event from the gateway log set.
 Useful to confirm that a broadcast tx was actually mined and not just
 accepted into the mempool.
+
+The output also carries a `finality` object (`status`, `confirmations`,
+`required_confirmations`, `op_class`) per the confirmation-depth policy
+(security-model.md §12): `status` is `pending`, `l2_included`, or
+`l1_finalized`. Pass `--op-class` (`deposit` default, `withdraw`,
+`vault_rebalance`, `admin_governance`) to select the policy row, and
+`--require-finality l1_finalized` to exit 5 until the high-value threshold
+(64 blocks) is met.
 
 ---
 
