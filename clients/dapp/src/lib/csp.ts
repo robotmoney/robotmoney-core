@@ -58,8 +58,7 @@ export const CSP_POLICY: string = CSP_DIRECTIVES.map(
  * for eligibility on the HSTS preload list (hstspreload.org).
  * Browsers cache this policy for one year after the first HTTPS response.
  */
-export const HSTS_HEADER_VALUE =
-  "max-age=31536000; includeSubDomains; preload";
+export const HSTS_HEADER_VALUE = "max-age=31536000; includeSubDomains; preload";
 
 /**
  * Vite plugin that enforces the strict CSP and HSTS header everywhere: it
