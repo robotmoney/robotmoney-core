@@ -158,7 +158,16 @@ contract Deploy is Script {
         // broadcaster IS d.admin so no vm.prank is needed.
         IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
         uint256 seedShares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
-        require(d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT, "seed deposit: totalAssets too low");
+        // Allow up to 1 bps (0.01%) rounding loss when real yield-protocol adapters
+        // (Aave V3, Compound V3, Morpho) convert USDC to yield-bearing tokens and
+        // back. PassthroughAdapter is lossless (exact amount round-trips), but real
+        // adapters may lose a few token dust units due to integer division in
+        // exchange-rate math. The security property here is that assets actually
+        // landed in the vault (totalAssets > 0), not that the exact amount round-tripped.
+        require(
+            d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
+            "seed deposit: totalAssets too low"
+        );
         require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
         console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
         console2.log("  seed shares minted :", seedShares);
@@ -317,7 +326,12 @@ contract Deploy is Script {
         IERC20(d.usdc).approve(address(d.vault), SEED_DEPOSIT_AMOUNT);
         uint256 shares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
         vm.stopPrank();
-        require(d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT, "seed deposit: totalAssets too low");
+        // Allow up to 1 bps (0.01%) rounding loss when real yield-protocol adapters
+        // convert USDC to yield-bearing tokens. See run() for the rationale.
+        require(
+            d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
+            "seed deposit: totalAssets too low"
+        );
         require(d.vault.totalSupply() > 0, "seed deposit: totalSupply must be > 0");
         console2.log("  seed deposit (USDC):", SEED_DEPOSIT_AMOUNT);
         console2.log("  seed shares minted :", shares);
@@ -397,14 +411,12 @@ contract Deploy is Script {
         // caller context differs between broadcast and in-process test modes.
         //
         // USE_PASSTHROUGH_ADAPTER=true → deploy one PassthroughAdapter and
-        // alias all three typed fields to its address.  Required on the
-        // Geth+Lighthouse smoke-test devnet: that chain boots from a genesis
-        // snapshot restricted to warm-storage slots, so real protocol contracts
-        // (Aave/Compound/Morpho) have bytecode but zero storage.  Any call
-        // returning uint256 (e.g. `balanceOf`) decodes empty returndata and
-        // reverts, which would abort every deposit.  The Rust harness sets
-        // this env var automatically (see `run_forge_deploy_with_env` in
-        // testing/smoke-test/src/lib.rs).
+        // alias all three typed fields to its address.  No longer needed for
+        // the Geth+Lighthouse smoke-test devnet: the genesis snapshot now
+        // carries real Aave V3 / Compound V3 / Morpho storage (issue #685 —
+        // adapter warming round-trip in scripts/devnet/snapshot-fork.sh).
+        // Kept as an escape hatch for local debugging only — Fixture::new()
+        // no longer passes this env var.
         d.passthroughMode = vm.envOr("USE_PASSTHROUGH_ADAPTER", false);
         if (d.passthroughMode) {
             PassthroughAdapter pt = new PassthroughAdapter(d.usdc, address(d.vault));

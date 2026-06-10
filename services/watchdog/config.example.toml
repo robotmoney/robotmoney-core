@@ -1,0 +1,26 @@
+# Canonical: docs/technical/security-model.md §9
+# This file defines names and ownership only. Issue #658 must add parsing,
+# validation, production values, and secret-backed pause/alert credentials.
+
+enabled = false
+poll_interval_seconds = 12
+response_sla_seconds = 300
+
+[indexer]
+database_url_env = "DATABASE_URL"
+
+[gateway]
+rpc_url_env = "WATCHDOG_RPC_URL"
+address_env = "WATCHDOG_GATEWAY_ADDRESS"
+pauser_key_env = "WATCHDOG_PAUSER_KEY"
+
+[alerts]
+webhook_url_env = "WATCHDOG_ALERT_WEBHOOK_URL"
+
+# Example values are intentionally non-production. Issue #658 owns selecting
+# and documenting real global and per-vault limits.
+[thresholds.global]
+mint_per_block_units = "1000000000000"
+mint_per_hour_units = "10000000000000"
+burn_per_block_units = "1000000000000"
+burn_per_hour_units = "10000000000000"

@@ -20,6 +20,8 @@
 pub mod fork_manifest;
 pub mod genesis_alloc;
 pub mod logging;
+/// Dev-scout map for the real-adapter state injection boundary (issue #739).
+pub mod real_adapter_state;
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -502,17 +504,12 @@ impl Fixture {
     /// Boot the Docker Geth+Lighthouse devnet, run the gateway deploy
     /// script, and fund the test EOAs.
     ///
-    /// The Geth devnet boots from a genesis snapshot that contains only
-    /// warm-storage slots (produced by `anvil --dump-state`).  Real Aave,
-    /// Compound, and Morpho contracts have bytecode but no on-chain state at
-    /// the ingested addresses, so any call returning `uint256` (e.g.
-    /// `balanceOf`) would ABI-decode empty return-data and revert — aborting
-    /// every deposit.  We therefore deploy a single `PassthroughAdapter`
-    /// instead of the three real protocol adapters for smoke-test runs.
-    /// Fork-based integration tests (`ForkFixture`) use real adapters because
-    /// they fork Base mainnet where protocol state is present.
+    /// The Geth devnet boots from a genesis snapshot that carries real Aave V3,
+    /// Compound V3, and Morpho storage (produced by `scripts/devnet/snapshot-fork.sh`
+    /// with the adapter warming step from issue #685).  Deploy.s.sol deploys the
+    /// three real protocol adapters by default.
     pub fn new() -> Result<Self, HarnessError> {
-        Self::with_deploy_env(&[("USE_PASSTHROUGH_ADAPTER", "true")])
+        Self::with_deploy_env(&[])
     }
 
     /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
