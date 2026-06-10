@@ -16,6 +16,12 @@
 # runner label in .github/workflows/release-*.yml and a mandatory
 # `environment: production` declaration gating the publish jobs. See
 # docs/technical/ci-environments.md.
+#
+# The release-signing job (issue #659, security-model.md §13 "Release signing")
+# guards the release signing + provenance invariants: signed annotated tags
+# only, keyless cosign signing/attestation of every published artifact, and
+# fail-closed in-workflow verification before anything is published. See
+# scripts/ci/check-release-signing.sh.
 
 name: ci-velocity-tier-guard
 
@@ -58,3 +64,13 @@ jobs:
 
       - name: Validate release-workflow runner pinning and production environment gate
         run: bash scripts/ci/check-release-runner-pinning.sh
+
+  release-signing:
+    name: release-signing-invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release signing and provenance invariants
+        run: bash scripts/ci/check-release-signing.sh

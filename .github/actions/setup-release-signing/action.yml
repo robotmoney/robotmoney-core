@@ -1,0 +1,42 @@
+# Canonical: docs/technical/security-model.md §13 "Release signing" (issue #659)
+#
+# Installs the pinned Sigstore tooling used by both release workflows and
+# configures git for keyless x509 tag signing:
+#
+# - cosign: signs/attests release artifacts (blob bundles, image signatures,
+#   SLSA provenance attestations) with the ephemeral keyless identity minted
+#   by Fulcio from the GitHub Actions OIDC token (`id-token: write`).
+# - gitsign: lets `git tag -s` / `git tag -v` use the same keyless identity,
+#   so release tags are signed annotated tags with no long-lived key.
+#
+# Both tools are version-pinned; gitsign is additionally checksum-pinned
+# because it is fetched as a raw release binary. The calling job must grant
+# `id-token: write` and set `GITSIGN_TOKEN_PROVIDER=github-actions` on steps
+# that sign, so gitsign uses the ambient Actions OIDC token non-interactively.
+name: setup-release-signing
+description: Install pinned cosign + gitsign and configure git for keyless tag signing
+
+runs:
+  using: composite
+  steps:
+    - name: Install cosign (pinned)
+      uses: sigstore/cosign-installer@v4
+      with:
+        cosign-release: "v3.1.1"
+
+    - name: Install gitsign (pinned, checksum-verified)
+      shell: bash
+      run: |
+        GITSIGN_VERSION="0.16.1"
+        GITSIGN_SHA256="4a29a1f4b9add1f0f6d9a3e9e6ba0cffa121b971be82d62bb1496d7d1d877b0a"
+        curl -fsSLo /tmp/gitsign \
+          "https://github.com/sigstore/gitsign/releases/download/v${GITSIGN_VERSION}/gitsign_${GITSIGN_VERSION}_linux_amd64"
+        echo "${GITSIGN_SHA256}  /tmp/gitsign" | sha256sum --check
+        sudo install -m 0755 /tmp/gitsign /usr/local/bin/gitsign
+        gitsign --version
+
+    - name: Configure git to sign and verify tags with gitsign
+      shell: bash
+      run: |
+        git config --global gpg.x509.program gitsign
+        git config --global gpg.format x509
