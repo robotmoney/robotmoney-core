@@ -28,9 +28,22 @@
 #                                       validate the workflow from any branch.
 # - push: tags v*.*.*               -> build all targets, attach to the existing tag
 #
+# RUNNER PINNING + PRODUCTION APPROVAL (issue #660, security-model.md §13)
+# Every job runs on a version-pinned runner label (ubuntu-24.04 / macos-15) —
+# never a floating `*-latest` alias. GitHub-hosted runners cannot be pinned to an
+# image SHA digest; the versioned label is the strongest pin available, and the
+# upgrade path to digest-level pinning is a self-hosted runner label (see
+# docs/technical/ci-environments.md). The `publish` job — the only job that
+# performs external writes (tag push, GitHub Release) — declares
+# `environment: production`, so GitHub blocks it until a required reviewer
+# approves the pending deployment. Build jobs stay credential-free: workflow-level
+# permissions are read-only and `contents: write` is granted only to `publish`.
+# The lint `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces both
+# invariants on every PR.
+#
 # GOTCHAS
 # - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
-# - cross-rs/cross requires Docker; ubuntu-latest runners include Docker by default.
+# - cross-rs/cross requires Docker; ubuntu-24.04 runners include Docker by default.
 # - commit_hash may be a short or full SHA; the resolve job expands it.
 
 name: release-rmpc
@@ -55,13 +68,15 @@ on:
         type: boolean
         default: false
 
+# Read-only by default; `contents: write` is granted only to the `publish` job,
+# which is gated behind the protected `production` environment (issue #660).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   resolve:
     name: resolve-inputs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.r.outputs.sha }}
       version: ${{ steps.r.outputs.version }}
@@ -106,22 +121,22 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cross: false
             os_label: linux-amd64
 
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cross: true
             os_label: linux-arm64
 
           - target: x86_64-apple-darwin
-            runner: macos-latest
+            runner: macos-15
             cross: false
             os_label: macos-amd64
 
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: macos-15
             cross: false
             os_label: macos-arm64
 
@@ -193,11 +208,20 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The only job with write credentials and the only job performing external
+  # writes (git tag push, GitHub Release creation). `environment: production`
+  # makes GitHub hold this job until a required reviewer approves the pending
+  # deployment (issue #660; repository Environments settings define the
+  # reviewer list — see docs/technical/ci-environments.md). Dry runs skip this
+  # job entirely, so no approval is requested for artifact-only builds.
   publish:
     name: tag-and-publish
     needs: [resolve, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -229,26 +253,15 @@ jobs:
           draft: false
           fail_on_unmatched_files: true
 
-  # Dev-scout seam only. Issue #660 owns the protected environment and runner
-  # policy; it must split publication from build before enabling this job.
-  production-approval:
-    name: production-approval-seam
-    if: ${{ false }}
-    runs-on: ubuntu-24.04
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - name: Protected environment seam
-        run: |
-          printf '%s\n' "Issue #660 enables this approval gate before publication."
-
   # Dev-scout seam only. Issue #659 exclusively owns contents/id-token
   # permissions and the detached signature/provenance bundle contract.
+  # Issue #660 replaced the production-approval seam by declaring
+  # `environment: production` directly on the `publish` job, so this seam now
+  # depends on `publish` — the approval gate is already satisfied upstream.
   sign-and-attest:
     name: sign-and-attest-rmpc-seam
     if: ${{ false }}
-    needs: [production-approval]
+    needs: [publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

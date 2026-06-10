@@ -7,16 +7,21 @@
 
 ## Current workflow boundary
 
-The existing release workflows combine artifact production with publication:
+Issue #660 established the protected publication boundary (see
+`docs/technical/ci-environments.md`):
 
-- `release-dapp.yml` builds and pushes the dapp image in `build-and-push`.
+- `release-dapp.yml` builds the image credential-free in `build` (artifact
+  only, no push), then performs every external write (tag push, GHCR push) in
+  `publish`, which declares `environment: production`.
 - `release-rmpc.yml` builds archives in `build`, then tags and publishes them
-  in `publish`.
+  in `publish`, which declares `environment: production`.
 
-The dapp workflow therefore has no approval boundary before its first external
-write. The rmpc workflow has a build/publish boundary, but tag creation and
-GitHub Release publication still share one job. Issue #660 must establish the
-protected publication boundary before later controls are enabled.
+All runners in both workflows use version-pinned labels (`ubuntu-24.04`,
+`macos-15`); `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces
+the pinning and the environment declaration on every PR. The disabled
+`production-approval` seam jobs were replaced by the `environment: production`
+declaration on the publish jobs themselves, so the `sign-and-attest` seams now
+depend on `publish`.
 
 Neither release workflow deploys contracts. BaseScan verification belongs to a
 contract-deploy workflow created or selected by issue #662. The disabled
@@ -27,9 +32,10 @@ that records this ownership; it must not become a BaseScan caller.
 
 The delivery-control issues are intentionally serialized:
 
-1. **#660, runner and approval owner.** Split build from external writes, move
-   all publication behind the `production` environment, and replace unpinned
-   runner labels. It owns `environment:` and runner selection.
+1. **#660, runner and approval owner — DONE.** Split build from external
+   writes, moved all publication behind the `production` environment, and
+   replaced unpinned runner labels. It owns `environment:` and runner
+   selection. Canonical record: `docs/technical/ci-environments.md`.
 2. **#659, signing and provenance owner.** Build on #660's publication jobs. It
    owns release signing, OIDC, `id-token: write`, artifact attestations, and
    signing-related `contents:` / `packages:` permissions.
@@ -49,11 +55,14 @@ by #660, #662 defines the post-deploy contract consumed by later checks, and
 
 Before enabling the disabled jobs, repository administrators must configure:
 
-- A GitHub environment named `production`.
+- A GitHub environment named `production`. *(Done by #660 — see
+  `docs/technical/ci-environments.md` for the configured reviewers, branch/tag
+  rules, and the single-maintainer `prevent_self_review` caveat.)*
 - At least one required reviewer who is not the deployment initiator.
 - Deployment branch/tag rules allowing only reviewed release tags or the
   designated production branch.
-- Runner labels or immutable runner images selected by #660.
+- Runner labels or immutable runner images selected by #660. *(Done:
+  `ubuntu-24.04` / `macos-15`.)*
 - GitHub OIDC trust for the keyless signing identity selected by #659.
 - `BASESCAN_API_KEY` as an environment secret for the contract-deploy
   workflow selected by #662.

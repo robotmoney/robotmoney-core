@@ -274,7 +274,7 @@ This section maps onto `docs/architecture.md` §15.
 | Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. |
 | Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
-| CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |
+| CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. Implemented: every `release-*.yml` job runs on a version-pinned runner label (no `*-latest`), and all external writes are gated behind the protected `production` GitHub environment (1 required reviewer) — see `docs/technical/ci-environments.md`; enforced on every PR by `scripts/ci/check-release-runner-pinning.sh` (suite-17). |
 | Backup loss / single-keeper-of-seed | Each Safe signer must independently back up their seed phrase to an offline, hardware-encrypted medium. No single person may hold sole recovery capability. |
 | Insider threat (rogue contributor) | `CODEOWNERS` must be configured for `contracts/**` and `scripts/**`. At least two reviewers are required to merge to any branch that can reach production. Branch protection must be enforced on `main` and `dev`. |
 
