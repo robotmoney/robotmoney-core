@@ -329,9 +329,19 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 Redeem vault shares proportionally from multiple vaults. For each
 leg the router calls `vault.redeem(sharesPerLeg[i], assetRecipient,
 shareHolder)`, routing USDC directly to `assetRecipient`. The caller
-(typically the gateway) must have obtained ERC-20 approvals from
-`shareHolder` on each vault's share token before calling this
-function, or must hold the shares itself.
+(typically the gateway) must either be `shareHolder` itself — the
+gateway pulls the user's shares into its own custody for the call
+frame and passes itself as `shareHolder` — or hold an ERC-20
+allowance from `shareHolder` on each vault's share token covering
+that leg's share count; otherwise the call reverts with
+`UnauthorizedRedeemer` (confused-deputy guard, audit finding M-5).
+SECURITY: users must NEVER grant a share-token approval directly to
+this router. The router calls `vault.redeem` with itself as the
+vault-level spender, so a standing user→router approval would let
+any holder-authorized caller burn the user's shares to an arbitrary
+`assetRecipient`. Only the gateway's transient self-custody flow
+(approve inside its own `nonReentrant` frame, clear afterwards) may
+approve the router.
 All legs must succeed (all-or-revert). No intermediate USDC custody
 is created in the router — each vault sends USDC directly to
 `assetRecipient`.
@@ -347,7 +357,7 @@ function redeemFor(address shareHolder, address assetRecipient, uint256[] callda
 
 |Name|Type|Description|
 |----|----|-----------|
-|`shareHolder`|`address`|      Address whose vault shares are redeemed (the `owner` passed to `vault.redeem`). Must have approved the caller (the gateway) for each vault's share token, which then must have approved this router, OR the gateway pulls shares from shareHolder and holds them temporarily during the call frame.|
+|`shareHolder`|`address`|      Address whose vault shares are redeemed (the `owner` passed to `vault.redeem`). Either equals the caller (gateway self-custody flow: shares pulled from the user and held only during the call frame), or must have approved the caller on each vault's share token for at least that leg's share count. Direct user approvals to this router are forbidden (see SECURITY note above).|
 |`assetRecipient`|`address`|   Address that receives redeemed USDC. The router forwards each leg's USDC here; it never custodies USDC.|
 |`sharesPerLeg`|`uint256[]`|     Shares to redeem per leg (parallel to effective weight vector). Length must match the effective vault list. Zero-share legs are accepted (and skipped) so the caller can specify partial positions.|
 
