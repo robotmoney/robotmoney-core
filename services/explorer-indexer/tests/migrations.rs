@@ -201,3 +201,32 @@ async fn every_row_has_chain_id_and_block_number() {
         assert_eq!(row.0, 1, "{t} must have a block_number column");
     }
 }
+
+/// Regression guard for the duplicate-version-0007 incident (PR #708 + #713):
+/// sqlx requires unique migration version numbers. Two files sharing a
+/// version make `MIGRATOR.run()` fail at runtime with a `_sqlx_migrations_pkey`
+/// violation on every fresh database. This test needs no Docker, so it always
+/// runs and can never be skipped.
+#[test]
+fn migration_version_numbers_are_unique() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+    let mut seen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+    for entry in std::fs::read_dir(dir).expect("read migrations dir") {
+        let name = entry.expect("dir entry").file_name();
+        let name = name.to_string_lossy().into_owned();
+        if !name.ends_with(".sql") {
+            continue;
+        }
+        let digits: String = name.chars().take_while(char::is_ascii_digit).collect();
+        let version: u64 = digits
+            .parse()
+            .unwrap_or_else(|_| panic!("migration {name} must start with a numeric version"));
+        if let Some(prev) = seen.insert(version, name.clone()) {
+            panic!(
+                "duplicate migration version {version}: {prev} and {name} — \
+                 sqlx MIGRATOR.run() fails on duplicate versions; renumber one of them"
+            );
+        }
+    }
+    assert!(!seen.is_empty(), "no .sql migrations found in {dir}");
+}

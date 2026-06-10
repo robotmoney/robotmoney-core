@@ -86,6 +86,13 @@ pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0009_account_history_events.sql"
 );
 
+/// Migration 0010: agent_policies owner + window_usage_to_date columns
+/// (issue #661). Renumbered from 0007 after colliding with the dev-scout stubs
+/// migration version; an idempotent no-op where 0007 already added the columns.
+pub const AGENT_POLICY_OWNER_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0010_agent_policy_owner_column.sql"
+);
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).
@@ -186,6 +193,10 @@ pub async fn apply_migrations(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("apply account history migration (0009)");
+    sqlx::raw_sql(AGENT_POLICY_OWNER_MIGRATION)
+        .execute(pool)
+        .await
+        .expect("apply agent policy owner migration (0010)");
 }
 
 /// Decode a 0x-prefixed hex string into raw bytes for BYTEA columns.
@@ -333,6 +344,68 @@ async fn seed_fixture(pool: &PgPool) {
         .bind(Some(2_000_000_000_i64))
         .bind(Some("5000000"))
         .bind(Some("5000000"))
+        .bind(Some(&share_receiver[..]))
+        .bind(indexed_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // --- agent_policies with owner (issue #661: GET /v1/accounts/:address/policies) ---
+    // Owner 0xdddd… authorizes two agents on Base. Agent 0x7777… has two state
+    // rows (block 900 authorization, block 950 usage update) so the endpoint's
+    // DISTINCT ON latest-state selection is observable. Agent 0x8888… is a
+    // revoked tombstone. A shadow-chain row for the same owner proves chain
+    // isolation. The legacy rows above keep owner NULL — they must never match
+    // an owner lookup.
+    let policy_owner = hex_bytes("dddddddddddddddddddddddddddddddddddddddd");
+    let agent_one = hex_bytes("7777777777777777777777777777777777777777");
+    let agent_two = hex_bytes("8888888888888888888888888888888888888888");
+    #[allow(clippy::type_complexity)]
+    let owner_policy_rows: [(i64, i64, &[u8], bool, Option<i64>, Option<&str>); 4] = [
+        // (chain_id, block_number, agent, revoked, valid_until, window_usage_to_date)
+        (
+            PRIMARY_CHAIN_ID,
+            900,
+            &agent_one,
+            false,
+            Some(2_000_000_000),
+            Some("0"),
+        ),
+        (
+            PRIMARY_CHAIN_ID,
+            950,
+            &agent_one,
+            false,
+            Some(2_000_000_000),
+            Some("250000"),
+        ),
+        (PRIMARY_CHAIN_ID, 920, &agent_two, true, None, None),
+        (
+            SHADOW_CHAIN_ID,
+            960,
+            &agent_one,
+            false,
+            Some(2_000_000_000),
+            Some("777"),
+        ),
+    ];
+    for (cid, block, agent_addr, revoked, valid_until, window_usage) in owner_policy_rows {
+        sqlx::query(
+            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, max_per_payment, max_per_window, window_usage_to_date, share_receiver, indexed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::NUMERIC, $10::NUMERIC, $11::NUMERIC, $12, $13)",
+        )
+        .bind(cid)
+        .bind(block)
+        .bind(1_i32)
+        .bind(&tx_hash[..])
+        .bind(agent_addr)
+        .bind(&policy_owner[..])
+        .bind(revoked)
+        .bind(valid_until)
+        .bind(Some("500000"))
+        .bind(Some("1000000"))
+        .bind(window_usage)
         .bind(Some(&share_receiver[..]))
         .bind(indexed_at)
         .execute(pool)

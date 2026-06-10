@@ -54,9 +54,12 @@ pub async fn try_pg_fixture() -> Option<PgFixture> {
             return None;
         }
     };
+    // A migrate failure is a code defect (broken or duplicate migration), not
+    // an environment problem — fail loudly instead of skipping. A silent skip
+    // here masked the duplicate-version-0007 migration bug (dev-scout PR #708
+    // + PR #713 both shipped a version-0007 file) behind a green test suite.
     if let Err(e) = db.migrate().await {
-        eprintln!("[explorer-indexer-tests] skipping: migrate failed: {e}");
-        return None;
+        panic!("[explorer-indexer-tests] migrate failed (code defect, not a skip): {e}");
     }
     Some(PgFixture {
         db,

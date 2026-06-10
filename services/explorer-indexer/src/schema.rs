@@ -71,37 +71,17 @@
 //! **Migration target:** `0007_account_history_and_vault_detail_stubs.sql`
 //!   tables `adapter_allocations`, `vault_fee_events`, `vault_transfer_events`.
 //!
-//! ## Issue #661 — GET /v1/accounts/:address/policies endpoint
+//! ## Issue #661 — GET /v1/accounts/:address/policies endpoint (SHIPPED)
 //!
-//! **Gap:** No `GET /v1/accounts/:address/policies` route exists.  The
-//! `agent_policies` table lacks `owner` and `window_usage_to_date` columns,
-//! so owner-based lookups are not possible.
-//!
-//! **Seams to touch:**
-//! 1. `services/explorer-indexer/migrations/` — migration adding `owner BYTEA`
-//!    and `window_usage_to_date NUMERIC(78,0)` columns (scaffold in 0007;
-//!    issue #661 should harden with NOT NULL constraint + backfill).
-//! 2. `services/explorer-indexer/src/db.rs` — update or replace
-//!    `insert_agent_policy` to accept and persist `owner` and
-//!    `window_usage_to_date`; implement `list_policies_by_owner` (stubs in
-//!    `db.rs`).
-//! 3. `services/explorer-indexer/src/indexer.rs` — update `handle_log` branch
-//!    for `AgentAuthorized` to decode the `owner` field (requires issue #366
-//!    ABI fix) and pass it to the updated DB function.
-//! 4. `clients/explorer-api/src/routes.rs` — add new route:
-//!    `.route("/v1/accounts/:address/policies", get(get_account_policies))`
-//! 5. `clients/explorer-api/src/routes.rs` (or new handler module) — implement
-//!    `get_account_policies` handler querying `list_policies_by_owner`.
-//! 6. `clients/explorer-api/tests/router_introspection.rs` — must pass
-//!    automatically once the route is registered (no code change needed if
-//!    the test is already open-ended).
-//!
-//! **Prerequisite:** Issue #366 (ABI drift fix for `AgentAuthorized` — adds
-//!   `address indexed owner` field).  The `owner` column will be NULL for all
-//!   rows indexed before #366 lands; #661 must decide whether to backfill.
-//!
-//! **Migration target:** `0007_account_history_and_vault_detail_stubs.sql`
-//!   `ALTER TABLE agent_policies ADD COLUMN IF NOT EXISTS owner BYTEA` etc.
+//! Implemented: `insert_agent_policy` in `db.rs` accepts and persists `owner`
+//! and `window_usage_to_date`; the owner lookup is a raw DISTINCT ON query in
+//! the `get_account_policies` handler (`clients/explorer-api/src/routes.rs`),
+//! so the `list_policies_by_owner` stub was removed. Columns/index land via
+//! `0010_agent_policy_owner_column.sql` (renumbered from a 0007 that collided
+//! with this scout's stubs migration — sqlx requires unique versions); the
+//! 0007 stubs migration also adds them, so 0010 is an idempotent no-op there.
+//! The `owner` column stays nullable: rows indexed before issue #366's
+//! AgentAuthorized ABI fix carry NULL and never match an owner lookup.
 //!
 //! ## Issue #695 — db::count() type-guard
 //!
