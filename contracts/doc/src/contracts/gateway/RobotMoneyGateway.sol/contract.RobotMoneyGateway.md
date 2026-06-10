@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dc0f1b358b0eb6ef80c7f6a43b09b85a3da49a21/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -12,7 +12,7 @@ the agent, enforces per-agent caps and a per-window gross cap,
 calls the vault, and routes the resulting `rmUSDC` shares to a
 per-agent configured receiver.
 
-Implements `docs/implementation-plan.md` §2.2. Custom errors only;
+Implements `Plan tracking issue #109` §2.2. Custom errors only;
 OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 hash deliberately excludes `deadline`.
 
