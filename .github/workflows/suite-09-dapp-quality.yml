@@ -111,3 +111,12 @@ jobs:
       # unsafe-eval. See clients/dapp/scripts/check-csp.sh.
       - name: Enforce strict CSP
         run: bash scripts/check-csp.sh
+
+      # Issue #671: enforce HSTS preload before public launch. Serves the built
+      # bundle via `vite preview` and asserts the Strict-Transport-Security
+      # response header contains max-age=31536000, includeSubDomains, and
+      # preload — the minimum required for HSTS preload list eligibility.
+      # Uses a different port (4174) to avoid conflicts with the CSP check.
+      # See clients/dapp/scripts/check-hsts.sh.
+      - name: Enforce HSTS preload header
+        run: bash scripts/check-hsts.sh
