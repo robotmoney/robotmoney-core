@@ -443,9 +443,14 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
 
     /// @notice Maximum USDC a user can withdraw in a single call (net of exit fee).
     ///         Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert.
+    ///         Uses floor rounding on the gross→net conversion so that
+    ///         `_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
+    ///         guaranteeing `previewWithdraw(maxWithdraw(owner)) <= balanceOf(owner)` even when `exitFeeBps > 0`.
     /// @param owner The address whose share balance determines the withdrawal cap.
     function maxWithdraw(address owner) public view override returns (uint256) {
-        return previewRedeem(balanceOf(owner));
+        uint256 shares = balanceOf(owner);
+        uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
+        return grossAssets.mulDiv(MAX_BPS - exitFeeBps, MAX_BPS, Math.Rounding.Floor);
     }
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
