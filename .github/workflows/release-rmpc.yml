@@ -41,6 +41,23 @@
 # The lint `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces both
 # invariants on every PR.
 #
+# RELEASE SIGNING + PROVENANCE (issue #659, security-model.md §13 "Release signing")
+# All signing happens inside `publish`, behind the production approval gate
+# (signing is an irreversible external write — it records entries in the public
+# Rekor transparency log). The identity is keyless: an ephemeral certificate is
+# minted by Sigstore Fulcio from the job's GitHub Actions OIDC token
+# (`id-token: write`); no long-lived signing key or secret exists.
+# - Tags: workflow_dispatch releases create the tag as a gitsign-signed
+#   annotated tag (`git tag -s`) and verify it (`git tag -v`) before pushing.
+#   Tag-push releases fail closed unless the pushed tag is a signed annotated
+#   tag.
+# - Archives: every tar.gz gets a keyless cosign bundle
+#   (`<archive>.sigstore.json`), verified with `cosign verify-blob` before the
+#   GitHub Release is created; the bundles are attached as Release assets.
+# Signing or verification failure fails `publish` — no unsigned artifact can
+# be published silently. The lint `scripts/ci/check-release-signing.sh`
+# (suite-17) enforces these invariants statically on every PR.
+#
 # GOTCHAS
 # - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
 # - cross-rs/cross requires Docker; ubuntu-24.04 runners include Docker by default.
@@ -209,11 +226,14 @@ jobs:
           retention-days: 7
 
   # The only job with write credentials and the only job performing external
-  # writes (git tag push, GitHub Release creation). `environment: production`
-  # makes GitHub hold this job until a required reviewer approves the pending
-  # deployment (issue #660; repository Environments settings define the
-  # reviewer list — see docs/technical/ci-environments.md). Dry runs skip this
-  # job entirely, so no approval is requested for artifact-only builds.
+  # writes (git tag push, GitHub Release creation, Rekor transparency-log
+  # entries from signing). `environment: production` makes GitHub hold this
+  # job until a required reviewer approves the pending deployment (issue #660;
+  # repository Environments settings define the reviewer list — see
+  # docs/technical/ci-environments.md). Dry runs skip this job entirely, so no
+  # approval is requested for artifact-only builds. `id-token: write` (issue
+  # #659) lets cosign/gitsign mint the keyless Sigstore signing certificate;
+  # it is granted only here so signing can never precede approval.
   publish:
     name: tag-and-publish
     needs: [resolve, build]
@@ -222,11 +242,15 @@ jobs:
     environment: production
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Set up release signing tooling (cosign + gitsign)
+        uses: ./.github/actions/setup-release-signing
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -237,47 +261,68 @@ jobs:
       - name: List downloaded archives
         run: ls -la artifacts/
 
-      - name: Create and push git tag (workflow_dispatch only)
+      - name: Create, verify, and push signed git tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          GITSIGN_TOKEN_PROVIDER: github-actions
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          git tag -s -a "${{ inputs.tag }}" -m "Release ${{ inputs.tag }}" "${{ needs.resolve.outputs.sha }}"
+          # Fail closed: never push a tag whose signature does not verify.
+          git tag -v "${{ inputs.tag }}"
+          git push origin "refs/tags/${{ inputs.tag }}"
 
-      - name: Create GitHub Release with all assets
+      - name: Verify pushed tag is a signed annotated tag (tag-push only)
+        if: github.event_name == 'push'
+        run: |
+          TAG="${{ github.ref_name }}"
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if [ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]; then
+            echo "::error::release tag ${TAG} is a lightweight tag — release tags must be signed annotated tags (security-model.md §13 Release signing)"
+            exit 1
+          fi
+          if ! git cat-file tag "refs/tags/${TAG}" | grep -qE -- '-----BEGIN (PGP SIGNATURE|SSH SIGNATURE|SIGNED MESSAGE)-----'; then
+            echo "::error::release tag ${TAG} carries no signature — release tags must be signed (security-model.md §13 Release signing)"
+            exit 1
+          fi
+
+      - name: Sign release archives (keyless cosign bundles)
+        run: |
+          for f in artifacts/*.tar.gz; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
+          done
+
+      - name: Verify archive signatures (fail closed before publishing)
+        run: |
+          for f in artifacts/*.tar.gz; do
+            cosign verify-blob \
+              --bundle "${f}.sigstore.json" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "^https://github.com/${{ github.repository }}/\.github/workflows/release-rmpc\.yml@" \
+              "${f}"
+          done
+
+      - name: Create GitHub Release with all assets and signature bundles
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sigstore.json
           draft: false
           fail_on_unmatched_files: true
-
-  # Dev-scout seam only. Issue #659 exclusively owns contents/id-token
-  # permissions and the detached signature/provenance bundle contract.
-  # Issue #660 replaced the production-approval seam by declaring
-  # `environment: production` directly on the `publish` job, so this seam now
-  # depends on `publish` — the approval gate is already satisfied upstream.
-  sign-and-attest:
-    name: sign-and-attest-rmpc-seam
-    if: ${{ false }}
-    needs: [publish]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - name: Signing and provenance seam
-        run: |
-          printf '%s\n' "Issue #659 enables signed tags and archive provenance."
 
   # Dev-scout seam only. Issue #662 owns the reusable BaseScan assertion and
   # the contract-deploy workflow. rmpc does not deploy contracts; this routing
   # seam records the required predecessor without making release-rmpc a caller.
+  # Issue #659 absorbed the former sign-and-attest seam into `publish` (signing
+  # must be atomic with publication, behind the same approval gate), so this
+  # seam now depends on `publish` directly.
   contract-source-verification:
     name: contract-source-verification-seam
     if: ${{ false }}
-    needs: [sign-and-attest]
+    needs: [publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

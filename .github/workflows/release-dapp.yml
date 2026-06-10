@@ -23,6 +23,27 @@
 # lint `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces this on
 # every PR.
 #
+# RELEASE SIGNING + PROVENANCE (issue #659, security-model.md §13 "Release signing")
+# The `build` job enables BuildKit SLSA provenance and SBOM generation
+# (`provenance: true`, `sbom: true`) and exports the image as an OCI archive so
+# the attestation manifests survive the trip to `publish`. All signing happens
+# inside `publish`, behind the production approval gate (signing is an
+# irreversible external write — it records entries in the public Rekor
+# transparency log). The identity is keyless: an ephemeral certificate is
+# minted by Sigstore Fulcio from the job's GitHub Actions OIDC token
+# (`id-token: write`); no long-lived signing key or secret exists.
+# - Tags: workflow_dispatch releases create the tag as a gitsign-signed
+#   annotated tag (`git tag -s`) and verify it (`git tag -v`) before pushing.
+#   Tag-push releases fail closed unless the pushed tag is a signed annotated
+#   tag.
+# - Image: after the push, the manifest digest is signed with `cosign sign`
+#   and the BuildKit SLSA provenance predicate is attached with
+#   `cosign attest --type slsaprovenance`, then both are verified
+#   (`cosign verify`, `cosign verify-attestation`) in the same job.
+# Signing or verification failure fails `publish` — no unsigned image can be
+# published silently. The lint `scripts/ci/check-release-signing.sh`
+# (suite-17) enforces these invariants statically on every PR.
+#
 # WHY GHCR WITH GITHUB_TOKEN
 # GHCR is tightly integrated with GitHub repositories and does not require any
 # additional secrets. GITHUB_TOKEN is granted write:packages permission on the
@@ -45,9 +66,12 @@
 # - The Dockerfile expects the build context to be the repo root (not clients/dapp/)
 #   because it COPYs from clients/dapp/ explicitly. The context is therefore set to
 #   the repo root via the build-args context.
-# - The image travels from build to publish as a docker-archive tar artifact;
-#   `docker load` restores it with its tags intact, and `docker push --all-tags`
-#   pushes exactly the tags computed by metadata-action in the build job.
+# - The image travels from build to publish as an OCI image-layout tar artifact
+#   (not a docker-archive): BuildKit can only attach provenance/SBOM attestation
+#   manifests to OCI/image outputs, and `docker load` would drop them. `publish`
+#   therefore pushes the archive with `skopeo copy --all --preserve-digests`,
+#   which uploads the complete image index (image + attestation manifests)
+#   byte-for-byte.
 
 name: release-dapp
 
@@ -99,13 +123,15 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest
 
-      - name: Build image to local archive (no push)
+      - name: Build image to local OCI archive with provenance + SBOM (no push)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: clients/dapp/Dockerfile
           push: false
-          outputs: type=docker,dest=/tmp/dapp-image.tar
+          provenance: true
+          sbom: true
+          outputs: type=oci,dest=/tmp/dapp-image.tar
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -129,10 +155,13 @@ jobs:
           retention-days: 7
 
   # The only job with write credentials and the only job performing external
-  # writes (git tag push, GHCR image push). `environment: production` makes
-  # GitHub hold this job until a required reviewer approves the pending
-  # deployment (issue #660; repository Environments settings define the
-  # reviewer list — see docs/technical/ci-environments.md).
+  # writes (git tag push, GHCR image push, Rekor transparency-log entries from
+  # signing). `environment: production` makes GitHub hold this job until a
+  # required reviewer approves the pending deployment (issue #660; repository
+  # Environments settings define the reviewer list — see
+  # docs/technical/ci-environments.md). `id-token: write` (issue #659) lets
+  # cosign/gitsign mint the keyless Sigstore signing certificate; it is
+  # granted only here so signing can never precede approval.
   publish:
     name: publish-dapp-image
     needs: [build]
@@ -142,6 +171,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -149,22 +179,40 @@ jobs:
         with:
           ref: ${{ inputs.commit_hash || github.sha }}
 
-      - name: Create and push git tag
+      - name: Set up release signing tooling (cosign + gitsign)
+        uses: ./.github/actions/setup-release-signing
+
+      - name: Create, verify, and push signed git tag
         if: github.event_name == 'workflow_dispatch'
+        env:
+          GITSIGN_TOKEN_PROVIDER: github-actions
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          git tag -s -a "${{ inputs.tag }}" -m "Release ${{ inputs.tag }}"
+          # Fail closed: never push a tag whose signature does not verify.
+          git tag -v "${{ inputs.tag }}"
+          git push origin "refs/tags/${{ inputs.tag }}"
+
+      - name: Verify pushed tag is a signed annotated tag (tag-push only)
+        if: github.event_name == 'push'
+        run: |
+          TAG="${{ github.ref_name }}"
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if [ "$(git cat-file -t "refs/tags/${TAG}")" != "tag" ]; then
+            echo "::error::release tag ${TAG} is a lightweight tag — release tags must be signed annotated tags (security-model.md §13 Release signing)"
+            exit 1
+          fi
+          if ! git cat-file tag "refs/tags/${TAG}" | grep -qE -- '-----BEGIN (PGP SIGNATURE|SSH SIGNATURE|SIGNED MESSAGE)-----'; then
+            echo "::error::release tag ${TAG} carries no signature — release tags must be signed (security-model.md §13 Release signing)"
+            exit 1
+          fi
 
       - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
           name: dapp-image
           path: /tmp
-
-      - name: Load image
-        run: docker load -i /tmp/dapp-image.tar
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -173,34 +221,54 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image (all tags)
-        run: docker push --all-tags ghcr.io/${{ github.repository_owner }}/dapp
-
-  # Dev-scout seam only. Issue #659 exclusively owns contents/packages/id-token
-  # permissions needed for signed tags and keyless image provenance.
-  # Issue #660 replaced the production-approval seam by declaring
-  # `environment: production` directly on the `publish` job, so this seam now
-  # depends on `publish` — the approval gate is already satisfied upstream.
-  sign-and-attest:
-    name: sign-and-attest-dapp-seam
-    if: ${{ false }}
-    needs: [publish]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-    steps:
-      - name: Signing and provenance seam
+      - name: Push OCI archive to GHCR (preserves attestation manifests)
+        id: push
         run: |
-          printf '%s\n' "Issue #659 enables signed tags, SBOM, and provenance."
+          IMAGE="ghcr.io/${{ github.repository_owner }}/dapp"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${RAW_TAG#v}"
+          if ! command -v skopeo >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y skopeo
+          fi
+          skopeo copy --all --preserve-digests "oci-archive:/tmp/dapp-image.tar" "docker://${IMAGE}:${VERSION}"
+          skopeo copy --all --preserve-digests "oci-archive:/tmp/dapp-image.tar" "docker://${IMAGE}:latest"
+          DIGEST="sha256:$(skopeo inspect --raw "docker://${IMAGE}:${VERSION}" | sha256sum | cut -d' ' -f1)"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign image and attach SLSA provenance attestation (keyless)
+        run: |
+          IMAGE_REF="${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+          cosign sign --yes "${IMAGE_REF}"
+          # Extract the BuildKit-generated SLSA provenance predicate from the
+          # pushed image index and re-attach it as a cosign-signed attestation.
+          docker buildx imagetools inspect "${IMAGE_REF}" --format '{{ json .Provenance }}' \
+            | jq -e '.SLSA // first(.[] | .SLSA?) // error("no SLSA provenance found in image index")' \
+            > /tmp/slsa-predicate.json
+          test -s /tmp/slsa-predicate.json
+          cosign attest --yes --type slsaprovenance --predicate /tmp/slsa-predicate.json "${IMAGE_REF}"
+
+      - name: Verify image signature and provenance attestation (fail closed)
+        run: |
+          IMAGE_REF="${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}"
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/\.github/workflows/release-dapp\.yml@" \
+            "${IMAGE_REF}"
+          cosign verify-attestation --type slsaprovenance \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/\.github/workflows/release-dapp\.yml@" \
+            "${IMAGE_REF}"
 
   # Dev-scout seam only. Issue #671 owns the serving-layer and deployed-domain
   # HSTS assertions after #662 establishes the deployment verification contract.
+  # Issue #659 absorbed the former sign-and-attest seam into `publish` (signing
+  # must be atomic with publication, behind the same approval gate), so this
+  # seam now depends on `publish` directly.
   verify-dapp-headers:
     name: verify-dapp-headers-seam
     if: ${{ false }}
-    needs: [sign-and-attest]
+    needs: [publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

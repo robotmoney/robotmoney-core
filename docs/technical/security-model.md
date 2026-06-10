@@ -241,7 +241,7 @@ This section maps onto `docs/architecture.md` §15.
 | Attack | Required control |
 |---|---|
 | Frontend JS injection (Bybit/Safe-class) | The dapp must be deployed with a strict Content Security Policy that disallows inline scripts and eval. Public production builds must be static, content-addressed or content-hash deployed, and reproducible from a signed tag. Third-party or CDN scripts are prohibited by default; if an exception is approved, Subresource Integrity hashes are required. The canonical deployment procedure must be documented and enforced. |
-| Build-pipeline compromise | Dapp release artifacts must be reproducibly buildable from a tagged commit. Release tags must be signed. Provenance attestation is required before public launch. |
+| Build-pipeline compromise | Dapp release artifacts must be reproducibly buildable from a tagged commit. Release tags must be signed. Provenance attestation is required before public launch. Implemented: release tags are signed annotated tags, the dapp image is built with BuildKit SLSA provenance + SBOM and signed/attested keyless with cosign, and verification runs fail-closed inside the release workflow — see §13 "Release signing". |
 | DNS hijack / phishing clone domain | Official domain(s) must be documented, registrar-locked, DNSSEC-enabled where supported by the registrar/TLD, and monitored for record changes. If IPFS/content-addressed hosting is used, an ENS record must point to the pinned deployment. A canonical domain list must be published. |
 | TLS/cert mis-issuance | HSTS preload must be enabled on all dapp domains. |
 | XSS in dapp | A Content Security Policy that disallows inline scripts and eval must be enforced. This must be verified in CI before public launch. |
@@ -277,6 +277,82 @@ This section maps onto `docs/architecture.md` §15.
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. Implemented: every `release-*.yml` job runs on a version-pinned runner label (no `*-latest`), and all external writes are gated behind the protected `production` GitHub environment (1 required reviewer) — see `docs/technical/ci-environments.md`; enforced on every PR by `scripts/ci/check-release-runner-pinning.sh` (suite-17). |
 | Backup loss / single-keeper-of-seed | Each Safe signer must independently back up their seed phrase to an offline, hardware-encrypted medium. No single person may hold sole recovery capability. |
 | Insider threat (rogue contributor) | `CODEOWNERS` must be configured for `contracts/**` and `scripts/**`. At least two reviewers are required to merge to any branch that can reach production. Branch protection must be enforced on `main` and `dev`. |
+
+### Release signing (issue #659)
+
+Every published release is cryptographically traceable to the reviewed commit
+it was built from. Both release workflows (`.github/workflows/release-dapp.yml`,
+`.github/workflows/release-rmpc.yml`) sign and attest inside the `publish` job,
+behind the protected `production` environment gate (§13 row "CI runner
+compromise"; signing writes to the public Rekor transparency log and is treated
+as an irreversible external write, so it never precedes human approval).
+
+**Signing identity — keyless OIDC, no long-lived key.** There is no GPG key,
+SSH key, or signing secret in the repository or its settings. Each signature is
+produced with an ephemeral certificate minted by Sigstore Fulcio
+(`https://fulcio.sigstore.dev`) from the GitHub Actions OIDC token of the
+publish job (`id-token: write`, issuer
+`https://token.actions.githubusercontent.com`), and recorded in the public
+Rekor transparency log (`https://rekor.sigstore.dev`). The certificate identity
+to expect when verifying is the workflow ref:
+
+```
+https://github.com/lucky-tensor/robotmoney-monorepo/.github/workflows/release-dapp.yml@<ref>
+https://github.com/lucky-tensor/robotmoney-monorepo/.github/workflows/release-rmpc.yml@<ref>
+```
+
+The public Sigstore instance already trusts the GitHub Actions OIDC issuer, so
+no repository-side OIDC trust configuration or key provisioning is required.
+
+**What is signed:**
+
+- **Release tags.** `workflow_dispatch` releases create the tag as a
+  gitsign-signed annotated tag (`git tag -s`, x509/Sigstore) and verify it with
+  `git tag -v` before pushing; a failed verification aborts the release.
+  Tag-push releases fail closed in `publish` unless the pushed tag is a signed
+  annotated tag.
+- **rmpc binary archives.** Each `rmpc-<version>-<target>.tar.gz` gets a
+  keyless cosign bundle `rmpc-<version>-<target>.tar.gz.sigstore.json`,
+  verified with `cosign verify-blob` in-workflow before the GitHub Release is
+  created; the bundles are attached as Release assets next to the archives.
+- **dapp container image.** The image is built with BuildKit SLSA provenance
+  and SBOM attestations (`provenance: true`, `sbom: true`), pushed as a
+  complete OCI index (attestation manifests included), then the manifest digest
+  is signed with `cosign sign` and the BuildKit SLSA provenance predicate is
+  attached as a cosign attestation (`cosign attest --type slsaprovenance`).
+  `cosign verify` and `cosign verify-attestation` run fail-closed in the same
+  job.
+
+**Verification procedure (operator):**
+
+```bash
+# Release tag (requires gitsign: gpg.format=x509, gpg.x509.program=gitsign)
+git tag -v vX.Y.Z
+
+# rmpc archive
+cosign verify-blob \
+  --bundle rmpc-vX.Y.Z-<target>.tar.gz.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/lucky-tensor/robotmoney-monorepo/\.github/workflows/release-rmpc\.yml@' \
+  rmpc-vX.Y.Z-<target>.tar.gz
+
+# dapp image signature + SLSA provenance attestation
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/lucky-tensor/robotmoney-monorepo/\.github/workflows/release-dapp\.yml@' \
+  ghcr.io/lucky-tensor/dapp:X.Y.Z
+cosign verify-attestation --type slsaprovenance \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/lucky-tensor/robotmoney-monorepo/\.github/workflows/release-dapp\.yml@' \
+  ghcr.io/lucky-tensor/dapp:X.Y.Z
+```
+
+**Fail-closed enforcement.** Signing or verification failure fails the
+`publish` job, so an unsigned or unattested artifact can never be published
+silently. The static lint `scripts/ci/check-release-signing.sh` (suite-17,
+`release-signing` job) fails any PR that removes the signing steps, downgrades
+the tag creation to unsigned, drops `provenance: true`/`sbom: true`, or strips
+the in-workflow verification.
 
 ---
 

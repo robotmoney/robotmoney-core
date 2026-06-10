@@ -13,17 +13,23 @@ environment named `production`:
 
 | Workflow | Gated job | External writes behind the gate |
 |---|---|---|
-| `.github/workflows/release-rmpc.yml` | `publish` (`tag-and-publish`) | git tag push, GitHub Release creation with binary assets |
-| `.github/workflows/release-dapp.yml` | `publish` (`publish-dapp-image`) | git tag push, GHCR image push (`:semver` and `:latest`) |
+| `.github/workflows/release-rmpc.yml` | `publish` (`tag-and-publish`) | signed git tag push, archive signing (Rekor entries), GitHub Release creation with binary assets + signature bundles |
+| `.github/workflows/release-dapp.yml` | `publish` (`publish-dapp-image`) | signed git tag push, GHCR image push (`:semver` and `:latest`), image signing/attestation (Rekor entries) |
 
 A job that declares `environment: production` does not start until a required
 reviewer approves the pending deployment in the Actions run UI. Build jobs are
 credential-free: workflow-level `permissions:` are read-only and write scopes
-(`contents: write`, `packages: write`) are granted only on the gated publish
-jobs. In `release-dapp.yml` the image is built in a separate, push-free `build`
-job and travels to `publish` as a docker-archive artifact, so no registry write
-can precede approval. In `release-rmpc.yml` dry runs (`dry_run=true`) skip the
-`publish` job entirely and therefore request no approval.
+(`contents: write`, `packages: write`, and — for keyless Sigstore signing,
+issue #659 — `id-token: write`) are granted only on the gated publish jobs.
+In `release-dapp.yml` the image is built in a separate, push-free `build` job
+and travels to `publish` as an OCI image-layout artifact (preserving the
+BuildKit provenance/SBOM attestation manifests), so no registry write can
+precede approval. In `release-rmpc.yml` dry runs (`dry_run=true`) skip the
+`publish` job entirely and therefore request no approval; because signing is
+an irreversible external write (public Rekor transparency-log entries), dry
+runs are also unsigned by design. Release signing and provenance controls are
+documented in `docs/technical/security-model.md` §13 "Release signing" and
+enforced by `scripts/ci/check-release-signing.sh` (suite-17).
 
 ### Repository settings (configured 2026-06-10 via `gh api`)
 

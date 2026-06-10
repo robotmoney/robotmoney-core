@@ -20,8 +20,17 @@ All runners in both workflows use version-pinned labels (`ubuntu-24.04`,
 `macos-15`); `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces
 the pinning and the environment declaration on every PR. The disabled
 `production-approval` seam jobs were replaced by the `environment: production`
-declaration on the publish jobs themselves, so the `sign-and-attest` seams now
-depend on `publish`.
+declaration on the publish jobs themselves.
+
+Issue #659 absorbed the disabled `sign-and-attest` seam jobs into the `publish`
+jobs: signing must be atomic with publication and behind the same approval
+gate, so tag signing (gitsign), archive signing (cosign blob bundles), and
+image signing/attestation (cosign sign + SLSA provenance attest) all run inside
+`publish`, fail closed, with `id-token: write` granted only there. The
+downstream seams (`verify-dapp-headers` in `release-dapp.yml`,
+`contract-source-verification` in `release-rmpc.yml`) now depend on `publish`
+directly. Canonical record: `docs/technical/security-model.md` §13 "Release
+signing"; static enforcement: `scripts/ci/check-release-signing.sh` (suite-17).
 
 Neither release workflow deploys contracts. BaseScan verification belongs to a
 contract-deploy workflow created or selected by issue #662. The disabled
@@ -36,9 +45,12 @@ The delivery-control issues are intentionally serialized:
    writes, moved all publication behind the `production` environment, and
    replaced unpinned runner labels. It owns `environment:` and runner
    selection. Canonical record: `docs/technical/ci-environments.md`.
-2. **#659, signing and provenance owner.** Build on #660's publication jobs. It
-   owns release signing, OIDC, `id-token: write`, artifact attestations, and
-   signing-related `contents:` / `packages:` permissions.
+2. **#659, signing and provenance owner — DONE.** Built on #660's publication
+   jobs. It owns release signing, OIDC, `id-token: write`, artifact
+   attestations, and signing-related `contents:` / `packages:` permissions.
+   Implemented keyless (public Sigstore: Fulcio + Rekor) inside the `publish`
+   jobs; no long-lived key or secret was introduced. Canonical record:
+   `docs/technical/security-model.md` §13 "Release signing".
 3. **#662, contract verification owner.** Create or select the contract-deploy
    workflow and add one reusable BaseScan verification implementation there.
    It owns `BASESCAN_API_KEY`, deployed-address inputs, timeout behavior, and
@@ -64,6 +76,10 @@ Before enabling the disabled jobs, repository administrators must configure:
 - Runner labels or immutable runner images selected by #660. *(Done:
   `ubuntu-24.04` / `macos-15`.)*
 - GitHub OIDC trust for the keyless signing identity selected by #659.
+  *(Satisfied with zero repository configuration: #659 signs against the
+  public Sigstore instance, whose Fulcio CA already trusts the GitHub Actions
+  OIDC issuer — the only requirement is the job-level `id-token: write`
+  permission, which is committed in the workflows.)*
 - `BASESCAN_API_KEY` as an environment secret for the contract-deploy
   workflow selected by #662.
 - Canonical production dapp domains as environment variables or configuration
