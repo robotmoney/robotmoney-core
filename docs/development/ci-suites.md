@@ -510,6 +510,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `natspec-coverage` | quick | |
 | `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
+| `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
@@ -534,3 +535,4 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
+| 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |

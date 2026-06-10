@@ -1,0 +1,65 @@
+[package]
+name = "watchdog"
+version = "0.1.0"
+edition = "2021"
+description = "Robot Money mint/burn rate watchdog — monitors per-block and per-hour deposit/withdrawal volume against thresholds and triggers automated gateway pause or on-call alert on breach (security model §9)."
+license = "MIT"
+publish = false
+
+# Canonical: docs/technical/security-model.md §9 (line 207)
+# "An automated watchdog must monitor per-block and per-hour mint and burn volume
+#  against defined thresholds. Breach must trigger an automated pause or alert to
+#  an on-call operator with a maximum response-time SLA."
+# Implements: issue #658 / PR #787.
+# SLA: 5 minutes maximum response time from breach detection to pause/alert.
+
+[lib]
+name = "watchdog"
+path = "src/lib.rs"
+
+[[bin]]
+name = "watchdog"
+path = "src/main.rs"
+
+[dependencies]
+# Configuration parsing.
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime.
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "signal", "sync"] }
+
+# HTTP client for gateway pause RPC and webhook alerts.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Postgres for querying indexed deposit/withdrawal data.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "bigdecimal", "chrono"] }
+bigdecimal = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+
+# EVM types for gateway pause transaction construction.
+alloy-primitives = { version = "0.8", features = ["k256"] }
+# ECDSA signing for the pause transaction.
+k256 = { version = "0.13", features = ["ecdsa"] }
+# Hex encoding for addresses and raw transactions.
+hex = "0.4"
+
+# Error handling.
+thiserror = "1"
+
+# Logging — shared facade (issue #247).
+tracing = "0.1"
+rmpc-logging = { path = "../../crates/rmpc-logging" }
+
+# CLI.
+clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+# Postgres-in-Docker for integration tests; skips cleanly when Docker is missing.
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+# Reuse explorer-indexer migrations so the watchdog DB fixture matches the canonical schema.
+explorer-indexer = { path = "../explorer-indexer" }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "sync", "net"] }
+which = "6"
