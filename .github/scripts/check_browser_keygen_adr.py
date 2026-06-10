@@ -10,10 +10,11 @@ mechanical checks:
       and go/no-go conditions. Case-insensitive substring match against
       every `#`-prefixed line in the ADR (covers `## ` and `### ` levels).
 
-  (B) Plan + parent-ADR cross-links — `docs/implementation-plan.md` §12 and
-      `docs/technical/dapp-credential-decisions.md` (the parent ADR whose
-      §3.1 names this review as the unlock gate) both reference the new
-      ADR by path.
+  (B) Parent-ADR cross-link — `docs/technical/dapp-credential-decisions.md`
+      (the parent ADR whose §3.1 names this review as the unlock gate)
+      references the new ADR by path. (docs/implementation-plan.md was
+      retired 2026-06-09 in favour of the Plan tracking issue #109, so the
+      former plan cross-link check is gone.)
 
   (C) Downstream UI-issue alignment — every issue listed in
       `DOWNSTREAM_ISSUES` references the ADR path in its
@@ -36,7 +37,6 @@ from pathlib import Path
 # --- Configuration -----------------------------------------------------
 
 ADR_PATH = Path("docs/technical/dapp-browser-keygen-review.md")
-PLAN_PATH = Path("docs/implementation-plan.md")
 PARENT_ADR_PATH = Path("docs/technical/dapp-credential-decisions.md")
 
 ADR_REFERENCE_NEEDLE = "docs/technical/dapp-browser-keygen-review.md"
@@ -197,20 +197,7 @@ def main() -> int:
     else:
         print(f"OK: ADR covers all {len(SCOPE_ITEMS)} scope items.")
 
-    # (B) Cross-link checks: implementation-plan and parent ADR.
-    plan_path = root / PLAN_PATH
-    if not plan_path.is_file():
-        failed = True
-        print(f"FAIL: implementation-plan missing at {plan_path}", file=sys.stderr)
-    elif ADR_REFERENCE_NEEDLE not in plan_path.read_text(encoding="utf-8"):
-        failed = True
-        print(
-            f"FAIL: {PLAN_PATH} does not cross-link to {ADR_REFERENCE_NEEDLE}",
-            file=sys.stderr,
-        )
-    else:
-        print(f"OK: {PLAN_PATH} cross-links to the ADR.")
-
+    # (B) Cross-link check: parent ADR.
     parent_path = root / PARENT_ADR_PATH
     if not parent_path.is_file():
         failed = True

@@ -33,8 +33,9 @@ from pathlib import Path
 
 # --- Configuration -----------------------------------------------------
 
+# docs/implementation-plan.md was retired 2026-06-09 in favour of the Plan
+# tracking issue #109, so this script no longer checks a plan cross-link.
 ADR_PATH = Path("docs/technical/dapp-credential-decisions.md")
-PLAN_PATH = Path("docs/implementation-plan.md")
 
 # Scope items from issue #59 body. Each entry is (label, list of
 # substrings; ALL must appear within a single heading line, case
@@ -188,17 +189,6 @@ def main() -> int:
         print(f"FAIL: ADR missing at {adr_path}", file=sys.stderr)
         return 1
     adr_text = adr_path.read_text(encoding="utf-8")
-
-    plan_path = root / PLAN_PATH
-    if not plan_path.is_file():
-        print(f"FAIL: implementation-plan missing at {plan_path}", file=sys.stderr)
-        return 1
-    if ADR_REFERENCE_NEEDLE not in plan_path.read_text(encoding="utf-8"):
-        print(
-            f"FAIL: {PLAN_PATH} does not cross-link to {ADR_REFERENCE_NEEDLE}",
-            file=sys.stderr,
-        )
-        return 1
 
     failed = False
 
