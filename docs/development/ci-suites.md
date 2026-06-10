@@ -508,11 +508,11 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
-| `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
+| `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh`; also runs `scripts/ci/check-release-runner-pinning.sh` (issue #660 — release workflows must use pinned runner labels and declare `environment: production`) |
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
-| `release-dapp` | release | tag/dispatch-only; not PR-triggered |
-| `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
+| `release-dapp` | release | tag/dispatch-only; not PR-triggered; publish gated by `environment: production` on pinned runners (docs/technical/ci-environments.md) |
+| `release-rmpc` | release | tag/dispatch-only; not PR-triggered; publish gated by `environment: production` on pinned runners (docs/technical/ci-environments.md) |
 
 ---
 

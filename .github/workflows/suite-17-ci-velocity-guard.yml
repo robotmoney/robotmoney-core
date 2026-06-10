@@ -10,6 +10,12 @@
 # workflow YAML on every PR via scripts/ci/check-workflow-tiers.sh so the
 # velocity work cannot regress. It boots no chain and finishes in well under a
 # minute.
+#
+# The release-runner-pinning job (issue #660, security-model.md §13) guards the
+# release-workflow hardening invariants the same way: no floating `*-latest`
+# runner label in .github/workflows/release-*.yml and a mandatory
+# `environment: production` declaration gating the publish jobs. See
+# docs/technical/ci-environments.md.
 
 name: ci-velocity-tier-guard
 
@@ -42,3 +48,13 @@ jobs:
 
       - name: Validate CI velocity tier invariants
         run: bash scripts/ci/check-workflow-tiers.sh
+
+  release-runner-pinning:
+    name: release-runner-pinning
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release-workflow runner pinning and production environment gate
+        run: bash scripts/ci/check-release-runner-pinning.sh

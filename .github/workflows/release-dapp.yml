@@ -6,10 +6,27 @@
 # This workflow builds the image on every v*.*.* tag and pushes it to GHCR so that
 # operators can pull a versioned, ready-to-run image.
 #
+# WHY BUILD AND PUBLISH ARE SEPARATE JOBS (issue #660, security-model.md §13)
+# The `build` job produces the image as a credential-free workflow artifact — it
+# never logs in to a registry and never pushes anything. Every external write
+# (git tag push, GHCR image push) lives in the `publish` job, which declares
+# `environment: production`: GitHub blocks it until a required reviewer approves
+# the pending deployment. This guarantees human approval precedes every
+# irreversible write. Workflow-level permissions are read-only; `contents: write`
+# and `packages: write` are granted only to `publish`.
+#
+# RUNNER PINNING (issue #660)
+# Jobs run on the version-pinned `ubuntu-24.04` label, never a floating
+# `*-latest` alias. GitHub-hosted runners cannot be pinned to an image SHA
+# digest; the versioned label is the strongest pin available, and the upgrade
+# path is a self-hosted runner label (docs/technical/ci-environments.md). The
+# lint `scripts/ci/check-release-runner-pinning.sh` (suite-17) enforces this on
+# every PR.
+#
 # WHY GHCR WITH GITHUB_TOKEN
 # GHCR is tightly integrated with GitHub repositories and does not require any
-# additional secrets. GITHUB_TOKEN is granted write:packages permission automatically
-# during a workflow run, which is sufficient to push images to the org namespace.
+# additional secrets. GITHUB_TOKEN is granted write:packages permission on the
+# publish job, which is sufficient to push images to the org namespace.
 #
 # WHY BUILD-TIME VITE_* ARGS ARE DEFAULTED TO PLACEHOLDERS
 # Vite inlines env vars into the static bundle at build time. The CI image is built
@@ -28,8 +45,9 @@
 # - The Dockerfile expects the build context to be the repo root (not clients/dapp/)
 #   because it COPYs from clients/dapp/ explicitly. The context is therefore set to
 #   the repo root via the build-args context.
-# - The packages: write permission is required explicitly; the default token only has
-#   contents: read.
+# - The image travels from build to publish as a docker-archive tar artifact;
+#   `docker load` restores it with its tags intact, and `docker push --all-tags`
+#   pushes exactly the tags computed by metadata-action in the build job.
 
 name: release-dapp
 
@@ -48,15 +66,82 @@ on:
         required: true
         type: string
 
+# Read-only by default; write permissions are granted only to the `publish` job,
+# which is gated behind the protected `production` environment (issue #660).
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
-  build-and-push:
-    name: build-and-push-dapp-image
-    runs-on: ubuntu-latest
+  # Credential-free artifact production: builds the image and uploads it as a
+  # workflow artifact. No registry login, no push, no write permissions.
+  build:
+    name: build-dapp-image
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_hash || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dapp
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build image to local archive (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: clients/dapp/Dockerfile
+          push: false
+          outputs: type=docker,dest=/tmp/dapp-image.tar
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_EXPLORER_API_URL=http://localhost:8080
+            VITE_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000000
+            VITE_VAULT_ADDRESS=0x0000000000000000000000000000000000000000
+            VITE_GATEWAY_EXPECTED_CODE_HASH=
+            VITE_GATEWAY_CODE_HASH_VERIFIED=false
+            VITE_ENV_CLASS=fork
+            VITE_BROWSER_KEYGEN=false
+            VITE_HISTORY_PANE=false
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dapp-image
+          path: /tmp/dapp-image.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job with write credentials and the only job performing external
+  # writes (git tag push, GHCR image push). `environment: production` makes
+  # GitHub hold this job until a required reviewer approves the pending
+  # deployment (issue #660; repository Environments settings define the
+  # reviewer list — see docs/technical/ci-environments.md).
+  publish:
+    name: publish-dapp-image
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
@@ -72,8 +157,14 @@ jobs:
           git tag "${{ inputs.tag }}"
           git push origin "${{ inputs.tag }}"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dapp-image
+          path: /tmp
+
+      - name: Load image
+        run: docker load -i /tmp/dapp-image.tar
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -82,55 +173,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/dapp
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: clients/dapp/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VITE_EXPLORER_API_URL=http://localhost:8080
-            VITE_GATEWAY_ADDRESS=0x0000000000000000000000000000000000000000
-            VITE_VAULT_ADDRESS=0x0000000000000000000000000000000000000000
-            VITE_GATEWAY_EXPECTED_CODE_HASH=
-            VITE_GATEWAY_CODE_HASH_VERIFIED=false
-            VITE_ENV_CLASS=fork
-            VITE_BROWSER_KEYGEN=false
-            VITE_HISTORY_PANE=false
-
-  # Dev-scout seam only. Issue #660 owns splitting build from publish and making
-  # this protected-environment gate a real predecessor of all publication.
-  production-approval:
-    name: production-approval-seam
-    if: ${{ false }}
-    runs-on: ubuntu-24.04
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - name: Protected environment seam
-        run: |
-          printf '%s\n' "Issue #660 enables this approval gate before publication."
+      - name: Push image (all tags)
+        run: docker push --all-tags ghcr.io/${{ github.repository_owner }}/dapp
 
   # Dev-scout seam only. Issue #659 exclusively owns contents/packages/id-token
   # permissions needed for signed tags and keyless image provenance.
+  # Issue #660 replaced the production-approval seam by declaring
+  # `environment: production` directly on the `publish` job, so this seam now
+  # depends on `publish` — the approval gate is already satisfied upstream.
   sign-and-attest:
     name: sign-and-attest-dapp-seam
     if: ${{ false }}
-    needs: [production-approval]
+    needs: [publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
