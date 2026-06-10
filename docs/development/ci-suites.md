@@ -514,6 +514,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
+| `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
 
 ---
 

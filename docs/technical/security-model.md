@@ -192,7 +192,7 @@ source. The manipulation-resistance posture is:
 | Attack | Required control |
 |---|---|
 | Pre-0.8 integer overflow inheritance | All contracts must use Solidity ≥0.8. OZ dependency versions must be pinned in `foundry.toml` / `package.json`. Any dependency upgrade requires a PR with an explicit compatibility review. |
-| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. |
+| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` runs `forge script --broadcast --verify` and then calls `scripts/assert-basescan-verified.sh` for every deployed address, blocking the deploy job until all contracts are source-verified or the 3600 s timeout expires. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
 | Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
@@ -271,8 +271,8 @@ This section maps onto `docs/architecture.md` §15.
 
 | Attack | Required control |
 |---|---|
-| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. |
-| Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. |
+| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` uses a GitHub Actions `environment` requiring sign-off before execution, and asserts BaseScan verification within 3600 s. |
+| Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. **CI gate implemented** (issue #662): `scripts/assert-basescan-verified.sh` polls the BaseScan `getsourcecode` API for each deployed address and exits non-zero if any contract is unverified when the timeout is reached. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |
 | Backup loss / single-keeper-of-seed | Each Safe signer must independently back up their seed phrase to an offline, hardware-encrypted medium. No single person may hold sole recovery capability. |
