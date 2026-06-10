@@ -899,4 +899,29 @@ contract RobotMoneyVaultTest is Test {
         vm.prank(admin);
         vault.forceRemoveAdapter(0);
     }
+
+    /// @notice forceRemoveAdapter must pause deposits to close the share-price-crash arbitrage window.
+    function test_forceRemoveAdapter_pausesDeposits() public {
+        // Alice deposits so the adapter holds non-zero assets.
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+
+        // Force-remove the adapter.
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+
+        // Deposits must now be paused.
+        assertTrue(vault.depositsPaused(), "deposits must be paused after forceRemoveAdapter");
+
+        // A subsequent deposit attempt must revert (maxDeposit returns 0 when depositsPaused,
+        // so OZ ERC4626 reverts with ERC4626ExceededMaxDeposit before reaching _deposit).
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", bob, 100 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(100 * ONE_USDC, bob);
+    }
 }

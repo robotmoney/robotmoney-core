@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/29a6b0a3488522b2001095b39bc04eabd642f8f6/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/4b538399027636f20b316ae10f72d0d6c6960fb1/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -341,19 +341,38 @@ See docs/technical/basket-vault-gap-report.md §3.
 function previewDeposit(uint256 assets_) public view override returns (uint256);
 ```
 
-### previewWithdraw
+### previewMint
 
-Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
+Worst-case assets required to mint `shares`.
+Grosses up the raw NAV by `MAX_BPS / (MAX_BPS - maxSlippageBps)` so that
+after the on-chain swap applies the same `maxSlippageBps` haircut, the vault
+captures the full proportional NAV. Without this override, `mint()` would
+undercharge relative to `deposit()`, allowing a permissionless value leak
+onto existing holders (see docs/code-review/smart-contract-vulnerability-audit-20260609.md H-1).
+Rounded up (Ceil) so the vault is never shortchanged.
 
 
 ```solidity
-function previewWithdraw(uint256 assets_) public view override returns (uint256);
+function previewMint(uint256 shares) public view override returns (uint256);
+```
+
+### previewWithdraw
+
+BasketVault cannot guarantee ERC-4626 withdraw exactness because
+the actual USDC delivered depends on proportional swap execution
+and variable on-chain slippage. Use `redeem()` instead — the ERC-4626
+redeem guarantee (actual ≥ previewRedeem) is enforced at the swap level.
+
+
+```solidity
+function previewWithdraw(uint256) public view override returns (uint256);
 ```
 
 ### _withdraw
 
-Ignores the ERC-4626 `assets` parameter because actual USDC received depends
-on swap execution. Users should use `redeem` for this vault type.
+Performs a proportional-swap withdrawal. The `assets` parameter
+is intentionally unused because the actual USDC received depends on
+swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
 Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
 
@@ -514,7 +533,7 @@ Reverts when any router leg cannot satisfy its effective floor.
 
 
 ```solidity
-function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant;
+function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant;
 ```
 
 ### emergencyUnwindWithOverride
@@ -534,7 +553,8 @@ override is enabled.
 
 ```solidity
 function emergencyUnwindWithOverride(address[] calldata tokens)
-    external
+    public
+    virtual
     onlyRole(EMERGENCY_ROLE)
     nonReentrant;
 ```
@@ -1033,6 +1053,16 @@ registering the asset.
 
 ```solidity
 error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+```
+
+### RedeemOnly
+Raised by withdraw() and previewWithdraw(). BasketVault cannot
+guarantee ERC-4626 exactness for proportional-swap exits — use
+redeem() instead, which returns actual swap proceeds.
+
+
+```solidity
+error RedeemOnly();
 ```
 
 ## Structs

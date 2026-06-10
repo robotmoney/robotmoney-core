@@ -790,6 +790,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @param index Registry index of the adapter to force-remove.
     function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
+        _setDepositsPaused(true);
         uint256 lossAmount = adapters[index].adapter.totalAssets();
         adapters[index].active = false;
         emit AdapterForceRemoved(index, address(adapters[index].adapter), lossAmount);

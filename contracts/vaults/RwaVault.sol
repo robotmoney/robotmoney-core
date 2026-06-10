@@ -216,6 +216,49 @@ contract RwaVault is BasketVault {
         }
     }
 
+    // ─── Emergency stale override ────────────────────────────────────
+
+    /// @notice When true, EMERGENCY_ROLE may call emergencyUnwind and
+    ///         emergencyUnwindWithOverride even if the Chronicle feed is stale.
+    ///         Defaults to false, which causes emergency unwind to revert with
+    ///         `StalePriceFeed` when the oracle has not been updated within
+    ///         `oracleHeartbeat`.
+    bool public emergencyUnwindStaleOverride;
+
+    /// @dev Emitted when EMERGENCY_ROLE toggles the stale-price override flag.
+    event EmergencyUnwindStaleOverrideUpdated(bool allowed);
+
+    /// @notice Allow (true) or forbid (false, default) emergency unwind when the
+    ///         Chronicle feed is stale. Restricted to EMERGENCY_ROLE.
+    function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(EMERGENCY_ROLE) {
+        emergencyUnwindStaleOverride = allowed_;
+        emit EmergencyUnwindStaleOverrideUpdated(allowed_);
+    }
+
+    /// @notice Emergency unwind with Chronicle staleness gate.
+    /// @dev Reverts with `StalePriceFeed` when the feed is stale, unless
+    ///      `emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+    function emergencyUnwind() public override onlyRole(EMERGENCY_ROLE) {
+        if (!emergencyUnwindStaleOverride) {
+            _checkOracleFreshness();
+        }
+        super.emergencyUnwind();
+    }
+
+    /// @notice High-risk emergency unwind with Chronicle staleness gate.
+    /// @dev Reverts with `StalePriceFeed` when the feed is stale, unless
+    ///      `emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+    function emergencyUnwindWithOverride(address[] calldata tokens)
+        public
+        override
+        onlyRole(EMERGENCY_ROLE)
+    {
+        if (!emergencyUnwindStaleOverride) {
+            _checkOracleFreshness();
+        }
+        super.emergencyUnwindWithOverride(tokens);
+    }
+
     // ─── Admin: oracle configuration ─────────────────────────────────
 
     /// @notice Update the Chronicle staleness heartbeat. Restricted to ADMIN_ROLE.
