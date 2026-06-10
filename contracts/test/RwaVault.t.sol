@@ -707,6 +707,68 @@ contract RwaVaultTest is Test {
         );
     }
 
+    // ─── ChronicleOracleAdapter: NAV price validation ──────────────────────────
+
+    /// @notice ChronicleOracleAdapter rejects zero NAV price.
+    function test_adapter_rejectsZeroNavPrice() public {
+        chronicle.setPrice(0);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, 0));
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price below MIN_NAV.
+    function test_adapter_rejectsNavPriceBelowMin() public {
+        uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
+        chronicle.setPrice(lowPrice);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice));
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price above MAX_NAV.
+    function test_adapter_rejectsNavPriceAboveMax() public {
+        uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
+        chronicle.setPrice(highPrice);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice));
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter accepts NAV price at MIN_NAV boundary.
+    function test_adapter_acceptsNavPriceAtMinBoundary() public {
+        uint256 minNav = ChronicleOracleAdapter(address(adapter)).MIN_NAV();
+        chronicle.setPrice(minNav);
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter accepts NAV price at MAX_NAV boundary.
+    function test_adapter_acceptsNavPriceAtMaxBoundary() public {
+        uint256 maxNav = ChronicleOracleAdapter(address(adapter)).MAX_NAV();
+        chronicle.setPrice(maxNav);
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects zero NAV price in USDC→RWA direction.
+    function test_adapter_rejectsZeroNavPrice_usdcToRwa() public {
+        chronicle.setPrice(0);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, 0));
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price below MIN_NAV in USDC→RWA direction.
+    function test_adapter_rejectsNavPriceBelowMin_usdcToRwa() public {
+        uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
+        chronicle.setPrice(lowPrice);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice));
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price above MAX_NAV in USDC→RWA direction.
+    function test_adapter_rejectsNavPriceAboveMax_usdcToRwa() public {
+        uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
+        chronicle.setPrice(highPrice);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice));
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
+    }
+
     /// @notice RwaVault rejects zero-address for Chronicle oracle.
     function test_vault_rejectsZeroChronicle() public {
         // We must deploy StubSwapRouter before the expectRevert scope.
