@@ -241,6 +241,10 @@ contract RouterGovernance is AccessControl {
         quorumThreshold = _quorumThreshold;
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
+
+        // Operational note: only RouterGovernance (deployed behind Safe→Timelock)
+        // should hold ADMIN_ROLE on the Portfolio Router. If the router's ADMIN_ROLE
+        // is held elsewhere, setWeights bypasses the propose/vote/delay path entirely.
     }
 
     // ─── Admin: cadence parameters ────────────────────────────────────────────
