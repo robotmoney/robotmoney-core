@@ -49,11 +49,27 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    // ─── WAD constant ─────────────────────────────────────────────────
+    // ─── Constants ────────────────────────────────────────────────────
 
     /// @dev 1e18 — Chronicle oracle price scale. Chronicle reports NAV in
     ///      units of USDC per deSPXA, scaled to 18 decimal places (WAD).
     uint256 private constant WAD = 1e18;
+
+    /// @notice Minimum acceptable NAV price from the Chronicle oracle in WAD.
+    ///         Any price below this threshold is considered invalid and will
+    ///         cause twapPrice() to revert. Set to 1e12 (0.000001 USD per RWA
+    ///         token) — well below any realistic deSPXA peg but safely above
+    ///         zero to catch malfunctioning or manipulated oracles.
+    /// @dev    1e12 in WAD corresponds to 1e-6 USD given WAD = 1e18.
+    uint256 public constant MIN_NAV = 1e12;
+
+    /// @notice Maximum acceptable NAV price from the Chronicle oracle in WAD.
+    ///         Any price above this threshold is considered invalid and will
+    ///         cause twapPrice() to revert. Set to 1e24 (1,000,000 USD per RWA
+    ///         token) — far above any plausible deSPXA price but tight enough
+    ///         to guard against extreme oracle malfunctions.
+    /// @dev    1e24 in WAD corresponds to 1e6 USD given WAD = 1e18.
+    uint256 public constant MAX_NAV = 1e24;
 
     // ─── Immutables ───────────────────────────────────────────────────
 
@@ -87,6 +103,10 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     ///      neither (baseToken=RWA, quoteToken=USDC) nor
     ///      (baseToken=USDC, quoteToken=RWA) matches the expected pair.
     error UnknownPricePair(address baseToken, address quoteToken);
+
+    /// @dev Raised when the Chronicle oracle returns a NAV price that is
+    ///      zero or outside the accepted [MIN_NAV, MAX_NAV] range.
+    error BadNavPrice(uint256 navPrice);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -187,6 +207,10 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
         if (baseAmount == 0) return 0;
 
         uint256 navPrice = ORACLE.latestAnswer(); // WAD: USDC per RWA, 18 dec
+
+        if (navPrice < MIN_NAV || navPrice > MAX_NAV) {
+            revert BadNavPrice(navPrice);
+        }
 
         if (baseToken == RWA_TOKEN && quoteToken == USDC) {
             // RWA → USDC: quoteAmount in USDC (6 dec)
