@@ -23,8 +23,9 @@ Replaces manual review for the acceptance criteria on issue #92:
       questions). This catches an ADR section being added with no
       content.
 
-  (D) "Implementation plan cross-links the ADR." — we assert
-      `docs/implementation-plan.md` contains the ADR path.
+  (D) retired — the former "implementation plan cross-links the ADR"
+      check is gone: docs/implementation-plan.md was retired 2026-06-09
+      in favour of the Plan tracking issue #109.
 
 The script exits 0 on success, non-zero on any drift, and prints a
 human-readable diagnosis. It does not require network access.
@@ -45,7 +46,6 @@ from pathlib import Path
 
 ADR_PATH = Path("docs/technical/source-doc-reconciliation.md")
 OPEN_QUESTIONS_PATH = Path("docs/papers/open-questions.md")
-PLAN_PATH = Path("docs/implementation-plan.md")
 
 SOURCE_PAPERS: list[Path] = [
     Path("docs/papers/Robot-Money-Whitepaper-v01.md"),
@@ -152,12 +152,6 @@ def main() -> int:
         return 1
     oq_text = oq_path.read_text(encoding="utf-8")
 
-    plan_path = root / PLAN_PATH
-    if not plan_path.is_file():
-        print(f"FAIL: implementation-plan missing at {plan_path}", file=sys.stderr)
-        return 1
-    plan_text = plan_path.read_text(encoding="utf-8")
-
     failed = False
 
     # (A) Every §1 contradiction has an ADR section.
@@ -233,15 +227,9 @@ def main() -> int:
             f"reference the ADR."
         )
 
-    # (D) Implementation plan cross-links the ADR.
-    if ADR_REFERENCE_NEEDLE not in plan_text:
-        failed = True
-        print(
-            f"FAIL: {PLAN_PATH} does not reference `{ADR_REFERENCE_NEEDLE}`.",
-            file=sys.stderr,
-        )
-    else:
-        print(f"OK: {PLAN_PATH} references the ADR.")
+    # (D) retired: docs/implementation-plan.md no longer exists (Plan
+    # tracking issue #109 is the canonical plan), so there is no plan
+    # cross-link to validate.
 
     return 1 if failed else 0
 
