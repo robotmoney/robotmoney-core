@@ -1,5 +1,5 @@
 # RwaVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/4b538399027636f20b316ae10f72d0d6c6960fb1/contracts/test/RwaVault.t.sol)
 
 **Inherits:**
 Test
@@ -366,6 +366,64 @@ OracleHeartbeatUpdated event is emitted on heartbeat update.
 
 ```solidity
 function test_oracleHeartbeat_emitsEvent() public;
+```
+
+### test_emergencyUnwind_revertsOnStaleFeed
+
+emergencyUnwind reverts with StalePriceFeed when the Chronicle
+feed is stale and the override flag is not set.
+
+
+```solidity
+function test_emergencyUnwind_revertsOnStaleFeed() public;
+```
+
+### test_emergencyUnwindWithOverride_revertsOnStaleFeed
+
+emergencyUnwindWithOverride reverts with StalePriceFeed when the
+Chronicle feed is stale and the override flag is not set.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_revertsOnStaleFeed() public;
+```
+
+### test_emergencyUnwind_succeedsWithStaleOverride
+
+emergencyUnwind succeeds when the override flag is set, even
+when the Chronicle feed is stale.
+
+
+```solidity
+function test_emergencyUnwind_succeedsWithStaleOverride() public;
+```
+
+### test_emergencyUnwindWithOverride_succeedsWithStaleOverride
+
+emergencyUnwindWithOverride succeeds when the override flag is
+set, even when the Chronicle feed is stale.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWithStaleOverride() public;
+```
+
+### test_emergencyUnwindStaleOverride_onlyEmergencyRole
+
+Only EMERGENCY_ROLE can set the stale override flag.
+
+
+```solidity
+function test_emergencyUnwindStaleOverride_onlyEmergencyRole() public;
+```
+
+### test_emergencyUnwindStaleOverride_emitsEvent
+
+Setting the stale override flag emits the expected event.
+
+
+```solidity
+function test_emergencyUnwindStaleOverride_emitsEvent() public;
 ```
 
 ### test_adapter_rejectsZeroRouter
