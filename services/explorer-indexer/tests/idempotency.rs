@@ -171,7 +171,10 @@ async fn agent_policy_insert_roundtrip_with_owner() {
         )
         .await
         .unwrap();
-    assert_eq!(second, 0, "second insert is a no-op (ON CONFLICT DO NOTHING)");
+    assert_eq!(
+        second, 0,
+        "second insert is a no-op (ON CONFLICT DO NOTHING)"
+    );
 
     assert_eq!(fx.db.count(CountTable::AgentPolicies).await.unwrap(), 1);
 }
