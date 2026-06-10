@@ -1088,3 +1088,93 @@ async fn sign_authorize_endpoints_are_absent() {
         }
     }
 }
+
+/// Issue #661 AC: GET /v1/accounts/:address/policies returns one latest-state
+/// entry per agent owned by the address, with every contract field present.
+/// Also covers chain isolation (shadow-chain row for the same owner must not
+/// leak) and DISTINCT ON latest-state selection (block 950 supersedes 900).
+#[tokio::test]
+async fn account_policies_returns_latest_state_per_agent() {
+    let s = start_with_seed().await;
+    let body: serde_json::Value = http()
+        .get(format!(
+            "http://{}/v1/accounts/0xdddddddddddddddddddddddddddddddddddddddd/policies",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        body["address"],
+        "0xdddddddddddddddddddddddddddddddddddddddd"
+    );
+    let policies = body["policies"].as_array().expect("policies array");
+    // Two agents on the primary chain; the shadow-chain row must not appear.
+    assert_eq!(policies.len(), 2, "one latest-state entry per agent");
+
+    // Sorted by agent ascending: 0x7777… then 0x8888….
+    let p1 = &policies[0];
+    assert_eq!(p1["agent"], "0x7777777777777777777777777777777777777777");
+    assert_eq!(p1["owner"], "0xdddddddddddddddddddddddddddddddddddddddd");
+    assert_eq!(p1["revoked"], false);
+    assert_eq!(p1["valid_until"], 2_000_000_000_i64);
+    assert_eq!(p1["max_per_payment"], "500000");
+    assert_eq!(p1["max_per_window"], "1000000");
+    // Latest state (block 950) wins over the original authorization (block 900).
+    assert_eq!(p1["window_usage_to_date"], "250000");
+    assert_eq!(
+        p1["share_receiver"],
+        "0x5555555555555555555555555555555555555555"
+    );
+    assert!(
+        p1["tx_hash"].as_str().unwrap().starts_with("0x"),
+        "tx_hash must be hex-encoded"
+    );
+
+    let p2 = &policies[1];
+    assert_eq!(p2["agent"], "0x8888888888888888888888888888888888888888");
+    assert_eq!(p2["revoked"], true, "tombstone row is surfaced as revoked");
+    assert!(p2["valid_until"].is_null());
+    assert!(p2["window_usage_to_date"].is_null());
+
+    // Freshness envelope, consistent with the other account-scope endpoints.
+    assert!(body["block_number"].is_i64());
+    assert!(body["indexed_at"].is_string());
+}
+
+/// Issue #661 AC: unknown owner returns an empty array (not 404). Legacy
+/// agent_policies rows with NULL owner must never match an owner lookup.
+#[tokio::test]
+async fn account_policies_unknown_owner_returns_empty_array() {
+    let s = start_with_seed().await;
+    let resp = http()
+        .get(format!(
+            "http://{}/v1/accounts/0xdead000000000000000000000000000000000000/policies",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "empty result is 200, not 404");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let policies = body["policies"].as_array().expect("policies array");
+    assert!(policies.is_empty());
+}
+
+/// Issue #661: malformed owner address is rejected with 400.
+#[tokio::test]
+async fn account_policies_invalid_address_returns_400() {
+    let s = start_with_seed().await;
+    let resp = http()
+        .get(format!(
+            "http://{}/v1/accounts/not-an-address/policies",
+            s.addr
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
