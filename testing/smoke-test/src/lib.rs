@@ -2957,10 +2957,6 @@ impl DappStack {
                 fixture.router_hex().to_string(),
             ),
             (
-                "INDEXER_PORTFOLIO_ROUTER".into(),
-                fixture.router_hex().to_string(),
-            ),
-            (
                 "INDEXER_RPC_URL".into(),
                 format!("http://host.docker.internal:{}", fixture.rpc_port()),
             ),

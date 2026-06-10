@@ -23,6 +23,8 @@
 #   #   INDEXER_CHAIN_ID=918453
 #   #   INDEXER_CHAIN_NAME=devnet
 #   #   EXPLORER_API_CHAIN_ID=918453
+#   #   INDEXER_REGISTRY=          — VaultRegistry address (enables /v1/vaults)
+#   #   INDEXER_PORTFOLIO_ROUTER=  — PortfolioRouter address (enables /v1/router/weights)
 #   #   POSTGRES_PORT=5432
 #   #   EXPLORER_API_PORT=8080
 #   #   DAPP_PORT=5173
@@ -72,6 +74,11 @@ services:
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
+      # Issue #615: INDEXER_PORTFOLIO_ROUTER enables WeightsSet / DefaultWeightsSet
+      # and RouterDeposit event ingestion from the PortfolioRouter contract.  Without
+      # this the explorer /v1/router/weights endpoint returns an empty weight list
+      # even when the deploy script called setWeights() before the dapp stack booted.
+      INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even
