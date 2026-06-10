@@ -1,20 +1,20 @@
 # ADR — Explorer schema, indexer cadence, and ingestion model
 
-> Scope: dev-scout decision record for Phase 5 (Simple Web Explorer API and Database) of `docs/implementation-plan.md` §11. Resolves the unresolved choices that gate any explorer schema or indexer code: which DB engines are supported per environment, indexer trigger cadence and reorg handling, the exact idempotency-key shape, the ingestion model (rmpc-output-driven vs JSON-RPC-only), and the explicit defer list for "optional later" tables.
+> Scope: dev-scout decision record for Phase 5 (Simple Web Explorer API and Database) of `Plan tracking issue #109` §11. Resolves the unresolved choices that gate any explorer schema or indexer code: which DB engines are supported per environment, indexer trigger cadence and reorg handling, the exact idempotency-key shape, the ingestion model (rmpc-output-driven vs JSON-RPC-only), and the explicit defer list for "optional later" tables.
 >
-> Closes the open question gate in `docs/implementation-plan.md` §11. No schema migrations or API code are produced by this scout.
+> Closes the open question gate in `Plan tracking issue #109` §11. No schema migrations or API code are produced by this scout.
 
 ---
 
 ## 1. Status
 
-Accepted. Authored 2026-05-06 against `docs/implementation-plan.md` §11 on branch `feat/56-dev-scout-explorer-schema-indexer-shape`. No prior ADR exists for this phase. No code stubs are required: §11 prescribes a separate service tree that does not yet exist, and the §11 acceptance criteria are documentation-only ("a local developer can start the API and DB, index a fork range, and query deposit/vault history" is satisfied at implementation time, not by this scout).
+Accepted. Authored 2026-05-06 against `Plan tracking issue #109` §11 on branch `feat/56-dev-scout-explorer-schema-indexer-shape`. No prior ADR exists for this phase. No code stubs are required: §11 prescribes a separate service tree that does not yet exist, and the §11 acceptance criteria are documentation-only ("a local developer can start the API and DB, index a fork range, and query deposit/vault history" is satisfied at implementation time, not by this scout).
 
 Companion ADR: `docs/technical/rmpc-read-output-contract.md` §3.3 and §5 already lock the `source: "json_rpc"` provenance rule for `rmpc` reads and explicitly anticipate a future `Source::Indexer` variant. This ADR does not modify that contract; it operates one layer below, on the indexer that would back any such variant.
 
 ## 2. Context
 
-`docs/implementation-plan.md` §11 names nine minimum tables (`chains`, `contracts`, `blocks`, `transactions`, `agent_deposits`, `agent_policies`, `vault_snapshots`, `wallet_positions`, `indexer_runs`) and four optional later tables (`basket_routes`, `governance_events`, `buybacks`, `agent_task_runs`). It commits the API to:
+`Plan tracking issue #109` §11 names nine minimum tables (`chains`, `contracts`, `blocks`, `transactions`, `agent_deposits`, `agent_policies`, `vault_snapshots`, `wallet_positions`, `indexer_runs`) and four optional later tables (`basket_routes`, `governance_events`, `buybacks`, `agent_task_runs`). It commits the API to:
 
 - A small HTTP API with the eight endpoints listed in §11.
 - "Preferably Postgres for production-like use and SQLite only for local development if it materially simplifies setup."
@@ -165,7 +165,7 @@ A second binding constraint from user memory applies: **no fast-feedback optimiz
 
 - **Constraint cited.** §11 "explorer is never the source of truth for safety decisions" — returning a deposit or policy from the wrong chain would silently corrupt any safety check that consumed the result.
 
-## 5. Impact on `docs/implementation-plan.md` §11
+## 5. Impact on `Plan tracking issue #109` §11
 
 The decisions above are consistent with §11 as written. **No §11 acceptance criterion changes.** The §11 prose can be left unchanged; this ADR provides the missing operational detail (DB engine, cadence, confirmations depth, per-table PKs, ingestion-source rule, defer triggers) that §11 deliberately left out.
 
@@ -182,8 +182,8 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 
 ## 7. References
 
-- `docs/implementation-plan.md` §11 — Phase 5 — Simple Web Explorer API and Database (constraints this ADR resolves).
-- `docs/implementation-plan.md` §12 — Phase 6 Human Dapp (downstream consumer).
+- `Plan tracking issue #109` §11 — Phase 5 — Simple Web Explorer API and Database (constraints this ADR resolves).
+- `Plan tracking issue #109` §12 — Phase 6 Human Dapp (downstream consumer).
 - `docs/technical/rmpc-read-output-contract.md` — §3.3 (`source: "json_rpc"` lock) and §5 (future `Source::Indexer` variant).
 - `docs/technical/fork-e2e-decisions.md` — §3.2 fork-block env-var pattern (reused by indexer integration tests).
 - `docs/technical/security-model.md` — explorer-is-not-source-of-truth boundary.

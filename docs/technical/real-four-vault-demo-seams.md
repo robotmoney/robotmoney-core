@@ -2,7 +2,7 @@
 
 **Scout issue:** #541
 **Date:** 2026-06-02
-**Canonical docs:** `docs/implementation-plan.md`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`
+**Canonical docs:** `Plan tracking issue #109`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`
 **Phase:** Real four-vault demo (Plan #109, issues #541–#568)
 
 ---
@@ -409,7 +409,7 @@ Every file path below exists in the tree at the time of this commit:
 - `testing/smoke-test/tests/demo_seeding.rs`
 - `testing/smoke-test/tests/full_stack_demo_tvl.rs`
 - `docs/prd.md`
-- `docs/implementation-plan.md`
+- `Plan tracking issue #109`
 - `docs/technical/basket-vault-gap-report.md`
 - `docs/technical/demo-seeding-seams.md`
 - `docs/adr/ADR-0001-mvp-agent-token-shortlist.md`

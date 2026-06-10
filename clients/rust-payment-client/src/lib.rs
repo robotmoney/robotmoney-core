@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4 — Phase 1 Rust client (library surface for integration tests)
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4 — Phase 1 Rust client (library surface for integration tests)
 //!
 //! `rust-payment-client` library crate.
 //!

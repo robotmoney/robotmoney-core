@@ -1,14 +1,14 @@
 # ADR — Portfolio Router contract seams, deposit signature, preview return shape, cap enforcement, all-or-revert semantics, and gateway coupling
 
 > Scope: dev-scout decision record for the Portfolio Router phase of
-> `docs/implementation-plan.md` §"Phase: Portfolio Router contract". Resolves
+> `Plan tracking issue #109` §"Phase: Portfolio Router contract". Resolves
 > all open questions that gate any `PortfolioRouter.sol` code: deposit
 > signature, preview return shape, cap enforcement order, all-or-revert
 > semantics, unavailable-leg detection, and gateway extension model. No
 > `PortfolioRouter.sol` bytecode, gateway changes, or rmpc commands are
 > produced by this scout.
 >
-> Closes the open question gate listed under `docs/implementation-plan.md`
+> Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Portfolio Router contract" item 1.
 
 ---
@@ -16,7 +16,7 @@
 ## 1. Status
 
 Accepted. Authored 2026-05-14 against `docs/architecture.md` §4.2 and
-`docs/implementation-plan.md` §"Phase: Portfolio Router contract" on branch
+`Plan tracking issue #109` §"Phase: Portfolio Router contract" on branch
 `chore/300-dev-scout-map-portfolio-router-contract-seams-pr`.
 
 ---
@@ -245,7 +245,7 @@ adjust their action.
 
 The gateway currently pins one immutable `vaultContract` address. Extending
 agent deposits to reach the Portfolio Router requires a gateway extension issue
-(already listed in `docs/implementation-plan.md` §"Phase: Portfolio Router
+(already listed in `Plan tracking issue #109` §"Phase: Portfolio Router
 contract": "Gateway: extend allowed destinations to include the Portfolio
 Router"). This scout maps the coupling without implementing it.
 
@@ -316,7 +316,7 @@ In `previewDeposit()`, unavailable-leg detection additionally catches:
 
 ## 4. Downstream unblocked issues and sequencing
 
-All items below are in `docs/implementation-plan.md` §"Phase: Portfolio Router
+All items below are in `Plan tracking issue #109` §"Phase: Portfolio Router
 contract".
 
 | Issue | Unblocked by this ADR? | Must serialize after |

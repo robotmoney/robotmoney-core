@@ -32,7 +32,7 @@ identifies work that was never started or never formally tracked.
 ## Critical (risk 5)
 
 ### MAINNET-001 — No plan for PortfolioRouter/RouterGovernance mainnet deploy or TimelockController ADMIN_ROLE migration
-**Source:** `docs/architecture.md` §10, `docs/implementation-plan.md` (missing)
+**Source:** `docs/architecture.md` §10, `Plan tracking issue #109` (missing)
 **Issue:** #655
 
 The architecture specifies a `TimelockController` wrapping `ADMIN_ROLE` for all privileged
@@ -355,7 +355,7 @@ not run by any CI workflow. The acceptance criteria for several shipped issues (
 #563) are not verified by CI. Adding these to suite-14 closes the gap.
 
 ### CI-PATHS-001 — `paths:` filters prevent unconditional suite runs on dev push
-**Source:** `docs/implementation-plan.md` ("CI: run all suites unconditionally on push to
+**Source:** `Plan tracking issue #109` ("CI: run all suites unconditionally on push to
 `dev` — suite-01-02 and others still gated by `paths:` filters")
 **Issue:** #681
 
@@ -412,12 +412,12 @@ publicly. No entry exists at `robotmoney.net/smart-contract-risks`.
 **Issue:** #686
 
 ### BASKET-FORK-E2E-001 — No fork e2e multi-vault round-trip for basket vaults
-**Source:** `docs/implementation-plan.md` ("Fork e2e: multi-vault round-trip including
+**Source:** `Plan tracking issue #109` ("Fork e2e: multi-vault round-trip including
 basket vaults" — unchecked)
 **Issue:** #690
 
 ### PLAN-STALE-001 — Several completed checkboxes not ticked in implementation-plan.md
-**Source:** `docs/implementation-plan.md`
+**Source:** `Plan tracking issue #109`
 **Issue:** #689
 
 ### OPENQ-ROUTER-WEIGHTS-001 — open-questions.md §1.A not marked Resolved
@@ -425,7 +425,7 @@ basket vaults" — unchecked)
 **Issue:** #674
 
 ### SUITE05-001 — suite-05 duplicate test audit not verified complete
-**Source:** `docs/implementation-plan.md`
+**Source:** `Plan tracking issue #109`
 **Issue:** #688
 
 ---
@@ -501,5 +501,5 @@ a pre-launch vs. post-launch split would sharpen the backlog.
 - Findings already fixed by the 2026-06-06 security deep clean (#641)
 - Shipped features working correctly (all [x] items in the implementation plan)
 - Business, legal, tokenomics, and go-to-market decisions (out of scope per
-  `docs/implementation-plan.md` Non-goals)
+  `Plan tracking issue #109` Non-goals)
 - Upstream Aave V3 / Compound V3 / Morpho smart contract risk (accepted by design)

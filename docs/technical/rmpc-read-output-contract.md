@@ -1,16 +1,16 @@
 # ADR — `rmpc` read-command stable JSON output contract
 
-> Scope: dev-scout decision record for Phase 3 (Direct Chain-Read Query Tooling) of `docs/implementation-plan.md` §9. Locks the shared output envelope every `rmpc get-*` command emits, the seam multi-read commands use to aggregate partial results, and the type-level rules that prevent JSON-number drift on large integers. No real read commands are produced by this scout — only the shared module they will all consume.
+> Scope: dev-scout decision record for Phase 3 (Direct Chain-Read Query Tooling) of `Plan tracking issue #109` §9. Locks the shared output envelope every `rmpc get-*` command emits, the seam multi-read commands use to aggregate partial results, and the type-level rules that prevent JSON-number drift on large integers. No real read commands are produced by this scout — only the shared module they will all consume.
 
 ---
 
 ## 1. Status
 
-Accepted. Authored 2026-05-06 against `docs/implementation-plan.md` §9 on branch `feat/51-dev-scout-rmpc-read-commands-stable-json-output-`. Closes the open question gate in §9 ("Output contract"). No prior ADR exists for this phase. Stub code lives in `clients/rust-payment-client/src/read_output.rs`.
+Accepted. Authored 2026-05-06 against `Plan tracking issue #109` §9 on branch `feat/51-dev-scout-rmpc-read-commands-stable-json-output-`. Closes the open question gate in §9 ("Output contract"). No prior ADR exists for this phase. Stub code lives in `clients/rust-payment-client/src/read_output.rs`.
 
 ## 2. Context
 
-`docs/implementation-plan.md` §9 prescribes a family of direct-chain-read commands (`rmpc get-vault`, `get-balance`, `get-agent`, `get-gateway`, `get-deposit`, `get-tx`, `get-allowance`, `get-roles`) and binds them all to one output contract:
+`Plan tracking issue #109` §9 prescribes a family of direct-chain-read commands (`rmpc get-vault`, `get-balance`, `get-agent`, `get-gateway`, `get-deposit`, `get-tx`, `get-allowance`, `get-roles`) and binds them all to one output contract:
 
 - All large integers are decimal strings.
 - Every command includes `chain_id`, `block_number`, and `source: "json_rpc"`.
@@ -80,6 +80,6 @@ The following are the seams downstream read-command batches MUST consume. Adding
 
 ## 6. References
 
-- `docs/implementation-plan.md` §9 — Phase 3 Direct Chain-Read Query Tooling, "Output contract"
+- `Plan tracking issue #109` §9 — Phase 3 Direct Chain-Read Query Tooling, "Output contract"
 - `clients/rust-payment-client/src/read_output.rs` — stub module implementing the surfaces above
 - `clients/rust-payment-client/src/commands/status.rs` — predates the envelope; migration deferred

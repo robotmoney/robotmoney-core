@@ -1,7 +1,7 @@
 # OpenCode walkthrough — read-only Robot Money inspection on a fork
 
-> Canonical: [`docs/implementation-plan.md`](../implementation-plan.md) §10
-> (Phase 4, Agent-Harness Installation and Skill Loading).
+> Canonical: [Plan tracking issue #109](https://github.com/lucky-tensor/robotmoney-monorepo/issues/109) §10
+> (Phase 4, Agent-Harness Installation and Skill Loading; retired docs/implementation-plan.md).
 > ADR: [`docs/technical/mcp-decision.md`](../technical/mcp-decision.md) — MCP
 > deferred; harnesses run `rmpc` as a process-per-call shell command.
 > Skill package: [`plugins/robotmoney-user/`](../../plugins/robotmoney-user/).

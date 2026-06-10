@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — Phase 3 Direct Chain-Read Query Tooling
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc get-deposit --deposit-id 0x…` — gateway deposit lookup by id.

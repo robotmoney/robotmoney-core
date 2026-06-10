@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5.1 — Protocol-scope vault registry reads
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §5.1 — Protocol-scope vault registry reads
 //!
 //! Integration tests for `rmpc get-vaults` and `rmpc get-vault --address <addr>`
 //! (issue #297).

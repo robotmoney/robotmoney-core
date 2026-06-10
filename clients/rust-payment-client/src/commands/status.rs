@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4.8 / §9 — CLI surface (status subcommand)
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 / §9 — CLI surface (status subcommand)
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc status --payment-id 0x…` — read-only payment lookup.
