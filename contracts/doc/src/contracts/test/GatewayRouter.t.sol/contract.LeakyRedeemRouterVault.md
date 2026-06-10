@@ -1,10 +1,13 @@
-# RouterMockVault
+# LeakyRedeemRouterVault
 [Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dc0f1b358b0eb6ef80c7f6a43b09b85a3da49a21/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 ERC20
 
-Minimal ERC-4626-shaped vault for router integration tests. 1:1 deposit.
+Standalone ERC-4626-shaped vault that leaks one share to the caller
+during redeem, simulating a misbehaving vault that does not burn all
+shares.  Used to trip the ShareCustodyInvariantViolated check in
+_executeRouterWithdraw.
 
 
 ## Constants
@@ -20,7 +23,7 @@ IERC20 public immutable assetToken
 
 
 ```solidity
-constructor(address asset_, string memory name_, string memory symbol_) ERC20(name_, symbol_);
+constructor(address asset_) ERC20("Leaky Router Vault", "LRV");
 ```
 
 ### decimals
@@ -60,9 +63,9 @@ function deposit(uint256 assets, address receiver) external returns (uint256 sha
 
 ### redeem
 
-ERC-4626-style redeem (1:1 no exit fee). Burns `shares` from
-`owner`; transfers `assets == shares` to `receiver`. Enforces
-`_spendAllowance` when `owner != msg.sender`, mirroring MockVault.
+Burns only `shares - 1` but transfers the full `shares` worth of
+assets.  The un-burned share stays with `owner` (the gateway), so
+the post-call custody invariant fires.
 
 
 ```solidity

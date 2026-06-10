@@ -89,6 +89,59 @@ contract UnderPullRouter {
     }
 }
 
+/// @notice Standalone ERC-4626-shaped vault that leaks one share to the caller
+///         during redeem, simulating a misbehaving vault that does not burn all
+///         shares.  Used to trip the ShareCustodyInvariantViolated check in
+///         _executeRouterWithdraw.
+contract LeakyRedeemRouterVault is ERC20 {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable assetToken;
+
+    constructor(address asset_) ERC20("Leaky Router Vault", "LRV") {
+        assetToken = IERC20(asset_);
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function asset() external view returns (address) {
+        return address(assetToken);
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return assetToken.balanceOf(address(this));
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets;
+    }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        assetToken.safeTransferFrom(msg.sender, address(this), assets);
+        shares = assets;
+        _mint(receiver, shares);
+    }
+
+    /// @dev Burns only `shares - 1` but transfers the full `shares` worth of
+    ///      assets.  The un-burned share stays with `owner` (the gateway), so
+    ///      the post-call custody invariant fires.
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets)
+    {
+        require(shares > 0, "zero shares");
+        if (owner != msg.sender) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+        // Only burn shares - 1; leave 1 share with owner intentionally.
+        _burn(owner, shares - 1);
+        assets = shares;
+        assetToken.safeTransfer(receiver, assets);
+    }
+}
+
 /// @title GatewayRouterTest
 /// @notice Tests for gateway.depositTo routing through the PortfolioRouter.
 ///         Covers: AC1 (router deposit), AC2 (policy restriction), AC3 (invalid
@@ -1637,6 +1690,250 @@ contract GatewayRouterTest is Test {
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         _assertWithdrawalRoutedLog(logs, orderId, agent);
+    }
+
+    // ─── Coverage gap tests ───────────────────────────────────────────────────
+
+    /// @dev DeadlineExpired: deadline is in the past → revert.
+    function test_withdrawFromRouter_revertsOnExpiredDeadline() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = ONE_USDC;
+        sharesPerLeg[1] = 0;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.DeadlineExpired.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-exp-o"), sharesPerLeg, uint64(block.timestamp - 1), keccak256("rw-exp-i")
+        );
+    }
+
+    /// @dev DeadlineTooFar: deadline is beyond MAX_DEADLINE_SKEW → revert.
+    function test_withdrawFromRouter_revertsOnDeadlineTooFar() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = ONE_USDC;
+        sharesPerLeg[1] = 0;
+
+        uint64 tooFar = uint64(block.timestamp + gateway.MAX_DEADLINE_SKEW() + 1);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.DeadlineTooFar.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-far-o"), sharesPerLeg, tooFar, keccak256("rw-far-i")
+        );
+    }
+
+    /// @dev AgentPolicyExpired: policy validUntil is in the past → revert.
+    function test_withdrawFromRouter_revertsOnExpiredPolicy() public {
+        IGateway.AgentPolicy memory p = _policyWithRouterWithdrawal();
+        p.validUntil = uint64(block.timestamp + 1);
+        _authorize(agent, p);
+
+        // Advance time so the policy is now expired.
+        vm.warp(block.timestamp + 2);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = ONE_USDC;
+        sharesPerLeg[1] = 0;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.AgentPolicyExpired.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-polexp-o"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-polexp-i")
+        );
+    }
+
+    /// @dev allowedSourceVaults zero-shares continue: a zero-shares leg for a
+    ///      vault not in the allowlist must be silently skipped (not revert).
+    ///      This exercises the `if (sharesPerLeg[i] == 0) continue;` branch at
+    ///      the top of the allowedSourceVaults validation loop.
+    function test_withdrawFromRouter_allowedSourceVaults_skipsZeroShareLegs() public {
+        // Policy: only vaultA is an allowed source.
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory sources = new address[](1);
+        sources[0] = address(vaultA);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("srcSkipRecipient"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: sources
+        });
+        _authorize(agent, p);
+
+        // Deposit only via router to get shares in vaultA (and vaultB).
+        (uint256 sharesA,) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+
+        // Approve gateway for vaultA only.
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+
+        // sharesPerLeg[1] == 0 → vaultB (not in allowlist) must be skipped.
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = 0;
+
+        vm.prank(agent);
+        (, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
+            keccak256("rw-src-skip-o"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-src-skip-i")
+        );
+
+        assertEq(assetsPerLeg[0], sharesA, "leg 0 assets");
+        assertEq(assetsPerLeg[1], 0, "leg 1 assets (zero-share skip)");
+    }
+
+    /// @dev Zero-shares continue in share-pull and approval-clear loops: a
+    ///      successful withdrawal with one zero leg exercises both
+    ///      `if (sharesPerLeg[i] == 0) continue;` branches in
+    ///      _executeRouterWithdraw (lines 1056 and 1068).
+    function test_withdrawFromRouter_zeroShareLeg_skippedInPullAndClearLoops() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        (uint256 sharesA,) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+
+        // Approve only vaultA; vaultB leg is zero so no transfer occurs.
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = 0; // zero leg — must be skipped in pull + clear loops
+
+        vm.prank(agent);
+        (, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
+            keccak256("rw-zero-leg-o"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-zero-leg-i")
+        );
+
+        assertEq(assetsPerLeg[0], sharesA, "leg 0 assets");
+        assertEq(assetsPerLeg[1], 0, "leg 1 zero skip");
+        assertEq(IERC20(address(vaultA)).balanceOf(address(gateway)), 0, "gateway vaultA clean");
+        assertEq(IERC20(address(vaultB)).balanceOf(address(gateway)), 0, "gateway vaultB clean");
+    }
+
+    /// @dev ShareCustodyInvariantViolated: router vault leaks one share back to
+    ///      the gateway during redeemFor → post-call custody check fires.
+    function test_withdrawFromRouter_revertsOnShareCustodyInvariant() public {
+        (
+            RobotMoneyGateway leakyGateway,
+            LeakyRedeemRouterVault leakyVault,
+            PortfolioRouter leakyRouter
+        ) = _buildLeakyGateway();
+        _doLeakyWithdraw(leakyGateway, leakyVault, leakyRouter);
+    }
+
+    /// @dev Build a gateway whose only vault is LeakyRedeemRouterVault.
+    function _buildLeakyGateway()
+        internal
+        returns (
+            RobotMoneyGateway leakyGateway,
+            LeakyRedeemRouterVault leakyVault,
+            PortfolioRouter leakyRouter
+        )
+    {
+        leakyVault = new LeakyRedeemRouterVault(address(usdc));
+
+        VaultRegistry leakyRegistry = new VaultRegistry(admin);
+        vm.startPrank(admin);
+        leakyRegistry.registerVault(
+            address(leakyVault),
+            VaultRegistry.VaultMetadata({name: "Leaky", asset: address(usdc), registeredAt: 0})
+        );
+        vm.stopPrank();
+
+        leakyRouter = new PortfolioRouter(address(usdc), address(leakyRegistry), admin);
+
+        address[] memory lv = new address[](1);
+        lv[0] = address(leakyVault);
+        uint256[] memory lbps = new uint256[](1);
+        lbps[0] = 10000;
+
+        vm.startPrank(admin);
+        leakyRegistry.setRouterEligible(address(leakyVault), true);
+        leakyRouter.setWeights(lv, lbps);
+        vm.stopPrank();
+
+        leakyGateway = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(leakyRouter)
+        );
+    }
+
+    /// @dev Authorize an agent, deposit via leakyRouter, then attempt the
+    ///      withdraw that trips ShareCustodyInvariantViolated.
+    function _doLeakyWithdraw(
+        RobotMoneyGateway leakyGateway,
+        LeakyRedeemRouterVault leakyVault,
+        PortfolioRouter leakyRouter
+    ) internal {
+        address leakyDepositor = makeAddr("leakyDepositor");
+        address leakyAgent = makeAddr("leakyAgent");
+        address leakyShareReceiver = makeAddr("leakyShareReceiver");
+
+        {
+            address[] memory dests = new address[](1);
+            dests[0] = address(leakyRouter);
+            address[] memory noSrcs = new address[](0);
+            IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+                active: true,
+                validUntil: uint64(block.timestamp + 365 days),
+                maxPerPayment: MAX_PER_PAYMENT,
+                maxPerWindow: MAX_PER_WINDOW,
+                shareReceiver: leakyShareReceiver,
+                allowedDestinations: dests,
+                assetRecipient: makeAddr("leakyRecipient"),
+                maxWithdrawPerPayment: MAX_PER_PAYMENT,
+                maxWithdrawPerWindow: MAX_PER_WINDOW,
+                allowedSourceVaults: noSrcs
+            });
+            vm.prank(leakyDepositor);
+            leakyGateway.authorizeAgent(leakyAgent, p);
+        }
+
+        // Deposit to mint leaky vault shares into leakyShareReceiver.
+        usdc.mint(leakyAgent, 100 * ONE_USDC);
+        vm.prank(leakyAgent);
+        usdc.approve(address(leakyGateway), 100 * ONE_USDC);
+        vm.prank(leakyAgent);
+        leakyGateway.depositTo(
+            keccak256("leaky-deposit"),
+            100 * ONE_USDC,
+            uint64(block.timestamp + 60),
+            keccak256("leaky-deposit-idem"),
+            address(leakyRouter),
+            new uint256[](0)
+        );
+
+        uint256 shares = leakyVault.balanceOf(leakyShareReceiver);
+        assertTrue(shares > 0, "leaky vault shares minted");
+
+        vm.prank(leakyShareReceiver);
+        leakyVault.approve(address(leakyGateway), shares);
+
+        uint256[] memory sharesPerLeg = new uint256[](1);
+        sharesPerLeg[0] = shares;
+
+        vm.prank(leakyAgent);
+        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
+        leakyGateway.withdrawFromRouter(
+            keccak256("leaky-withdraw"),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("leaky-withdraw-idem")
+        );
     }
 
     /// @dev Extract AgentWithdrawalRouted log and assert indexed topics.

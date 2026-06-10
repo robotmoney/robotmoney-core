@@ -46,6 +46,7 @@
 - [FeatureFlagsTest](FeatureFlags.t.sol/contract.FeatureFlagsTest.md)
 - [RouterMockVault](GatewayRouter.t.sol/contract.RouterMockVault.md)
 - [UnderPullRouter](GatewayRouter.t.sol/contract.UnderPullRouter.md)
+- [LeakyRedeemRouterVault](GatewayRouter.t.sol/contract.LeakyRedeemRouterVault.md)
 - [GatewayRouterTest](GatewayRouter.t.sol/contract.GatewayRouterTest.md)
 - [MockVaultTest](MockVault.t.sol/contract.MockVaultTest.md)
 - [MockMorphoVault](MorphoAdapter.t.sol/contract.MockMorphoVault.md)
