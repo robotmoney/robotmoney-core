@@ -720,7 +720,9 @@ contract RwaVaultTest is Test {
     function test_adapter_rejectsNavPriceBelowMin() public {
         uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
         chronicle.setPrice(lowPrice);
-        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice)
+        );
         adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
     }
 
@@ -728,7 +730,9 @@ contract RwaVaultTest is Test {
     function test_adapter_rejectsNavPriceAboveMax() public {
         uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
         chronicle.setPrice(highPrice);
-        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice)
+        );
         adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
     }
 
@@ -757,7 +761,9 @@ contract RwaVaultTest is Test {
     function test_adapter_rejectsNavPriceBelowMin_usdcToRwa() public {
         uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
         chronicle.setPrice(lowPrice);
-        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice)
+        );
         adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
     }
 
@@ -765,7 +771,9 @@ contract RwaVaultTest is Test {
     function test_adapter_rejectsNavPriceAboveMax_usdcToRwa() public {
         uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
         chronicle.setPrice(highPrice);
-        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice));
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice)
+        );
         adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
     }
 

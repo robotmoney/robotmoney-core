@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -695,6 +695,25 @@ registry's router-eligible vault count.
 
 ```solidity
 function test_setDefaultWeights_revertsIfLengthMismatch() public;
+```
+
+### test_redeemFor_unauthorizedCaller_reverts
+
+An unauthorized caller cannot redeemFor — the confused-deputy
+guard reverts with UnauthorizedRedeemer before any vault call.
+
+
+```solidity
+function test_redeemFor_unauthorizedCaller_reverts() public;
+```
+
+### test_redeemFor_shareHolderCanRedeem
+
+shareHolder can call redeemFor on their own shares.
+
+
+```solidity
+function test_redeemFor_shareHolderCanRedeem() public;
 ```
 
 ### test_previewDeposit_uses_defaultWeights_when_no_proposal

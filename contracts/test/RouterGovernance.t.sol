@@ -369,6 +369,87 @@ contract RouterGovernanceTest is Test {
         assertEq(gov.currentProposalId(), 2);
     }
 
+    // ─── voteSnapshot — snapshot voting power at propose time (issue #756) ────
+
+    /// @notice propose() stores the creation block number as voteSnapshot.
+    function test_propose_snapshotsVoteSnapshot() public {
+        uint256 pid = _proposeValid();
+        assertEq(gov.proposalVoteSnapshot(pid), block.number);
+    }
+
+    /// @notice vote() reads checkpointed power at the snapshot block, not live
+    ///         votingPower: reducing Alice's power to 0 after propose() does not
+    ///         stop her from voting with her snapshot power.
+    function test_vote_usesSnapshotPowerNotLive() public {
+        uint256 pid = _proposeValid();
+
+        // Admin zeroes Alice's power in a later block, mid-proposal.
+        vm.roll(block.number + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 0);
+        assertEq(gov.votingPower(alice), 0);
+
+        // Alice still votes with her snapshot power.
+        vm.prank(alice);
+        gov.vote(pid);
+
+        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
+        assertEq(votesFor, ALICE_POWER);
+    }
+
+    /// @notice Mid-proposal voting power changes do not retroactively affect
+    ///         already-cast votes. Alice votes with 600k power at vote time,
+    ///         then admin reduces Alice to 0 — her vote weight is preserved.
+    function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Admin reduces Alice's power to 0 mid-proposal.
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 0);
+
+        // Alice's vote still counts — votesFor was already incremented.
+        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
+        assertEq(votesFor, ALICE_POWER);
+    }
+
+    /// @notice Granting voting power after a proposal is created does not let
+    ///         the new voter affect that proposal — the checkpoint lookup at the
+    ///         snapshot block returns 0 for newly-empowered addresses.
+    function test_vote_revertsIfPowerGrantedAfterProposal() public {
+        uint256 pid = _proposeValid();
+        uint256 snapBlock = block.number;
+
+        // Grant power to stranger in a later block.
+        vm.roll(snapBlock + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(stranger, ALICE_POWER);
+
+        // Stranger tries to vote — voteSnapshot = snapBlock, at which
+        // stranger had no checkpoint → past power is 0.
+        vm.prank(stranger);
+        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
+        gov.vote(pid);
+    }
+
+    /// @notice getPastVotes returns the historical checkpoint value, not the
+    ///         latest assignment.
+    function test_getPastVotes_returnsHistoricalPower() public {
+        uint256 grantBlock = block.number;
+
+        vm.roll(grantBlock + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 1e18);
+
+        // At grantBlock Alice still had her setUp power; at grantBlock+1 the
+        // new checkpoint applies.
+        assertEq(gov.getPastVotes(alice, grantBlock), ALICE_POWER);
+        assertEq(gov.getPastVotes(alice, grantBlock + 1), 1e18);
+        assertEq(gov.votingPower(alice), 1e18);
+    }
+
     // ─── vote() ──────────────────────────────────────────────────────────────
 
     function test_vote_success() public {

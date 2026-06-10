@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -529,7 +529,7 @@ Reverts when any router leg cannot satisfy its effective floor.
 
 
 ```solidity
-function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant;
+function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant;
 ```
 
 ### emergencyUnwindWithOverride
@@ -549,7 +549,8 @@ override is enabled.
 
 ```solidity
 function emergencyUnwindWithOverride(address[] calldata tokens)
-    external
+    public
+    virtual
     onlyRole(EMERGENCY_ROLE)
     nonReentrant;
 ```

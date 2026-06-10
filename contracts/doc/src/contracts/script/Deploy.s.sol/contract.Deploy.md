@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -313,6 +313,18 @@ function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 
 ```solidity
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
+```
+
+### _authorizeDeployAgent
+
+Constructs the default agent policy, calls authorizeAgent on the
+deployed gateway, then runs post-authorization sanity checks.
+Must be called in a context where msg.sender holds
+DEFAULT_ADMIN_ROLE (i.e. d.admin or the broadcast deployer).
+
+
+```solidity
+function _authorizeDeployAgent(Deployed memory d, Params memory p) internal;
 ```
 
 ### _envOrDefault

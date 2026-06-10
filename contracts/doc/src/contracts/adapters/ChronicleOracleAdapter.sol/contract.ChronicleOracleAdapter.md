@@ -1,5 +1,5 @@
 # ChronicleOracleAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/adapters/ChronicleOracleAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/adapters/ChronicleOracleAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -37,6 +37,36 @@ units of USDC per deSPXA, scaled to 18 decimal places (WAD).
 
 ```solidity
 uint256 private constant WAD = 1e18
+```
+
+
+### MIN_NAV
+Minimum acceptable NAV price from the Chronicle oracle in WAD.
+Any price below this threshold is considered invalid and will
+cause twapPrice() to revert. Set to 1e12 (0.000001 USD per RWA
+token) — well below any realistic deSPXA peg but safely above
+zero to catch malfunctioning or manipulated oracles.
+
+1e12 in WAD corresponds to 1e-6 USD given WAD = 1e18.
+
+
+```solidity
+uint256 public constant MIN_NAV = 1e12
+```
+
+
+### MAX_NAV
+Maximum acceptable NAV price from the Chronicle oracle in WAD.
+Any price above this threshold is considered invalid and will
+cause twapPrice() to revert. Set to 1e24 (1,000,000 USD per RWA
+token) — far above any plausible deSPXA price but tight enough
+to guard against extreme oracle malfunctions.
+
+1e24 in WAD corresponds to 1e6 USD given WAD = 1e18.
+
+
+```solidity
+uint256 public constant MAX_NAV = 1e24
 ```
 
 
@@ -230,5 +260,14 @@ neither (baseToken=RWA, quoteToken=USDC) nor
 
 ```solidity
 error UnknownPricePair(address baseToken, address quoteToken);
+```
+
+### BadNavPrice
+Raised when the Chronicle oracle returns a NAV price that is
+zero or outside the accepted [MIN_NAV, MAX_NAV] range.
+
+
+```solidity
+error BadNavPrice(uint256 navPrice);
 ```
 
