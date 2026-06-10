@@ -1250,6 +1250,39 @@ contract BasketVaultTest is Test {
             depositShares, targetShares, "previewMint must not undercharge relative to deposit"
         );
     }
+
+    // ─── ERC-4626 withdraw exactness (issue #754) ──────────────────────
+
+    /// @notice withdraw() and previewWithdraw() revert with RedeemOnly because
+    ///         BasketVault proportional-swap exits cannot guarantee the ERC-4626
+    ///         exactness guarantee. Users must use redeem() instead.
+    function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public {
+        // Preview (no state needed — view function).
+        vm.expectRevert(BasketVault.RedeemOnly.selector);
+        vault.previewWithdraw(100);
+
+        // Stateful: deposit to get shares, then call withdraw.
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 basketOut = 995 * ONE_USDC;
+        usdc.mint(address(stranger), depositAmount);
+        basketToken.mint(address(router), basketOut);
+        router.setAmountOut(basketOut);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        vm.prank(stranger);
+        vm.expectRevert(BasketVault.RedeemOnly.selector);
+        vault.withdraw(100, stranger, stranger);
+
+        // redeem still works.
+        vm.prank(stranger);
+        vault.redeem(shares, stranger, stranger);
+
+        assertGt(usdc.balanceOf(stranger), 0, "redeem still works");
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────

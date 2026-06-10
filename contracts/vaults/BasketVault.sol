@@ -240,6 +240,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      eligibility requirement (gap-report §1). Provide depth before
     ///      registering the asset.
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+    /// @dev Raised by withdraw() and previewWithdraw(). BasketVault cannot
+    ///      guarantee ERC-4626 exactness for proportional-swap exits — use
+    ///      redeem() instead, which returns actual swap proceeds.
+    error RedeemOnly();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -475,16 +479,17 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return grossAssets.mulDiv(MAX_BPS, MAX_BPS - maxSlippageBps, Math.Rounding.Ceil);
     }
 
-    /// @notice Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
-    function previewWithdraw(uint256 assets_) public view override returns (uint256) {
-        uint256 gross = exitFeeBps == 0
-            ? assets_
-            : assets_.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
-        return _convertToShares(gross, Math.Rounding.Ceil);
+    /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because
+    ///         the actual USDC delivered depends on proportional swap execution
+    ///         and variable on-chain slippage. Use `redeem()` instead — the ERC-4626
+    ///         redeem guarantee (actual ≥ previewRedeem) is enforced at the swap level.
+    function previewWithdraw(uint256) public view override returns (uint256) {
+        revert RedeemOnly();
     }
 
-    /// @dev Ignores the ERC-4626 `assets` parameter because actual USDC received depends
-    ///      on swap execution. Users should use `redeem` for this vault type.
+    /// @dev Performs a proportional-swap withdrawal. The `assets` parameter
+    ///      is intentionally unused because the actual USDC received depends on
+    ///      swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
     ///      Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
     function _withdraw(
         address caller,
