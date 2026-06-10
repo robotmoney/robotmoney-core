@@ -1,5 +1,5 @@
 -- Canonical: docs/technical/explorer-schema-decisions.md §3.4 / §3.5
---            docs/implementation-plan.md §"Phase: Multi-vault explorer"
+--            Plan tracking issue #109 §"Phase: Multi-vault explorer"
 -- Implements: issue #315 — multi-vault schema migration
 --
 -- Two changes in this migration:

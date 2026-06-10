@@ -1,6 +1,6 @@
 # Multi-stage build for the explorer-indexer binary.
 #
-# Canonical: docs/implementation-plan.md §11 — Phase 5.
+# Canonical: Plan tracking issue #109 §11 — Phase 5.
 # Used by: docker-compose.full-stack.yaml (issue #146).
 #
 # Build context is the repo root so that the dev-dependency path crate
