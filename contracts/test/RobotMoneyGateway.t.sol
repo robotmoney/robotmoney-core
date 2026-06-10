@@ -1579,8 +1579,8 @@ contract GatewayWithdrawTest is Test {
             keccak256("o3"), 1, address(vault), uint64(block.timestamp + 60), keccak256("i3")
         );
 
-        // Roll window — should succeed again.
-        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        // After 2 * WINDOW_SECONDS the carry-forward budget fully resets.
+        vm.warp(block.timestamp + 2 * gateway.WINDOW_SECONDS());
         _mintSharesAndApprove(shares);
         vm.prank(agent);
         gateway.withdraw(
@@ -1638,9 +1638,9 @@ contract GatewayWithdrawTest is Test {
             keccak256("i-post-boundary")
         );
 
-        // After a full WINDOW_SECONDS has elapsed since the anchor, the
-        // rolling window resets and a fresh cap is available again.
-        vm.warp(nextBoundary - 1 + windowSeconds);
+        // After 2 * WINDOW_SECONDS has elapsed since the anchor, the
+        // rolling window fully expires and a fresh cap is available.
+        vm.warp(nextBoundary - 1 + 2 * windowSeconds);
         vm.prank(agent);
         gateway.withdraw(
             keccak256("o-after-rolling"),
@@ -1648,6 +1648,77 @@ contract GatewayWithdrawTest is Test {
             address(vault),
             uint64(block.timestamp + 60),
             keccak256("i-after-rolling")
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // AC: withdrawal burst prevented across anchor expiry (#752)
+    //
+    // When the anchor expires after WINDOW_SECONDS of inactivity, the
+    // remaining budget from the old window must carry forward — a full
+    // fresh cap must not become available until 2 * WINDOW_SECONDS from
+    // the original anchor.
+    // -------------------------------------------------------------------
+
+    function test_withdraw_rollingWindow_preventsBurstAcrossAnchorExpiry() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // Bump both caps so a single max payment can use the full window.
+        p.maxWithdrawPerPayment = MAX_WITHDRAW_PER_PAYMENT * 2;
+        p.maxWithdrawPerWindow = MAX_WITHDRAW_PER_PAYMENT * 2;
+        _authorize(p);
+
+        uint256 halfCap = MAX_WITHDRAW_PER_PAYMENT;
+        uint256 fullCap = MAX_WITHDRAW_PER_PAYMENT * 2;
+
+        // First withdrawal: half the window cap.
+        _mintSharesAndApprove(halfCap);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-752-first"),
+            halfCap,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-752-first")
+        );
+
+        // Warp past WINDOW_SECONDS: anchor expires, enter carry-forward zone.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+
+        // A full-cap withdrawal must revert — only the remaining budget
+        // from the old window carries forward.
+        _mintSharesAndApprove(fullCap);
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
+        gateway.withdraw(
+            keccak256("o-752-burst"),
+            fullCap,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-752-burst")
+        );
+
+        // Withdrawing the remaining budget (halfCap) must still succeed.
+        _mintSharesAndApprove(halfCap);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-752-remain"),
+            halfCap,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-752-remain")
+        );
+
+        // After 2 * WINDOW_SECONDS from the original anchor, the budget
+        // fully resets and a fresh full-cap withdrawal succeeds.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        _mintSharesAndApprove(fullCap);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-752-fresh"),
+            fullCap,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-752-fresh")
         );
     }
 
@@ -1762,8 +1833,9 @@ contract GatewayWithdrawTest is Test {
             keccak256("o-2"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-2")
         );
 
-        // After a full window elapses, the rolling budget refreshes.
-        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        // After 2 * WINDOW_SECONDS the carry-forward budget fully resets
+        // and a fresh cap is available.
+        vm.warp(block.timestamp + 2 * gateway.WINDOW_SECONDS());
         vm.prank(agent);
         gateway.withdraw(
             keccak256("o-3"), shares, address(vault), uint64(block.timestamp + 60), keccak256("i-3")

@@ -293,8 +293,20 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 anchor = ww.windowStart;
         uint256 priorGross = ww.gross;
         if (anchor == 0 || block.timestamp >= uint256(anchor) + WINDOW_SECONDS) {
-            anchor = uint64(block.timestamp);
-            priorGross = 0;
+            uint256 elapsed = block.timestamp - uint256(anchor);
+            if (elapsed < WINDOW_SECONDS * 2) {
+                // Carry-forward zone: the old window's withdrawals still partially
+                // overlap with the current sliding window. Keep priorGross as-is
+                // but DO NOT advance the anchor — that would discard the overlap.
+                // The original anchor stays in place so time naturally decays the
+                // carried-forward amount until elapsed >= 2 * WINDOW_SECONDS.
+            } else {
+                // Fully expired: the old window no longer overlaps with any
+                // current sliding window. Reset to a fresh budget and advance
+                // the anchor to now.
+                anchor = uint64(block.timestamp);
+                priorGross = 0;
+            }
         }
         uint256 projected = priorGross + shares;
         if (projected > cap) revert WithdrawWindowCapExceeded();
