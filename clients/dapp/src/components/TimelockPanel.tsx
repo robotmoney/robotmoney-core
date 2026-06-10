@@ -239,6 +239,10 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
     }
 
     const minDelayResult = scalars[0];
+    if (minDelayResult === undefined) {
+      setState({ kind: "error", message: "minDelay read returned no result." });
+      return;
+    }
     if (minDelayResult.status === "failure") {
       setState({
         kind: "error",
