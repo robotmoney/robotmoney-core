@@ -49,6 +49,16 @@ jobs:
       - name: Run upstream monitoring mock tests
         run: bash .github/scripts/tests/test_upstream_monitoring.sh
 
+  assert-basescan-mock-tests:
+    name: assert-basescan-mock-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run assert-basescan-verified unit tests (mock mode)
+        run: bash .github/scripts/tests/test_assert_basescan_verified.sh
+
   live-monitor:
     name: live-monitor
     # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
