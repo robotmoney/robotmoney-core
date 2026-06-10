@@ -2859,10 +2859,10 @@ impl DappStack {
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
             // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
             ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
-            (
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the service name, not via
+            // host.docker.internal which is unreachable on some Docker configs.
+            ("INDEXER_RPC_URL", "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
@@ -2956,10 +2956,8 @@ impl DappStack {
                 "INDEXER_PORTFOLIO_ROUTER".into(),
                 fixture.router_hex().to_string(),
             ),
-            (
-                "INDEXER_RPC_URL".into(),
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: see dapp_log_env comment above.
+            ("INDEXER_RPC_URL".into(), "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
             (
                 "VITE_EXPLORER_API_URL".into(),
@@ -3007,11 +3005,11 @@ impl DappStack {
             .env("INDEXER_REGISTRY", fixture.registry_hex())
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
             .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
-            // RPC is on the host; containers reach it via host.docker.internal
-            .env(
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            )
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the `geth` service name — no
+            // host port needed. The dapp compose connects to that network via
+            // the chain-net external network reference in docker-compose.dapp.yaml.
+            .env("INDEXER_RPC_URL", "http://geth:8545")
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see
             // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
