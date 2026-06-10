@@ -195,6 +195,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         USDC is permanently stranded in the router.
     error UsdcCustodyInvariantViolated();
 
+    /// @notice Caller is not the shareHolder and has insufficient ERC-20
+    ///         allowance on the vault share token to redeem on its behalf.
+    /// @param shareHolder  The owner of the vault shares.
+    /// @param caller       The address that attempted the unauthorized redeem.
+    error UnauthorizedRedeemer(address shareHolder, address caller);
+
     /// @notice A vault has not been marked router-eligible in the
     ///         VaultRegistry (`isRouterEligible(vault) == false`).
     ///         Production-readiness is registry state set by ADMIN_ROLE on
@@ -492,6 +498,17 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
             if (vaultStatus != VaultRegistry.VaultStatus.Active) {
                 revert VaultNotActive(vault, vaultStatus);
+            }
+
+            // Confused-deputy guard (issue #751): caller must be shareHolder or
+            // have ERC-20 allowance on the vault share token. Without this check
+            // any address can front-run a shareHolder's approval tx and call
+            // redeemFor, burning shares at a caller-specified share count.
+            if (
+                msg.sender != shareHolder
+                    && IERC20(vault).allowance(shareHolder, msg.sender) < shares
+            ) {
+                revert UnauthorizedRedeemer(shareHolder, msg.sender);
             }
 
             // Redeem: shareHolder must have approved msg.sender (the gateway) to
