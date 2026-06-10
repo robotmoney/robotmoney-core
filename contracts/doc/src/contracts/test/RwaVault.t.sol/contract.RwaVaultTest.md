@@ -1,5 +1,5 @@
 # RwaVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/RwaVault.t.sol)
 
 **Inherits:**
 Test
@@ -368,6 +368,64 @@ OracleHeartbeatUpdated event is emitted on heartbeat update.
 function test_oracleHeartbeat_emitsEvent() public;
 ```
 
+### test_emergencyUnwind_revertsOnStaleFeed
+
+emergencyUnwind reverts with StalePriceFeed when the Chronicle
+feed is stale and the override flag is not set.
+
+
+```solidity
+function test_emergencyUnwind_revertsOnStaleFeed() public;
+```
+
+### test_emergencyUnwindWithOverride_revertsOnStaleFeed
+
+emergencyUnwindWithOverride reverts with StalePriceFeed when the
+Chronicle feed is stale and the override flag is not set.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_revertsOnStaleFeed() public;
+```
+
+### test_emergencyUnwind_succeedsWithStaleOverride
+
+emergencyUnwind succeeds when the override flag is set, even
+when the Chronicle feed is stale.
+
+
+```solidity
+function test_emergencyUnwind_succeedsWithStaleOverride() public;
+```
+
+### test_emergencyUnwindWithOverride_succeedsWithStaleOverride
+
+emergencyUnwindWithOverride succeeds when the override flag is
+set, even when the Chronicle feed is stale.
+
+
+```solidity
+function test_emergencyUnwindWithOverride_succeedsWithStaleOverride() public;
+```
+
+### test_emergencyUnwindStaleOverride_onlyEmergencyRole
+
+Only EMERGENCY_ROLE can set the stale override flag.
+
+
+```solidity
+function test_emergencyUnwindStaleOverride_onlyEmergencyRole() public;
+```
+
+### test_emergencyUnwindStaleOverride_emitsEvent
+
+Setting the stale override flag emits the expected event.
+
+
+```solidity
+function test_emergencyUnwindStaleOverride_emitsEvent() public;
+```
+
 ### test_adapter_rejectsZeroRouter
 
 ChronicleOracleAdapter rejects zero-address for router.
@@ -384,6 +442,78 @@ ChronicleOracleAdapter rejects zero-address for oracle.
 
 ```solidity
 function test_adapter_rejectsZeroOracle() public;
+```
+
+### test_adapter_rejectsZeroNavPrice
+
+ChronicleOracleAdapter rejects zero NAV price.
+
+
+```solidity
+function test_adapter_rejectsZeroNavPrice() public;
+```
+
+### test_adapter_rejectsNavPriceBelowMin
+
+ChronicleOracleAdapter rejects NAV price below MIN_NAV.
+
+
+```solidity
+function test_adapter_rejectsNavPriceBelowMin() public;
+```
+
+### test_adapter_rejectsNavPriceAboveMax
+
+ChronicleOracleAdapter rejects NAV price above MAX_NAV.
+
+
+```solidity
+function test_adapter_rejectsNavPriceAboveMax() public;
+```
+
+### test_adapter_acceptsNavPriceAtMinBoundary
+
+ChronicleOracleAdapter accepts NAV price at MIN_NAV boundary.
+
+
+```solidity
+function test_adapter_acceptsNavPriceAtMinBoundary() public;
+```
+
+### test_adapter_acceptsNavPriceAtMaxBoundary
+
+ChronicleOracleAdapter accepts NAV price at MAX_NAV boundary.
+
+
+```solidity
+function test_adapter_acceptsNavPriceAtMaxBoundary() public;
+```
+
+### test_adapter_rejectsZeroNavPrice_usdcToRwa
+
+ChronicleOracleAdapter rejects zero NAV price in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsZeroNavPrice_usdcToRwa() public;
+```
+
+### test_adapter_rejectsNavPriceBelowMin_usdcToRwa
+
+ChronicleOracleAdapter rejects NAV price below MIN_NAV in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsNavPriceBelowMin_usdcToRwa() public;
+```
+
+### test_adapter_rejectsNavPriceAboveMax_usdcToRwa
+
+ChronicleOracleAdapter rejects NAV price above MAX_NAV in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsNavPriceAboveMax_usdcToRwa() public;
 ```
 
 ### test_vault_rejectsZeroChronicle

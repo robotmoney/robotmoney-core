@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -365,15 +365,18 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 
 ### authorizeAgent
 
-First-time authorization for `agent`. Permissionless — any EOA
-may call to register their own agent. `msg.sender` is recorded
-as the agent's owner. Reverts if `agent` already has a
-recorded owner; that owner must call `setPolicy` to update or
-`revokeAgent` to release.
+First-time authorization for `agent`. Admin-only — only callable
+by `DEFAULT_ADMIN_ROLE`. Regular users must use
+`commitAuthorization` + `revealAuthorization` instead.
+`msg.sender` is recorded as the agent's owner. Reverts if
+`agent` already has a recorded owner; that owner must call
+`setPolicy` to update or `revokeAgent` to release.
 
 
 ```solidity
-function authorizeAgent(address agent, AgentPolicy calldata p) external;
+function authorizeAgent(address agent, AgentPolicy calldata p)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE);
 ```
 **Parameters**
 

@@ -1,5 +1,5 @@
 # RwaVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/vaults/RwaVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/vaults/RwaVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -121,6 +121,19 @@ uint256 public oracleHeartbeat
 ```
 
 
+### emergencyUnwindStaleOverride
+When true, EMERGENCY_ROLE may call emergencyUnwind and
+emergencyUnwindWithOverride even if the Chronicle feed is stale.
+Defaults to false, which causes emergency unwind to revert with
+`StalePriceFeed` when the oracle has not been updated within
+`oracleHeartbeat`.
+
+
+```solidity
+bool public emergencyUnwindStaleOverride
+```
+
+
 ## Functions
 ### constructor
 
@@ -205,6 +218,43 @@ feed is stale, consistent with the "fail closed" philosophy in ADR-0006 §2.
 function _checkOracleFreshness() internal view;
 ```
 
+### setEmergencyUnwindStaleOverride
+
+Allow (true) or forbid (false, default) emergency unwind when the
+Chronicle feed is stale. Restricted to EMERGENCY_ROLE.
+
+
+```solidity
+function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(EMERGENCY_ROLE);
+```
+
+### emergencyUnwind
+
+Emergency unwind with Chronicle staleness gate.
+
+Reverts with `StalePriceFeed` when the feed is stale, unless
+`emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+
+
+```solidity
+function emergencyUnwind() public override onlyRole(EMERGENCY_ROLE);
+```
+
+### emergencyUnwindWithOverride
+
+High-risk emergency unwind with Chronicle staleness gate.
+
+Reverts with `StalePriceFeed` when the feed is stale, unless
+`emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+
+
+```solidity
+function emergencyUnwindWithOverride(address[] calldata tokens)
+    public
+    override
+    onlyRole(EMERGENCY_ROLE);
+```
+
 ### setOracleHeartbeat
 
 Update the Chronicle staleness heartbeat. Restricted to ADMIN_ROLE.
@@ -227,6 +277,14 @@ Emitted when ADMIN_ROLE updates the oracle staleness heartbeat.
 
 ```solidity
 event OracleHeartbeatUpdated(uint256 oldHeartbeat, uint256 newHeartbeat);
+```
+
+### EmergencyUnwindStaleOverrideUpdated
+Emitted when EMERGENCY_ROLE toggles the stale-price override flag.
+
+
+```solidity
+event EmergencyUnwindStaleOverrideUpdated(bool allowed);
 ```
 
 ## Errors

@@ -71,6 +71,7 @@
 - [VaultHarness](RobotMoneyVault.t.sol/contract.VaultHarness.md)
 - [RobotMoneyVaultTest](RobotMoneyVault.t.sol/contract.RobotMoneyVaultTest.md)
 - [RobotMoneyVault4626Conformance](RobotMoneyVault4626Conformance.t.sol/contract.RobotMoneyVault4626Conformance.md)
+- [RobotMoneyVault4626ConformanceWithFee](RobotMoneyVault4626Conformance.t.sol/contract.RobotMoneyVault4626ConformanceWithFee.md)
 - [MockUsdc](RouterGovernance.t.sol/contract.MockUsdc.md)
 - [MockGovVault](RouterGovernance.t.sol/contract.MockGovVault.md)
 - [RouterGovernanceTest](RouterGovernance.t.sol/contract.RouterGovernanceTest.md)

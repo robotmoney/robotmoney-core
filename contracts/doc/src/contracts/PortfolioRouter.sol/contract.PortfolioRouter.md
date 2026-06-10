@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -768,6 +768,22 @@ USDC is permanently stranded in the router.
 ```solidity
 error UsdcCustodyInvariantViolated();
 ```
+
+### UnauthorizedRedeemer
+Caller is not the shareHolder and has insufficient ERC-20
+allowance on the vault share token to redeem on its behalf.
+
+
+```solidity
+error UnauthorizedRedeemer(address shareHolder, address caller);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`shareHolder`|`address`| The owner of the vault shares.|
+|`caller`|`address`|      The address that attempted the unauthorized redeem.|
 
 ### VaultNotRouterEligible
 A vault has not been marked router-eligible in the

@@ -1,5 +1,5 @@
 # MockRouterVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 ERC20
@@ -72,6 +72,15 @@ function setFailOnDeposit(bool fail) external;
 
 ```solidity
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+### redeem
+
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+    external
+    returns (uint256 assets);
 ```
 
 ## Events

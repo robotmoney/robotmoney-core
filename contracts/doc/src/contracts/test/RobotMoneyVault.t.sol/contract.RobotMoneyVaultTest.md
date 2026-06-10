@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ea758b479e8ca22039bd13ec062ac539c6106ca4/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/75f0b4b6846ed0d886afdaede8205c3c2ab2177f/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -449,5 +449,14 @@ Calling forceRemoveAdapter on an already-inactive adapter must revert with Adapt
 
 ```solidity
 function test_forceRemoveAdapter_revertsOnAlreadyInactiveAdapter() public;
+```
+
+### test_forceRemoveAdapter_pausesDeposits
+
+forceRemoveAdapter must pause deposits to close the share-price-crash arbitrage window.
+
+
+```solidity
+function test_forceRemoveAdapter_pausesDeposits() public;
 ```
 
