@@ -1,0 +1,53 @@
+# Robot Money mint/burn rate watchdog configuration
+# Canonical: docs/technical/security-model.md §9
+# Implements: issue #658 / PR #787
+#
+# SLA: 5 minutes maximum response time from breach detection to pause/alert.
+#
+# All amount fields are USDC base units (6 decimals).
+# Example: "500000" = 0.5 USDC, "1000000000" = 1000 USDC.
+
+[global]
+# Maximum total mint (deposit) volume per block across all vaults.
+# Deposits in a single Base block (~2s) above this level indicate a flash exploit.
+per_block_mint_limit_usdc   = "1000000000"   # 1000 USDC per block
+
+# Maximum total mint volume in any rolling 60-minute window.
+per_hour_mint_limit_usdc    = "10000000000"  # 10 000 USDC per hour
+
+# Maximum total burn (withdrawal/redeem) volume per block.
+per_block_burn_limit_usdc   = "1000000000"   # 1000 USDC per block
+
+# Maximum total burn volume in any rolling 60-minute window.
+per_hour_burn_limit_usdc    = "10000000000"  # 10 000 USDC per hour
+
+[action]
+# Breach response mode.
+#   "pause"           → call gateway.pause() via funded PAUSER_ROLE key
+#   "alert"           → dispatch structured JSON alert to webhook_url
+#   "pause_and_alert" → both (recommended for production)
+mode = "pause_and_alert"
+
+# Webhook URL for structured PagerDuty-compatible JSON alerts.
+# Required when mode includes "alert". Set via WATCHDOG_WEBHOOK_URL env var
+# or replace the placeholder below.
+webhook_url = "https://events.pagerduty.com/v2/enqueue"
+
+# JSON-RPC endpoint for the gateway chain.
+# Required when mode includes "pause".
+gateway_rpc_url = "https://mainnet.base.org"
+
+# Deployed RobotMoneyGateway contract address on Base mainnet.
+# Required when mode includes "pause".
+gateway_address = "0x0000000000000000000000000000000000000000"
+
+# Hex-encoded private key for the PAUSER_ROLE account (must be funded for gas).
+# SECURITY: Do not commit a real key. Provide via WATCHDOG_PAUSER_PRIVATE_KEY_HEX
+# environment variable or a secrets manager at runtime.
+# Required when mode includes "pause".
+pauser_private_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[sla]
+# Maximum seconds between breach detection and pause/alert dispatch.
+# This value is the SLA recorded in the Plan for issue #658 (5 minutes).
+max_response_secs = 300
