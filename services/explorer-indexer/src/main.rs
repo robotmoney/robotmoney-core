@@ -148,6 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match run_once(&db, &rpc, &cfg).await {
             Ok(o) => {
+                if let Some(ref err) = o.error {
+                    error!(run_id = o.run_id, error = %err, "tick error (will retry)");
+                }
                 info!(
                     run_id = o.run_id,
                     last_indexed_block = ?o.last_indexed_block,

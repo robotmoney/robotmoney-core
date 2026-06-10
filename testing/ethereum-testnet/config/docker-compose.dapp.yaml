@@ -23,6 +23,8 @@
 #   #   INDEXER_CHAIN_ID=918453
 #   #   INDEXER_CHAIN_NAME=devnet
 #   #   EXPLORER_API_CHAIN_ID=918453
+#   #   INDEXER_REGISTRY=          — VaultRegistry address (enables /v1/vaults)
+#   #   INDEXER_PORTFOLIO_ROUTER=  — PortfolioRouter address (enables /v1/router/weights)
 #   #   POSTGRES_PORT=5432
 #   #   EXPLORER_API_PORT=8080
 #   #   DAPP_PORT=5173
@@ -61,17 +63,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Issue #775: join the ethereum-testnet_default network so the indexer
+    # can reach Geth directly via the `geth` service hostname (port 8545
+    # inside the chain network) instead of relying on host.docker.internal,
+    # which is not reachable on all Docker host configurations.
+    networks:
+      - default
+      - chain-net
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
-      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8545}
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://geth:8545}
       INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-918453}
       INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
+      # Issue #615: INDEXER_PORTFOLIO_ROUTER enables WeightsSet / DefaultWeightsSet
+      # and RouterDeposit event ingestion from the PortfolioRouter contract.  Without
+      # this the explorer /v1/router/weights endpoint returns an empty weight list
+      # even when the deploy script called setWeights() before the dapp stack booted.
+      INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even
@@ -154,3 +166,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+# Issue #775: chain-net joins the ethereum-testnet_default Docker network
+# created by docker-compose.yaml (the chain compose stack) so that
+# explorer-indexer can reach Geth via the `geth` service name rather than
+# host.docker.internal.  The ethereum-testnet stack must be running before
+# this overlay is brought up (the README and standalone usage instructions
+# already require this).
+networks:
+  chain-net:
+    external: true
+    name: ethereum-testnet_default
