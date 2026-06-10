@@ -757,6 +757,23 @@ impl Fixture {
             "post-readiness chain RPC stable; starting deployment",
         );
 
+        // Deploy.s.sol run() performs a mandatory 1,000 USDC seed deposit from
+        // the broadcaster (issue #656), so the deployer must hold USDC before
+        // the forge script runs. Drip from HARNESS_USDC_HOLDER (genesis grant).
+        const DEPLOYER_USDC_GRANT: u128 = 10_000 * 1_000_000; // 10k USDC, 6dp
+        fund_usdc_to_deployer(&rpc_url, DEPLOYER_USDC_GRANT).inspect_err(|err| {
+            logging::error("smoke-test", format!("deployer USDC funding failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "deployer USDC funding failure",
+                200,
+            );
+            cleanup();
+        })?;
+
         let dep_out = tmp.path().join("deployment.json");
         let agent_hex = format!("{:#x}", agent_address());
         run_forge_deploy_with_env(
@@ -2007,6 +2024,48 @@ fn parse_compose_ps_stdout(stdout: &[u8]) -> Result<Vec<String>, HarnessError> {
     Ok(running)
 }
 
+/// Fund the deployer EOA with USDC from HARNESS_USDC_HOLDER before the forge
+/// deploy runs. Deploy.s.sol `run()` executes a mandatory seed deposit of
+/// `SEED_DEPOSIT_AMOUNT` (1,000 USDC) from the broadcaster (issue #656), so
+/// the deployer must hold USDC *before* deployment — `Fixture::fund_usdc` is
+/// not available yet at that point in the boot sequence.
+fn fund_usdc_to_deployer(rpc_url: &str, amount_units: u128) -> Result<String, HarnessError> {
+    logging::debug(
+        "rpc",
+        format!(
+            "eth_sendRawTransaction via cast send usdc transfer {amount_units} -> {DEPLOYER_ADDRESS_HEX}"
+        ),
+    );
+    let out = Command::new("cast")
+        .args([
+            "send",
+            "--rpc-url",
+            rpc_url,
+            "--private-key",
+            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            genesis_alloc::BASE_USDC_ADDR,
+            "transfer(address,uint256)",
+            DEPLOYER_ADDRESS_HEX,
+            &amount_units.to_string(),
+            "--json",
+        ])
+        .output()?;
+    logging::log_command_output("cast", &out);
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "fund deployer usdc failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| HarnessError::other(format!("fund deployer usdc json: {e}")))?;
+    Ok(v.get("transactionHash")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
 fn fund_eth_from_deployer(
     rpc_url: &str,
     recipient_hex: &str,
@@ -2800,10 +2859,10 @@ impl DappStack {
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
             // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
             ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
-            (
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the service name, not via
+            // host.docker.internal which is unreachable on some Docker configs.
+            ("INDEXER_RPC_URL", "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
@@ -2897,14 +2956,8 @@ impl DappStack {
                 "INDEXER_PORTFOLIO_ROUTER".into(),
                 fixture.router_hex().to_string(),
             ),
-            (
-                "INDEXER_PORTFOLIO_ROUTER".into(),
-                fixture.router_hex().to_string(),
-            ),
-            (
-                "INDEXER_RPC_URL".into(),
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: see dapp_log_env comment above.
+            ("INDEXER_RPC_URL".into(), "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
             (
                 "VITE_EXPLORER_API_URL".into(),
@@ -2952,11 +3005,11 @@ impl DappStack {
             .env("INDEXER_REGISTRY", fixture.registry_hex())
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
             .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
-            // RPC is on the host; containers reach it via host.docker.internal
-            .env(
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            )
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the `geth` service name — no
+            // host port needed. The dapp compose connects to that network via
+            // the chain-net external network reference in docker-compose.dapp.yaml.
+            .env("INDEXER_RPC_URL", "http://geth:8545")
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see
             // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is

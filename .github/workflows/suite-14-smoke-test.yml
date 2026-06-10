@@ -84,6 +84,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # check-fork-manifest.sh uses `cast index` to validate the harness USDC
+      # balance slot in the produced genesis alloc, so Foundry is required even
+      # though this job never boots a devnet.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
