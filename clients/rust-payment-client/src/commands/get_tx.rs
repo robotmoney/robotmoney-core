@@ -44,8 +44,8 @@ use std::str::FromStr;
 use alloy_primitives::B256;
 use serde::Serialize;
 
-use crate::confirmation_policy::{self, OpClass, RequiredFinalityLevel};
 use crate::config::Config;
+use crate::confirmation_policy::{self, OpClass, RequiredFinalityLevel};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU128, DecimalU256, Envelope, PartialBuilder};
 
@@ -294,8 +294,19 @@ pub fn run(args: Args) -> i32 {
 }
 
 /// Compute the `FinalityStatus` from an observed confirmation count and the
-/// policy entry. L1-finalized operations require 64+ confirmations; L2-included
-/// operations require the class-specific minimum (1 or 6).
+/// policy entry.
+///
+/// The status is the *achieved* finality level, so high-value operations can
+/// distinguish "L2 included" from "L1 finalized" (security-model.md §12):
+/// - `l1_finalized` once `L1_FINALIZED_DEPTH` confirmations have accumulated,
+///   regardless of operation class.
+/// - For `l1_finalized`-class operations (admin/governance), any included
+///   transaction below that depth reports `l2_included` — it IS on L2, it is
+///   just not yet irreversible on L1. The `--require-finality l1_finalized`
+///   gate (exit 5) enforces the policy threshold.
+/// - For `l2_included`-class operations, the class-specific minimum depth
+///   (1 or 6) must be met before `l2_included` is reported; below it the
+///   status is `pending`.
 fn compute_finality_status(
     confirmations: u64,
     policy: &confirmation_policy::PolicyEntry,
@@ -311,18 +322,17 @@ fn compute_finality_status(
     const L1_FINALIZED_DEPTH: u64 = 64;
 
     if confirmations >= L1_FINALIZED_DEPTH {
-        FinalityStatus::L1Finalized
-    } else if confirmations >= policy.min_confirmations {
-        match policy.required_level {
-            Rl::L2Included => FinalityStatus::L2Included,
-            Rl::L1Finalized => {
-                // The operation class requires L1 finality but we haven't
-                // hit L1_FINALIZED_DEPTH yet — report pending.
-                FinalityStatus::Pending
-            }
-        }
-    } else {
-        FinalityStatus::Pending
+        return FinalityStatus::L1Finalized;
+    }
+    match policy.required_level {
+        // L2-class operations: pending until the class minimum is met.
+        Rl::L2Included if confirmations >= policy.min_confirmations => FinalityStatus::L2Included,
+        Rl::L2Included => FinalityStatus::Pending,
+        // L1-class operations (high-value admin/governance): the tx is on L2
+        // as soon as it has at least one confirmation, but it is not
+        // `l1_finalized` until the L1 horizon — surface the distinction.
+        Rl::L1Finalized if confirmations >= 1 => FinalityStatus::L2Included,
+        Rl::L1Finalized => FinalityStatus::Pending,
     }
 }
 
@@ -432,9 +442,28 @@ mod tests {
     }
 
     #[test]
-    fn finality_pending_admin_governance_below_64() {
+    fn finality_admin_governance_l2_included_below_64() {
+        // High-value (l1_finalized-class) operations distinguish "L2 included"
+        // from "L1 finalized": included but below the L1 horizon → l2_included.
         let policy = policy_for(OpClass::AdminGovernance); // requires 64, l1_finalized
         let status = compute_finality_status(63, &policy);
+        assert_eq!(status, FinalityStatus::L2Included);
+    }
+
+    #[test]
+    fn finality_admin_governance_l2_included_at_1_confirmation() {
+        // A high-value op at block N with tip = N+1 reports l2_included,
+        // not l1_finalized and not pending.
+        let policy = policy_for(OpClass::AdminGovernance);
+        let status = compute_finality_status(1, &policy);
+        assert_eq!(status, FinalityStatus::L2Included);
+    }
+
+    #[test]
+    fn finality_admin_governance_pending_at_0_confirmations() {
+        // Tip == inclusion block: no blocks mined on top yet.
+        let policy = policy_for(OpClass::AdminGovernance);
+        let status = compute_finality_status(0, &policy);
         assert_eq!(status, FinalityStatus::Pending);
     }
 

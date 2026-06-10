@@ -10,8 +10,8 @@ use std::path::Path;
 use clap::Parser;
 use rust_payment_client::cli::{Cli, Command};
 use rust_payment_client::commands;
-use rust_payment_client::confirmation_policy::{OpClass, RequiredFinalityLevel};
 use rust_payment_client::config::Config;
+use rust_payment_client::confirmation_policy::{OpClass, RequiredFinalityLevel};
 use rust_payment_client::logging;
 
 fn main() {
