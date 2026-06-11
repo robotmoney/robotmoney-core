@@ -141,9 +141,35 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-Future vault categories include thematic/RWA vaults. Those need
-separate execution, oracle, liquidity, legal, and disclosure
-architecture before production use.
+The source tree also contains `RwaVault`, a shipped ERC-4626 USDC vault
+for tokenised real-world assets. The current deployment holds deSPXA
+(Centrifuge / Janus Henderson / Anemoy tokenised S&P 500 on Base).
+Key architectural characteristics:
+
+- **Entry and exit via Aerodrome secondary market only.** Primary NAV
+  redemption through the Centrifuge V3 ERC-7540 epoch operator is a
+  permanent non-goal: a permissionless smart-contract vault cannot
+  satisfy the KYC requirement. All deposits and withdrawals swap
+  USDC↔deSPXA through an Aerodrome CL pool.
+- **Chronicle push oracle for NAV pricing.** Aerodrome DEX TWAP is
+  unsuitable for thin RWA liquidity. `ChronicleOracleAdapter` prices NAV
+  and slippage floors via a Chronicle on-chain signed price feed.
+  `RwaVault` enforces a heartbeat window (default 24 h); price-sensitive
+  operations revert with `StalePriceFeed` if the feed is stale.
+- **Issuer freeze-control risk.** The deSPXA issuer may freeze token
+  transfers at any time, blocking all Aerodrome swaps and therefore all
+  vault deposits and withdrawals. Existing rmRWA holders retain their
+  shares; no funds are confiscated. Admin should pause the vault when a
+  freeze is detected to surface user-facing messages instead of opaque
+  ERC-20 reverts. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+- **Single-asset basket.** `RwaVault` holds exactly one basket asset
+  (deSPXA). `maxAssets()` returns 1 to enforce this constraint.
+- **Router eligibility.** `RwaVault` is a `BasketVault` subclass.
+  Router eligibility follows the same `VaultRegistry.isRouterEligible`
+  registry-flag model as other basket vaults. The flag is flipped by
+  ADMIN_ROLE once pool cardinality, oracle freshness, and the intra-vault
+  rebalancing model are certified. `RwaVault` is marked Active — real
+  asset, seeded, Router-eligible per `docs/prd.md` §11.4.
 
 ### 4.2 Portfolio Router
 
@@ -194,7 +220,7 @@ Mutating adapter functions are callable only by the owning vault. Adapter
 selection and caps are privileged vault-management operations and expand
 the audit surface of that vault.
 
-Current stable-yield adapters:
+Current stable-yield adapters (for `RobotMoneyVault`):
 
 - `MorphoAdapter` deposits USDC into the Morpho Gauntlet USDC Prime
   ERC-4626 vault.
@@ -203,6 +229,29 @@ Current stable-yield adapters:
 - `CompoundV3Adapter` supplies USDC to Compound V3 Comet on Base and
   forwards withdrawn USDC back to the vault.
 - `PassthroughAdapter` is for devnet and smoke tests only.
+
+Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
+`BasketVault` subclasses including `RwaVault`, `ProtocolAssetVault`, and
+`AgentTokenVault`):
+
+- `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
+  Finance Router on Base (concentrated-liquidity CL pools). NAV and
+  slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
+  tick over a configurable window, using the same `observe()` ABI as
+  Uniswap V3). Only Aerodrome CL pools are supported; classic stable/volatile
+  pools do not expose `observe()`.
+- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
+  Router (`exactInputSingle`) on Base. TWAP reads use the V4 pool's
+  `observe()` method (EIP-7680 compatible, identical ABI to V3). Tick
+  spacing is derived from the fee tier using Uniswap V4's standard mapping
+  (500→10, 3000→60, 10000→200). Pools with hooks or custom tick spacings
+  require a bespoke adapter.
+- `ChronicleOracleAdapter` routes USDC↔asset swaps through the Aerodrome
+  Router (same swap path as `AerodromeSwapAdapter`) but prices NAV via a
+  Chronicle on-chain push oracle instead of a DEX TWAP. Used by `RwaVault`
+  for deSPXA where DEX liquidity is insufficient for a manipulation-resistant
+  TWAP. Staleness enforcement (heartbeat check) is delegated to the owning
+  vault, keeping the adapter stateless.
 
 ### 4.4 Synchronous Redemption
 
