@@ -105,7 +105,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
         break;
       }
     }
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert" as const };
   }
 
@@ -118,7 +118,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
     selector = toFunctionSelector(
       vaultAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert" as const, calldata };
   }
 

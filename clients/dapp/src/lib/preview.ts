@@ -335,7 +335,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         break;
       }
     }
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert" };
   }
 
@@ -349,7 +349,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
     selector = toFunctionSelector(
       gatewayAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert", calldata };
   }
 

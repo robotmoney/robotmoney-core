@@ -87,7 +87,6 @@ pub enum RmpcError {
     ErrShareAllowanceInsufficient,
 
     // ── Architecture §7.2 product reason codes ─────────────────────────────
-
     /// The target vault is disabled (not registered or de-listed).
     /// Maps to the `vault_disabled` product reason code.
     #[error("ErrVaultDisabled: target vault is not registered or has been disabled")]
@@ -197,7 +196,10 @@ mod tests {
             (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
             (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
             (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
-            (RmpcError::ErrSlippageBoundExceeded, "ErrSlippageBoundExceeded"),
+            (
+                RmpcError::ErrSlippageBoundExceeded,
+                "ErrSlippageBoundExceeded",
+            ),
         ];
         for (err, name) in cases {
             let s = format!("{err}");

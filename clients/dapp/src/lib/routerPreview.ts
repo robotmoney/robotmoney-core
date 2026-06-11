@@ -78,7 +78,7 @@ export function buildRouterPreview(
       // already surfaces unavailable legs before the user signs.
       args: [amount, []],
     });
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert" as const };
   }
 
@@ -91,7 +91,7 @@ export function buildRouterPreview(
     selector = toFunctionSelector(
       routerAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (_err) {
+  } catch {
     return { ok: false, reason: "unknown_revert" as const, calldata };
   }
 
