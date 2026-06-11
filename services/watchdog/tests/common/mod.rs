@@ -48,9 +48,16 @@ pub async fn try_pg_fixture() -> Option<PgFixture> {
         .ok()?;
 
     // Apply the canonical explorer-indexer migrations so the watchdog's SQL
-    // queries have the expected tables.
+    // queries have the expected tables.  A "duplicate key" error on
+    // _sqlx_migrations_pkey means the migrations already ran (e.g. testcontainers
+    // reused a warm container); treat that as success.
     if let Err(e) = MIGRATOR.run(&pool).await {
-        panic!("[watchdog-tests] migrate failed: {e}");
+        let msg = e.to_string();
+        if msg.contains("duplicate key value violates unique constraint") {
+            eprintln!("[watchdog-tests] migrations already applied (container reused) — continuing");
+        } else {
+            panic!("[watchdog-tests] migrate failed: {e}");
+        }
     }
 
     Some(PgFixture {

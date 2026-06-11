@@ -85,4 +85,4 @@ jobs:
 
       - name: Threshold breach integration test
         working-directory: services/watchdog
-        run: cargo test --test threshold_breach -- --nocapture --test-threads=1
+        run: cargo test --test threshold_breach -- --nocapture
