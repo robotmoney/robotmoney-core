@@ -40,22 +40,6 @@ pub enum RmpcError {
     #[error("ErrBalanceInsufficient: USDC balanceOf(self) < amount")]
     ErrBalanceInsufficient,
 
-    /// Stable product refusal seam for a registry-disabled destination.
-    #[error("ErrVaultDisabled: destination vault is disabled")]
-    ErrVaultDisabled,
-
-    /// Stable product refusal seam for an expired depositor-owned policy.
-    #[error("ErrPolicyExpired: agent policy has expired")]
-    ErrPolicyExpired,
-
-    /// Stable product refusal seam for an unavailable Portfolio Router leg.
-    #[error("ErrUnavailableLeg: one or more router legs are unavailable")]
-    ErrUnavailableLeg,
-
-    /// Stable product refusal seam for a previewed minimum-shares violation.
-    #[error("ErrSlippageBoundExceeded: minimum shares bound would be exceeded")]
-    ErrSlippageBoundExceeded,
-
     #[error("ErrSoftwareSignerDisallowed: [signer].allow_software_fallback must be true")]
     ErrSoftwareSignerDisallowed,
 
@@ -190,7 +174,7 @@ mod tests {
             (RmpcError::ErrBalanceInsufficient, "ErrBalanceInsufficient"),
             (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
             (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
-            (RmpcError::ErrUnavailableLeg, "ErrUnavailableLeg"),
+            (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
             (
                 RmpcError::ErrSlippageBoundExceeded,
                 "ErrSlippageBoundExceeded",
@@ -214,14 +198,6 @@ mod tests {
                     proposal_id: "1".into(),
                 },
                 "ErrVoteAlreadyCast",
-            ),
-            // Architecture §7.2 product reason codes — four previously-absent variants.
-            (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
-            (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
-            (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
-            (
-                RmpcError::ErrSlippageBoundExceeded,
-                "ErrSlippageBoundExceeded",
             ),
         ];
         for (err, name) in cases {

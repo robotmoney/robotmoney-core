@@ -627,7 +627,7 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
         RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
         RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
-        RmpcError::ErrUnavailableLeg => "ErrUnavailableLeg",
+        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
         RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
         RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
@@ -646,11 +646,6 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrRpcTransport(_) => "ErrRpcTransport",
         RmpcError::ErrRpcServer { .. } => "ErrRpcServer",
         RmpcError::ErrRpcDecode(_) => "ErrRpcDecode",
-        // Architecture §7.2 product reason codes
-        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
-        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
-        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
-        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
     }
 }
 
