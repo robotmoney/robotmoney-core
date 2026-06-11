@@ -67,6 +67,40 @@ const SELECTOR_MAP: Record<string, ProductReasonCode> = {
 };
 
 /**
+ * Human-readable display messages for each ProductReasonCode.
+ *
+ * These are the strings surfaced in the UI (e.g. the TxPreview refusal
+ * panel). They are intentionally verbose so the user can understand what
+ * happened without reading on-chain data.
+ */
+const PRODUCT_REASON_DISPLAY: Record<ProductReasonCode, string> = {
+  paused: "Gateway or vault is paused. Writes are disabled until it is unpaused.",
+  vault_disabled: "The target vault is disabled or not registered with the gateway.",
+  cap_exceeded:
+    "A per-payment or per-window cap has been exceeded. Wait for the window to reset or reduce the amount.",
+  expired_policy: "Agent policy has expired (validUntil < current time). Re-authorize the agent.",
+  insufficient_allowance:
+    "Token allowance is insufficient. Approve the gateway for the required amount first.",
+  insufficient_balance:
+    "Token or share balance is insufficient. Ensure you hold enough before retrying.",
+  unavailable_leg:
+    "One or more vault legs in the router deposit are unavailable. Review the leg status before signing.",
+  fee_cap_exceeded:
+    "Gas fee exceeds the operator-configured cap. Wait for lower gas or raise the cap.",
+  slippage_bound_exceeded:
+    "Estimated shares per leg fall below the minimum bound. Adjust slippage tolerance or try a smaller amount.",
+  unknown_revert: "Gateway bytecode hash does not match the pinned fixture. Refusing to sign.",
+};
+
+/**
+ * Return the human-readable display message for a ProductReasonCode.
+ * Use this in UI components instead of rendering the raw code string.
+ */
+export function productReasonDisplay(code: ProductReasonCode): string {
+  return PRODUCT_REASON_DISPLAY[code];
+}
+
+/**
  * Map a raw EVM revert payload (or error message string) to a stable
  * ProductReasonCode.
  *
