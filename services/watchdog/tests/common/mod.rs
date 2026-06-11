@@ -54,7 +54,9 @@ pub async fn try_pg_fixture() -> Option<PgFixture> {
     if let Err(e) = MIGRATOR.run(&pool).await {
         let msg = e.to_string();
         if msg.contains("duplicate key value violates unique constraint") {
-            eprintln!("[watchdog-tests] migrations already applied (container reused) — continuing");
+            eprintln!(
+                "[watchdog-tests] migrations already applied (container reused) — continuing"
+            );
         } else {
             panic!("[watchdog-tests] migrate failed: {e}");
         }
