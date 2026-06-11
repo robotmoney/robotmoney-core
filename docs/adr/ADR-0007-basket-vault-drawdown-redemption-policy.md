@@ -132,7 +132,7 @@ that the cap remain conservative for any router-eligible basket vault.
   bank-run / contagion dynamics.
 - **Unblocks router eligibility** for `ProtocolAssetVault` and `AgentTokenVault`:
   the drawdown redemption policy required by open-questions §1.C is now resolved
-  (see `docs/implementation-plan.md`, router-eligibility item). Any remaining
+  (see `Plan tracking issue #109`, router-eligibility item). Any remaining
   audit gate is unaffected.
 
 **Negative / accepted risks.**

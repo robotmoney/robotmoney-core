@@ -2,7 +2,7 @@
 
 > **Audience:** Product Manager.
 > **Status:** Draft for review. Fleshed out and sanity-checked against
-> `docs/prd.md`, `docs/implementation-plan.md`, ADR-0001, and the live
+> `docs/prd.md`, `Plan tracking issue #109`, ADR-0001, and the live
 > `robotmoney.net/committee` and `robotmoney.net/allocation` pages.
 >
 > Several items in the raw notes conflict with the canonical PRD/ADR or with

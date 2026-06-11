@@ -1,7 +1,7 @@
 # ADR — Multi-vault explorer: schema migration seams, new table specifications, and indexer poll-loop extension points
 
 > Scope: dev-scout decision record for the multi-vault explorer phase of
-> `docs/implementation-plan.md`. Resolves all open schema questions that gate
+> `Plan tracking issue #109`. Resolves all open schema questions that gate
 > any indexer code change or migration file: the `vault_snapshots`
 > generalization strategy, three new tables (`router_weight_snapshots`,
 > `governance_proposals`, `governance_votes`), the `account_positions` query

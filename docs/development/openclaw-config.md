@@ -1,6 +1,6 @@
 # OpenClaw — install + long-running task config
 
-> Canonical: `docs/implementation-plan.md` §10 (Phase 4 — Agent-Harness
+> Canonical: `Plan tracking issue #109` §10 (Phase 4 — Agent-Harness
 > Installation and Skill Loading). Issue: #114.
 
 This walkthrough documents how to install `rmpc`, register the Robot

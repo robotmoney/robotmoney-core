@@ -1,5 +1,5 @@
 /**
- * Canonical: docs/implementation-plan.md §12 — Phase 6 Human Dapp Controls
+ * Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §12 — Phase 6 Human Dapp Controls
  * Canonical: docs/technical/dapp-credential-decisions.md §3–§4
  *
  * Register-existing-address credential workflow.

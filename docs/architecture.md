@@ -687,7 +687,7 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | retired `docs/implementation-plan.md` §0 (git history) |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | retired `Plan tracking issue #109` §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 
 ## 10. Open Decisions
@@ -721,4 +721,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| retired `docs/implementation-plan.md` (git history; live plan: Plan tracking issue #109) | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |
+| retired `Plan tracking issue #109` (git history; live plan: Plan tracking issue #109) | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |

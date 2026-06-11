@@ -2,7 +2,7 @@
 // Robot Money explorer HTTP API.
 //
 // Canonical docs:
-//   - docs/implementation-plan.md §11 (Phase 5 — Simple Web Explorer API and Database)
+//   - Plan tracking issue #109 §11 (Phase 5 — Simple Web Explorer API and Database)
 //   - docs/technical/explorer-schema-decisions.md (DB engine, indexer cadence,
 //     reorg handling, per-table idempotency keys, ingestion model)
 //

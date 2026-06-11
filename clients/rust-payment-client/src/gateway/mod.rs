@@ -1,9 +1,9 @@
-//! Canonical: docs/implementation-plan.md §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
 //!
 //! `gateway` module — typed `alloy-sol-types` bindings for the on-chain
 //! contracts the daemon interacts with.
 //!
-//! Per issue #11 and `docs/implementation-plan.md` §3.5: typed ABI
+//! Per issue #11 and `Plan tracking issue #109` §3.5: typed ABI
 //! encode/decode for `RobotMoneyGateway`, plus read-side bindings for the
 //! standard ERC-20 `allowance`+`balanceOf` views (used against real USDC in
 //! production and against test ERC-20 deployments in CI) and the `MockVault`

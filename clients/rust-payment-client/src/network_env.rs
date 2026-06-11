@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4 — Phase 1 Rust client
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4 — Phase 1 Rust client
 //!
 //! Network environment classification helper.
 //!

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/implementation-plan.md §3 — Phase 1 Contracts (deploy + role-separation invariant)
+// Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §3 — Phase 1 Contracts (deploy + role-separation invariant)
 // (See also: docs/architecture.md §6 — Roles)
 pragma solidity ^0.8.24;
 
@@ -31,7 +31,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///         gateway deposit-routing unit tests directly. See issue #277.
 ///         PassthroughAdapter is NOT registered by this script; it is
 ///         retained in the codebase for unit tests only. See issue #363.
-/// @dev Implements `docs/implementation-plan.md` §5 step 1–2 and
+/// @dev Implements `Plan tracking issue #109` §5 step 1–2 and
 ///      satisfies issue #10. Inputs are env-driven so the same script works
 ///      on Anvil, the docker devnet, and (with care) any throwaway L1.
 ///

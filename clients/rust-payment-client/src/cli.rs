@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4.8 — CLI surface
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 — CLI surface
 //!
 //! Argument parsing for the `rmpc` CLI.
 //!
@@ -153,7 +153,7 @@ pub enum Command {
     },
     /// Read an ERC-20 token balance for an address (USDC by default).
     ///
-    /// Per docs/implementation-plan.md §9 / docs/technical/rmpc-read-output-contract.md.
+    /// Per Plan tracking issue #109 §9 / docs/technical/rmpc-read-output-contract.md.
     GetBalance {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]

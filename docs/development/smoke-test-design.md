@@ -1,6 +1,6 @@
 # Full-Stack Smoke Test Design
 
-> Canonical: `docs/implementation-plan.md` §10.5 (Phase 4.5 — Full-stack hosted devnet).
+> Canonical: `Plan tracking issue #109` §10.5 (Phase 4.5 — Full-stack hosted devnet).
 > Implementation: issue #146.
 
 This document records the design decisions for the full-stack integration

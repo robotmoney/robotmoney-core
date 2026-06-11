@@ -1,5 +1,5 @@
 -- Canonical: docs/architecture.md §5.4 — router state history.
---            docs/implementation-plan.md §"Phase: Multi-vault explorer" (issue #316).
+--            Plan tracking issue #109 §"Phase: Multi-vault explorer" (issue #316).
 --
 -- Adds the router_weight_snapshots table, one row per WeightsApplied event
 -- emitted by PortfolioRouter.  Stores the full ordered vault+bps vector at

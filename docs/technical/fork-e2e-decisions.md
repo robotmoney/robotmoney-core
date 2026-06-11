@@ -1,18 +1,18 @@
 # ADR — Forked Smart-Contract E2E: target chain, block pinning, harness driver
 
-> Scope: dev-scout decision record for Phase 2 (Forked Smart-Contract E2E) of `docs/implementation-plan.md` §8. Resolves the unresolved choices that gated test code: which public chain fork to target, how fork blocks are pinned for CI vs local, whether the harness driver is a Rust integration crate or reuses the existing TypeScript fork-test logic, the CI vs manual-trigger split, the per-test isolation approach, and the recommendation on issue #37 (drop Anvil flavor).
+> Scope: dev-scout decision record for Phase 2 (Forked Smart-Contract E2E) of `Plan tracking issue #109` §8. Resolves the unresolved choices that gated test code: which public chain fork to target, how fork blocks are pinned for CI vs local, whether the harness driver is a Rust integration crate or reuses the existing TypeScript fork-test logic, the CI vs manual-trigger split, the per-test isolation approach, and the recommendation on issue #37 (drop Anvil flavor).
 >
-> Closes the open question gate in `docs/implementation-plan.md` §8 ("Fork target", "Harness", "Outputs"). No test code is produced by this scout.
+> Closes the open question gate in `Plan tracking issue #109` §8 ("Fork target", "Harness", "Outputs"). No test code is produced by this scout.
 
 ---
 
 ## 1. Status
 
-Accepted. Authored 2026-05-06 against `docs/implementation-plan.md` (commit on branch `feat/47-dev-scout-fork-target-block-pinning-harness-driv`). No prior ADR exists for this phase.
+Accepted. Authored 2026-05-06 against `Plan tracking issue #109` (commit on branch `feat/47-dev-scout-fork-target-block-pinning-harness-driv`). No prior ADR exists for this phase.
 
 ## 2. Context
 
-`docs/implementation-plan.md` §8 prescribes a forked smart-contract E2E suite for Phase 2 but leaves six choices unresolved. Each choice has cross-cutting implications for CI runtime budget, fixture management, and whether `rmpc` owns the command surface for fork tests:
+`Plan tracking issue #109` §8 prescribes a forked smart-contract E2E suite for Phase 2 but leaves six choices unresolved. Each choice has cross-cutting implications for CI runtime budget, fixture management, and whether `rmpc` owns the command surface for fork tests:
 
 1. **Fork target.** Plan §8 names "a recent Base mainnet fork" as the default, but does not commit to it.
 2. **Block pinning.** Plan §8 says CI must be pinned and local may be "latest recent", but does not specify how a pin is captured, recorded, or refreshed.
@@ -49,7 +49,7 @@ A binding constraint already lives in user memory and applies across the project
 - **Driver:** Phase 2 ships as a Rust integration test crate parallel to the existing Phase 1 `testing/ethereum-testnet/e2e-rust/` crate. The new crate's `Cargo.toml` lives at `testing/fork-e2e-rust/Cargo.toml` and depends on `alloy-provider`, `alloy-signer-local`, `alloy-sol-types`, and the same `rmpc` workspace crate the Phase 1 e2e uses.
 - **`rmpc` ownership:** the test surface invokes `rmpc` subcommands through the same `Fixture` pattern Phase 1 already uses (`Fixture::new()` after issue #37 lands). No bypassing of `rmpc` for read or write paths — fork tests must drive the same CLI surface that ships to users.
 - **TypeScript fork-test logic:** treated as a *reference for fixture data* only — addresses, USDC funding amounts, expected slippage envelopes — and not migrated into the harness. Once Phase 2 lands, the legacy TS fork tests are deleted in a follow-up issue (track separately; not in scope of this scout).
-- **Constraint cited:** plan §8 says "Prefer Rust integration tests once `rmpc` owns the command surface". `rmpc` already owns the Phase 1 command surface (per `docs/implementation-plan.md` §4 and §5), so the precondition is satisfied. Picking Rust now also matches the Phase 1 e2e crate, so contributors learn one harness shape, not two.
+- **Constraint cited:** plan §8 says "Prefer Rust integration tests once `rmpc` owns the command surface". `rmpc` already owns the Phase 1 command surface (per `Plan tracking issue #109` §4 and §5), so the precondition is satisfied. Picking Rust now also matches the Phase 1 e2e crate, so contributors learn one harness shape, not two.
 - **Rejected alternatives:**
   - *Reuse the TypeScript fork tests as the long-term driver.* Forces two harness shapes, two CI runners, two sets of fixture-loading code. Rejected.
   - *Reuse the Phase 1 `testing/ethereum-testnet/e2e-rust/` crate.* Phase 1 tests against a local Geth+Lighthouse devnet with deploy-then-test semantics. Phase 2 tests against a forked archive node with no deploy step. Mixing them in one crate would require runtime branching on backend type for every fixture. Two crates is the smaller change.
@@ -86,7 +86,7 @@ A binding constraint already lives in user memory and applies across the project
 - **Cross-issue handoff:** when #37 lands, `Fixture::geth()` becomes `Fixture::new()` (per #37 scope). Phase 2's new `testing/fork-e2e-rust/` crate introduces its own `ForkFixture` constructor; the two `Fixture` types do not need to share a trait. Document this split in the Phase 2 README when the harness is built.
 - **Status:** accept. No deferral, no rejection. Phase 2 work assumes Phase 1 has already dropped Anvil per #37.
 
-## 4. Impact on `docs/implementation-plan.md` §8
+## 4. Impact on `Plan tracking issue #109` §8
 
 The decisions above are consistent with §8 as written. **No §8 acceptance criterion changes.** The §8 prose can be left unchanged; this ADR provides the missing operational detail (RPC env vars, pin-refresh cadence, per-test backend, scenario→trigger mapping) that §8 deliberately left out.
 
@@ -101,8 +101,8 @@ If a future PR wants a single-line cross-link, the right place is at the end of 
 
 ## 6. References
 
-- `docs/implementation-plan.md` §8 — Phase 2 — Forked Smart-Contract E2E (constraints this ADR resolves).
-- `docs/implementation-plan.md` §5 — Phase 1 e2e plan (precedent for the Rust integration-test pattern).
+- `Plan tracking issue #109` §8 — Phase 2 — Forked Smart-Contract E2E (constraints this ADR resolves).
+- `Plan tracking issue #109` §5 — Phase 1 e2e plan (precedent for the Rust integration-test pattern).
 - `docs/technical/smart-contracts.md` §2 — Base-mainnet deployed addresses (justifies §3.1 chain choice).
 - `docs/development/testing-strategy-ethereum.md` — Geth+Lighthouse devnet doc (Phase 1 stack; Phase 2 does not use it).
 - Issue #37 — drop Anvil flavor, consolidate on Geth+Lighthouse (accepted, see §3.6).

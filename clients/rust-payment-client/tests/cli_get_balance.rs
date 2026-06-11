@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — `rmpc get-balance`
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — `rmpc get-balance`
 //!
 //! Integration tests for `rmpc get-balance` (issue #50).
 

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §5 — On-Chain Gateway
-// (See also: docs/implementation-plan.md §3.2 — RobotMoneyGateway.sol)
+// (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §3.2 — RobotMoneyGateway.sol)
 pragma solidity ^0.8.24;
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
-/// @dev Per the MVP plan (`docs/implementation-plan.md` §2.2), the gateway
+/// @dev Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
 ///      exposes a single state-mutating entrypoint for agents (`deposit`),
 ///      a permissionless depositor-owned authorize/revoke/policy surface
 ///      (`authorizeAgent`, `revokeAgent`, `setPolicy`), and a protocol-wide

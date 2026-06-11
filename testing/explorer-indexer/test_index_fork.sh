@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/implementation-plan.md §11 + docs/technical/explorer-schema-decisions.md
+# Canonical: Plan tracking issue #109 §11 + docs/technical/explorer-schema-decisions.md
 # Implements: issue #57 acceptance criterion
 # "Scripted indexer run against a fork-anvil range exits 0 and
 #  populates all 9 tables (asserted by Rust integration test)".

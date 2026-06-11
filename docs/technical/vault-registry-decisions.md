@@ -1,13 +1,13 @@
 # ADR — Vault Registry contract seams, event schema, and indexer integration points
 
 > Scope: dev-scout decision record for the Vault registry phase of
-> `docs/implementation-plan.md` §"Phase: Vault registry". Resolves the four
+> `Plan tracking issue #109` §"Phase: Vault registry". Resolves the four
 > open questions that gate any VaultRegistry.sol code: standalone vs extension,
 > access-control role, gateway-coupling model, and the canonical event +
 > read-ABI shape. No contract bytecode or schema migrations are produced by this
 > scout.
 >
-> Closes the open question gate listed under `docs/implementation-plan.md`
+> Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Vault registry" item 1.
 
 ---
@@ -15,7 +15,7 @@
 ## 1. Status
 
 Accepted. Authored 2026-05-14 against `docs/architecture.md` §4.2, §10 and
-`docs/implementation-plan.md` §"Phase: Vault registry" on branch
+`Plan tracking issue #109` §"Phase: Vault registry" on branch
 `chore/292-dev-scout-map-vault-registry-contract-seams-even`.
 
 ---
@@ -24,7 +24,7 @@ Accepted. Authored 2026-05-14 against `docs/architecture.md` §4.2, §10 and
 
 `docs/architecture.md` §10 marks the vault registry as "Resolved: on-chain
 contract" and specifies that it must expose stable read methods and emit events
-indexable by the explorer. `docs/implementation-plan.md` names seven downstream
+indexable by the explorer. `Plan tracking issue #109` names seven downstream
 items that are blocked until this scout closes:
 
 1. `VaultRegistry.sol` implementation
@@ -71,7 +71,7 @@ Four questions must be resolved before any implementation issue starts:
     independently pausable, consistent with the vault-level independence
     principle in §4.1: "Each vault is independently observable and independently
     pausable."
-  - The Portfolio Router (`docs/implementation-plan.md` §"Phase: Portfolio
+  - The Portfolio Router (`Plan tracking issue #109` §"Phase: Portfolio
     Router contract") reads `listVaults()` from the registry. If the registry
     were embedded in the gateway, the router would depend on the gateway
     internals — tight coupling that does not appear anywhere in the architecture.
@@ -124,7 +124,7 @@ Four questions must be resolved before any implementation issue starts:
 - **Rationale.**
   - The current gateway has a single immutable vault; moving to a dynamic
     allowlist requires a separate gateway extension issue (already planned in
-    `docs/implementation-plan.md` §"Phase: Portfolio Router contract": "Gateway:
+    `Plan tracking issue #109` §"Phase: Portfolio Router contract": "Gateway:
     extend allowed destinations to include the Portfolio Router"). That extension
     should happen in its own scoped PR.
   - Automatic coupling via a callback or shared storage would create a circular
@@ -248,7 +248,7 @@ Idempotency key for ingestion follows the same pattern as `agent_deposits`
 
 ## 4. Downstream unblocked issues and sequencing
 
-All items below are in `docs/implementation-plan.md` §"Phase: Vault registry".
+All items below are in `Plan tracking issue #109` §"Phase: Vault registry".
 They are **all unblocked** by this scout and may begin in parallel except where
 noted.
 
@@ -262,7 +262,7 @@ noted.
 | `rmpc get-vault <address>` | Yes | `VaultRegistry.sol` deployed |
 | Fork e2e: register → list → status-change | Yes | `VaultRegistry.sol` + Deploy script |
 
-The Portfolio Router phase (`docs/implementation-plan.md` §"Phase: Portfolio
+The Portfolio Router phase (`Plan tracking issue #109` §"Phase: Portfolio
 Router contract") depends on `listVaults()` being available on a deployed
 registry. It is blocked on the Vault registry phase completing, not on this
 scout alone.

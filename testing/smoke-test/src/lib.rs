@@ -2739,7 +2739,7 @@ pub struct DappEndpoints {
 /// explorer-indexer + Postgres) started by `--full-stack`. Drop tears
 /// the stack down unconditionally.
 ///
-/// Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
+/// Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §10.5 — Phase 4.5.
 /// Boot via [`DappStack::boot`] after the chain fixture is ready and
 /// contracts are deployed.
 pub struct DappStack {

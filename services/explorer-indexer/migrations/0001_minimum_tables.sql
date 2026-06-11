@@ -1,4 +1,4 @@
--- Canonical: docs/implementation-plan.md §11 + docs/technical/explorer-schema-decisions.md §3.4
+-- Canonical: Plan tracking issue #109 §11 + docs/technical/explorer-schema-decisions.md §3.4
 --
 -- The nine "minimum tables" for Phase 5. Composite primary keys per the ADR:
 -- events keyed (chain_id, block_number, log_index); state snapshots keyed

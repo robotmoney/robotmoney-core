@@ -1,14 +1,14 @@
 # ADR — Dapp credential model, wallet-signing, calldata preview, and config export
 
-> Scope: dev-scout decision record for Phase 6 (Human Dapp for Commands and Credentials) of `docs/implementation-plan.md` §12. Resolves the unresolved choices that gate any dapp implementation work: the agent-credential generation policy, the key-custody boundary, the calldata-preview UX requirements, and the `rmpc` config export format.
+> Scope: dev-scout decision record for Phase 6 (Human Dapp for Commands and Credentials) of `Plan tracking issue #109` §12. Resolves the unresolved choices that gate any dapp implementation work: the agent-credential generation policy, the key-custody boundary, the calldata-preview UX requirements, and the `rmpc` config export format.
 >
-> Closes the open question gate in `docs/implementation-plan.md` §12. No frontend code or wallet-adapter selection is produced by this scout.
+> Closes the open question gate in `Plan tracking issue #109` §12. No frontend code or wallet-adapter selection is produced by this scout.
 
 ---
 
 ## 1. Status
 
-Accepted. Authored 2026-05-07 against `docs/implementation-plan.md` §12 on branch `feat/59-dev-scout-dapp-credential-wallet-signing-model`. No prior ADR exists for this phase.
+Accepted. Authored 2026-05-07 against `Plan tracking issue #109` §12 on branch `feat/59-dev-scout-dapp-credential-wallet-signing-model`. No prior ADR exists for this phase.
 
 Companion ADRs:
 
@@ -18,7 +18,7 @@ Companion ADRs:
 
 ## 2. Context
 
-`docs/implementation-plan.md` §12 commits the dapp to eight primary workflows (connect wallet, select chain/env, inspect state, create/register agent credential, configure agent policy, grant/revoke roles, pause/unpause, export `rmpc` config) and names four open choices:
+`Plan tracking issue #109` §12 commits the dapp to eight primary workflows (connect wallet, select chain/env, inspect state, create/register agent credential, configure agent policy, grant/revoke roles, pause/unpause, export `rmpc` config) and names four open choices:
 
 1. **Credential model.** Does the dapp generate agent keys in the browser, only register existing public addresses, or both? Under what conditions?
 2. **Key-custody boundary.** Where does the agent's private key live, and what does the dapp ever touch?
@@ -137,7 +137,7 @@ Binding constraints:
 A drift-catcher (`.github/scripts/check_dapp_credential_adr.py`, wired into `.github/workflows/docs-validators.yml`) asserts:
 
 - This ADR exists and has a heading addressing each of the four scope items (credential model, custody, calldata preview, config export).
-- `docs/implementation-plan.md` §12 cross-links to this ADR.
+- `Plan tracking issue #109` §12 cross-links to this ADR.
 - Downstream issue #60's `## Canonical docs` section references this ADR.
 
 The validator replaces the two manual review items previously on issue #59. It mirrors the pattern in `.github/scripts/check_explorer_adr.py` (ADR #56 / issues #57, #58).

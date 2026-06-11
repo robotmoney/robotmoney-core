@@ -11,7 +11,7 @@
 > - #466 — wire the RM token address into the dapp and add a Base ETH gas faucet drip
 > - #433 — (closed) refactor: remove VITE_FEATURE_FLAGS gating and consolidate router deposit to RouterDepositTab
 >
-> Canonical inputs: `docs/implementation-plan.md`, `docs/prd.md`,
+> Canonical inputs: `Plan tracking issue #109`, `docs/prd.md`,
 > `docs/architecture.md` §4 (Router) and §5.3 (Human dapp).
 
 ## 1. Status
@@ -166,7 +166,7 @@ Three independent seam clusters:
 
 1. **Register additional vaults.** The contracts and registry already
    support N vaults; `BasketVault.sol` exists but per
-   `docs/implementation-plan.md` §"Basket vault production path" the
+   `Plan tracking issue #109` §"Basket vault production path" the
    protocol-asset and agent-token vaults remain ADR-blocked. For a
    *demo-only* seed the safe play is to register two additional
    `RobotMoneyVault` instances (passthrough adapter or duplicate

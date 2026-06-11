@@ -1,5 +1,5 @@
 -- Canonical: docs/technical/vault-registry-decisions.md §3.5 (field mapping)
---            docs/implementation-plan.md §"Phase: Vault registry"
+--            Plan tracking issue #109 §"Phase: Vault registry"
 --
 -- Adds the `vaults` table keyed by (chain_id, vault_address).  Each row
 -- represents the current registered state of a vault as reported by the

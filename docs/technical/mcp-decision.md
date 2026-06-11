@@ -1,20 +1,20 @@
 # ADR — MCP server: build, defer, or not needed for `rmpc` in OpenCode and OpenClaw
 
-> Scope: dev-scout decision record for Phase 4 (Agent-Harness Installation and Skill Loading) of `docs/implementation-plan.md` §10. Resolves the open question of whether Robot Money ships a Model Context Protocol (MCP) server that wraps `rmpc`, defers the question, or rules MCP out for the planned harness set. No MCP server, schema, or stub code is produced by this scout.
+> Scope: dev-scout decision record for Phase 4 (Agent-Harness Installation and Skill Loading) of `Plan tracking issue #109` §10. Resolves the open question of whether Robot Money ships a Model Context Protocol (MCP) server that wraps `rmpc`, defers the question, or rules MCP out for the planned harness set. No MCP server, schema, or stub code is produced by this scout.
 >
-> Closes the open question gate in `docs/implementation-plan.md` §10 ("MCP decision"). Also retires the open item in `docs/architecture.md` §"Open questions" — "Whether MCP is needed for OpenClaw or can be deferred."
+> Closes the open question gate in `Plan tracking issue #109` §10 ("MCP decision"). Also retires the open item in `docs/architecture.md` §"Open questions" — "Whether MCP is needed for OpenClaw or can be deferred."
 
 ---
 
 ## 1. Status
 
-**Decision:** **Defer.** No MCP server is built in Phase 4. Both OpenCode and OpenClaw execute `rmpc` as a process-per-call shell command, consuming the stable JSON output contract (`docs/technical/rmpc-read-output-contract.md`) and the Robot Money skill (`docs/implementation-plan.md` §10 "Skill loading").
+**Decision:** **Defer.** No MCP server is built in Phase 4. Both OpenCode and OpenClaw execute `rmpc` as a process-per-call shell command, consuming the stable JSON output contract (`docs/technical/rmpc-read-output-contract.md`) and the Robot Money skill (`Plan tracking issue #109` §10 "Skill loading").
 
-Authored 2026-05-06 against `docs/implementation-plan.md` §10 on branch `feat/55-dev-scout-mcp-build-defer-decision`. No prior ADR exists for the harness layer.
+Authored 2026-05-06 against `Plan tracking issue #109` §10 on branch `feat/55-dev-scout-mcp-build-defer-decision`. No prior ADR exists for the harness layer.
 
 ## 2. Context
 
-`docs/implementation-plan.md` §10 names three eligible decisions — **build now**, **defer**, **not needed** — and binds each to a concrete criterion:
+`Plan tracking issue #109` §10 names three eligible decisions — **build now**, **defer**, **not needed** — and binds each to a concrete criterion:
 
 - *Build now* — MCP is justified only if it makes OpenClaw integration "materially simpler or safer with long-lived tools than with process-per-call shell execution."
 - *Defer* — both OpenCode and OpenClaw can already run `rmpc` directly with clean JSON and robust timeout handling.
@@ -24,7 +24,7 @@ The framing in §10 itself already leans toward defer ("not required for the fir
 
 Three external constraints anchor the decision:
 
-1. **`rmpc` already owns the command surface.** Phases 1, 2, and 3 (`docs/implementation-plan.md` §§5, 8, 9) lock `rmpc` as the user-facing CLI, with a stable JSON envelope (`docs/technical/rmpc-read-output-contract.md`) and a Rust integration test crate that exercises the same CLI surface humans and agents use. An MCP server today would be a second tool surface wrapping a CLI surface that already exists.
+1. **`rmpc` already owns the command surface.** Phases 1, 2, and 3 (`Plan tracking issue #109` §§5, 8, 9) lock `rmpc` as the user-facing CLI, with a stable JSON envelope (`docs/technical/rmpc-read-output-contract.md`) and a Rust integration test crate that exercises the same CLI surface humans and agents use. An MCP server today would be a second tool surface wrapping a CLI surface that already exists.
 2. **OpenCode and OpenClaw both support shell execution.** OpenCode's whole interaction model is shell tool calls; OpenClaw's long-running task model also supports shell invocations and per-call timeouts. Neither harness is in the failure mode that §10 names ("the harness cannot safely or ergonomically execute shell commands").
 3. **No fast-feedback optimization** (binding user-memory constraint applied across the project). Building MCP now would add a moving part — server lifecycle, transport choice, schema duplication, version skew between MCP schema and `rmpc --help` output — purely to optimize per-call overhead. The constraint says we should not.
 
@@ -69,7 +69,7 @@ If §3.3 ever fires and the next ADR chooses *build*, that ADR is bound by the �
 - **No interactive secret prompts.** The MCP server never prompts for a passphrase, never opens a TTY, never reads from stdin for secrets. Secret material arrives via env var, file path, or external signer reference — the same surfaces `rmpc` uses today. This rule is independent of §3.3 trigger 5: even if MCP exists to hold a cached signer, the *acquisition* of that secret happens before the server starts.
 - **Mirror `rmpc`'s refusal and cap behavior exactly.** Any MCP tool call that would map to a `rmpc` subcommand must produce the same refusal, cap, and fork-vs-mainnet behavior. The MCP layer cannot relax safety; it can only re-shape the call.
 
-## 5. Impact on `docs/implementation-plan.md` §10
+## 5. Impact on `Plan tracking issue #109` §10
 
 §10's prose stands as written; this ADR records the answer to its open question without changing acceptance criteria. The §10 acceptance criterion "The MCP decision is recorded as `build now`, `defer`, or `not needed`, with rationale" is satisfied by §1 + §3 of this document.
 
@@ -77,7 +77,7 @@ A one-line cross-link is added to §10 ("MCP decision" subsection): `See docs/te
 
 ## 6. Impact on downstream Phase 4 issues
 
-- **Skill package (§10 "Skill loading").** The `SKILL.md` + `references/` set assumes shell-tool execution of `rmpc`. No MCP tool-listing prelude, no MCP server boot step, no MCP-specific examples. Per `docs/implementation-plan.md` §10 the skill must remain harness-portable; the deferral keeps that portability — the skill works in any runtime that can shell out.
+- **Skill package (§10 "Skill loading").** The `SKILL.md` + `references/` set assumes shell-tool execution of `rmpc`. No MCP tool-listing prelude, no MCP server boot step, no MCP-specific examples. Per `Plan tracking issue #109` §10 the skill must remain harness-portable; the deferral keeps that portability — the skill works in any runtime that can shell out.
 - **OpenCode installation issue.** Documents `rmpc` build/install + skill registration only. No MCP install step.
 - **OpenClaw installation issue.** Documents how OpenClaw obtains the `rmpc` binary, env vars, and state directories. No MCP server install or supervisor wiring.
 - **Phase 7 OpenClaw e2e demo (§13).** Inherits the same shell-execution model. If the demo workload itself triggers §3.3 condition 2 (per-call startup becomes load-bearing), the re-evaluation happens then, not now.
@@ -90,11 +90,11 @@ A one-line cross-link is added to §10 ("MCP decision" subsection): `See docs/te
 
 ## 8. References
 
-- `docs/implementation-plan.md` §10 — Phase 4, MCP decision criteria (the question this ADR closes).
+- `Plan tracking issue #109` §10 — Phase 4, MCP decision criteria (the question this ADR closes).
 - `docs/architecture.md` §"Open questions" — "Whether MCP is needed for OpenClaw or can be deferred" (this ADR is the answer).
 - `docs/architecture.md` §"Agent harnesses" — `rmpc` + skill targeting OpenCode + OpenClaw.
 - `docs/technical/rmpc-read-output-contract.md` — the JSON envelope agents parse from `rmpc` (issue #51).
 - `docs/technical/fork-e2e-decisions.md` — ADR template followed here (issue #47).
-- `docs/implementation-plan.md` §§5, 8, 9 — `rmpc` ownership of the command surface (precondition for §3.1).
+- `Plan tracking issue #109` §§5, 8, 9 — `rmpc` ownership of the command surface (precondition for §3.1).
 - Issue #55 — this scout.
 - User memory: "No fast-feedback optimization in test harness" — applied to §3.1's defer rationale.

@@ -1,7 +1,7 @@
 # ADR — OpenCode headless invocation contract for CI testing
 
 > Scope: dev-scout decision record for Phase 4 (Agent-Harness Installation and
-> Skill Loading) of `docs/implementation-plan.md` §10. Documents the exact
+> Skill Loading) of `Plan tracking issue #109` §10. Documents the exact
 > flags, environment variables, exit codes, and output format required to drive
 > OpenCode non-interactively in CI pipelines. No CI workflow is added by this
 > scout.
@@ -15,7 +15,7 @@
 
 ## 1. Status
 
-**Accepted.** Authored 2026-05-08 against `docs/implementation-plan.md` §10 on
+**Accepted.** Authored 2026-05-08 against `Plan tracking issue #109` §10 on
 branch `feat/135-document-opencode-headless-invocation-contract-f`. No prior
 ADR exists for OpenCode headless operation in this repo.
 
@@ -56,7 +56,7 @@ npm install -g opencode@1.14.29
 
 ## 3. Context
 
-`docs/implementation-plan.md` §10 specifies that OpenCode and OpenClaw run
+`Plan tracking issue #109` §10 specifies that OpenCode and OpenClaw run
 `rmpc` as a process-per-call shell command. For automated testing we need to
 invoke OpenCode itself non-interactively — driving it with a prompt, capturing
 output, and asserting exit codes — without a human at a terminal. This ADR

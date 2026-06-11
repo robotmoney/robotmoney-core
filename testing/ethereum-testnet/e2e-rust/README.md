@@ -1,7 +1,7 @@
 # rmpc-e2e
 
 End-to-end harness for the Rust payment daemon (`rmpc`). Implements
-the scaffold called for in issue #17 / the retired `docs/implementation-plan.md` (git history)
+the scaffold called for in issue #17 / the retired `Plan tracking issue #109` (git history)
 §4 and the scenario coverage from #18 / #19, consolidated onto a
 single Geth+Lighthouse backend per #37.
 

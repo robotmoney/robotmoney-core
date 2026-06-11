@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dc0f1b358b0eb6ef80c7f6a43b09b85a3da49a21/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -18,7 +18,7 @@ gateway deposit-routing unit tests directly. See issue #277.
 PassthroughAdapter is NOT registered by this script; it is
 retained in the codebase for unit tests only. See issue #363.
 
-Implements `docs/implementation-plan.md` §5 step 1–2 and
+Implements `Plan tracking issue #109` §5 step 1–2 and
 satisfies issue #10. Inputs are env-driven so the same script works
 on Anvil, the docker devnet, and (with care) any throwaway L1.
 Required env vars:

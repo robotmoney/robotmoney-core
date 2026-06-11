@@ -1,5 +1,5 @@
 # IAerodromeRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/dc0f1b358b0eb6ef80c7f6a43b09b85a3da49a21/contracts/interfaces/IAerodromeRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/interfaces/IAerodromeRouter.sol)
 
 Minimal Aerodrome Router interface for single-hop token swaps.
 Aerodrome uses (tokenA, tokenB, stable, factory) route tuples

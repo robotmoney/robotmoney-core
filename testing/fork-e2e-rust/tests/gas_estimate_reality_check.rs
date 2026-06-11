@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §8 — scenario 3
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — scenario 3
 //! (`gas_estimate_reality_check`).
 //!
 //! Executes the deposit path against the deployed vault and

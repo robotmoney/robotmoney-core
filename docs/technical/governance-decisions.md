@@ -1,13 +1,13 @@
 # ADR — Router-weight governance: quorum, cadence, voting power, execution delay, and setWeights call path
 
 > Scope: dev-scout decision record for the Router-weight governance phase of
-> `docs/implementation-plan.md` §"Phase: Router-weight governance". Resolves all
+> `Plan tracking issue #109` §"Phase: Router-weight governance". Resolves all
 > open questions that gate any `RouterGovernance.sol` code: quorum threshold,
 > voting cadence, voting power model, execution delay, proposal lifecycle states,
 > and the exclusive weight-update call path. No `RouterGovernance.sol` bytecode,
 > explorer changes, or rmpc commands are produced by this scout.
 >
-> Closes the open question gate listed under `docs/implementation-plan.md`
+> Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Router-weight governance" item 1 and `docs/architecture.md` §10
 > ("Router-weight governance implementation").
 
@@ -134,7 +134,7 @@ Observer/Participant/Analyst/Strategist tiers. No tier system or CFO Feed
 activity gate is specified for router-weight voting.
 
 **Delegation.** Vote delegation is out of scope for this phase (listed as out of
-scope in `docs/implementation-plan.md` §"Phase: Router-weight governance").
+scope in `Plan tracking issue #109` §"Phase: Router-weight governance").
 
 ### 3.4 Execution delay
 
@@ -258,7 +258,7 @@ option 2. If not, use option 1 with a documented upgrade path. This is a
 
 ## 5. Downstream unblocked issues and sequencing
 
-All items below are in `docs/implementation-plan.md` §"Phase: Router-weight
+All items below are in `Plan tracking issue #109` §"Phase: Router-weight
 governance".
 
 | Issue | Unblocked by this ADR? | Must serialize after |
@@ -396,5 +396,5 @@ function cadenceParams()
 ```
 
 These four read functions correspond to the `rmpc get-governance` output
-contract specified in `docs/architecture.md` §4.4 and `docs/implementation-plan.md`
+contract specified in `docs/architecture.md` §4.4 and `Plan tracking issue #109`
 §"Phase: Router-weight governance".

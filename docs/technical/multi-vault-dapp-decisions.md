@@ -1,14 +1,14 @@
 # ADR — Multi-vault dapp component seams, live-chain vs explorer read split, and hot-file coupling
 
 > Scope: dev-scout decision record for the Multi-vault dapp phase of
-> `docs/implementation-plan.md` §"Phase: Multi-vault dapp". Resolves the
+> `Plan tracking issue #109` §"Phase: Multi-vault dapp". Resolves the
 > open questions that gate every multi-vault dapp implementation issue:
 > which shared data-fetching seam prevents N+1 chain reads, how reads are
 > classified as live-chain vs explorer, which existing components require
 > hot-file edits, and which new components are fully additive. No component
 > code changes are produced by this scout.
 >
-> Closes the open question gate listed under `docs/implementation-plan.md`
+> Closes the open question gate listed under `Plan tracking issue #109`
 > §"Phase: Multi-vault dapp" item 1 (dev-scout).
 
 ---
@@ -16,7 +16,7 @@
 ## 1. Status
 
 Accepted. Authored 2026-05-15 against `docs/architecture.md` §5.3 and
-`docs/implementation-plan.md` §"Phase: Multi-vault dapp" on branch
+`Plan tracking issue #109` §"Phase: Multi-vault dapp" on branch
 `chore/317-dev-scout-map-multi-vault-dapp-component-seams-l`.
 
 Companion ADRs:
@@ -386,7 +386,7 @@ This scout (317)
 6. **Explorer API surface for the multi-vault phase.** Several protocol layer
    display fields (indexed TVL, unique depositor count, activity feed) depend on
    explorer endpoints that do not exist yet (they are planned in
-   `docs/implementation-plan.md` §"Phase: Multi-vault explorer"). Protocol layer
+   `Plan tracking issue #109` §"Phase: Multi-vault explorer"). Protocol layer
    components must degrade gracefully when these endpoints return 404 or error.
    The `resolveExplorerApiUrl` / `fetchAgentDeposits` pattern in `explorerApi.ts`
    is the established model — extend it with typed functions per new endpoint.
@@ -401,7 +401,7 @@ This scout (317)
 
 ## 6. Downstream unblocked issues and sequencing
 
-All items below are in `docs/implementation-plan.md` §"Phase: Multi-vault dapp".
+All items below are in `Plan tracking issue #109` §"Phase: Multi-vault dapp".
 
 | Issue | Unblocked by this ADR? | Must serialize after |
 |---|---|---|

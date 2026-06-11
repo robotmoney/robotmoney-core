@@ -1,6 +1,6 @@
 # Explorer indexer integration tests
 
-Canonical: Plan tracking issue #109 (formerly `docs/implementation-plan.md` §11) + `docs/technical/explorer-schema-decisions.md` (issue #56).
+Canonical: Plan tracking issue #109 (formerly `Plan tracking issue #109` §11) + `docs/technical/explorer-schema-decisions.md` (issue #56).
 Implements: issue #57 / PR #76.
 
 The explorer-indexer crate lives at `services/explorer-indexer/`. Its

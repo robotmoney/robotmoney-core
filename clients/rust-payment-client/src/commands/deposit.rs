@@ -1,9 +1,9 @@
 //! Canonical: docs/architecture.md §4 — High-Level Flow
-//! (See also: docs/implementation-plan.md §4.8 — CLI surface)
+//! (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 — CLI surface)
 //!
 //! `rmpc deposit` — sign and broadcast a USDC deposit through the gateway.
 //!
-//! Per `docs/implementation-plan.md` §3.8 and issue #16. This is the
+//! Per `Plan tracking issue #109` §3.8 and issue #16. This is the
 //! keystone command; it ties together every other module:
 //!
 //! 1. Load config + signer (software keystore decrypted in-process).

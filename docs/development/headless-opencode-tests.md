@@ -1,6 +1,6 @@
 # Headless OpenCode test gaps
 
-> Canonical: `docs/implementation-plan.md` §10 (Phase 4 — Agent-Harness
+> Canonical: `Plan tracking issue #109` §10 (Phase 4 — Agent-Harness
 > Installation and Skill Loading).
 
 This document tracks known gaps in automated test coverage for OpenCode

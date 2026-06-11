@@ -22,7 +22,7 @@ name = "rmpc-keystore-import"
 path = "src/bin/rmpc_keystore_import.rs"
 
 [dependencies]
-# Per docs/implementation-plan.md §3.5
+# Per Plan tracking issue #109 §3.5
 alloy-primitives = { version = "0.8", features = ["k256"] }
 alloy-sol-types = { version = "0.8", features = ["json"] }
 alloy-consensus = { version = "0.5", features = ["k256"] }

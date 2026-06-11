@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §"Multi-vault devnet" line 280
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §"Multi-vault devnet" line 280
 //! (`[ ] Fork e2e: multi-vault round-trip including basket vaults`).
 //!
 //! End-to-end round-trip through `ProtocolAssetVault` and `AgentTokenVault`
