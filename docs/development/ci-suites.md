@@ -481,6 +481,38 @@ a config file, or a doc is just as dangerous as one committed to source code.
 
 ---
 
+### 21. Nightly full-suite orchestrator (nightly-full-suite)
+**Suggested file:** `.github/workflows/suite-21-nightly.yml`
+**Tier:** nightly
+**Environment:** `none` (dispatches other suites; no direct job steps)
+**Trigger:** `schedule` — `0 2 * * *` (02:00 UTC) + `workflow_dispatch`
+
+Dispatches every registered CI suite against the `dev` HEAD via the GitHub
+`workflow_dispatch` REST endpoint. Ensures every suite receives a daily green/red
+signal regardless of whether that day's commits touch each suite's path filters.
+
+**Design rationale:**
+- Several suites are intentionally not triggered on feature-branch PRs (e.g. suites
+  that call live external services, or heavy devnet matrices) and may go days
+  without running if no commit touches their path filters. The nightly orchestrator
+  guarantees at least one run per day.
+- `workflow_dispatch` on each target workflow is used rather than duplicating job
+  steps — each suite retains its own timeout, matrix, and concurrency settings.
+- Scheduled at 02:00 UTC to avoid collision with other nightly workflows (e.g.
+  suite-11b opencode-headless at 03:17 UTC).
+- The default `GITHUB_TOKEN` provides the `actions: write` permission required for
+  `workflow_dispatch` on private repositories.
+
+**Jobs:**
+- `dispatch-all-suites` — single job; iterates over all suite workflow files and
+  calls `gh workflow run <file> --ref dev`
+
+**Steps:**
+1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref
+2. (Suites run independently; this job only fires the dispatches and exits)
+
+---
+
 ## CI velocity tiers
 
 Issue #600 splits CI into two tiers so a routine feature PR waits only on cheap,
@@ -544,6 +576,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
+| `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
 | `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
@@ -569,3 +602,4 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
 | 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |
+| 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |
