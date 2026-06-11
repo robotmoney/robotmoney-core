@@ -261,7 +261,7 @@ This section maps onto `docs/architecture.md` §15.
 | Base sequencer censorship | Force-inclusion via L1 must be documented in the user playbook. This is an accepted Base L2 risk. |
 | Base sequencer reorg | A minimum confirmation-depth policy must be documented per operation class and enforced by `rmpc` before reporting transaction finality. High-value admin and governance operations must distinguish "L2 included" from "L1 finalized." |
 | L1 reorg affecting L2 finality | Same as above. The confirmation-depth policy must account for L1 finality and must be surfaced in `rmpc` JSON output and dapp status copy. |
-| RPC provider outage | `rmpc` must support multiple RPC endpoints with automatic failover. The operator config must document the required redundancy. |
+| RPC provider outage | **Satisfied (issue #667).** `FailoverRpcClient` in `clients/rust-payment-client/src/rpc/mod.rs` retries every JSON-RPC call across an ordered list of endpoints; `Config.rpc_urls` (list) and the backward-compatible `Config.rpc_url` (single) are both accepted. `clients/rust-payment-client/config.example.toml` documents the minimum recommended redundancy (two endpoints from different providers). |
 | Mempool-leak exposing pending agent intents | Agent deposits are irreversible by design and carry no slippage surface on the vault leg; public mempool is accepted for MVP. When bucket-B/C legs ship, private orderflow submission must be evaluated. |
 | Time/clock skew on signer | Signing must use EVM block context, not wall time, for all deadline and expiry computations. |
 

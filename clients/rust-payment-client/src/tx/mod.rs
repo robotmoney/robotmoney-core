@@ -43,7 +43,7 @@ use alloy_rpc_types::TransactionReceipt;
 
 use crate::errors::{Result, RmpcError};
 use crate::fees::FeeBid;
-use crate::rpc::RpcClient;
+use crate::rpc::FailoverRpcClient;
 
 /// Default per-poll interval while waiting for a receipt. The Geth-layer
 /// e2e tests run on 12-second blocks, so polling every 1s is roughly 12
@@ -152,13 +152,16 @@ pub(crate) fn sign_eip1559_with_key(
 /// Broadcast a raw EIP-1559 envelope. Thin wrapper that exists so the
 /// deposit command (#16) doesn't reach into the rpc client directly and
 /// so we have one place to add observability later.
-pub async fn broadcast(rpc: &RpcClient, raw: &Bytes) -> Result<B256> {
+pub async fn broadcast(rpc: &FailoverRpcClient, raw: &Bytes) -> Result<B256> {
     rpc.send_raw_transaction(raw).await
 }
 
 /// Poll for a receipt with the MVP defaults (see
 /// [`RECEIPT_POLL_INTERVAL_MS`] / [`RECEIPT_POLL_MAX_ATTEMPTS`]).
-pub async fn wait_for_receipt(rpc: &RpcClient, tx_hash: B256) -> Result<TransactionReceipt> {
+pub async fn wait_for_receipt(
+    rpc: &FailoverRpcClient,
+    tx_hash: B256,
+) -> Result<TransactionReceipt> {
     wait_for_receipt_with(
         rpc,
         tx_hash,
@@ -173,7 +176,7 @@ pub async fn wait_for_receipt(rpc: &RpcClient, tx_hash: B256) -> Result<Transact
 /// exhausted budget surfaces as [`RmpcError::ErrRpcTransport`] with a
 /// timeout message so log-scrapers can match on it.
 pub async fn wait_for_receipt_with(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     tx_hash: B256,
     interval: std::time::Duration,
     max_attempts: u32,
@@ -366,7 +369,7 @@ mod tests {
             .with_body(receipt_json)
             .create_async()
             .await;
-        let rpc = RpcClient::new(server2.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server2.url()]).unwrap();
         let r = wait_for_receipt_with(&rpc, tx_hash, std::time::Duration::from_millis(1), 5)
             .await
             .expect("receipt");
@@ -383,7 +386,7 @@ mod tests {
             .expect_at_least(2)
             .create_async()
             .await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let err = wait_for_receipt_with(&rpc, B256::ZERO, std::time::Duration::from_millis(1), 3)
             .await
             .unwrap_err();

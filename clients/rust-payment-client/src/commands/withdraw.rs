@@ -47,7 +47,7 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::policy::{Preflight, PreflightInputs};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
@@ -308,7 +308,7 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc withdraw: rpc client init failed: {e}");
@@ -609,7 +609,7 @@ pub fn run(args: Args) -> i32 {
 /// 2. vault.allowance(agent, gateway) >= shares
 /// 3. vault.balanceOf(agent) >= shares
 async fn withdraw_vault_preflight(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     source_vault: Address,
     gateway: Address,
     agent: Address,
@@ -636,7 +636,7 @@ async fn withdraw_vault_preflight(
     Ok(())
 }
 
-async fn call_vault_paused(rpc: &RpcClient, vault: Address) -> Result<bool, RmpcError> {
+async fn call_vault_paused(rpc: &FailoverRpcClient, vault: Address) -> Result<bool, RmpcError> {
     let data = MockVault::pausedCall {}.abi_encode();
     let out = rpc
         .eth_call(
@@ -654,7 +654,7 @@ async fn call_vault_paused(rpc: &RpcClient, vault: Address) -> Result<bool, Rmpc
 }
 
 async fn call_erc20_allowance(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     token: Address,
     owner: Address,
     spender: Address,
@@ -676,7 +676,7 @@ async fn call_erc20_allowance(
 }
 
 async fn call_erc20_balance_of(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     token: Address,
     who: Address,
 ) -> Result<U256, RmpcError> {
@@ -721,6 +721,10 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrGatewayPaused => "ErrGatewayPaused",
         RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
+        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
+        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
+        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
+        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
         RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
         RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
@@ -738,11 +742,6 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrRpcTransport(_) => "ErrRpcTransport",
         RmpcError::ErrRpcServer { .. } => "ErrRpcServer",
         RmpcError::ErrRpcDecode(_) => "ErrRpcDecode",
-        // Architecture §7.2 product reason codes
-        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
-        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
-        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
-        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
     }
 }
 
@@ -837,7 +836,7 @@ mod tests {
             U256::from(u128::MAX),
         )
         .await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(100u64))
             .await
             .unwrap_err();
@@ -849,7 +848,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         // paused = false, allowance too low, balance ample
         install_vault_mocks(&mut server, false, U256::from(1u64), U256::from(u128::MAX)).await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
             .await
             .unwrap_err();
@@ -864,7 +863,7 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         // paused = false, ample allowance, balance too low
         install_vault_mocks(&mut server, false, U256::from(u128::MAX), U256::from(1u64)).await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
             .await
             .unwrap_err();
@@ -884,7 +883,7 @@ mod tests {
             U256::from(u128::MAX),
         )
         .await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let result =
             withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(100u64)).await;
         assert!(result.is_ok(), "expected ok, got {result:?}");

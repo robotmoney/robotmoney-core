@@ -21,6 +21,7 @@
 //   GET /v1/router/state
 //   GET /v1/accounts/:address/positions
 //   GET /v1/accounts/:address/history
+//   GET /v1/accounts/:address/policies
 //
 // Boundary (§11): only GET methods. Any other method on any path returns
 // 405. Any /v1/sign* or /v1/authorize* path falls through to a global 404
@@ -51,13 +52,13 @@ use serde::Deserialize;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
     dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
-    AccountPositionsResponse, ActivityEvent, AdapterAllocationEntry, AgentPolicy, AgentResponse,
-    Contract, ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness,
-    Health, ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
-    RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse,
-    Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot,
-    VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse,
-    VoteEntry, WeightHistoryEntry,
+    AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
+    AdapterAllocationEntry, AgentPolicy, AgentResponse, Contract, ContractsResponse, Deposit,
+    DepositResponse, DepositsResponse, EventKind, Freshness, Health, ProposalDetail,
+    ProposalDetailResponse, ProposalSummary, ProposalsResponse, RouterStateResponse,
+    RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse, Vault, VaultDetail,
+    VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
+    VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -192,13 +193,29 @@ type DepositFeedRow = (
     DateTime<Utc>,
 );
 
+// (agent BYTEA, owner BYTEA, revoked BOOL, valid_until BIGINT?,
+//  max_per_payment NUMERIC?, max_per_window NUMERIC?, window_usage_to_date NUMERIC?,
+//  share_receiver BYTEA?, tx_hash BYTEA)
+// Used by get_account_policies — latest policy state per agent for a given owner.
+type PolicyRow = (
+    Vec<u8>,
+    Vec<u8>,
+    bool,
+    Option<i64>,
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    Option<BigDecimal>,
+    Option<Vec<u8>>,
+    Vec<u8>,
+);
+
 /// Build the application router. All routes are GET-only.
 ///
 /// `#[rustfmt::skip]` is intentional: the router-introspection test
-/// (tests/router_introspection.rs) reads this source file line by line and
-/// asserts that every `.route(` line also contains `get(`.  Rustfmt would
-/// split long `.route(...)` calls across multiple lines, causing the test to
-/// fail.  The skip keeps all route declarations on one line per §11 invariant.
+/// (tests/router_introspection.rs) reads this source file and checks that
+/// every route declaration uses only the GET method.  Rustfmt would split long
+/// route declarations across multiple lines, causing the test to fail.
+/// The skip keeps all route declarations on one line per §11 invariant.
 #[rustfmt::skip]
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -221,6 +238,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/router/state", get(get_router_state))
         .route("/v1/accounts/:address/positions", get(get_account_positions))
         .route("/v1/accounts/:address/history", get(get_account_history))
+        .route("/v1/accounts/:address/policies", get(get_account_policies))
         .fallback(not_found)
         .with_state(state)
 }
@@ -1241,6 +1259,78 @@ async fn get_account_history(
     Ok(Json(AccountHistoryResponse {
         address: addr_to_hex(&address_bytes),
         events,
+        freshness,
+    }))
+}
+
+/// GET /v1/accounts/:address/policies — all gateway agent-policy states owned by a depositor.
+///
+/// Returns the latest-state row per agent for all policies where `owner` matches
+/// the queried address.  Uses `DISTINCT ON (agent)` ordered by block_number DESC
+/// to surface only the most recent authorization or revocation for each agent.
+/// Returns an empty array (not 404) when the owner has no policies.
+/// Chain-scoped to state.chain_id.
+async fn get_account_policies(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<AccountPoliciesResponse>> {
+    let address_bytes = decode_address_param(&address)?;
+
+    // Latest policy state per agent for this owner. DISTINCT ON picks the
+    // highest-block row per (chain_id, agent) pair, matching the tombstone
+    // pattern from migration 0001: `revoked = true` rows supersede older
+    // authorization rows.
+    let rows: Vec<PolicyRow> = sqlx::query_as(
+        "SELECT agent, owner, revoked, valid_until, \
+                max_per_payment, max_per_window, window_usage_to_date, \
+                share_receiver, tx_hash \
+         FROM ( \
+             SELECT DISTINCT ON (chain_id, agent) \
+                    agent, owner, revoked, valid_until, \
+                    max_per_payment, max_per_window, window_usage_to_date, \
+                    share_receiver, tx_hash, block_number \
+             FROM agent_policies \
+             WHERE chain_id = $1 AND owner = $2 \
+             ORDER BY chain_id, agent, block_number DESC, log_index DESC \
+         ) AS latest \
+         ORDER BY agent ASC",
+    )
+    .bind(state.chain_id)
+    .bind(&address_bytes[..])
+    .fetch_all(&state.pool)
+    .await?;
+
+    let policies: Vec<AccountPolicy> = rows
+        .into_iter()
+        .map(
+            |(
+                agent,
+                owner,
+                revoked,
+                valid_until,
+                max_per_payment,
+                max_per_window,
+                window_usage_to_date,
+                share_receiver,
+                tx_hash,
+            )| AccountPolicy {
+                agent: addr_to_hex(&agent),
+                owner: addr_to_hex(&owner),
+                revoked,
+                valid_until,
+                max_per_payment: max_per_payment.as_ref().map(dec_to_string),
+                max_per_window: max_per_window.as_ref().map(dec_to_string),
+                window_usage_to_date: window_usage_to_date.as_ref().map(dec_to_string),
+                share_receiver: share_receiver.as_deref().map(addr_to_hex),
+                tx_hash: hash_to_hex(&tx_hash),
+            },
+        )
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(AccountPoliciesResponse {
+        address: addr_to_hex(&address_bytes),
+        policies,
         freshness,
     }))
 }

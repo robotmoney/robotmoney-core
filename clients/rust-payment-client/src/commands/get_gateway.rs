@@ -38,7 +38,7 @@ use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -92,7 +92,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-gateway: rpc client init failed: {e}");
@@ -123,7 +123,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 /// succeed, every individual sub-read failure is captured on the
 /// envelope via `record_err`.
 async fn read_gateway(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     cfg: &Config,
     gateway_addr: Address,
 ) -> crate::errors::Result<Envelope<GatewayData>> {
@@ -193,7 +193,7 @@ async fn read_gateway(
 /// human-readable message on failure (transport, server, decode) so the
 /// builder can surface it as a `FieldError`.
 async fn call_view_address<C>(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     to: Address,
     block_tag: &str,
     call: C,
@@ -235,7 +235,7 @@ impl ReturnAddress for RobotMoneyGateway::vaultReturn {
 }
 
 async fn call_view_paused(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
 ) -> std::result::Result<bool, String> {

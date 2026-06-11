@@ -71,6 +71,8 @@ const router = env.VITE_ROUTER_ADDRESS ? (env.VITE_ROUTER_ADDRESS as Address) : 
 const governance = env.VITE_GOVERNANCE_ADDRESS
   ? (env.VITE_GOVERNANCE_ADDRESS as Address)
   : undefined;
+// Issue #647: TimelockController address for the Timelock admin tab (architecture §4.5).
+const timelock = env.VITE_TIMELOCK_ADDRESS ? (env.VITE_TIMELOCK_ADDRESS as Address) : undefined;
 // Issue #365: RM token address for the Faucet tab drip button. Zero address
 // default means the button is hidden in standalone builds without the smoke-test harness.
 const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Address) : undefined;
@@ -163,6 +165,7 @@ function App() {
                   registryAddress={registry}
                   routerAddress={router}
                   rmTokenAddress={rmToken}
+                  timelockAddress={timelock}
                 />
               ),
             },

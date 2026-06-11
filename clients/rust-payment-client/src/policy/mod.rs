@@ -46,7 +46,7 @@ use alloy_sol_types::SolCall;
 use crate::config::Config;
 use crate::errors::{Result, RmpcError};
 use crate::gateway::{Erc20, RobotMoneyGateway};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 /// Window length in seconds. Mirrors `RobotMoneyGateway.WINDOW_SECONDS`
 /// (constant on-chain, baked into the contract). Re-reading it on every
@@ -81,16 +81,16 @@ pub struct PreflightReport {
     pub balance: U256,
 }
 
-/// Preflight runner — stateless façade over [`RpcClient`]. Construct once
+/// Preflight runner — stateless façade over [`FailoverRpcClient`]. Construct once
 /// per command invocation; cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Preflight<'a> {
-    rpc: &'a RpcClient,
+    rpc: &'a FailoverRpcClient,
     config: &'a Config,
 }
 
 impl<'a> Preflight<'a> {
-    pub fn new(rpc: &'a RpcClient, config: &'a Config) -> Self {
+    pub fn new(rpc: &'a FailoverRpcClient, config: &'a Config) -> Self {
         Self { rpc, config }
     }
 

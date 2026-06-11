@@ -570,10 +570,12 @@ async fn handle_log(
                 log.log_index as i32,
                 log.tx_hash.0,
                 decoded.agent.into_array(),
+                Some(decoded.owner.into_array()),
                 false,
                 Some(decoded.validUntil as i64),
                 Some(decoded.maxPerPayment),
                 Some(decoded.maxPerWindow),
+                None, // window_usage_to_date not available from AgentAuthorized event
                 Some(decoded.shareReceiver.into_array()),
             )
             .await?;
@@ -604,10 +606,12 @@ async fn handle_log(
                 log.log_index as i32,
                 log.tx_hash.0,
                 decoded.agent.into_array(),
+                Some(decoded.owner.into_array()),
                 true,
                 None,
                 None,
                 None,
+                None, // window_usage_to_date not available from AgentRevoked event
                 None,
             )
             .await?;

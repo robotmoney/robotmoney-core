@@ -360,6 +360,48 @@ describe("VaultDetail", () => {
       expect(getByTestId("vault-detail-freshness").textContent).toContain("1000");
     });
   });
+
+  it("renders issuer freeze-control disclosure when risk_label is SPECULATIVE", async () => {
+    const speculativeFixture: VaultDetailResponse = {
+      vault: {
+        chain_id: 8453,
+        address: VAULT_A_ADDR,
+        name: "deSPXA RWA Vault",
+        risk_label: "SPECULATIVE",
+        status: 0,
+        deposit_cap: "1000000000",
+        tvl_history: [],
+        indexed_at: "2026-01-01T12:00:00Z",
+      },
+      block_number: 1000,
+      indexed_at: "2026-01-01T12:00:00Z",
+    };
+    const { getByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_A_ADDR}
+        fetchImpl={makeFetch(speculativeFixture)}
+      />,
+    );
+    await waitFor(() => expect(getByTestId("vault-detail-issuer-freeze-disclosure")).toBeTruthy());
+    const disclosure = getByTestId("vault-detail-issuer-freeze-disclosure");
+    expect(disclosure.textContent).toContain("freeze");
+    expect(disclosure.textContent).toContain("Centrifuge");
+    expect(disclosure.textContent).toContain("Janus Henderson");
+  });
+
+  it("does not render issuer freeze-control disclosure for non-SPECULATIVE vaults", async () => {
+    const { queryByTestId } = render(
+      <VaultDetail
+        apiUrl="http://api"
+        address={VAULT_A_ADDR}
+        fetchImpl={makeFetch(vaultDetailFixture)}
+      />,
+    );
+    await waitFor(() => expect(queryByTestId("vault-detail-name")).toBeTruthy());
+    // vaultDetailFixture has risk_label "stable-yield" — disclosure must be absent
+    expect(queryByTestId("vault-detail-issuer-freeze-disclosure")).toBeNull();
+  });
 });
 
 // ─── RouterView ───────────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ use crate::config::Config;
 use crate::gateway::{MockVault, RobotMoneyGateway, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -166,7 +166,7 @@ pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-vault: rpc client init failed: {e}");
@@ -246,7 +246,7 @@ pub fn run(config_path: &Path, address: Option<&str>, pretty: bool) -> i32 {
 }
 
 async fn read_vault(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     vault: Address,
 ) -> crate::errors::Result<Envelope<VaultData>> {
@@ -325,7 +325,7 @@ async fn read_vault(
 /// call fails (e.g. vault not registered) — callers map this to exit 3
 /// per the §9 "unregistered address exits non-zero" AC.
 async fn read_vault_from_registry(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     vault: Address,
 ) -> crate::errors::Result<Envelope<RegistryVaultData>> {
@@ -395,7 +395,7 @@ async fn read_vault_from_registry(
 /// Call `VaultRegistry.getVault(address)` and return the decoded `VaultRecord`.
 /// Returns `Err` if the call fails (including revert for unregistered vault).
 async fn call_get_vault(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     vault: Address,
     block_tag: &str,
@@ -435,7 +435,7 @@ fn compute_share_price(total_assets: U256, total_supply: U256, decimals: u8) -> 
 // ---- typed view helpers --------------------------------------------------
 
 async fn call_vault_addr(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
 ) -> std::result::Result<Address, String> {
@@ -457,7 +457,7 @@ async fn call_vault_addr(
 }
 
 async fn call_asset(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<Address, String> {
@@ -479,7 +479,7 @@ async fn call_asset(
 }
 
 async fn call_decimals(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<u8, String> {
@@ -502,7 +502,7 @@ async fn call_decimals(
 
 /// Generic helper for `() -> string` views on the vault.
 async fn call_string<C>(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
     call: C,
@@ -543,7 +543,7 @@ impl ReturnString for MockVault::symbolReturn {
 
 /// Generic helper for `() -> uint256` views on the vault.
 async fn call_u256_view<C>(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
     call: C,

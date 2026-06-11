@@ -43,7 +43,7 @@ use crate::gateway::{Erc20, RobotMoneyGateway};
 use crate::network_env::NetworkEnv;
 use crate::policy::WINDOW_SECONDS;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -132,7 +132,7 @@ pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-agent: rpc client init failed: {e}");
@@ -158,7 +158,7 @@ pub fn run(config_path: &Path, agent_hex: &str, pretty: bool) -> i32 {
 }
 
 async fn read_agent(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     vault: Address,
     agent: Address,
@@ -242,7 +242,7 @@ struct AgentTuple {
 }
 
 async fn call_agents(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
     agent: Address,
@@ -279,7 +279,7 @@ async fn call_agents(
 /// path (a stolen agent key can redeem up to
 /// `min(share_allowance, max_withdraw_per_window)` shares).
 async fn call_share_allowance(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
     owner: Address,
@@ -303,7 +303,7 @@ async fn call_share_allowance(
 }
 
 async fn call_window_gross(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
     agent: Address,
