@@ -1,4 +1,4 @@
-// Canonical: docs/architecture.md §7.1 — Previews
+// Canonical: docs/architecture.md §7.1 — Previews, §7.2 — Stable product reason codes
 
 /**
  * TxPreview component — renders the structured preview block defined
@@ -8,6 +8,7 @@
  * caller (action form) reads `preview.ok` to gate the signing CTA.
  */
 import type { Preview, RiskClass } from "../lib/preview";
+import { productReasonDisplay } from "../lib/productReasonCode";
 
 const RISK_COLOR: Record<RiskClass, string> = {
   low: "#2e7d32",
@@ -21,7 +22,7 @@ export function TxPreview({ preview }: { preview: Preview }) {
     return (
       <section data-testid="tx-preview" data-ok="false" className="tx-preview tx-preview--refusal">
         <h3>Refusing to sign</h3>
-        <p data-testid="refusal-reason">{preview.reason}</p>
+        <p data-testid="refusal-reason">{productReasonDisplay(preview.reason)}</p>
         {preview.calldata && (
           <details>
             <summary>Raw calldata (for external verification only)</summary>

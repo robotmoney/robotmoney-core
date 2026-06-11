@@ -130,6 +130,7 @@ describe("buildRouterPreview — refusal paths", () => {
     const preview = buildRouterPreview(10_000_000n, legsActive, ctxUnverified);
     expect(preview.ok).toBe(false);
     if (preview.ok) return;
-    expect(preview.reason).toMatch(/bytecode/i);
+    // reason is now a typed ProductReasonCode
+    expect(preview.reason).toBe("unknown_revert");
   });
 });

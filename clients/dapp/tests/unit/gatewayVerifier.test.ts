@@ -28,12 +28,12 @@ describe("computeVerificationState", () => {
     }
   });
 
-  it("returns refused when hash mismatches, naming both values", () => {
+  it("returns refused when hash mismatches", () => {
     const result = computeVerificationState(GATEWAY, WRONG_HASH, CODE);
     expect(result.status).toBe("refused");
     if (result.status === "refused") {
-      expect(result.reason).toContain(WRONG_HASH);
-      expect(result.reason).toContain(CODE_HASH);
+      // reason is now a typed ProductReasonCode — mismatch maps to "unknown_revert"
+      expect(result.reason).toBe("unknown_revert");
     }
   });
 
@@ -41,7 +41,8 @@ describe("computeVerificationState", () => {
     const result = computeVerificationState(GATEWAY, undefined, CODE);
     expect(result.status).toBe("refused");
     if (result.status === "refused") {
-      expect(result.reason).toMatch(/VITE_GATEWAY_EXPECTED_CODE_HASH/);
+      // reason is now a typed ProductReasonCode
+      expect(result.reason).toBe("unknown_revert");
     }
   });
 
@@ -54,7 +55,8 @@ describe("computeVerificationState", () => {
     const result = computeVerificationState(ZERO_ADDRESS, CODE_HASH, CODE);
     expect(result.status).toBe("refused");
     if (result.status === "refused") {
-      expect(result.reason).toMatch(/zero/i);
+      // reason is now a typed ProductReasonCode
+      expect(result.reason).toBe("unknown_revert");
     }
   });
 
@@ -67,7 +69,8 @@ describe("computeVerificationState", () => {
     const result = computeVerificationState(GATEWAY, CODE_HASH, null);
     expect(result.status).toBe("refused");
     if (result.status === "refused") {
-      expect(result.reason).toMatch(/empty/i);
+      // reason is now a typed ProductReasonCode
+      expect(result.reason).toBe("unknown_revert");
     }
   });
 

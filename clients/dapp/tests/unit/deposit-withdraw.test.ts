@@ -86,6 +86,7 @@ describe("buildVaultPreview — refusal paths", () => {
     );
     expect(preview.ok).toBe(false);
     if (preview.ok) return;
-    expect(preview.reason).toMatch(/bytecode/i);
+    // reason is now a typed ProductReasonCode
+    expect(preview.reason).toBe("unknown_revert");
   });
 });
