@@ -1,4 +1,4 @@
-// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
+// Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway, §7.2 — Stable product reason codes
 
 /**
  * Gateway bytecode hash verifier (pure — no wagmi/viem side effects).
@@ -16,12 +16,20 @@
  */
 import { keccak256 } from "viem";
 import type { Hex } from "viem";
+import type { ProductReasonCode } from "./productReasonCode";
 
 export type VerificationState =
   | { status: "idle" }
   | { status: "pending" }
   | { status: "verified"; computedHash: Hex }
-  | { status: "refused"; reason: string };
+  | {
+      status: "refused";
+      /**
+       * Typed stable product reason code (Architecture §7.2).
+       * The free-form `string` surface has been replaced by this typed union.
+       */
+      reason: ProductReasonCode;
+    };
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -47,9 +55,7 @@ export function computeVerificationState(
   if (!expectedHash || expectedHash.trim() === "") {
     return {
       status: "refused",
-      reason:
-        "VITE_GATEWAY_EXPECTED_CODE_HASH is not set. " +
-        "Configure the expected runtime hash to enable admin writes.",
+      reason: "unknown_revert",
     };
   }
 
@@ -57,9 +63,7 @@ export function computeVerificationState(
   if (!gatewayAddress || gatewayAddress === ZERO_ADDRESS) {
     return {
       status: "refused",
-      reason:
-        "Gateway address is zero or missing. " +
-        "Set VITE_GATEWAY_ADDRESS to the deployed contract address.",
+      reason: "unknown_revert",
     };
   }
 
@@ -73,9 +77,7 @@ export function computeVerificationState(
   if (code === null || (code as string) === "0x" || (code as string) === "") {
     return {
       status: "refused",
-      reason:
-        "Gateway bytecode is empty. The address is not a deployed contract " +
-        "on the current network.",
+      reason: "unknown_revert",
     };
   }
 
@@ -84,10 +86,7 @@ export function computeVerificationState(
   if (computedHash.toLowerCase() !== expectedHash.toLowerCase()) {
     return {
       status: "refused",
-      reason:
-        `Gateway bytecode hash mismatch. ` +
-        `Expected ${expectedHash} but got ${computedHash}. ` +
-        `Refusing to surface signing prompts.`,
+      reason: "unknown_revert",
     };
   }
 

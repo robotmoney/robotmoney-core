@@ -1,4 +1,4 @@
-// Canonical: docs/architecture.md §7.1 — Previews
+// Canonical: docs/architecture.md §7.1 — Previews, §7.2 — Stable product reason codes
 
 /**
  * Calldata-preview pipeline. Implements the fixed shape required by
@@ -24,6 +24,8 @@ import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector 
 import type { Address, Hex } from "viem";
 import { gatewayAbi, ROLE_HASH } from "./abi";
 import type { AdminActionName, RoleName, VaultActionName } from "./abi";
+import type { ProductReasonCode } from "./productReasonCode";
+export type { ProductReasonCode } from "./productReasonCode";
 
 /**
  * Union of every function name that may appear in a structured Preview.
@@ -83,7 +85,12 @@ interface PreviewSuccess {
 
 interface PreviewFailure {
   ok: false;
-  reason: string;
+  /**
+   * Typed stable product reason code (Architecture §7.2).
+   * The free-form `string` surface has been replaced by this typed union so
+   * that callers and tests can match on a stable finite set of codes.
+   */
+  reason: ProductReasonCode;
   /** Always present even on failure so the operator can paste into a second tool. */
   calldata?: Hex;
 }
@@ -156,8 +163,7 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
   if (!ctx.gatewayCodeHashVerified) {
     return {
       ok: false,
-      reason:
-        "Gateway bytecode hash does not match the pinned fixture. Refusing to surface a signing prompt.",
+      reason: "unknown_revert",
     };
   }
 
@@ -329,8 +335,8 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
         break;
       }
     }
-  } catch (err) {
-    return { ok: false, reason: `Encoding failed: ${(err as Error).message}` };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert" };
   }
 
   // Re-decode round-trip to guarantee the preview shape stays consistent.
@@ -338,13 +344,13 @@ export function buildPreview(action: AdminAction, ctx: PreviewContext): Preview 
   try {
     const decoded = decodeFunctionData({ abi: gatewayAbi, data: calldata });
     if (decoded.functionName !== functionName) {
-      return { ok: false, reason: "Decoder mismatch", calldata };
+      return { ok: false, reason: "unknown_revert", calldata };
     }
     selector = toFunctionSelector(
       gatewayAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (err) {
-    return { ok: false, reason: `Decode round-trip failed: ${(err as Error).message}`, calldata };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert", calldata };
   }
 
   return {

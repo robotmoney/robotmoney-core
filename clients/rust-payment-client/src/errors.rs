@@ -86,6 +86,30 @@ pub enum RmpcError {
     )]
     ErrShareAllowanceInsufficient,
 
+    // ── Architecture §7.2 product reason codes ─────────────────────────────
+
+    /// The target vault is disabled (not registered or de-listed).
+    /// Maps to the `vault_disabled` product reason code.
+    #[error("ErrVaultDisabled: target vault is not registered or has been disabled")]
+    ErrVaultDisabled,
+
+    /// The agent policy `validUntil` timestamp is in the past.
+    /// Maps to the `expired_policy` product reason code.
+    #[error("ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)")]
+    ErrPolicyExpired,
+
+    /// A required router leg is unavailable (vault paused, full, or de-listed).
+    /// Maps to the `unavailable_leg` product reason code.
+    #[error("ErrLegUnavailable: router leg vault is unavailable (paused, full, or de-listed)")]
+    ErrLegUnavailable,
+
+    /// The transaction would not satisfy the caller's `minSharesPerLeg` slippage bound.
+    /// Maps to the `slippage_bound_exceeded` product reason code.
+    #[error(
+        "ErrSlippageBoundExceeded: estimated shares per leg fall below the caller's minimum bound"
+    )]
+    ErrSlippageBoundExceeded,
+
     /// The withdraw landed in a block but the gateway emitted no
     /// `AgentWithdrawal` log — invariant violation. Operator must inspect.
     #[error("ErrAgentWithdrawLogMissing: receipt has no AgentWithdrawal log (tx_hash={tx_hash})")]
@@ -169,6 +193,11 @@ mod tests {
                 },
                 "ErrVoteAlreadyCast",
             ),
+            // Architecture §7.2 product reason codes — four previously-absent variants.
+            (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
+            (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
+            (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
+            (RmpcError::ErrSlippageBoundExceeded, "ErrSlippageBoundExceeded"),
         ];
         for (err, name) in cases {
             let s = format!("{err}");

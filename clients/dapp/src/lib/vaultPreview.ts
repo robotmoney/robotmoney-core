@@ -22,6 +22,7 @@ import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSelector 
 import type { Address, Hex } from "viem";
 import { vaultAbi, type VaultActionName } from "./abi";
 import type { Preview, PreviewContext, RiskClass } from "./preview";
+// ProductReasonCode is used indirectly through the Preview type's typed reason field.
 
 export type VaultAction =
   | { kind: "vaultDeposit"; assets: bigint; receiver: Address }
@@ -43,8 +44,7 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
   if (!ctx.gatewayCodeHashVerified) {
     return {
       ok: false,
-      reason:
-        "Gateway bytecode hash does not match the pinned fixture. Refusing to surface a signing prompt.",
+      reason: "unknown_revert" as const,
     };
   }
 
@@ -105,21 +105,21 @@ export function buildVaultPreview(action: VaultAction, ctx: VaultPreviewContext)
         break;
       }
     }
-  } catch (err) {
-    return { ok: false, reason: `Encoding failed: ${(err as Error).message}` };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert" as const };
   }
 
   let selector: Hex;
   try {
     const decoded = decodeFunctionData({ abi: vaultAbi, data: calldata });
     if (decoded.functionName !== functionName) {
-      return { ok: false, reason: "Decoder mismatch", calldata };
+      return { ok: false, reason: "unknown_revert" as const, calldata };
     }
     selector = toFunctionSelector(
       vaultAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (err) {
-    return { ok: false, reason: `Decode round-trip failed: ${(err as Error).message}`, calldata };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert" as const, calldata };
   }
 
   return {

@@ -63,8 +63,7 @@ export function buildRouterPreview(
   if (!ctx.gatewayCodeHashVerified) {
     return {
       ok: false,
-      reason:
-        "Gateway bytecode hash does not match the pinned fixture. Refusing to surface a signing prompt.",
+      reason: "unknown_revert" as const,
     };
   }
 
@@ -79,21 +78,21 @@ export function buildRouterPreview(
       // already surfaces unavailable legs before the user signs.
       args: [amount, []],
     });
-  } catch (err) {
-    return { ok: false, reason: `Encoding failed: ${(err as Error).message}` };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert" as const };
   }
 
   let selector: Hex;
   try {
     const decoded = decodeFunctionData({ abi: routerAbi, data: calldata });
     if (decoded.functionName !== functionName) {
-      return { ok: false, reason: "Decoder mismatch", calldata };
+      return { ok: false, reason: "unknown_revert" as const, calldata };
     }
     selector = toFunctionSelector(
       routerAbi.find((e) => e.type === "function" && e.name === functionName) as never,
     );
-  } catch (err) {
-    return { ok: false, reason: `Decode round-trip failed: ${(err as Error).message}`, calldata };
+  } catch (_err) {
+    return { ok: false, reason: "unknown_revert" as const, calldata };
   }
 
   const hasUnavailable = legs.some((l) => l.unavailable);
