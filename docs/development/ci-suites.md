@@ -254,7 +254,8 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 6. `bunx tsc -b` — TypeScript type check
 7. `bun run test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
 8. `bun run build` — verify production build succeeds
-9. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, and the dev-only vitest UI advisory) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
+9. `bash scripts/check-csp.sh` — Enforce strict CSP: builds the production bundle, serves it with `vite preview`, then asserts the `Content-Security-Policy` response header is present and contains `script-src` but neither `unsafe-inline` nor `unsafe-eval`; also checks the baked-in `<meta http-equiv="Content-Security-Policy">` tag in `index.html` (issue #665)
+10. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, and the dev-only vitest UI advisory) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
 
 ---
 
@@ -446,6 +447,37 @@ isolation, independent of any client (rmpc, dapp, explorer).
 1. Checkout repository
 2. Install Python
 3. `check_explorer_migrations.py` — single-canonical-home invariant: migration files exist only in `services/explorer-indexer/migrations/`, no duplicates elsewhere
+
+---
+
+### 18. Secrets scan (gitleaks)
+**Suggested file:** `.github/workflows/suite-18-secrets-scan.yml`
+**Environment:** `none`
+**Trigger paths:** All PRs (no `paths:` filter — secrets can appear in any file)
+
+Runs [gitleaks](https://github.com/gitleaks/gitleaks) on every PR commit to
+detect accidentally committed credentials before they reach the default branch.
+The gate is intentionally path-unfiltered: a secret committed to a test fixture,
+a config file, or a doc is just as dangerous as one committed to source code.
+
+**Design rationale (security-model.md §13):**
+- A pinned gitleaks binary is used rather than the latest release so the
+  detector behaviour is deterministic and upgrades are deliberate.
+- The configuration (`.gitleaks.toml`) extends the upstream built-in provider
+  ruleset (`[extend] useDefault = true`) so that upstream rule improvements
+  (new provider patterns for AWS, GCP, GitHub, Stripe, etc.) flow in
+  automatically when the pinned action version is bumped.
+- An allowlist in `.gitleaks.toml` covers known-safe test fixtures (Hardhat
+  deterministic devnet keys, public on-chain addresses). Every allowlist entry
+  carries a comment naming the fixture it covers. Real credentials are never
+  allowlisted. When a fixture is removed, its allowlist entry must be deleted too.
+
+**Jobs:**
+- `secrets-scan` — single job; runs immediately on every PR
+
+**Steps:**
+1. Checkout repository (full history — `fetch-depth: 0` so gitleaks can diff the PR range)
+2. Run gitleaks at pinned version with `--config .gitleaks.toml` — scans all commits in the PR; exits non-zero on any unallowlisted secret pattern, blocking merge
 
 ---
 
