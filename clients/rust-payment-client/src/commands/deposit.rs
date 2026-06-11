@@ -42,7 +42,6 @@ use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
 use crate::nonce::AgentLock;
 use crate::policy::{Preflight, PreflightInputs};
-use crate::rpc::RpcClient;
 use crate::signer::software::{SoftwareSigner, PASSPHRASE_ENV_VAR};
 use crate::signer::{require_production_grade_for_write, AgentSigner, SignerBackendKind};
 use crate::tx::{
@@ -80,6 +79,13 @@ pub struct Args {
     /// When `Some(_)` it wins over both `[fees].max_fee_per_gas_cap` in
     /// TOML and the per-chain default table.
     pub fee_cap_wei: Option<u64>,
+    /// When `Some(_)`, the deposit is routed through `gateway.depositTo()`
+    /// targeting this PortfolioRouter address. When `None` the existing
+    /// single-vault `gateway.deposit()` path is used.
+    pub destination: Option<String>,
+    /// Per-leg minimum shares forwarded to `gateway.depositTo()`.
+    /// Ignored when `destination` is `None`.
+    pub min_shares_per_leg: Vec<String>,
     pub pretty: bool,
 }
 
@@ -388,7 +394,7 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc deposit: rpc client init failed: {e}");
@@ -491,13 +497,51 @@ pub fn run(args: Args) -> i32 {
     };
 
     // -- Build + sign envelope -------------------------------------------
-    let calldata = RobotMoneyGateway::depositCall {
-        orderId: order_id,
-        amount,
-        deadline,
-        idempotencyKey: idempotency_key,
-    }
-    .abi_encode();
+    // Branch: router-deposit (depositTo) vs. single-vault deposit.
+    let calldata = if let Some(ref dest_str) = args.destination {
+        // Parse the destination router address.
+        let destination = match Address::from_str(dest_str) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("rmpc deposit: --destination is not a valid address: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
+        // Parse per-leg minimum shares (decimal U256 strings).
+        let mut min_shares: Vec<U256> = Vec::with_capacity(args.min_shares_per_leg.len());
+        for s in &args.min_shares_per_leg {
+            match U256::from_str(s) {
+                Ok(v) => min_shares.push(v),
+                Err(e) => {
+                    log::error!(
+                        "rmpc deposit: --min-shares-per-leg value {s:?} is not a decimal U256: {e}"
+                    );
+                    return EXIT_STARTUP_FAIL;
+                }
+            }
+        }
+        log::info!(
+            "deposit: router path: destination={destination:#x} legs={}",
+            min_shares.len()
+        );
+        RobotMoneyGateway::depositToCall {
+            orderId: order_id,
+            amount,
+            deadline,
+            idempotencyKey: idempotency_key,
+            destination,
+            minSharesPerLeg: min_shares,
+        }
+        .abi_encode()
+    } else {
+        RobotMoneyGateway::depositCall {
+            orderId: order_id,
+            amount,
+            deadline,
+            idempotencyKey: idempotency_key,
+        }
+        .abi_encode()
+    };
 
     let tx = build_eip1559(Eip1559Inputs {
         chain_id: cfg.chain_id,
@@ -706,6 +750,10 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrGatewayPaused => "ErrGatewayPaused",
         RmpcError::ErrAllowanceInsufficient => "ErrAllowanceInsufficient",
         RmpcError::ErrBalanceInsufficient => "ErrBalanceInsufficient",
+        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
+        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
+        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
+        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
         RmpcError::ErrSoftwareSignerDisallowed => "ErrSoftwareSignerDisallowed",
         RmpcError::ErrProductionSignerRequired => "ErrProductionSignerRequired",
         RmpcError::ErrOrderIdAlreadySubmitted { .. } => "ErrOrderIdAlreadySubmitted",
@@ -723,11 +771,6 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrRpcTransport(_) => "ErrRpcTransport",
         RmpcError::ErrRpcServer { .. } => "ErrRpcServer",
         RmpcError::ErrRpcDecode(_) => "ErrRpcDecode",
-        // Architecture §7.2 product reason codes
-        RmpcError::ErrVaultDisabled => "ErrVaultDisabled",
-        RmpcError::ErrPolicyExpired => "ErrPolicyExpired",
-        RmpcError::ErrLegUnavailable => "ErrLegUnavailable",
-        RmpcError::ErrSlippageBoundExceeded => "ErrSlippageBoundExceeded",
     }
 }
 
@@ -768,7 +811,7 @@ mod tests {
             .create_async()
             .await;
 
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
         let deadline_secs = 300u64;
         let block_number = rpc.block_number().await.unwrap();
         let ts = rpc.block_timestamp(block_number).await.unwrap();

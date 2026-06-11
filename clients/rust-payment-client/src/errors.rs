@@ -172,6 +172,13 @@ mod tests {
                 "ErrAllowanceInsufficient",
             ),
             (RmpcError::ErrBalanceInsufficient, "ErrBalanceInsufficient"),
+            (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
+            (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
+            (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
+            (
+                RmpcError::ErrSlippageBoundExceeded,
+                "ErrSlippageBoundExceeded",
+            ),
             (
                 RmpcError::ErrSoftwareSignerDisallowed,
                 "ErrSoftwareSignerDisallowed",
@@ -191,14 +198,6 @@ mod tests {
                     proposal_id: "1".into(),
                 },
                 "ErrVoteAlreadyCast",
-            ),
-            // Architecture §7.2 product reason codes — four previously-absent variants.
-            (RmpcError::ErrVaultDisabled, "ErrVaultDisabled"),
-            (RmpcError::ErrPolicyExpired, "ErrPolicyExpired"),
-            (RmpcError::ErrLegUnavailable, "ErrLegUnavailable"),
-            (
-                RmpcError::ErrSlippageBoundExceeded,
-                "ErrSlippageBoundExceeded",
             ),
         ];
         for (err, name) in cases {

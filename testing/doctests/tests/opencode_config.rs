@@ -30,8 +30,8 @@ fn fixture_parses_with_rmpc_config_loader() {
         "fork-only walkthrough requires software fallback to be enabled"
     );
     assert!(
-        cfg.rpc_url.starts_with("http://127.0.0.1") || cfg.rpc_url.starts_with("http://localhost"),
-        "walkthrough config must point at a local anvil fork; got {}",
+        cfg.rpc_url.as_deref().is_some_and(|u| u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost")),
+        "walkthrough config must point at a local anvil fork; got {:?}",
         cfg.rpc_url
     );
 }
