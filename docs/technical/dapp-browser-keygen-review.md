@@ -18,7 +18,7 @@
 ## 1. Status
 
 Accepted. Authored 2026-05-07 against
-`docs/implementation-plan.md` §12 on branch
+`Plan tracking issue #109` §12 on branch
 `feat/84-dev-scout-browser-keygen-security-review-adr`.
 
 Companion ADRs:
@@ -66,7 +66,7 @@ Binding constraints carried forward from the parent ADR:
   `--allow-unsafe` is passed.
 - "Any secret export must be explicit, encrypted where possible, and
   labeled as unsafe for production if it is software-backed."
-  (`docs/implementation-plan.md` §12.)
+  (`Plan tracking issue #109` §12.)
 
 ## 3. Custody boundary
 
@@ -400,7 +400,7 @@ wired into `.github/workflows/docs-validators.yml`) asserts:
 - This ADR exists and contains a heading per scope item enumerated by
   issue #84 (custody boundary, threat model, key-export UX, fork-vs-
   mainnet gate, go/no-go conditions).
-- `docs/implementation-plan.md` §12 cross-links to this ADR.
+- `Plan tracking issue #109` §12 cross-links to this ADR.
 - `docs/technical/dapp-credential-decisions.md` cross-links to this
   ADR (the §3.1 gate names this document).
 - Any downstream UI implementation issue listed in the validator

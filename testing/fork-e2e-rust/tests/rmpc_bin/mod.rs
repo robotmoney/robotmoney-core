@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — fork tests for `rmpc`
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — fork tests for `rmpc`
 //! read commands (issue #50).
 //!
 //! Shared helpers that locate / build the `rmpc` binary (which lives

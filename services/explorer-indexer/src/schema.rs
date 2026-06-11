@@ -107,7 +107,7 @@
 //!
 //! **Gap:** `db::count()` uses a `format!()` with a `CountTable` enum but the
 //! enum variants do not yet cover the new tables added by migration 0007.
-//! `docs/implementation-plan.md` line 134 carries an unchecked item:
+//! `Plan tracking issue #109` line 134 carries an unchecked item:
 //! "Indexer: restrict or type-guard db::count() to prevent dynamic SQL expansion."
 //!
 //! **Seams to touch:**
@@ -119,7 +119,7 @@
 //!    `CountTable` is an enum, this is satisfied by construction at the type
 //!    level; the test can assert `CountTable::from_str("unknown_table")` returns
 //!    `Err(...)` after a `FromStr` impl is added.
-//! 3. `docs/implementation-plan.md` — tick the unchecked item once the above lands.
+//! 3. `Plan tracking issue #109` — tick the unchecked item once the above lands.
 //!
 //! **No migration required.** This is a code-only change.
 //!

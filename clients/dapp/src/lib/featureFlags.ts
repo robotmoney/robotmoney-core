@@ -4,7 +4,7 @@
  * Feature flags for the human dapp.
  *
  * `historyPane` gates the optional explorer-API-backed history pane
- * described in docs/implementation-plan.md §12 and issue #88. The plan
+ * described in Plan tracking issue #109 §12 and issue #88. The plan
  * states "Dapp reads live chain state directly through RPC and may use
  * phase 5 API for historical display." The pane is hidden by default
  * because it introduces a hard dependency on the phase-5 explorer API

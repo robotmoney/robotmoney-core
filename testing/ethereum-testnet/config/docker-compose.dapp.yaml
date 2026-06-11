@@ -1,6 +1,6 @@
 # Full-stack dapp overlay for the Robot Money devnet.
 #
-# Canonical: Plan tracking issue #109 (formerly docs/implementation-plan.md §10.5 — Phase 4.5.)
+# Canonical: Plan tracking issue #109 §10.5 — Phase 4.5.
 # Used by: testing/smoke-test (--full-stack flag, issue #228).
 #
 # Brings up Postgres, explorer-indexer, explorer-api, and the dapp

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §11 — Phase 5 — Simple Web Explorer API and Database.
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §11 — Phase 5 — Simple Web Explorer API and Database.
 //! Decision record: docs/technical/explorer-schema-decisions.md (issue #56).
 //! Implements: issue #57 / PR #76.
 //!

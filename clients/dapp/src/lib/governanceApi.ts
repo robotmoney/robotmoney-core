@@ -10,7 +10,7 @@
  *
  * Used exclusively by GovernancePanel (issue #322). The client never
  * issues on-chain RPC calls — live proposal state is fetched from the
- * indexed API, consistent with §12 of docs/implementation-plan.md.
+ * indexed API, consistent with §12 of Plan tracking issue #109.
  */
 import type { FetchLike } from "./explorerApi";
 export type { FetchLike };

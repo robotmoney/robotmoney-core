@@ -1,6 +1,6 @@
 # Devnet runbook
 
-> **Canonical:** `docs/implementation-plan.md` §2 (Phase 1 gateway + vault).
+> **Canonical:** `Plan tracking issue #109` §2 (Phase 1 gateway + vault).
 
 The devnet is a local Geth + Lighthouse proof-of-stake chain managed by
 the `testing/smoke-test` crate. All integration tests that need a live

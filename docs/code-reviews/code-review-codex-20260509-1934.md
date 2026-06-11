@@ -3,7 +3,7 @@
 **Date:** 2026-05-09  
 **Reviewer:** Codex (GPT-5), acting as an external blockchain-security CTO  
 **Scope:** Full codebase pass with emphasis on `contracts/`, `clients/rust-payment-client/`, `clients/dapp/`, `services/explorer-indexer/`, and `clients/explorer-api/`  
-**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/technical/security-model.md`, `docs/implementation-plan.md`
+**Anchor docs:** `docs/prd.md`, `docs/architecture.md`, `docs/technical/security-model.md`, `Plan tracking issue #109`
 
 ---
 

@@ -13,7 +13,7 @@
 //! All tests skip cleanly when Docker is not available.
 //!
 //! Canonical: docs/technical/explorer-schema-decisions.md §3.4 / §3.5
-//!            docs/implementation-plan.md §"Phase: Multi-vault explorer"
+//!            Plan tracking issue #109 §"Phase: Multi-vault explorer"
 //!            docs/technical/governance-decisions.md §3.5
 
 mod common;

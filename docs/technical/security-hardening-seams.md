@@ -1,12 +1,12 @@
 # ADR — Security hardening seam map
 
 > Scope: dev-scout report for issue #434, covering the Security hardening
-> phase in `docs/implementation-plan.md`. This report is documentation only:
+> phase in `Plan tracking issue #109`. This report is documentation only:
 > no allowlist, eligibility, unwind, dapp, or signer behaviour changes are
 > introduced here.
 >
 > Canonical inputs: `docs/technical/security-model.md`, `docs/architecture.md`, and
-> `docs/implementation-plan.md`.
+> `Plan tracking issue #109`.
 
 ## 1. Status
 

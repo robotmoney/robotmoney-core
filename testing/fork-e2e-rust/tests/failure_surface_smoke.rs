@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §8 — scenario 5
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — scenario 5
 //! (`failure_surface_smoke`).
 //!
 //! Exercises the documented refusal surfaces of the deployed

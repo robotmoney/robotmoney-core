@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4.8 — CLI surface
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 — CLI surface
 //!
 //! `rmpc` subcommand implementations.
 //!

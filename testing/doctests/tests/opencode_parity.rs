@@ -322,8 +322,8 @@ fn skill_package_referenced_and_files_exist() {
 fn walkthrough_links_implementation_plan_section_10() {
     let text = doc_text();
     assert!(
-        text.contains("docs/implementation-plan.md") && text.contains("§10"),
-        "walkthrough must back-link to docs/implementation-plan.md §10 \
+        text.contains("Plan tracking issue #109") && text.contains("§10"),
+        "walkthrough must back-link to Plan tracking issue #109 §10 \
          (the canonical Phase 4 doc this work implements)"
     );
 }

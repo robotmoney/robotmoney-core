@@ -1,7 +1,7 @@
 # Suite-05 (Anvil mainnet-fork) coverage audit
 
 > Canonical: `docs/development/ci-suites.md` §5, `docs/technical/fork-e2e-decisions.md`,
-> `docs/implementation-plan.md` §8 and §9.
+> `Plan tracking issue #109` §8 and §9.
 
 This audit answers a single question: does suite-05 catch regression
 classes that no other CI suite catches, or is its coverage reproducible

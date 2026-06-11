@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §10 (skill packaging).
+//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §10 (skill packaging).
 //!
 //! Automated parity checks for the `plugins/robotmoney-cli/` skill package.
 //!
