@@ -16,9 +16,17 @@
 # - csp-gate:    activated — clients/dapp/scripts/check-csp.sh shipped in #735.
 # - secrets-scanning: REMOVED from this file; covered by suite-18-secrets-scan.yml.
 #
-# FOLLOW-UP ISSUES
-# - Issue #813: Add deny.toml to allow-list known-safe RustSec advisories and pin
-#   cargo-audit policy (block CRITICAL/HIGH, warn MEDIUM/LOW).
+# HARDENING HISTORY
+# - Issue #813: cargo-audit advisory allow-list + severity policy lives in
+#   .cargo/audit.toml (the file `cargo audit` actually reads; deny.toml is
+#   cargo-deny's file and is not consumed here). The §8 gate blocks HIGH/CRITICAL
+#   (CVSS >= 7.0) and downgrades unmaintained/notice advisories to warnings.
+#   bun-audit: the transitive CRITICAL (vitest <3.2.6) and HIGH (axios) advisories
+#   were resolved — vitest/@vitest/browser pinned to ^3.2.6 and axios pinned to
+#   ^1.17.0 via a package.json `overrides`. The gate now runs `bun audit
+#   --audit-level=high` (the real bun flag; the previous `--level high` was
+#   silently ignored, which is why the warn-only `|| true` was needed) with no
+#   warn-only override.
 
 name: security-gates
 
@@ -44,7 +52,7 @@ jobs:
   # Scans Cargo.lock for Rust advisory database (RustSec) hits.
   # Uses cargo-audit CLI directly (not rustsec/audit-check action) to avoid the
   # action's checks:write permission requirement that causes annotation errors on PRs.
-  # Follow-up issue #813: add deny.toml for advisory allow-list and severity policy.
+  # Advisory allow-list + severity policy: .cargo/audit.toml (issue #813).
   cargo-audit:
     name: cargo-audit
     runs-on: ubuntu-latest
@@ -62,9 +70,14 @@ jobs:
 
   # ── Bun audit ──────────────────────────────────────────────────────────────
   # Scans clients/dapp package manifest for JS advisory (npm) hits.
-  # NOTE: run in warn-only mode (exit 0) until transitive HIGH advisories in
-  # axios/vitest are resolved (follow-up issue #813). The audit output is still
-  # visible in the CI log. Remove `|| true` after #813 upgrades those deps.
+  # Hard gate (issue #813): fails on any HIGH/CRITICAL advisory. The transitive
+  # CRITICAL (vitest <3.2.6) and HIGH (axios) advisories were resolved by pinning
+  # vitest/@vitest/browser to ^3.2.6 and axios to ^1.17.0 (package.json overrides).
+  # `--audit-level=high` is bun's real severity flag — it suppresses sub-HIGH
+  # advisories from both output AND the exit code, so remaining moderate
+  # transitive advisories (vite/esbuild/ws/uuid/hono/brace-expansion) do not fail
+  # the gate. The previous `--level high` was an unrecognized flag (silently
+  # ignored), which is why a `|| true` warn-only override used to be required.
   bun-audit:
     name: bun-audit
     runs-on: ubuntu-latest
@@ -72,9 +85,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: bun audit (warn-only until transitive HIGH deps resolved — issue #813)
+      - name: bun audit (fail on HIGH/CRITICAL)
         working-directory: clients/dapp
-        run: bun audit --level high || true
+        run: bun audit --audit-level=high
 
   # ── CSP gate ───────────────────────────────────────────────────────────────
   # Asserts the dapp production bundle does not weaken the Content-Security-Policy.
