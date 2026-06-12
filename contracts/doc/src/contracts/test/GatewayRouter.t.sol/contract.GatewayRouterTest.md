@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -404,14 +404,13 @@ function test_depositTo_routerPath_revertsOnUsdcCustodyInvariant() public;
 function test_depositTo_revertsOnFeeOnTransferToken() public;
 ```
 
-### test_depositTo_vaultPath_revertsOnPreCallShareCustody
+### test_depositTo_vaultPath_ignoresPreexistingDonatedShares
 
-`depositTo` vault path: pre-call share custody invariant — gateway must
-hold zero shares of the destination vault before the call.
+Preexisting donated shares do not brick the vault deposit path.
 
 
 ```solidity
-function test_depositTo_vaultPath_revertsOnPreCallShareCustody() public;
+function test_depositTo_vaultPath_ignoresPreexistingDonatedShares() public;
 ```
 
 ### test_depositTo_vaultPath_revertsOnPostCallShareCustody

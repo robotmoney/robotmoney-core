@@ -930,9 +930,8 @@ contract GatewayRouterTest is Test {
         );
     }
 
-    /// @dev `depositTo` vault path: pre-call share custody invariant — gateway must
-    ///      hold zero shares of the destination vault before the call.
-    function test_depositTo_vaultPath_revertsOnPreCallShareCustody() public {
+    /// @dev Preexisting donated shares do not brick the vault deposit path.
+    function test_depositTo_vaultPath_ignoresPreexistingDonatedShares() public {
         _authorize(agent, _policyOpenDestinations());
         _fundAndApprove(agent, 100 * ONE_USDC);
 
@@ -941,7 +940,6 @@ contract GatewayRouterTest is Test {
 
         uint256[] memory emptyMin = new uint256[](0);
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
         gateway.depositTo(
             keccak256("o"),
             100 * ONE_USDC,
@@ -950,6 +948,7 @@ contract GatewayRouterTest is Test {
             address(vault),
             emptyMin
         );
+        assertEq(vault.balanceOf(address(gateway)), 1, "donated share must remain unchanged");
     }
 
     /// @dev `depositTo` vault path: post-call share custody invariant —
@@ -1936,8 +1935,13 @@ contract GatewayRouterTest is Test {
                 maxWithdrawPerWindow: MAX_PER_WINDOW,
                 allowedSourceVaults: noSrcs
             });
+            bytes32 salt = keccak256("leaky-authorization");
+            bytes32 commitHash = keccak256(abi.encode(leakyAgent, leakyDepositor, salt));
             vm.prank(leakyDepositor);
-            leakyGateway.authorizeAgent(leakyAgent, p);
+            leakyGateway.commitAuthorization(commitHash);
+            vm.roll(block.number + 1);
+            vm.prank(leakyDepositor);
+            leakyGateway.revealAuthorization(leakyAgent, salt, p);
         }
 
         // Deposit to mint leaky vault shares into leakyShareReceiver.

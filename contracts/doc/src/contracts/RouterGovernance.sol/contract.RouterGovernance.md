@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl

@@ -42,8 +42,10 @@ contract MockAdapter is IStrategyAdapter {
 
     /// @notice Extra USDC credited directly (simulates protocol-level donation).
     uint256 public donatedAmount;
+    bool public revertTotalAssets;
 
     error OnlyVault();
+    error TotalAssetsUnavailable();
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -76,7 +78,12 @@ contract MockAdapter is IStrategyAdapter {
 
     /// @inheritdoc IStrategyAdapter
     function totalAssets() external view returns (uint256) {
+        if (revertTotalAssets) revert TotalAssetsUnavailable();
         return USDC.balanceOf(address(this));
+    }
+
+    function setRevertTotalAssets(bool enabled) external {
+        revertTotalAssets = enabled;
     }
 
     /// @inheritdoc IStrategyAdapter
@@ -1000,6 +1007,22 @@ contract RobotMoneyVaultTest is Test {
             assetsBefore,
             "adapter assets must remain untouched (loss accepted)"
         );
+    }
+
+    function test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+        adapter.setRevertTotalAssets(true);
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit RobotMoneyVault.AdapterForceRemoved(0, address(adapter), 0);
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+
+        (,, bool active) = vault.adapters(0);
+        assertFalse(active, "reverting adapter must be quarantined");
+        assertEq(vault.totalAssets(), 0, "inactive reverting adapter must not block healthy views");
     }
 
     /// @notice Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.

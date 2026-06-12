@@ -15,7 +15,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
-import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
+import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
+import {IAerodromeCLFactory} from "../interfaces/IAerodromeCLFactory.sol";
 import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
 import {TickMath} from "../lib/TickMath.sol";
 
@@ -39,16 +40,11 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
 
     // ─── Immutables ───────────────────────────────────────────────────
 
-    /// @notice Aerodrome Router used for all swaps.
-    IAerodromeRouter public immutable ROUTER;
+    /// @notice Aerodrome Slipstream router used for all swaps.
+    IAerodromeSlipstreamRouter public immutable ROUTER;
 
-    /// @notice Pool factory embedded in route structs. Must match the factory
-    ///         that created the target CL pool.
-    address public immutable FACTORY;
-
-    /// @notice Whether the route uses Aerodrome's stable-swap curve.
-    ///         `true` for stable pools (e.g. USDC/USDT), `false` for volatile.
-    bool public immutable STABLE;
+    /// @notice Factory that resolves canonical Slipstream CL pools.
+    IAerodromeCLFactory public immutable FACTORY;
 
     // ─── Errors ───────────────────────────────────────────────────────
 
@@ -58,21 +54,18 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
     error ZeroWindow();
     /// @dev Raised when the pool's tokens do not match the requested base/quote pair.
     error PoolTokenMismatch();
-    /// @dev Raised when the Aerodrome Router returns an empty amounts array,
-    ///      which would otherwise underflow the output-index read
-    ///      (audit 2026-06-09, L-7).
-    error EmptyRouterAmounts();
+    error PoolFactoryMismatch(address expected, address actual);
+    error InvalidTickSpacing();
+    error PoolNotFound(address tokenIn, address tokenOut, int24 tickSpacing);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
     /// @param router_  Aerodrome Router address. Must not be address(0).
-    /// @param factory_ Pool factory address embedded in route structs.
-    /// @param stable_  Whether to use the stable-swap AMM curve for this adapter.
-    constructor(address router_, address factory_, bool stable_) {
+    /// @param factory_ Aerodrome Slipstream CL factory address.
+    constructor(address router_, address factory_) {
         if (router_ == address(0) || factory_ == address(0)) revert ZeroAddress();
-        ROUTER = IAerodromeRouter(router_);
-        FACTORY = factory_;
-        STABLE = stable_;
+        ROUTER = IAerodromeSlipstreamRouter(router_);
+        FACTORY = IAerodromeCLFactory(factory_);
     }
 
     // ─── IBasketSwapAdapter ───────────────────────────────────────────
@@ -86,7 +79,7 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
     function swap(
         address tokenIn,
         address tokenOut,
-        uint24, /* fee — unused by Aerodrome */
+        uint24 fee,
         uint256 amountIn,
         uint256 minAmountOut,
         address recipient,
@@ -94,23 +87,29 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
     ) external returns (uint256 amountOut) {
         if (tokenIn == address(0) || tokenOut == address(0)) revert ZeroAddress();
         if (amountIn == 0) return 0;
+        if (fee == 0 || fee > uint24(type(int24).max)) revert InvalidTickSpacing();
+        int24 tickSpacing = int24(fee);
+        if (FACTORY.getPool(tokenIn, tokenOut, tickSpacing) == address(0)) {
+            revert PoolNotFound(tokenIn, tokenOut, tickSpacing);
+        }
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(ROUTER), amountIn);
 
-        IAerodromeRouter.Route[] memory routes = new IAerodromeRouter.Route[](1);
-        routes[0] =
-            IAerodromeRouter.Route({from: tokenIn, to: tokenOut, stable: STABLE, factory: FACTORY});
-
-        uint256[] memory amounts =
-            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, routes, recipient, deadline);
+        amountOut = ROUTER.exactInputSingle(
+            IAerodromeSlipstreamRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                tickSpacing: tickSpacing,
+                recipient: recipient,
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut,
+                sqrtPriceLimitX96: 0
+            })
+        );
 
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);
-
-        // The router returns one amount per hop; the last element is the output.
-        // Guard the index read against a malformed empty return (audit L-7).
-        if (amounts.length == 0) revert EmptyRouterAmounts();
-        amountOut = amounts[amounts.length - 1];
     }
 
     /// @inheritdoc IBasketSwapAdapter
@@ -133,6 +132,9 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
         if (baseAmount == 0) return 0;
 
         _checkPoolPair(pool, baseToken, quoteToken);
+        address canonicalPool =
+            FACTORY.getPool(baseToken, quoteToken, IAerodromePool(pool).tickSpacing());
+        if (canonicalPool != pool) revert PoolFactoryMismatch(pool, canonicalPool);
 
         int24 meanTick = _meanTick(pool, window);
         quoteAmount = _priceFromTick(meanTick, baseToken, quoteToken, baseAmount);

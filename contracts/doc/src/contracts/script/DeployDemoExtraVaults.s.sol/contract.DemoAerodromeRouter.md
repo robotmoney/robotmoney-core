@@ -1,5 +1,5 @@
 # DemoAerodromeRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Aerodrome router stub for demo purposes. Records swaps at
 a 1:1 rate, minting output token to the recipient. Demo-only.
@@ -8,24 +8,38 @@ also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
 totalAssets ≈ totalDeposits and no share inflation occurs.
 
 
-## Functions
-### swapExactTokensForTokens
-
+## State Variables
+### pools
 
 ```solidity
-function swapExactTokensForTokens(
-    uint256 amountIn,
-    uint256, /* amountOutMin */
-    IAerodromeRouter.Route[] calldata routes,
-    address to,
-    uint256 /* deadline */
-) external returns (uint256[] memory amounts);
+mapping(bytes32 => address) public pools
 ```
 
-### defaultFactory
+
+## Functions
+### setPool
 
 
 ```solidity
-function defaultFactory() external pure returns (address);
+function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external;
+```
+
+### getPool
+
+
+```solidity
+function getPool(address tokenA, address tokenB, int24 tickSpacing)
+    external
+    view
+    returns (address);
+```
+
+### exactInputSingle
+
+
+```solidity
+function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+    external
+    returns (uint256);
 ```
 

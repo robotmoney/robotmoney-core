@@ -794,7 +794,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             if (!adapters[i].active) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             address adptAddr = address(adpt);
-            uint256 balance = adpt.totalAssets();
+            uint256 balance;
+            try adpt.totalAssets() returns (uint256 reported) {
+                balance = reported;
+            } catch {
+                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
+                continue;
+            }
             if (balance == 0) continue;
             try adpt.withdraw(balance) returns (uint256 actual) {
                 emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
@@ -817,7 +823,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             revert AdapterNotFound();
         }
         _setDepositsPaused(true);
-        uint256 balance = adapters[index].adapter.totalAssets();
+        uint256 balance;
+        try adapters[index].adapter.totalAssets() returns (uint256 reported) {
+            balance = reported;
+        } catch {
+            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, false);
+            return;
+        }
         if (balance == 0) {
             emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, true);
             return;
@@ -837,9 +849,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         _setDepositsPaused(true);
-        uint256 lossAmount = adapters[index].adapter.totalAssets();
+        IStrategyAdapter adapter = adapters[index].adapter;
         adapters[index].active = false;
-        emit AdapterForceRemoved(index, address(adapters[index].adapter), lossAmount);
+        uint256 lossAmount;
+        try adapter.totalAssets() returns (uint256 reported) {
+            lossAmount = reported;
+        } catch {}
+        emit AdapterForceRemoved(index, address(adapter), lossAmount);
     }
 
     /// @notice Permanently shut down the vault: set `shutdown = true` and zero the TVL cap.

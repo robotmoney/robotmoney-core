@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -317,15 +317,13 @@ emergency unwind completes successfully.
 function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public;
 ```
 
-### test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck
+### test_emergencyUnwindWithOverride_isOracleIndependent
 
-emergencyUnwindWithOverride also applies the TWAP floor as a secondary
-check alongside the configured appliedFloor. A swap below the TWAP floor
-is rejected even when maxLossBps is generous.
+Override execution remains available when the TWAP oracle is unavailable.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck() public;
+function test_emergencyUnwindWithOverride_isOracleIndependent() public;
 ```
 
 ### test_setTwapWindow_emitsEvent
@@ -397,22 +395,22 @@ emergencyUnwindWithOverride succeeds when vault is already paused.
 function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public;
 ```
 
-### test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwind on unpaused vault still pauses the vault.
+emergencyUnwind on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
-### test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwindWithOverride on unpaused vault still pauses the vault.
+emergencyUnwindWithOverride on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
 ### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts
@@ -432,6 +430,27 @@ pool's observationCardinality is 1 (Uniswap deployment default).
 
 ```solidity
 function test_addAsset_revertsWhenPoolCardinalityIsOne() public;
+```
+
+### test_addAsset_revertsWithoutFullTwapHistory
+
+
+```solidity
+function test_addAsset_revertsWithoutFullTwapHistory() public;
+```
+
+### test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable
+
+
+```solidity
+function test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable() public;
+```
+
+### test_emergencyUnwind_blocksDepositsButAllowsRedemption
+
+
+```solidity
+function test_emergencyUnwind_blocksDepositsButAllowsRedemption() public;
 ```
 
 ### test_addAsset_succeedsWhenCardinalityMeetsMinimum

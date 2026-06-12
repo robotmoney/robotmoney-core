@@ -915,19 +915,17 @@ contract RobotMoneyGatewayTest is Test {
         gateway.revokeAgent(address(0));
     }
 
-    function test_deposit_revertsOnPreCallShareCustodyInvariant() public {
-        // Seed gateway with rmUSDC shares before any deposit. The pre-call
-        // invariant (line 222) must reject the call.
+    function test_deposit_ignoresPreexistingDonatedShares() public {
+        // A donated share balance must not brick deposits. The invariant is
+        // delta-based and only rejects shares introduced by the current call.
         _authorize(agent, _defaultPolicy());
         _fundAndApprove(agent, 100 * ONE_USDC);
 
-        // Mint shares directly into the gateway via the vault's ERC20
-        // facing — use `deal` to set its balance.
         deal(address(vault), address(gateway), 1, true);
 
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
         gateway.deposit(bytes32("o"), 100 * ONE_USDC, uint64(block.timestamp + 60), bytes32("i"));
+        assertEq(vault.balanceOf(address(gateway)), 1, "donated share must remain unchanged");
     }
 
     function test_deposit_revertsOnPostCallShareCustodyInvariant() public {
@@ -1316,18 +1314,20 @@ contract GatewayRollingDepositWindowTest is Test {
         // Fund agent generously.
         _fundAndApprove(MAX_PER_WINDOW * 10);
 
-        uint256 rollingGross;
-        uint64 windowAnchor;
+        uint64[8] memory acceptedAt;
+        uint256[8] memory acceptedAmounts;
+        uint8 acceptedCount;
 
         for (uint8 i = 0; i < numDeposits; i++) {
             // Apply a bounded time offset between 0 and 2×WINDOW_SECONDS.
             uint64 offset = uint64(bound(timeOffsets[i], 0, 2 * windowSeconds));
             vm.warp(block.timestamp + offset);
 
-            // Recompute expected rolling state.
-            if (windowAnchor == 0 || block.timestamp >= uint256(windowAnchor) + windowSeconds) {
-                windowAnchor = uint64(block.timestamp);
-                rollingGross = 0;
+            uint256 rollingGross;
+            for (uint8 j = 0; j < acceptedCount; j++) {
+                if (uint256(acceptedAt[j]) + windowSeconds > block.timestamp) {
+                    rollingGross += acceptedAmounts[j];
+                }
             }
 
             uint256 amount = bound(rawAmounts[i], 1, p.maxPerPayment);
@@ -1340,12 +1340,13 @@ contract GatewayRollingDepositWindowTest is Test {
                 vm.prank(agent);
                 vm.expectRevert(RobotMoneyGateway.WindowCapExceeded.selector);
                 gateway.deposit(orderId, amount, uint64(block.timestamp + 60), idem);
-                // State unchanged — anchor and gross stay the same.
             } else {
                 vm.prank(agent);
                 gateway.deposit(orderId, amount, uint64(block.timestamp + 60), idem);
 
-                rollingGross += amount;
+                acceptedAt[acceptedCount] = uint64(block.timestamp);
+                acceptedAmounts[acceptedCount] = amount;
+                acceptedCount++;
                 // Invariant: effective gross must not exceed cap.
                 assertLe(
                     gateway.effectiveDepositWindowGross(agent),
@@ -1681,11 +1682,19 @@ contract GatewayWithdrawTest is Test {
             keccak256("i-752-first")
         );
 
-        // Warp past WINDOW_SECONDS: anchor expires, enter carry-forward zone.
-        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        // A second half-cap event at 1.5W remains in the trailing interval at 2W.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS() + gateway.WINDOW_SECONDS() / 2);
+        _mintSharesAndApprove(halfCap);
+        vm.prank(agent);
+        gateway.withdraw(
+            keccak256("o-752-remain"),
+            halfCap,
+            address(vault),
+            uint64(block.timestamp + 60),
+            keccak256("i-752-remain")
+        );
 
-        // A full-cap withdrawal must revert — only the remaining budget
-        // from the old window carries forward.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS() / 2);
         _mintSharesAndApprove(fullCap);
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.WithdrawWindowCapExceeded.selector);
@@ -1697,20 +1706,8 @@ contract GatewayWithdrawTest is Test {
             keccak256("i-752-burst")
         );
 
-        // Withdrawing the remaining budget (halfCap) must still succeed.
-        _mintSharesAndApprove(halfCap);
-        vm.prank(agent);
-        gateway.withdraw(
-            keccak256("o-752-remain"),
-            halfCap,
-            address(vault),
-            uint64(block.timestamp + 60),
-            keccak256("i-752-remain")
-        );
-
-        // After 2 * WINDOW_SECONDS from the original anchor, the budget
-        // fully resets and a fresh full-cap withdrawal succeeds.
-        vm.warp(block.timestamp + gateway.WINDOW_SECONDS());
+        // Once the second event reaches age W, a fresh full cap is available.
+        vm.warp(block.timestamp + gateway.WINDOW_SECONDS() / 2);
         _mintSharesAndApprove(fullCap);
         vm.prank(agent);
         gateway.withdraw(
@@ -2241,7 +2238,8 @@ contract GatewayCommitRevealTest is Test {
         assertEq(gateway.agentOwner(agent), depositor);
 
         // Commitment must be cleared after reveal.
-        (address committer,) = gateway.commitments(commitHash);
+        bytes32 storageKey = keccak256(abi.encode(commitHash, depositor));
+        (address committer,) = gateway.commitments(storageKey);
         assertEq(committer, address(0));
     }
 
@@ -2374,6 +2372,23 @@ contract GatewayCommitRevealTest is Test {
         gateway.revealAuthorization(agent, saltBob, p);
     }
 
+    function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public {
+        address attacker = makeAddr("attacker");
+        bytes32 salt = keccak256("scoped-commitment");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+
+        vm.prank(depositor);
+        gateway.commitAuthorization(commitHash);
+        vm.prank(attacker);
+        gateway.commitAuthorization(commitHash);
+        vm.roll(block.number + 1);
+
+        vm.prank(depositor);
+        gateway.revealAuthorization(agent, salt, p);
+        assertEq(gateway.agentOwner(agent), depositor);
+    }
+
     // -------------------------------------------------------------------
     // Event and storage verification
     // -------------------------------------------------------------------
@@ -2389,7 +2404,8 @@ contract GatewayCommitRevealTest is Test {
         gateway.commitAuthorization(commitHash);
 
         // Verify storage.
-        (address committer, uint64 blockNum) = gateway.commitments(commitHash);
+        bytes32 storageKey = keccak256(abi.encode(commitHash, depositor));
+        (address committer, uint64 blockNum) = gateway.commitments(storageKey);
         assertEq(committer, depositor);
         assertEq(blockNum, block.number);
     }

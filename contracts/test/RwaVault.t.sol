@@ -649,7 +649,8 @@ contract RwaVaultTest is Test {
 
         vm.prank(emergencyResponder);
         vault.emergencyUnwind();
-        assertTrue(vault.paused(), "vault paused by emergencyUnwind");
+        assertTrue(vault.depositsPaused(), "deposits paused by emergencyUnwind");
+        assertFalse(vault.paused(), "redemption remains available");
     }
 
     /// @notice emergencyUnwindWithOverride succeeds when the override flag is
@@ -663,7 +664,8 @@ contract RwaVaultTest is Test {
         address[] memory tokens = new address[](0);
         vm.prank(emergencyResponder);
         vault.emergencyUnwindWithOverride(tokens);
-        assertTrue(vault.paused(), "vault paused by emergencyUnwindWithOverride");
+        assertTrue(vault.depositsPaused(), "deposits paused by emergencyUnwindWithOverride");
+        assertFalse(vault.paused(), "redemption remains available");
     }
 
     /// @notice Only EMERGENCY_ROLE can set the stale override flag.
