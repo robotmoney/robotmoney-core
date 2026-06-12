@@ -596,6 +596,38 @@ process-per-call command. MCP is deferred; any future MCP surface must
 inherit `rmpc`'s command schema, chain/config pinning, and refusal
 semantics rather than becoming a new signing authority.
 
+### 5.6 Mint/Burn Watchdog
+
+`services/watchdog` is the automated circuit-breaker monitor required by
+`docs/technical/security-model.md` §9 ("No anomaly detection on mint/burn
+rate"). It was shipped in PR #787 (issue #658). It is a standalone Rust
+service that closes the security-model gap by watching gateway mint and burn
+flow and reacting without a human in the loop.
+
+Its role is rate monitoring and automated containment. On each poll cycle
+(default `poll_interval_seconds = 12`, one Base block) it aggregates rolling
+per-block and per-hour mint and burn volume from the explorer indexer
+database and compares each total against configurable global and per-vault
+thresholds (`thresholds.global.{mint,burn}_per_{block,hour}_units`). The
+service reads the indexed event history; it is not an authoritative signer
+for normal operations.
+
+On a threshold breach the watchdog takes two actions. It dispatches a
+structured alert through the webhook dispatcher (`src/alert.rs`,
+PagerDuty-compatible structured JSON to `WATCHDOG_ALERT_WEBHOOK_URL`), and it
+triggers an automated gateway pause by constructing and submitting a
+`gateway.pause()` transaction (`src/pause.rs`) signed with the EIP-155-bound
+pauser key (`WATCHDOG_PAUSER_KEY`). The pauser is a guardian-role key
+distinct from `ADMIN_ROLE`: it can pause but cannot unpause, matching the
+guardian/quorum separation in security-model.md §9. Unpause still requires
+`ADMIN_ROLE` through the timelock.
+
+The service enforces a maximum response-time SLA (`response_sla_seconds`,
+default 300 — five minutes) from breach detection to pause/alert dispatch.
+It is exercised by CI suite-20 (`tests/threshold_breach.rs`,
+`tests/alert_webhook.rs`) and is described in
+`docs/development/ci-suites.md`.
+
 ## 6. Data and Trust Boundaries
 
 ### 6.1 Authoritative Data
@@ -668,39 +700,42 @@ as `paused`, `vault_disabled`, `cap_exceeded`, `expired_policy`,
 
 ### 7.2.1 Client Stability Integration Seams
 
+The client-stability integration seams reserved here are now shipped; this
+section documents the stable surfaces rather than pending work.
+
 The stable dapp contract is `ProductReasonCode` in
 `clients/dapp/src/lib/productReasonCode.ts`. It includes the nine product
-codes above plus `unknown_revert` as the only catch-all. Issue #670 owns
-mapping contract custom errors, JSON-RPC error data, and existing preview
-refusals to that union. Mapping must inspect structured revert data before
-message text; provider-specific messages are diagnostic context, not stable
-API values.
+codes above plus `unknown_revert` as the only catch-all. The mapping layer
+translates contract custom errors, JSON-RPC error data, and preview refusals
+into that union, inspecting structured revert data before message text;
+provider-specific messages are diagnostic context, not stable API values.
 
-The Rust boundary remains `RmpcError` in
+The Rust boundary is `RmpcError` in
 `clients/rust-payment-client/src/errors.rs`. Product failures use named
-variants whose `Display` prefixes are operator-visible contracts. Issue #670
-owns the explicit `RmpcError` to product-code mapping; RPC transport, decode,
-and unknown server errors must not be misclassified as known contract
-refusals.
+variants whose `Display` prefixes are operator-visible contracts. The
+explicit `RmpcError`-to-product-code mapping is in place; RPC transport,
+decode, and unknown server errors are kept distinct from known contract
+refusals and are never misclassified as such.
 
-Router deposits reserve `DepositDestination` in
-`clients/rust-payment-client/src/cli.rs`. Issue #649 owns exposing it as a CLI
-argument and routing only the router variant through `depositTo`; until then,
-the existing deposit command remains vault-only. Deadline computation in
-#672 must land before #649 edits the shared deposit path.
+Router deposits are exposed through `DepositDestination` in
+`clients/rust-payment-client/src/cli.rs`. `rmpc deposit --destination router`
+routes the router variant through `depositTo`, while the default remains the
+vault-only path. Deadlines on the shared deposit path are computed from the
+EVM block timestamp, not wall-clock.
 
-Confirmation policy reserves `OperationClass`, `RequiredFinality`, and
-`ConfirmationDepthPolicy` in `clients/rust-payment-client/src/config.rs`.
-Issue #676 owns defaults, TOML integration, `get-tx` enforcement, and dapp
-status copy. Its config and CLI work follows #667 so multi-RPC config changes
-do not race on the same structures.
+Confirmation policy is enforced through `OperationClass`, `RequiredFinality`,
+and `ConfirmationDepthPolicy` in `clients/rust-payment-client/src/config.rs`,
+with per-operation-class defaults, TOML integration, `get-tx` enforcement,
+and dapp status copy all shipped. These structures coexist with the
+multi-endpoint `rpc_urls` failover config in the same module.
 
 Policy-state reads have two distinct authorities. `rmpc get-agent` and the
-future `get-position` command (#666) use live chain reads for signing and
-treasury decisions. The Explorer API owner lookup (#661) is an indexed,
-historical account view and must remain explicitly non-authoritative. Dapp
-work in #647 and #652 is isolated from the Rust hot-file lane and may proceed
-in parallel after this scout.
+`get-position` command use live chain reads for signing and treasury
+decisions. The Explorer API owner lookup
+(`GET /v1/accounts/:address/policies`) is an indexed, historical account view
+and remains explicitly non-authoritative. The dapp timelocked-proposals panel
+and the RWA-vault issuer freeze-control risk disclosure are shipped on the
+dapp surface, isolated from the Rust hot-file lane.
 
 ## 7.3 Single Production Codebase
 
@@ -786,7 +821,7 @@ this architecture:
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
 | On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
-| Production JSON-RPC provider | Safety-critical reads depend on provider correctness and availability. | Support configured primary plus documented fallback; defer multi-RPC consensus until a specific risk justifies it. |
+| Production JSON-RPC provider | Resolved (automatic failover): issue #667 shipped ordered multi-endpoint failover — the `rpc_urls` array in `clients/rust-payment-client/src/config.rs` with endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
 | Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
