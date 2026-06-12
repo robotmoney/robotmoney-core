@@ -605,28 +605,31 @@ service that closes the security-model gap by watching gateway mint and burn
 flow and reacting without a human in the loop.
 
 Its role is rate monitoring and automated containment. On each poll cycle
-(default `poll_interval_seconds = 12`, one Base block) it aggregates rolling
-per-block and per-hour mint and burn volume from the explorer indexer
-database and compares each total against configurable global and per-vault
-thresholds (`thresholds.global.{mint,burn}_per_{block,hour}_units`). The
-service reads the indexed event history; it is not an authoritative signer
-for normal operations.
+(default `--poll-interval-secs 12`, also configurable through
+`WATCHDOG_POLL_INTERVAL_SECS`) it aggregates rolling per-block and per-hour
+mint and burn volume from the explorer indexer database and compares each
+total against the TOML-configured global limits
+(`global.per_{block,hour}_{mint,burn}_limit_usdc`). Optional
+`vault.<address>` entries override those limits per vault. The service reads
+the indexed event history; it is not an authoritative signer for normal
+operations.
 
-On a threshold breach the watchdog takes two actions. It dispatches a
-structured alert through the webhook dispatcher (`src/alert.rs`,
-PagerDuty-compatible structured JSON to `WATCHDOG_ALERT_WEBHOOK_URL`), and it
-triggers an automated gateway pause by constructing and submitting a
-`gateway.pause()` transaction (`src/pause.rs`) signed with the EIP-155-bound
-pauser key (`WATCHDOG_PAUSER_KEY`). The pauser is a guardian-role key
-distinct from `ADMIN_ROLE`: it can pause but cannot unpause, matching the
-guardian/quorum separation in security-model.md §9. Unpause still requires
-`ADMIN_ROLE` through the timelock.
+On a threshold breach the watchdog follows `action.mode`: `alert`, `pause`,
+or `pause_and_alert`. The alert path dispatches PagerDuty-compatible
+structured JSON through `src/alert.rs` to `action.webhook_url`. The pause
+path constructs and submits a `gateway.pause()` EIP-155 transaction through
+`src/pause.rs`, using `action.gateway_rpc_url`,
+`action.gateway_address`, and the funded PAUSER_ROLE key in
+`action.pauser_private_key_hex`. The pauser is distinct from `ADMIN_ROLE`:
+it can pause but cannot unpause, matching the guardian/quorum separation in
+security-model.md §9. Unpause still requires `ADMIN_ROLE` through the
+timelock.
 
-The service enforces a maximum response-time SLA (`response_sla_seconds`,
-default 300 — five minutes) from breach detection to pause/alert dispatch.
-It is exercised by CI suite-20 (`tests/threshold_breach.rs`,
-`tests/alert_webhook.rs`) and is described in
-`docs/development/ci-suites.md`.
+The configured maximum response-time SLA is
+`sla.max_response_secs = 300` (five minutes) from breach detection to
+pause/alert dispatch; startup rejects a zero value. The service is exercised
+by CI suite-20 (`tests/threshold_breach.rs`, `tests/alert_webhook.rs`) and is
+described in `docs/development/ci-suites.md`.
 
 ## 6. Data and Trust Boundaries
 
