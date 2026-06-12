@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.6 — Nonce management
+//! Canonical: Plan tracking issue #109 §4.6 — Nonce management
 //!
 //! `nonce` — single-flight per-agent file lock.
 //!

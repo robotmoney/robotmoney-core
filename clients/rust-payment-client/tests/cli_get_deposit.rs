@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — `rmpc get-deposit`
+//! Canonical: Plan tracking issue #109 §9 — `rmpc get-deposit`
 //!
 //! Integration tests for `rmpc get-deposit` (issue #50).
 

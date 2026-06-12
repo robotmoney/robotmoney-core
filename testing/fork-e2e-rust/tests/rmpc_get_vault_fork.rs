@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — Phase 3 Direct Chain-Read
+//! Canonical: Plan tracking issue #109 §9 — Phase 3 Direct Chain-Read
 //! Query Tooling. Acceptance criterion: "Fork tests cover every read
 //! command against pinned contracts."
 //!

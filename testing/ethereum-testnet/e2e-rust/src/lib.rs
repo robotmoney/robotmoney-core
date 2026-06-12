@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §5 — Phase 1 End-to-end test plan
+//! Canonical: Plan tracking issue #109 §5 — Phase 1 End-to-end test plan
 //!
 //! rmpc integration test fixture. Wraps [`smoke_test::Fixture`] (the
 //! devnet + deployed contracts) and adds:

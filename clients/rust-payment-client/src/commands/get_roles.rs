@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — Phase 3 Direct Chain-Read Query Tooling
+//! Canonical: Plan tracking issue #109 §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc get-roles --address 0x…` — direct on-chain read of role

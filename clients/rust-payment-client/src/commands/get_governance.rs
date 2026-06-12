@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) — "Router-weight governance" phase
+//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
 //! Implements: issue #309 (rmpc get-governance subprocess assertion)
 //!
 //! `rmpc get-governance` — direct on-chain read of RouterGovernance state.

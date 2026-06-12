@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — Phase 3 Direct Chain-Read Query Tooling
+//! Canonical: Plan tracking issue #109 §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc get-balance --address 0x…` — ERC-20 token balance for an address.

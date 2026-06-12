@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 ("Required scenarios").
+//! Canonical: Plan tracking issue #109 §8 ("Required scenarios").
 //!
 //! Shared helpers used by the five §8 scenarios. The scenarios
 //! themselves live as `#[test]` cases under `tests/` so each one
