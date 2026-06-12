@@ -72,7 +72,9 @@ jobs:
             suite-16-abi-drift.yml
             suite-17-ci-velocity-guard.yml
             suite-18-secrets-scan.yml
+            suite-18-security-gates.yml
             suite-18-upstream-monitoring.yml
+            suite-19-erc4626-demo-tvl-matrix.yml
             suite-20-watchdog.yml
           )
           for workflow in "${SUITES[@]}"; do
