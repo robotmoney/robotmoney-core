@@ -70,7 +70,38 @@ The following are the seams downstream read-command batches MUST consume. Adding
 | `DecimalU256` | `read_output::DecimalU256` | `u256` field that serializes as a decimal string |
 | `DecimalU128` | `read_output::DecimalU128` | `u128` field that serializes as a decimal string |
 
-## 5. Newly discovered integration points and risks
+## 5. Stable RmpcError Reason-Code Variants
+
+The four variants below are the stable, product-visible API surface of
+`RmpcError` (`clients/rust-payment-client/src/errors.rs`).  Agents and
+operator tooling **must** match on these variant names (the prefix of every
+`Display` output) rather than on human-readable message text.  Renaming any
+variant is a breaking change; see `docs/architecture.md` §7.2.
+
+| Variant | Display prefix | Product reason code (arch §7.2) | EVM revert source |
+|---|---|---|---|
+| `ErrVaultDisabled` | `ErrVaultDisabled:` | `vault_disabled` | `PortfolioRouter.VaultNotRegistered` / `VaultNotActive` |
+| `ErrPolicyExpired` | `ErrPolicyExpired:` | `expired_policy` | `RobotMoneyGateway.AgentPolicyExpired` |
+| `ErrLegUnavailable` | `ErrLegUnavailable:` | `unavailable_leg` | `PortfolioRouter.VaultNotActive` / `VaultCapExceeded` |
+| `ErrSlippageBoundExceeded` | `ErrSlippageBoundExceeded:` | `slippage_bound_exceeded` | `PortfolioRouter.SlippageExceeded` |
+
+All four variants are unit-free (no struct fields).  Their full `Display`
+strings are:
+
+```
+ErrVaultDisabled: target vault is not registered or has been disabled
+ErrPolicyExpired: agent policy has expired (validUntil < block.timestamp)
+ErrLegUnavailable: router leg vault is unavailable (paused, full, or de-listed)
+ErrSlippageBoundExceeded: estimated shares per leg fall below the caller's minimum bound
+```
+
+These are the only `RmpcError` variants that map directly from contract
+execution results rather than pre-flight checks.  Earlier variants such as
+`ErrGatewayPaused`, `ErrAllowanceInsufficient`, and `ErrBalanceInsufficient`
+are raised before the transaction is signed; these four are raised from the
+on-chain revert data decoded from a mined or simulated transaction.
+
+## 6. Newly discovered integration points and risks
 
 - **`rmpc status` predates the envelope.** Migrating its output to `Envelope<StatusFound>` is a breaking change for any e2e test or downstream consumer that already parses the flat shape. Filed as an out-of-scope follow-up; not part of this scout. Recommend the migration land at the same time as the first `get-*` command, in a separate PR, so the operator-visible break is one event.
 - **Pretty-printer is per-command today.** `commands/status.rs::emit` carries its own pretty-vs-compact branch. Each new `get-*` command will duplicate that branch unless we lift `emit` into `read_output`. Not part of this scout — fold into the first read-command batch if duplication shows up.
@@ -78,7 +109,7 @@ The following are the seams downstream read-command batches MUST consume. Adding
 - **Reorg semantics are deferred.** `PartialBuilder` carries one `block_number` but does not enforce it across sub-reads. The first multi-read batch (`get-vault` is the most likely candidate) owns the choice between "pin once via `eth_blockNumber` then issue all sub-reads against that tag" and "issue against `latest` and surface drift via `_meta.block_drift`". Recommend the former — it's stricter, and §9's "block_number" is naturally a single value.
 - **Indexer source variant.** §9 explicitly allows future explorer enrichment as long as JSON-RPC remains the source of truth. If/when that lands, `Source` gains an `Indexer` variant and consumers learn to ignore commands with `source: "indexer"` for safety-critical flows. Out of scope here; flagged as a known future ADR trigger.
 
-## 6. References
+## 7. References
 
 - `Plan tracking issue #109` §9 — Phase 3 Direct Chain-Read Query Tooling, "Output contract"
 - `clients/rust-payment-client/src/read_output.rs` — stub module implementing the surfaces above
