@@ -186,9 +186,10 @@ contract ERC4626PreconditionChecks is Test {
         if (kind == AdapterKind.Aave) {
             // aToken stub: balanceOf(adapter) == 0 on an empty adapter.
             TestERC20 aToken = new TestERC20();
-            return address(
-                new AaveV3Adapter(POOL_STUB, address(usdc), address(aToken), address(vault))
-            );
+            return
+                address(
+                    new AaveV3Adapter(POOL_STUB, address(usdc), address(aToken), address(vault))
+                );
         }
         if (kind == AdapterKind.Compound) {
             // comet stub: balanceOf(adapter) == 0 on an empty adapter.
