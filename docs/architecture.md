@@ -10,7 +10,7 @@
 ## 1. Overview
 
 Robot Money is a USDC treasury system for human depositors, autonomous
-agents, and token holders. The product architecture has three on-chain
+agents, and governance voters. The product architecture has three on-chain
 allocation layers: the Portfolio Router at the outer product layer,
 individual Robot Money vaults at the exposure layer, and vault adapters
 inside each vault for venue-specific strategy execution. Agent access has
@@ -18,6 +18,11 @@ a separate permission and safety layer: the gateway. Human and agent
 clients share the same read-before-write safety model: chain state is the
 authority for signing and execution, while indexed data is used only for
 display, history, and public observability.
+
+Current governance uses admin-assigned voting power: `ADMIN_ROLE` assigns
+each voter's power and controls proposal creation. Token-holder voting
+(RM-balance-weighted) is a future goal and is not active in the current
+deployment. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
 ## 2. Core Model
 
@@ -75,16 +80,27 @@ weight, and unavailable leg.
 
 ### 2.3 Governance Boundary
 
-`$ROBOTMONEY` governance controls Portfolio Router target weights across
-active vaults. It does not currently govern vault onboarding, vault
-retirement, per-vault asset selection, per-vault strategy internals,
-adapter selection, adapter caps, fees, or agent permissions.
+**Current MVP:** Governance voting power is admin-assigned.
+`RouterGovernance.sol` is the shipped governance contract. `ADMIN_ROLE`
+assigns each voter's weight and creates proposals; there is no automatic
+RM-balance snapshot. Governance controls Portfolio Router target weights
+across active vaults and nothing else. It does not govern vault
+onboarding, vault retirement, per-vault asset selection, per-vault
+strategy internals, adapter selection, adapter caps, fees, or agent
+permissions.
 
-The governance architecture must expose proposal state, vote casting,
-vote history, cadence metadata, execution state, and the resulting router
-weights. Those surfaces are required for both the dapp and programmatic
-read clients; the implementation of quorum, delay, and execution remains
-an open decision.
+**Future goal:** Token-holder voting weighted by RM-balance snapshot
+(ERC-20 Votes / EIP-5805) replaces admin assignment once the RM token's
+historical-balance interface is confirmed and a real token distribution
+exists. The quorum, cadence, execution-delay, and setWeights call-path
+decisions are recorded in
+`docs/technical/governance-decisions.md`. Until that phase ships,
+admin-assigned voting power remains the only active governance model.
+
+The governance read surface must expose proposal state, vote tallies,
+cadence metadata, execution state, and the resulting router weights. Those
+surfaces are required for both the dapp and programmatic read clients.
+See `docs/technical/governance-decisions.md` for the accepted parameters.
 
 ## 3. Technology Stack
 
@@ -810,17 +826,17 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | retired `Plan tracking issue #109` §0 (git history) |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | Plan tracking issue #109 §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 
 ## 10. Open Decisions
 
 | Decision | Tradeoff | Recommended default |
 | --- | --- | --- |
-| Portfolio Router contract design | Execution model resolved: all-or-revert. Remaining open: contract API, preview call signatures, cap enforcement across legs, and governance weight execution path. | Build a dedicated router contract; do not fold router behavior into adapters or `rmpc`. |
-| Vault registry contract | Resolved: on-chain contract. PRD requires observable vault registry, mandates, statuses, caps, and risk labels; the registry must expose stable read methods and emit events indexable by the explorer. | Add an on-chain registry with stable read methods and event history, then index it. |
-| Router-weight governance implementation | PRD fixes the governance surface but not the voting contract, cadence enforcement, quorum, delay, or execution path. | Keep governance narrow: one weight-vote module that can update router weights only. |
-| Protocol-asset and agent-token vault execution | These vaults need swaps, oracles, slippage bounds, liquidity rules, and asset-selection criteria. | Require separate ADRs before implementation; exclude from router until synchronous redemption and pricing are proven. |
+| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
+| Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
+| Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum (5 %), cadence (7-day min), voting period (5 days), and execution delay (48 h) are all fixed in the contract. Token-holder voting (RM-balance snapshot via ERC-20 Votes) is a future goal; the snapshot-mechanism risk is documented in `docs/technical/governance-decisions.md` §6.1. | Current admin-assigned MVP is the active model; do not build RM-snapshot voting until `docs/technical/governance-decisions.md` §6.1 is resolved and a real token distribution exists. |
+| Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC/wSOL) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
 | On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
@@ -836,7 +852,7 @@ this architecture:
 | `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, and out-of-scope boundaries. | Implementation sequencing. |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
-| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation. | Future vault categories and Portfolio Router. |
+| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation. | Basket-vault and Portfolio Router categories now shipped in source; doc coverage may lag source. |
 | `docs/technical/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
 | `docs/technical/rmpc-read-output-contract.md` | Stable JSON envelope, JSON-RPC source lock, partial-read contract, decimal-string integer serialization. | Per-command flag spelling and future indexer source variant. |
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |
@@ -844,4 +860,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| retired `Plan tracking issue #109` (git history; live plan: Plan tracking issue #109) | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |
+| Plan tracking issue #109 (GitHub) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the live plan is the canonical source. | Implementation-plan file references; those were retired 2026-06-09. |
