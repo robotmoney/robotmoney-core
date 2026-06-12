@@ -3,9 +3,10 @@
 # WHY THIS SUITE EXISTS
 # Two complementary test-matrix expansion concerns live here:
 #
-# 1. ERC-4626 PRECONDITION TESTS (still disabled — follow-up issue #814)
-#    contracts/test/ERC4626PreconditionChecks.t.sol does not exist yet.
-#    Kept as a stub; re-enable when the file is created.
+# 1. ERC-4626 PRECONDITION TESTS (activated — issue #814)
+#    contracts/test/ERC4626PreconditionChecks.t.sol asserts asset()/decimals()
+#    and empty-vault share-price invariants across the exitFeeBps × adapter matrix.
+#    The matrix shards by exit-fee tier via the EXIT_FEE_BPS env var.
 #
 # 2. DEMO-TVL MATRIX (activated — issue #804)
 #    The full_stack_demo_tvl smoke test
@@ -13,11 +14,11 @@
 #    Runs HEAVY tier only (dev-phase-* branches and dev/main) to keep ordinary
 #    PR cycles fast. Uses oven-sh/setup-bun@v2 for the DappStack dapp-build step.
 #
-# ACTIVATION HISTORY (issue #804)
-# - erc4626-precondition: still disabled — ERC4626PreconditionChecks.t.sol not yet
-#   created. Follow-up issue #814 covers creating the file and re-enabling this job.
-# - demo-tvl: activated — full_stack_demo_tvl.rs exists; bun runner dep resolved
-#   via oven-sh/setup-bun@v2.
+# ACTIVATION HISTORY
+# - erc4626-precondition: activated in issue #814 — ERC4626PreconditionChecks.t.sol
+#   created and `if: false` removed.
+# - demo-tvl: activated in issue #804 — full_stack_demo_tvl.rs exists; bun runner
+#   dep resolved via oven-sh/setup-bun@v2.
 
 name: erc4626-demo-tvl-matrix
 
@@ -38,13 +39,14 @@ concurrency:
 
 jobs:
   # ── ERC-4626 precondition checks ───────────────────────────────────────────
-  # Still disabled: contracts/test/ERC4626PreconditionChecks.t.sol not yet created.
-  # Follow-up issue #814: create the file and remove `if: false`.
+  # Activated in issue #814: contracts/test/ERC4626PreconditionChecks.t.sol asserts
+  # asset()/decimals()/empty-vault share-price invariants for each exitFeeBps tier
+  # × adapter (passthrough, aave, compound, morpho). The matrix shards the run by
+  # exit-fee tier; the test reads the EXIT_FEE_BPS env var for its matrix-env tier.
   erc4626-precondition:
-    name: erc4626-precondition-stub
+    name: erc4626-precondition
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: false # disabled until ERC4626PreconditionChecks.t.sol is created (issue #814)
     strategy:
       fail-fast: false
       matrix:
@@ -58,13 +60,13 @@ jobs:
         with:
           version: stable
       - name: forge test ERC-4626 preconditions (exitFeeBps=${{ matrix.exit_fee_bps }})
-        working-directory: contracts
+        env:
+          EXIT_FEE_BPS: ${{ matrix.exit_fee_bps }}
         run: |
           forge test \
             --match-contract ERC4626PreconditionChecks \
             --fuzz-runs 256 \
-            -vv \
-            --env EXIT_FEE_BPS=${{ matrix.exit_fee_bps }}
+            -vv
 
   # ── Full-stack demo-TVL ────────────────────────────────────────────────────
   # Runs the full_stack_demo_tvl smoke test on HEAVY-tier branches.
