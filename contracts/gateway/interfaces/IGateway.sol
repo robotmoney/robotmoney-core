@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §5 — On-Chain Gateway
-// (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §3.2 — RobotMoneyGateway.sol)
+// (See also: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol)
 pragma solidity ^0.8.24;
 
 /// @title IGateway

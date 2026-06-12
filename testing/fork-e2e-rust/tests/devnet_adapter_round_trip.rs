@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — issue #363 (devnet adapter
+//! Canonical: Plan tracking issue #109 §8 — issue #363 (devnet adapter
 //! round-trip).
 //!
 //! Verifies that the real Aave V3, Compound V3, and Morpho adapters

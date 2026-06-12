@@ -1,5 +1,5 @@
 //! Canonical: docs/architecture.md §4 — High-Level Flow
-//! (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 — CLI surface)
+//! (See also: Plan tracking issue #109 §4.8 — CLI surface)
 //!
 //! `rmpc deposit` — sign and broadcast a USDC deposit through the gateway.
 //!

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # generate_abi_bindings.sh — extract ABI arrays from Foundry artifacts.
 #
-# Canonical: docs/implementation-plan.md §3.2
+# Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway (ABI artifact pipeline)
 #
 # WHY THIS SCRIPT EXISTS
 # The Foundry out/ directory is the single canonical source for all contract

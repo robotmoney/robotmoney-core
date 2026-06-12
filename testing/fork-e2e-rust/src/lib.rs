@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — Phase 2 Forked Smart-Contract E2E.
+//! Canonical: Plan tracking issue #109 §8 — Phase 2 Forked Smart-Contract E2E.
 //! Decision record: docs/technical/fork-e2e-decisions.md (issue #47).
 //! Implements: issue #48.
 //!

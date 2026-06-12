@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4 — Phase 1 Rust client
+//! Canonical: Plan tracking issue #109 §4 — Phase 1 Rust client
 //!
 //! `rmpc` — Robot Money payment client CLI entry point.
 //!

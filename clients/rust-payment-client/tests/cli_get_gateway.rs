@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — `rmpc get-gateway`
+//! Canonical: Plan tracking issue #109 §9 — `rmpc get-gateway`
 //!
 //! Integration tests for `rmpc get-gateway` (issue #49). Drives the
 //! command against a `mockito` JSON-RPC server with canned responses

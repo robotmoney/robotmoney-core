@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.3 — Software signer
+//! Canonical: Plan tracking issue #109 §4.3 — Software signer
 //!
 //! Encrypted-keystore software signer (§3.3).
 //!

@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.3 — Software signer
+//! Canonical: Plan tracking issue #109 §4.3 — Software signer
 //!
 //! `rmpc-keystore-import` — test-only helper that takes a raw secp256k1
 //! private key (32 bytes, hex) and writes an Argon2id+AES-256-GCM

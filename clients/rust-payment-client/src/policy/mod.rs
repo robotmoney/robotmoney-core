@@ -1,5 +1,5 @@
 //! Canonical: docs/architecture.md §9 — Client Preflight
-//! (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §4.4 — Preflight)
+//! (See also: Plan tracking issue #109 §4.4 — Preflight)
 //!
 //! `policy` module — client-side preflight that mirrors the on-chain
 //! `RobotMoneyGateway` policy.

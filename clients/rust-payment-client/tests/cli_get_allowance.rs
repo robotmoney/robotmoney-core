@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — `rmpc get-allowance`
+//! Canonical: Plan tracking issue #109 §9 — `rmpc get-allowance`
 //!
 //! Integration tests for `rmpc get-allowance` (issue #50).
 

@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) — "Router-weight governance" phase
+//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
 //! Implements: issue #309 (rmpc get-router subprocess assertion)
 //!
 //! `rmpc get-router` — direct on-chain read of Portfolio Router state.

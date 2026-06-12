@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) — Phase: Vault registry
+//! Canonical: Plan tracking issue #109 — Phase: Vault registry
 //! Implements: issue #298
 //!
 //! Fork e2e scenarios for the on-chain VaultRegistry contract.

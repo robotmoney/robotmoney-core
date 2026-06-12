@@ -1,6 +1,6 @@
 // Strict Content Security Policy and HSTS header enforcement for the dapp.
 //
-// Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) "Backend and dapp hardening" — the
+// Canonical: Plan tracking issue #109 "Backend and dapp hardening" — the
 // security model (PRD §11 / XSS) requires the dapp be deployed with a strict
 // CSP that disallows inline scripts and eval, verified in CI before public
 // launch (issue #665). PRD §11 / TLS also requires HSTS preload on all dapp

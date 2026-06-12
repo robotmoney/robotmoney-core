@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §5.1 — Protocol-scope vault registry reads
+//! Canonical: Plan tracking issue #109 §5.1 — Protocol-scope vault registry reads
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //! ADR: docs/technical/vault-registry-decisions.md §3.4
 //!

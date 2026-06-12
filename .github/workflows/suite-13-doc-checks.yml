@@ -92,6 +92,9 @@ jobs:
       - name: RmpcError §7.2 variants documented in rmpc-read-output-contract.md (issue #806)
         run: python3 .github/scripts/check_rmpc_error_variants_doc.py
 
+      - name: Canonical-header staleness — retired-plan phrase and impl-plan links (issue #823)
+        run: python3 .github/scripts/check_canonical_header_staleness.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest
