@@ -406,20 +406,25 @@ contract RwaVaultTest is Test {
 
     // ─── AC-3: Caps ───────────────────────────────────────────────────────────
 
-    /// @notice Deposits above the per-deposit cap revert with PerDepositCapExceeded.
+    /// @notice Deposits above the per-deposit cap revert. Since BasketVault.maxDeposit
+    ///         now reflects the caps (audit 2026-06-09, L-16), OZ's ERC4626 entry-point
+    ///         check fires first with ERC4626ExceededMaxDeposit.
     ///         AC-3: caps are enforced.
     function test_caps_perDepositCapEnforced() public {
         // perDepositCap = 10k USDC; try to deposit 11k
         uint256 depositAmount = 11_000 * ONE_USDC;
+        assertEq(vault.maxDeposit(user), 10_000 * ONE_USDC, "maxDeposit reflects perDepositCap");
         usdc.mint(user, depositAmount);
         vm.startPrank(user);
         usdc.approve(address(vault), depositAmount);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("PerDepositCapExceeded()"))));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, maxDeposit)
         vault.deposit(depositAmount, user);
         vm.stopPrank();
     }
 
-    /// @notice Deposits above the TVL cap revert with TVLCapExceeded.
+    /// @notice Deposits above the TVL cap revert. Since BasketVault.maxDeposit now
+    ///         reflects TVL-cap headroom (audit 2026-06-09, L-16), OZ's ERC4626
+    ///         entry-point check fires first with ERC4626ExceededMaxDeposit.
     ///         AC-3: caps are enforced.
     function test_caps_tvlCapEnforced() public {
         // Seed the vault with deSPXA so TVL is just 6 USDC below the cap.
@@ -434,7 +439,7 @@ contract RwaVaultTest is Test {
         usdc.mint(user, depositAmount);
         vm.startPrank(user);
         usdc.approve(address(vault), depositAmount);
-        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("TVLCapExceeded()"))));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, headroom)
         vault.deposit(depositAmount, user);
         vm.stopPrank();
     }
@@ -705,6 +710,76 @@ contract RwaVaultTest is Test {
             address(despxa),
             address(usdc)
         );
+    }
+
+    // ─── ChronicleOracleAdapter: NAV price validation ──────────────────────────
+
+    /// @notice ChronicleOracleAdapter rejects zero NAV price.
+    function test_adapter_rejectsZeroNavPrice() public {
+        chronicle.setPrice(0);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, 0));
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price below MIN_NAV.
+    function test_adapter_rejectsNavPriceBelowMin() public {
+        uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
+        chronicle.setPrice(lowPrice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice)
+        );
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price above MAX_NAV.
+    function test_adapter_rejectsNavPriceAboveMax() public {
+        uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
+        chronicle.setPrice(highPrice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice)
+        );
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter accepts NAV price at MIN_NAV boundary.
+    function test_adapter_acceptsNavPriceAtMinBoundary() public {
+        uint256 minNav = ChronicleOracleAdapter(address(adapter)).MIN_NAV();
+        chronicle.setPrice(minNav);
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter accepts NAV price at MAX_NAV boundary.
+    function test_adapter_acceptsNavPriceAtMaxBoundary() public {
+        uint256 maxNav = ChronicleOracleAdapter(address(adapter)).MAX_NAV();
+        chronicle.setPrice(maxNav);
+        adapter.twapPrice(address(pool), address(despxa), address(usdc), 1e18, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects zero NAV price in USDC→RWA direction.
+    function test_adapter_rejectsZeroNavPrice_usdcToRwa() public {
+        chronicle.setPrice(0);
+        vm.expectRevert(abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, 0));
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price below MIN_NAV in USDC→RWA direction.
+    function test_adapter_rejectsNavPriceBelowMin_usdcToRwa() public {
+        uint256 lowPrice = ChronicleOracleAdapter(address(adapter)).MIN_NAV() - 1;
+        chronicle.setPrice(lowPrice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, lowPrice)
+        );
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
+    }
+
+    /// @notice ChronicleOracleAdapter rejects NAV price above MAX_NAV in USDC→RWA direction.
+    function test_adapter_rejectsNavPriceAboveMax_usdcToRwa() public {
+        uint256 highPrice = ChronicleOracleAdapter(address(adapter)).MAX_NAV() + 1;
+        chronicle.setPrice(highPrice);
+        vm.expectRevert(
+            abi.encodeWithSelector(ChronicleOracleAdapter.BadNavPrice.selector, highPrice)
+        );
+        adapter.twapPrice(address(pool), address(usdc), address(despxa), 5 * ONE_USDC, 0);
     }
 
     /// @notice RwaVault rejects zero-address for Chronicle oracle.

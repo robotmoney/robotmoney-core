@@ -91,6 +91,52 @@ contract MockAdapter is IStrategyAdapter {
     }
 }
 
+/// @dev Adapter that over-reports `totalAssets` by a configurable phantom amount and
+///      can leak real USDC out, modelling a buggy or lying adapter. Used for the
+///      `_pullProportional` shortfall tests (audit 2026-06-09, L-2).
+contract ShortfallAdapter is IStrategyAdapter {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable USDC;
+    address public immutable VAULT;
+
+    /// @notice Phantom assets added on top of the real balance in `totalAssets()`.
+    uint256 public phantom;
+
+    constructor(address usdc_, address vault_) {
+        USDC = IERC20(usdc_);
+        VAULT = vault_;
+    }
+
+    function setPhantom(uint256 phantom_) external {
+        phantom = phantom_;
+    }
+
+    /// @notice Simulate a loss: move real USDC out without adjusting reporting.
+    function leak(address to, uint256 amount) external {
+        USDC.safeTransfer(to, amount);
+    }
+
+    /// @inheritdoc IStrategyAdapter
+    function deploy(uint256) external {}
+
+    /// @inheritdoc IStrategyAdapter
+    function withdraw(uint256 amount) external returns (uint256) {
+        uint256 bal = USDC.balanceOf(address(this));
+        uint256 actual = amount > bal ? bal : amount;
+        USDC.safeTransfer(VAULT, actual);
+        return actual;
+    }
+
+    /// @inheritdoc IStrategyAdapter
+    function totalAssets() external view returns (uint256) {
+        return USDC.balanceOf(address(this)) + phantom;
+    }
+
+    /// @inheritdoc IStrategyAdapter
+    function rescueTokens(address, address) external {}
+}
+
 // ─── Vault harness ───────────────────────────────────────────────────────────
 
 /// @dev Exposes internal helpers for tests.
@@ -273,23 +319,111 @@ contract RobotMoneyVaultTest is Test {
         assertEq(typedVault.activeAdapterCount(), 4, "all approved adapter types should be active");
     }
 
-    function test_depositCannotAllocateToAdapterAfterApprovalRevoked() public {
+    /// @notice Revoking an active adapter's allowlist entry must NOT brick deposits
+    ///         (audit 2026-06-09, L-4): `_routeDeposit` skips the ineligible adapter
+    ///         and the funds stay idle in the vault (UnroutedDeposit emitted).
+    function test_deposit_skipsAdapterAfterApprovalRevoked_fundsStayIdle() public {
         uint256 amount = 1_000 * ONE_USDC;
         vm.prank(admin);
         vault.setAdapterAllowed(address(adapter), false);
 
         uint256 beforeAdapter = usdc.balanceOf(address(adapter));
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit RobotMoneyVault.UnroutedDeposit(amount);
         vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(adapter))
-        );
-        vault.deposit(amount, alice);
+        uint256 shares = vault.deposit(amount, alice);
 
+        assertGt(shares, 0, "depositor must receive shares");
         assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
-        assertEq(usdc.balanceOf(address(vault)), 0, "deposit transfer must roll back");
+        assertEq(usdc.balanceOf(address(vault)), amount, "deposit must stay idle in the vault");
     }
 
-    function test_rebalanceCannotAllocateToAdapterAfterApprovalRevoked() public {
+    /// @notice With two adapters, revoking one routes the full deposit into the
+    ///         remaining eligible adapter instead of reverting (audit L-4).
+    function test_deposit_routesToRemainingEligibleAdapterAfterRevocation() public {
+        MockAdapter second = new MockAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(second));
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
+
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(adapter), false);
+
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+
+        assertEq(usdc.balanceOf(address(adapter)), 0, "revoked adapter must not receive USDC");
+        assertEq(
+            usdc.balanceOf(address(second)), amount, "eligible adapter must absorb the deposit"
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "nothing should stay idle");
+    }
+
+    /// @notice `_pullProportional` reverts with the dedicated
+    ///         `InsufficientAdapterLiquidity` error (instead of an opaque ERC-20
+    ///         transfer revert) when the active adapters cannot deliver the
+    ///         requested withdrawal (audit 2026-06-09, L-2).
+    function test_withdraw_revertsWithInsufficientAdapterLiquidity_onAdapterShortfall() public {
+        ShortfallAdapter liar = new ShortfallAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(liar));
+        vm.prank(admin);
+        vault.addAdapter(address(liar), 10_000);
+        // Deactivate the honest default adapter so the liar is the only active one.
+        vm.prank(admin);
+        vault.removeAdapter(0);
+
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice); // routed entirely into the liar (real 1 000)
+
+        liar.setPhantom(500 * ONE_USDC); // reports 1 500 but can only deliver 1 000
+
+        uint256 aliceShares = vault.balanceOf(alice);
+        // No exit fee: the gross pulled from adapters equals previewRedeem; only
+        // the liar's real 1 000 USDC is deliverable.
+        uint256 expectedGross = vault.previewRedeem(aliceShares);
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.InsufficientAdapterLiquidity.selector, expectedGross, amount
+            )
+        );
+        vault.redeem(aliceShares, alice, alice);
+    }
+
+    /// @notice The leftover sweep distributes a shortfall across ALL active adapters
+    ///         instead of dumping it on the last one: a withdrawal that the honest
+    ///         adapter can cover succeeds even when the registry's last adapter
+    ///         under-delivers (audit 2026-06-09, L-2).
+    function test_withdraw_sweepCoversLastAdapterShortfall() public {
+        // Registry: [honest default adapter, lying adapter last].
+        ShortfallAdapter liar = new ShortfallAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(liar));
+        vm.prank(admin);
+        vault.addAdapter(address(liar), 10_000);
+
+        vm.prank(alice);
+        vault.deposit(1_600 * ONE_USDC, alice); // equal-weight 800 / 800
+        assertEq(usdc.balanceOf(address(adapter)), 800 * ONE_USDC, "honest adapter funded");
+        assertEq(usdc.balanceOf(address(liar)), 800 * ONE_USDC, "liar funded");
+
+        // The liar loses 700 real USDC but keeps reporting 600 (100 real + 500 phantom).
+        liar.leak(makeAddr("sink"), 700 * ONE_USDC);
+        liar.setPhantom(500 * ONE_USDC);
+
+        // Withdraw 700 net (no exit fee). The old implementation dumped the pass-1
+        // shortfall on the LAST adapter (the liar), under-delivered, and reverted
+        // opaquely on the final transfer; the sweep now covers it from the honest one.
+        uint256 aliceUsdcBefore = usdc.balanceOf(alice);
+        vm.prank(alice);
+        vault.withdraw(700 * ONE_USDC, alice, alice);
+        assertEq(usdc.balanceOf(alice), aliceUsdcBefore + 700 * ONE_USDC, "alice received 700 USDC");
+    }
+
+    /// @notice Keeper `rebalance()` must NOT brick when an active adapter's allowlist
+    ///         entry is revoked (audit L-4): the routing pass skips it; idle funds remain.
+    function test_rebalance_skipsAdapterAfterApprovalRevoked() public {
         uint256 amount = 1_000 * ONE_USDC;
         vm.prank(alice);
         vault.deposit(amount, alice);
@@ -301,12 +435,10 @@ contract RobotMoneyVaultTest is Test {
         uint256 beforeAdapter = usdc.balanceOf(address(adapter));
         vm.warp(block.timestamp + vault.minRebalanceInterval());
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(RobotMoneyVault.AdapterNotAllowed.selector, address(adapter))
-        );
         vault.rebalance();
 
         assertEq(usdc.balanceOf(address(adapter)), beforeAdapter, "adapter must not receive USDC");
+        assertEq(usdc.balanceOf(address(vault)), amount, "idle funds must remain in the vault");
     }
 
     function test_adminRebalanceCannotAllocateToAdapterAfterApprovalRevoked() public {
@@ -796,9 +928,13 @@ contract RobotMoneyVaultTest is Test {
         vm.expectRevert(); // ERC4626ExceededMaxDeposit(receiver, assets, 0)
         vault.deposit(1_000 * ONE_USDC, bob);
 
-        // Redeem blocked.
+        // Redeem blocked. maxRedeem() returns 0 while withdrawals are paused
+        // (audit 2026-06-09, L-1), so ERC4626ExceededMaxRedeem fires before the
+        // internal WithdrawalsPaused guard.
+        assertEq(vault.maxRedeem(alice), 0, "maxRedeem must be 0 while paused");
+        assertEq(vault.maxWithdraw(alice), 0, "maxWithdraw must be 0 while paused");
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(RobotMoneyVault.WithdrawalsPaused.selector));
+        vm.expectRevert(); // ERC4626ExceededMaxRedeem(owner, shares, 0)
         vault.redeem(aliceShares, alice, alice);
     }
 

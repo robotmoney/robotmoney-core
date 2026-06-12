@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -60,6 +60,17 @@ uint64 public constant MIN_VOTING_PERIOD = 1 hours
 ```
 
 
+### MIN_EXECUTION_DELAY
+Minimum execution delay in seconds (1 hour). Prevents proposals
+from being executed immediately after the voting deadline, giving
+users time to inspect outcomes and withdraw before state changes.
+
+
+```solidity
+uint64 public constant MIN_EXECUTION_DELAY = 1 hours
+```
+
+
 ### router
 The Portfolio Router whose `setWeights` is called on execution.
 
@@ -97,12 +108,12 @@ uint256 public quorumThreshold
 ```
 
 
-### votingPower
-Voting power per address. Assigned by ADMIN_ROLE.
+### _votingPowerCheckpoints
+Voting power checkpoints per address. Assigned by ADMIN_ROLE.
 
 
 ```solidity
-mapping(address => uint256) public votingPower
+mapping(address => VotingPowerCheckpoint[]) private _votingPowerCheckpoints
 ```
 
 
@@ -190,6 +201,7 @@ function setVotingPeriod(uint64 period) external onlyRole(ADMIN_ROLE);
 ### setExecutionDelay
 
 Update the execution delay. Restricted to ADMIN_ROLE.
+Reverts with ExecutionDelayBelowMinimum if delay < MIN_EXECUTION_DELAY.
 
 
 ```solidity
@@ -206,6 +218,15 @@ from token holdings. Token-holder voting is a future goal.
 
 ```solidity
 function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE);
+```
+
+### votingPower
+
+Return the current voting power for `voter` (latest checkpoint value).
+
+
+```solidity
+function votingPower(address voter) public view returns (uint256);
 ```
 
 ### setDefaultWeights
@@ -293,6 +314,9 @@ function cancel(uint256 proposalId) external onlyRole(ADMIN_ROLE);
 
 Cast a FOR vote on the currently active proposal.
 Caller must have voting power assigned by ADMIN_ROLE.
+Voting power is read from the checkpoint at the proposal's
+voteSnapshot block, so mid-proposal power changes do not
+affect the tally.
 
 
 ```solidity
@@ -378,6 +402,37 @@ Whether `voter` has already voted on `proposalId`.
 
 ```solidity
 function hasVoted(uint256 proposalId, address voter) external view returns (bool);
+```
+
+### proposalVoteSnapshot
+
+Return the block number captured as `proposalId`'s voting-power
+snapshot at propose() time. Reverts for unknown proposal ids.
+
+
+```solidity
+function proposalVoteSnapshot(uint256 proposalId) external view returns (uint256);
+```
+
+### getPastVotes
+
+Return the voting power `voter` held at `blockNumber`.
+Reverts if blockNumber is more than 256 blocks behind the
+current tip (EVM checkpoint depth limitation).
+
+
+```solidity
+function getPastVotes(address voter, uint256 blockNumber) external view returns (uint256);
+```
+
+### _getPastVotes
+
+Binary search for a voter's power at the given block number.
+Returns 0 if no checkpoint exists at or before `blockNumber`.
+
+
+```solidity
+function _getPastVotes(address voter, uint256 blockNumber) internal view returns (uint256);
 ```
 
 ### _state
@@ -630,6 +685,14 @@ Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
 error VotingPeriodBelowMinimum();
 ```
 
+### ExecutionDelayBelowMinimum
+Thrown when executionDelay is set below MIN_EXECUTION_DELAY.
+
+
+```solidity
+error ExecutionDelayBelowMinimum();
+```
+
 ### VaultNotEligible
 Thrown by propose() when a vault in the proposed weight list is
 not router-eligible (zero address, unregistered, ineligible flag
@@ -648,6 +711,16 @@ error VaultNotEligible(address vault);
 |Name|Type|Description|
 |----|----|-----------|
 |`vault`|`address`|The vault address that failed the router-eligibility check.|
+
+### CheckpointTooOld
+Thrown by the external getPastVotes view when the queried block
+is more than 256 blocks behind the current block — mirrors EVM
+blockhash depth limits to discourage unbounded historical reads.
+
+
+```solidity
+error CheckpointTooOld();
+```
 
 ## Structs
 ### Proposal
@@ -673,10 +746,26 @@ struct Proposal {
     /// quorumThreshold storage variable do not retroactively affect this
     /// proposal — preventing both retroactive defeat and retroactive passage.
     uint256 snapshotQuorum;
+    /// Block number at which this proposal was created. vote() reads each
+    /// voter's checkpointed voting power at this block, so power granted or
+    /// revoked mid-proposal does not shift the tally.
+    uint256 voteSnapshot;
     /// Whether the proposal has been executed.
     bool executed;
     /// Whether the proposal has been cancelled by ADMIN_ROLE.
     bool cancelled;
+}
+```
+
+### VotingPowerCheckpoint
+Checkpoint history for voting power. Each push records `(block, power)`.
+Enables getPastVotes queries against the proposal's voteSnapshot block.
+
+
+```solidity
+struct VotingPowerCheckpoint {
+    uint64 fromBlock;
+    uint216 power;
 }
 ```
 

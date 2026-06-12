@@ -296,6 +296,115 @@ contract BasketVaultTest is Test {
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
     }
 
+    /// @notice A removed (inactive) basket asset's token is rescuable when a balance
+    ///         reappears later — `totalAssets`/`_sellProportional` skip inactive
+    ///         entries, so the balance would otherwise be stranded forever
+    ///         (audit 2026-06-09, L-15).
+    function test_rescueTokens_succeedsForInactiveBasketAsset() public {
+        vm.prank(admin);
+        vault.removeAsset(0); // vault holds zero basketToken, removal allowed
+
+        // A balance reappears after removal (e.g. late airdrop or refund).
+        basketToken.mint(address(vault), 7 * ONE_USDC);
+
+        vm.prank(admin);
+        vault.rescueTokens(address(basketToken), admin);
+
+        assertEq(basketToken.balanceOf(admin), 7 * ONE_USDC, "reappeared balance recovered");
+        assertEq(basketToken.balanceOf(address(vault)), 0, "vault no longer holds the token");
+    }
+
+    // ─── maxDeposit / maxMint 4626 conformance (audit 2026-06-09, L-16) ───────
+
+    function test_maxDeposit_reflectsPerDepositCap() public view {
+        // Fresh vault: TVL headroom (1M) exceeds perDepositCap (100k).
+        assertEq(vault.maxDeposit(stranger), 100_000 * ONE_USDC, "maxDeposit == perDepositCap");
+        assertEq(
+            vault.maxMint(stranger),
+            vault.previewDeposit(100_000 * ONE_USDC),
+            "maxMint mirrors maxDeposit through previewDeposit"
+        );
+    }
+
+    function test_maxDeposit_zeroWhenPaused() public {
+        vm.prank(emergencyResponder);
+        vault.pause();
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while paused");
+        assertEq(vault.maxMint(stranger), 0, "maxMint 0 while paused");
+
+        vm.prank(admin);
+        vault.unpause();
+        assertGt(vault.maxDeposit(stranger), 0, "maxDeposit restored after unpause");
+    }
+
+    function test_maxDeposit_zeroWhenShutdown() public {
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 after shutdown");
+        assertEq(vault.maxMint(stranger), 0, "maxMint 0 after shutdown");
+    }
+
+    function test_maxDeposit_zeroWhenNoActiveAssets() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 with no active assets");
+        assertEq(vault.maxMint(stranger), 0, "maxMint 0 with no active assets");
+    }
+
+    function test_maxDeposit_reflectsTvlHeadroom() public {
+        vm.prank(admin);
+        vault.setTvlCap(50_000 * ONE_USDC);
+        assertEq(vault.maxDeposit(stranger), 50_000 * ONE_USDC, "headroom below perDepositCap");
+
+        // Idle USDC counts toward totalAssets and shrinks the headroom.
+        usdc.mint(address(vault), 20_000 * ONE_USDC);
+        assertEq(vault.maxDeposit(stranger), 30_000 * ONE_USDC, "headroom shrinks with TVL");
+
+        // At/above the cap, deposits are fully disabled.
+        usdc.mint(address(vault), 40_000 * ONE_USDC);
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 at TVL cap");
+        assertEq(vault.maxMint(stranger), 0, "maxMint 0 at TVL cap");
+    }
+
+    // ─── setMaxSlippageBps pool-fee floor (audit 2026-06-09, L-17) ────────────
+
+    function test_setMaxSlippageBps_revertsBelowPoolFeeFloor() public {
+        // Active asset registered with fee tier 500 (hundredths of a bip) → 5 bps floor.
+        assertEq(vault.minSlippageFloorBps(), 5, "floor derives from the active fee tier");
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(BasketVault.SlippageBelowPoolFeeFloor.selector, 0, 5)
+        );
+        vault.setMaxSlippageBps(0); // the bricking case from the audit
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(BasketVault.SlippageBelowPoolFeeFloor.selector, 4, 5)
+        );
+        vault.setMaxSlippageBps(4);
+    }
+
+    function test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(5); // exactly at the 5 bps floor
+        assertEq(vault.maxSlippageBps(), 5, "floor value accepted");
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(200);
+        assertEq(vault.maxSlippageBps(), 200, "value above floor accepted");
+    }
+
+    function test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        assertEq(vault.minSlippageFloorBps(), 0, "no active assets, no floor");
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(0); // nothing can brick with an empty basket
+        assertEq(vault.maxSlippageBps(), 0, "zero accepted with empty basket");
+    }
+
     function test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap() public {
         // issue #446: an admin-configured upper-loss cap must bound override slippage.
         uint256 tokenAmount = 1_000 * ONE_USDC;
@@ -1493,11 +1602,26 @@ contract MockAerodromeRouter {
     using SafeERC20 for IERC20;
 
     uint256 public amountOut;
+    /// @dev When set, the deadline forwarded by the adapter is enforced
+    ///      (mirrors the real Aerodrome Router's "Expired" check).
+    bool public enforceDeadline;
+    /// @dev When set, return an empty amounts array (malformed router response,
+    ///      audit 2026-06-09 L-7 regression input).
+    bool public returnEmptyAmounts;
 
     error TooLittleReceived(uint256 amountOut, uint256 amountOutMin);
+    error Expired(uint256 deadline, uint256 blockTimestamp);
 
     function setAmountOut(uint256 amountOut_) external {
         amountOut = amountOut_;
+    }
+
+    function setEnforceDeadline(bool enforce_) external {
+        enforceDeadline = enforce_;
+    }
+
+    function setReturnEmptyAmounts(bool empty_) external {
+        returnEmptyAmounts = empty_;
     }
 
     function swapExactTokensForTokens(
@@ -1505,11 +1629,15 @@ contract MockAerodromeRouter {
         uint256 amountOutMin,
         IAerodromeRouter.Route[] calldata routes,
         address to,
-        uint256 /* deadline */
+        uint256 deadline
     ) external returns (uint256[] memory amounts) {
+        if (enforceDeadline && block.timestamp > deadline) {
+            revert Expired(deadline, block.timestamp);
+        }
         if (amountOut < amountOutMin) revert TooLittleReceived(amountOut, amountOutMin);
         IERC20(routes[0].from).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(routes[routes.length - 1].to).safeTransfer(to, amountOut);
+        if (returnEmptyAmounts) return new uint256[](0);
         amounts = new uint256[](routes.length + 1);
         amounts[routes.length] = amountOut;
     }
@@ -1787,10 +1915,76 @@ contract BasketVaultAerodromeTest is Test {
             )
         );
         adapter.swap(
-            address(tokenA), address(tokenB), 0, 1_000 * ONE_USDC, 900 * ONE_USDC, address(this)
+            address(tokenA),
+            address(tokenB),
+            0,
+            1_000 * ONE_USDC,
+            900 * ONE_USDC,
+            address(this),
+            block.timestamp
         );
         // localPool is used to establish token ordering; it has no further role in this test.
         assertTrue(localPool.token0() != address(0), "pool token ordering set");
+    }
+
+    /// @notice AerodromeSwapAdapter.swap() reverts with EmptyRouterAmounts when the
+    ///         router returns an empty amounts array instead of underflowing the
+    ///         output-index read (audit 2026-06-09, L-7).
+    function test_AerodromeSwapAdapter_swap_revertsOnEmptyRouterAmounts() public {
+        TestERC20 tokenA = new TestERC20();
+        TestERC20 tokenB = new TestERC20();
+
+        MockAerodromeRouter localRouter = new MockAerodromeRouter();
+        AerodromeSwapAdapter adapter =
+            new AerodromeSwapAdapter(address(localRouter), fakeFactory, false);
+
+        tokenA.mint(address(this), 1_000 * ONE_USDC);
+        tokenB.mint(address(localRouter), 1_000 * ONE_USDC);
+        tokenA.approve(address(adapter), 1_000 * ONE_USDC);
+        localRouter.setAmountOut(1_000 * ONE_USDC);
+        localRouter.setReturnEmptyAmounts(true);
+
+        vm.expectRevert(AerodromeSwapAdapter.EmptyRouterAmounts.selector);
+        adapter.swap(
+            address(tokenA), address(tokenB), 0, 1_000 * ONE_USDC, 0, address(this), block.timestamp
+        );
+    }
+
+    /// @notice AerodromeSwapAdapter.swap() forwards the caller-chosen deadline to
+    ///         the router instead of hardcoding block.timestamp (audit 2026-06-09, L-5).
+    function test_AerodromeSwapAdapter_swap_forwardsCallerDeadline() public {
+        TestERC20 tokenA = new TestERC20();
+        TestERC20 tokenB = new TestERC20();
+
+        MockAerodromeRouter localRouter = new MockAerodromeRouter();
+        AerodromeSwapAdapter adapter =
+            new AerodromeSwapAdapter(address(localRouter), fakeFactory, false);
+
+        tokenA.mint(address(this), 1_000 * ONE_USDC);
+        tokenB.mint(address(localRouter), 1_000 * ONE_USDC);
+        tokenA.approve(address(adapter), 1_000 * ONE_USDC);
+        localRouter.setAmountOut(1_000 * ONE_USDC);
+        localRouter.setEnforceDeadline(true);
+
+        uint256 expired = block.timestamp - 1;
+        vm.expectRevert(
+            abi.encodeWithSelector(MockAerodromeRouter.Expired.selector, expired, block.timestamp)
+        );
+        adapter.swap(
+            address(tokenA), address(tokenB), 0, 1_000 * ONE_USDC, 0, address(this), expired
+        );
+
+        // A live deadline passes through and the swap succeeds.
+        uint256 out = adapter.swap(
+            address(tokenA),
+            address(tokenB),
+            0,
+            1_000 * ONE_USDC,
+            0,
+            address(this),
+            block.timestamp + 60
+        );
+        assertEq(out, 1_000 * ONE_USDC, "swap succeeds with a live caller deadline");
     }
 
     /// @notice AerodromeSwapAdapter.twapPrice() returns 1:1 at tick=0.
@@ -2142,7 +2336,13 @@ contract BasketVaultUniswapV4Test is Test {
             )
         );
         adapter.swap(
-            address(tokenA), address(tokenB), 3000, 1_000 * ONE_USDC, 900 * ONE_USDC, address(this)
+            address(tokenA),
+            address(tokenB),
+            3000,
+            1_000 * ONE_USDC,
+            900 * ONE_USDC,
+            address(this),
+            block.timestamp
         );
     }
 
@@ -2163,7 +2363,13 @@ contract BasketVaultUniswapV4Test is Test {
         localRouter.setAmountOut(expectedOut);
 
         uint256 out = adapter.swap(
-            address(tokenA), address(tokenB), 500, amountIn, 990 * ONE_USDC, address(this)
+            address(tokenA),
+            address(tokenB),
+            500,
+            amountIn,
+            990 * ONE_USDC,
+            address(this),
+            block.timestamp
         );
         assertEq(out, expectedOut, "swap returns expected amountOut");
         assertEq(tokenB.balanceOf(address(this)), expectedOut, "caller received tokenB");
@@ -2172,8 +2378,71 @@ contract BasketVaultUniswapV4Test is Test {
     /// @notice UniswapV4SwapAdapter.swap() returns 0 for zero amountIn (no revert).
     function test_UniswapV4SwapAdapter_swap_zeroAmountInReturnsZero() public {
         UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
-        uint256 out = adapter.swap(address(usdc), address(v4Token), 500, 0, 0, address(this));
+        uint256 out = adapter.swap(
+            address(usdc), address(v4Token), 500, 0, 0, address(this), block.timestamp
+        );
         assertEq(out, 0, "zero amountIn returns 0 without revert");
+    }
+
+    /// @notice UniswapV4SwapAdapter.swap() enforces the caller-chosen deadline in the
+    ///         adapter (the V4 router params carry none) — audit 2026-06-09, L-5.
+    function test_UniswapV4SwapAdapter_swap_revertsOnExpiredDeadline() public {
+        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
+        uint256 expired = block.timestamp - 1;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                UniswapV4SwapAdapter.DeadlineExpired.selector, expired, block.timestamp
+            )
+        );
+        adapter.swap(
+            address(usdc), address(v4Token), 500, 1_000 * ONE_USDC, 0, address(this), expired
+        );
+    }
+
+    /// @notice UniswapV4SwapAdapter.swap() reverts (SafeCast) instead of silently
+    ///         truncating a minAmountOut above uint128 max, which would have
+    ///         weakened the slippage floor — audit 2026-06-09, L-6.
+    function test_UniswapV4SwapAdapter_swap_revertsOnUint128MinAmountOutOverflow() public {
+        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        uint256 amountIn = 1_000 * ONE_USDC;
+        usdc.mint(address(this), amountIn);
+        usdc.approve(address(adapter), amountIn);
+        v4Router.setAmountOut(type(uint256).max); // never the limiting factor here
+
+        uint256 oversizedMinOut = uint256(type(uint128).max) + 1;
+        vm.expectRevert(); // SafeCastOverflowedUintDowncast(128, oversizedMinOut)
+        adapter.swap(
+            address(usdc),
+            address(v4Token),
+            500,
+            amountIn,
+            oversizedMinOut,
+            address(this),
+            block.timestamp
+        );
+    }
+
+    /// @notice UniswapV4SwapAdapter.swap() reverts (SafeCast) for amountIn above
+    ///         uint128 max instead of wrapping — audit 2026-06-09, L-6.
+    function test_UniswapV4SwapAdapter_swap_revertsOnUint128AmountInOverflow() public {
+        UniswapV4SwapAdapter adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        uint256 oversizedAmountIn = uint256(type(uint128).max) + 1;
+        usdc.mint(address(this), oversizedAmountIn);
+        usdc.approve(address(adapter), oversizedAmountIn);
+        v4Router.setAmountOut(1);
+
+        vm.expectRevert(); // SafeCastOverflowedUintDowncast(128, oversizedAmountIn)
+        adapter.swap(
+            address(usdc),
+            address(v4Token),
+            500,
+            oversizedAmountIn,
+            0,
+            address(this),
+            block.timestamp
+        );
     }
 
     /// @notice UniswapV4SwapAdapter.twapPrice() returns 1:1 at tick=0.
@@ -2224,7 +2493,15 @@ contract BasketVaultUniswapV4Test is Test {
         vm.expectRevert(
             abi.encodeWithSelector(UniswapV4SwapAdapter.UnsupportedFeeTier.selector, uint24(9999))
         );
-        adapter.swap(address(usdc), address(v4Token), 9999, 1_000 * ONE_USDC, 0, address(this));
+        adapter.swap(
+            address(usdc),
+            address(v4Token),
+            9999,
+            1_000 * ONE_USDC,
+            0,
+            address(this),
+            block.timestamp
+        );
     }
 
     /// @notice All standard fee tiers (100, 500, 3000, 10000) are accepted.
@@ -2243,7 +2520,9 @@ contract BasketVaultUniswapV4Test is Test {
             ta.approve(address(adapter), amtIn);
             v4Router.setAmountOut(amtOut);
             // Should not revert (fee tier is supported).
-            uint256 out = adapter.swap(address(ta), address(tb), fees[i], amtIn, 0, address(this));
+            uint256 out = adapter.swap(
+                address(ta), address(tb), fees[i], amtIn, 0, address(this), block.timestamp
+            );
             assertEq(out, amtOut, "swap succeeds for standard fee tier");
         }
     }
@@ -2677,4 +2956,3 @@ contract BasketVaultVenueSelectorTest is Test {
         );
     }
 }
-

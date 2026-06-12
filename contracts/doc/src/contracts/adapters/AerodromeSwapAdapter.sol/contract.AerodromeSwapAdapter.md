@@ -1,5 +1,5 @@
 # AerodromeSwapAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/adapters/AerodromeSwapAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/adapters/AerodromeSwapAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -72,7 +72,9 @@ Execute a single-hop swap.
 
 The `fee` parameter is ignored; Aerodrome derives the fee from the
 pool configuration rather than the route struct. The caller (BasketVault)
-still passes it for interface uniformity.
+still passes it for interface uniformity. The caller-chosen `deadline`
+is forwarded to the Aerodrome Router, which reverts when expired
+(audit 2026-06-09, L-5).
 
 
 ```solidity
@@ -82,7 +84,8 @@ function swap(
     uint24, /* fee — unused by Aerodrome */
     uint256 amountIn,
     uint256 minAmountOut,
-    address recipient
+    address recipient,
+    uint256 deadline
 ) external returns (uint256 amountOut);
 ```
 **Parameters**
@@ -95,6 +98,7 @@ function swap(
 |`amountIn`|`uint256`|     Exact amount of `tokenIn` to sell.|
 |`minAmountOut`|`uint256`| Minimum amount of `tokenOut` required; reverts if not met.|
 |`recipient`|`address`|    Recipient of `tokenOut`.|
+|`deadline`|`uint256`|     Unix timestamp after which the swap must revert. Chosen by the caller — adapters must not substitute `block.timestamp` (audit 2026-06-09, L-5). Callers that execute synchronously within their own transaction (e.g. BasketVault) may pass `block.timestamp`.|
 
 **Returns**
 
@@ -196,5 +200,15 @@ Raised when the pool's tokens do not match the requested base/quote pair.
 
 ```solidity
 error PoolTokenMismatch();
+```
+
+### EmptyRouterAmounts
+Raised when the Aerodrome Router returns an empty amounts array,
+which would otherwise underflow the output-index read
+(audit 2026-06-09, L-7).
+
+
+```solidity
+error EmptyRouterAmounts();
 ```
 

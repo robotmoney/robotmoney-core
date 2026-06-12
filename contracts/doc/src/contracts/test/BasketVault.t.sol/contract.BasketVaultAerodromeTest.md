@@ -1,5 +1,5 @@
 # BasketVaultAerodromeTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -169,6 +169,27 @@ AerodromeSwapAdapter.swap() reverts when minAmountOut is not met.
 
 ```solidity
 function test_AerodromeSwapAdapter_swap_revertsOnSlippage() public;
+```
+
+### test_AerodromeSwapAdapter_swap_revertsOnEmptyRouterAmounts
+
+AerodromeSwapAdapter.swap() reverts with EmptyRouterAmounts when the
+router returns an empty amounts array instead of underflowing the
+output-index read (audit 2026-06-09, L-7).
+
+
+```solidity
+function test_AerodromeSwapAdapter_swap_revertsOnEmptyRouterAmounts() public;
+```
+
+### test_AerodromeSwapAdapter_swap_forwardsCallerDeadline
+
+AerodromeSwapAdapter.swap() forwards the caller-chosen deadline to
+the router instead of hardcoding block.timestamp (audit 2026-06-09, L-5).
+
+
+```solidity
+function test_AerodromeSwapAdapter_swap_forwardsCallerDeadline() public;
 ```
 
 ### test_AerodromeSwapAdapter_twapPrice_returnsCorrectAtTickZero

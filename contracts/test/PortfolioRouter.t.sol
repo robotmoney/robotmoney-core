@@ -67,6 +67,18 @@ contract MockRouterVault is ERC20 {
         _mint(receiver, shares);
         emit Deposit(msg.sender, receiver, assets, shares);
     }
+
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets)
+    {
+        if (msg.sender != owner) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+        _burn(owner, shares);
+        assets = shares;
+        assetToken.safeTransfer(receiver, assets);
+    }
 }
 
 /// @notice A misbehaving vault that only accepts half of the legAmount,
@@ -1228,6 +1240,74 @@ contract PortfolioRouterTest is Test {
         vm.prank(admin);
         vm.expectRevert(PortfolioRouter.LengthMismatch.selector);
         router.setDefaultWeights(vaults, bps);
+    }
+
+    // ─── redeemFor: authorization guards (issue #751) ──────────────────────────
+
+    /// @notice An unauthorized caller cannot redeemFor — the confused-deputy
+    ///         guard reverts with UnauthorizedRedeemer before any vault call.
+    function test_redeemFor_unauthorizedCaller_reverts() public {
+        _setEqualWeights();
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        // Fund vaults so they can pay out on redeem.
+        usdc.mint(address(vaultA), 1000 * ONE_USDC);
+        usdc.mint(address(vaultB), 1000 * ONE_USDC);
+
+        // Approve the router on vault share tokens.
+        vm.prank(depositor);
+        vaultA.approve(address(router), shares[0]);
+        vm.prank(depositor);
+        vaultB.approve(address(router), shares[1]);
+
+        uint256[] memory sharesToRedeem = new uint256[](2);
+        sharesToRedeem[0] = shares[0];
+        sharesToRedeem[1] = shares[1];
+
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.UnauthorizedRedeemer.selector, depositor, stranger
+            )
+        );
+        router.redeemFor(depositor, stranger, sharesToRedeem);
+    }
+
+    /// @notice shareHolder can call redeemFor on their own shares.
+    function test_redeemFor_shareHolderCanRedeem() public {
+        _setEqualWeights();
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        // Fund vaults so they can pay out on redeem.
+        usdc.mint(address(vaultA), 1000 * ONE_USDC);
+        usdc.mint(address(vaultB), 1000 * ONE_USDC);
+
+        // Approve the router on vault share tokens.
+        vm.prank(depositor);
+        vaultA.approve(address(router), shares[0]);
+        vm.prank(depositor);
+        vaultB.approve(address(router), shares[1]);
+
+        uint256[] memory sharesToRedeem = new uint256[](2);
+        sharesToRedeem[0] = shares[0];
+        sharesToRedeem[1] = shares[1];
+
+        vm.prank(depositor);
+        uint256[] memory assetsOut = router.redeemFor(depositor, depositor, sharesToRedeem);
+
+        assertEq(assetsOut[0], shares[0]);
+        assertEq(assetsOut[1], shares[1]);
+        assertEq(vaultA.balanceOf(depositor), 0);
+        assertEq(vaultB.balanceOf(depositor), 0);
+        assertEq(usdc.balanceOf(depositor), amount);
     }
 
     /// @notice With no proposal ever passed (voted vector inactive), the router

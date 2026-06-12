@@ -369,6 +369,87 @@ contract RouterGovernanceTest is Test {
         assertEq(gov.currentProposalId(), 2);
     }
 
+    // ─── voteSnapshot — snapshot voting power at propose time (issue #756) ────
+
+    /// @notice propose() stores the creation block number as voteSnapshot.
+    function test_propose_snapshotsVoteSnapshot() public {
+        uint256 pid = _proposeValid();
+        assertEq(gov.proposalVoteSnapshot(pid), block.number);
+    }
+
+    /// @notice vote() reads checkpointed power at the snapshot block, not live
+    ///         votingPower: reducing Alice's power to 0 after propose() does not
+    ///         stop her from voting with her snapshot power.
+    function test_vote_usesSnapshotPowerNotLive() public {
+        uint256 pid = _proposeValid();
+
+        // Admin zeroes Alice's power in a later block, mid-proposal.
+        vm.roll(block.number + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 0);
+        assertEq(gov.votingPower(alice), 0);
+
+        // Alice still votes with her snapshot power.
+        vm.prank(alice);
+        gov.vote(pid);
+
+        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
+        assertEq(votesFor, ALICE_POWER);
+    }
+
+    /// @notice Mid-proposal voting power changes do not retroactively affect
+    ///         already-cast votes. Alice votes with 600k power at vote time,
+    ///         then admin reduces Alice to 0 — her vote weight is preserved.
+    function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public {
+        uint256 pid = _proposeValid();
+
+        vm.prank(alice);
+        gov.vote(pid);
+
+        // Admin reduces Alice's power to 0 mid-proposal.
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 0);
+
+        // Alice's vote still counts — votesFor was already incremented.
+        (,,,,,, uint256 votesFor,,,) = gov.activeProposal();
+        assertEq(votesFor, ALICE_POWER);
+    }
+
+    /// @notice Granting voting power after a proposal is created does not let
+    ///         the new voter affect that proposal — the checkpoint lookup at the
+    ///         snapshot block returns 0 for newly-empowered addresses.
+    function test_vote_revertsIfPowerGrantedAfterProposal() public {
+        uint256 pid = _proposeValid();
+        uint256 snapBlock = block.number;
+
+        // Grant power to stranger in a later block.
+        vm.roll(snapBlock + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(stranger, ALICE_POWER);
+
+        // Stranger tries to vote — voteSnapshot = snapBlock, at which
+        // stranger had no checkpoint → past power is 0.
+        vm.prank(stranger);
+        vm.expectRevert(RouterGovernance.NoVotingPower.selector);
+        gov.vote(pid);
+    }
+
+    /// @notice getPastVotes returns the historical checkpoint value, not the
+    ///         latest assignment.
+    function test_getPastVotes_returnsHistoricalPower() public {
+        uint256 grantBlock = block.number;
+
+        vm.roll(grantBlock + 1);
+        vm.prank(govAdmin);
+        gov.setVotingPower(alice, 1e18);
+
+        // At grantBlock Alice still had her setUp power; at grantBlock+1 the
+        // new checkpoint applies.
+        assertEq(gov.getPastVotes(alice, grantBlock), ALICE_POWER);
+        assertEq(gov.getPastVotes(alice, grantBlock + 1), 1e18);
+        assertEq(gov.votingPower(alice), 1e18);
+    }
+
     // ─── vote() ──────────────────────────────────────────────────────────────
 
     function test_vote_success() public {
@@ -739,17 +820,19 @@ contract RouterGovernanceTest is Test {
         new RouterGovernance(address(router), govAdmin, tooShort, EXECUTION_DELAY, QUORUM_THRESHOLD);
     }
 
-    /// @notice Deploying with quorumThreshold = 1 and votingPeriod = MIN_VOTING_PERIOD succeeds.
+    /// @notice Deploying with quorumThreshold = 1, votingPeriod = MIN_VOTING_PERIOD,
+    ///         and executionDelay = MIN_EXECUTION_DELAY succeeds.
     function test_constructor_validFloorArgumentsSucceed() public {
         RouterGovernance freshGov = new RouterGovernance(
             address(router),
             govAdmin,
             uint64(gov.MIN_VOTING_PERIOD()),
-            EXECUTION_DELAY,
+            uint64(gov.MIN_EXECUTION_DELAY()),
             gov.MIN_QUORUM_THRESHOLD()
         );
         assertEq(freshGov.quorumThreshold(), gov.MIN_QUORUM_THRESHOLD());
         assertEq(freshGov.votingPeriod(), gov.MIN_VOTING_PERIOD());
+        assertEq(freshGov.executionDelay(), gov.MIN_EXECUTION_DELAY());
     }
 
     // ─── Floor validation — setters ───────────────────────────────────────────
@@ -769,9 +852,34 @@ contract RouterGovernanceTest is Test {
         gov.setVotingPeriod(tooShort);
     }
 
+    // ─── Floor validation — execution delay ────────────────────────────────────
+
+    /// @notice Deploying with executionDelay below MIN_EXECUTION_DELAY must revert.
+    function test_constructor_revertsOnExecutionDelayBelowMin() public {
+        uint64 tooShort = uint64(gov.MIN_EXECUTION_DELAY()) - 1;
+        vm.expectRevert(RouterGovernance.ExecutionDelayBelowMinimum.selector);
+        new RouterGovernance(address(router), govAdmin, VOTING_PERIOD, tooShort, QUORUM_THRESHOLD);
+    }
+
+    /// @notice setExecutionDelay(MIN_EXECUTION_DELAY - 1) must revert with ExecutionDelayBelowMinimum.
+    function test_setExecutionDelay_revertsOnBelowMin() public {
+        uint64 tooShort = uint64(gov.MIN_EXECUTION_DELAY()) - 1;
+        vm.prank(govAdmin);
+        vm.expectRevert(RouterGovernance.ExecutionDelayBelowMinimum.selector);
+        gov.setExecutionDelay(tooShort);
+    }
+
+    /// @notice setExecutionDelay with MIN_EXECUTION_DELAY succeeds.
+    function test_setExecutionDelay_succeedsWithMinDelay() public {
+        uint64 minDelay = uint64(gov.MIN_EXECUTION_DELAY());
+        vm.prank(govAdmin);
+        gov.setExecutionDelay(minDelay);
+        assertEq(gov.executionDelay(), minDelay);
+    }
+
     // ─── Zero-quorum exploit sequence is blocked ──────────────────────────────
 
-    /// @notice With quorumThreshold=1 and executionDelay=0 a single actor cannot
+    /// @notice With quorumThreshold=1 a single actor cannot
     ///         execute with 0 votes — execute() must revert because quorum is not
     ///         reached (0 votes < 1 required).
     function test_zeroVoteExploitSequenceBlocked() public {
@@ -780,7 +888,7 @@ contract RouterGovernanceTest is Test {
             address(router),
             govAdmin,
             uint64(gov.MIN_VOTING_PERIOD()), // minimum period
-            0, // executionDelay = 0 (unguarded, but that is out of scope)
+            uint64(gov.MIN_EXECUTION_DELAY()), // minimum delay
             gov.MIN_QUORUM_THRESHOLD() // quorumThreshold = 1
         );
 

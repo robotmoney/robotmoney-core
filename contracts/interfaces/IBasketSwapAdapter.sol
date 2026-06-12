@@ -21,6 +21,11 @@ interface IBasketSwapAdapter {
     /// @param amountIn      Exact amount of `tokenIn` to sell.
     /// @param minAmountOut  Minimum amount of `tokenOut` required; reverts if not met.
     /// @param recipient     Recipient of `tokenOut`.
+    /// @param deadline      Unix timestamp after which the swap must revert. Chosen
+    ///                      by the caller — adapters must not substitute
+    ///                      `block.timestamp` (audit 2026-06-09, L-5). Callers that
+    ///                      execute synchronously within their own transaction (e.g.
+    ///                      BasketVault) may pass `block.timestamp`.
     /// @return amountOut    Actual amount of `tokenOut` received.
     function swap(
         address tokenIn,
@@ -28,7 +33,8 @@ interface IBasketSwapAdapter {
         uint24 fee,
         uint256 amountIn,
         uint256 minAmountOut,
-        address recipient
+        address recipient,
+        uint256 deadline
     ) external returns (uint256 amountOut);
 
     /// @notice Compute a TWAP-based price quote: how many `quoteToken` for `baseAmount`

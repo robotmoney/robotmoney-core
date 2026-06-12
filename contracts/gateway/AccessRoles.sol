@@ -23,6 +23,13 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 /// Enforced by overriding `_grantRole` to revert on any overlap, and
 /// exposed via `_assertRoleSeparation` for use in deploy scripts and
 /// the gateway's `authorizeAgent`.
+///
+/// `DEFAULT_ADMIN_ROLE` is treated as part of the ADMIN tier
+/// (audit 2026-06-09, L-14): it may coexist with `ADMIN_ROLE` (the gateway
+/// constructor grants both to the same admin address), but never with
+/// `PAUSER_ROLE` or `AGENT_ROLE`. Without this, a `DEFAULT_ADMIN_ROLE`
+/// holder could renounce `ADMIN_ROLE` and then self-grant `AGENT_ROLE`,
+/// silently bypassing the disjointness invariant.
 abstract contract AccessRoles is AccessControl {
     /// @notice Reverts when granting a role would cause an account to hold
     ///         any two of {ADMIN, PAUSER, AGENT} simultaneously.
@@ -37,35 +44,43 @@ abstract contract AccessRoles is AccessControl {
     /// @notice Only role allowed to call `deposit()`.
     bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
 
-    /// @dev Override that enforces full pairwise separation among
-    ///      {ADMIN, PAUSER, AGENT} before any grant takes effect.
-    ///      Reverts on any overlap.
+    /// @dev Override that enforces full pairwise separation among the
+    ///      {ADMIN-tier, PAUSER, AGENT} role tiers before any grant takes
+    ///      effect, where the ADMIN tier is {ADMIN_ROLE, DEFAULT_ADMIN_ROLE}
+    ///      (audit 2026-06-09, L-14). Reverts on any cross-tier overlap;
+    ///      ADMIN_ROLE and DEFAULT_ADMIN_ROLE may coexist on one account.
     function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
         if (role == AGENT_ROLE) {
-            if (hasRole(ADMIN_ROLE, account) || hasRole(PAUSER_ROLE, account)) {
+            if (_isAdminTier(account) || hasRole(PAUSER_ROLE, account)) {
                 revert RoleSeparationViolated();
             }
-        } else if (role == ADMIN_ROLE) {
+        } else if (role == ADMIN_ROLE || role == DEFAULT_ADMIN_ROLE) {
             if (hasRole(AGENT_ROLE, account) || hasRole(PAUSER_ROLE, account)) {
                 revert RoleSeparationViolated();
             }
         } else if (role == PAUSER_ROLE) {
-            if (hasRole(AGENT_ROLE, account) || hasRole(ADMIN_ROLE, account)) {
+            if (hasRole(AGENT_ROLE, account) || _isAdminTier(account)) {
                 revert RoleSeparationViolated();
             }
         }
         return super._grantRole(role, account);
     }
 
-    /// @dev Post-grant invariant check. Reverts if `account` holds any
-    ///      two of {ADMIN, PAUSER, AGENT} simultaneously. Intended for
-    ///      deploy scripts and the gateway's `authorizeAgent` to assert
-    ///      state explicitly.
+    /// @dev True when `account` holds either admin-tier role.
+    function _isAdminTier(address account) internal view returns (bool) {
+        return hasRole(ADMIN_ROLE, account) || hasRole(DEFAULT_ADMIN_ROLE, account);
+    }
+
+    /// @dev Post-grant invariant check. Reverts if `account` holds roles
+    ///      from any two of the {ADMIN-tier, PAUSER, AGENT} tiers
+    ///      simultaneously (ADMIN_ROLE + DEFAULT_ADMIN_ROLE together count
+    ///      as one tier). Intended for deploy scripts and the gateway's
+    ///      `authorizeAgent` to assert state explicitly.
     function _assertRoleSeparation(address account) internal view {
-        bool isAdmin = hasRole(ADMIN_ROLE, account);
+        bool isAdmin = _isAdminTier(account);
         bool isPauser = hasRole(PAUSER_ROLE, account);
         bool isAgent = hasRole(AGENT_ROLE, account);
-        // Pairwise disjointness: at most one of the three may be held.
+        // Pairwise disjointness: at most one of the three tiers may be held.
         uint256 count = (isAdmin ? 1 : 0) + (isPauser ? 1 : 0) + (isAgent ? 1 : 0);
         if (count > 1) {
             revert RoleSeparationViolated();

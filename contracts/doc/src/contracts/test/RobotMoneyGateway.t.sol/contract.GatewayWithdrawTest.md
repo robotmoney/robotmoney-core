@@ -1,5 +1,5 @@
 # GatewayWithdrawTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -184,6 +184,13 @@ function test_withdraw_revertsWhenWindowCapExceeded() public;
 
 ```solidity
 function test_withdraw_rollingWindow_blocksBoundaryBurst() public;
+```
+
+### test_withdraw_rollingWindow_preventsBurstAcrossAnchorExpiry
+
+
+```solidity
+function test_withdraw_rollingWindow_preventsBurstAcrossAnchorExpiry() public;
 ```
 
 ### test_effectiveWithdrawWindowGross_zeroForUntouchedAgent

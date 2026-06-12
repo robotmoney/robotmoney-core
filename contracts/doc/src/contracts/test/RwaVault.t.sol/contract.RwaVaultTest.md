@@ -1,5 +1,5 @@
 # RwaVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/RwaVault.t.sol)
 
 **Inherits:**
 Test
@@ -236,7 +236,9 @@ function test_staleFeed_resumesAfterOracleRefresh() public;
 
 ### test_caps_perDepositCapEnforced
 
-Deposits above the per-deposit cap revert with PerDepositCapExceeded.
+Deposits above the per-deposit cap revert. Since BasketVault.maxDeposit
+now reflects the caps (audit 2026-06-09, L-16), OZ's ERC4626 entry-point
+check fires first with ERC4626ExceededMaxDeposit.
 AC-3: caps are enforced.
 
 
@@ -246,7 +248,9 @@ function test_caps_perDepositCapEnforced() public;
 
 ### test_caps_tvlCapEnforced
 
-Deposits above the TVL cap revert with TVLCapExceeded.
+Deposits above the TVL cap revert. Since BasketVault.maxDeposit now
+reflects TVL-cap headroom (audit 2026-06-09, L-16), OZ's ERC4626
+entry-point check fires first with ERC4626ExceededMaxDeposit.
 AC-3: caps are enforced.
 
 
@@ -442,6 +446,78 @@ ChronicleOracleAdapter rejects zero-address for oracle.
 
 ```solidity
 function test_adapter_rejectsZeroOracle() public;
+```
+
+### test_adapter_rejectsZeroNavPrice
+
+ChronicleOracleAdapter rejects zero NAV price.
+
+
+```solidity
+function test_adapter_rejectsZeroNavPrice() public;
+```
+
+### test_adapter_rejectsNavPriceBelowMin
+
+ChronicleOracleAdapter rejects NAV price below MIN_NAV.
+
+
+```solidity
+function test_adapter_rejectsNavPriceBelowMin() public;
+```
+
+### test_adapter_rejectsNavPriceAboveMax
+
+ChronicleOracleAdapter rejects NAV price above MAX_NAV.
+
+
+```solidity
+function test_adapter_rejectsNavPriceAboveMax() public;
+```
+
+### test_adapter_acceptsNavPriceAtMinBoundary
+
+ChronicleOracleAdapter accepts NAV price at MIN_NAV boundary.
+
+
+```solidity
+function test_adapter_acceptsNavPriceAtMinBoundary() public;
+```
+
+### test_adapter_acceptsNavPriceAtMaxBoundary
+
+ChronicleOracleAdapter accepts NAV price at MAX_NAV boundary.
+
+
+```solidity
+function test_adapter_acceptsNavPriceAtMaxBoundary() public;
+```
+
+### test_adapter_rejectsZeroNavPrice_usdcToRwa
+
+ChronicleOracleAdapter rejects zero NAV price in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsZeroNavPrice_usdcToRwa() public;
+```
+
+### test_adapter_rejectsNavPriceBelowMin_usdcToRwa
+
+ChronicleOracleAdapter rejects NAV price below MIN_NAV in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsNavPriceBelowMin_usdcToRwa() public;
+```
+
+### test_adapter_rejectsNavPriceAboveMax_usdcToRwa
+
+ChronicleOracleAdapter rejects NAV price above MAX_NAV in USDC→RWA direction.
+
+
+```solidity
+function test_adapter_rejectsNavPriceAboveMax_usdcToRwa() public;
 ```
 
 ### test_vault_rejectsZeroChronicle

@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -51,7 +51,8 @@ uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
 ### OP_DEPOSIT
 Op-kind discriminators prepended to every `paymentId` hash to
 prevent cross-operation replay (deposit id ≠ depositTo id ≠
-withdrawal id even when all other inputs are identical).
+withdrawal id ≠ router-withdrawal id even when all other inputs
+are identical).
 
 
 ```solidity
@@ -70,6 +71,13 @@ uint8 internal constant OP_WITHDRAW = 2
 
 ```solidity
 uint8 internal constant OP_DEPOSIT_TO = 3
+```
+
+
+### OP_WITHDRAW_ROUTER
+
+```solidity
+uint8 internal constant OP_WITHDRAW_ROUTER = 4
 ```
 
 
@@ -365,15 +373,18 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 
 ### authorizeAgent
 
-First-time authorization for `agent`. Permissionless — any EOA
-may call to register their own agent. `msg.sender` is recorded
-as the agent's owner. Reverts if `agent` already has a
-recorded owner; that owner must call `setPolicy` to update or
-`revokeAgent` to release.
+First-time authorization for `agent`. Admin-only — only callable
+by `DEFAULT_ADMIN_ROLE`. Regular users must use
+`commitAuthorization` + `revealAuthorization` instead.
+`msg.sender` is recorded as the agent's owner. Reverts if
+`agent` already has a recorded owner; that owner must call
+`setPolicy` to update or `revokeAgent` to release.
 
 
 ```solidity
-function authorizeAgent(address agent, AgentPolicy calldata p) external;
+function authorizeAgent(address agent, AgentPolicy calldata p)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE);
 ```
 **Parameters**
 
@@ -598,6 +609,18 @@ before calling this function. The gateway pulls shares via
 forwards USDC only to `policy.assetRecipient`. CEI pattern: state
 effects written before external calls. `nonReentrant` provides
 defense-in-depth.
+Share custody requirement (audit 2026-06-09, L-13 — intentional):
+this single-vault path pulls shares from the AGENT (`msg.sender`),
+while `deposit` mints shares to `policy.shareReceiver` and the
+router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
+Single-vault withdrawal therefore requires `agent == shareReceiver`,
+or the share holder to have transferred shares to the agent first.
+This matches the production client contract: rmpc preflights
+`vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
+(clients/rust-payment-client/src/commands/withdraw.rs) before
+submitting, so changing the pull source here would break the only
+production caller. No funds are at risk either way: USDC always
+settles to `policy.assetRecipient`.
 
 
 ```solidity

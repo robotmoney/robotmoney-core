@@ -1,5 +1,5 @@
 # IBasketSwapAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/interfaces/IBasketSwapAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/interfaces/IBasketSwapAdapter.sol)
 
 **Title:**
 IBasketSwapAdapter
@@ -27,7 +27,8 @@ function swap(
     uint24 fee,
     uint256 amountIn,
     uint256 minAmountOut,
-    address recipient
+    address recipient,
+    uint256 deadline
 ) external returns (uint256 amountOut);
 ```
 **Parameters**
@@ -40,6 +41,7 @@ function swap(
 |`amountIn`|`uint256`|     Exact amount of `tokenIn` to sell.|
 |`minAmountOut`|`uint256`| Minimum amount of `tokenOut` required; reverts if not met.|
 |`recipient`|`address`|    Recipient of `tokenOut`.|
+|`deadline`|`uint256`|     Unix timestamp after which the swap must revert. Chosen by the caller — adapters must not substitute `block.timestamp` (audit 2026-06-09, L-5). Callers that execute synchronously within their own transaction (e.g. BasketVault) may pass `block.timestamp`.|
 
 **Returns**
 

@@ -214,6 +214,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      `setEmergencyUnwindGuard` and bounds the realized loss versus the
     ///      admin-set reference floor `minUsdcOut`.
     error EmergencyUnwindLossCapExceeded(address token, uint256 received, uint256 appliedFloor);
+    /// @dev Raised when `setMaxSlippageBps` is called with a value below the
+    ///      pool-fee floor of the active basket. A slippage bound below the fee
+    ///      tier makes every swap's `amountOutMinimum` unsatisfiable (the fee
+    ///      alone consumes more than the allowance), bricking deposits and
+    ///      withdrawals (audit 2026-06-09, L-17).
+    error SlippageBelowPoolFeeFloor(uint256 requestedBps, uint256 floorBps);
     /// @dev Raised when ADMIN_ROLE attempts to set a TWAP window outside the
     ///      `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]` range. Surfaces a typed error
     ///      rather than a generic `InvalidParam` so off-chain governance
@@ -477,6 +483,35 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     function previewMint(uint256 shares) public view override returns (uint256) {
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Ceil);
         return grossAssets.mulDiv(MAX_BPS, MAX_BPS - maxSlippageBps, Math.Rounding.Ceil);
+    }
+
+    /// @notice Maximum USDC that can be deposited given current vault state.
+    ///         Returns 0 when the vault is paused or shut down, when no basket
+    ///         asset is active, or when the TVL cap is reached; otherwise
+    ///         min(perDepositCap, TVL-cap headroom). Overrides the OZ default
+    ///         (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
+    ///         return 0 when deposits are disabled (audit 2026-06-09, L-16).
+    function maxDeposit(address) public view override returns (uint256) {
+        if (paused() || shutdown) return 0;
+        if (_activeAssetCount() == 0) return 0;
+        if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
+            return type(uint256).max;
+        }
+        uint256 current = totalAssets();
+        if (current >= tvlCap) return 0;
+        uint256 headroom = tvlCap - current;
+        return perDepositCap < headroom ? perDepositCap : headroom;
+    }
+
+    /// @notice Maximum shares that can be minted given current vault state.
+    ///         Derived from `maxDeposit` through the slippage-discounted share
+    ///         conversion (`previewDeposit`) so the implied asset charge of
+    ///         `mint(maxMint(receiver))` stays within the deposit caps
+    ///         (audit 2026-06-09, L-16).
+    function maxMint(address receiver) public view override returns (uint256) {
+        uint256 assets_ = maxDeposit(receiver);
+        if (assets_ == type(uint256).max) return type(uint256).max;
+        return previewDeposit(assets_);
     }
 
     /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because
@@ -829,13 +864,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         emit Shutdown();
     }
 
-    /// @notice Recover accidentally sent ERC-20 tokens (not USDC or basket assets). ADMIN_ROLE.
+    /// @notice Recover accidentally sent ERC-20 tokens (not USDC or active basket assets). ADMIN_ROLE.
+    /// @dev Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
+    ///      and `_sellProportional` skip them, so any balance that reappears after
+    ///      `removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
     function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
         if (token == address(_USDC)) revert CannotRescueUsdc();
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
-            if (token == assets[i].token) revert AssetInBasket();
+            if (assets[i].active && token == assets[i].token) revert AssetInBasket();
         }
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);
@@ -866,10 +904,30 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         feeRecipient = newRecipient;
     }
 
+    /// @notice Update the worst-case slippage bound used for swap floors and previews.
+    /// @dev Bounded above by `MAX_SLIPPAGE_BPS` and below by `minSlippageFloorBps()`
+    ///      (the highest active asset's pool fee tier in bps) so a single admin write
+    ///      cannot set an unsatisfiable `amountOutMinimum` and brick all swaps
+    ///      (audit 2026-06-09, L-17).
     function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
         if (newBps > MAX_SLIPPAGE_BPS) revert InvalidParam();
+        uint256 floorBps = minSlippageFloorBps();
+        if (newBps < floorBps) revert SlippageBelowPoolFeeFloor(newBps, floorBps);
         emit MaxSlippageUpdated(maxSlippageBps, newBps);
         maxSlippageBps = newBps;
+    }
+
+    /// @notice Lower bound accepted by `setMaxSlippageBps`: the highest pool fee
+    ///         tier among active basket assets, expressed in basis points
+    ///         (`swapFee` is in hundredths of a bip, e.g. 3000 → 30 bps).
+    ///         Returns 0 when no asset is active (nothing can brick).
+    function minSlippageFloorBps() public view returns (uint256 floorBps) {
+        uint256 len = assets.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (!assets[i].active) continue;
+            uint256 feeBps = uint256(assets[i].swapFee) / 100;
+            if (feeBps > floorBps) floorBps = feeBps;
+        }
     }
 
     /// @notice Configure per-token minimum USDC output, optional high-risk override
@@ -1096,6 +1154,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @dev Routes a swap through the per-asset adapter when set, or falls back
     ///      to the immutable Uniswap V3 SWAP_ROUTER.  Centralises approval
     ///      management: forceApprove before the call, clear after.
+    ///
+    ///      Deadline note (audit 2026-06-09, L-5): adapters take an explicit
+    ///      caller-chosen `deadline` instead of hardcoding `block.timestamp`.
+    ///      This vault's entry points are standard ERC-4626 (no deadline
+    ///      parameter), and every swap executes synchronously inside the
+    ///      caller's transaction, so the vault pins the deadline to the current
+    ///      block — equivalent protection to a tx-level deadline. External
+    ///      integrators calling adapters directly MUST supply a real deadline.
     function _executeSwap(
         address adapter,
         address tokenIn,
@@ -1109,7 +1175,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             // Adapter pulls `tokenIn` from this contract via transferFrom.
             IERC20(tokenIn).forceApprove(adapter, amountIn);
             amountOut = IBasketSwapAdapter(adapter)
-                .swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient);
+                .swap(tokenIn, tokenOut, fee, amountIn, minAmountOut, recipient, block.timestamp);
             IERC20(tokenIn).forceApprove(adapter, 0);
         } else {
             // Default Uniswap V3 path (backward-compatible).

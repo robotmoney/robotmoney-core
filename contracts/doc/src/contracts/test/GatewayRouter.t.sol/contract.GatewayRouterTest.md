@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -529,6 +529,17 @@ router: happy path — deposit via router, withdraw via router, USDC lands at as
 
 ```solidity
 function test_withdrawFromRouter_happyPath() public;
+```
+
+### test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix
+
+router: the withdrawFromRouter paymentId preimage carries the
+OP_WITHDRAW_ROUTER (= 4) op-kind prefix so router-withdrawal ids are
+namespaced away from the three sibling op kinds (audit 2026-06-09, L-12).
+
+
+```solidity
+function test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix() public;
 ```
 
 ### test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted

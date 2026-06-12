@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/2c36c8c1f505bf99870d94b72352925723aa9588/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -347,6 +347,11 @@ function previewWithdraw(uint256 assets) public view override returns (uint256);
 
 Maximum USDC a user can withdraw in a single call (net of exit fee).
 Overrides the OZ default to satisfy ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert.
+Uses floor rounding on the gross→net conversion so that
+`_netToGross(maxWithdraw(owner))` never exceeds `_convertToAssets(balanceOf(owner), Floor)`,
+guaranteeing `previewWithdraw(maxWithdraw(owner)) <= balanceOf(owner)` even when `exitFeeBps > 0`.
+Returns 0 while withdrawals are paused, mirroring the deposit-side views
+(ERC-4626: withdraw(maxWithdraw(owner)) MUST NOT revert; audit 2026-06-09, L-1).
 
 
 ```solidity
@@ -357,6 +362,23 @@ function maxWithdraw(address owner) public view override returns (uint256);
 |Name|Type|Description|
 |----|----|-----------|
 |`owner`|`address`|The address whose share balance determines the withdrawal cap.|
+
+
+### maxRedeem
+
+Maximum shares a user can redeem in a single call.
+Returns 0 while withdrawals are paused so that `redeem(maxRedeem(owner))`
+never reverts, per ERC-4626 (audit 2026-06-09, L-1).
+
+
+```solidity
+function maxRedeem(address owner) public view override returns (uint256);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`owner`|`address`|The address whose share balance determines the redemption cap.|
 
 
 ### maxDeposit
@@ -735,6 +757,17 @@ Set `withdrawalsPaused` and emit an event if the state changes.
 
 ```solidity
 function _setWithdrawalsPaused(bool paused_) internal;
+```
+
+### _isAdapterEligible
+
+Non-reverting twin of `_requireAdapterEligible`, used by `_routeDeposit`
+to skip (rather than revert on) adapters whose eligibility was revoked
+while still active in the registry (audit 2026-06-09, L-4).
+
+
+```solidity
+function _isAdapterEligible(address adapter_) internal view returns (bool);
 ```
 
 ### _requireAdapterEligible
@@ -1429,6 +1462,23 @@ error AdapterVaultMismatch(address adapter, address expected, address actual);
 |`adapter`|`address`| Adapter address that reported the wrong vault.|
 |`expected`|`address`|This vault address.|
 |`actual`|`address`|  Vault reported by the adapter's `VAULT()` view.|
+
+### InsufficientAdapterLiquidity
+Active adapters cannot deliver the USDC required for this withdrawal.
+Raised early (before any transfer) so callers see a clear error instead
+of an opaque downstream ERC-20 balance revert. (Audit 2026-06-09, L-2.)
+
+
+```solidity
+error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`requested`|`uint256`|USDC needed from adapters (after idle balance is applied).|
+|`available`|`uint256`|Total USDC the active adapters actually delivered or report holding.|
 
 ## Structs
 ### AdapterInfo
