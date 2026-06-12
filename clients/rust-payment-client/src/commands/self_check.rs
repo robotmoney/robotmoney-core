@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.8 — CLI surface (self-check subcommand)
+//! Canonical: Plan tracking issue #109 §4.8 — CLI surface (self-check subcommand)
 //! (See also: docs/architecture.md §8 — Signer Backends)
 //! Security: docs/code-reviews/review-codex-20260518-234945.md §5 (agent-key compromise blast radius)
 //!

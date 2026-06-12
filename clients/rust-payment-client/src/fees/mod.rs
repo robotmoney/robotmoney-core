@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.7 — Fee policy
+//! Canonical: Plan tracking issue #109 §4.7 — Fee policy
 //!
 //! `fees` — EIP-1559 fee policy.
 //!

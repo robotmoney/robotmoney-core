@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — scenario 4
+//! Canonical: Plan tracking issue #109 §8 — scenario 4
 //! (`abi_address_sanity`).
 //!
 //! Asserts that every configured Robot Money / USDC contract has

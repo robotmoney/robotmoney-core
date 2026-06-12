@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4 — Phase 1 Rust client (operator-visible error catalog)
+//! Canonical: Plan tracking issue #109 §4 — Phase 1 Rust client (operator-visible error catalog)
 //!
 //! Named error variants used across the rmpc codebase.
 //!

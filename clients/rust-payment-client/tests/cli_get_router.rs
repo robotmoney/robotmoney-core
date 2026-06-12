@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §5.1 — Router-weight governance reads
+//! Canonical: Plan tracking issue #109 §5.1 — Router-weight governance reads
 //!
 //! Integration tests for `rmpc get-router` (issue #308).
 //! Drives the command against a `mockito` JSON-RPC server with canned

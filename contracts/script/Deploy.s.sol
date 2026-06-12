@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §3 — Phase 1 Contracts (deploy + role-separation invariant)
+// Canonical: Plan tracking issue #109 §3 — Phase 1 Contracts (deploy + role-separation invariant)
 // (See also: docs/architecture.md §6 — Roles)
 pragma solidity ^0.8.24;
 

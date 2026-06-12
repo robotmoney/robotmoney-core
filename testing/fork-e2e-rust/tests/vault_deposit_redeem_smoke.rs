@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — scenario 1
+//! Canonical: Plan tracking issue #109 §8 — scenario 1
 //! (`vault_deposit_redeem_smoke`).
 //!
 //! End-to-end smoke through the deployed `RobotMoneyVault` ERC-4626:

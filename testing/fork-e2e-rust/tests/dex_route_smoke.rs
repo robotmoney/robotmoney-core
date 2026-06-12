@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §8 — scenario 2
+//! Canonical: Plan tracking issue #109 §8 — scenario 2
 //! (`dex_route_smoke`).
 //!
 //! Smallest meaningful DEX interaction: USDC -> WETH single-hop

@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §9 — fork test for
+//! Canonical: Plan tracking issue #109 §9 — fork test for
 //! `rmpc get-balance`. Implements the issue #50 acceptance criterion
 //! "Fork tests cover every command against pinned contracts".
 //!

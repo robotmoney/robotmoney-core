@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
+//! Canonical: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
 //!
 //! `gateway` module — typed `alloy-sol-types` bindings for the on-chain
 //! contracts the daemon interacts with.

@@ -1,5 +1,5 @@
 //! Canonical: docs/architecture.md §7 — Rust Client (tx envelope build/sign/broadcast)
-//! (See also: Plan tracking issue #109 (retired Plan tracking issue #109) §4.5 — ABI encoding)
+//! (See also: Plan tracking issue #109 §4.5 — ABI encoding)
 //!
 //! `tx` — EIP-1559 transaction envelope construction and broadcast.
 //!

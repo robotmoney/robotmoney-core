@@ -1,4 +1,4 @@
-//! Canonical: Plan tracking issue #109 (retired Plan tracking issue #109) §4.5 — ABI encoding and Ethereum primitives (JSON-RPC transport)
+//! Canonical: Plan tracking issue #109 §4.5 — ABI encoding and Ethereum primitives (JSON-RPC transport)
 //!
 //! `rpc` module — minimal async JSON-RPC over `reqwest`.
 //!
