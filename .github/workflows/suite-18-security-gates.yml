@@ -10,7 +10,8 @@
 # SECRETS SCANNING is handled by suite-18-secrets-scan.yml (shipped) — not duplicated here.
 #
 # ACTIVATION HISTORY (issue #804)
-# - cargo-audit: activated — uses rustsec/audit-check action (no deny.toml needed for basic scan).
+# - cargo-audit: activated — installs cargo-audit and runs directly (avoids rustsec/audit-check
+#   action's checks:write permission requirement which causes annotation errors on PRs).
 # - bun-audit:   activated — `bun audit` from clients/dapp/ (exits 1 on any HIGH/CRITICAL).
 # - csp-gate:    activated — clients/dapp/scripts/check-csp.sh shipped in #735.
 # - secrets-scanning: REMOVED from this file; covered by suite-18-secrets-scan.yml.
@@ -41,6 +42,8 @@ concurrency:
 jobs:
   # ── Cargo audit ────────────────────────────────────────────────────────────
   # Scans Cargo.lock for Rust advisory database (RustSec) hits.
+  # Uses cargo-audit CLI directly (not rustsec/audit-check action) to avoid the
+  # action's checks:write permission requirement that causes annotation errors on PRs.
   # Follow-up issue #813: add deny.toml for advisory allow-list and severity policy.
   cargo-audit:
     name: cargo-audit
@@ -48,10 +51,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
       - name: cargo audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit
 
   # ── Bun audit ──────────────────────────────────────────────────────────────
   # Scans clients/dapp package manifest for JS advisory (npm) hits.
