@@ -1,8 +1,8 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ac261f5ffeed58d231519872023066ebc065f5ba/contracts/RouterGovernance.sol)
 
 **Inherits:**
-AccessControl
+AccessControl, ReentrancyGuard
 
 **Title:**
 RouterGovernance
@@ -331,7 +331,7 @@ and the execution delay has elapsed.
 
 
 ```solidity
-function execute(uint256 proposalId) external;
+function execute(uint256 proposalId) external nonReentrant;
 ```
 
 ### proposalState

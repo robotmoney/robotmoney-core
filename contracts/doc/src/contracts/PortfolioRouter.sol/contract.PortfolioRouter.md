@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ac261f5ffeed58d231519872023066ebc065f5ba/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 AccessControl, ReentrancyGuard
@@ -247,7 +247,7 @@ reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
 
 
 ```solidity
-function rescueUsdc(address to) external onlyRole(ADMIN_ROLE);
+function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE);
 ```
 **Parameters**
 

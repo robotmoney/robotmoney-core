@@ -472,6 +472,7 @@ contract RouterGovernance is AccessControl, ReentrancyGuard {
         emit ProposalExecuted(proposalId, msg.sender);
         emit WeightsApplied(proposalId, p.vaults, p.bps);
     }
+
     // slither-disable-end reentrancy-events
 
     // ─── Read surface ────────────────────────────────────────────────────────

@@ -356,6 +356,7 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         usdc.safeTransfer(to, amount);
         emit RescuedUsdc(to, amount);
     }
+
     // slither-disable-end reentrancy-events
 
     // ─── Preview ─────────────────────────────────────────────────────────────

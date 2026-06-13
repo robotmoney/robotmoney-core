@@ -440,6 +440,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         adpt.deploy(amount);
         emit Allocated(i, adptAddr, amount);
     }
+
     // slither-disable-end reentrancy-events
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
@@ -612,6 +613,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
         }
     }
+
     // slither-disable-end reentrancy-balance
 
     // ─── Adapter management ──────────────────────────────────────────

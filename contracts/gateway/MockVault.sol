@@ -89,15 +89,15 @@ contract MockVault is ERC20, ReentrancyGuard {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
+    // slither-disable-start reentrancy-events
+    // This is a test fixture and the emit after the guarded transfer is
+    // intentional. `nonReentrant` blocks observable reentry in the mock too.
     /// @notice ERC-4626-style redeem. Burns `shares` from `owner` and
     ///         transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
     /// @param  shares   Amount of `rmUSDC` shares to burn.
     /// @param  receiver Recipient of the redeemed USDC.
     /// @param  owner    Share owner whose balance is debited.
     /// @return assets   Amount of USDC transferred (== shares, 1:1).
-    // slither-disable-start reentrancy-events
-    // This is a test fixture and the emit after the guarded transfer is
-    // intentional. `nonReentrant` blocks observable reentry in the mock too.
     function redeem(uint256 shares, address receiver, address owner)
         external
         virtual
@@ -118,6 +118,7 @@ contract MockVault is ERC20, ReentrancyGuard {
 
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
+
     // slither-disable-end reentrancy-events
 
     /// @notice Maximum shares redeemable for `owner` (their full balance).

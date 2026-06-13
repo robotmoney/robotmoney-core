@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/ac261f5ffeed58d231519872023066ebc065f5ba/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -614,7 +614,7 @@ and `_sellProportional` skip them, so any balance that reappears after
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE);
+function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE);
 ```
 
 ### setTvlCap

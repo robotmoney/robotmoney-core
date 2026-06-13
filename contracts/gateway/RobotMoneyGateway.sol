@@ -816,6 +816,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.windowId
         );
     }
+
     // slither-disable-end reentrancy-balance
 
     // -------------------------------------------------------------------

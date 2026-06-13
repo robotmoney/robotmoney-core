@@ -1143,6 +1143,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         );
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
+
     // slither-disable-end reentrancy-balance
 
     /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
