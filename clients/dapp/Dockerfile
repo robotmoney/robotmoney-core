@@ -1,6 +1,6 @@
 # Multi-stage build for the human dapp.
 #
-# Canonical: docs/implementation-plan.md §12 — Phase 6.
+# Canonical: docs/architecture.md §5.3
 # Used by: docker-compose.full-stack.yaml (issue #146).
 #
 # Build args wire VITE_* env vars at build time (Vite inlines them into

@@ -1,6 +1,6 @@
 # Minimal multi-stage build for the explorer-api binary.
 #
-# Canonical: docs/implementation-plan.md §11 — Phase 5.
+# Canonical: docs/architecture.md §5.4
 # Used by: docker-compose.full-stack.yaml (issue #146).
 
 FROM rust:1-bookworm AS builder
