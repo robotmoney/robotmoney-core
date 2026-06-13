@@ -1,5 +1,5 @@
 # BasketVaultAerodromeTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -91,13 +91,6 @@ address internal stranger = makeAddr("stranger")
 ```
 
 
-### fakeFactory
-
-```solidity
-address internal fakeFactory = address(0xF00D)
-```
-
-
 ## Functions
 ### setUp
 
@@ -169,6 +162,16 @@ AerodromeSwapAdapter.swap() reverts when minAmountOut is not met.
 
 ```solidity
 function test_AerodromeSwapAdapter_swap_revertsOnSlippage() public;
+```
+
+### test_AerodromeSwapAdapter_swap_forwardsCallerDeadline
+
+AerodromeSwapAdapter.swap() forwards the caller-chosen deadline to
+the router instead of hardcoding block.timestamp (audit 2026-06-09, L-5).
+
+
+```solidity
+function test_AerodromeSwapAdapter_swap_forwardsCallerDeadline() public;
 ```
 
 ### test_AerodromeSwapAdapter_twapPrice_returnsCorrectAtTickZero

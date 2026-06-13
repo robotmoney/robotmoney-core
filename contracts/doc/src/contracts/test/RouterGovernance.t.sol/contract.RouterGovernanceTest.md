@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -309,6 +309,58 @@ function test_propose_allEligibleVaultsSucceedsActive() public;
 function test_propose_allowsNewProposalAfterDefeated() public;
 ```
 
+### test_propose_snapshotsVoteSnapshot
+
+propose() stores the creation block number as voteSnapshot.
+
+
+```solidity
+function test_propose_snapshotsVoteSnapshot() public;
+```
+
+### test_vote_usesSnapshotPowerNotLive
+
+vote() reads checkpointed power at the snapshot block, not live
+votingPower: reducing Alice's power to 0 after propose() does not
+stop her from voting with her snapshot power.
+
+
+```solidity
+function test_vote_usesSnapshotPowerNotLive() public;
+```
+
+### test_vote_midProposalPowerChangeDoesNotAffectCastVotes
+
+Mid-proposal voting power changes do not retroactively affect
+already-cast votes. Alice votes with 600k power at vote time,
+then admin reduces Alice to 0 — her vote weight is preserved.
+
+
+```solidity
+function test_vote_midProposalPowerChangeDoesNotAffectCastVotes() public;
+```
+
+### test_vote_revertsIfPowerGrantedAfterProposal
+
+Granting voting power after a proposal is created does not let
+the new voter affect that proposal — the checkpoint lookup at the
+snapshot block returns 0 for newly-empowered addresses.
+
+
+```solidity
+function test_vote_revertsIfPowerGrantedAfterProposal() public;
+```
+
+### test_getPastVotes_returnsHistoricalPower
+
+getPastVotes returns the historical checkpoint value, not the
+latest assignment.
+
+
+```solidity
+function test_getPastVotes_returnsHistoricalPower() public;
+```
+
 ### test_vote_success
 
 
@@ -525,7 +577,8 @@ function test_constructor_revertsOnVotingPeriodBelowMin() public;
 
 ### test_constructor_validFloorArgumentsSucceed
 
-Deploying with quorumThreshold = 1 and votingPeriod = MIN_VOTING_PERIOD succeeds.
+Deploying with quorumThreshold = 1, votingPeriod = MIN_VOTING_PERIOD,
+and executionDelay = MIN_EXECUTION_DELAY succeeds.
 
 
 ```solidity
@@ -550,9 +603,36 @@ setVotingPeriod(MIN_VOTING_PERIOD - 1) must revert with VotingPeriodBelowMinimum
 function test_setVotingPeriod_revertsOnBelowMin() public;
 ```
 
+### test_constructor_revertsOnExecutionDelayBelowMin
+
+Deploying with executionDelay below MIN_EXECUTION_DELAY must revert.
+
+
+```solidity
+function test_constructor_revertsOnExecutionDelayBelowMin() public;
+```
+
+### test_setExecutionDelay_revertsOnBelowMin
+
+setExecutionDelay(MIN_EXECUTION_DELAY - 1) must revert with ExecutionDelayBelowMinimum.
+
+
+```solidity
+function test_setExecutionDelay_revertsOnBelowMin() public;
+```
+
+### test_setExecutionDelay_succeedsWithMinDelay
+
+setExecutionDelay with MIN_EXECUTION_DELAY succeeds.
+
+
+```solidity
+function test_setExecutionDelay_succeedsWithMinDelay() public;
+```
+
 ### test_zeroVoteExploitSequenceBlocked
 
-With quorumThreshold=1 and executionDelay=0 a single actor cannot
+With quorumThreshold=1 a single actor cannot
 execute with 0 votes — execute() must revert because quorum is not
 reached (0 votes < 1 required).
 

@@ -2571,6 +2571,11 @@ export const vaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "ReentrancyGuardReentrantCall",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "SafeERC20FailedOperation",
     inputs: [
       {
@@ -4920,6 +4925,22 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientAdapterLiquidity",
+    inputs: [
+      {
+        name: "requested",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidCap",
     inputs: [],
   },
@@ -6452,6 +6473,22 @@ export const routerAbiGenerated = [
     type: "error",
     name: "SlippageExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "UnauthorizedRedeemer",
+    inputs: [
+      {
+        name: "shareHolder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "caller",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

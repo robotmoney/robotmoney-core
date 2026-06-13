@@ -27,6 +27,9 @@
 #   --audit-level=high` (the real bun flag; the previous `--level high` was
 #   silently ignored, which is why the warn-only `|| true` was needed) with no
 #   warn-only override.
+# - Issue #835: bun-audit now runs clients/dapp/scripts/audit-deps.sh (the same
+#   gate suite-09 dapp-lint-build uses) instead of a bare `bun audit`, so the
+#   accepted-advisory list with dated justifications lives in exactly one place.
 
 name: security-gates
 
@@ -39,6 +42,7 @@ on:
       - "Cargo.lock"
       - "clients/dapp/bun.lock"
       - "clients/dapp/package.json"
+      - "clients/dapp/scripts/audit-deps.sh"
       - "clients/dapp/scripts/check-csp.sh"
       - ".github/workflows/suite-18-security-gates.yml"
   workflow_dispatch:
@@ -85,9 +89,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: bun audit (fail on HIGH/CRITICAL)
+      - name: bun audit (fail on HIGH/CRITICAL, accepted advisories suppressed)
         working-directory: clients/dapp
-        run: bun audit --audit-level=high
+        run: bash scripts/audit-deps.sh
 
   # ── CSP gate ───────────────────────────────────────────────────────────────
   # Asserts the dapp production bundle does not weaken the Content-Security-Policy.

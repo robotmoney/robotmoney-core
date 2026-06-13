@@ -23,6 +23,7 @@ import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {ChronicleOracleAdapter} from "../adapters/ChronicleOracleAdapter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
+import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 
 /// @notice Demo-only stand-in ERC20 for the basket-vault devnet seeds. The
 ///         devnet has no real liquidity for the PRD §11.2 protocol basket
@@ -46,6 +47,7 @@ contract DemoBasketToken is ERC20 {
 contract DemoUsdcPool {
     address public immutable token0;
     address public immutable token1;
+    int24 public constant tickSpacing = 10_000;
 
     constructor(address tokenA, address tokenB) {
         // Order is irrelevant to addAsset's check; store as given.
@@ -139,23 +141,33 @@ contract DemoV4SwapRouter {
 ///         also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
 ///         totalAssets ≈ totalDeposits and no share inflation occurs.
 contract DemoAerodromeRouter {
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256, /* amountOutMin */
-        IAerodromeRouter.Route[] calldata routes,
-        address to,
-        uint256 /* deadline */
-    ) external returns (uint256[] memory amounts) {
-        require(routes.length > 0, "no routes");
-        IERC20(routes[0].from).transferFrom(msg.sender, address(this), amountIn);
-        DemoBasketToken(routes[0].to).mint(to, amountIn);
-        amounts = new uint256[](2);
-        amounts[0] = amountIn;
-        amounts[1] = amountIn;
+    mapping(bytes32 => address) public pools;
+
+    function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external {
+        pools[keccak256(abi.encode(tokenA, tokenB, tickSpacing))] = pool;
+        pools[keccak256(abi.encode(tokenB, tokenA, tickSpacing))] = pool;
     }
 
-    function defaultFactory() external pure returns (address) {
-        return address(0);
+    function getPool(address tokenA, address tokenB, int24 tickSpacing)
+        external
+        view
+        returns (address)
+    {
+        return pools[keccak256(abi.encode(tokenA, tokenB, tickSpacing))];
+    }
+
+    function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+        external
+        returns (uint256)
+    {
+        require(
+            pools[keccak256(abi.encode(params.tokenIn, params.tokenOut, params.tickSpacing))]
+                != address(0),
+            "pool not configured"
+        );
+        IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
+        DemoBasketToken(params.tokenOut).mint(params.recipient, params.amountIn);
+        return params.amountIn;
     }
 }
 
@@ -308,8 +320,7 @@ contract AgentBasketStubDeployer {
 
         v3Router = address(v3);
         v4Adapter = address(new UniswapV4SwapAdapter(address(v4Router)));
-        aeroAdapter =
-            address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter), false));
+        aeroAdapter = address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter)));
 
         for (uint256 i = 0; i < 3; i++) {
             DemoBasketToken token = new DemoBasketToken(
@@ -318,6 +329,7 @@ contract AgentBasketStubDeployer {
             tokens[i] = token;
             pools[i] = new DemoUsdcPool(address(token), usdc);
         }
+        aeroRouter.setPool(address(tokens[2]), usdc, 10_000, address(pools[2]));
     }
 }
 

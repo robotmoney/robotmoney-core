@@ -1,5 +1,5 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -114,9 +114,8 @@ bytes32 internal agentRole
 
 ### depositor
 Default owner used by `_authorize` when none is specified.
-Matches the pre-#269 admin-as-authorizer behavior at the test
-level while exercising the new permissionless path under the
-hood (any EOA may authorize; recorded owner == msg.sender).
+Now uses `admin` since `authorizeAgent` requires
+DEFAULT_ADMIN_ROLE (issue #753).
 
 
 ```solidity
@@ -190,8 +189,9 @@ function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
 
 ### test_authorizeAgent_permissionless
 
-AC: a non-`ADMIN_ROLE` EOA calls `authorizeAgent` and the gateway
-records `(msg.sender, agent)` as the owner pair (issue #269).
+AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
+revert (issue #753 — commit/reveal is now the only permissionless
+first-time authorization path).
 
 
 ```solidity
@@ -200,12 +200,24 @@ function test_authorizeAgent_permissionless() public;
 
 ### test_authorizeAgent_no_longer_requires_admin_role
 
-AC: calling `authorizeAgent` from an EOA holding no roles does
-not revert (issue #269).
+AC: commit/reveal is the permissionless alternative to the
+admin-only `authorizeAgent` (issue #753).
 
 
 ```solidity
 function test_authorizeAgent_no_longer_requires_admin_role() public;
+```
+
+### test_authorizeAgent_frontRunProtection
+
+Front-run regression: an attacker observing a victim's
+`revealAuthorization` cannot pre-empt it via the direct
+`authorizeAgent` because that function now requires
+DEFAULT_ADMIN_ROLE (issue #753).
+
+
+```solidity
+function test_authorizeAgent_frontRunProtection() public;
 ```
 
 ### test_authorizeAgent_revertsOnRoleSeparation_grantingAgentToAdmin
@@ -253,8 +265,7 @@ function test_authorizeAgent_revertsWhenPaymentCapExceedsWindowCap() public;
 ### test_authorizeAgent_revertsWhenAlreadyOwned
 
 Re-authorizing an already-owned agent is rejected; the owner
-must `setPolicy` (or `revokeAgent` first). Replaces the
-pre-#269 "admin re-authorizes" semantic.
+must `setPolicy` (or `revokeAgent` first).
 
 
 ```solidity
@@ -309,7 +320,7 @@ function test_revokeAgent_clearsPolicyAndRoleAndOwner() public;
 ### test_revokeAgent_requires_recorded_owner
 
 AC: only the recorded owner can revoke; a third-party caller
-reverts with the new ownership-check error (issue #269).
+reverts with NotAgentOwner (issue #269).
 
 
 ```solidity
@@ -319,8 +330,7 @@ function test_revokeAgent_requires_recorded_owner() public;
 ### test_revokeAgent_then_authorizeAgent_by_different_owner
 
 After revoke, the agent address is releasable: a fresh depositor
-can claim it via `authorizeAgent`. This is the round-trip
-property the dapp's onboarding wizard relies on.
+can claim it via commit/reveal (issue #753).
 
 
 ```solidity
@@ -495,11 +505,11 @@ function test_authorizeAgent_revertsOnExpiredValidUntil() public;
 function test_revokeAgent_revertsOnZeroAgent() public;
 ```
 
-### test_deposit_revertsOnPreCallShareCustodyInvariant
+### test_deposit_ignoresPreexistingDonatedShares
 
 
 ```solidity
-function test_deposit_revertsOnPreCallShareCustodyInvariant() public;
+function test_deposit_ignoresPreexistingDonatedShares() public;
 ```
 
 ### test_deposit_revertsOnPostCallShareCustodyInvariant

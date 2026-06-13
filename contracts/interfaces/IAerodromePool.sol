@@ -13,6 +13,7 @@ pragma solidity ^0.8.24;
 interface IAerodromePool {
     function token0() external view returns (address);
     function token1() external view returns (address);
+    function tickSpacing() external view returns (int24);
 
     /// @notice Returns sqrtPriceX96 and tick from the pool's slot0.
     ///         Aerodrome Slipstream (CL) pools use the same slot0 ABI as Uniswap V3.

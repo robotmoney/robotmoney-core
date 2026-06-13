@@ -16,7 +16,7 @@
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
         "venue": "V3",
-        "adapter": null,
+        "adapter": "0x0000000000000000000000000000000000000000",
         "note": "TODO: confirm Base mainnet BNKR/USDC V3 pool address before mainnet deploy"
       },
       {
@@ -25,7 +25,7 @@
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
         "venue": "V4",
-        "adapter": null,
+        "adapter": "0x0000000000000000000000000000000000000000",
         "note": "TODO: confirm Base mainnet JUNO/USDC V4 pool address and deploy UniswapV4SwapAdapter before mainnet deploy"
       },
       {
@@ -34,7 +34,7 @@
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
         "venue": "Aerodrome",
-        "adapter": null,
+        "adapter": "0x0000000000000000000000000000000000000000",
         "note": "TODO: confirm ROBOTMONEY token address, Aerodrome CL pool, and deploy AerodromeSwapAdapter before mainnet deploy"
       }
     ]
@@ -61,7 +61,7 @@
         "venue": "Aerodrome",
         "swapFee": 10000,
         "adapter_type": "AerodromeSwapAdapter",
-        "note": "Uses AerodromeSwapAdapter wrapping DemoAerodromeRouter on devnet. stable=false (volatile pool)."
+        "note": "Uses AerodromeSwapAdapter wrapping the Slipstream-compatible DemoAerodromeRouter on devnet. swapFee carries the CL pool tick spacing."
       }
     ],
     "override_env_prefix": {

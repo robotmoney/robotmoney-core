@@ -150,6 +150,9 @@ contract Deploy is Script {
         // runs the deploy script with the admin private key), so msg.sender on
         // the addAdapter calls is d.admin which holds ADMIN_ROLE.  No vm.prank
         // is required — and vm.prank is prohibited inside startBroadcast.
+        // authorizeAgent also requires DEFAULT_ADMIN_ROLE, which the broadcaster
+        // holds as d.admin.
+        _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
         // Seed deposit: the deployer (broadcaster) approves and deposits ≥ 1,000 USDC
         // before the vault is opened to the public.  This is required by
@@ -184,9 +187,10 @@ contract Deploy is Script {
     function runInProcess() external returns (Deployed memory d) {
         Params memory p = _readEnvParams();
         d = _doDeploy(p);
-        // In-process (no broadcast): addAdapter requires ADMIN_ROLE which is
-        // held by d.admin. Use vm.prank to call it as d.admin.
+        // In-process (no broadcast): addAdapter and authorizeAgent require
+        // ADMIN_ROLE and DEFAULT_ADMIN_ROLE respectively, both held by d.admin.
         vm.startPrank(d.admin);
+        _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
     }
@@ -220,9 +224,10 @@ contract Deploy is Script {
         p.maxWithdrawPerWindow = DEFAULT_MAX_WITHDRAW_PER_WINDOW;
         p.usdcAddress = usdc_;
         d = _doDeploy(p);
-        // In-process (no broadcast): addAdapter requires ADMIN_ROLE which is
-        // held by d.admin. Use vm.prank to call it as d.admin.
+        // In-process (no broadcast): addAdapter and authorizeAgent require
+        // ADMIN_ROLE and DEFAULT_ADMIN_ROLE respectively, both held by d.admin.
         vm.startPrank(d.admin);
+        _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
         // Note: no seed deposit here — runInProcessWith is used by Deploy.t.sol
@@ -259,6 +264,7 @@ contract Deploy is Script {
         p.usdcAddress = usdc_;
         d = _doDeploy(p);
         vm.startPrank(d.admin);
+        _authorizeDeployAgent(d, p);
         _approveAndRegisterAdapters(d);
         vm.stopPrank();
         _executeSeedDeposit(d);
@@ -436,43 +442,11 @@ contract Deploy is Script {
             IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser, address(0)
         );
 
-        // 2. Authorize agent under a sane initial policy. Authorization is
-        //    permissionless (issue #269): the broadcaster becomes the agent's
-        //    recorded owner via `msg.sender`. On the smoke-test devnet that
-        //    is the deployer EOA; the deployer is the depositor proxy for
-        //    happy-path smoke-tests and may later `setPolicy`/`revokeAgent`
-        //    against this agent without holding any privileged role.
-        address[] memory noDestinations = new address[](0);
-        // When withdrawals are enabled (maxWithdrawPerPayment > 0) the contract
-        // requires assetRecipient != address(0).  Use shareReceiver as the
-        // USDC recipient for devnet/test deployments.
-        address assetRecipient = p.maxWithdrawPerPayment > 0 ? d.shareReceiver : address(0);
-        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
-            active: true,
-            validUntil: p.validUntil,
-            maxPerPayment: p.maxPerPayment,
-            maxPerWindow: p.maxPerWindow,
-            shareReceiver: d.shareReceiver,
-            allowedDestinations: noDestinations,
-            assetRecipient: assetRecipient,
-            maxWithdrawPerPayment: p.maxWithdrawPerPayment,
-            maxWithdrawPerWindow: p.maxWithdrawPerWindow,
-            allowedSourceVaults: noDestinations
-        });
+        // 2. Agent authorization + sanity checks are done by each caller
+        //    (_authorizeDeployAgent), since authorizeAgent now requires
+        //    DEFAULT_ADMIN_ROLE.
 
-        d.gateway.authorizeAgent(d.agent, policy);
-
-        // 3. Sanity: post-grant, agent must satisfy role separation.
-        //    authorizeAgent already calls _assertRoleSeparation, but we
-        //    repeat the public hasRole checks here as a belt-and-braces
-        //    deploy invariant (and to emit a clear console line on failure).
-        require(d.gateway.hasRole(d.gateway.AGENT_ROLE(), d.agent), "agent missing AGENT_ROLE");
-        require(!d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.agent), "agent has ADMIN_ROLE");
-        require(!d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.agent), "agent has PAUSER_ROLE");
-        require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin), "admin missing ADMIN_ROLE");
-        require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
-
-        // 4. Pin gateway runtime hash.
+        // 3. Pin gateway runtime hash.
         //    Agent funding is the caller's responsibility — the smoke-test
         //    harness funds the agent via `Fixture::fund_usdc` (a real
         //    transfer from the genesis-allocated HARNESS_USDC_HOLDER), and
@@ -499,6 +473,36 @@ contract Deploy is Script {
         console2.log("  agent            :", d.agent);
         console2.log("  shareReceiver    :", d.shareReceiver);
         console2.log("  agent USDC bal   :", IERC20(d.usdc).balanceOf(d.agent));
+    }
+
+    /// @dev Constructs the default agent policy, calls authorizeAgent on the
+    ///      deployed gateway, then runs post-authorization sanity checks.
+    ///      Must be called in a context where msg.sender holds
+    ///      DEFAULT_ADMIN_ROLE (i.e. d.admin or the broadcast deployer).
+    function _authorizeDeployAgent(Deployed memory d, Params memory p) internal {
+        address[] memory noDestinations = new address[](0);
+        address assetRecipient = p.maxWithdrawPerPayment > 0 ? d.shareReceiver : address(0);
+        IGateway.AgentPolicy memory policy = IGateway.AgentPolicy({
+            active: true,
+            validUntil: p.validUntil,
+            maxPerPayment: p.maxPerPayment,
+            maxPerWindow: p.maxPerWindow,
+            shareReceiver: d.shareReceiver,
+            allowedDestinations: noDestinations,
+            assetRecipient: assetRecipient,
+            maxWithdrawPerPayment: p.maxWithdrawPerPayment,
+            maxWithdrawPerWindow: p.maxWithdrawPerWindow,
+            allowedSourceVaults: noDestinations
+        });
+
+        d.gateway.authorizeAgent(d.agent, policy);
+
+        // Sanity: post-grant, agent must satisfy role separation.
+        require(d.gateway.hasRole(d.gateway.AGENT_ROLE(), d.agent), "agent missing AGENT_ROLE");
+        require(!d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.agent), "agent has ADMIN_ROLE");
+        require(!d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.agent), "agent has PAUSER_ROLE");
+        require(d.gateway.hasRole(d.gateway.ADMIN_ROLE(), d.admin), "admin missing ADMIN_ROLE");
+        require(d.gateway.hasRole(d.gateway.PAUSER_ROLE(), d.pauser), "pauser missing PAUSER_ROLE");
     }
 
     function _envOrDefault(string memory key, uint256 fallbackValue)

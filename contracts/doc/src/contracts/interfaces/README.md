@@ -2,8 +2,10 @@
 
 # Contents
 - [IAavePool](IAavePool.sol/interface.IAavePool.md)
+- [IAerodromeCLFactory](IAerodromeCLFactory.sol/interface.IAerodromeCLFactory.md)
 - [IAerodromePool](IAerodromePool.sol/interface.IAerodromePool.md)
 - [IAerodromeRouter](IAerodromeRouter.sol/interface.IAerodromeRouter.md)
+- [IAerodromeSlipstreamRouter](IAerodromeSlipstreamRouter.sol/interface.IAerodromeSlipstreamRouter.md)
 - [IBasketSwapAdapter](IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
 - [IChronicleOracle](IChronicleOracle.sol/interface.IChronicleOracle.md)
 - [IComet](IComet.sol/interface.IComet.md)

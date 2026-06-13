@@ -195,6 +195,12 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         USDC is permanently stranded in the router.
     error UsdcCustodyInvariantViolated();
 
+    /// @notice Caller is not the shareHolder and has insufficient ERC-20
+    ///         allowance on the vault share token to redeem on its behalf.
+    /// @param shareHolder  The owner of the vault shares.
+    /// @param caller       The address that attempted the unauthorized redeem.
+    error UnauthorizedRedeemer(address shareHolder, address caller);
+
     /// @notice A vault has not been marked router-eligible in the
     ///         VaultRegistry (`isRouterEligible(vault) == false`).
     ///         Production-readiness is registry state set by ADMIN_ROLE on
@@ -339,13 +345,19 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         transfers, or USDC approved but not pulled by a vault that
     ///         reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
     /// @param to  Recipient of all stranded USDC held by the router.
-    function rescueUsdc(address to) external onlyRole(ADMIN_ROLE) {
+    // slither-disable-start reentrancy-events
+    // The router is already `nonReentrant` on its state-mutating entrypoints;
+    // this recovery path only emits after the guarded token transfer and the
+    // event ordering is intentional.
+    function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE) {
         if (to == address(0)) revert ZeroAddress();
         uint256 amount = usdc.balanceOf(address(this));
         if (amount == 0) return;
         usdc.safeTransfer(to, amount);
         emit RescuedUsdc(to, amount);
     }
+
+    // slither-disable-end reentrancy-events
 
     // ─── Preview ─────────────────────────────────────────────────────────────
 
@@ -446,20 +458,33 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice Redeem vault shares proportionally from multiple vaults. For each
     ///         leg the router calls `vault.redeem(sharesPerLeg[i], assetRecipient,
     ///         shareHolder)`, routing USDC directly to `assetRecipient`. The caller
-    ///         (typically the gateway) must have obtained ERC-20 approvals from
-    ///         `shareHolder` on each vault's share token before calling this
-    ///         function, or must hold the shares itself.
+    ///         (typically the gateway) must either be `shareHolder` itself — the
+    ///         gateway pulls the user's shares into its own custody for the call
+    ///         frame and passes itself as `shareHolder` — or hold an ERC-20
+    ///         allowance from `shareHolder` on each vault's share token covering
+    ///         that leg's share count; otherwise the call reverts with
+    ///         `UnauthorizedRedeemer` (confused-deputy guard, audit finding M-5).
+    ///
+    ///         SECURITY: users must NEVER grant a share-token approval directly to
+    ///         this router. The router calls `vault.redeem` with itself as the
+    ///         vault-level spender, so a standing user→router approval would let
+    ///         any holder-authorized caller burn the user's shares to an arbitrary
+    ///         `assetRecipient`. Only the gateway's transient self-custody flow
+    ///         (approve inside its own `nonReentrant` frame, clear afterwards) may
+    ///         approve the router.
     ///
     ///         All legs must succeed (all-or-revert). No intermediate USDC custody
     ///         is created in the router — each vault sends USDC directly to
     ///         `assetRecipient`.
     ///
     /// @param shareHolder       Address whose vault shares are redeemed (the `owner`
-    ///                          passed to `vault.redeem`). Must have approved the
-    ///                          caller (the gateway) for each vault's share token,
-    ///                          which then must have approved this router, OR the
-    ///                          gateway pulls shares from shareHolder and holds them
-    ///                          temporarily during the call frame.
+    ///                          passed to `vault.redeem`). Either equals the caller
+    ///                          (gateway self-custody flow: shares pulled from the
+    ///                          user and held only during the call frame), or must
+    ///                          have approved the caller on each vault's share token
+    ///                          for at least that leg's share count. Direct user
+    ///                          approvals to this router are forbidden (see SECURITY
+    ///                          note above).
     /// @param assetRecipient    Address that receives redeemed USDC. The router
     ///                          forwards each leg's USDC here; it never custodies USDC.
     /// @param sharesPerLeg      Shares to redeem per leg (parallel to effective weight
@@ -492,6 +517,17 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
             (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
             if (vaultStatus != VaultRegistry.VaultStatus.Active) {
                 revert VaultNotActive(vault, vaultStatus);
+            }
+
+            // Confused-deputy guard (issue #751): caller must be shareHolder or
+            // have ERC-20 allowance on the vault share token. Without this check
+            // any address can front-run a shareHolder's approval tx and call
+            // redeemFor, burning shares at a caller-specified share count.
+            if (
+                msg.sender != shareHolder
+                    && IERC20(vault).allowance(shareHolder, msg.sender) < shares
+            ) {
+                revert UnauthorizedRedeemer(shareHolder, msg.sender);
             }
 
             // Redeem: shareHolder must have approved msg.sender (the gateway) to

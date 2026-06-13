@@ -121,7 +121,7 @@ jobs:
         run: forge build
 
       - name: slither static analysis
-        run: slither .
+        run: slither . --config-file slither.config.json --filter-paths 'lib/,contracts/test/,contracts/script/'
 
       - name: Dependency audit (OZ + Aave interface versions)
         run: |

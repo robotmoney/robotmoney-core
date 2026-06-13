@@ -1,8 +1,7 @@
 # MockAerodromeRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
-Mock Aerodrome Router: records calls and disburses pre-set amounts.
-Mimics the IAerodromeRouter.swapExactTokensForTokens signature.
+Mock Aerodrome Slipstream router and CL factory.
 
 
 ## State Variables
@@ -10,6 +9,23 @@ Mimics the IAerodromeRouter.swapExactTokensForTokens signature.
 
 ```solidity
 uint256 public amountOut
+```
+
+
+### enforceDeadline
+When set, the deadline forwarded by the adapter is enforced
+(mirrors the real Aerodrome Router's "Expired" check).
+
+
+```solidity
+bool public enforceDeadline
+```
+
+
+### pools
+
+```solidity
+mapping(bytes32 => address) public pools
 ```
 
 
@@ -21,24 +37,37 @@ uint256 public amountOut
 function setAmountOut(uint256 amountOut_) external;
 ```
 
-### swapExactTokensForTokens
+### setEnforceDeadline
 
 
 ```solidity
-function swapExactTokensForTokens(
-    uint256 amountIn,
-    uint256 amountOutMin,
-    IAerodromeRouter.Route[] calldata routes,
-    address to,
-    uint256 /* deadline */
-) external returns (uint256[] memory amounts);
+function setEnforceDeadline(bool enforce_) external;
 ```
 
-### defaultFactory
+### setPool
 
 
 ```solidity
-function defaultFactory() external pure returns (address);
+function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external;
+```
+
+### exactInputSingle
+
+
+```solidity
+function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+    external
+    returns (uint256);
+```
+
+### getPool
+
+
+```solidity
+function getPool(address tokenA, address tokenB, int24 tickSpacing)
+    external
+    view
+    returns (address);
 ```
 
 ## Errors
@@ -46,5 +75,11 @@ function defaultFactory() external pure returns (address);
 
 ```solidity
 error TooLittleReceived(uint256 amountOut, uint256 amountOutMin);
+```
+
+### Expired
+
+```solidity
+error Expired(uint256 deadline, uint256 blockTimestamp);
 ```
 

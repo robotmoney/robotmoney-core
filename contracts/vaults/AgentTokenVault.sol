@@ -57,7 +57,7 @@ import {BasketVault} from "./BasketVault.sol";
 ///
 ///         ## Operational notes
 ///
-///         The canonical MVP shortlist (six Base-only tokens, equal-weight) is seeded
+///         The active shortlist is seeded
 ///         from config/agent-token-shortlist.json via
 ///         contracts/script/DeployAgentTokenVault.s.sol — no token address is
 ///         hardcoded here.

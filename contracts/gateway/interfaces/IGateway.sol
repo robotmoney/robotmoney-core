@@ -317,11 +317,12 @@ interface IGateway {
     /// @param p      Initial policy parameters.
     function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
-    /// @notice First-time authorization for `agent`. Permissionless — any EOA
-    ///         may call to register their own agent. `msg.sender` is recorded
-    ///         as the agent's owner. Reverts if `agent` already has a
-    ///         recorded owner; that owner must call `setPolicy` to update or
-    ///         `revokeAgent` to release.
+    /// @notice First-time authorization for `agent`. Admin-only — only callable
+    ///         by `DEFAULT_ADMIN_ROLE`. Regular users must use
+    ///         `commitAuthorization` + `revealAuthorization` instead.
+    ///         `msg.sender` is recorded as the agent's owner. Reverts if
+    ///         `agent` already has a recorded owner; that owner must call
+    ///         `setPolicy` to update or `revokeAgent` to release.
     /// @param agent The agent address to authorize (must not already be owned).
     /// @param p     Initial policy parameters.
     function authorizeAgent(address agent, AgentPolicy calldata p) external;

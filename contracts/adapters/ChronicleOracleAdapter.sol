@@ -49,11 +49,27 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    // ─── WAD constant ─────────────────────────────────────────────────
+    // ─── Constants ────────────────────────────────────────────────────
 
     /// @dev 1e18 — Chronicle oracle price scale. Chronicle reports NAV in
     ///      units of USDC per deSPXA, scaled to 18 decimal places (WAD).
     uint256 private constant WAD = 1e18;
+
+    /// @notice Minimum acceptable NAV price from the Chronicle oracle in WAD.
+    ///         Any price below this threshold is considered invalid and will
+    ///         cause twapPrice() to revert. Set to 1e12 (0.000001 USD per RWA
+    ///         token) — well below any realistic deSPXA peg but safely above
+    ///         zero to catch malfunctioning or manipulated oracles.
+    /// @dev    1e12 in WAD corresponds to 1e-6 USD given WAD = 1e18.
+    uint256 public constant MIN_NAV = 1e12;
+
+    /// @notice Maximum acceptable NAV price from the Chronicle oracle in WAD.
+    ///         Any price above this threshold is considered invalid and will
+    ///         cause twapPrice() to revert. Set to 1e24 (1,000,000 USD per RWA
+    ///         token) — far above any plausible deSPXA price but tight enough
+    ///         to guard against extreme oracle malfunctions.
+    /// @dev    1e24 in WAD corresponds to 1e6 USD given WAD = 1e18.
+    uint256 public constant MAX_NAV = 1e24;
 
     // ─── Immutables ───────────────────────────────────────────────────
 
@@ -87,6 +103,15 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     ///      neither (baseToken=RWA, quoteToken=USDC) nor
     ///      (baseToken=USDC, quoteToken=RWA) matches the expected pair.
     error UnknownPricePair(address baseToken, address quoteToken);
+
+    /// @dev Raised when the Chronicle oracle returns a NAV price that is
+    ///      zero or outside the accepted [MIN_NAV, MAX_NAV] range.
+    error BadNavPrice(uint256 navPrice);
+
+    /// @dev Raised when the Aerodrome Router returns an empty amounts array,
+    ///      which would otherwise underflow the output-index read
+    ///      (audit 2026-06-09, L-7).
+    error EmptyRouterAmounts();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -122,13 +147,16 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
     /// @dev Routes via Aerodrome. The `fee` parameter is ignored (Aerodrome
     ///      derives fee from pool config). The swap reverts if the deSPXA
     ///      issuer has frozen transfers — see ADR-0006 §4 (freeze-control risk).
+    ///      The caller-chosen `deadline` is forwarded to the Aerodrome Router,
+    ///      which reverts when expired (audit 2026-06-09, L-5).
     function swap(
         address tokenIn,
         address tokenOut,
         uint24, /* fee — unused by Aerodrome */
         uint256 amountIn,
         uint256 minAmountOut,
-        address recipient
+        address recipient,
+        uint256 deadline
     ) external returns (uint256 amountOut) {
         if (tokenIn == address(0) || tokenOut == address(0)) revert ZeroAddress();
         if (amountIn == 0) return 0;
@@ -140,13 +168,14 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
         routes[0] =
             IAerodromeRouter.Route({from: tokenIn, to: tokenOut, stable: STABLE, factory: FACTORY});
 
-        uint256[] memory amounts = ROUTER.swapExactTokensForTokens(
-            amountIn, minAmountOut, routes, recipient, block.timestamp
-        );
+        uint256[] memory amounts =
+            ROUTER.swapExactTokensForTokens(amountIn, minAmountOut, routes, recipient, deadline);
 
         IERC20(tokenIn).forceApprove(address(ROUTER), 0);
 
         // The router returns one amount per hop; the last element is the output.
+        // Guard the index read against a malformed empty return (audit L-7).
+        if (amounts.length == 0) revert EmptyRouterAmounts();
         amountOut = amounts[amounts.length - 1];
     }
 
@@ -187,6 +216,10 @@ contract ChronicleOracleAdapter is IBasketSwapAdapter {
         if (baseAmount == 0) return 0;
 
         uint256 navPrice = ORACLE.latestAnswer(); // WAD: USDC per RWA, 18 dec
+
+        if (navPrice < MIN_NAV || navPrice > MAX_NAV) {
+            revert BadNavPrice(navPrice);
+        }
 
         if (baseToken == RWA_TOKEN && quoteToken == USDC) {
             // RWA → USDC: quoteAmount in USDC (6 dec)

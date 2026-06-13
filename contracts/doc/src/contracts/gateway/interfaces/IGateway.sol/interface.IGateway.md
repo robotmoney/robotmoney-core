@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -230,11 +230,12 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 
 ### authorizeAgent
 
-First-time authorization for `agent`. Permissionless — any EOA
-may call to register their own agent. `msg.sender` is recorded
-as the agent's owner. Reverts if `agent` already has a
-recorded owner; that owner must call `setPolicy` to update or
-`revokeAgent` to release.
+First-time authorization for `agent`. Admin-only — only callable
+by `DEFAULT_ADMIN_ROLE`. Regular users must use
+`commitAuthorization` + `revealAuthorization` instead.
+`msg.sender` is recorded as the agent's owner. Reverts if
+`agent` already has a recorded owner; that owner must call
+`setPolicy` to update or `revokeAgent` to release.
 
 
 ```solidity

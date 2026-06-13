@@ -1,5 +1,5 @@
 # BasketVaultVenueSelectorTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -79,13 +79,6 @@ address internal emergencyResponder = makeAddr("emergencyResponder")
 
 ```solidity
 address internal stranger = makeAddr("stranger")
-```
-
-
-### fakeFactory
-
-```solidity
-address internal fakeFactory = makeAddr("fakeFactory")
 ```
 
 

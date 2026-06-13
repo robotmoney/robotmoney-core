@@ -5,13 +5,14 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title MockVault
 /// @notice Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC`
 ///         shares 1:1 against deposited USDC and redeems 1:1 with no exit fee.
 ///         Covers the full deposit→redeem round-trip exercised by the dapp e2e
 ///         (issue #257). This contract is a TEST FIXTURE only.
-contract MockVault is ERC20 {
+contract MockVault is ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Deposit amount is zero.
@@ -72,7 +73,12 @@ contract MockVault is ERC20 {
     /// @param  assets Amount of USDC (6 decimals) to deposit.
     /// @param  receiver Recipient of the freshly minted `rmUSDC` shares.
     /// @return shares Amount of `rmUSDC` minted (1:1 with assets).
-    function deposit(uint256 assets, address receiver) external virtual returns (uint256 shares) {
+    function deposit(uint256 assets, address receiver)
+        external
+        virtual
+        nonReentrant
+        returns (uint256 shares)
+    {
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroReceiver();
 
@@ -83,6 +89,9 @@ contract MockVault is ERC20 {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
+    // slither-disable-start reentrancy-events
+    // This is a test fixture and the emit after the guarded transfer is
+    // intentional. `nonReentrant` blocks observable reentry in the mock too.
     /// @notice ERC-4626-style redeem. Burns `shares` from `owner` and
     ///         transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
     /// @param  shares   Amount of `rmUSDC` shares to burn.
@@ -92,6 +101,7 @@ contract MockVault is ERC20 {
     function redeem(uint256 shares, address receiver, address owner)
         external
         virtual
+        nonReentrant
         returns (uint256 assets)
     {
         if (shares == 0) revert ZeroAmount();
@@ -108,6 +118,8 @@ contract MockVault is ERC20 {
 
         emit Withdraw(msg.sender, receiver, owner, assets, shares);
     }
+
+    // slither-disable-end reentrancy-events
 
     /// @notice Maximum shares redeemable for `owner` (their full balance).
     /// @param  owner Address to query.

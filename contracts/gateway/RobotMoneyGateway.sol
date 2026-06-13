@@ -121,10 +121,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Op-kind discriminators prepended to every `paymentId` hash to
     ///         prevent cross-operation replay (deposit id ≠ depositTo id ≠
-    ///         withdrawal id even when all other inputs are identical).
+    ///         withdrawal id ≠ router-withdrawal id even when all other inputs
+    ///         are identical).
     uint8 internal constant OP_DEPOSIT = 1;
     uint8 internal constant OP_WITHDRAW = 2;
     uint8 internal constant OP_DEPOSIT_TO = 3;
+    uint8 internal constant OP_WITHDRAW_ROUTER = 4;
 
     // -------------------------------------------------------------------
     // Immutables
@@ -154,8 +156,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint64 blockNumber;
     }
 
-    /// @notice Pending commitments keyed by `commitHash =
-    ///         keccak256(abi.encode(agent, depositor, salt))`. Cleared on reveal.
+    /// @notice Pending commitments keyed by
+    ///         `keccak256(abi.encode(commitHash, committer))`. Caller scoping
+    ///         prevents another account from overwriting a commitment observed
+    ///         in the mempool or on-chain.
     mapping(bytes32 => Commitment) public commitments;
 
     /// @notice Per-agent policy. Keyed on the agent's signing address.
@@ -210,6 +214,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Per-agent rolling withdrawal window state. See `WithdrawWindow`.
     mapping(address => WithdrawWindow) public agentWithdrawWindow;
+
+    struct WindowEntry {
+        uint64 timestamp;
+        uint256 amount;
+    }
+
+    mapping(address => WindowEntry[]) private _depositWindowEntries;
+    mapping(address => uint256) private _depositWindowHead;
+    mapping(address => uint256) private _depositWindowTotal;
+    mapping(address => WindowEntry[]) private _withdrawWindowEntries;
+    mapping(address => uint256) private _withdrawWindowHead;
+    mapping(address => uint256) private _withdrawWindowTotal;
 
     /// @notice Replay protection. `paymentId => used`.
     mapping(bytes32 => bool) public usedPaymentIds;
@@ -269,18 +285,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @inheritdoc IGateway
     function effectiveWithdrawWindowGross(address agent) external view returns (uint256) {
-        WithdrawWindow memory ww = agentWithdrawWindow[agent];
-        if (ww.windowStart == 0) return 0;
-        if (block.timestamp >= uint256(ww.windowStart) + WINDOW_SECONDS) return 0;
-        return ww.gross;
+        return _effectiveWindowTotal(
+            _withdrawWindowEntries[agent], _withdrawWindowHead[agent], _withdrawWindowTotal[agent]
+        );
     }
 
     /// @inheritdoc IGateway
     function effectiveDepositWindowGross(address agent) external view returns (uint256) {
-        DepositWindow memory dw = agentDepositWindow[agent];
-        if (dw.windowStart == 0) return 0;
-        if (block.timestamp >= uint256(dw.windowStart) + WINDOW_SECONDS) return 0;
-        return dw.gross;
+        return _effectiveWindowTotal(
+            _depositWindowEntries[agent], _depositWindowHead[agent], _depositWindowTotal[agent]
+        );
     }
 
     /// @dev Apply a `shares` redemption against the agent's rolling-window
@@ -289,17 +303,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      writes the updated `WithdrawWindow` to storage. Extracted from
     ///      `withdraw` to keep the entrypoint within EVM stack-depth limits.
     function _accrueRollingWithdraw(address agent, uint256 shares, uint256 cap) internal {
-        WithdrawWindow storage ww = agentWithdrawWindow[agent];
-        uint64 anchor = ww.windowStart;
-        uint256 priorGross = ww.gross;
-        if (anchor == 0 || block.timestamp >= uint256(anchor) + WINDOW_SECONDS) {
-            anchor = uint64(block.timestamp);
-            priorGross = 0;
-        }
-        uint256 projected = priorGross + shares;
+        (uint256 head, uint256 total) = _pruneWindow(
+            _withdrawWindowEntries[agent], _withdrawWindowHead[agent], _withdrawWindowTotal[agent]
+        );
+        uint256 projected = total + shares;
         if (projected > cap) revert WithdrawWindowCapExceeded();
-        ww.windowStart = anchor;
-        ww.gross = projected;
+        _withdrawWindowEntries[agent].push(
+            WindowEntry({timestamp: uint64(block.timestamp), amount: shares})
+        );
+        _withdrawWindowHead[agent] = head;
+        _withdrawWindowTotal[agent] = projected;
+        agentWithdrawWindow[agent] = WithdrawWindow({
+            windowStart: _withdrawWindowEntries[agent][head].timestamp, gross: projected
+        });
     }
 
     /// @dev Apply an `amount` deposit against the agent's rolling-window deposit
@@ -308,17 +324,46 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      `DepositWindow` to storage. Mirrors `_accrueRollingWithdraw` so
     ///      the deposit side is equally hardened against calendar-boundary bursts.
     function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal {
-        DepositWindow storage dw = agentDepositWindow[agent];
-        uint64 anchor = dw.windowStart;
-        uint256 priorGross = dw.gross;
-        if (anchor == 0 || block.timestamp >= uint256(anchor) + WINDOW_SECONDS) {
-            anchor = uint64(block.timestamp);
-            priorGross = 0;
-        }
-        uint256 projected = priorGross + amount;
+        (uint256 head, uint256 total) = _pruneWindow(
+            _depositWindowEntries[agent], _depositWindowHead[agent], _depositWindowTotal[agent]
+        );
+        uint256 projected = total + amount;
         if (projected > cap) revert WindowCapExceeded();
-        dw.windowStart = anchor;
-        dw.gross = projected;
+        _depositWindowEntries[agent].push(
+            WindowEntry({timestamp: uint64(block.timestamp), amount: amount})
+        );
+        _depositWindowHead[agent] = head;
+        _depositWindowTotal[agent] = projected;
+        agentDepositWindow[agent] = DepositWindow({
+            windowStart: _depositWindowEntries[agent][head].timestamp, gross: projected
+        });
+    }
+
+    function _pruneWindow(WindowEntry[] storage entries, uint256 head, uint256 total)
+        internal
+        view
+        returns (uint256 newHead, uint256 newTotal)
+    {
+        uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
+        uint256 len = entries.length;
+        while (head < len && entries[head].timestamp <= cutoff) {
+            total -= entries[head].amount;
+            head++;
+        }
+        return (head, total);
+    }
+
+    function _effectiveWindowTotal(WindowEntry[] storage entries, uint256 head, uint256 total)
+        internal
+        view
+        returns (uint256)
+    {
+        (, uint256 effectiveTotal) = _pruneWindow(entries, head, total);
+        return effectiveTotal;
+    }
+
+    function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32) {
+        return keccak256(abi.encode(commitHash, committer));
     }
 
     // -------------------------------------------------------------------
@@ -333,11 +378,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @inheritdoc IGateway
     function commitAuthorization(bytes32 commitHash) external {
-        // Overwrite any prior commitment from this caller for the same hash.
-        // This is safe: an old expired commitment is useless; overwriting it
-        // with a fresh block number resets the expiry clock, which is the
-        // depositor's intent when they re-commit.
-        commitments[commitHash] =
+        bytes32 storageKey = _commitmentKey(commitHash, msg.sender);
+        commitments[storageKey] =
             Commitment({committer: msg.sender, blockNumber: uint64(block.number)});
         emit CommitSubmitted(msg.sender, commitHash, uint64(block.number));
     }
@@ -345,7 +387,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @inheritdoc IGateway
     function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external {
         bytes32 commitHash = keccak256(abi.encode(agent, msg.sender, salt));
-        Commitment memory c = commitments[commitHash];
+        bytes32 storageKey = _commitmentKey(commitHash, msg.sender);
+        Commitment memory c = commitments[storageKey];
 
         // 1. Commitment must exist.
         if (c.committer == address(0)) revert CommitmentNotFound();
@@ -371,7 +414,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         }
 
         // 5. Clear the commitment before the authorization logic (CEI).
-        delete commitments[commitHash];
+        delete commitments[storageKey];
 
         emit CommitRevealed(msg.sender, commitHash, agent);
 
@@ -380,7 +423,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function authorizeAgent(address agent, AgentPolicy calldata p) external {
+    function authorizeAgent(address agent, AgentPolicy calldata p)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         _authorizeAgentInternal(agent, p);
     }
 
@@ -522,10 +568,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         );
         if (usedPaymentIds[paymentId]) revert PaymentIdAlreadyUsed();
 
-        // Pre-call invariant: gateway must hold zero shares.
-        if (IERC20(address(vaultContract)).balanceOf(address(this)) != 0) {
-            revert ShareCustodyInvariantViolated();
-        }
+        uint256 shareBalanceBefore = IERC20(address(vaultContract)).balanceOf(address(this));
 
         // 6. EFFECTS: write state before any external call (CEI pattern).
         //    Rolling-window deposit cap (#497): eliminates the calendar-boundary
@@ -558,7 +601,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // Post-call invariants:
         // gateway must not custody any rmUSDC.
-        if (IERC20(address(vaultContract)).balanceOf(address(this)) != 0) {
+        if (IERC20(address(vaultContract)).balanceOf(address(this)) != shareBalanceBefore) {
             revert ShareCustodyInvariantViolated();
         }
         // gateway must not custody any leftover USDC from this call.
@@ -745,16 +788,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @dev Vault-path deposit: pre-call share custody check, approve vault, deposit,
     ///      clear allowance, post-call custody invariants, emit event.
+    // slither-disable-start reentrancy-balance
+    // `deposit()` and `depositTo()` are `nonReentrant`; the pre-call balance
+    // snapshot and post-call custody checks are therefore safe from observable
+    // reentry and the stale-balance warning is a false positive.
     function _executeVaultDeposit(DepositArgs memory args) internal {
-        if (IERC20(args.destination).balanceOf(address(this)) != 0) {
-            revert ShareCustodyInvariantViolated();
-        }
+        uint256 shareBalanceBefore = IERC20(args.destination).balanceOf(address(this));
 
         usdcToken.forceApprove(args.destination, args.amount);
         uint256 sharesMinted = IERC4626(args.destination).deposit(args.amount, args.shareReceiver);
         usdcToken.forceApprove(args.destination, 0);
 
-        if (IERC20(args.destination).balanceOf(address(this)) != 0) {
+        if (IERC20(args.destination).balanceOf(address(this)) != shareBalanceBefore) {
             revert ShareCustodyInvariantViolated();
         }
         if (usdcToken.balanceOf(address(this)) != args.balBefore) {
@@ -772,6 +817,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         );
     }
 
+    // slither-disable-end reentrancy-balance
+
     // -------------------------------------------------------------------
     // Withdrawal
     // -------------------------------------------------------------------
@@ -783,6 +830,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      forwards USDC only to `policy.assetRecipient`. CEI pattern: state
     ///      effects written before external calls. `nonReentrant` provides
     ///      defense-in-depth.
+    ///
+    ///      Share custody requirement (audit 2026-06-09, L-13 — intentional):
+    ///      this single-vault path pulls shares from the AGENT (`msg.sender`),
+    ///      while `deposit` mints shares to `policy.shareReceiver` and the
+    ///      router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
+    ///      Single-vault withdrawal therefore requires `agent == shareReceiver`,
+    ///      or the share holder to have transferred shares to the agent first.
+    ///      This matches the production client contract: rmpc preflights
+    ///      `vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
+    ///      (clients/rust-payment-client/src/commands/withdraw.rs) before
+    ///      submitting, so changing the pull source here would break the only
+    ///      production caller. No funds are at risk either way: USDC always
+    ///      settles to `policy.assetRecipient`.
     function withdraw(
         bytes32 orderId,
         uint256 shares,
@@ -863,6 +923,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // (CEI). `nonReentrant` provides defense-in-depth. Only `AGENT_ROLE`
         // holders can reach this code.
 
+        uint256 shareBalanceBefore = IERC20(sourceVault).balanceOf(address(this));
+
         // 10. Pull shares from agent into the gateway via transferFrom.
         //     Agent must have approved the gateway for at least `shares`.
         IERC20(sourceVault).safeTransferFrom(msg.sender, address(this), shares);
@@ -881,7 +943,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         }
 
         // 14. Gateway must hold zero vault shares after the redemption.
-        if (IERC20(sourceVault).balanceOf(address(this)) != 0) {
+        if (IERC20(sourceVault).balanceOf(address(this)) != shareBalanceBefore) {
             revert ShareCustodyInvariantViolated();
         }
         // slither-disable-end reentrancy-balance
@@ -920,6 +982,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         uint256 totalShares;
         uint64 windowId;
         address[] vaultList;
+        uint256[] shareBalancesBefore;
     }
 
     /// @inheritdoc IGateway
@@ -1006,9 +1069,17 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
         // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        //    OP_WITHDRAW_ROUTER prefix namespaces router-withdrawal ids away
+        //    from the three sibling op kinds (audit 2026-06-09, L-12).
         args.paymentId = keccak256(
             abi.encode(
-                block.chainid, address(this), msg.sender, orderId, args.totalShares, idempotencyKey
+                OP_WITHDRAW_ROUTER,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                args.totalShares,
+                idempotencyKey
             )
         );
         if (usedPaymentIds[args.paymentId]) revert PaymentIdAlreadyUsed();
@@ -1052,7 +1123,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 11. Pull each vault's shares from shareHolder into the gateway,
         //     then approve the router to spend them on behalf of the gateway.
+        args.shareBalancesBefore = new uint256[](args.vaultList.length);
         for (uint256 i = 0; i < sharesPerLeg.length; i++) {
+            args.shareBalancesBefore[i] = IERC20(args.vaultList[i]).balanceOf(address(this));
             if (sharesPerLeg[i] == 0) continue;
             IERC20(args.vaultList[i])
                 .safeTransferFrom(args.shareHolder, address(this), sharesPerLeg[i]);
@@ -1071,7 +1144,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 14. Post-call custody invariant: gateway must hold zero vault shares.
         for (uint256 i = 0; i < args.vaultList.length; i++) {
-            if (IERC20(args.vaultList[i]).balanceOf(address(this)) != 0) {
+            if (IERC20(args.vaultList[i]).balanceOf(address(this)) != args.shareBalancesBefore[i]) {
                 revert ShareCustodyInvariantViolated();
             }
         }
