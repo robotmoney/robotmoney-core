@@ -24,7 +24,9 @@ This document tracks only the questions that are **still open and product/engine
 
 ### 1.A Governance and voting
 
-**Router default-weight vector (§3.9).** Ship an admin-settable on-chain default-weights vector that the Router falls back to below quorum, sized to the live vault set and sourced from chain state per [ADR-0002](../adr/ADR-0002-router-default-weights-on-chain.md). Continuous smoothing / whiplash blending is deferred.
+**Router default-weight vector (§3.9).** **Resolved** — see [ADR-0002](../adr/ADR-0002-router-default-weights-on-chain.md) (2026-05-27).
+
+Decision: admin-settable on-chain default-weights vector that the Router falls back to below quorum, sized to the live vault set and sourced from chain state. Implemented in `PortfolioRouter.sol` with `_defaultWeightVaultList`, `_defaultWeightBps` state, `setDefaultWeights(ADMIN_ROLE)` setter, and fallback logic in routing decisions. Continuous smoothing / whiplash blending is deferred.
 
 **AgentTokenVault shortlist governance (§1.3, §1.4).** **Resolved** — see [ADR-0004](../adr/ADR-0004-agent-token-shortlist-governance.md) (2026-06-03).
 
@@ -56,7 +58,6 @@ Decision: NAV haircut at current per-share NAV. Depositors always redeem at the 
 
 ## 2. Suggested resolution order
 
-1. **Router default-weight vector on-chain** — implement the admin-settable fallback per ADR-0002 and close §3.9.
-2. **Intra-vault rebalancing transparency** — ~~pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15~~ **Closed** by ADR-0003.
-3. **Vault lifecycle residuals** — ~~depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7)~~ **Closed**: migration by ADR-0009, drawdown policy by ADR-0007. The drawdown policy unblocks marking a basket vault router-eligible.
-4. **Trading authority reframe (§3.2)** — ~~product to reframe before any engineering work~~ **Closed** by ADR-0008 (explicit non-goal).
+1. **Intra-vault rebalancing transparency** — ~~pick the depositor-facing reporting surface (target / aggregate-realized / per-depositor effective) for the new-deposits-only model and close §3.15~~ **Closed** by ADR-0003.
+2. **Vault lifecycle residuals** — ~~depositor migration on retirement (§3.5) and basket-drawdown redemption policy (§3.7)~~ **Closed**: migration by ADR-0009, drawdown policy by ADR-0007. The drawdown policy unblocks marking a basket vault router-eligible.
+3. **Trading authority reframe (§3.2)** — ~~product to reframe before any engineering work~~ **Closed** by ADR-0008 (explicit non-goal).
