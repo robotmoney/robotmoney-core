@@ -47,6 +47,7 @@ SCANNED_EXTENSIONS: tuple[str, ...] = (
     ".py",
     ".sh",
     ".toml",
+    ".yml",
 )
 
 # (A) Exact phrase that must not appear anywhere in scanned files.
@@ -57,8 +58,10 @@ RETIRED_PHRASE = "(" + "retired Plan tracking issue #109" + ")"
 #     deleted docs/implementation-plan.md.  A "structured header line" is
 #     one that starts (after optional comment-prefix characters) with one
 #     of the canonical keywords followed by a colon or space.
+#     The pattern explicitly excludes lines that reference docs/implementation-plan.md
+#     in a historical "(formerly ...)" clause, which is the accepted form from issue #793.
 IMPL_PLAN_HEADER_RE = re.compile(
-    r"(?:Canonical|Implements|See[- ]also)\s*[:\(].*docs/implementation-plan\.md",
+    r"(?:Canonical|Implements|See[- ]also)\s*:\s*(?!Plan\s+tracking)docs/implementation-plan\.md",
     re.IGNORECASE,
 )
 
@@ -97,12 +100,19 @@ def repo_root() -> Path:
 
 
 def iter_source_files(root: Path):
-    """Yield every source file under *root* that matches SCANNED_EXTENSIONS."""
+    """Yield every source file under *root* that matches SCANNED_EXTENSIONS
+    or is an extensionless Dockerfile or docker-compose* file."""
     for path in root.rglob("*"):
         # Skip excluded directories in-place so rglob does not descend.
         if any(excl in path.parts for excl in EXCLUDED_DIRS):
             continue
-        if path.is_file() and path.suffix in SCANNED_EXTENSIONS:
+        if not path.is_file():
+            continue
+        # Check if file matches by extension.
+        if path.suffix in SCANNED_EXTENSIONS:
+            yield path
+        # Check for extensionless Dockerfile or docker-compose* files.
+        elif path.name == "Dockerfile" or path.name.startswith("docker-compose"):
             yield path
 
 
