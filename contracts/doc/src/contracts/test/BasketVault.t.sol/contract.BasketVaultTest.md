@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -127,6 +127,74 @@ function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
 function test_rescueTokens_succeedsForNonBasketAsset() public;
 ```
 
+### test_rescueTokens_succeedsForInactiveBasketAsset
+
+A removed (inactive) basket asset's token is rescuable when a balance
+reappears later — `totalAssets`/`_sellProportional` skip inactive
+entries, so the balance would otherwise be stranded forever
+(audit 2026-06-09, L-15).
+
+
+```solidity
+function test_rescueTokens_succeedsForInactiveBasketAsset() public;
+```
+
+### test_maxDeposit_reflectsPerDepositCap
+
+
+```solidity
+function test_maxDeposit_reflectsPerDepositCap() public view;
+```
+
+### test_maxDeposit_zeroWhenPaused
+
+
+```solidity
+function test_maxDeposit_zeroWhenPaused() public;
+```
+
+### test_maxDeposit_zeroWhenShutdown
+
+
+```solidity
+function test_maxDeposit_zeroWhenShutdown() public;
+```
+
+### test_maxDeposit_zeroWhenNoActiveAssets
+
+
+```solidity
+function test_maxDeposit_zeroWhenNoActiveAssets() public;
+```
+
+### test_maxDeposit_reflectsTvlHeadroom
+
+
+```solidity
+function test_maxDeposit_reflectsTvlHeadroom() public;
+```
+
+### test_setMaxSlippageBps_revertsBelowPoolFeeFloor
+
+
+```solidity
+function test_setMaxSlippageBps_revertsBelowPoolFeeFloor() public;
+```
+
+### test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor
+
+
+```solidity
+function test_setMaxSlippageBps_acceptsValuesAtOrAboveFloor() public;
+```
+
+### test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets
+
+
+```solidity
+function test_setMaxSlippageBps_zeroAllowedWhenNoActiveAssets() public;
+```
+
 ### test_emergencyUnwindWithOverride_revertsWhenBelowUpperLossCap
 
 
@@ -249,15 +317,13 @@ emergency unwind completes successfully.
 function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public;
 ```
 
-### test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck
+### test_emergencyUnwindWithOverride_isOracleIndependent
 
-emergencyUnwindWithOverride also applies the TWAP floor as a secondary
-check alongside the configured appliedFloor. A swap below the TWAP floor
-is rejected even when maxLossBps is generous.
+Override execution remains available when the TWAP oracle is unavailable.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck() public;
+function test_emergencyUnwindWithOverride_isOracleIndependent() public;
 ```
 
 ### test_setTwapWindow_emitsEvent
@@ -329,22 +395,22 @@ emergencyUnwindWithOverride succeeds when vault is already paused.
 function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public;
 ```
 
-### test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwind on unpaused vault still pauses the vault.
+emergencyUnwind on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
-### test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwindWithOverride on unpaused vault still pauses the vault.
+emergencyUnwindWithOverride on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
 ### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts
@@ -364,6 +430,27 @@ pool's observationCardinality is 1 (Uniswap deployment default).
 
 ```solidity
 function test_addAsset_revertsWhenPoolCardinalityIsOne() public;
+```
+
+### test_addAsset_revertsWithoutFullTwapHistory
+
+
+```solidity
+function test_addAsset_revertsWithoutFullTwapHistory() public;
+```
+
+### test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable
+
+
+```solidity
+function test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable() public;
+```
+
+### test_emergencyUnwind_blocksDepositsButAllowsRedemption
+
+
+```solidity
+function test_emergencyUnwind_blocksDepositsButAllowsRedemption() public;
 ```
 
 ### test_addAsset_succeedsWhenCardinalityMeetsMinimum

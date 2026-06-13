@@ -1,5 +1,5 @@
 # MockPool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/BasketVault.t.sol)
 
 Minimal mock supporting both slot0 (legacy spot read) and observe()
 (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -52,6 +52,13 @@ uint128 public poolLiquidity
 ```
 
 
+### revertObserve
+
+```solidity
+bool public revertObserve
+```
+
+
 ## Functions
 ### constructor
 
@@ -86,6 +93,13 @@ function setCardinality(uint16 cardinality_) external;
 
 ```solidity
 function setLiquidity(uint128 liquidity_) external;
+```
+
+### setRevertObserve
+
+
+```solidity
+function setRevertObserve(bool value) external;
 ```
 
 ### liquidity

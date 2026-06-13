@@ -5,6 +5,7 @@
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 
 /// @title RouterGovernance
@@ -22,7 +23,7 @@ import {PortfolioRouter} from "./PortfolioRouter.sol";
 ///         - One active proposal at a time (simple linear cadence).
 ///
 /// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
-contract RouterGovernance is AccessControl {
+contract RouterGovernance is AccessControl, ReentrancyGuard {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants voting power to addresses, creates proposals, sets params.
@@ -40,6 +41,11 @@ contract RouterGovernance is AccessControl {
     /// @notice Minimum voting period in seconds (1 hour). Prevents proposals
     ///         from being created and immediately executed within the same block.
     uint64 public constant MIN_VOTING_PERIOD = 1 hours;
+
+    /// @notice Minimum execution delay in seconds (1 hour). Prevents proposals
+    ///         from being executed immediately after the voting deadline, giving
+    ///         users time to inspect outcomes and withdraw before state changes.
+    uint64 public constant MIN_EXECUTION_DELAY = 1 hours;
 
     // ─── Proposal state ──────────────────────────────────────────────────────
 
@@ -76,6 +82,10 @@ contract RouterGovernance is AccessControl {
         /// quorumThreshold storage variable do not retroactively affect this
         /// proposal — preventing both retroactive defeat and retroactive passage.
         uint256 snapshotQuorum;
+        /// Block number at which this proposal was created. vote() reads each
+        /// voter's checkpointed voting power at this block, so power granted or
+        /// revoked mid-proposal does not shift the tally.
+        uint256 voteSnapshot;
         /// Whether the proposal has been executed.
         bool executed;
         /// Whether the proposal has been cancelled by ADMIN_ROLE.
@@ -96,8 +106,15 @@ contract RouterGovernance is AccessControl {
     /// @notice Minimum voting power that must vote FOR to reach quorum.
     uint256 public quorumThreshold;
 
-    /// @notice Voting power per address. Assigned by ADMIN_ROLE.
-    mapping(address => uint256) public votingPower;
+    /// @dev Checkpoint history for voting power. Each push records `(block, power)`.
+    ///      Enables getPastVotes queries against the proposal's voteSnapshot block.
+    struct VotingPowerCheckpoint {
+        uint64 fromBlock;
+        uint216 power;
+    }
+
+    /// @dev Voting power checkpoints per address. Assigned by ADMIN_ROLE.
+    mapping(address => VotingPowerCheckpoint[]) private _votingPowerCheckpoints;
 
     /// @notice Total voting power outstanding (sum of all assigned powers).
     uint256 public totalVotingPower;
@@ -190,6 +207,8 @@ contract RouterGovernance is AccessControl {
     error QuorumBelowMinimum();
     /// @notice Thrown when votingPeriod is set below MIN_VOTING_PERIOD.
     error VotingPeriodBelowMinimum();
+    /// @notice Thrown when executionDelay is set below MIN_EXECUTION_DELAY.
+    error ExecutionDelayBelowMinimum();
     /// @notice Thrown by propose() when a vault in the proposed weight list is
     ///         not router-eligible (zero address, unregistered, ineligible flag
     ///         not set, or wrong underlying asset). Identifies the offending
@@ -198,6 +217,10 @@ contract RouterGovernance is AccessControl {
     ///         proposals that would revert on execute().
     /// @param vault The vault address that failed the router-eligibility check.
     error VaultNotEligible(address vault);
+    /// @notice Thrown by the external getPastVotes view when the queried block
+    ///         is more than 256 blocks behind the current block — mirrors EVM
+    ///         blockhash depth limits to discourage unbounded historical reads.
+    error CheckpointTooOld();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -218,12 +241,17 @@ contract RouterGovernance is AccessControl {
         }
         if (_quorumThreshold < MIN_QUORUM_THRESHOLD) revert QuorumBelowMinimum();
         if (_votingPeriod < MIN_VOTING_PERIOD) revert VotingPeriodBelowMinimum();
+        if (_executionDelay < MIN_EXECUTION_DELAY) revert ExecutionDelayBelowMinimum();
         router = PortfolioRouter(_router);
         votingPeriod = _votingPeriod;
         executionDelay = _executionDelay;
         quorumThreshold = _quorumThreshold;
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
+
+        // Operational note: only RouterGovernance (deployed behind Safe→Timelock)
+        // should hold ADMIN_ROLE on the Portfolio Router. If the router's ADMIN_ROLE
+        // is held elsewhere, setWeights bypasses the propose/vote/delay path entirely.
     }
 
     // ─── Admin: cadence parameters ────────────────────────────────────────────
@@ -245,7 +273,9 @@ contract RouterGovernance is AccessControl {
     }
 
     /// @notice Update the execution delay. Restricted to ADMIN_ROLE.
+    ///         Reverts with ExecutionDelayBelowMinimum if delay < MIN_EXECUTION_DELAY.
     function setExecutionDelay(uint64 delay) external onlyRole(ADMIN_ROLE) {
+        if (delay < MIN_EXECUTION_DELAY) revert ExecutionDelayBelowMinimum();
         emit ExecutionDelaySet(executionDelay, delay);
         executionDelay = delay;
     }
@@ -256,10 +286,19 @@ contract RouterGovernance is AccessControl {
     ///         from token holdings. Token-holder voting is a future goal.
     function setVotingPower(address voter, uint256 power) external onlyRole(ADMIN_ROLE) {
         if (voter == address(0)) revert ZeroAddress();
-        uint256 old = votingPower[voter];
+        uint256 old = votingPower(voter);
         totalVotingPower = totalVotingPower - old + power;
-        votingPower[voter] = power;
+        _votingPowerCheckpoints[voter].push(
+            VotingPowerCheckpoint(uint64(block.number), uint216(power))
+        );
         emit VotingPowerSet(voter, old, power);
+    }
+
+    /// @notice Return the current voting power for `voter` (latest checkpoint value).
+    function votingPower(address voter) public view returns (uint256) {
+        VotingPowerCheckpoint[] storage ckpts = _votingPowerCheckpoints[voter];
+        if (ckpts.length == 0) return 0;
+        return ckpts[ckpts.length - 1].power;
     }
 
     // ─── Admin: default (below-quorum fallback) weights ────────────────────────
@@ -345,6 +384,7 @@ contract RouterGovernance is AccessControl {
         p.votingDeadline = deadline;
         p.executableAfter = execAfter;
         p.snapshotQuorum = quorumThreshold;
+        p.voteSnapshot = block.number;
 
         // Copy arrays into storage.
         for (uint256 i = 0; i < vaults.length; i++) {
@@ -379,13 +419,16 @@ contract RouterGovernance is AccessControl {
 
     /// @notice Cast a FOR vote on the currently active proposal.
     ///         Caller must have voting power assigned by ADMIN_ROLE.
+    ///         Voting power is read from the checkpoint at the proposal's
+    ///         voteSnapshot block, so mid-proposal power changes do not
+    ///         affect the tally.
     function vote(uint256 proposalId) external {
         Proposal storage p = _proposals[proposalId];
         if (p.id == 0) revert NoActiveProposal();
         if (_state(proposalId) != ProposalState.Active) revert ProposalNotActive();
         if (_hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
-        uint256 power = votingPower[msg.sender];
+        uint256 power = _getPastVotes(msg.sender, p.voteSnapshot);
         if (power == 0) revert NoVotingPower();
 
         _hasVoted[proposalId][msg.sender] = true;
@@ -399,7 +442,10 @@ contract RouterGovernance is AccessControl {
     /// @notice Execute a queued proposal — call `router.setWeights` with the
     ///         proposed weight vector. Anyone may call once quorum is reached
     ///         and the execution delay has elapsed.
-    function execute(uint256 proposalId) external {
+    // slither-disable-start reentrancy-events
+    // `execute()` is `nonReentrant`; the event emission follows the guarded
+    // router call and the detector is a false positive here.
+    function execute(uint256 proposalId) external nonReentrant {
         Proposal storage p = _proposals[proposalId];
         if (p.id == 0) revert NoActiveProposal();
         if (p.executed) revert AlreadyExecuted();
@@ -426,6 +472,8 @@ contract RouterGovernance is AccessControl {
         emit ProposalExecuted(proposalId, msg.sender);
         emit WeightsApplied(proposalId, p.vaults, p.bps);
     }
+
+    // slither-disable-end reentrancy-events
 
     // ─── Read surface ────────────────────────────────────────────────────────
 
@@ -497,7 +545,44 @@ contract RouterGovernance is AccessControl {
         return _hasVoted[proposalId][voter];
     }
 
+    /// @notice Return the block number captured as `proposalId`'s voting-power
+    ///         snapshot at propose() time. Reverts for unknown proposal ids.
+    function proposalVoteSnapshot(uint256 proposalId) external view returns (uint256) {
+        Proposal storage p = _proposals[proposalId];
+        if (p.id == 0) revert NoActiveProposal();
+        return p.voteSnapshot;
+    }
+
+    /// @notice Return the voting power `voter` held at `blockNumber`.
+    ///         Reverts if blockNumber is more than 256 blocks behind the
+    ///         current tip (EVM checkpoint depth limitation).
+    function getPastVotes(address voter, uint256 blockNumber) external view returns (uint256) {
+        if (block.number > blockNumber + 256) revert CheckpointTooOld();
+        return _getPastVotes(voter, blockNumber);
+    }
+
     // ─── Internal helpers ────────────────────────────────────────────────────
+
+    /// @dev Binary search for a voter's power at the given block number.
+    ///      Returns 0 if no checkpoint exists at or before `blockNumber`.
+    function _getPastVotes(address voter, uint256 blockNumber) internal view returns (uint256) {
+        VotingPowerCheckpoint[] storage ckpts = _votingPowerCheckpoints[voter];
+        if (ckpts.length == 0) return 0;
+
+        uint256 low = 0;
+        uint256 high = ckpts.length;
+        while (low < high) {
+            uint256 mid = (low + high) / 2;
+            if (ckpts[mid].fromBlock <= blockNumber) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        if (low == 0) return 0;
+        return ckpts[low - 1].power;
+    }
 
     /// @dev Compute proposal state without requiring `id != 0`.
     function _state(uint256 proposalId) internal view returns (ProposalState) {

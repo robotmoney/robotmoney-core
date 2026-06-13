@@ -1,5 +1,5 @@
 # IAerodromePool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/interfaces/IAerodromePool.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/interfaces/IAerodromePool.sol)
 
 Minimal Aerodrome concentrated-liquidity (CL) pool interface for TWAP reads
 and pool-token discovery.  Aerodrome CL pools (SlipstreamPool) follow the
@@ -23,6 +23,13 @@ function token0() external view returns (address);
 
 ```solidity
 function token1() external view returns (address);
+```
+
+### tickSpacing
+
+
+```solidity
+function tickSpacing() external view returns (int24);
 ```
 
 ### slot0

@@ -1,5 +1,5 @@
 # AerodromeSwapAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/adapters/AerodromeSwapAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/adapters/AerodromeSwapAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -22,31 +22,20 @@ can resolve the pool deterministically.
 
 ## Constants
 ### ROUTER
-Aerodrome Router used for all swaps.
+Aerodrome Slipstream router used for all swaps.
 
 
 ```solidity
-IAerodromeRouter public immutable ROUTER
+IAerodromeSlipstreamRouter public immutable ROUTER
 ```
 
 
 ### FACTORY
-Pool factory embedded in route structs. Must match the factory
-that created the target CL pool.
+Factory that resolves canonical Slipstream CL pools.
 
 
 ```solidity
-address public immutable FACTORY
-```
-
-
-### STABLE
-Whether the route uses Aerodrome's stable-swap curve.
-`true` for stable pools (e.g. USDC/USDT), `false` for volatile.
-
-
-```solidity
-bool public immutable STABLE
+IAerodromeCLFactory public immutable FACTORY
 ```
 
 
@@ -55,15 +44,14 @@ bool public immutable STABLE
 
 
 ```solidity
-constructor(address router_, address factory_, bool stable_) ;
+constructor(address router_, address factory_) ;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
 |`router_`|`address`| Aerodrome Router address. Must not be address(0).|
-|`factory_`|`address`|Pool factory address embedded in route structs.|
-|`stable_`|`bool`| Whether to use the stable-swap AMM curve for this adapter.|
+|`factory_`|`address`|Aerodrome Slipstream CL factory address.|
 
 
 ### swap
@@ -72,17 +60,20 @@ Execute a single-hop swap.
 
 The `fee` parameter is ignored; Aerodrome derives the fee from the
 pool configuration rather than the route struct. The caller (BasketVault)
-still passes it for interface uniformity.
+still passes it for interface uniformity. The caller-chosen `deadline`
+is forwarded to the Aerodrome Router, which reverts when expired
+(audit 2026-06-09, L-5).
 
 
 ```solidity
 function swap(
     address tokenIn,
     address tokenOut,
-    uint24, /* fee — unused by Aerodrome */
+    uint24 fee,
     uint256 amountIn,
     uint256 minAmountOut,
-    address recipient
+    address recipient,
+    uint256 deadline
 ) external returns (uint256 amountOut);
 ```
 **Parameters**
@@ -91,10 +82,11 @@ function swap(
 |----|----|-----------|
 |`tokenIn`|`address`|      Address of the token to sell.|
 |`tokenOut`|`address`|     Address of the token to buy.|
-|`<none>`|`uint24`||
+|`fee`|`uint24`|          Venue-specific fee parameter (fee tier for Uniswap V3, ignored for Aerodrome which derives fee from pool config).|
 |`amountIn`|`uint256`|     Exact amount of `tokenIn` to sell.|
 |`minAmountOut`|`uint256`| Minimum amount of `tokenOut` required; reverts if not met.|
 |`recipient`|`address`|    Recipient of `tokenOut`.|
+|`deadline`|`uint256`|     Unix timestamp after which the swap must revert. Chosen by the caller — adapters must not substitute `block.timestamp` (audit 2026-06-09, L-5). Callers that execute synchronously within their own transaction (e.g. BasketVault) may pass `block.timestamp`.|
 
 **Returns**
 
@@ -196,5 +188,23 @@ Raised when the pool's tokens do not match the requested base/quote pair.
 
 ```solidity
 error PoolTokenMismatch();
+```
+
+### PoolFactoryMismatch
+
+```solidity
+error PoolFactoryMismatch(address expected, address actual);
+```
+
+### InvalidTickSpacing
+
+```solidity
+error InvalidTickSpacing();
+```
+
+### PoolNotFound
+
+```solidity
+error PoolNotFound(address tokenIn, address tokenOut, int24 tickSpacing);
 ```
 

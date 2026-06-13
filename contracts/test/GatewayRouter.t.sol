@@ -270,7 +270,7 @@ contract GatewayRouterTest is Test {
     }
 
     function _authorize(address who, IGateway.AgentPolicy memory p) internal {
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(who, p);
     }
 
@@ -471,7 +471,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         noRouterGateway.authorizeAgent(agent, p);
 
         usdc.mint(agent, 10 * ONE_USDC);
@@ -846,7 +846,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: noSources
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -910,7 +910,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: noSources2
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         fotGateway.authorizeAgent(agent, p);
 
         fotUsdc.mint(agent, 200 * ONE_USDC);
@@ -930,9 +930,8 @@ contract GatewayRouterTest is Test {
         );
     }
 
-    /// @dev `depositTo` vault path: pre-call share custody invariant — gateway must
-    ///      hold zero shares of the destination vault before the call.
-    function test_depositTo_vaultPath_revertsOnPreCallShareCustody() public {
+    /// @dev Preexisting donated shares do not brick the vault deposit path.
+    function test_depositTo_vaultPath_ignoresPreexistingDonatedShares() public {
         _authorize(agent, _policyOpenDestinations());
         _fundAndApprove(agent, 100 * ONE_USDC);
 
@@ -941,7 +940,6 @@ contract GatewayRouterTest is Test {
 
         uint256[] memory emptyMin = new uint256[](0);
         vm.prank(agent);
-        vm.expectRevert(RobotMoneyGateway.ShareCustodyInvariantViolated.selector);
         gateway.depositTo(
             keccak256("o"),
             100 * ONE_USDC,
@@ -950,6 +948,7 @@ contract GatewayRouterTest is Test {
             address(vault),
             emptyMin
         );
+        assertEq(vault.balanceOf(address(gateway)), 1, "donated share must remain unchanged");
     }
 
     /// @dev `depositTo` vault path: post-call share custody invariant —
@@ -973,7 +972,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -1013,7 +1012,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gw.authorizeAgent(agent, p);
 
         usdc.mint(agent, 100 * ONE_USDC);
@@ -1189,11 +1188,11 @@ contract GatewayRouterTest is Test {
         address agentA = makeAddr("gasAgentA");
         address agentB = makeAddr("gasAgentB");
 
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentA, pDeposit);
 
         IGateway.AgentPolicy memory pDepositTo = _policyWithVaultOnly();
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentB, pDepositTo);
 
         uint256 amount = 100 * ONE_USDC;
@@ -1260,7 +1259,7 @@ contract GatewayRouterTest is Test {
             allowedSourceVaults: empty
         });
 
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentDeposit, pol);
 
         address[] memory vaultDests = new address[](1);
@@ -1277,7 +1276,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: 0,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         gateway.authorizeAgent(agentDepositTo, polDepositTo);
 
         uint256 amount = MAX_PER_PAYMENT;
@@ -1405,6 +1404,43 @@ contract GatewayRouterTest is Test {
         // shareReceiver shares must be zero.
         assertEq(vaultA.balanceOf(shareReceiver), 0, "shareReceiver vaultA zero");
         assertEq(vaultB.balanceOf(shareReceiver), 0, "shareReceiver vaultB zero");
+    }
+
+    /// @dev router: the withdrawFromRouter paymentId preimage carries the
+    ///      OP_WITHDRAW_ROUTER (= 4) op-kind prefix so router-withdrawal ids are
+    ///      namespaced away from the three sibling op kinds (audit 2026-06-09, L-12).
+    function test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        bytes32 orderId = keccak256("router-withdraw-prefix-order");
+        bytes32 idem = keccak256("router-withdraw-prefix-idem");
+
+        vm.prank(agent);
+        (bytes32 paymentId,) =
+            gateway.withdrawFromRouter(orderId, sharesPerLeg, uint64(block.timestamp + 60), idem);
+
+        uint256 totalShares = sharesA + sharesB;
+        bytes32 expected = keccak256(
+            abi.encode(uint8(4), block.chainid, address(gateway), agent, orderId, totalShares, idem)
+        );
+        assertEq(paymentId, expected, "paymentId must use the OP_WITHDRAW_ROUTER prefix");
+
+        // And it must differ from the legacy un-prefixed preimage.
+        bytes32 legacy = keccak256(
+            abi.encode(block.chainid, address(gateway), agent, orderId, totalShares, idem)
+        );
+        assertTrue(paymentId != legacy, "id must differ from the un-prefixed legacy preimage");
     }
 
     /// @dev router: allowedSourceVaults enforced — vault not in list reverts.
@@ -1612,7 +1648,7 @@ contract GatewayRouterTest is Test {
             maxWithdrawPerWindow: MAX_PER_WINDOW,
             allowedSourceVaults: empty
         });
-        vm.prank(depositor);
+        vm.prank(admin);
         noRouterGateway.authorizeAgent(agent, p);
 
         uint256[] memory sharesPerLeg = new uint256[](0);
@@ -1899,8 +1935,13 @@ contract GatewayRouterTest is Test {
                 maxWithdrawPerWindow: MAX_PER_WINDOW,
                 allowedSourceVaults: noSrcs
             });
+            bytes32 salt = keccak256("leaky-authorization");
+            bytes32 commitHash = keccak256(abi.encode(leakyAgent, leakyDepositor, salt));
             vm.prank(leakyDepositor);
-            leakyGateway.authorizeAgent(leakyAgent, p);
+            leakyGateway.commitAuthorization(commitHash);
+            vm.roll(block.number + 1);
+            vm.prank(leakyDepositor);
+            leakyGateway.revealAuthorization(leakyAgent, salt, p);
         }
 
         // Deposit to mint leaky vault shares into leakyShareReceiver.

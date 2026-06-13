@@ -1,5 +1,5 @@
 # ChronicleOracleAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/adapters/ChronicleOracleAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/adapters/ChronicleOracleAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -37,6 +37,36 @@ units of USDC per deSPXA, scaled to 18 decimal places (WAD).
 
 ```solidity
 uint256 private constant WAD = 1e18
+```
+
+
+### MIN_NAV
+Minimum acceptable NAV price from the Chronicle oracle in WAD.
+Any price below this threshold is considered invalid and will
+cause twapPrice() to revert. Set to 1e12 (0.000001 USD per RWA
+token) — well below any realistic deSPXA peg but safely above
+zero to catch malfunctioning or manipulated oracles.
+
+1e12 in WAD corresponds to 1e-6 USD given WAD = 1e18.
+
+
+```solidity
+uint256 public constant MIN_NAV = 1e12
+```
+
+
+### MAX_NAV
+Maximum acceptable NAV price from the Chronicle oracle in WAD.
+Any price above this threshold is considered invalid and will
+cause twapPrice() to revert. Set to 1e24 (1,000,000 USD per RWA
+token) — far above any plausible deSPXA price but tight enough
+to guard against extreme oracle malfunctions.
+
+1e24 in WAD corresponds to 1e6 USD given WAD = 1e18.
+
+
+```solidity
+uint256 public constant MAX_NAV = 1e24
 ```
 
 
@@ -131,6 +161,8 @@ Execute a single-hop swap.
 Routes via Aerodrome. The `fee` parameter is ignored (Aerodrome
 derives fee from pool config). The swap reverts if the deSPXA
 issuer has frozen transfers — see ADR-0006 §4 (freeze-control risk).
+The caller-chosen `deadline` is forwarded to the Aerodrome Router,
+which reverts when expired (audit 2026-06-09, L-5).
 
 
 ```solidity
@@ -140,7 +172,8 @@ function swap(
     uint24, /* fee — unused by Aerodrome */
     uint256 amountIn,
     uint256 minAmountOut,
-    address recipient
+    address recipient,
+    uint256 deadline
 ) external returns (uint256 amountOut);
 ```
 **Parameters**
@@ -153,6 +186,7 @@ function swap(
 |`amountIn`|`uint256`|     Exact amount of `tokenIn` to sell.|
 |`minAmountOut`|`uint256`| Minimum amount of `tokenOut` required; reverts if not met.|
 |`recipient`|`address`|    Recipient of `tokenOut`.|
+|`deadline`|`uint256`|     Unix timestamp after which the swap must revert. Chosen by the caller — adapters must not substitute `block.timestamp` (audit 2026-06-09, L-5). Callers that execute synchronously within their own transaction (e.g. BasketVault) may pass `block.timestamp`.|
 
 **Returns**
 
@@ -230,5 +264,24 @@ neither (baseToken=RWA, quoteToken=USDC) nor
 
 ```solidity
 error UnknownPricePair(address baseToken, address quoteToken);
+```
+
+### BadNavPrice
+Raised when the Chronicle oracle returns a NAV price that is
+zero or outside the accepted [MIN_NAV, MAX_NAV] range.
+
+
+```solidity
+error BadNavPrice(uint256 navPrice);
+```
+
+### EmptyRouterAmounts
+Raised when the Aerodrome Router returns an empty amounts array,
+which would otherwise underflow the output-index read
+(audit 2026-06-09, L-7).
+
+
+```solidity
+error EmptyRouterAmounts();
 ```
 

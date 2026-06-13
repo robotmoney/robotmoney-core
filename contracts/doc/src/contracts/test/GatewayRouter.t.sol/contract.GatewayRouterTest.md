@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -404,14 +404,13 @@ function test_depositTo_routerPath_revertsOnUsdcCustodyInvariant() public;
 function test_depositTo_revertsOnFeeOnTransferToken() public;
 ```
 
-### test_depositTo_vaultPath_revertsOnPreCallShareCustody
+### test_depositTo_vaultPath_ignoresPreexistingDonatedShares
 
-`depositTo` vault path: pre-call share custody invariant — gateway must
-hold zero shares of the destination vault before the call.
+Preexisting donated shares do not brick the vault deposit path.
 
 
 ```solidity
-function test_depositTo_vaultPath_revertsOnPreCallShareCustody() public;
+function test_depositTo_vaultPath_ignoresPreexistingDonatedShares() public;
 ```
 
 ### test_depositTo_vaultPath_revertsOnPostCallShareCustody
@@ -529,6 +528,17 @@ router: happy path — deposit via router, withdraw via router, USDC lands at as
 
 ```solidity
 function test_withdrawFromRouter_happyPath() public;
+```
+
+### test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix
+
+router: the withdrawFromRouter paymentId preimage carries the
+OP_WITHDRAW_ROUTER (= 4) op-kind prefix so router-withdrawal ids are
+namespaced away from the three sibling op kinds (audit 2026-06-09, L-12).
+
+
+```solidity
+function test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix() public;
 ```
 
 ### test_withdrawFromRouter_allowedSourceVaults_rejectsUnlisted

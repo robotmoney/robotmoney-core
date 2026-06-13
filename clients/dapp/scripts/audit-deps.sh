@@ -36,6 +36,11 @@ ACCEPTED_ADVISORIES=(
   # vitest (dev/test dependency, never shipped to users). The advisory only
   # applies when the Vitest UI server is listening, which CI never enables.
   "GHSA-5xrq-8626-4rwp" # vitest: arbitrary file read via UI server. expires: 2026-12-01
+  # esbuild (build-time only, transitive via vite 5, which pins esbuild ^0.21;
+  # the fixed 0.28.1 requires a major vite upgrade). The advisory affects only
+  # esbuild's Deno install path, which downloads its binary without integrity
+  # verification; this repo installs via bun/npm, never Deno.
+  "GHSA-gv7w-rqvm-qjhr" # esbuild: Deno-path binary integrity RCE. expires: 2026-12-01
 )
 
 ignore_args=()

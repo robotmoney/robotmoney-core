@@ -1,5 +1,5 @@
 # ConfusedDeputyGuardsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/ConfusedDeputyGuards.t.sol)
 
 **Inherits:**
 Test
@@ -225,7 +225,7 @@ function test_invariant7_authorizeAgent_rejectsDoubleRegistration() public;
 ### test_invariant7b_agentOwner_boundToFirstDepositor
 
 agentOwner[agent] is set to msg.sender at first authorize and
-can only change via the authorizing depositor calling revokeAgent.
+can only change via the recorded owner calling revokeAgent.
 
 
 ```solidity

@@ -1,5 +1,5 @@
 # UniswapV4SwapAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/adapters/UniswapV4SwapAdapter.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/adapters/UniswapV4SwapAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -54,6 +54,11 @@ Constructs a V4 PoolKey from the two tokens and the fee tier, then calls
 token address ordering (token0 < token1). Tokens are pulled from
 `msg.sender` (BasketVault) via `transferFrom`; BasketVault approves this
 adapter before calling and clears the approval after.
+The caller-chosen `deadline` is enforced here (the V4 router params
+carry no deadline field) — audit 2026-06-09, L-5. `amountIn` and
+`minAmountOut` are range-checked via `SafeCast.toUint128` so
+out-of-range inputs revert instead of silently wrapping and
+weakening the slippage floor — audit 2026-06-09, L-6.
 
 
 ```solidity
@@ -63,7 +68,8 @@ function swap(
     uint24 fee,
     uint256 amountIn,
     uint256 minAmountOut,
-    address recipient
+    address recipient,
+    uint256 deadline
 ) external returns (uint256 amountOut);
 ```
 **Parameters**
@@ -76,6 +82,7 @@ function swap(
 |`amountIn`|`uint256`|     Exact amount of `tokenIn` to sell.|
 |`minAmountOut`|`uint256`| Minimum amount of `tokenOut` required; reverts if not met.|
 |`recipient`|`address`|    Recipient of `tokenOut`.|
+|`deadline`|`uint256`|     Unix timestamp after which the swap must revert. Chosen by the caller — adapters must not substitute `block.timestamp` (audit 2026-06-09, L-5). Callers that execute synchronously within their own transaction (e.g. BasketVault) may pass `block.timestamp`.|
 
 **Returns**
 
@@ -195,5 +202,15 @@ Raised when the fee tier has no standard tick spacing mapping.
 
 ```solidity
 error UnsupportedFeeTier(uint24 fee);
+```
+
+### DeadlineExpired
+Raised when the caller-chosen swap deadline has already passed.
+Enforced in the adapter because the V4 router params carry no
+deadline field (audit 2026-06-09, L-5).
+
+
+```solidity
+error DeadlineExpired(uint256 deadline, uint256 blockTimestamp);
 ```
 

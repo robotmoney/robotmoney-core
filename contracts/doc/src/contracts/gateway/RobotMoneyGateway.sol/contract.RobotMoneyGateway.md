@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/d405ee0d62231186573c29a3046786860035c5e3/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -51,7 +51,8 @@ uint256 public constant COMMIT_EXPIRY_BLOCKS = 256
 ### OP_DEPOSIT
 Op-kind discriminators prepended to every `paymentId` hash to
 prevent cross-operation replay (deposit id ≠ depositTo id ≠
-withdrawal id even when all other inputs are identical).
+withdrawal id ≠ router-withdrawal id even when all other inputs
+are identical).
 
 
 ```solidity
@@ -70,6 +71,13 @@ uint8 internal constant OP_WITHDRAW = 2
 
 ```solidity
 uint8 internal constant OP_DEPOSIT_TO = 3
+```
+
+
+### OP_WITHDRAW_ROUTER
+
+```solidity
+uint8 internal constant OP_WITHDRAW_ROUTER = 4
 ```
 
 
@@ -103,8 +111,10 @@ IPortfolioRouter public immutable routerContract
 
 ## State Variables
 ### commitments
-Pending commitments keyed by `commitHash =
-keccak256(abi.encode(agent, depositor, salt))`. Cleared on reveal.
+Pending commitments keyed by
+`keccak256(abi.encode(commitHash, committer))`. Caller scoping
+prevents another account from overwriting a commitment observed
+in the mempool or on-chain.
 
 
 ```solidity
@@ -161,6 +171,48 @@ Per-agent rolling withdrawal window state. See `WithdrawWindow`.
 
 ```solidity
 mapping(address => WithdrawWindow) public agentWithdrawWindow
+```
+
+
+### _depositWindowEntries
+
+```solidity
+mapping(address => WindowEntry[]) private _depositWindowEntries
+```
+
+
+### _depositWindowHead
+
+```solidity
+mapping(address => uint256) private _depositWindowHead
+```
+
+
+### _depositWindowTotal
+
+```solidity
+mapping(address => uint256) private _depositWindowTotal
+```
+
+
+### _withdrawWindowEntries
+
+```solidity
+mapping(address => WindowEntry[]) private _withdrawWindowEntries
+```
+
+
+### _withdrawWindowHead
+
+```solidity
+mapping(address => uint256) private _withdrawWindowHead
+```
+
+
+### _withdrawWindowTotal
+
+```solidity
+mapping(address => uint256) private _withdrawWindowTotal
 ```
 
 
@@ -315,6 +367,33 @@ the deposit side is equally hardened against calendar-boundary bursts.
 function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal;
 ```
 
+### _pruneWindow
+
+
+```solidity
+function _pruneWindow(WindowEntry[] storage entries, uint256 head, uint256 total)
+    internal
+    view
+    returns (uint256 newHead, uint256 newTotal);
+```
+
+### _effectiveWindowTotal
+
+
+```solidity
+function _effectiveWindowTotal(WindowEntry[] storage entries, uint256 head, uint256 total)
+    internal
+    view
+    returns (uint256);
+```
+
+### _commitmentKey
+
+
+```solidity
+function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32);
+```
+
 ### commitAuthorization
 
 Phase-1 of the two-phase commit/reveal agent authorization.
@@ -365,15 +444,18 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 
 ### authorizeAgent
 
-First-time authorization for `agent`. Permissionless — any EOA
-may call to register their own agent. `msg.sender` is recorded
-as the agent's owner. Reverts if `agent` already has a
-recorded owner; that owner must call `setPolicy` to update or
-`revokeAgent` to release.
+First-time authorization for `agent`. Admin-only — only callable
+by `DEFAULT_ADMIN_ROLE`. Regular users must use
+`commitAuthorization` + `revealAuthorization` instead.
+`msg.sender` is recorded as the agent's owner. Reverts if
+`agent` already has a recorded owner; that owner must call
+`setPolicy` to update or `revokeAgent` to release.
 
 
 ```solidity
-function authorizeAgent(address agent, AgentPolicy calldata p) external;
+function authorizeAgent(address agent, AgentPolicy calldata p)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE);
 ```
 **Parameters**
 
@@ -598,6 +680,18 @@ before calling this function. The gateway pulls shares via
 forwards USDC only to `policy.assetRecipient`. CEI pattern: state
 effects written before external calls. `nonReentrant` provides
 defense-in-depth.
+Share custody requirement (audit 2026-06-09, L-13 — intentional):
+this single-vault path pulls shares from the AGENT (`msg.sender`),
+while `deposit` mints shares to `policy.shareReceiver` and the
+router path (`withdrawFromRouter`) pulls from `policy.shareReceiver`.
+Single-vault withdrawal therefore requires `agent == shareReceiver`,
+or the share holder to have transferred shares to the agent first.
+This matches the production client contract: rmpc preflights
+`vault.allowance(agent, gateway)` and `vault.balanceOf(agent)`
+(clients/rust-payment-client/src/commands/withdraw.rs) before
+submitting, so changing the pull source here would break the only
+production caller. No funds are at risk either way: USDC always
+settles to `policy.assetRecipient`.
 
 
 ```solidity
@@ -1036,6 +1130,15 @@ struct WithdrawWindow {
 |`windowStart`|`uint64`|Unix-seconds anchor of the agent's current rolling window. Zero when the agent has never withdrawn.|
 |`gross`|`uint256`|      Cumulative shares redeemed since `windowStart`.|
 
+### WindowEntry
+
+```solidity
+struct WindowEntry {
+    uint64 timestamp;
+    uint256 amount;
+}
+```
+
 ### DepositArgs
 Internal args struct to avoid stack-too-deep in `depositTo`.
 
@@ -1069,6 +1172,7 @@ struct RouterWithdrawArgs {
     uint256 totalShares;
     uint64 windowId;
     address[] vaultList;
+    uint256[] shareBalancesBefore;
 }
 ```
 

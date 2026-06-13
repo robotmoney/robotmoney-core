@@ -51,3 +51,33 @@ contract RobotMoneyVault4626Conformance is ERC4626Test {
         _unlimitedAmount = false;
     }
 }
+
+/// @title RobotMoneyVault4626ConformanceWithFee
+/// @notice ERC-4626 conformance for RobotMoneyVault with `exitFeeBps = 100` (1 %).
+///         Validates that `maxWithdraw` round-trip does not revert under a non-zero exit fee.
+contract RobotMoneyVault4626ConformanceWithFee is ERC4626Test {
+    function setUp() public override {
+        TestERC20 underlying = new TestERC20();
+
+        RobotMoneyVault vault = new RobotMoneyVault(
+            OZIERC20(address(underlying)),
+            type(uint256).max, // tvlCap — unbounded for fuzzing
+            type(uint256).max, // perDepositCap — unbounded for fuzzing
+            100, // exitFeeBps — 1 % exit fee
+            address(this), // feeRecipient
+            address(this), // admin
+            address(this) // emergencyResponder
+        );
+
+        PassthroughAdapter adapter = new PassthroughAdapter(address(underlying), address(vault));
+        vault.setAdapterAllowed(address(adapter), true);
+        vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
+        vault.addAdapter(address(adapter), 10000); // 100% cap
+
+        _underlying_ = address(underlying);
+        _vault_ = address(vault);
+        _delta_ = 0;
+        _vaultMayBeEmpty = true;
+        _unlimitedAmount = false;
+    }
+}
