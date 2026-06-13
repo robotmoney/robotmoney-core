@@ -888,7 +888,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @dev Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
     ///      and `_sellProportional` skip them, so any balance that reappears after
     ///      `removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
-    function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
+    // slither-disable-start reentrancy-events
+    // This emergency recovery path is already `nonReentrant`; the emit after the
+    // guarded token transfer is intentional and the detector is a false positive.
+    function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE) {
         if (token == address(_USDC)) revert CannotRescueUsdc();
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
@@ -899,6 +902,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         IERC20(token).safeTransfer(to, balance);
         emit EmergencyTokenRecovered(token, to, balance);
     }
+    // slither-disable-end reentrancy-events
 
     // ─── Param setters ────────────────────────────────────────────────
 
@@ -1120,6 +1124,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         revert AssetNotFound();
     }
 
+    // slither-disable-start reentrancy-balance
+    // The caller (`emergencyUnwind`) holds the contract-level `nonReentrant`
+    // guard, so the pre-call `balanceOf` read cannot be observed by a
+    // reentrant call before the swap completes. The emitted `Swapped` event
+    // uses the freshly-returned `received` amount, not the stale balance.
     function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
@@ -1134,6 +1143,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         );
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
+    // slither-disable-end reentrancy-balance
 
     /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
     ///      `amountOutMinimum` and additionally enforces the cap with a typed

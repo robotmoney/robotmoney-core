@@ -428,6 +428,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (remaining > 0) emit UnroutedDeposit(remaining);
     }
 
+    // slither-disable-start reentrancy-events
+    // `_routeDeposit()` and `rebalance()` are `nonReentrant`; the emitted
+    // event happens after the guarded external adapter calls and the warning is
+    // a false positive.
     function _allocateTo(uint256 i, uint256 amount) internal {
         IStrategyAdapter adpt = adapters[i].adapter;
         address adptAddr = address(adpt);
@@ -436,6 +440,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         adpt.deploy(amount);
         emit Allocated(i, adptAddr, amount);
     }
+    // slither-disable-end reentrancy-events
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
 
@@ -540,6 +545,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
+    // slither-disable-start reentrancy-balance
+    // The public entrypoints that reach this helper are `nonReentrant`; the
+    // pre-call balance reads are therefore protected and the stale-balance
+    // warning is a false positive.
     function _pullProportional(uint256 assetsNeeded) internal {
         if (assetsNeeded == 0) return;
 
@@ -603,6 +612,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
         }
     }
+    // slither-disable-end reentrancy-balance
 
     // ─── Adapter management ──────────────────────────────────────────
 

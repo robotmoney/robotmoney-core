@@ -788,6 +788,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @dev Vault-path deposit: pre-call share custody check, approve vault, deposit,
     ///      clear allowance, post-call custody invariants, emit event.
+    // slither-disable-start reentrancy-balance
+    // `deposit()` and `depositTo()` are `nonReentrant`; the pre-call balance
+    // snapshot and post-call custody checks are therefore safe from observable
+    // reentry and the stale-balance warning is a false positive.
     function _executeVaultDeposit(DepositArgs memory args) internal {
         uint256 shareBalanceBefore = IERC20(args.destination).balanceOf(address(this));
 
@@ -812,6 +816,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             args.windowId
         );
     }
+    // slither-disable-end reentrancy-balance
 
     // -------------------------------------------------------------------
     // Withdrawal

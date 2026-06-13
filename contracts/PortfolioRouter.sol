@@ -345,13 +345,18 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///         transfers, or USDC approved but not pulled by a vault that
     ///         reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
     /// @param to  Recipient of all stranded USDC held by the router.
-    function rescueUsdc(address to) external onlyRole(ADMIN_ROLE) {
+    // slither-disable-start reentrancy-events
+    // The router is already `nonReentrant` on its state-mutating entrypoints;
+    // this recovery path only emits after the guarded token transfer and the
+    // event ordering is intentional.
+    function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE) {
         if (to == address(0)) revert ZeroAddress();
         uint256 amount = usdc.balanceOf(address(this));
         if (amount == 0) return;
         usdc.safeTransfer(to, amount);
         emit RescuedUsdc(to, amount);
     }
+    // slither-disable-end reentrancy-events
 
     // ─── Preview ─────────────────────────────────────────────────────────────
 
