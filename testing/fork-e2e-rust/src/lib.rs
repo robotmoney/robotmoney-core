@@ -43,11 +43,15 @@ use k256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
 
 pub mod addresses;
+/// Dev-scout module for Base testnet e2e infrastructure (issue #842).
+/// Multi-network parameter configuration and integration seams for issue #839.
+pub mod base_testnet;
 pub mod scenarios;
 
 // -- Deployed addresses module is re-exported for ergonomic use ----
 
 pub use addresses::BASE_ADDRESSES;
+pub use base_testnet::{Network, TestnetFundingConfig};
 
 // -- Errors --------------------------------------------------------
 
