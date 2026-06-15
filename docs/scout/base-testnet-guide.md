@@ -144,18 +144,27 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 
 ## CI integration
 
-**Suite 19 (Issue #843):** E2E tests with Base testnet support.
+The Base testnet adapter e2e runs as the `base-testnet-adapters` job in
+`.github/workflows/suite-05-fork-integration.yml` (shipped in PR #849). The job
+gracefully skips when `BASE_TESTNET_RPC_URL` is unset (the secret has no value).
 
 ```yaml
-# .github/workflows/suite-19-erc4626-demo-tvl.yml (example structure)
-env:
-  BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
+# .github/workflows/suite-05-fork-integration.yml (base-testnet-adapters job)
 jobs:
-  base-testnet-e2e:
+  base-testnet-adapters:
+    name: base-testnet-adapters
     runs-on: ubuntu-latest
+    env:
+      BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
+      BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
+      BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
+      RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}
     steps:
-      - run: cargo test --test base_testnet_fixture
-      - run: cargo test --release --test e2e -- --network base --nocapture
+      - name: Base testnet account-funding assertion (smoke-test)
+        run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
+      - name: Base testnet multi-network adapter e2e (fork-e2e)
+        working-directory: testing/fork-e2e-rust
+        run: cargo test --release --test multi_network_adapters -- --test-threads=1 --nocapture
 ```
 
 ---
