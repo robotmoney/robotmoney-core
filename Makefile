@@ -15,10 +15,11 @@ PUBLIC_DAPP_URL     ?= https://robotmoney-dev-dapp.superfield.co
 PUBLIC_RPC_URL      ?= https://robotmoney-dev-rpc.superfield.co
 PUBLIC_EXPLORER_URL ?= https://robotmoney-dev-explorer.superfield.co
 
-ZOMBIE_NAMES := \
-	dapp-frontend dapp-explorer-api dapp-explorer-indexer dapp-postgres \
-	eth-execution eth-beacon eth-validator-1 eth-validator-2 eth-validator-3 \
-	rmoney-gateway-deployer
+# Devnet containers are identified by their docker-compose project label, which
+# Compose stamps automatically on every service — so teardown reaps them all with
+# no hand-maintained name list to drift out of sync, and it also catches legacy
+# containers booted before the com.robotmoney.testnet run-id labels existed.
+TESTNET_COMPOSE_PROJECTS := ethereum-testnet robotmoney-dapp
 
 ##
 ## Project targets
@@ -28,8 +29,10 @@ help: ## Print this help message
 	@grep -E '^[a-zA-Z_-]+:.*## .*$$' $(MAKEFILE_LIST) | \
 	    awk 'BEGIN {FS = ":.*## "}; {printf "  %-24s %s\n", $$1, $$2}'
 
-teardown-zombies: ## Force-remove orphaned smoke-test containers
-	@ids=$$(docker ps -aq $(foreach n,$(ZOMBIE_NAMES),--filter 'name=^$(n)$$')); \
+teardown-zombies: ## Force-remove every smoke-test devnet container (any run)
+	@ids=$$(for p in $(TESTNET_COMPOSE_PROJECTS); do \
+		docker ps -aq --filter "label=com.docker.compose.project=$$p"; \
+	done | sort -u); \
 	if [ -z "$$ids" ]; then \
 		echo "no zombie containers"; \
 	else \
