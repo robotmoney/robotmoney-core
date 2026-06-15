@@ -1,7 +1,7 @@
 //! Canonical: docs/development/opencode-readonly-fork.md (issue #53),
 //! step 5 (read-only inspection).
 //!
-//! Boots an `anvil --fork-url $RMPC_FORK_RPC_URL` against Base mainnet
+//! Boots an `anvil --fork-url $RMPC_FORK_RPC_URL` against a forked Base block
 //! and runs `rmpc get-vault` against it through the operator config
 //! the walkthrough ships. Asserts the JSON envelope contract from
 //! `docs/technical/rmpc-read-output-contract.md` (chain_id,

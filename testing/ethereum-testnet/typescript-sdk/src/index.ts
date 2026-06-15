@@ -12,7 +12,7 @@ const CONFIG_DIR = resolve(
 /**
  * Ethereum Docker Testnet - Multi-validator PoS setup
  *
- * Provides a mainnet-like Ethereum environment with:
+ * Provides a production-like Ethereum environment with:
  * - Geth execution layer
  * - Lighthouse beacon node
  * - Lighthouse validator client

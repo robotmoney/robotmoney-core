@@ -3,12 +3,12 @@
 //! `parameterized_e2e!`, `ForkFixture::for_network`).
 //!
 //! Validates that the Robot Money strategy adapters and the surrounding
-//! third-party DeFi services behave consistently across **Base mainnet** and
+//! third-party DeFi services behave consistently across **Robot Money Devnet** and
 //! **Base testnet (Sepolia)**. A single test body runs once per
 //! [`rmpc_fork_e2e::Network`] via the `parameterized_e2e!` macro (decision D3 —
 //! comprehensive adapter coverage with shared templates, no copy-paste):
 //!
-//! - mainnet runs against an anvil-fork / the checked-in fixture (existing path);
+//! - devnet runs against an anvil-fork / the checked-in fixture (existing path);
 //! - testnet runs against the live Base Sepolia RPC named by
 //!   `BASE_TESTNET_RPC_URL`, funded from `BASE_TESTNET_FUNDER_KEY`.
 //!
@@ -21,7 +21,7 @@
 //! - **Uniswap** V3 swap — USDC -> WETH `exactInputSingle` on the live router.
 //! - **Aave** V3 supply — USDC `supply` into the live Aave pool, asserting the
 //!   aToken (interest-bearing receipt) balance rises.
-//! - **Curve** swap — exercised on mainnet via the vault's strategy stack when
+//! - **Curve** swap — exercised on devnet via the vault's strategy stack when
 //!   the vault is present; on testnet the Curve venue is reported but skipped
 //!   until a Robot Money deploy populates the registry (see `RM_TESTNET_*`).
 //! - **Compound** / **Morpho** — exercised through the `RobotMoneyVault`
@@ -87,7 +87,7 @@ const SUPPLY_USDC: u64 = 5_000_000; // 5 USDC into Aave
 
 /// One funded account on the network under test.
 ///
-/// Mainnet uses the existing `ephemeral` path (anvil/devnet seeding). Testnet
+/// Devnet uses the existing `ephemeral` path (anvil/devnet seeding). Testnet
 /// uses `ephemeral_testnet` (seeded transfers from `BASE_TESTNET_FUNDER_KEY`).
 /// Returns `Err(SkipNoRpc)` when testnet funding is not provisioned, so the
 /// body skips that network gracefully.
@@ -98,7 +98,7 @@ fn funded_account<'a>(
     usdc_units: U256,
 ) -> Result<Account<'a>, HarnessError> {
     match network {
-        Network::BaseMainnet => fx.ephemeral(eth_wei, usdc_units),
+        Network::RobotMoneyDevnet => fx.ephemeral(eth_wei, usdc_units),
         Network::BaseTestnet => fx.ephemeral_testnet(network.usdc(), eth_wei, usdc_units),
     }
 }
@@ -252,7 +252,7 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
 /// network (testnet vault deploy is a prerequisite, out of scope for #839).
 fn exercise_vault_adapter_stack(fx: &ForkFixture, network: Network) -> Result<(), HarnessError> {
     let vault = match network {
-        Network::BaseMainnet => Some(rmpc_fork_e2e::addresses::VAULT),
+        Network::RobotMoneyDevnet => Some(rmpc_fork_e2e::addresses::VAULT),
         Network::BaseTestnet => base_testnet_addresses::robotmoney_vault(),
     };
     let Some(vault) = vault else {
@@ -333,7 +333,7 @@ parameterized_e2e!(
             network.name(),
             fx.chain_id,
             hex::encode(match network {
-                Network::BaseMainnet => rmpc_fork_e2e::addresses::address_set_hash(),
+                Network::RobotMoneyDevnet => rmpc_fork_e2e::addresses::address_set_hash(),
                 Network::BaseTestnet => base_testnet_addresses::address_set_hash(),
             })
         );

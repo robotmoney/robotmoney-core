@@ -23,7 +23,7 @@ fn fixture_parses_with_rmpc_config_loader() {
     // Spot-check the fields the walkthrough story depends on.
     assert_eq!(
         cfg.chain_id, 8453,
-        "walkthrough targets Base mainnet (8453)"
+        "walkthrough targets the forked Base chain (8453)"
     );
     assert!(
         cfg.signer.allow_software_fallback,

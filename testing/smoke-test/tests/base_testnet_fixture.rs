@@ -75,7 +75,7 @@ fn account_funding_config_custom() {
 
 // ── Account funding assertions ────────────────────────────────────────────────
 
-/// Verify assertion defaults are reasonable for testnet (lower than mainnet requirements).
+/// Verify assertion defaults are reasonable for testnet (lower than the Robot Money Devnet requirements).
 #[test]
 fn account_funding_assertion_default() {
     let assertion = AccountFundingAssertion::default();

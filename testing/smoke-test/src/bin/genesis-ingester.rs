@@ -1,7 +1,7 @@
 //! Canonical: docs/architecture.md §5.4 — Explorer Indexer and API
 //! CLI entry point: `smoke-test-genesis-ingester`
 //!
-//! Ingests a Base-mainnet Anvil state snapshot into a geth-genesis-compatible
+//! Ingests a Base Anvil state snapshot into a geth-genesis-compatible
 //! `alloc` JSON, restricted to the address allowlist declared in
 //! `testing/ethereum-testnet/config/fork-block.json`. Overlays the harness
 //! EOAs with ETH for gas and patches USDC storage so `HARNESS_USDC_HOLDER`

@@ -1,6 +1,6 @@
-//! Canonical: docs/technical/smart-contracts.md §2 (Base mainnet
+//! Canonical: docs/technical/smart-contracts.md §2 (Base
 //! deployed addresses) and docs/technical/fork-e2e-decisions.md §3.1
-//! (chain target = Base mainnet).
+//! (chain target = Base).
 //!
 //! Hard-coded contract addresses for the Phase 2 fork harness.
 //! Every address here is verified against the source of truth in
@@ -11,11 +11,11 @@
 use alloy_primitives::{address, keccak256, Address, B256};
 
 /// `RobotMoneyVault` (ERC-4626) — canonical Robot Money product
-/// vault on Base mainnet. asset = USDC, share token symbol =
+/// vault on Base. asset = USDC, share token symbol =
 /// rmUSDC.
 pub const VAULT: Address = address!("4f835c9f54bcf17daf9040f60cb72951ccbb49dd");
 
-/// USDC on Base mainnet (Circle's native USDC).
+/// USDC on Base (Circle's native USDC).
 pub const USDC: Address = address!("833589fcd6edb6e08f4c7c32d4f71b54bda02913");
 
 /// Morpho strategy adapter registered with [`VAULT`].
@@ -30,12 +30,12 @@ pub const COMPOUND_V3_ADAPTER: Address = address!("8247da22a59fce074c102431048d0
 /// Admin / fee-recipient Safe multisig.
 pub const ADMIN_SAFE: Address = address!("88ba7364cc6ce5054981d571b33f8fb3e91475a0");
 
-// -- Protocol-level contract addresses (Base mainnet) -----------------
+// -- Protocol-level contract addresses (Base) -----------------
 // These are the underlying protocol contracts that the Robot Money
 // strategy adapters delegate to. Used by Deploy.s.sol when deploying
 // fresh adapter instances against a new vault (e.g. smoke-test devnet).
 
-/// Aave V3 Pool on Base mainnet. Used by [`AAVE_V3_ADAPTER`] and by
+/// Aave V3 Pool on Base. Used by [`AAVE_V3_ADAPTER`] and by
 /// Deploy.s.sol to construct new AaveV3Adapter instances.
 pub const AAVE_V3_POOL: Address = address!("a238dd80c259a72e81d7e4664a9801593f98d1c5");
 
@@ -51,7 +51,7 @@ pub const MORPHO_GAUNTLET_USDC_PRIME: Address =
 
 /// Compound V3 (Comet) USDC market on Base. The underlying venue for
 /// [`COMPOUND_V3_ADAPTER`] and newly deployed CompoundV3Adapter instances.
-/// Verified against `cast call <compound-adapter> "COMET()(address)"` on Base mainnet.
+/// Verified against `cast call <compound-adapter> "COMET()(address)"` on Base.
 pub const COMPOUND_V3_COMET: Address = address!("b125e6687d4313864e53df431d5425969c15eb2f");
 
 /// USDC whale on Base. Historically used for funding via impersonation;
@@ -95,8 +95,8 @@ pub const POOL_WSOL_USDC: Address = address!("c1bf8adf6e62cc9c56e2b246b03d3e74da
 // -- Basket vault asset addresses (ProtocolAssetVault + AgentTokenVault) ----
 // Canonical: config/dex-pools.json §basket_assets; docs/prd.md §11.2–11.3.
 // These are the underlying token and pool addresses used when deploying
-// basket vaults against a live Base-mainnet fork. The vault contracts are
-// NOT deployed on Base mainnet (deploy scripts exist but have not been run);
+// basket vaults against a live forked Base block. The vault contracts are
+// NOT deployed on Base (deploy scripts exist but have not been run);
 // the fork-e2e test deploys them transiently on the fork under test.
 
 /// cbBTC (Coinbase-wrapped Bitcoin) ERC-20 on Base.

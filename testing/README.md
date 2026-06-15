@@ -13,7 +13,7 @@ and the environment key — see [docs/development/ci-suites.md](../docs/developm
 | # | Root | Owner domain | Environment | CI workflow |
 |---|------|-------------|-------------|-------------|
 | 1–2 | `contracts/test/` | Smart contracts | `anvil` | `suite-01-02-forge-tests.yml` |
-| 5 | `testing/fork-e2e-rust/` | Rust client × mainnet adapters | `fork` | `suite-05-fork-integration.yml` |
+| 5 | `testing/fork-e2e-rust/` | Rust client × Base adapters | `fork` | `suite-05-fork-integration.yml` |
 | 14 | `testing/smoke-test/` | Devnet fixture library | `devnet` | `suite-14-smoke-test.yml` |
 | 7 | `testing/ethereum-testnet/e2e-rust/` | Rust client × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
 | — | `testing/ethereum-testnet/typescript-sdk/` | TypeScript SDK × devnet | `devnet` | `suite-07-rmpc-integration.yml` |
@@ -53,12 +53,12 @@ A branch-coverage gate on `RobotMoneyGateway` is enforced by `check_gateway_cove
 
 ---
 
-### 5. `testing/fork-e2e-rust/` — Fork integration (Rust client × Base mainnet)
+### 5. `testing/fork-e2e-rust/` — Fork integration (Rust client × Base)
 
-**Owner domain:** Rust client (`rmpc`) against already-deployed Base mainnet contracts  
+**Owner domain:** Rust client (`rmpc`) against already-deployed Base contracts  
 **CI workflow:** [`.github/workflows/suite-05-fork-integration.yml`](../.github/workflows/suite-05-fork-integration.yml)  
-**Environment:** `fork` — Anvil forked from a pinned Base mainnet block  
-**Required services/secrets:** `RMPC_FORK_RPC_URL` (Base mainnet RPC endpoint with archive access). Tests skip loudly when the secret is absent.  
+**Environment:** `fork` — Anvil forked from a pinned Base block  
+**Required services/secrets:** `RMPC_FORK_RPC_URL` (Base RPC endpoint with archive access). Tests skip loudly when the secret is absent.  
 **docs/development/ci-suites.md reference:** [Suite 5](../docs/development/ci-suites.md#5-fork-integration-tests-protocol-adapters)
 
 **Run commands:**
@@ -74,7 +74,7 @@ cargo test \
   --test dex_route_smoke \
   --test failure_surface_smoke \
   --test gas_estimate_reality_check \
-  --test rmpc_get_vault_fork_base_mainnet \
+  --test rmpc_get_vault_fork_robotmoney_devnet \
   --test rmpc_get_balance_fork \
   --test rmpc_get_allowance_fork \
   --test rmpc_get_tx_fork \
@@ -83,7 +83,7 @@ cargo test \
 
 **Product promise covered:**  
 ABI encoding, contract addresses, and RPC error shapes produced by `rmpc` match
-the contracts actually deployed on Base mainnet. Catches drift that only
+the contracts actually deployed on Base. Catches drift that only
 surfaces against real deployed state (not fresh devnet contracts).
 
 ---
@@ -252,7 +252,7 @@ removed) against real Geth+Lighthouse fork-choice.
 |--------|---------|
 | `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from a pinned mainnet block via `RMPC_FORK_RPC_URL`. Skips loudly when the secret is absent. |
+| `fork` | Anvil forked from a pinned Base block via `RMPC_FORK_RPC_URL`. Skips loudly when the secret is absent. |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 See [docs/development/ci-suites.md](../docs/development/ci-suites.md) for the full

@@ -2,7 +2,7 @@
 name = "rmpc-fork-e2e"
 version = "0.1.0"
 edition = "2021"
-description = "Phase 2 forked-mainnet e2e harness for Robot Money — drives anvil-fork against Base mainnet."
+description = "Phase 2 forked-Base e2e harness for Robot Money — drives anvil-fork against Base."
 license = "MIT"
 publish = false
 

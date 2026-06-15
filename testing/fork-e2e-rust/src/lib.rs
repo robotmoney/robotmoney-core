@@ -2,7 +2,7 @@
 //! Decision record: docs/technical/fork-e2e-decisions.md (issue #47).
 //! Implements: issue #48.
 //!
-//! Forked-mainnet end-to-end harness for Robot Money. Each test boots
+//! Forked-Base end-to-end harness for Robot Money. Each test boots
 //! its own `anvil --fork-url $RMPC_FORK_RPC_URL --fork-block-number
 //! $RMPC_FORK_BLOCK` backend (per §3.5 of the ADR, fork-restart per
 //! test, no shared backend), creates an ephemeral secp256k1 signer,
@@ -22,7 +22,7 @@
 //! - [`Account`] — the ephemeral key bound to a fixture, plus
 //!   [`Account::send`] / [`Account::call`] helpers that hide
 //!   nonce/gas/eip-1559 plumbing.
-//! - [`addresses`] module — Base-mainnet contract addresses, parsed
+//! - [`addresses`] module — Base contract addresses, parsed
 //!   once and re-exported.
 //!
 //! Reads use only JSON-RPC (per §8 outputs and §3.1 of the ADR — no
@@ -141,13 +141,13 @@ macro_rules! skip_in_testnet_mode {
     };
 }
 
-/// Skip the test unless a live mainnet fork RPC is available via
+/// Skip the test unless a live forked-Base RPC is available via
 /// `RMPC_FORK_RPC_URL`. Use this for tests that read storage from
-/// production Base mainnet contracts (e.g. `abi_address_sanity`),
+/// production Base contracts (e.g. `abi_address_sanity`),
 /// which require a real fork rather than the checked-in fixture
-/// (the fixture has bytecode but not full storage for mainnet contracts).
+/// (the fixture has bytecode but not full storage for Base contracts).
 #[macro_export]
-macro_rules! skip_if_no_mainnet_fork {
+macro_rules! skip_if_no_devnet_fork {
     () => {
         if which::which("anvil").is_err()
             || !std::env::var("RMPC_FORK_RPC_URL")
@@ -156,7 +156,7 @@ macro_rules! skip_if_no_mainnet_fork {
         {
             eprintln!(
                 "[fork-e2e] skipping: RMPC_FORK_RPC_URL not set. \
-                 This test requires a live Base mainnet archive RPC."
+                 This test requires a live Base archive RPC."
             );
             return;
         }
@@ -167,7 +167,7 @@ macro_rules! skip_if_no_mainnet_fork {
 /// comprehensive coverage across networks "using parameterized fixtures and
 /// shared test templates to avoid code duplication"). The body receives a
 /// `network: Network` binding and a booted [`ForkFixture`] bound to that
-/// network; it is invoked once for [`Network::BaseMainnet`] and once for
+/// network; it is invoked once for [`Network::RobotMoneyDevnet`] and once for
 /// [`Network::BaseTestnet`].
 ///
 /// A network whose RPC endpoint is unavailable
@@ -224,7 +224,7 @@ macro_rules! parameterized_e2e {
             if ran == 0 {
                 eprintln!(
                     "[{}] no network RPC configured; set RMPC_FORK_RPC_URL / \
-                     RMPC_TESTNET_RPC_URL (mainnet) or BASE_TESTNET_RPC_URL (testnet) to run.",
+                     RMPC_TESTNET_RPC_URL (devnet) or BASE_TESTNET_RPC_URL (testnet) to run.",
                     stringify!($name)
                 );
             }
@@ -292,7 +292,7 @@ pub fn can_run() -> bool {
 /// `RMPC_FORK_BLOCK` is unset. Matches §3.2 of the ADR.
 const LOCAL_LAG_BLOCKS: u64 = 50;
 
-/// Base mainnet chain id. Hard-coded — Phase 2 only targets Base
+/// Base chain id. Hard-coded — Phase 2 only targets Base
 /// per §3.1 of the ADR.
 pub const BASE_CHAIN_ID: u64 = 8453;
 
@@ -307,7 +307,7 @@ pub const USDC_PROXY_ADMIN_SLOT: B256 =
 
 /// Path (relative to workspace root) of the committed USDC storage
 /// seed: proxy storage slots + implementation address and bytecode
-/// captured from Base mainnet. Applied by
+/// captured from a Base block. Applied by
 /// [`ForkFixture::apply_usdc_storage_seed`] on every boot so the
 /// checked-in `--load-state` snapshot — which only carries the
 /// proxy's runtime bytecode, not its admin/impl storage — becomes
@@ -646,7 +646,7 @@ impl ForkFixture {
 
     /// Boot a fixture for a specific [`Network`] (issue #839 multi-network e2e).
     ///
-    /// - [`Network::BaseMainnet`] delegates to [`Self::new`] — anvil-fork or the
+    /// - [`Network::RobotMoneyDevnet`] delegates to [`Self::new`] — anvil-fork or the
     ///   checked-in fixture, exactly as the existing Phase 2 scenarios use.
     /// - [`Network::BaseTestnet`] connects **directly** to the live Base Sepolia
     ///   RPC named by `BASE_TESTNET_RPC_URL` (no anvil, no fork). The connected
@@ -658,13 +658,13 @@ impl ForkFixture {
     /// as a graceful skip, never a failure.
     pub fn for_network(network: Network) -> Result<Self, HarnessError> {
         match network {
-            Network::BaseMainnet => {
+            Network::RobotMoneyDevnet => {
                 // These are *live third-party service* tests (Aave/Uniswap/Curve
                 // pools). The checked-in `--load-state` fixture carries vault +
                 // USDC storage but NOT the full external-pool storage, so a swap
                 // against it reverts. Require a live upstream — `RMPC_FORK_RPC_URL`
                 // (anvil-fork) or `RMPC_TESTNET_RPC_URL` (shared devnet) — and skip
-                // the fixture-only case, mirroring `skip_if_no_mainnet_fork!`.
+                // the fixture-only case, mirroring `skip_if_no_devnet_fork!`.
                 let has_live_upstream = std::env::var("RMPC_FORK_RPC_URL")
                     .map(|v| !v.is_empty())
                     .unwrap_or(false)

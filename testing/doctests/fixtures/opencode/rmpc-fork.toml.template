@@ -1,9 +1,9 @@
 # Read-only fork inspection config for the OpenCode walkthrough.
 # Canonical: docs/development/opencode-readonly-fork.md
 #
-# This file is fork-only. Pointing it at mainnet would still refuse all
-# writes (no signer key is loaded), but operators must never edit a
-# mainnet config in a walkthrough shell — keep fork and prod configs in
+# This file is fork-only. Pointing it at a production network would still
+# refuse all writes (no signer key is loaded), but operators must never edit
+# a production config in a walkthrough shell — keep fork and prod configs in
 # separate directories.
 #
 # This template is parsed by the real `rust_payment_client::config::Config`
