@@ -510,8 +510,8 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 | `setQuorumThreshold(uint256)` | ADMIN | Set minimum voting power needed for quorum. New proposals use the updated threshold. |
 | `setVotingPeriod(uint64 seconds)` | ADMIN | Set voting window duration. Minimum `MIN_VOTING_PERIOD` (1 hour). |
 | `setExecutionDelay(uint64 seconds)` | ADMIN | Set delay from voting deadline to earliest execution. Minimum `MIN_EXECUTION_DELAY` (1 hour). |
-| `getProposal(uint256 proposalId)` | view | Return full proposal state, vote tally, deadlines, and status. |
-| `getProposalState(uint256 proposalId)` | view | Return proposal enum state (Active, Defeated, Queued, Executed, Cancelled). |
+| `activeProposal()` | view | Return the single active/queued proposal's full state: id, proposer, vaults, bps, deadlines, vote tally, snapshot quorum, and executed/cancelled flags. Reverts if no proposal exists. |
+| `proposalState(uint256 proposalId)` | view | Return the proposal's `ProposalState` enum (Active, Defeated, Queued, Executed, Cancelled). |
 
 ### 9.2.5 Key invariants
 
