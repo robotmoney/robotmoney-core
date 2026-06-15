@@ -49,20 +49,29 @@ impl Network {
     /// Reads `BASE_TESTNET_RPC_URL` (required for real testnet connection).
     /// Returns `None` if not set; tests using this should skip gracefully.
     ///
+    /// An env var that is present but **empty** is treated as unset and yields
+    /// `None`. GitHub Actions injects an absent `${{ secrets.X }}` as the empty
+    /// string, so without this an unprovisioned secret would otherwise resolve
+    /// to `Some("")` — pointing the harness at an empty URL, which fails the
+    /// connection (`eth_blockNumber: builder error`) instead of skipping. This
+    /// matches the empty-string filtering used throughout the rest of the
+    /// harness (e.g. [`crate::ForkFixture::new`]).
+    ///
     /// # Acceptance criteria link
     /// "e2e test harness accepts Base testnet RPC endpoint via env var or config"
     pub fn rpc_url(&self) -> Option<String> {
         match self {
             Network::BaseMainnet => {
-                // Mainnet mode: return RMPC_FORK_RPC_URL if set, None otherwise
-                // (tests skip on None). Implementation in issue #839 will wire
-                // this to fork logic or fixture.
-                env::var("RMPC_FORK_RPC_URL").ok()
+                // Mainnet mode: return RMPC_FORK_RPC_URL if set (and non-empty),
+                // None otherwise (tests skip on None).
+                env::var("RMPC_FORK_RPC_URL").ok().filter(|v| !v.is_empty())
             }
             Network::BaseTestnet => {
-                // Testnet mode: return BASE_TESTNET_RPC_URL if set.
+                // Testnet mode: return BASE_TESTNET_RPC_URL if set and non-empty.
                 // Required for live testnet connectivity.
-                env::var("BASE_TESTNET_RPC_URL").ok()
+                env::var("BASE_TESTNET_RPC_URL")
+                    .ok()
+                    .filter(|v| !v.is_empty())
             }
         }
     }
@@ -197,6 +206,34 @@ mod tests {
             Network::BaseMainnet.weth9(),
             Network::BaseTestnet.weth9(),
             "WETH9 is the same OP-stack predeploy on both networks"
+        );
+    }
+
+    #[test]
+    fn rpc_url_empty_env_resolves_to_none() {
+        // GitHub Actions injects an absent `${{ secrets.X }}` as the empty
+        // string. An empty value MUST be treated as unset so the parameterized
+        // e2e skips gracefully instead of connecting to an empty URL (which
+        // fails with `eth_blockNumber: builder error`). Regression for the
+        // base-testnet-adapters CI job (issue #839).
+        // SAFETY: single-threaded test; set+remove within this test only.
+        std::env::set_var("BASE_TESTNET_RPC_URL", "");
+        assert_eq!(
+            Network::BaseTestnet.rpc_url(),
+            None,
+            "empty BASE_TESTNET_RPC_URL must resolve to None (graceful skip)"
+        );
+        std::env::set_var("BASE_TESTNET_RPC_URL", "https://example.invalid");
+        assert_eq!(
+            Network::BaseTestnet.rpc_url(),
+            Some("https://example.invalid".to_string()),
+            "non-empty BASE_TESTNET_RPC_URL must resolve to the URL"
+        );
+        std::env::remove_var("BASE_TESTNET_RPC_URL");
+        assert_eq!(
+            Network::BaseTestnet.rpc_url(),
+            None,
+            "unset BASE_TESTNET_RPC_URL must resolve to None"
         );
     }
 
