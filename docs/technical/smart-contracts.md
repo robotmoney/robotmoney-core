@@ -485,10 +485,10 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 ### 9.2.2 Proposal lifecycle
 
-1. **Propose** (ADMIN_ROLE): `createProposal(vaults[], bps[])` creates a new proposal. Voting starts immediately. The proposal's snapshot block captures voting power; votes cast mid-proposal use checkpointed power at that block.
+1. **Propose** (ADMIN_ROLE): `propose(vaults[], bps[])` creates a new proposal and returns its `proposalId`. Voting starts immediately. The proposal's snapshot block captures voting power; votes cast mid-proposal use checkpointed power at that block.
 2. **Vote** (assigned voter): Voters with non-zero voting power call `vote(proposalId)` during the voting window. One vote per voter per proposal (no vote changing).
 3. **Defeated** or **Queued**: After the voting period (admin-set duration) expires, the proposal is either `Defeated` (did not reach quorum) or `Queued` (quorum reached, awaiting execution delay).
-4. **Execute** (anyone): After the execution delay elapses, anyone calls `executeProposal(proposalId)`, which calls `router.setWeights(...)` with the proposal's vaults and bps.
+4. **Execute** (anyone): After the execution delay elapses, anyone calls `execute(proposalId)`, which calls `router.setWeights(...)` with the proposal's vaults and bps.
 5. **Executed** or **Cancelled**: The proposal is marked executed, or ADMIN_ROLE can cancel before execution.
 
 ### 9.2.3 Voting power and checkpoints
@@ -496,16 +496,16 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 - ADMIN_ROLE assigns voting power to addresses via `setVotingPower(address, uint256)`.
 - Voting power is stored as a history of checkpoints `(block, power)`, enabling `getPastVotes(address, blockNumber)` to read power as of the proposal's snapshot block.
 - Total voting power is the sum of all assigned powers (`totalVotingPower`).
-- Quorum is a fixed threshold: `createProposal` snapshots the current `quorumThreshold` at proposal time, preventing retroactive defeats or passages if the threshold changes.
+- Quorum is a fixed threshold: `propose` snapshots the current `quorumThreshold` at proposal time, preventing retroactive defeats or passages if the threshold changes.
 
 ### 9.2.4 Key functions
 
 | Function | Role | Effect |
 |---|---|---|
-| `createProposal(address[] vaults, uint256[] bps)` | ADMIN | Create a new proposal (only one active at a time). Snapshot quorum and voting power block. Start voting period. |
+| `propose(address[] vaults, uint256[] bps)` | ADMIN | Create a new proposal (only one active/queued at a time) and return its `proposalId`. Validates the weight sum and per-vault router eligibility. Snapshot quorum and voting power block. Start voting period. |
 | `vote(uint256 proposalId)` | voting power holder | Cast one vote FOR the proposal. Uses checkpointed power at proposal's snapshot block. |
-| `executeProposal(uint256 proposalId)` | anyone | If quorum reached and voting period + execution delay have elapsed, execute via `router.setWeights(...)`. |
-| `cancelProposal(uint256 proposalId)` | ADMIN | Cancel a proposal before execution. Emit `ProposalCancelled`. |
+| `execute(uint256 proposalId)` | anyone | If quorum reached and voting period + execution delay have elapsed, execute via `router.setWeights(...)`. `nonReentrant`. |
+| `cancel(uint256 proposalId)` | ADMIN | Cancel any non-executed proposal before execution. Emit `ProposalCancelled`. |
 | `setVotingPower(address voter, uint256 power)` | ADMIN | Assign voting power to a voter. Pushes a checkpoint if power changes. |
 | `setQuorumThreshold(uint256)` | ADMIN | Set minimum voting power needed for quorum. New proposals use the updated threshold. |
 | `setVotingPeriod(uint64 seconds)` | ADMIN | Set voting window duration. Minimum `MIN_VOTING_PERIOD` (1 hour). |
@@ -515,7 +515,7 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 ### 9.2.5 Key invariants
 
-- **One active proposal at a time**: `createProposal` reverts if a proposal is already active (not yet executed or cancelled).
+- **One active proposal at a time**: `propose` reverts if a proposal is already active or queued (not yet executed or cancelled).
 - **Voting power snapshot immutability**: A proposal's quorum threshold and vote snapshot block are set at proposal time and never change, even if governance parameters are updated later.
 - **No vote changing**: A voter can vote once per proposal; `vote` reverts if the voter has already voted.
 - **Execution delay enforcement**: A proposal cannot execute until the voting period ends and the execution delay elapses.
