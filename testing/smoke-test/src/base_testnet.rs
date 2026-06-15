@@ -134,9 +134,177 @@ impl Default for AccountFundingAssertion {
     }
 }
 
+// ── Live funding + balance assertion (issue #839) ─────────────────────────────
+
+use alloy_primitives::{Address, U256};
+
+/// Error raised while funding or asserting a Base testnet account.
+#[derive(Debug, thiserror::Error)]
+pub enum FundingError {
+    /// The RPC endpoint (or a required funder secret) is not configured. Treated
+    /// as a graceful skip by callers — never a hard failure on a contributor
+    /// laptop without the testnet secret.
+    #[error("base testnet RPC/funder not configured; skipping")]
+    Skip,
+    /// JSON-RPC transport or decode error.
+    #[error("rpc error: {0}")]
+    Rpc(String),
+    /// Account funding completed but the post-funding balance assertion failed.
+    #[error("funding assertion failed: {0}")]
+    Assertion(String),
+}
+
+impl FundingError {
+    /// True when this error means "endpoint not configured; skip rather than
+    /// fail" — the same contract the fork-e2e harness uses.
+    pub fn is_skip(&self) -> bool {
+        matches!(self, FundingError::Skip)
+    }
+}
+
+/// A funded test account on Base testnet (Sepolia). Constructed against a live
+/// RPC endpoint; provides the `eth_getBalance` validation the acceptance
+/// criteria require ("assert by … checking account balances via eth_getBalance").
+///
+/// This is intentionally a *read + assert* surface over a real EOA address
+/// rather than a key generator — the funder/key wiring (seeded transfers vs
+/// faucet) lives in the fork-e2e harness's [`ForkFixture::ephemeral_testnet`].
+/// Here we validate that whatever funding ran left the account above the
+/// [`AccountFundingAssertion`] thresholds, which is the CI gate.
+#[derive(Debug, Clone)]
+pub struct BaseTestnetAccount {
+    /// The account address whose balances we assert.
+    pub address: Address,
+    /// Resolved RPC endpoint (e.g. from `RpcEndpoint::EnvVar("BASE_TESTNET_RPC_URL")`).
+    rpc_url: String,
+    http: reqwest::blocking::Client,
+}
+
+impl BaseTestnetAccount {
+    /// Bind to `address` on the network reachable at `endpoint`. Returns
+    /// [`FundingError::Skip`] when the endpoint env var is unset.
+    pub fn new(endpoint: &RpcEndpoint, address: Address) -> Result<Self, FundingError> {
+        let rpc_url = endpoint.resolve().ok_or(FundingError::Skip)?;
+        let http = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| FundingError::Rpc(format!("http client: {e}")))?;
+        Ok(Self {
+            address,
+            rpc_url,
+            http,
+        })
+    }
+
+    /// Native ETH balance of [`Self::address`] in wei, via `eth_getBalance`.
+    pub fn eth_balance(&self) -> Result<U256, FundingError> {
+        let hex: String = self.rpc(
+            "eth_getBalance",
+            serde_json::json!([format!("{:#x}", self.address), "latest"]),
+        )?;
+        U256::from_str_radix(hex.trim_start_matches("0x"), 16)
+            .map_err(|e| FundingError::Rpc(format!("eth_getBalance decode: {e}")))
+    }
+
+    /// ERC-20 balance of [`Self::address`] for `token` via an `eth_call` to
+    /// `balanceOf(address)` (selector `0x70a08231`). Used to assert USDC funding.
+    pub fn token_balance(&self, token: Address) -> Result<U256, FundingError> {
+        // balanceOf(address) selector + 32-byte left-padded address.
+        let mut data = vec![0x70u8, 0xa0, 0x82, 0x31];
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(self.address.as_slice());
+        let call = serde_json::json!([
+            {
+                "to": format!("{:#x}", token),
+                "data": format!("0x{}", hex::encode(&data)),
+            },
+            "latest"
+        ]);
+        let ret: String = self.rpc("eth_call", call)?;
+        let bytes = hex::decode(ret.trim_start_matches("0x"))
+            .map_err(|e| FundingError::Rpc(format!("balanceOf decode: {e}")))?;
+        if bytes.len() < 32 {
+            return Err(FundingError::Rpc(format!(
+                "balanceOf returned {} bytes (<32)",
+                bytes.len()
+            )));
+        }
+        Ok(U256::from_be_slice(&bytes[..32]))
+    }
+
+    /// Assert the account is funded above the thresholds in `assertion` against
+    /// `usdc_token`. This is the CI gate the acceptance criteria call for:
+    /// "run fixture setup in CI and check account balances via eth_getBalance".
+    pub fn assert_funded(
+        &self,
+        assertion: &AccountFundingAssertion,
+        usdc_token: Address,
+    ) -> Result<(), FundingError> {
+        let eth = self.eth_balance()?;
+        if eth < U256::from(assertion.min_eth_wei) {
+            return Err(FundingError::Assertion(format!(
+                "ETH balance {eth} wei < required {} wei for {:#x}",
+                assertion.min_eth_wei, self.address
+            )));
+        }
+        let usdc = self.token_balance(usdc_token)?;
+        if usdc < U256::from(assertion.min_usdc_units) {
+            return Err(FundingError::Assertion(format!(
+                "USDC balance {usdc} units < required {} units for {:#x}",
+                assertion.min_usdc_units, self.address
+            )));
+        }
+        Ok(())
+    }
+
+    fn rpc<T: for<'de> serde::Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<T, FundingError> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        });
+        let resp: serde_json::Value = self
+            .http
+            .post(&self.rpc_url)
+            .json(&body)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.json())
+            .map_err(|e| FundingError::Rpc(format!("{method}: {e}")))?;
+        if let Some(err) = resp.get("error") {
+            return Err(FundingError::Rpc(format!("{method}: {err}")));
+        }
+        let result = resp
+            .get("result")
+            .ok_or_else(|| FundingError::Rpc(format!("{method}: no result field")))?
+            .clone();
+        serde_json::from_value(result)
+            .map_err(|e| FundingError::Rpc(format!("{method}: decode: {e}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_testnet_account_skips_without_rpc() {
+        let ep = RpcEndpoint::EnvVar("BASE_TESTNET_RPC_URL_UNSET_FOR_TEST".to_string());
+        let err = BaseTestnetAccount::new(&ep, Address::ZERO).unwrap_err();
+        assert!(err.is_skip(), "unset RPC env var must produce a Skip error");
+    }
+
+    #[test]
+    fn funding_error_skip_classification() {
+        assert!(FundingError::Skip.is_skip());
+        assert!(!FundingError::Rpc("x".into()).is_skip());
+        assert!(!FundingError::Assertion("x".into()).is_skip());
+    }
 
     #[test]
     fn funding_method_name_faucet() {
