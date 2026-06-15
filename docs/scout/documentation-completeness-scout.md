@@ -4,9 +4,9 @@
 > Scout issue: #834
 > Canonical docs touched by the phase:
 > [`docs/development/ci-suites.md`](../development/ci-suites.md),
-> [`docs/technical/security-model.md`](technical/security-model.md),
+> [`docs/technical/security-model.md`](../technical/security-model.md),
 > [`docs/architecture.md`](../architecture.md),
-> [`docs/technical/smart-contracts.md`](technical/smart-contracts.md),
+> [`docs/technical/smart-contracts.md`](../technical/smart-contracts.md),
 > [`docs/development/open-questions.md`](../development/open-questions.md)
 
 This is a STUB-ONLY integration scout. It maps the documentation edit surfaces
