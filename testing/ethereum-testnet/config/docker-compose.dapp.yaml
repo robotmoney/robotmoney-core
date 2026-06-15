@@ -66,10 +66,16 @@ services:
       timeout: 5s
       retries: 15
 
+  # indexer + explorer-api run the SAME image (built once from the shared Rust
+  # build container, docker/rust-services.Dockerfile) with different entrypoints,
+  # so the workspace compiles once instead of once per service. This service owns
+  # the build; explorer-api reuses the resulting robotmoney-rust-services:devnet tag.
   explorer-indexer:
+    image: robotmoney-rust-services:devnet
     build:
       context: ../../..
-      dockerfile: services/explorer-indexer/Dockerfile
+      dockerfile: docker/rust-services.Dockerfile
+    entrypoint: ["/usr/local/bin/indexer"]
     container_name: dapp-explorer-indexer
     labels: *testnet-labels
     restart: unless-stopped
@@ -106,16 +112,20 @@ services:
       # config/feature-flags.json id=2; services/explorer-indexer/src/feature_flags.rs.
       FEATURE_FLAGS: ${FEATURE_FLAGS:-4}
 
+  # Reuses the robotmoney-rust-services:devnet image built by explorer-indexer
+  # (no build: of its own) and selects the explorer-api binary via entrypoint.
+  # depends_on explorer-indexer so the shared image is built before this starts.
   explorer-api:
-    build:
-      context: ../../..
-      dockerfile: clients/explorer-api/Dockerfile
+    image: robotmoney-rust-services:devnet
+    entrypoint: ["/usr/local/bin/explorer-api"]
     container_name: dapp-explorer-api
     labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      explorer-indexer:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
       EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-918453}
