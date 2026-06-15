@@ -1,6 +1,13 @@
 # Canonical: docs/development/ci-suites.md §14
 #
 # WHY THIS SUITE EXISTS
+# This suite is the CI contract for `make testnet`: the cli_meta matrix entry boots
+# `cargo run -p smoke-test -- --full-stack` — the exact path `make testnet` runs — so a
+# devnet boot regression (e.g. a deploy script drifting from a contract invariant, like
+# the RouterGovernance ExecutionDelayBelowMinimum revert) is caught in CI on push to
+# main/dev/dev-phase-* and in the nightly full-suite run (suite-21), not only when a
+# human next runs `make testnet` locally.
+#
 # The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.
 # If Fixture::new() is broken — because a Docker image changed, the genesis script
 # regressed, or a port mapping shifted — every one of those suites will fail at boot
@@ -115,6 +122,15 @@ jobs:
       - name: fork-block alignment guard (expected-prices + ingested pools)
         working-directory: testing/smoke-test
         run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
+
+      # Hermetic unit tests for the boot harness internals: the zombie-reaper
+      # stale-vs-current classification (run-id labels) and the compose collision
+      # guard. No Docker required — exercises the pure decision logic so a reaper
+      # regression is caught here in seconds rather than as a mysterious zombie
+      # collision in the devnet matrix below.
+      - name: harness unit tests (reaper + compose guard, hermetic)
+        working-directory: testing/smoke-test
+        run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
 
   # PARALLEL DEVNET MATRIX (issue #600): each devnet-booting binary used to run as a
   # SERIAL step in one job, each booting Geth+Lighthouse on port 8545 (suite ~38m).

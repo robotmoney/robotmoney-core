@@ -1,7 +1,20 @@
 name: ethereum-testnet
+
+# Run-identity labels (testnet boot hardening). The smoke-test harness stamps
+# every container with a per-boot run-id and creation timestamp so a later boot
+# can find and force-remove containers stranded by a previous, now-dead run
+# (run-id mismatch) instead of colliding on the fixed container names. The
+# harness injects SMOKE_RUN_ID / SMOKE_RUN_CREATED; the defaults keep ad-hoc
+# `docker compose` usage working without the harness.
+x-testnet-labels: &testnet-labels
+  com.robotmoney.testnet: "1"
+  com.robotmoney.testnet.run-id: "${SMOKE_RUN_ID:-standalone}"
+  com.robotmoney.testnet.created: "${SMOKE_RUN_CREATED:-0}"
+
 services:
   # 1. Setup Service (Generates Artifacts, Initializes Geth, Imports Keys)
   setup:
+    labels: *testnet-labels
     build:
       context: ./genesis
     volumes:
@@ -36,6 +49,7 @@ services:
   geth:
     image: ethereum/client-go:v1.13.14
     container_name: eth-execution
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       setup:
@@ -57,15 +71,18 @@ services:
       - "127.0.0.1:${GETH_AUTHRPC_PORT:-8551}:8551"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8545"]
-      interval: 5s
+      # 2s cadence so beacon (depends_on geth: service_healthy) starts promptly
+      # once Geth answers. 45 retries keeps a ~90s window for a cold `geth init`.
+      interval: 2s
       timeout: 5s
-      retries: 30
+      retries: 45
       start_period: 10s
 
   # 5. Main Beacon Node
   beacon:
     image: sigp/lighthouse:v5.3.0
     container_name: eth-beacon
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       geth:
@@ -100,6 +117,7 @@ services:
   validator-1:
     image: sigp/lighthouse:v5.3.0
     container_name: eth-validator-1
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       beacon:
@@ -120,6 +138,7 @@ services:
   validator-2:
     image: sigp/lighthouse:v5.3.0
     container_name: eth-validator-2
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       beacon:
@@ -140,6 +159,7 @@ services:
   validator-3:
     image: sigp/lighthouse:v5.3.0
     container_name: eth-validator-3
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       beacon:
@@ -160,6 +180,7 @@ services:
   validator-4:
     image: sigp/lighthouse:v5.3.0
     container_name: eth-validator-4
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       beacon:
