@@ -2,7 +2,7 @@
 //! `rmpc get-balance`. Implements the issue #50 acceptance criterion
 //! "Fork tests cover every command against pinned contracts".
 //!
-//! Boots an anvil-fork against Base mainnet and shells out to the
+//! Boots an anvil-fork against a Base block and shells out to the
 //! `rmpc get-balance` binary, asserting the JSON envelope shape and
 //! that the on-chain USDC balance round-trips through the read
 //! command.

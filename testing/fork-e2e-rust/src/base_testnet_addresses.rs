@@ -2,7 +2,7 @@
 //!
 //! Deployed contract addresses for **Base Sepolia (chain id 84532)** — the
 //! Robot Money testnet network. Mirrors the structure of [`crate::addresses`]
-//! (Base mainnet) so the parameterized multi-network e2e tests can select the
+//! (Base) so the parameterized multi-network e2e tests can select the
 //! correct address set per [`crate::Network`].
 //!
 //! # What lives here
@@ -36,7 +36,7 @@ use alloy_primitives::{address, keccak256, Address, B256};
 
 // -- Live third-party services on Base Sepolia (chain 84532) ----------
 // These are public, canonical Base Sepolia addresses. Sources are noted
-// inline; they are the testnet equivalents of the Base-mainnet constants
+// inline; they are the testnet equivalents of the Base constants
 // in `crate::addresses`.
 
 /// Circle's USDC on Base Sepolia (6 decimals). The canonical testnet USDC
@@ -45,7 +45,7 @@ use alloy_primitives::{address, keccak256, Address, B256};
 pub const USDC: Address = address!("036cbd53842c5426634e7929541ec2318f3dcf7e");
 
 /// WETH9 on Base Sepolia. Predeploy at the canonical OP-stack WETH address,
-/// identical to Base mainnet. Used as the intermediate token in the smallest
+/// identical to Base. Used as the intermediate token in the smallest
 /// useful DEX route smoke (USDC -> WETH).
 pub const WETH9: Address = address!("4200000000000000000000000000000000000006");
 
@@ -59,7 +59,7 @@ pub const UNISWAP_V3_SWAP_ROUTER: Address = address!("94cc0aac535ccdb3c01d6787d6
 /// Source: Aave V3 testnet deployment — Base Sepolia.
 pub const AAVE_V3_POOL: Address = address!("07ea79f68b2b3df564d0a34f8e19d9b1e339814b");
 
-/// Base Sepolia chain id. Mirrors [`crate::BASE_CHAIN_ID`] (mainnet, 8453).
+/// Base Sepolia chain id. Mirrors [`crate::BASE_CHAIN_ID`] (Base, 8453).
 pub const BASE_SEPOLIA_CHAIN_ID: u64 = 84532;
 
 // -- Robot Money contracts (deploy is a prerequisite, out of scope) ---
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn weth_matches_op_stack_predeploy() {
-        // OP-stack WETH predeploy is identical across Base mainnet/testnet.
+        // OP-stack WETH predeploy is identical across Base/testnet.
         assert_eq!(WETH9, crate::addresses::WETH9);
     }
 

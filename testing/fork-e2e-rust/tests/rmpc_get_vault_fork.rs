@@ -3,7 +3,7 @@
 //! command against pinned contracts."
 //!
 //! Drives the four `rmpc get-*` CLI binaries against an anvil-fork of
-//! Base mainnet, pinned to `RMPC_FORK_BLOCK` (or latest-N), and asserts
+//! a Base block, pinned to `RMPC_FORK_BLOCK` (or latest-N), and asserts
 //! the envelope output matches on-chain truth at the pinned address
 //! set.
 //!
@@ -14,7 +14,7 @@
 //!   symbol == "rmUSDC", decimals == 6) plus the §9 `not_onchain`
 //!   sentinels.
 //! - `get-gateway`, `get-agent`, `get-roles` — degradation path: the
-//!   `RobotMoneyGateway` contract is not deployed on Base mainnet, so
+//!   `RobotMoneyGateway` contract is not deployed on Base, so
 //!   pointing rmpc at an EOA gateway address surfaces the documented
 //!   `partial = true` + per-field error envelope. This locks in AC
 //!   "Each subcommand fails with a named error" against a *real*
@@ -32,7 +32,7 @@ use rmpc_fork_e2e::{addresses, skip_if_no_fork, ForkFixture};
 use serde_json::Value;
 
 /// `0x000…dEaD` — used as the throwaway gateway address. On Base
-/// mainnet this is an EOA (no code), so any `eth_call` against it
+/// this is an EOA (no code), so any `eth_call` against it
 /// returns `0x` and rmpc records each sub-read as a per-field error
 /// in the partial envelope.
 const DEAD_GATEWAY: &str = "0x000000000000000000000000000000000000dEaD";
@@ -76,7 +76,7 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Write a minimal rmpc.toml that points at `rpc_url`, with `chain_id`
-/// = Base mainnet, vault = the deployed Robot Money vault, and a
+/// = Base, vault = the deployed Robot Money vault, and a
 /// throwaway gateway address (the gateway is not deployed on Base; the
 /// gateway-side sub-reads are expected to fail and be recorded as
 /// per-field errors in the `partial`/`errors` envelope).
@@ -169,10 +169,10 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
 // the vault storage seed lands.
 #[test]
 #[ignore = "needs vault storage seed (separate from #249 admin-slot repair)"]
-fn rmpc_get_vault_fork_base_mainnet() {
+fn rmpc_get_vault_fork_robotmoney_devnet() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[rmpc_get_vault_fork_base_mainnet] {}", fx.summary_line());
+    eprintln!("[rmpc_get_vault_fork_robotmoney_devnet] {}", fx.summary_line());
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id);

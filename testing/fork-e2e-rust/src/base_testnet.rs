@@ -12,8 +12,8 @@
 //!
 //! # Design notes
 //!
-//! Base testnet is a separate network from Base mainnet. Contracts must be
-//! deployed to Base testnet addresses (not the mainnet addresses in [`crate::addresses`]).
+//! Base testnet is a separate network from Robot Money Devnet. Contracts must be
+//! deployed to Base testnet addresses (not the Base addresses in [`crate::addresses`]).
 //! RPC configuration is separate from fork mode to enable direct testnet connections
 //! when faucet funding is available.
 //!
@@ -24,7 +24,7 @@
 //! - Contract address registry for deployed Base testnet adapters
 //!
 //! See docs/scout/base-testnet-guide.md for the test environment setup,
-//! known mainnet divergences, and the issue #839 integration roadmap.
+//! known Base divergences, and the issue #839 integration roadmap.
 
 use std::env;
 
@@ -32,8 +32,8 @@ use std::env;
 /// Used to select RPC endpoint, contract addresses, and fixture behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Network {
-    /// Base mainnet (forked via anvil or direct RPC).
-    BaseMainnet,
+    /// Robot Money Devnet (forked Base block via anvil or direct RPC).
+    RobotMoneyDevnet,
     /// Base testnet (Sepolia-linked, faucet-funded).
     BaseTestnet,
 }
@@ -41,7 +41,7 @@ pub enum Network {
 impl Network {
     /// Get the RPC endpoint for this network from environment or defaults.
     ///
-    /// # Base mainnet
+    /// # Robot Money Devnet
     /// Reads `RMPC_FORK_RPC_URL` (for anvil-fork); falls back to bundled
     /// fixture if env var not set.
     ///
@@ -61,8 +61,8 @@ impl Network {
     /// "e2e test harness accepts Base testnet RPC endpoint via env var or config"
     pub fn rpc_url(&self) -> Option<String> {
         match self {
-            Network::BaseMainnet => {
-                // Mainnet mode: return RMPC_FORK_RPC_URL if set (and non-empty),
+            Network::RobotMoneyDevnet => {
+                // Devnet mode: return RMPC_FORK_RPC_URL if set (and non-empty),
                 // None otherwise (tests skip on None).
                 env::var("RMPC_FORK_RPC_URL").ok().filter(|v| !v.is_empty())
             }
@@ -79,19 +79,19 @@ impl Network {
     /// Human-readable network name for logging and error messages.
     pub fn name(&self) -> &'static str {
         match self {
-            Network::BaseMainnet => "Base mainnet",
+            Network::RobotMoneyDevnet => "Robot Money Devnet",
             Network::BaseTestnet => "Base testnet",
         }
     }
 
-    /// EVM chain id for this network. Base mainnet = 8453, Base Sepolia
+    /// EVM chain id for this network. Base = 8453, Base Sepolia
     /// (testnet) = 84532. The parameterized adapter tests assert the
     /// connected RPC reports this chain id before exercising any adapter,
     /// so a misconfigured endpoint fails loudly rather than silently
     /// testing the wrong chain.
     pub fn chain_id(&self) -> u64 {
         match self {
-            Network::BaseMainnet => crate::BASE_CHAIN_ID,
+            Network::RobotMoneyDevnet => crate::BASE_CHAIN_ID,
             Network::BaseTestnet => crate::base_testnet_addresses::BASE_SEPOLIA_CHAIN_ID,
         }
     }
@@ -100,7 +100,7 @@ impl Network {
     /// the input token for the DEX route adapter test.
     pub fn usdc(&self) -> alloy_primitives::Address {
         match self {
-            Network::BaseMainnet => crate::addresses::USDC,
+            Network::RobotMoneyDevnet => crate::addresses::USDC,
             Network::BaseTestnet => crate::base_testnet_addresses::USDC,
         }
     }
@@ -109,7 +109,7 @@ impl Network {
     /// token.
     pub fn weth9(&self) -> alloy_primitives::Address {
         match self {
-            Network::BaseMainnet => crate::addresses::WETH9,
+            Network::RobotMoneyDevnet => crate::addresses::WETH9,
             Network::BaseTestnet => crate::base_testnet_addresses::WETH9,
         }
     }
@@ -117,7 +117,7 @@ impl Network {
     /// Uniswap V3 SwapRouter02 address for this network.
     pub fn uniswap_v3_swap_router(&self) -> alloy_primitives::Address {
         match self {
-            Network::BaseMainnet => crate::addresses::UNISWAP_V3_SWAP_ROUTER,
+            Network::RobotMoneyDevnet => crate::addresses::UNISWAP_V3_SWAP_ROUTER,
             Network::BaseTestnet => crate::base_testnet_addresses::UNISWAP_V3_SWAP_ROUTER,
         }
     }
@@ -125,7 +125,7 @@ impl Network {
     /// Aave V3 Pool address for this network — used by the Aave adapter test.
     pub fn aave_v3_pool(&self) -> alloy_primitives::Address {
         match self {
-            Network::BaseMainnet => crate::addresses::AAVE_V3_POOL,
+            Network::RobotMoneyDevnet => crate::addresses::AAVE_V3_POOL,
             Network::BaseTestnet => crate::base_testnet_addresses::AAVE_V3_POOL,
         }
     }
@@ -133,7 +133,7 @@ impl Network {
     /// Every network the parameterized e2e tests iterate over. The macro
     /// [`crate::parameterized_e2e`] runs a single test body once per entry,
     /// skipping any network whose RPC endpoint is unset.
-    pub const ALL: &'static [Network] = &[Network::BaseMainnet, Network::BaseTestnet];
+    pub const ALL: &'static [Network] = &[Network::RobotMoneyDevnet, Network::BaseTestnet];
 }
 
 /// Testnet account funding configuration (dev-scout stub).
@@ -172,8 +172,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn network_name_mainnet() {
-        assert_eq!(Network::BaseMainnet.name(), "Base mainnet");
+    fn network_name_devnet() {
+        assert_eq!(Network::RobotMoneyDevnet.name(), "Robot Money Devnet");
     }
 
     #[test]
@@ -183,14 +183,14 @@ mod tests {
 
     #[test]
     fn chain_ids_distinct_and_correct() {
-        assert_eq!(Network::BaseMainnet.chain_id(), 8453);
+        assert_eq!(Network::RobotMoneyDevnet.chain_id(), 8453);
         assert_eq!(Network::BaseTestnet.chain_id(), 84532);
     }
 
     #[test]
     fn all_networks_covers_both() {
         assert_eq!(Network::ALL.len(), 2);
-        assert!(Network::ALL.contains(&Network::BaseMainnet));
+        assert!(Network::ALL.contains(&Network::RobotMoneyDevnet));
         assert!(Network::ALL.contains(&Network::BaseTestnet));
     }
 
@@ -198,12 +198,12 @@ mod tests {
     fn per_network_addresses_differ_for_usdc() {
         // USDC differs across chains; WETH (OP-stack predeploy) is shared.
         assert_ne!(
-            Network::BaseMainnet.usdc(),
+            Network::RobotMoneyDevnet.usdc(),
             Network::BaseTestnet.usdc(),
-            "Base mainnet and Sepolia USDC must be different contracts"
+            "Base and Sepolia USDC must be different contracts"
         );
         assert_eq!(
-            Network::BaseMainnet.weth9(),
+            Network::RobotMoneyDevnet.weth9(),
             Network::BaseTestnet.weth9(),
             "WETH9 is the same OP-stack predeploy on both networks"
         );

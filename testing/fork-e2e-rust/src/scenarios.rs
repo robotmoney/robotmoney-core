@@ -92,7 +92,7 @@ pub fn approve_usdc(
 
 /// Approve `spender` to pull `amount` of the USDC token at `usdc_token`.
 /// Network-aware variant of [`approve_usdc`] used by the multi-network adapter
-/// tests, which must target Base mainnet USDC or Base Sepolia USDC depending on
+/// tests, which must target Base canonical USDC or Base Sepolia USDC depending on
 /// the [`crate::Network`] under test (issue #839).
 pub fn approve_usdc_on(
     account: &Account<'_>,

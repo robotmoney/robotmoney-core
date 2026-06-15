@@ -219,20 +219,20 @@ fn approve_usdc_succeeds() {
 // -- Uniswap V3 stub pools (issue #531) ----------------------------------
 
 /// All four devnet stub pool addresses are non-zero and distinct from the
-/// Base mainnet pool addresses (which have no bytecode on the fresh devnet).
+/// Base pool addresses (which have no bytecode on the fresh devnet).
 #[test]
 fn stub_pool_addresses_are_non_zero_and_distinct() {
     if skip_if_no_prereqs("stub_pool_addresses_are_non_zero_and_distinct") {
         return;
     }
     let fx = fixture();
-    let mainnet_eth_usd: Address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
+    let base_eth_usd: Address = "0xd0b53D9277642d899DF5C87A3966A349A798F224"
         .parse()
         .unwrap();
-    let mainnet_cbbtc: Address = "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
+    let base_cbbtc: Address = "0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef"
         .parse()
         .unwrap();
-    let mainnet_wsol: Address = "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1"
+    let base_wsol: Address = "0xc1bF8adf6E62cC9C56E2b246b03d3e74da45A0E1"
         .parse()
         .unwrap();
 
@@ -244,16 +244,16 @@ fn stub_pool_addresses_are_non_zero_and_distinct() {
     ] {
         assert_ne!(addr, Address::ZERO, "stub pool {name} is zero address");
         assert_ne!(
-            addr, mainnet_eth_usd,
-            "stub pool {name} matches mainnet eth/usd pool"
+            addr, base_eth_usd,
+            "stub pool {name} matches Base eth/usd pool"
         );
         assert_ne!(
-            addr, mainnet_cbbtc,
-            "stub pool {name} matches mainnet cbbtc pool"
+            addr, base_cbbtc,
+            "stub pool {name} matches Base cbbtc pool"
         );
         assert_ne!(
-            addr, mainnet_wsol,
-            "stub pool {name} matches mainnet wsol pool"
+            addr, base_wsol,
+            "stub pool {name} matches Base wsol pool"
         );
     }
 }
