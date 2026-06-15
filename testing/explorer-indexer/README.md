@@ -5,7 +5,7 @@ Implements: issue #57 / PR #76.
 
 The explorer-indexer crate lives at `services/explorer-indexer/`. Its
 integration tests boot a Postgres testcontainer and (for the fork
-scenario) a Base-mainnet fork-anvil via the Phase 2 `rmpc-fork-e2e`
+scenario) a forked-Base fork-anvil via the Phase 2 `rmpc-fork-e2e`
 harness. Run them from the crate directory:
 
 ```sh

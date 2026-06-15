@@ -1,6 +1,6 @@
 # Ethereum PoS Docker Testnet
 
-A mainnet-like Ethereum Proof-of-Stake testnet for local development and testing. Designed for cross-chain state proof verification and light client synchronization.
+A production-like Ethereum Proof-of-Stake testnet for local development and testing. Designed for cross-chain state proof verification and light client synchronization.
 
 ## Architecture
 

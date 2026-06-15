@@ -2,7 +2,7 @@
 //! Implements: issue #255 — fork-block manifest validator.
 //!
 //! The fork-block manifest lives at `testing/ethereum-testnet/config/fork-block.json`
-//! and is the single source of truth for the Base mainnet fork point used to
+//! and is the single source of truth for the Base fork point used to
 //! seed the smoke-test devnet's genesis `alloc`. This module deserializes and
 //! validates that manifest.
 //!

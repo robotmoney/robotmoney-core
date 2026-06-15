@@ -50,7 +50,7 @@ Tests gracefully skip if the env var is unset.
 | `BASE_TESTNET_USDC_ADDR` | Override for Base Sepolia USDC (defaults to Circle's `0x036C…cF7e`). | `0x036C…cF7e` |
 | `RM_TESTNET_VAULT_ADDR` | Deployed `RobotMoneyVault` on Base Sepolia (deploy is a prerequisite, out of scope for #839). Unset ⇒ the vault-stack adapter leg (Compound/Morpho/Curve) skips. | `0x…` |
 | `RM_TESTNET_<PROTO>_ADAPTER_ADDR` | Deployed strategy-adapter addresses (`AAVE_V3`, `COMPOUND_V3`, `MORPHO`). | `0x…` |
-| `RMPC_FORK_RPC_URL` | Base mainnet archive RPC for local fork — required for the mainnet leg of the parameterized adapter test (fixture-only is skipped). | `https://base.g.alchemy.com/v2/...` |
+| `RMPC_FORK_RPC_URL` | Base archive RPC for local fork — required for the Robot Money Devnet leg of the parameterized adapter test (fixture-only is skipped). | `https://base.g.alchemy.com/v2/...` |
 
 ---
 
@@ -64,10 +64,10 @@ Tests use the `Network` enum to select configuration per-test:
 use rmpc_fork_e2e::Network;
 
 #[test]
-fn deposit_mainnet() {
-    let network = Network::BaseMainnet;
+fn deposit_robotmoney_devnet() {
+    let network = Network::RobotMoneyDevnet;
     let rpc_url = network.rpc_url()?;  // RMPC_FORK_RPC_URL
-    // ...test mainnet scenario
+    // ...test Robot Money Devnet scenario
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn deposit_testnet() {
 **Future (issue #839):** A parameterized macro will avoid duplication:
 
 ```rust
-#[parameterized_e2e(Network::BaseMainnet, Network::BaseTestnet)]
+#[parameterized_e2e(Network::RobotMoneyDevnet, Network::BaseTestnet)]
 fn deposit(network: Network) {
     let rpc_url = network.rpc_url()?;
     // single test runs twice: once per network
@@ -130,13 +130,13 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 
 ---
 
-## Known divergences from mainnet
+## Known divergences from Base
 
-1. **Block timing:** Base Sepolia produces blocks slower than mainnet (~12s vs ~2s). Increase test timeouts if polling for block production.
+1. **Block timing:** Base Sepolia produces blocks slower than Base (~12s vs ~2s). Increase test timeouts if polling for block production.
 
 2. **Faucet availability:** Test account funding depends on external faucet APIs. Tests should skip gracefully if faucet is down (return `HarnessError::SkipNoRpc` or similar).
 
-3. **Gas prices:** Base Sepolia gas prices fluctuate less predictably. Hard-coded gas estimates from mainnet may fail; use dynamic `eth_estimateGas`.
+3. **Gas prices:** Base Sepolia gas prices fluctuate less predictably. Hard-coded gas estimates from Base may fail; use dynamic `eth_estimateGas`.
 
 4. **Service availability:** Live Aave/Curve/Uniswap pools on Sepolia may have low liquidity. Test swap sizes appropriately (smoke amounts, not real deposit sizes).
 

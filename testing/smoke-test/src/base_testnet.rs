@@ -29,7 +29,7 @@
 //! - Parameterized test macro with @network decorator
 //!
 //! See docs/scout/base-testnet-guide.md for the test environment setup,
-//! known mainnet divergences, and the issue #839 integration roadmap.
+//! known Robot Money Devnet divergences, and the issue #839 integration roadmap.
 
 use std::env;
 

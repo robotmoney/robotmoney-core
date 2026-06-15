@@ -973,7 +973,7 @@ impl Fixture {
         // The Arachnid factory is pre-installed in the devnet genesis alloc by
         // `genesis_alloc::ARACHNID_FACTORY_ADDR`. This step makes the
         // landing-page price strip resolve slot0 on the fresh devnet instead of
-        // rendering 'unavailable' (mainnet pool addresses have no bytecode here).
+        // rendering 'unavailable' (Base pool addresses have no bytecode here).
         let stubs_out = tmp.path().join("demo-uniswap-v3-stubs.json");
         run_forge_deploy_demo_uniswap_v3_stubs(&repo_root, &rpc_url, &stubs_out).inspect_err(
             |err| {

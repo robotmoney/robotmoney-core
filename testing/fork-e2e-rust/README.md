@@ -5,7 +5,7 @@
 > Implements: issue #48.
 
 This crate runs the five §8 fork scenarios against a forked Base
-mainnet (`anvil --fork-url`) backend. Each scenario is a plain
+block (`anvil --fork-url`) backend. Each scenario is a plain
 `#[test]` — the harness boots one anvil child per test (per ADR
 §3.5: fork-restart-per-test isolation, no shared backend). The Phase 1 e2e
 `Fixture` lives in `../ethereum-testnet/e2e-rust/` and is **not**
@@ -23,7 +23,7 @@ The harness reads two environment variables:
 
 | Var | Required | Meaning |
 |---|---|---|
-| `RMPC_FORK_RPC_URL` | yes | A Base mainnet archive RPC (Alchemy, Infura, or any archive endpoint). When unset, every scenario prints a skip line and exits 0 — `cargo test` on a contributor laptop without an RPC stays green. |
+| `RMPC_FORK_RPC_URL` | yes | A Base archive RPC (Alchemy, Infura, or any archive endpoint). When unset, every scenario prints a skip line and exits 0 — `cargo test` on a contributor laptop without an RPC stays green. |
 | `RMPC_FORK_BLOCK` | no | Decimal block number to pin. CI sets this in the workflow file so a pin change is visible in PR diff. When unset, the harness uses `eth_blockNumber - 50` against the upstream RPC. |
 
 `anvil` must be on PATH (install via [Foundry](https://getfoundry.sh)).
@@ -58,14 +58,14 @@ in the same PR. Document the swap in the PR description.
 ## Module layout
 
 - `src/lib.rs` — `ForkFixture`, `Account`, JSON-RPC client, EIP-1559 signing.
-- `src/addresses.rs` — Base mainnet contract addresses + the address-set hash.
+- `src/addresses.rs` — Base contract addresses + the address-set hash.
 - `src/scenarios.rs` — small ABI-encode / decode helpers shared across the test files.
 - `tests/<scenario>.rs` — one `#[test]` per §8 scenario.
 
 ## Why no shared `Fixture` trait with Phase 1?
 
 Phase 1 deploys the gateway stack against a Geth+Lighthouse devnet
-and tests `rmpc` end-to-end. Phase 2 forks Base mainnet and tests
+and tests `rmpc` end-to-end. Phase 2 forks a Base block and tests
 the deployed Robot Money contracts. They share no fixture
 parameters — addresses, RPC URL semantics, signing keys, deploy
 step — so an artificial supertype would just push branching into
