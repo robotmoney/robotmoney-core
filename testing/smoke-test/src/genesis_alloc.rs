@@ -1,7 +1,7 @@
 //! Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections).
 //! Implements: issue #255 — genesis alloc builder for the Geth+Lighthouse devnet.
 //!
-//! This module ingests a Base-mainnet state snapshot (an Anvil `--dump-state`
+//! This module ingests a Base state snapshot (an Anvil `--dump-state`
 //! JSON, see `testing/fixtures/fork-state/`) and produces a
 //! geth-genesis-compatible `alloc` map restricted to the address allowlist
 //! declared in `testing/ethereum-testnet/config/fork-block.json`. The output
@@ -42,7 +42,7 @@ use crate::fork_manifest::{ForkManifest, ManifestError};
 
 // -- Canonical addresses ---------------------------------------------------
 
-/// Canonical Base mainnet USDC proxy (Circle FiatTokenV2_1).
+/// Canonical Base USDC proxy (Circle FiatTokenV2_1).
 pub const BASE_USDC_ADDR: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 /// Arachnid deterministic-deployment-proxy (CREATE2 factory).
@@ -58,7 +58,7 @@ pub const ARACHNID_FACTORY_ADDR: &str = "0x4e59b44847b379578588920cA78FbF26c0B49
 
 /// Deployed bytecode of the Arachnid deterministic-deployment-proxy.
 /// This is the runtime bytecode (not creation bytecode); injected verbatim
-/// into the genesis alloc.  Verified against Base mainnet:
+/// into the genesis alloc.  Verified against Base:
 ///   cast code 0x4e59b44847b379578588920cA78FbF26c0B4956C --rpc-url https://mainnet.base.org
 /// The 69-byte runtime is identical for every EVM chain that has the factory.
 pub const ARACHNID_FACTORY_BYTECODE: &str = "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3";
@@ -66,7 +66,7 @@ pub const ARACHNID_FACTORY_BYTECODE: &str = "0x7ffffffffffffffffffffffffffffffff
 /// FiatTokenV2_1 storage slot index for the `balances` mapping. The slot
 /// holding `balances[holder]` is `keccak256(abi.encode(holder, 9))`.
 ///
-/// Verified empirically against Base mainnet at block 45743443 with
+/// Verified empirically against Base at block 45743443 with
 /// `cast storage 0x8335… $(cast index address <holder> 9)` matching
 /// `balanceOf(<holder>)`.
 pub const FIAT_TOKEN_BALANCES_SLOT: u64 = 9;
@@ -79,7 +79,7 @@ pub const FIAT_TOKEN_BALANCES_SLOT: u64 = 9;
 /// blacklister, slot 4: blacklisted mapping). Then FiatTokenV1 adds
 /// `name` (slot 5? — actually slot 4 is the name string), `symbol`,
 /// `decimals`, `currency`, `masterMinter`+`initialized` packed, then
-/// `balances`, `allowed`, `totalSupply_`. Verified against Base mainnet:
+/// `balances`, `allowed`, `totalSupply_`. Verified against Base:
 /// `cast call totalSupply()` == `cast storage USDC 11`.
 pub const FIAT_TOKEN_TOTAL_SUPPLY_SLOT: u64 = 11;
 
@@ -138,7 +138,7 @@ struct AnvilState {
 /// One account entry in Anvil's dump. Anvil emits `balance` as `0x…` hex,
 /// `nonce` as either a decimal integer or a `0x…` hex string (both forms are
 /// observed across different Anvil versions and fork snapshots — e.g. proxied
-/// contracts added at Base-mainnet block 45743443 carry `"nonce":"0x1"`),
+/// contracts added at Base block 45743443 carry `"nonce":"0x1"`),
 /// `code` as `0x…` hex (including `0x` for empty EOAs), and `storage` as a
 /// `{ "0x…32bytes" : "0x…32bytes" }` map.
 #[derive(Debug, Deserialize, Clone)]

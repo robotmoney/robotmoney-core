@@ -12,7 +12,7 @@
 //!
 //! The test uses an EOA as the proposer (rather than a full Safe proxy) because
 //! deploying the Safe proxy factory and singleton on an anvil-fork requires the
-//! factory bytecode to be present — which is present on a live Base mainnet fork
+//! factory bytecode to be present — which is present on a live forked Base block
 //! but not on a bare anvil instance. Deploying the TimelockController itself is
 //! sufficient to prove the `rmpc get-timelock` CLI can read the on-chain data
 //! correctly.
@@ -20,7 +20,7 @@
 //! Skips cleanly when no fork RPC / fixture is available (`skip_if_no_fork!`).
 //!
 //! To run locally:
-//!   RMPC_FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
+//!   RMPC_FORK_RPC_URL=<base-archive-rpc> \
 //!     cargo test --test rmpc_get_timelock_fork -- --nocapture
 
 use std::path::{Path, PathBuf};
