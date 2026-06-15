@@ -406,20 +406,27 @@ subclass must not be added to the Portfolio Router weight vector.
 | Receipt token | rmAGENT |
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
-| Exposure | Admin-curated basket of agent-economy tokens via Uniswap V3 swaps |
-| MVP shortlist | JUNO, Woon, ZYFAI, GIZA (Base-chain only) — see [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md) |
+| Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
+| MVP shortlist | BNKR, JUNO, ROBOTMONEY (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight across shortlisted tokens at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
 | Status | Router-eligible after hardening gates (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with a fixed
-four-token equal-weighted basket: JUNO, Woon, ZYFAI, GIZA (Base-chain
-only; see ADR-0001). Changes flow through the Safe → Timelock →
-`ADMIN_ROLE` path; there is no token-holder vote over shortlist
-membership in the MVP. The production model (bribery-based or RM-token
-inclusion vote) is deferred past MVP. TWAP pricing is shipped via the
-basket-vault base.
+three-token equal-weighted basket: BNKR, JUNO, ROBOTMONEY (Base-chain
+only). Each token routes through the DEX venue holding its deepest
+liquidity — BNKR via Uniswap V3, JUNO via Uniswap V4, and ROBOTMONEY
+via Aerodrome — under the per-asset venue abstraction in
+[ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md); current
+membership, venues, and pool parameters live in
+`config/agent-token-shortlist.json`. Changes flow through the Safe →
+Timelock → `ADMIN_ROLE` path with a mandatory timelock delay and public
+veto window (see
+[ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
+no token-holder vote over shortlist membership in the MVP. The
+production model (bribery-based or RM-token inclusion vote) is deferred
+past MVP. Per-venue TWAP pricing is shipped via the basket-vault base.
 
 This vault has no in-vault agent trading authority or strategy: it is an
 admin-curated, equal-weight custody-and-rebalance basket, not a discretionary
@@ -440,8 +447,9 @@ being satisfied and formally certified for a given deployment:
 3. **Liquidity-proof gate** — same requirement as rmPROTO (§11.2).
 4. **Shortlist-governance gate** — the shortlist governance model (admin
    path for MVP, deferred on-chain vote for production) is specified in
-   a merged ADR; the deployed shortlist consists exclusively of the
-   Base-chain set {JUNO, Woon, ZYFAI, GIZA}.
+   a merged ADR ([ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md));
+   the deployed shortlist consists exclusively of the Base-chain set
+   {BNKR, JUNO, ROBOTMONEY}.
 
 Until all four gates are certified for a given deployment, the vault
 subclass must not be added to the Portfolio Router weight vector.
