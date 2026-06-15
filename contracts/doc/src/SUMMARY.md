@@ -150,6 +150,7 @@
     - [ISafeProxyFactory](contracts/test/SafeIntegration.t.sol/interface.ISafeProxyFactory.md)
     - [SafeIntegrationTest](contracts/test/SafeIntegration.t.sol/contract.SafeIntegrationTest.md)
     - [_ISafeSetup](contracts/test/SafeIntegration.t.sol/interface._ISafeSetup.md)
+    - [VaultCodeSizeGuard](contracts/test/VaultCodeSizeGuard.t.sol/contract.VaultCodeSizeGuard.md)
     - [VaultForkRegressions](contracts/test/VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
     - [MockDefaultWeightsRouter](contracts/test/VaultRegistry.t.sol/contract.MockDefaultWeightsRouter.md)
     - [VaultRegistryTest](contracts/test/VaultRegistry.t.sol/contract.VaultRegistryTest.md)
