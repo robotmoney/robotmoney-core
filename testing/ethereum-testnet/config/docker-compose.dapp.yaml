@@ -60,9 +60,11 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney} -d ${POSTGRES_DB:-explorer}"]
-      interval: 5s
+      # 2s cadence so indexer + explorer-api (depends_on postgres: service_healthy)
+      # start promptly once Postgres accepts connections.
+      interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 15
 
   explorer-indexer:
     build:
@@ -123,9 +125,11 @@ services:
       - "127.0.0.1:${EXPLORER_API_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
-      interval: 5s
+      # 2s cadence so dapp (depends_on explorer-api: service_healthy) starts
+      # promptly once the API answers /health.
+      interval: 2s
       timeout: 5s
-      retries: 20
+      retries: 30
 
   dapp:
     build:
@@ -176,9 +180,9 @@ services:
       - "127.0.0.1:${DAPP_PORT:-5173}:5173"
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"const r = await fetch('http://localhost:5173'); process.exit(r.ok ? 0 : 1)\""]
-      interval: 5s
+      interval: 2s
       timeout: 5s
-      retries: 20
+      retries: 30
 
 # Issue #775: chain-net joins the ethereum-testnet_default Docker network
 # created by docker-compose.yaml (the chain compose stack) so that

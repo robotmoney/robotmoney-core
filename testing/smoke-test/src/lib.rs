@@ -1726,6 +1726,17 @@ fn parse_addr(s: &str) -> Address {
     s.parse::<Address>().unwrap_or(Address::ZERO)
 }
 
+/// Sub-second readiness poll cadence for HTTP/RPC probes: a quickly-booting
+/// service is detected within a quarter second rather than waiting out a
+/// multi-second tick. The per-request timeout (5s) still bounds a hung probe,
+/// so tightening the cadence costs nothing but a few extra cheap calls.
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Block-height poll cadence. Slower than [`READINESS_POLL_INTERVAL`] because a
+/// new block only arrives once per slot, so polling faster cannot surface one
+/// sooner.
+const BLOCK_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
 #[allow(dead_code)]
 fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
     wait_for_rpc_with_probe(url, timeout, None)
@@ -1747,7 +1758,8 @@ fn wait_for_rpc_with_probe(
         "method": "eth_chainId",
         "params": []
     });
-    let deadline = std::time::Instant::now() + timeout;
+    let started = std::time::Instant::now();
+    let deadline = started + timeout;
     #[allow(unused_assignments)]
     let mut last_error: Option<String> = None;
     let mut unreachable_since: Option<std::time::Instant> = None;
@@ -1768,7 +1780,13 @@ fn wait_for_rpc_with_probe(
                                 ),
                             );
                         }
-                        logging::debug("rpc", format!("{url} returned chainId"));
+                        logging::info(
+                            "rpc",
+                            format!(
+                                "{url} ready in {}ms (chainId)",
+                                started.elapsed().as_millis()
+                            ),
+                        );
                         return Ok(());
                     }
                     last_error = Some("missing result field".to_string());
@@ -1815,7 +1833,7 @@ fn wait_for_rpc_with_probe(
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
     }
     Err(HarnessError::RpcTimeout {
         url: url.to_string(),
@@ -1962,7 +1980,7 @@ fn wait_for_block_height_with_probe(
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(1000));
+        std::thread::sleep(BLOCK_POLL_INTERVAL);
     }
     Err(HarnessError::RpcTimeout {
         url: url.to_string(),
@@ -3554,7 +3572,8 @@ fn wait_for_http_ok_with_probe(
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
-    let deadline = std::time::Instant::now() + timeout;
+    let started = std::time::Instant::now();
+    let deadline = started + timeout;
     let mut last = String::new();
     while std::time::Instant::now() < deadline {
         if let Some(probe) = health_probe.as_deref_mut() {
@@ -3562,13 +3581,20 @@ fn wait_for_http_ok_with_probe(
         }
         match client.get(url).send() {
             Ok(resp) if resp.status().is_success() => {
-                logging::debug("http", format!("{url} returned {}", resp.status()));
+                logging::info(
+                    "http",
+                    format!(
+                        "{url} ready in {}ms (HTTP {})",
+                        started.elapsed().as_millis(),
+                        resp.status()
+                    ),
+                );
                 return Ok(());
             }
             Ok(resp) => last = format!("HTTP {}", resp.status()),
             Err(e) => last = format!("{e}"),
         }
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
     }
     Err(HarnessError::other(format!(
         "service at {url} not healthy after {timeout:?}: {last}"

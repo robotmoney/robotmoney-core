@@ -71,9 +71,11 @@ services:
       - "127.0.0.1:${GETH_AUTHRPC_PORT:-8551}:8551"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:8545"]
-      interval: 5s
+      # 2s cadence so beacon (depends_on geth: service_healthy) starts promptly
+      # once Geth answers. 45 retries keeps a ~90s window for a cold `geth init`.
+      interval: 2s
       timeout: 5s
-      retries: 30
+      retries: 45
       start_period: 10s
 
   # 5. Main Beacon Node
