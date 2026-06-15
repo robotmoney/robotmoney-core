@@ -13,18 +13,6 @@ remappings = [
     "erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/",
 ]
 
-# EIP-170 (issue #865): under the default optimizer pipeline RwaVault (24834) and
-# AgentTokenVault (25241) exceed the 24576-byte runtime-code limit and revert on
-# real-chain deploy. The IR pipeline packs them to ~21.6KB. Scope via_ir to ONLY
-# these two contracts so every other contract stays on the default pipeline with
-# byte-identical output — notably the on-Base RobotMoneyVault (separate hierarchy)
-# and the deploy scripts (which hit a Yul "stack too deep" under via_ir).
-additional_compiler_profiles = [{ name = "viair", via_ir = true }]
-compilation_restrictions = [
-    { paths = "contracts/vaults/RwaVault.sol", via_ir = true },
-    { paths = "contracts/vaults/AgentTokenVault.sol", via_ir = true },
-]
-
 # Allow Deploy.s.sol to write the deployment JSON. Scoped read-write so
 # downstream tools (rmpc config loader, e2e harness) can read it back.
 fs_permissions = [
