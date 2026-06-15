@@ -247,14 +247,8 @@ fn stub_pool_addresses_are_non_zero_and_distinct() {
             addr, base_eth_usd,
             "stub pool {name} matches Base eth/usd pool"
         );
-        assert_ne!(
-            addr, base_cbbtc,
-            "stub pool {name} matches Base cbbtc pool"
-        );
-        assert_ne!(
-            addr, base_wsol,
-            "stub pool {name} matches Base wsol pool"
-        );
+        assert_ne!(addr, base_cbbtc, "stub pool {name} matches Base cbbtc pool");
+        assert_ne!(addr, base_wsol, "stub pool {name} matches Base wsol pool");
     }
 }
 

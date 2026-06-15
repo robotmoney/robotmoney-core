@@ -172,7 +172,10 @@ fn run_rmpc(cfg: &Path, args: &[&str], chain_id: u64) -> Value {
 fn rmpc_get_vault_fork_robotmoney_devnet() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[rmpc_get_vault_fork_robotmoney_devnet] {}", fx.summary_line());
+    eprintln!(
+        "[rmpc_get_vault_fork_robotmoney_devnet] {}",
+        fx.summary_line()
+    );
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let cfg = write_config(&tmp, &fx.rpc_url, fx.chain_id);
