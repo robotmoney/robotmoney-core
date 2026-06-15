@@ -75,14 +75,25 @@ following revisions:
   original "dropped" determination.
 - **JUNO — retained, re-venued to Uniswap V4.** Its deepest USDC
   liquidity is on Uniswap V4, not V3; routing follows ADR-0005.
-- **ROBOTMONEY ($RM) — added (Aerodrome).** This reverses the original
-  self-referential conflict-of-interest exclusion. The concern is **not
-  waived**: inclusion is accepted only because the agent-token vault is
-  prototype-labelled and **not Router-eligible** (the same caveat that
-  applies throughout this ADR). The self-referential-inclusion question
-  must be revisited under the shortlist-governance gate before the vault
-  is marked Router-eligible (see `docs/prd.md` §11.3 gate 4 and
-  [ADR-0004](ADR-0004-agent-token-shortlist-governance.md)).
+- **ROBOTMONEY — added (Aerodrome).** This reverses the original
+  self-referential conflict-of-interest exclusion. As deployed, the code
+  applies **no self-referential or conflict-of-interest guard**:
+  `AgentTokenVault` treats ROBOTMONEY identically to any other shortlist
+  entry — equal-weighted, with a token/pool/adapter triple routed through
+  the Aerodrome adapter (`BasketVault.Venue.Aerodrome`, asset index 2 in
+  the demo seed). Router-eligibility is generic vault-level registry
+  state (`VaultRegistry.isRouterEligible`) and is **not** conditioned on,
+  nor blocked by, ROBOTMONEY's presence anywhere in the contract: in the
+  Real four-vault demo the agent-token vault — ROBOTMONEY leg included —
+  is seeded Router-eligible and carries a leg in the router default
+  weight vector (`test_rmAGENT_is_router_eligible`). On mainnet,
+  Router-eligibility still depends on the generic hardening gates
+  (audit / TWAP oracle / liquidity proof), not on a ROBOTMONEY-specific
+  check. The demo seeds ROBOTMONEY as a stand-in `DemoBasketToken`; the
+  live `$RM` / `RmToken` address for a production deploy is an unresolved
+  `TODO` in `config/agent-token-shortlist.json`. The original
+  self-referential concern is therefore a governance/product
+  consideration only — it is **not** enforced or gated in code.
 
 The hand-picked-not-quant-filtered method, the equal-weight allocation,
 and the admin-curation governance path are unchanged by this amendment.
