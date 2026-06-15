@@ -26,7 +26,8 @@ import {PortfolioRouter} from "../PortfolioRouter.sol";
 ///
 ///         Optional env vars:
 ///           VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
-///           EXECUTION_DELAY    — delay from voting end to execution in seconds (default: 0)
+///           EXECUTION_DELAY    — delay from voting end to execution in seconds
+///                                (default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
 ///           QUORUM_THRESHOLD   — minimum FOR voting power for quorum (default: 1)
 ///           DEPLOYMENT_OUT     — path for the output JSON
 ///                                (default: "deployments/governance-<chain_id>.json")
@@ -36,8 +37,10 @@ contract DeployRouterGovernance is Script {
     /// @notice Default voting period: 1 hour in seconds.
     uint64 public constant DEFAULT_VOTING_PERIOD = 3600;
 
-    /// @notice Default execution delay: 0 seconds (immediate after quorum).
-    uint64 public constant DEFAULT_EXECUTION_DELAY = 0;
+    /// @notice Default execution delay: 1 hour in seconds. Must be >=
+    ///         RouterGovernance.MIN_EXECUTION_DELAY (1 hour), or the
+    ///         constructor reverts with ExecutionDelayBelowMinimum().
+    uint64 public constant DEFAULT_EXECUTION_DELAY = 3600;
 
     /// @notice Default quorum threshold: 1 unit of voting power.
     uint256 public constant DEFAULT_QUORUM_THRESHOLD = 1;
