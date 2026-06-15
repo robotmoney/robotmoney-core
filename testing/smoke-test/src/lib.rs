@@ -33,7 +33,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{keccak256, Address};
 use serde::Deserialize;
@@ -598,6 +598,13 @@ impl Fixture {
                 compose_files_owned.join(" "),
             ),
         );
+        // Stamp this boot with a unique run-id (exported for the compose label
+        // interpolation) and reap any containers stranded by a previous run
+        // before asserting the project is idle. Replaces the old "error out and
+        // make the operator clean up by hand" behaviour on a zombie collision.
+        let (run_id, _run_created) = ensure_run_identity();
+        logging::info("smoke-test", format!("boot run-id={run_id}"));
+        reap_stale_testnet_containers(&run_id);
         ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
         let cleanup_compose_files = compose_files_owned.clone();
         let cleanup_compose_dir = compose_dir.clone();
@@ -1963,6 +1970,138 @@ fn wait_for_block_height_with_probe(
     })
 }
 
+/// Environment variables the compose files read to stamp run-identity labels
+/// onto every container (see docker-compose.yaml / docker-compose.dapp.yaml).
+const RUN_ID_ENV: &str = "SMOKE_RUN_ID";
+const RUN_CREATED_ENV: &str = "SMOKE_RUN_CREATED";
+
+/// Docker label key carrying the run-id of the boot that created a container.
+/// A boot reaps containers in our compose projects whose run-id differs from
+/// its own (i.e. stranded by a previous, now-dead run).
+const RUN_ID_LABEL: &str = "com.robotmoney.testnet.run-id";
+
+/// Compose projects whose containers belong to a devnet boot. The reaper scans
+/// only these so it never touches unrelated containers on the host.
+const TESTNET_COMPOSE_PROJECTS: [&str; 2] = ["ethereum-testnet", "robotmoney-dapp"];
+
+/// Mint (once per process) a unique run-id and creation timestamp and export
+/// them so child `docker compose` invocations stamp them as container labels.
+/// Idempotent: a run-id already set earlier in the same process is reused, so
+/// the chain stack and the dapp overlay share one identity and are reaped
+/// together. Mirrors the existing SMOKE_GENESIS_ALLOC_FILE env-passing pattern.
+fn ensure_run_identity() -> (String, String) {
+    if let (Ok(id), Ok(created)) = (std::env::var(RUN_ID_ENV), std::env::var(RUN_CREATED_ENV)) {
+        if !id.is_empty() {
+            return (id, created);
+        }
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let created = now.as_secs().to_string();
+    // Sub-second precision plus the pid keeps two boots from the same process
+    // (or two processes within the same second) distinct.
+    let run_id = format!("{:016x}-{:x}", now.as_nanos() as u64, std::process::id());
+    std::env::set_var(RUN_ID_ENV, &run_id);
+    std::env::set_var(RUN_CREATED_ENV, &created);
+    (run_id, created)
+}
+
+/// Parse `docker ps` label output (lines of `<id>\t<run-id>\t<name>`) and return
+/// the `(id, name)` pairs whose run-id differs from `current_run_id` — i.e. the
+/// containers stranded by a previous run. Pure (no docker), so the
+/// stale-vs-current decision is unit-tested without a live daemon.
+fn stale_containers_from_listing(listing: &str, current_run_id: &str) -> Vec<(String, String)> {
+    let mut stale = Vec::new();
+    for line in listing.lines() {
+        let mut cols = line.split('\t');
+        let id = cols.next().unwrap_or("").trim();
+        let run_id = cols.next().unwrap_or("").trim();
+        let name = cols.next().unwrap_or("").trim();
+        if id.is_empty() || run_id == current_run_id {
+            continue;
+        }
+        stale.push((id.to_string(), name.to_string()));
+    }
+    stale
+}
+
+/// Force-remove devnet containers stranded by a previous run. Scans only our
+/// compose projects (via Docker's built-in `com.docker.compose.project` label)
+/// and removes any container whose run-id label differs from `current_run_id`.
+/// Containers from the current run are protected by the run-id match; legacy
+/// containers booted before run-id labels existed carry an empty run-id and so
+/// are treated as stale and reaped. Best-effort: docker errors are logged, not
+/// propagated, so a transient `docker` hiccup never blocks a boot.
+fn reap_stale_testnet_containers(current_run_id: &str) {
+    let mut stale: Vec<(String, String)> = Vec::new();
+    for project in TESTNET_COMPOSE_PROJECTS {
+        let listing = Command::new("docker")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &format!("label=com.docker.compose.project={project}"),
+                "--format",
+                &format!("{{{{.ID}}}}\t{{{{.Label \"{RUN_ID_LABEL}\"}}}}\t{{{{.Names}}}}"),
+            ])
+            .output();
+        match listing {
+            Ok(out) if out.status.success() => {
+                stale.extend(stale_containers_from_listing(
+                    &String::from_utf8_lossy(&out.stdout),
+                    current_run_id,
+                ));
+            }
+            Ok(out) => logging::warn(
+                "smoke-test",
+                format!(
+                    "reaper: `docker ps` for project {project} failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            ),
+            Err(err) => {
+                logging::warn(
+                    "smoke-test",
+                    format!("reaper: `docker ps` not runnable: {err}"),
+                );
+                return;
+            }
+        }
+    }
+    if stale.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = stale.iter().map(|(_, n)| n.as_str()).collect();
+    logging::info(
+        "smoke-test",
+        format!(
+            "reaper: removing {} container(s) stranded by previous run(s): {}",
+            stale.len(),
+            names.join(", ")
+        ),
+    );
+    let mut rm = Command::new("docker");
+    rm.args(["rm", "-f"]);
+    for (id, _) in &stale {
+        rm.arg(id);
+    }
+    match rm.output() {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => logging::warn(
+            "smoke-test",
+            format!(
+                "reaper: `docker rm -f` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ),
+        Err(err) => logging::warn(
+            "smoke-test",
+            format!("reaper: `docker rm -f` not runnable: {err}"),
+        ),
+    }
+}
+
 fn ensure_compose_project_idle(
     compose_dir: &Path,
     compose_files: &[String],
@@ -2791,6 +2930,11 @@ impl DappStack {
     /// contract addresses as build args. Waits for the dapp and
     /// explorer-api health checks to pass before returning.
     pub fn boot(fixture: &Fixture, opts: DappStackOptions) -> Result<Self, HarnessError> {
+        // Share the chain boot's run-id (already set in this process) so the
+        // dapp containers carry the same run-identity labels and are reaped
+        // together; mint one defensively if a caller boots the dapp stack
+        // without first booting the chain fixture.
+        ensure_run_identity();
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
         let gateway_hex = fixture.gateway_hex();
         let vault_hex = fixture.vault_hex();
@@ -3451,5 +3595,43 @@ mod tests {
     fn parse_compose_ps_stdout_ignores_empty_output() {
         let names = parse_compose_ps_stdout(b"\n\n").expect("parse empty output");
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn reaper_keeps_current_run_and_marks_others_stale() {
+        // `docker ps` label listing: <id>\t<run-id>\t<name>. CURRENT is the
+        // active boot; PREVIOUS is a stranded run; the empty-run-id row is a
+        // legacy container booted before run-id labels existed.
+        let listing = "\
+aaa111\tCURRENT\teth-execution
+bbb222\tPREVIOUS\teth-execution
+ccc333\t\teth-beacon
+";
+        let stale = stale_containers_from_listing(listing, "CURRENT");
+        assert_eq!(
+            stale,
+            vec![
+                ("bbb222".to_string(), "eth-execution".to_string()),
+                ("ccc333".to_string(), "eth-beacon".to_string()),
+            ],
+            "previous-run and legacy (empty run-id) containers are stale; current run is kept"
+        );
+    }
+
+    #[test]
+    fn reaper_listing_tolerates_blank_lines_and_missing_columns() {
+        let listing = "\n\nddd444\tOLD\n";
+        // Missing name column -> name parses as empty string, still flagged stale.
+        let stale = stale_containers_from_listing(listing, "CURRENT");
+        assert_eq!(stale, vec![("ddd444".to_string(), String::new())]);
+    }
+
+    #[test]
+    fn run_identity_is_stable_and_distinct_per_id() {
+        // Two distinct ids never collide on the formatted prefix shape.
+        let a = format!("{:016x}-{:x}", 1u64, 2u32);
+        let b = format!("{:016x}-{:x}", 3u64, 2u32);
+        assert_ne!(a, b);
+        assert!(a.contains('-'));
     }
 }

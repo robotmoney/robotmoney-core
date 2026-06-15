@@ -37,10 +37,20 @@
 
 name: robotmoney-dapp
 
+# Run-identity labels (testnet boot hardening) — see docker-compose.yaml for the
+# rationale. The harness injects SMOKE_RUN_ID / SMOKE_RUN_CREATED so a later boot
+# can reap dapp containers stranded by a previous run instead of colliding on the
+# fixed container names. Defaults keep standalone `docker compose` usage working.
+x-testnet-labels: &testnet-labels
+  com.robotmoney.testnet: "1"
+  com.robotmoney.testnet.run-id: "${SMOKE_RUN_ID:-standalone}"
+  com.robotmoney.testnet.created: "${SMOKE_RUN_CREATED:-0}"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: dapp-postgres
+    labels: *testnet-labels
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
@@ -59,6 +69,7 @@ services:
       context: ../../..
       dockerfile: services/explorer-indexer/Dockerfile
     container_name: dapp-explorer-indexer
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       postgres:
@@ -98,6 +109,7 @@ services:
       context: ../../..
       dockerfile: clients/explorer-api/Dockerfile
     container_name: dapp-explorer-api
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       postgres:
@@ -155,6 +167,7 @@ services:
         # integrity check stay consistent.
         VITE_FAUCET_DRIP_ETH_WEI: ${VITE_FAUCET_DRIP_ETH_WEI:-10000000000000000}
     container_name: dapp-frontend
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       explorer-api:
