@@ -7,9 +7,9 @@
 > scout.
 >
 > Cross-linked from:
-> [`docs/development/headless-opencode-tests.md`](../testing/headless-opencode-tests.md) §G7.
+> [`docs/development/headless-opencode-tests.md`](../development/headless-opencode-tests.md) §G7.
 > Related walkthrough:
-> [`docs/development/opencode-readonly-fork.md`](../walkthroughs/opencode-readonly-fork.md).
+> [`docs/development/opencode-readonly-fork.md`](../development/opencode-readonly-fork.md).
 
 ---
 
