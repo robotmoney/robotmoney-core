@@ -235,7 +235,7 @@ jobs:
         # getPastVotes returns the latest value instead of the historical one and
         # the assertion fails (1e18 != ALICE_POWER). It passes in the forge test
         # (unit) job; only the coverage pass is affected.
-        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_returnsHistoricalPower$" --no-match-contract "VaultCodeSizeGuard"
+        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_returnsHistoricalPower" --no-match-contract "VaultCodeSizeGuard"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info
