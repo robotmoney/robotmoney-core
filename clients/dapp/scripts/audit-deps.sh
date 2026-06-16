@@ -56,6 +56,11 @@ ACCEPTED_ADVISORIES=(
   # attacker-controlled field/file names; the dApp never constructs multipart
   # requests itself — form-data is only reachable through the pinned wallet SDK.
   "GHSA-hmw2-7cc7-3qxx" # form-data: CRLF injection via unescaped multipart field names. expires: 2026-12-01
+  # hono (transitive via wagmi > @wagmi/connectors > porto). The CORS-middleware
+  # advisory only triggers when an app mounts hono's CORS middleware with the
+  # origin left at its wildcard default while sending credentials; the dApp never
+  # runs hono itself — hono is only reachable through the pinned porto wallet SDK.
+  "GHSA-88fw-hqm2-52qc" # hono: CORS middleware reflects any Origin with credentials on wildcard default. expires: 2026-12-01
 )
 
 ignore_args=()
