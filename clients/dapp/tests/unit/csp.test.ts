@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CSP_POLICY, cspPlugin } from "../../src/lib/csp";
+import { CSP_POLICY, CSP_META_POLICY, cspPlugin } from "../../src/lib/csp";
 
 describe("CSP policy", () => {
   it("defines script-src 'self' without unsafe-inline or unsafe-eval", () => {
@@ -45,7 +45,17 @@ describe("CSP policy", () => {
       (t) => t.tag === "meta" && t.attrs?.["http-equiv"] === "Content-Security-Policy",
     );
     expect(meta).toBeDefined();
-    expect(meta?.attrs?.content).toBe(CSP_POLICY);
+    // The meta tag carries the meta-safe policy: browsers ignore (and log a
+    // console error for) frame-ancestors in a <meta> element, so it is excluded
+    // here and enforced via the HTTP header instead (issue #665 / dapp-e2e).
+    expect(meta?.attrs?.content).toBe(CSP_META_POLICY);
+    expect(meta?.attrs?.content).not.toContain("frame-ancestors");
+    expect(meta?.attrs?.content).toContain("script-src 'self'");
+  });
+
+  it("keeps frame-ancestors in the header policy but not the meta policy", () => {
+    expect(CSP_POLICY).toContain("frame-ancestors 'none'");
+    expect(CSP_META_POLICY).not.toContain("frame-ancestors");
   });
 
   it("emits the CSP meta tag into the production build output when present", () => {
