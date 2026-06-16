@@ -1471,9 +1471,13 @@ impl Fixture {
         count: u32,
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
-        // Each depositor runs two deposit paths (router split + direct RWA),
-        // each consuming `per_user_usdc`, so fund twice the per-path amount.
-        let total_usdc = per_user_usdc.saturating_mul(2);
+        // Each depositor runs the router split plus a direct belt-and-suspenders
+        // deposit into each basket/RWA vault (Protocol §11.2, Agent §11.3, RWA
+        // §11.4). The router's weighted split can under-fund a basket leg on a
+        // busy chain — leaving that vault at zero TVL (issue #882) — so the
+        // direct deposits guarantee every vault ends boot with non-zero TVL.
+        // Fund four per-path budgets (router + three direct deposits).
+        let total_usdc = per_user_usdc.saturating_mul(4);
         let keys: Vec<(String, Address)> = (0..count).map(demo_depositor_key).collect();
 
         // ── Funding phase ────────────────────────────────────────────────
@@ -1510,12 +1514,16 @@ impl Fixture {
         // nor depend on one another; the chain mines them in parallel.
         let router_hex = format!("{:#x}", self.router());
         let rwa_hex = format!("{:#x}", self.rwa_vault());
+        let protocol_hex = format!("{:#x}", self.demo_protocol_vault());
+        let agent_hex = format!("{:#x}", self.demo_agent_vault());
         let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
             let handles: Vec<_> = keys
                 .iter()
                 .map(|(pk_hex, depositor)| {
                     let router_hex = &router_hex;
                     let rwa_hex = &rwa_hex;
+                    let protocol_hex = &protocol_hex;
+                    let agent_hex = &agent_hex;
                     s.spawn(move || -> Result<(Address, String), HarnessError> {
                         let depositor_hex = format!("{depositor:#x}");
 
@@ -1549,6 +1557,36 @@ impl Fixture {
                         self.cast_send(
                             pk_hex,
                             self.rwa_vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
+
+                        // Direct belt-and-suspenders deposits into the two basket
+                        // vaults (Protocol §11.2, Agent §11.3). The router's
+                        // weighted split can under-fund a basket leg on a busy
+                        // chain (issue #882); a direct deposit guarantees non-zero
+                        // TVL. Each swaps USDC -> basket via the demo stub routers.
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[protocol_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.demo_protocol_vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[agent_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.demo_agent_vault(),
                             "deposit(uint256,address)",
                             &[&per_user_usdc.to_string(), &depositor_hex],
                         )?;
