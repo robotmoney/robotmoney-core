@@ -15,7 +15,7 @@
  * with the supplied private key.
  */
 import type { Page } from "@playwright/test";
-import { createWalletClient, http, type Hex, type Address } from "viem";
+import { createPublicClient, createWalletClient, http, type Hex, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { DevnetEndpoints } from "./devnet";
 
@@ -53,6 +53,9 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
     account,
     transport: http(opts.rpcUrl),
   });
+  const publicClient = createPublicClient({
+    transport: http(opts.rpcUrl),
+  });
 
   await page.exposeBinding("__rmpcRpc", async (_source, body: unknown) => {
     const res = await fetch(opts.rpcUrl, {
@@ -72,12 +75,34 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
           value?: Hex;
           gas?: Hex;
         }>;
+        // Gas handling mirrors a real injected wallet (e.g. MetaMask).
+        //
+        // The dapp's `writeContract(simulateResult.request)` does NOT set a
+        // `gas` field (viem's `simulateContract` returns only abi/address/
+        // args/account — see the upstream action), so an injected wallet is
+        // responsible for filling gas. A bare `eth_estimateGas` is not safe
+        // to use verbatim: Geth under-estimates transactions that trigger
+        // gas refunds (e.g. an ERC-4626 `redeem` that burns shares and
+        // clears storage slots), so a tx sent with exactly the estimate
+        // mines but reverts out-of-gas — the balance never changes and the
+        // failure is silent. Real wallets pad the estimate; we do the same
+        // with a 1.5x buffer so the harness behaves like production.
+        let gas: bigint | undefined = tx.gas ? BigInt(tx.gas) : undefined;
+        if (gas === undefined) {
+          const estimated = await publicClient.estimateGas({
+            account: account.address,
+            to: tx.to,
+            data: tx.data,
+            value: tx.value ? BigInt(tx.value) : undefined,
+          });
+          gas = (estimated * 3n) / 2n;
+        }
         return walletClient.sendTransaction({
           chain: null,
           to: tx.to,
           data: tx.data,
           value: tx.value ? BigInt(tx.value) : undefined,
-          gas: tx.gas ? BigInt(tx.gas) : undefined,
+          gas,
         });
       }
       case "personal_sign":
