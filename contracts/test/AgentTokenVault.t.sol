@@ -89,7 +89,7 @@ contract AgentTokenVaultTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant N = 6;
 
-    string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    string[6] internal SYMBOLS = ["JUNO", "RM", "BANKR", "ZYFAI", "GIZA", "DEUS"];
 
     TestERC20 internal usdc;
     RecordingSwapRouter internal router;
@@ -138,7 +138,7 @@ contract AgentTokenVaultTest is Test {
 
     function test_shortlist_ordering_matches_config() public view {
         // Ordering is load-bearing: the dapp renders shortlist() in array order,
-        // which must equal the ADR-0001 / config order (JUNO, ROBOTMONEY, ...).
+        // which must equal the ADR-0001 / config order (JUNO, RM, ...).
         (address[] memory t,,,,) = vault.shortlist();
         for (uint256 i = 0; i < N; i++) {
             assertEq(t[i], address(tokens[i]), "shortlist ordering matches seed/config order");
@@ -220,7 +220,7 @@ contract AgentTokenVaultTest is Test {
 
     /// @notice Exercises the real demo seed chain: DeployDemoExtraVaults.run()
     ///         deploys + seeds AgentTokenVault with the three real-asset demo
-    ///         tokens (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome), registers it in
+    ///         tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
     ///         VaultRegistry, and makes it router-eligible (issue #560).
     ///         The vault is reachable via the same registry path the dapp uses.
     function test_demo_seed_registers_agent_token_vault_with_shortlist() public {
@@ -277,7 +277,7 @@ contract AgentTokenVaultTest is Test {
         );
 
         // 1. AgentTokenVault deployed and seeded with three real-asset demo tokens
-        //    (BNKR, JUNO, ROBOTMONEY — issue #560 three-token basket).
+        //    (BNKR, JUNO, RM — issue #560 three-token basket).
         assertTrue(d.agentTokenVault != address(0), "agent token vault deployed");
         assertEq(d.agentTokens.length, 3, "three real-asset demo tokens seeded");
 

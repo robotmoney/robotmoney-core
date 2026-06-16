@@ -23,7 +23,7 @@ and `docs/prd.md` §"Allocation Governance"; `docs/development/open-questions.md
 
 ## 2. Context
 
-`docs/architecture.md` §2.3 fixes the governance boundary: `$ROBOTMONEY`
+`docs/architecture.md` §2.3 fixes the governance boundary: `$RM`
 governance controls Portfolio Router target weights across active vaults and
 nothing else. It cannot govern vault onboarding, vault retirement, per-vault
 asset selection, per-vault strategy internals, adapter selection, adapter caps,

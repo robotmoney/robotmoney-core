@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Real four-vault demo AgentTokenVault basket (issue #560). Three Base-only agent-economy tokens curated by ADMIN_ROLE: BNKR (V3), JUNO (V4), ROBOTMONEY (V4/Aerodrome). Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployDemoExtraVaults.s.sol) seeds devnet stand-in ERC20s + stub pools at deploy time. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
+  "description": "Real four-vault demo AgentTokenVault basket (issue #560). Three Base-only agent-economy tokens curated by ADMIN_ROLE: BNKR (V3), JUNO (V4), RM (V4/Aerodrome). Token addresses live here, never in Solidity source (contracts/vaults/AgentTokenVault.sol). The deploy script (contracts/script/DeployDemoExtraVaults.s.sol) seeds devnet stand-in ERC20s + stub pools at deploy time. Ordering is load-bearing: AgentTokenVault.shortlist() returns tokens in this order.",
   "tokens": [
     "BNKR",
     "JUNO",
-    "ROBOTMONEY"
+    "RM"
   ],
   "mainnet": {
     "chain_id": 8453,
@@ -29,18 +29,18 @@
         "note": "TODO: confirm Base mainnet JUNO/USDC V4 pool address and deploy UniswapV4SwapAdapter before mainnet deploy"
       },
       {
-        "symbol": "ROBOTMONEY",
+        "symbol": "RM",
         "token": "0x0000000000000000000000000000000000000000",
         "pool": "0x0000000000000000000000000000000000000000",
         "swapFee": 10000,
         "venue": "Aerodrome",
         "adapter": "0x0000000000000000000000000000000000000000",
-        "note": "TODO: confirm ROBOTMONEY token address, Aerodrome CL pool, and deploy AerodromeSwapAdapter before mainnet deploy"
+        "note": "TODO: confirm RM token address, Aerodrome CL pool, and deploy AerodromeSwapAdapter before mainnet deploy"
       }
     ]
   },
   "devnet": {
-    "description": "Stand-in ERC20 + pool addresses for devnet/test deploys. The demo deploy script (DeployDemoExtraVaults.s.sol) creates DemoBasketToken + DemoUsdcPool stubs at run-time and wires them with per-asset venue adapters (DemoV3SwapRouter for BNKR, DemoV4SwapRouter for JUNO, DemoAerodromeRouter for ROBOTMONEY). Token/pool/adapter addresses are dynamically assigned per run; this config documents the expected structure and venue assignment only.",
+    "description": "Stand-in ERC20 + pool addresses for devnet/test deploys. The demo deploy script (DeployDemoExtraVaults.s.sol) creates DemoBasketToken + DemoUsdcPool stubs at run-time and wires them with per-asset venue adapters (DemoV3SwapRouter for BNKR, DemoV4SwapRouter for JUNO, DemoAerodromeRouter for RM). Token/pool/adapter addresses are dynamically assigned per run; this config documents the expected structure and venue assignment only.",
     "shortlist": [
       {
         "symbol": "BNKR",
@@ -57,7 +57,7 @@
         "note": "Uses UniswapV4SwapAdapter wrapping DemoV4SwapRouter on devnet."
       },
       {
-        "symbol": "ROBOTMONEY",
+        "symbol": "RM",
         "venue": "Aerodrome",
         "swapFee": 10000,
         "adapter_type": "AerodromeSwapAdapter",

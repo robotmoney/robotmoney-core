@@ -407,16 +407,16 @@ subclass must not be added to the Portfolio Router weight vector.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | SPECULATIVE |
 | Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
-| MVP shortlist | BNKR, JUNO, ROBOTMONEY (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
+| MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
 | Allocation model | Equal-weight across shortlisted tokens at deposit time |
 | Exit fee | Configurable 0–1% |
 | Withdrawal | Synchronous; depends on swap liquidity |
 | Status | Router-eligible after hardening gates (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with a fixed
-three-token equal-weighted basket: BNKR, JUNO, ROBOTMONEY (Base-chain
+three-token equal-weighted basket: BNKR, JUNO, RM (Base-chain
 only). Each token routes through the DEX venue holding its deepest
-liquidity — BNKR via Uniswap V3, JUNO via Uniswap V4, and ROBOTMONEY
+liquidity — BNKR via Uniswap V3, JUNO via Uniswap V4, and RM
 via Aerodrome — under the per-asset venue abstraction in
 [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md); current
 membership, venues, and pool parameters live in
@@ -449,7 +449,7 @@ being satisfied and formally certified for a given deployment:
    path for MVP, deferred on-chain vote for production) is specified in
    a merged ADR ([ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md));
    the deployed shortlist consists exclusively of the Base-chain set
-   {BNKR, JUNO, ROBOTMONEY}.
+   {BNKR, JUNO, RM}.
 
 Until all four gates are certified for a given deployment, the vault
 subclass must not be added to the Portfolio Router weight vector.

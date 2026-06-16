@@ -172,7 +172,7 @@ contract DeployDemoExtraVaultsTest is Test {
         );
     }
 
-    /// @notice rmAGENT holds exactly BNKR/JUNO/ROBOTMONEY — the three-token
+    /// @notice rmAGENT holds exactly BNKR/JUNO/RM — the three-token
     ///         real-asset basket (issue #560 AC1).
     function test_rmAGENT_holds_three_token_basket() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
@@ -200,7 +200,7 @@ contract DeployDemoExtraVaultsTest is Test {
     }
 
     /// @notice The three basket tokens use the correct per-asset venues:
-    ///         BNKR → V3, JUNO → V4, ROBOTMONEY → Aerodrome (issue #560 AC1).
+    ///         BNKR → V3, JUNO → V4, RM → Aerodrome (issue #560 AC1).
     function test_rmAGENT_basket_tokens_have_correct_venues() public {
         DeployDemoExtraVaults.Deployed memory d = _runScript();
         AgentTokenVault agentVault = AgentTokenVault(d.agentTokenVault);
@@ -208,7 +208,7 @@ contract DeployDemoExtraVaultsTest is Test {
         // Read and assert per-asset (stack-split to avoid stack-too-deep).
         _assertBnkrAsset(agentVault, d);
         _assertJunoAsset(agentVault, d);
-        _assertRobotmoneyAsset(agentVault, d);
+        _assertRmAsset(agentVault, d);
     }
 
     /// @notice A direct deposit to rmAGENT after the demo seed increases
@@ -231,7 +231,7 @@ contract DeployDemoExtraVaultsTest is Test {
 
         uint256 totalAssetsBefore = agentVault.totalAssets();
 
-        // deposit() routes USDC into BNKR (V3), JUNO (V4), ROBOTMONEY (Aerodrome).
+        // deposit() routes USDC into BNKR (V3), JUNO (V4), RM (Aerodrome).
         // Each demo stub router performs a 1:1 swap, so each token balance
         // increases by depositAmount/3 = 100 USDC.
         agentVault.deposit(depositAmount, address(this));
@@ -272,20 +272,18 @@ contract DeployDemoExtraVaultsTest is Test {
         assertEq(adapter, d.v4Adapter, "JUNO adapter = deployed v4Adapter");
     }
 
-    function _assertRobotmoneyAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed memory d)
+    function _assertRmAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed memory d)
         internal
         view
     {
         (address token, address pool,, bool active, address adapter, BasketVault.Venue venue) =
             vault.assets(2);
-        assertEq(token, d.agentTokens[2], "ROBOTMONEY token address");
-        assertTrue(active, "ROBOTMONEY active");
-        assertTrue(pool != address(0), "ROBOTMONEY pool set");
-        assertEq(
-            uint256(venue), uint256(BasketVault.Venue.Aerodrome), "ROBOTMONEY venue = Aerodrome"
-        );
-        assertNotEq(adapter, address(0), "ROBOTMONEY uses Aerodrome adapter");
-        assertEq(adapter, d.aeroAdapter, "ROBOTMONEY adapter = deployed aeroAdapter");
+        assertEq(token, d.agentTokens[2], "RM token address");
+        assertTrue(active, "RM active");
+        assertTrue(pool != address(0), "RM pool set");
+        assertEq(uint256(venue), uint256(BasketVault.Venue.Aerodrome), "RM venue = Aerodrome");
+        assertNotEq(adapter, address(0), "RM uses Aerodrome adapter");
+        assertEq(adapter, d.aeroAdapter, "RM adapter = deployed aeroAdapter");
     }
 
     // ─── rmPROTO router-eligibility (issue #559) ─────────────────────────────

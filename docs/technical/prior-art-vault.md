@@ -239,7 +239,7 @@ path.
 **Robot Money** governance controls Portfolio Router target weights across active
 vaults. The current deployed `RouterGovernance.sol` is an admin-weighted MVP
 mock: voting power is assigned by `ADMIN_ROLE`; proposal creation is
-`ADMIN_ROLE`-only. Token-holder voting against `$ROBOTMONEY` balances is
+`ADMIN_ROLE`-only. Token-holder voting against `$RM` balances is
 explicitly a future goal. The governance surface is intentionally narrow — it
 covers only router weight updates and does not control vault internals,
 per-vault asset selection, fees, or individual agent policies.

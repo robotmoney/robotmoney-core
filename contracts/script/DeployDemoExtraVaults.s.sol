@@ -137,7 +137,7 @@ contract DemoV4SwapRouter {
 
 /// @notice Minimal Aerodrome router stub for demo purposes. Records swaps at
 ///         a 1:1 rate, minting output token to the recipient. Demo-only.
-///         Used by AgentTokenVault for its ROBOTMONEY leg, where the pool TWAP
+///         Used by AgentTokenVault for its RM leg, where the pool TWAP
 ///         also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
 ///         totalAssets ≈ totalDeposits and no share inflation occurs.
 contract DemoAerodromeRouter {
@@ -291,16 +291,16 @@ contract DemoRwaStubDeployer {
 }
 
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket
-///         stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+///         stand-ins (PRD §11.3 — BNKR/JUNO/RM, three real-asset demo tokens)
 ///         AND the per-asset swap router stubs + adapters. Its constructor performs
 ///         all 11 sub-CREATEs in a single broadcaster transaction:
-///           - 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+///           - 3 × DemoBasketToken (BNKR, JUNO, RM)
 ///           - 3 × DemoUsdcPool
 ///           - DemoV3SwapRouter (BNKR built-in path)
 ///           - DemoV4SwapRouter (JUNO V4 path)
-///           - DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+///           - DemoAerodromeRouter (RM Aerodrome path)
 ///           - UniswapV4SwapAdapter (JUNO)
-///           - AerodromeSwapAdapter (ROBOTMONEY)
+///           - AerodromeSwapAdapter (RM)
 ///         Collapsed into one broadcaster CREATE to minimize on-chain tx count
 ///         and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 contract AgentBasketStubDeployer {
@@ -310,7 +310,7 @@ contract AgentBasketStubDeployer {
     address public v4Adapter;
     address public aeroAdapter;
 
-    string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"];
+    string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "RM"];
 
     constructor(address usdc) {
         // Deploy router stubs first so adapters can reference them.
@@ -500,10 +500,10 @@ contract DeployDemoExtraVaults is Script {
         /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
         address[] protocolTokens;
         /// @dev `AgentTokenVault` (PRD §11.3). Registered Active AND router-eligible
-        ///      (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome). Included in defaultWeights.
+        ///      (BNKR/V3, JUNO/V4, RM/Aerodrome). Included in defaultWeights.
         address agentTokenVault;
         /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
-        ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
+        ///      (three real-asset demo stubs: BNKR, JUNO, RM).
         address[] agentTokens;
         /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
         ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
@@ -511,20 +511,20 @@ contract DeployDemoExtraVaults is Script {
         address rwaVault;
         /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
         address v4Adapter;
-        /// @dev AerodromeSwapAdapter deployed for ROBOTMONEY (Venue.Aerodrome).
+        /// @dev AerodromeSwapAdapter deployed for RM (Venue.Aerodrome).
         address aeroAdapter;
     }
 
     /// @notice Real four-vault demo agent-token symbols: BNKR (V3), JUNO (V4),
-    ///         ROBOTMONEY (V4/Aerodrome). Three-token basket per issue #560.
-    string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
+    ///         RM (V4/Aerodrome). Three-token basket per issue #560.
+    string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "RM"];
     /// @notice Swap fee tier for BNKR (Uniswap V3, 1% pool tier — illiquid agent token).
     uint24 internal constant DEMO_AGENT_BNKR_FEE = 10_000;
     /// @notice Swap fee tier for JUNO (Uniswap V4, 1% pool tier).
     uint24 internal constant DEMO_AGENT_JUNO_FEE = 10_000;
-    /// @notice Swap fee tier for ROBOTMONEY (Aerodrome — fee param unused by adapter
+    /// @notice Swap fee tier for RM (Aerodrome — fee param unused by adapter
     ///         but kept for interface uniformity; 1% matches the illiquid stance).
-    uint24 internal constant DEMO_AGENT_ROBOTMONEY_FEE = 10_000;
+    uint24 internal constant DEMO_AGENT_RM_FEE = 10_000;
 
     /// @notice ProtocolAssetVault basket symbols (PRD §11.2 — wETH, cbBTC, wSOL).
     string[3] internal PROTOCOL_SYMBOLS = ["wETH", "cbBTC", "wSOL"];
@@ -719,7 +719,7 @@ contract DeployDemoExtraVaults is Script {
 
         // 2. Seed AgentTokenVault (PRD §11.3) with the real four-vault demo
         //    three-token basket: BNKR (Venue.V3), JUNO (Venue.V4 via v4Adapter),
-        //    ROBOTMONEY (Venue.Aerodrome via aeroAdapter). Register it Active
+        //    RM (Venue.Aerodrome via aeroAdapter). Register it Active
         //    and make it router-eligible — the demo deploy wires working multi-DEX
         //    swap adapters so a routed deposit succeeds end-to-end on devnet.
         d.agentTokens = _seedAgentTokenVault(
@@ -783,7 +783,7 @@ contract DeployDemoExtraVaults is Script {
     ///      `AgentTokenVault` via `addAsset` with per-asset venue selection:
     ///        index 0: BNKR  — Venue.V3  (built-in SWAP_ROUTER, adapter = address(0))
     ///        index 1: JUNO  — Venue.V4  (UniswapV4SwapAdapter)
-    ///        index 2: ROBOTMONEY — Venue.Aerodrome (AerodromeSwapAdapter)
+    ///        index 2: RM — Venue.Aerodrome (AerodromeSwapAdapter)
     ///
     ///      Tokens + USDC pool stubs were already created inside
     ///      `AgentBasketStubDeployer`. Demo pools satisfy the cardinality and
@@ -816,12 +816,12 @@ contract DeployDemoExtraVaults is Script {
             BasketVault.Venue.V4
         );
 
-        // ROBOTMONEY — Venue.Aerodrome via AerodromeSwapAdapter.
+        // RM — Venue.Aerodrome via AerodromeSwapAdapter.
         tokens[2] = address(seeder.tokens(2));
         vault.addAsset(
             tokens[2],
             address(seeder.pools(2)),
-            DEMO_AGENT_ROBOTMONEY_FEE,
+            DEMO_AGENT_RM_FEE,
             aeroAdapterAddr,
             BasketVault.Venue.Aerodrome
         );
@@ -924,9 +924,7 @@ contract DeployDemoExtraVaults is Script {
         console2.log("DeployDemoExtraVaults complete");
         console2.log("  protocolVault :", d.protocolVault, "(router-eligible, wETH/cbBTC/wSOL)");
         console2.log("  protocolTokens:", d.protocolTokens.length);
-        console2.log(
-            "  agentVault    :", d.agentTokenVault, "(router-eligible, BNKR/JUNO/ROBOTMONEY)"
-        );
+        console2.log("  agentVault    :", d.agentTokenVault, "(router-eligible, BNKR/JUNO/RM)");
         console2.log("  agentTokens   :", d.agentTokens.length, "(V3/V4/Aerodrome)");
         console2.log("  v4Adapter     :", d.v4Adapter);
         console2.log("  aeroAdapter   :", d.aeroAdapter);

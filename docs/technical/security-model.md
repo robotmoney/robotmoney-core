@@ -175,7 +175,7 @@ source. The manipulation-resistance posture is:
 
 | Attack | Required control |
 |---|---|
-| Flash-loan voting takeover (Beanstalk-class) | When `$ROBOTMONEY` / `veRM` governance ships, vote weight must be determined by a snapshotted or vote-escrowed balance, not a spot balance. Flash-loan acquisition of voting power must be provably ineffective. |
+| Flash-loan voting takeover (Beanstalk-class) | When `$RM` / `veRM` governance ships, vote weight must be determined by a snapshotted or vote-escrowed balance, not a spot balance. Flash-loan acquisition of voting power must be provably ineffective. |
 | Same-block propose-and-execute | All governance execution must include a mandatory delay between proposal and execution. This applies to both the `TimelockController` and any future token-governance module. |
 | Bribery / vote-buying markets | Acknowledged risk class. The governance design must document its stance on vote markets before the governance token ships. |
 | Treasury drain via malicious proposal | Treasury operations must be gated by the multisig-backed timelock. A treasury-drain proposal must be detectable and cancellable within the timelock delay window. |
