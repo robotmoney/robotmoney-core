@@ -834,6 +834,21 @@ impl Fixture {
 
         let registry_deployment = read_registry_deployment(&reg_out)?;
 
+        // Confirm the registry actually reports the vault as registered before
+        // pinning the router simulation's fork block. `--slow` waits for the
+        // registerVault receipt, but Geth's "latest" can still briefly lag the
+        // mined block on a loaded runner, so fetching the head immediately can
+        // pin a fork block that predates the registration — intermittently
+        // failing the router deploy with NotRegistered() (issue #880).
+        wait_for_vault_registered(&rpc_url, &registry_deployment.registry, &deployment.vault)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("vault registration wait failed: {err}"),
+                );
+                cleanup();
+            })?;
+
         // Pin the fork block for the router simulation to the current chain
         // head — guarantees the simulation sees the registerVault tx that
         // run_forge_deploy_registry just mined (avoids a race where Geth
@@ -2423,6 +2438,46 @@ fn fetch_current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
     s.parse::<u64>().map_err(|e| {
         HarnessError::Other(format!("cast block-number returned non-integer {s:?}: {e}"))
     })
+}
+
+/// Poll the VaultRegistry until `vault` appears in `listVaults()`, so the
+/// PortfolioRouter deploy — whose simulation is pinned to the chain head right
+/// after — forks a block that already includes the `registerVault` tx. Avoids
+/// the intermittent `setRouterEligible -> NotRegistered()` race where Geth's
+/// "latest" lags the just-mined registration on a loaded CI runner (issue #880).
+fn wait_for_vault_registered(
+    rpc_url: &str,
+    registry: &str,
+    vault: &str,
+) -> Result<(), HarnessError> {
+    let needle = vault.to_lowercase();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        match Command::new("cast")
+            .args([
+                "call",
+                registry,
+                "listVaults()(address[])",
+                "--rpc-url",
+                rpc_url,
+            ])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                last = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                if last.contains(&needle) {
+                    return Ok(());
+                }
+            }
+            Ok(out) => last = String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(HarnessError::Other(format!(
+        "vault {vault} not visible in registry {registry} listVaults() after 30s; last: {last}"
+    )))
 }
 
 fn read_router_deployment(path: &Path) -> Result<RouterDeploymentJson, HarnessError> {
