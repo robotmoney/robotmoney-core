@@ -1,9 +1,9 @@
 # DemoAerodromeRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c96aeddaee03b01c692b1a7bc0798e010e7d1381/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Aerodrome router stub for demo purposes. Records swaps at
 a 1:1 rate, minting output token to the recipient. Demo-only.
-Used by AgentTokenVault for its ROBOTMONEY leg, where the pool TWAP
+Used by AgentTokenVault for its RM leg, where the pool TWAP
 also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
 totalAssets ≈ totalDeposits and no share inflation occurs.
 
