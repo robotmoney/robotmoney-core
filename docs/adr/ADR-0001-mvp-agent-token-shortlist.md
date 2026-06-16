@@ -36,7 +36,7 @@ token routed through the DEX venue holding its deepest liquidity:
 |---|---|
 | BNKR | Uniswap V3 |
 | JUNO | Uniswap V4 |
-| ROBOTMONEY ($RM) | Aerodrome |
+| RM ($RM) | Aerodrome |
 
 Token, pool, and adapter addresses live in
 `config/agent-token-shortlist.json` (never in Solidity source), which is
@@ -75,21 +75,21 @@ following revisions:
   original "dropped" determination.
 - **JUNO — retained, re-venued to Uniswap V4.** Its deepest USDC
   liquidity is on Uniswap V4, not V3; routing follows ADR-0005.
-- **ROBOTMONEY — added (Aerodrome).** This reverses the original
+- **RM — added (Aerodrome).** This reverses the original
   self-referential conflict-of-interest exclusion. As deployed, the code
   applies **no self-referential or conflict-of-interest guard**:
-  `AgentTokenVault` treats ROBOTMONEY identically to any other shortlist
+  `AgentTokenVault` treats RM identically to any other shortlist
   entry — equal-weighted, with a token/pool/adapter triple routed through
   the Aerodrome adapter (`BasketVault.Venue.Aerodrome`, asset index 2 in
   the demo seed). Router-eligibility is generic vault-level registry
   state (`VaultRegistry.isRouterEligible`) and is **not** conditioned on,
-  nor blocked by, ROBOTMONEY's presence anywhere in the contract: in the
-  Real four-vault demo the agent-token vault — ROBOTMONEY leg included —
+  nor blocked by, RM's presence anywhere in the contract: in the
+  Real four-vault demo the agent-token vault — RM leg included —
   is seeded Router-eligible and carries a leg in the router default
   weight vector (`test_rmAGENT_is_router_eligible`). On mainnet,
   Router-eligibility still depends on the generic hardening gates
-  (audit / TWAP oracle / liquidity proof), not on a ROBOTMONEY-specific
-  check. The demo seeds ROBOTMONEY as a stand-in `DemoBasketToken`; the
+  (audit / TWAP oracle / liquidity proof), not on a RM-specific
+  check. The demo seeds RM as a stand-in `DemoBasketToken`; the
   live `$RM` / `RmToken` address for a production deploy is an unresolved
   `TODO` in `config/agent-token-shortlist.json`. The original
   self-referential concern is therefore a governance/product

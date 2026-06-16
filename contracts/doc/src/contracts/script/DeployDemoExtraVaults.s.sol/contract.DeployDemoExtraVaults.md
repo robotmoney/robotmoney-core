@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c96aeddaee03b01c692b1a7bc0798e010e7d1381/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -72,13 +72,13 @@ uint24 internal constant DEMO_AGENT_JUNO_FEE = 10_000
 ```
 
 
-### DEMO_AGENT_ROBOTMONEY_FEE
-Swap fee tier for ROBOTMONEY (Aerodrome — fee param unused by adapter
+### DEMO_AGENT_RM_FEE
+Swap fee tier for RM (Aerodrome — fee param unused by adapter
 but kept for interface uniformity; 1% matches the illiquid stance).
 
 
 ```solidity
-uint24 internal constant DEMO_AGENT_ROBOTMONEY_FEE = 10_000
+uint24 internal constant DEMO_AGENT_RM_FEE = 10_000
 ```
 
 
@@ -136,11 +136,11 @@ address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F
 ## State Variables
 ### AGENT_SYMBOLS
 Real four-vault demo agent-token symbols: BNKR (V3), JUNO (V4),
-ROBOTMONEY (V4/Aerodrome). Three-token basket per issue #560.
+RM (V4/Aerodrome). Three-token basket per issue #560.
 
 
 ```solidity
-string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"]
+string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "RM"]
 ```
 
 
@@ -249,7 +249,7 @@ Wire the three real-asset demo tokens into the pre-built
 `AgentTokenVault` via `addAsset` with per-asset venue selection:
 index 0: BNKR  — Venue.V3  (built-in SWAP_ROUTER, adapter = address(0))
 index 1: JUNO  — Venue.V4  (UniswapV4SwapAdapter)
-index 2: ROBOTMONEY — Venue.Aerodrome (AerodromeSwapAdapter)
+index 2: RM — Venue.Aerodrome (AerodromeSwapAdapter)
 Tokens + USDC pool stubs were already created inside
 `AgentBasketStubDeployer`. Demo pools satisfy the cardinality and
 liquidity gates in BasketVault.addAsset via stub returns.
@@ -362,10 +362,10 @@ struct Deployed {
     /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
     address[] protocolTokens;
     /// @dev `AgentTokenVault` (PRD §11.3). Registered Active AND router-eligible
-    ///      (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome). Included in defaultWeights.
+    ///      (BNKR/V3, JUNO/V4, RM/Aerodrome). Included in defaultWeights.
     address agentTokenVault;
     /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
-    ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
+    ///      (three real-asset demo stubs: BNKR, JUNO, RM).
     address[] agentTokens;
     /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
     ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
@@ -373,7 +373,7 @@ struct Deployed {
     address rwaVault;
     /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
     address v4Adapter;
-    /// @dev AerodromeSwapAdapter deployed for ROBOTMONEY (Venue.Aerodrome).
+    /// @dev AerodromeSwapAdapter deployed for RM (Venue.Aerodrome).
     address aeroAdapter;
 }
 ```

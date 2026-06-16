@@ -95,7 +95,7 @@ the current product scope.
 
 ## RM-Token Governance
 
-RM-token governance means `$ROBOTMONEY` holders vote on router weights.
+RM-token governance means `$RM` holders vote on router weights.
 
 In the current product scope, RM-token governance does not control:
 
