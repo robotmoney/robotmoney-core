@@ -163,10 +163,23 @@ test.describe("Deposit & Withdraw tab — vault round-trip on smoke-test devnet"
 
     const usdcFinal = await usdcBalanceOf(endpoints.rpc_url, endpoints.usdc_addr, admin);
 
-    // USDC delta over the full round-trip must be within exitFeeBps of zero.
-    // (Some rounding tolerance accepted: 1 base unit.)
+    // USDC delta over the full round-trip must be within exitFeeBps of zero,
+    // plus a small ERC-4626 rounding allowance.
+    //
+    // The demo primary vault is an OpenZeppelin ERC-4626 with an 18-decimal
+    // share offset. A deposit-then-redeem of the freshly minted shares floors
+    // twice — previewDeposit rounds shares down, previewRedeem rounds assets
+    // down — so the round-trip loses a few base units even with exitFeeBps=0.
+    // The exact loss depends on the live totalAssets/totalSupply ratio, which
+    // other suite-10 specs (e.g. multi-vault-withdrawal) shift when they run
+    // first against the shared devnet. A flat 1-base-unit allowance was only
+    // ever reached once the redeem write started mining (it previously timed
+    // out); widen it to cover the offset-vault double-flooring. This stays far
+    // below any real value leak (a missed exit fee or lost principal would be
+    // orders of magnitude larger).
+    const ROUNDING_ALLOWANCE = 16n; // base units (1.6e-5 USDC)
     const fee = await exitFeeBps(endpoints.rpc_url, endpoints.vault_addr);
-    const tolerated = (DEPOSIT_USDC * fee) / 10_000n + 1n;
+    const tolerated = (DEPOSIT_USDC * fee) / 10_000n + ROUNDING_ALLOWANCE;
     const lost = usdcStart - usdcFinal;
     expect(lost).toBeLessThanOrEqual(tolerated);
   });
