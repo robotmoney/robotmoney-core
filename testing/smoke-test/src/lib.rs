@@ -1472,12 +1472,13 @@ impl Fixture {
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
         // Each depositor runs the router split plus a direct belt-and-suspenders
-        // deposit into each basket/RWA vault (Protocol §11.2, Agent §11.3, RWA
-        // §11.4). The router's weighted split can under-fund a basket leg on a
-        // busy chain — leaving that vault at zero TVL (issue #882) — so the
-        // direct deposits guarantee every vault ends boot with non-zero TVL.
-        // Fund four per-path budgets (router + three direct deposits).
-        let total_usdc = per_user_usdc.saturating_mul(4);
+        // deposit into ALL FOUR vaults (primary §11.1, Protocol §11.2, Agent
+        // §11.3, RWA §11.4). The router's weighted split can intermittently
+        // under-fund a vault on a busy chain — leaving it at zero TVL or leaving
+        // a depositor with no shares (issue #882) — so the direct deposits
+        // guarantee every vault has non-zero TVL and every depositor holds shares
+        // in each. Fund five per-path budgets (router + four direct deposits).
+        let total_usdc = per_user_usdc.saturating_mul(5);
         let keys: Vec<(String, Address)> = (0..count).map(demo_depositor_key).collect();
 
         // ── Funding phase ────────────────────────────────────────────────
@@ -1516,6 +1517,7 @@ impl Fixture {
         let rwa_hex = format!("{:#x}", self.rwa_vault());
         let protocol_hex = format!("{:#x}", self.demo_protocol_vault());
         let agent_hex = format!("{:#x}", self.demo_agent_vault());
+        let primary_hex = format!("{:#x}", self.vault());
         let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
             let handles: Vec<_> = keys
                 .iter()
@@ -1524,6 +1526,7 @@ impl Fixture {
                     let rwa_hex = &rwa_hex;
                     let protocol_hex = &protocol_hex;
                     let agent_hex = &agent_hex;
+                    let primary_hex = &primary_hex;
                     s.spawn(move || -> Result<(Address, String), HarnessError> {
                         let depositor_hex = format!("{depositor:#x}");
 
@@ -1543,6 +1546,25 @@ impl Fixture {
                             self.router(),
                             "deposit(uint256,uint256[])",
                             &[&per_user_usdc.to_string(), "[]"],
+                        )?;
+
+                        // Direct deposit into the primary vault too. The router
+                        // leg already routes ~8500 bps here, but the router
+                        // deposit can intermittently leave a depositor with no
+                        // primary-vault shares on a busy chain (issue #882); a
+                        // direct deposit guarantees every depositor holds primary
+                        // shares (1:1 via the PassthroughAdapter).
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[primary_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
                         )?;
 
                         // Approve and deposit directly into the §11.4 RWA vault,
