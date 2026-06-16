@@ -39,7 +39,11 @@ const CSP_DIRECTIVES: Array<[string, string[]]> = [
   ["style-src", ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]],
   ["font-src", ["'self'", "https://fonts.gstatic.com", "data:"]],
   ["img-src", ["'self'", "data:", "blob:"]],
-  ["connect-src", ["'self'", "https:", "wss:", "ws:", "http://localhost:*"]],
+  // `http://127.0.0.1:*` mirrors the `localhost` loopback allowance: the
+  // smoke-test devnet exposes the Geth RPC and explorer-api on 127.0.0.1:<port>
+  // (testing/smoke-test emits http://127.0.0.1 URLs), and without this the dapp's
+  // own CSP blocks every devnet connection in suite-10 dapp-e2e (issue #665 CSP).
+  ["connect-src", ["'self'", "https:", "wss:", "ws:", "http://localhost:*", "http://127.0.0.1:*"]],
   ["worker-src", ["'self'", "blob:"]],
   ["object-src", ["'none'"]],
   ["base-uri", ["'self'"]],
