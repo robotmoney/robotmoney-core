@@ -51,10 +51,26 @@ const CSP_DIRECTIVES: Array<[string, string[]]> = [
   ["form-action", ["'self'"]],
 ];
 
-/** The strict CSP policy as a single header/meta-tag value string. */
+/** The strict CSP policy as a single value string for the HTTP header. */
 export const CSP_POLICY: string = CSP_DIRECTIVES.map(
   ([name, sources]) => `${name} ${sources.join(" ")}`,
 ).join("; ");
+
+/**
+ * Directives the HTML spec says are ignored when a CSP is delivered via a
+ * `<meta>` element. Browsers also log a `console.error` for them, which fails
+ * the suite-10 dapp-e2e console-error gate. They are enforced via the real HTTP
+ * header instead (see `cspPlugin`), so excluding them from the meta tag loses no
+ * enforcement — `frame-ancestors` in particular is a no-op in `<meta>` anyway.
+ */
+const META_IGNORED_DIRECTIVES = new Set(["frame-ancestors", "report-uri", "sandbox"]);
+
+/** CSP value safe for a `<meta>` tag: the header policy minus meta-ignored directives. */
+export const CSP_META_POLICY: string = CSP_DIRECTIVES.filter(
+  ([name]) => !META_IGNORED_DIRECTIVES.has(name),
+)
+  .map(([name, sources]) => `${name} ${sources.join(" ")}`)
+  .join("; ");
 
 /**
  * HSTS header value required by the security model (PRD §11 / TLS).
@@ -96,7 +112,7 @@ export function cspPlugin(): Plugin {
             injectTo: "head-prepend",
             attrs: {
               "http-equiv": "Content-Security-Policy",
-              content: CSP_POLICY,
+              content: CSP_META_POLICY,
             },
           },
         ],
