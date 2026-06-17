@@ -40,10 +40,10 @@
 name: rust-fmt-clippy-doc-coverage
 
 on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does

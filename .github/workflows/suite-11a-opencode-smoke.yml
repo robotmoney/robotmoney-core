@@ -38,10 +38,10 @@
 name: opencode-plugin-validate-walkthrough-offline
 
 on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
     paths:
       - "plugins/robotmoney-user/**"
       - "clients/rust-payment-client/**"

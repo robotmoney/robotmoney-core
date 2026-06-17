@@ -21,21 +21,15 @@
 name: dapp-e2e
 
 on:
-  # HEAVY tier (issue #600): the dapp-e2e Playwright suite boots a full devnet and is
-  # NOT run on ordinary feature-branch PRs (to main/dev). It is re-anchored at the
-  # phase-integration boundary — push to dev-phase-* staging branches and dev (and
-  # main), plus PRs that target a dev-phase-* branch.
+  # HEAVY tier: the dapp-e2e Playwright suite boots a full devnet and is the
+  # merge gate for `dev` — it runs on every pull_request targeting dev (no path
+  # filter, so the gate always reports for any branch merging to dev) and on
+  # push to dev for merged-commit coverage.
   # See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev, "dev-phase-*"]
+    branches: [dev]
   pull_request:
-    branches: ["dev-phase-*"]
-    paths:
-      - "clients/dapp/**"
-      - "contracts/**"
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - ".github/workflows/suite-10-dapp-e2e.yml"
+    branches: [dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does

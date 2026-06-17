@@ -177,7 +177,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 ### 7. Rust client integration tests
 **Suggested file:** `.github/workflows/rmpc-integration.yml`
 **Environment:** `devnet` (Geth + Lighthouse)
-**Trigger paths:** `clients/rust-payment-client/**`, `testing/ethereum-testnet/e2e-rust/**`, `contracts/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 **Jobs:**
 - `geth-tests` — devnet-backed scenarios; runs immediately; should not run if suite 6 (`rmpc-unit`) is failing on the same commit (enforce via `workflow_run` dependency or branch protection)
@@ -262,7 +262,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 ### 10. dApp E2E tests
 **File:** `.github/workflows/suite-10-dapp-e2e.yml`
 **Environment:** `devnet` (smoke-test full stack)
-**Trigger paths:** `clients/dapp/**`, `contracts/**`, `testing/smoke-test/**`, `testing/ethereum-testnet/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 Single job runs every Playwright spec against a real Geth+Lighthouse
 devnet booted by Playwright's `globalSetup` (`devnet-global-setup.ts`),
@@ -388,34 +388,10 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 
 ---
 
-### 17. CI velocity tier guard
-**Suggested file:** `.github/workflows/suite-17-ci-velocity-guard.yml`
-**Environment:** `none`
-**Trigger paths:** all files (no path filter — structural invariants affect the entire repo)
-
-**Jobs:**
-- `tier-guard` — workflow YAML validation; runs immediately on every PR, push to `main`/`dev`, and `workflow_dispatch`
-
-**Design rationale:**
-Issue #600 split CI into two tiers (QUICK and HEAVY) to accelerate routine feature PRs while deferring expensive devnet e2e matrices to the phase-integration boundary. The split introduced structural invariants that YAML edits can silently violate:
-- Every PR-triggered workflow must declare `concurrency.cancel-in-progress` keyed on `${{ github.ref }}` to cancel superseded runs
-- Rust-building workflows must use `Swatinem/rust-cache@v2` instead of hand-rolled cache steps
-- Heavy-tier suites (devnet e2e, forge coverage gate) must not be reachable from feature-branch PRs
-- No devnet binary runs as a sequential step in a shared job (the devnet matrix must use `fail-fast: false` with per-binary teardown)
-
-These rules cannot be reliably enforced by manual review and would silently regress without automated checking. The tier guard runs `scripts/ci/check-workflow-tiers.sh` on every PR to statically validate the entire `.github/workflows/` tree against the tier mapping.
-
-**Steps:**
-1. Checkout repository
-2. Install Python + PyYAML
-3. `bash scripts/ci/check-workflow-tiers.sh` — parse all `.github/workflows/*.yml` files, verify tier membership matches the table below (### Tier mapping), and exit non-zero if any structural invariant is violated
-
----
-
 ### 14. smoke-test library
 **Suggested file:** `.github/workflows/smoke-test.yml`
 **Environment:** `devnet` (Geth + Lighthouse)
-**Trigger paths:** `testing/smoke-test/**`, `testing/ethereum-testnet/**`, `contracts/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 Validates the `smoke-test` crate — the canonical devnet fixture library — in
 isolation, independent of any client (rmpc, dapp, explorer).
@@ -566,7 +542,7 @@ Catches CSP weakening by dependency upgrades before deployment.
 **Environment:** `anvil` (precondition) / `devnet` (demo-tvl)
 **Trigger paths:** `contracts/test/ERC4626PreconditionChecks.t.sol`, `testing/smoke-test/tests/full_stack_demo_tvl.rs`, and the workflow file itself
 
-**Tier:** HEAVY — runs only on `push` to `main`/`dev` and `dev-phase-*` branches, plus `pull_request`s targeting `dev-phase-*`. Does not trigger on feature-branch PRs to keep routine PR cycles fast.
+**Tier:** HEAVY — the `dev` merge gate. Runs on every `pull_request` targeting `dev` (no `paths:` filter) and on `push` to `dev`. Not triggered on PRs to other branches, keeping routine feature-PR cycles fast.
 
 **Jobs:**
 - `erc4626-precondition` — matrix-sharded forge tests; runs immediately
@@ -589,7 +565,7 @@ The matrix shards by exit-fee tier (`EXIT_FEE_BPS` = 0, 30, 100) so each tier's 
 - `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps, while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1)
 - All four vaults report non-zero `totalAssets` after seeding
 
-This is the HEAVY-tier integration-layer half of the four-vault real-TVL test pyramid (the contract-layer half is suite 1–2, step 7). It is not run on every feature-branch PR because DappStack boot + seeding takes 25–35 minutes; instead, it runs when code paths change and at the phase-integration boundary.
+This is the HEAVY-tier integration-layer half of the four-vault real-TVL test pyramid (the contract-layer half is suite 1–2, step 7). It is not run on routine feature PRs because DappStack boot + seeding takes 25–35 minutes; instead, it runs as part of the `dev` merge gate (PRs into `dev` and push to `dev`).
 
 **Activation history:**
 - `erc4626-precondition`: activated in issue #814 — ERC4626PreconditionChecks.t.sol created and `if: false` removed
@@ -648,30 +624,32 @@ signal regardless of whether that day's commits touch each suite's path filters.
 
 ## CI velocity tiers
 
-Issue #600 splits CI into two tiers so a routine feature PR waits only on cheap,
-deterministic feedback while expensive devnet integration is proven where
-cross-feature interactions actually matter.
+CI is split into two tiers so a routine PR gets fast, cheap feedback while the
+expensive devnet integration battery gates the `dev` merge boundary, where
+cross-feature interactions actually land.
 
-- **QUICK tier** — runs on every feature-branch PR (`pull_request` to `main`/`dev`).
-  Forge unit + invariant tests, solidity fmt/natspec/slither, dapp
-  lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage, rmpc unit, hermetic
-  fork-fixture integration, abi-drift, doc/manifest guards, and this tier guard.
-  This is the only gate a routine feature PR blocks on.
-- **HEAVY tier** — relocated off per-feature-PR triggers and re-anchored at the
-  **phase-integration boundary**: `push` to per-phase staging branches
-  (`dev-phase-*`) and `dev` (and `main`), plus `pull_request`s that target a
-  `dev-phase-*` branch. The devnet e2e matrices (`rust-client-devnet-integration`,
-  `smoke-test-devnet-boot-teardown`), the full-devnet `dapp-e2e` Playwright suite,
-  and the `forge-coverage-gate` job all live here. No integration coverage is
-  lost — every heavy suite removed from per-PR triggers is re-anchored at the
-  `dev-phase-*` / `dev` boundary.
+- **LIGHT (quick) tier** — runs on `pull_request`s to **any branch** and on
+  `push` to `dev`/`dev-phase-*`. Forge unit + invariant tests, solidity
+  fmt/natspec/slither, dapp lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage,
+  rmpc unit, hermetic fork-fixture integration, abi-drift, doc/manifest guards, and
+  the security gates. This is the feedback a routine feature PR blocks on.
+- **HEAVY tier** — the `dev` merge gate. Runs on every `pull_request` targeting
+  `dev` (no `paths:` filter, so the gate always reports for any branch merging
+  into `dev`) and on `push` to `dev` for merged-commit coverage. The devnet e2e
+  matrices (`rust-client-devnet-integration`, `smoke-test-devnet-boot-teardown`),
+  the full-devnet `dapp-e2e` Playwright suite, the `erc4626-demo-tvl-matrix`, and
+  the `forge-coverage-gate` job all live here. Every branch that opens a PR into
+  `dev` runs the full heavy battery before it can land.
 
-Structural invariants (enforced by `scripts/ci/check-workflow-tiers.sh`, run by
-the `ci-velocity-tier-guard` workflow on every PR):
+To make a heavy suite actually *block* a merge, add its check to the required
+status checks on `dev`'s branch-protection rule (a GitHub setting, not repo YAML).
+
+Structural conventions (kept by convention; a prior static tier-guard workflow
+that enforced them was removed as overkill):
 
 - Every PR-triggered workflow declares `concurrency.cancel-in-progress` (enabled
   for `pull_request` events) with a `${{ github.ref }}`-keyed group, so re-pushing
-  a PR cancels superseded runs while `push:main`/`dev` runs keep a distinct,
+  a PR cancels superseded runs while `push:dev` runs keep a distinct,
   non-cancelling lane and merged-commit coverage always completes.
 - `rust-client-devnet-integration` (suite-07) and `smoke-test-devnet-boot-teardown`
   (suite-14) express their devnet binaries as a `fail-fast: false` job matrix —
@@ -684,12 +662,11 @@ the `ci-velocity-tier-guard` workflow on every PR):
 
 ### Tier mapping
 
-Every workflow's `name:` and its tier. The guard fails if a heavy suite is
-reachable from a feature-branch PR or if this table drifts from the workflows.
+Every workflow's `name:` and its tier.
 
 | Workflow `name:` | Tier | Notes |
 |------------------|------|-------|
-| `forge-unit-invariant-coverage` | quick | `unit`/`invariant` quick on feature PRs; the `forge-coverage-gate` job is heavy and `if:`-gated to push / `dev-phase-*` |
+| `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
 | `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
@@ -705,10 +682,9 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
-| `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh`; validates tier membership and structural invariants (concurrency, rust-cache, devnet matrix structure) |
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
-| `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); runs on dev-phase-* and dev/main (issue #804/#814) |
+| `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
@@ -735,7 +711,6 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
-| 17 | `suite-17-ci-velocity-guard.yml` | `tier-guard` | `none` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
 | 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` | `none` |
 | 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) \| `demo-tvl` | `anvil` / `devnet` |
