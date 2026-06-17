@@ -51,20 +51,14 @@
 name: smoke-test-devnet-boot-teardown
 
 on:
-  # HEAVY tier (issue #600): this devnet boot/teardown suite is NOT run on ordinary
-  # feature-branch PRs (to main/dev). It is re-anchored at the phase-integration
-  # boundary — push to dev-phase-* staging branches and dev (and main), plus PRs
-  # that target a dev-phase-* branch. See docs/development/ci-suites.md (CI velocity tiers).
+  # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
+  # runs on every pull_request targeting dev (no path filter, so the gate always
+  # reports for any branch merging to dev) and on push to dev for merged-commit
+  # coverage. See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev, "dev-phase-*"]
+    branches: [dev]
   pull_request:
-    branches: ["dev-phase-*"]
-    paths:
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - "contracts/**"
-      - "config/dex-pools.json"
-      - ".github/workflows/suite-14-smoke-test.yml"
+    branches: [dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does

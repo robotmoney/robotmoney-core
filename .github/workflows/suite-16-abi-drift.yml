@@ -38,10 +38,10 @@
 name: abi-drift-gate
 
 on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
     paths:
       - "contracts/**"
       - "foundry.toml"
