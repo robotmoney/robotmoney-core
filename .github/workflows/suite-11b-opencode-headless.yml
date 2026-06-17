@@ -103,6 +103,13 @@ jobs:
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
+      # Put the freshly-built rmpc on PATH so the headless agent's `rmpc <cmd>`
+      # calls resolve without it having to `find` the binary — the prompt tells
+      # the agent "rmpc is on PATH", so make that literally true and keep the
+      # run deterministic.
+      - name: Put rmpc on PATH
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+
       - name: Start Anvil devnet
         run: |
           anvil &
@@ -435,6 +442,13 @@ jobs:
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
+      # Put the freshly-built rmpc on PATH so the headless agent's `rmpc <cmd>`
+      # calls resolve without it having to `find` the binary — the prompt tells
+      # the agent "rmpc is on PATH", so make that literally true and keep the
+      # run deterministic.
+      - name: Put rmpc on PATH
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+
       - name: Start Anvil devnet
         run: |
           anvil &
@@ -484,9 +498,14 @@ jobs:
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
       # rmpc reads require a config.toml pinning chain id, RPC, and the deployed
-      # gateway/vault/USDC addresses. The read job is read-only, so no keystore
-      # or signer is needed, but the read commands still need the config so they
-      # hit the real deployed contracts on this devnet.
+      # gateway/vault/USDC addresses. The read job is read-only, but rmpc's
+      # ClientConfig makes the [signer] table a REQUIRED field (SignerConfig is
+      # non-Option in clients/rust-payment-client/src/config.rs), so a config
+      # without [signer] fails to deserialize and every rmpc command exits 3 —
+      # which is exactly what the first dispatch hit. Read commands never load
+      # the keystore (they only read chain state), so a [signer] block with
+      # allow_software_fallback=true and a dummy keystore_path satisfies the
+      # schema without needing a real key.
       - name: Write rmpc read config.toml
         run: |
           set -euo pipefail
@@ -505,6 +524,10 @@ jobs:
           usdc_address          = "$USDC_ADDRESS"
           vault_address         = "$VAULT"
           gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
+
+          [signer]
+          allow_software_fallback = true
+          keystore_path           = "${RUNNER_TEMP}/robotmoney-opencode/read-only-unused-keystore.json"
           EOF
           echo "RMPC_CONFIG=$CONFIG" >> $GITHUB_ENV
 
