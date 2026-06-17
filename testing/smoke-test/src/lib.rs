@@ -1357,15 +1357,12 @@ impl Fixture {
         // inclusion (or one sent with an explicit `--gas-limit`) can land
         // reverted with a zero process exit. Assert the receipt status so a
         // reverted seeding tx fails loudly instead of being silently accepted.
-        let status = v
-            .get("status")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| {
-                HarnessError::other(format!(
-                    "cast send {sig} receipt missing status field: {}",
-                    String::from_utf8_lossy(&out.stdout)
-                ))
-            })?;
+        let status = v.get("status").and_then(|x| x.as_str()).ok_or_else(|| {
+            HarnessError::other(format!(
+                "cast send {sig} receipt missing status field: {}",
+                String::from_utf8_lossy(&out.stdout)
+            ))
+        })?;
         if !receipt_status_succeeded(status) {
             let reason = self.tx_revert_reason(&tx_hash);
             return Err(HarnessError::other(format!(
@@ -1410,11 +1407,7 @@ impl Fixture {
     /// Read `token.balanceOf(owner)` via a plain `eth_call` (`cast call`).
     /// Used to verify deposits actually minted shares to the recipient. No
     /// signing, no impersonation — a read-only query against the live chain.
-    pub fn erc20_balance_of(
-        &self,
-        token: Address,
-        owner: Address,
-    ) -> Result<u128, HarnessError> {
+    pub fn erc20_balance_of(&self, token: Address, owner: Address) -> Result<u128, HarnessError> {
         // balanceOf(address) selector 0x70a08231, owner left-padded to 32 bytes.
         let data = format!(
             "0x70a08231000000000000000000000000{}",
@@ -1447,11 +1440,7 @@ impl Fixture {
         let low = &s[s.len().saturating_sub(32)..];
         let high_nonzero = s.len() > 32 && s[..s.len() - 32].chars().any(|c| c != '0');
         let low_val = u128::from_str_radix(low, 16).unwrap_or(u128::MAX);
-        Ok(if high_nonzero {
-            u128::MAX
-        } else {
-            low_val
-        })
+        Ok(if high_nonzero { u128::MAX } else { low_val })
     }
 
     /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
