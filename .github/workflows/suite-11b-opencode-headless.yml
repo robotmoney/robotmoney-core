@@ -138,6 +138,13 @@ jobs:
             --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
           USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
+          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
+          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
+          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
+          # must be minted that seed before the deploy or the deposit reverts with
+          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       # Issue #469: this step replaces the broken keystore-import
       # invocation that previously lived in this workflow (it passed the
@@ -199,6 +206,12 @@ jobs:
           # deposit. anvil_setBalance is the standard Anvil-only fast path.
           cast rpc anvil_setBalance "$AGENT_ADDR_FROM_KEYSTORE" "0xDE0B6B3A7640000" \
             --rpc-url http://127.0.0.1:8545
+          # Fund the agent with mock USDC too: the gateway deposit pulls
+          # `transferFrom(agent, gateway, amount)`, so the headless "deposit 1 USDC"
+          # run reverts with ERC20InsufficientBalance unless the generated key
+          # actually holds USDC. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDRESS" "mint(address,uint256)" "$AGENT_ADDR_FROM_KEYSTORE" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       - name: Deploy contracts on devnet (authorizes generated agent)
         # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
@@ -396,6 +409,13 @@ jobs:
             --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
           USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
+          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
+          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
+          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
+          # must be minted that seed before the deploy or the deposit reverts with
+          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       - name: Deploy contracts + fund agent on devnet
         # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
