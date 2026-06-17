@@ -201,6 +201,12 @@ jobs:
             --rpc-url http://127.0.0.1:8545
 
       - name: Deploy contracts on devnet (authorizes generated agent)
+        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
+        # default real adapters' seed-deposit totalAssets() reverts with
+        # 'call to non-contract address'. PassthroughAdapter is the documented
+        # lossless escape hatch for non-forked devnets.
+        env:
+          USE_PASSTHROUGH_ADAPTER: "true"
         run: |
           mkdir -p deployments
           # Deploy.s.sol reads AGENT_ADDRESS from env and calls
@@ -392,6 +398,12 @@ jobs:
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       - name: Deploy contracts + fund agent on devnet
+        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
+        # default real adapters' seed-deposit totalAssets() reverts with
+        # 'call to non-contract address'. PassthroughAdapter is the documented
+        # lossless escape hatch for non-forked devnets.
+        env:
+          USE_PASSTHROUGH_ADAPTER: "true"
         run: |
           mkdir -p deployments
           forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
