@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md — Phase: Vault registry
+//! Canonical: Plan tracking issue #109 — Phase: Vault registry
 //! Implements: issue #298
 //!
 //! Fork e2e scenarios for the on-chain VaultRegistry contract.
@@ -453,12 +453,40 @@ fn registry_empty_list() {
     eprintln!("[registry_empty_list] registry deployed at {registry_addr:#x}");
 
     // listVaults() must return an empty array.
+    // Retry loop: on Geth devnet there is a brief window after wait_for_receipt
+    // returns where eth_call "latest" may still reflect pre-deploy state and
+    // return undecodable/empty data ("Overrun"). Poll up to 5 times with 200 ms
+    // backoff before failing.
     let list_call = IOnchainVaultRegistry::listVaultsCall {};
-    let raw = deployer
-        .call(registry_addr, &list_call)
-        .expect("listVaults on empty registry");
-    let decoded = IOnchainVaultRegistry::listVaultsCall::abi_decode_returns(&raw, true)
-        .expect("decode listVaults returns");
+    let decoded = {
+        let mut last_err = String::new();
+        let mut result = None;
+        for attempt in 0..5u32 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            match deployer.call(registry_addr, &list_call) {
+                Err(e) => {
+                    last_err = format!("eth_call attempt {attempt}: {e}");
+                    eprintln!("[registry_empty_list] {last_err}");
+                }
+                Ok(raw) => {
+                    match IOnchainVaultRegistry::listVaultsCall::abi_decode_returns(&raw, true) {
+                        Ok(decoded) => {
+                            result = Some(decoded);
+                            break;
+                        }
+                        Err(e) => {
+                            last_err =
+                                format!("decode attempt {attempt}: {e} (raw={} bytes)", raw.len());
+                            eprintln!("[registry_empty_list] {last_err}");
+                        }
+                    }
+                }
+            }
+        }
+        result.unwrap_or_else(|| panic!("decode listVaults returns: {last_err}"))
+    };
     assert!(
         decoded._0.is_empty(),
         "listVaults on empty registry must return []"

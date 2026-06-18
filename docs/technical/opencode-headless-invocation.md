@@ -1,21 +1,21 @@
 # ADR — OpenCode headless invocation contract for CI testing
 
 > Scope: dev-scout decision record for Phase 4 (Agent-Harness Installation and
-> Skill Loading) of `docs/implementation-plan.md` §10. Documents the exact
+> Skill Loading) of `Plan tracking issue #109` §10. Documents the exact
 > flags, environment variables, exit codes, and output format required to drive
 > OpenCode non-interactively in CI pipelines. No CI workflow is added by this
 > scout.
 >
 > Cross-linked from:
-> [`docs/development/headless-opencode-tests.md`](../testing/headless-opencode-tests.md) §G7.
+> [`docs/development/headless-opencode-tests.md`](../development/headless-opencode-tests.md) §G7.
 > Related walkthrough:
-> [`docs/development/opencode-readonly-fork.md`](../walkthroughs/opencode-readonly-fork.md).
+> [`docs/development/opencode-readonly-fork.md`](../development/opencode-readonly-fork.md).
 
 ---
 
 ## 1. Status
 
-**Accepted.** Authored 2026-05-08 against `docs/implementation-plan.md` §10 on
+**Accepted.** Authored 2026-05-08 against `Plan tracking issue #109` §10 on
 branch `feat/135-document-opencode-headless-invocation-contract-f`. No prior
 ADR exists for OpenCode headless operation in this repo.
 
@@ -56,7 +56,7 @@ npm install -g opencode@1.14.29
 
 ## 3. Context
 
-`docs/implementation-plan.md` §10 specifies that OpenCode and OpenClaw run
+`Plan tracking issue #109` §10 specifies that OpenCode and OpenClaw run
 `rmpc` as a process-per-call shell command. For automated testing we need to
 invoke OpenCode itself non-interactively — driving it with a prompt, capturing
 output, and asserting exit codes — without a human at a terminal. This ADR
@@ -300,3 +300,90 @@ Re-evaluate when:
 - A stable `opencode run --stdin` or equivalent flag is added.
 - The project pins a different AI provider (non-Anthropic) requiring a
   different key variable.
+
+---
+
+## 12. Reconciled CI contract (issues #908/#909 — authoritative)
+
+§4–§10 above were written against OpenCode 1.14.x and an assumed event schema.
+The `suite-11b-opencode-headless.yml` read and deposit jobs are now reconciled
+against the **actual** OpenCode 1.16.x CLI and transcript reality. This section
+supersedes the relevant details above where they conflict.
+
+### 12.1 No `--plugin` flag; the SKILL bundle is not an OpenCode plugin
+
+- `opencode run` has **no** `--plugin` flag. Plugins are installed with
+  `opencode plugin <module>`, which records the path in `.opencode/opencode.json`.
+- `plugins/robotmoney-user/` is a Claude/Anthropic-style **SKILL bundle**
+  (`plugin.json` manifest + `skills/.../SKILL.md`), **not** an OpenCode JS-module
+  plugin. OpenCode's loader logs `Plugin export is not a function failed to load
+  plugin` and never registers the rmpc skill as a tool. The agent therefore has
+  only OpenCode's built-in tools (`bash`, `read`, `task`, …).
+- Consequently, the resolved in-repo plugin path appears (if at all) only in
+  `--print-logs` **stderr**, never in the `--format json` **stdout** that the
+  assert scripts scan. The previous assertion requiring an in-repo plugin-path
+  event in the JSON transcript was structurally unsatisfiable and has been
+  removed.
+
+### 12.2 Drive rmpc deterministically through the bash tool
+
+Because the skill is not registered, a vague prompt makes the agent improvise
+with `task`/`read` (and even suggest explorer URLs). The jobs therefore pass an
+**explicit prompt** that names the exact rmpc commands, in order, and instructs
+the agent to use the `bash` tool only. The model is pinned to the free,
+no-credential zen model `opencode/big-pickle` (the default a fresh CI runner
+selects), so no API-key secret is required and the run is deterministic.
+
+- Read job commands: `get-vault`, `get-gateway`, `get-balance`.
+- Deposit job commands (read prefix in the asserter's required order, then the
+  write): `get-vault`, `get-agent`, `get-balance`, `get-allowance`,
+  `self-check`, `deposit`.
+
+### 12.3 Real `--format json` transcript schema (1.16.x)
+
+The stream is NDJSON with event `type`s including `step_start`, `step_finish`,
+`text`, and `tool_use`. A shell tool call is a `tool_use` event:
+
+```json
+{"type": "tool_use",
+ "part": {"tool": "bash",
+          "state": {"status": "completed",
+                    "input": {"command": "rmpc get-vault --config ... --pretty"},
+                    "output": "<rmpc stdout>",
+                    "metadata": {"exit": 0, "output": "<rmpc stdout>"}}}}
+```
+
+The asserters key off this shape: command at `part.state.input.command`, exit
+code at `part.state.metadata.exit`, rmpc stdout at `part.state.output`. There is
+no top-level `exit_code` and no `tool.result` event type.
+
+### 12.4 Two real on-chain preconditions the deposit job must satisfy
+
+These are independent of OpenCode and were missing from the original workflow:
+
+1. **USDC allowance.** `rmpc deposit` preflight (§4.4) hard-refuses unless
+   `allowance(agent, gateway) >= amount`, and `rmpc` has no `approve` command
+   (approvals flow through the human dapp). The job adds an explicit
+   `cast send USDC approve(gateway, …)` **signed by the generated agent key**
+   after deploy.
+2. **`state_dir`.** `rmpc deposit` resolves a per-agent nonce-lock / replay-cache
+   directory via `RMPC_STATE_DIR` → config `state_dir` → **fail-fast** (no silent
+   `/tmp` fallback). The job pins `state_dir` in `config.toml` (and exports
+   `RMPC_STATE_DIR`). Without it the deposit exits non-zero with no stdout.
+
+### 12.5 What the reconciled asserters prove
+
+- **Read** (`assert_headless_read_transcript.py`): `rmpc get-vault`,
+  `get-gateway`, `get-balance` each ran as a completed `bash` tool call (exit 0)
+  whose stdout is a §9 `source: "json_rpc"` envelope; no forbidden explorer/dapp
+  host appears. The old `partial: true` gateway requirement was wrong — a
+  deployed-gateway snapshot returns `partial: false` — and is replaced by a
+  `source == "json_rpc"` check.
+- **Deposit** (`assert_headless_deposit_transcript.py`): the read prefix ran in
+  the required order before `rmpc deposit`; `rmpc deposit` completed exit 0 with
+  a `status: "success"` + `tx_hash` result; no forbidden hosts.
+- The on-chain checks are unchanged in intent:
+  `assert_headless_deposit_delta.py` ties the transcript-reported amount to the
+  vault `total_assets` delta, and `assert_headless_deposit_sender.py` confirms
+  the deposit tx `from` equals the generated agent key — both updated only to
+  read `tx_hash`/`amount` out of the real `part.state.output` JSON.

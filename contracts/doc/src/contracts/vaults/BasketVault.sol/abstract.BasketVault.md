@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64abc76af5e5cb6274bcad2a01525a762981c62c/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -180,6 +180,13 @@ uint256 public maxSlippageBps
 
 ```solidity
 bool public shutdown
+```
+
+
+### depositsPaused
+
+```solidity
+bool public depositsPaused
 ```
 
 
@@ -389,17 +396,21 @@ function maxMint(address receiver) public view override returns (uint256);
 
 ### previewWithdraw
 
-Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
+BasketVault cannot guarantee ERC-4626 withdraw exactness because
+the actual USDC delivered depends on proportional swap execution
+and variable on-chain slippage. Use `redeem()` instead — the ERC-4626
+redeem guarantee (actual ≥ previewRedeem) is enforced at the swap level.
 
 
 ```solidity
-function previewWithdraw(uint256 assets_) public view override returns (uint256);
+function previewWithdraw(uint256) public view override returns (uint256);
 ```
 
 ### _withdraw
 
-Ignores the ERC-4626 `assets` parameter because actual USDC received depends
-on swap execution. Users should use `redeem` for this vault type.
+Performs a proportional-swap withdrawal. The `assets` parameter
+is intentionally unused because the actual USDC received depends on
+swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
 Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
 
@@ -468,6 +479,29 @@ the effective window without reading the raw mapping fallback.
 function effectiveTwapWindow(address token) public view returns (uint32);
 ```
 
+### tickMathLibrary
+
+Address of the externally-linked `TickMath` library this vault
+`DELEGATECALL`s on the NAV / `totalAssets()` path.
+
+`TickMath.getSqrtRatioAtTick` is a `public` library function, so the
+compiler links it as a separate deployed contract and bakes its
+address into this vault's runtime bytecode. Exposing it lets deploy
+scripts and tests assert the linked library's runtime codehash equals
+the audited artifact (finding L3-D1): a mislinked or zero address —
+or one whose code does not match — must fail the deploy assertion.
+
+
+```solidity
+function tickMathLibrary() external pure returns (address lib);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`lib`|`address`|The linked `TickMath` library address.|
+
+
 ### _twapQuote
 
 Compute the time-weighted-average sqrtPriceX96 for `pool` over the
@@ -510,7 +544,7 @@ function addAsset(
 |----|----|-----------|
 |`token_`|`address`|   ERC-20 token address.|
 |`pool_`|`address`|    DEX pool pairing `token_` with USDC (either token0 or token1). For the Uniswap V3 default path, this is the V3 pool address. For Aerodrome, this is the CL pool address used for TWAP reads.|
-|`swapFee_`|`uint24`| Fee parameter forwarded to the adapter (Uniswap V3 fee tier; unused by Aerodrome adapters but kept for interface uniformity).|
+|`swapFee_`|`uint24`| Venue parameter forwarded to execution: Uniswap fee tier for V3/V4, or signed tick spacing for Aerodrome Slipstream.|
 |`adapter_`|`address`| Swap+TWAP adapter address implementing `IBasketSwapAdapter`. Pass `address(0)` to use the built-in Uniswap V3 default path (venue = V3). For V4 or Aerodrome, pass the deployed adapter address and the corresponding `venue_`.|
 |`venue_`|`Venue`|   DEX venue selector. Must match the adapter type: `Venue.V3` with `adapter_=address(0)`, `Venue.V4` with a `UniswapV4SwapAdapter`, `Venue.Aerodrome` with an `AerodromeSwapAdapter`. Stored on `AssetInfo` so governance tooling can inspect the venue without decoding the adapter address.|
 
@@ -538,29 +572,36 @@ function pause() external onlyRole(EMERGENCY_ROLE);
 function unpause() external onlyRole(ADMIN_ROLE);
 ```
 
-### _pauseIfNotPaused
-
-Pause only when not already paused. Silently no-ops when the
-contract is already paused so that the common incident sequence
-pause() → emergencyUnwind() does not revert with EnforcedPause.
+### _setDepositsPaused
 
 
 ```solidity
-function _pauseIfNotPaused() internal;
+function _setDepositsPaused(bool paused_) internal;
 ```
 
 ### emergencyUnwind
 
-Pause and swap all basket assets back to USDC using live TWAP-derived floors.
+Pause deposits and swap all basket assets back to USDC.
 
 The effective per-leg floor is max(TWAP-derived, configured minUsdcOut), so the
 admin-set value acts as a secondary lower bound while the live TWAP guards against
-stale configuration being exploited by a sandwich attacker.
+stale configuration being exploited by a sandwich attacker. If the
+oracle is unavailable, a non-zero configured floor is required.
 Reverts when any router leg cannot satisfy its effective floor.
 
 
 ```solidity
 function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant;
+```
+
+### emergencyTwapUsdcValue
+
+
+```solidity
+function emergencyTwapUsdcValue(AssetInfo calldata assetInfo, uint256 amount)
+    external
+    view
+    returns (uint256);
 ```
 
 ### emergencyUnwindWithOverride
@@ -571,11 +612,8 @@ Emits before each swap so off-chain operators can distinguish override use.
 Even on the override path, swap outputs are bounded by an upper-loss
 cap derived from the admin-configured `minUsdcOut` reference floor:
 `appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
-Additionally a live TWAP floor (max(TWAP-derived, appliedFloor)) is applied
-as a secondary guard to prevent sandwich exploitation of a stale `minUsdcOut`.
-Swaps whose realized USDC output is below the effective floor revert with
-`EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
-override is enabled.
+The override is deliberately oracle-independent so a broken oracle
+cannot block incident response. The configured loss cap remains mandatory.
 
 
 ```solidity
@@ -603,7 +641,7 @@ and `_sellProportional` skip them, so any balance that reappears after
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE);
+function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE);
 ```
 
 ### setTvlCap
@@ -901,6 +939,12 @@ event FeeRecipientUpdated(address oldRecipient, address newRecipient);
 event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
 ```
 
+### DepositsPausedSet
+
+```solidity
+event DepositsPausedSet(bool paused);
+```
+
 ### Shutdown
 
 ```solidity
@@ -1039,6 +1083,12 @@ error CannotRescueUsdc();
 error EmergencyUnwindOverrideDisabled();
 ```
 
+### EmergencyFloorUnavailable
+
+```solidity
+error EmergencyFloorUnavailable(address token);
+```
+
 ### PoolTokenMismatch
 
 ```solidity
@@ -1111,6 +1161,12 @@ observations to cover the full window before depositing.
 error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
 ```
 
+### InsufficientObservationHistory
+
+```solidity
+error InsufficientObservationHistory(address pool, uint32 requiredWindow);
+```
+
 ### InsufficientPoolLiquidity
 Raised by addAsset() when the pool's in-range liquidity (as
 returned by `IUniswapV3Pool.liquidity()`) is below
@@ -1122,6 +1178,16 @@ registering the asset.
 
 ```solidity
 error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+```
+
+### RedeemOnly
+Raised by withdraw() and previewWithdraw(). BasketVault cannot
+guarantee ERC-4626 exactness for proportional-swap exits — use
+redeem() instead, which returns actual swap proceeds.
+
+
+```solidity
+error RedeemOnly();
 ```
 
 ## Structs

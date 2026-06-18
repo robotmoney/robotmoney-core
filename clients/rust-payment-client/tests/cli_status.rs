@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4.8 / §9 — CLI integration tests for `rmpc status`
+//! Canonical: Plan tracking issue #109 §4.8 / §9 — CLI integration tests for `rmpc status`
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! Integration tests for `rmpc status --payment-id` (issue #149).

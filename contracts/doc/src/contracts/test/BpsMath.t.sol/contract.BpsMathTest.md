@@ -1,5 +1,5 @@
 # BpsMathTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64abc76af5e5cb6274bcad2a01525a762981c62c/contracts/test/BpsMath.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/BpsMath.t.sol)
 
 **Inherits:**
 Test

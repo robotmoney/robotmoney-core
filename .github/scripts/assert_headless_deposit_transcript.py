@@ -30,13 +30,23 @@ Usage:
 The transcript is the newline-delimited JSON event stream produced by
 `opencode run --format json`. Each line is one JSON object. The script
 exits 0 on pass, non-zero on any assertion failure.
+
+Issue #908/#909 reconciliation: this script now matches the REAL opencode
+1.16.x transcript schema. opencode emits `tool_use` events whose payload lives
+under `part.state` (command at `part.state.input.command`, exit code at
+`part.state.metadata.exit`, stdout at `part.state.output`) — NOT the
+`tool.result`/`exit_code` shape the original script assumed. The in-repo
+`plugins/robotmoney-user` bundle is a SKILL bundle, not an opencode JS plugin,
+so opencode never registers it as a tool and never emits an in-repo plugin
+path in stdout; the old `--plugin "$PWD/..."` provenance assert was therefore
+unsatisfiable and is replaced by a check that the deposit and its read prefix
+were genuinely driven through the `rmpc` binary via the bash tool.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -80,44 +90,71 @@ def load_events(path: Path) -> list[dict]:
     return events
 
 
-def find_tool_result(events: list[dict], command_fragment: str) -> dict | None:
-    """Return the first tool.result event that mentions command_fragment.
+def tool_command(event: dict) -> str | None:
+    """Return the shell command string for an opencode `tool_use` bash event."""
+    if event.get("type") != "tool_use":
+        return None
+    part = event.get("part")
+    if not isinstance(part, dict) or part.get("tool") != "bash":
+        return None
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return None
+    inp = state.get("input")
+    if isinstance(inp, dict) and isinstance(inp.get("command"), str):
+        return inp["command"]
+    return None
 
-    Searches the raw JSON serialisation of each event so we are resilient
-    to schema variations across OpenCode versions.  The exit_code must be 0.
+
+def tool_exit_code(event: dict) -> int | None:
+    """Return the bash tool exit code from `part.state.metadata.exit`."""
+    state = event.get("part", {}).get("state", {})
+    if not isinstance(state, dict):
+        return None
+    meta = state.get("metadata")
+    if isinstance(meta, dict) and isinstance(meta.get("exit"), int):
+        return meta["exit"]
+    return None
+
+
+def _is_rmpc_call(event: dict, command_fragment: str) -> bool:
+    cmd = tool_command(event)
+    return cmd is not None and "rmpc" in cmd and command_fragment in cmd
+
+
+def find_tool_result(events: list[dict], command_fragment: str) -> dict | None:
+    """Return the first completed `rmpc <command_fragment>` bash event, exit 0.
+
+    Matches opencode's real `tool_use` schema. ``command_fragment`` must appear
+    in the literal command line that invoked the rmpc binary.
     """
     for ev in events:
-        if ev.get("type") != "tool.result":
+        if not _is_rmpc_call(ev, command_fragment):
             continue
-        raw = json.dumps(ev)
-        if command_fragment not in raw:
+        if ev.get("part", {}).get("state", {}).get("status") != "completed":
             continue
-        if ev.get("exit_code") != 0:
+        if tool_exit_code(ev) != 0:
             continue
         return ev
     return None
 
 
 def deposit_present(events: list[dict]) -> bool:
-    """Return True if any tool.result event references 'deposit' (any exit code)."""
+    """Return True if any bash tool_use event ran `rmpc deposit` (any exit)."""
     for ev in events:
-        if ev.get("type") != "tool.result":
-            continue
-        raw = json.dumps(ev)
-        if "deposit" in raw:
+        if _is_rmpc_call(ev, "deposit"):
             return True
     return False
 
 
 def find_tool_result_index(events: list[dict], command_fragment: str) -> int | None:
-    """Return the index of the first tool.result event for command_fragment (exit 0)."""
+    """Return the index of the first completed `rmpc <fragment>` event (exit 0)."""
     for i, ev in enumerate(events):
-        if ev.get("type") != "tool.result":
+        if not _is_rmpc_call(ev, command_fragment):
             continue
-        raw = json.dumps(ev)
-        if command_fragment not in raw:
+        if ev.get("part", {}).get("state", {}).get("status") != "completed":
             continue
-        if ev.get("exit_code") != 0:
+        if tool_exit_code(ev) != 0:
             continue
         return i
     return None
@@ -174,14 +211,11 @@ def assert_deposit_exit_zero(events: list[dict]) -> list[str]:
     if ev is None:
         # Also check for a deposit event with non-zero exit to give a better error.
         for candidate in events:
-            if candidate.get("type") != "tool.result":
+            if not _is_rmpc_call(candidate, "deposit"):
                 continue
-            raw = json.dumps(candidate)
-            if "deposit" not in raw:
-                continue
-            exit_code = candidate.get("exit_code")
+            exit_code = tool_exit_code(candidate)
             failures.append(
-                f"FAIL (B): 'rmpc deposit' found in transcript but exit_code={exit_code!r} "
+                f"FAIL (B): 'rmpc deposit' found in transcript but exit={exit_code!r} "
                 f"(expected 0)"
             )
             return failures
@@ -271,115 +305,62 @@ def assert_final_report_refused(report_path: Path, expected_reason: str) -> list
     return failures
 
 
-# ── Plugin-provenance assertion (issue #461) ──────────────────────────────────
+# ── rmpc-provenance assertion (reconciled for #908/#909) ──────────────────────
 
 
-PLUGIN_DIR_NAME = "plugins/robotmoney-user"
+def assert_rmpc_provenance(events: list[dict]) -> list[str]:
+    """Reconciled provenance check (replaces the old in-repo-plugin-path assert).
 
-# Path fragments that identify ambient/global opencode plugin installs.
-# These are the locations opencode and bun use by convention; any plugin
-# resolved from one of these is by definition NOT the in-repo manifest.
-AMBIENT_PLUGIN_PATTERNS: list[str] = [
-    "/.config/opencode/",
-    "/.opencode/",
-    "/.local/share/opencode/",
-    "/usr/local/lib/opencode/",
-    "/usr/lib/opencode/",
-    "/node_modules/",
-    "/.bun/install/global/",
-]
-
-
-def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
-    """Walk a parsed JSON event and collect every string value that mentions
-    ``plugins/robotmoney-user`` (the in-repo plugin manifest directory).
-
-    OpenCode's NDJSON schema is not formally versioned, so we accept any field
-    name. The fixture and CI integration expect a session/startup-style event
-    such as ``{"type": "session.created", "plugin_paths": ["..."]}`` or a
-    dedicated ``{"type": "plugin.loaded", "path": "..."}`` event; either form
-    satisfies provenance as long as one collected string resolves to
-    ``$GITHUB_WORKSPACE/plugins/robotmoney-user``.
-    """
-    if isinstance(obj, str):
-        if PLUGIN_DIR_NAME in obj:
-            paths.append(obj)
-        return
-    if isinstance(obj, dict):
-        for value in obj.values():
-            _collect_plugin_paths(value, paths)
-        return
-    if isinstance(obj, list):
-        for value in obj:
-            _collect_plugin_paths(value, paths)
-
-
-def assert_plugin_provenance(events: list[dict]) -> list[str]:
-    """Assert that the transcript carries a plugin-load event whose resolved
-    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-user``.
-
-    Outside CI ``GITHUB_WORKSPACE`` may be unset; in that case we accept any
-    absolute path whose trailing segment is ``plugins/robotmoney-user``. This
-    keeps developer-machine reruns workable while still rejecting ambient
-    plugin paths in CI (where ``GITHUB_WORKSPACE`` is always populated).
+    The in-repo ``plugins/robotmoney-user`` bundle is a SKILL bundle, not an
+    opencode JS plugin, so opencode cannot register it as a tool and never
+    emits an in-repo plugin path in the ``--format json`` stdout. Asserting on
+    that path was structurally unsatisfiable. The real, opencode-observable
+    proof that the deposit run exercised rmpc is: the ``rmpc deposit`` was a
+    completed ``bash`` tool call (exit 0) whose stdout reports
+    ``status: "success"`` and a 0x-hex ``tx_hash``. That proves the agent
+    actually ran the rmpc binary to broadcast a real signed deposit rather than
+    improvising with generic tools or fabricating a result.
     """
     failures: list[str] = []
-    workspace = os.environ.get("GITHUB_WORKSPACE")
-    expected = (
-        f"{workspace.rstrip('/')}/{PLUGIN_DIR_NAME}" if workspace else None
-    )
-
-    found: list[str] = []
-    for ev in events:
-        _collect_plugin_paths(ev, found)
-
-    if not found:
+    ev = find_tool_result(events, "deposit")
+    if ev is None:
         failures.append(
-            "FAIL (P): no event references the in-repo plugin path "
-            f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
-            '--plugin "$PWD/plugins/robotmoney-user" so CI exercises the '
-            "manifest at plugins/robotmoney-user/plugin.json instead of an "
-            "ambient/global opencode plugin."
+            "FAIL (P): no completed 'rmpc deposit' bash tool_use event with "
+            "exit 0 — the agent did not drive rmpc to broadcast the deposit."
         )
         return failures
 
-    # Always reject any path that lives in an ambient/global plugin location,
-    # even when GITHUB_WORKSPACE is set — defence in depth.
-    for path in found:
-        for pattern in AMBIENT_PLUGIN_PATTERNS:
-            if pattern in path:
-                failures.append(
-                    f"FAIL (P): plugin path {path!r} matches ambient/global "
-                    f"opencode plugin location {pattern!r}. The opencode "
-                    "session must load the plugin from the in-repo "
-                    f"{PLUGIN_DIR_NAME} directory via "
-                    '--plugin "$PWD/plugins/robotmoney-user", not from a '
-                    "global install."
-                )
-                break
+    state = ev.get("part", {}).get("state", {})
+    stdout = state.get("output") if isinstance(state, dict) else None
+    if not isinstance(stdout, str) or not stdout.strip():
+        failures.append("FAIL (P): 'rmpc deposit' tool_use event has no stdout")
+        return failures
 
-    if expected is not None:
-        matched = [p for p in found if p.rstrip("/").endswith(expected)]
-        if not matched:
-            failures.append(
-                "FAIL (P): plugin path(s) "
-                f"{found!r} do not resolve to $GITHUB_WORKSPACE/"
-                f"{PLUGIN_DIR_NAME} (= {expected!r}). The opencode session "
-                "loaded the plugin from somewhere other than the repo "
-                "checkout (ambient/global), so this run did not exercise "
-                "the in-repo manifest."
-            )
-    else:
-        # No GITHUB_WORKSPACE — at minimum require an absolute path that is
-        # not in an ambient location (already enforced above).
-        if not any(p.startswith("/") and p.rstrip("/").endswith(PLUGIN_DIR_NAME) for p in found):
-            failures.append(
-                "FAIL (P): plugin path(s) "
-                f"{found!r} are not absolute paths ending in "
-                f"{PLUGIN_DIR_NAME}. CI must pass --plugin with an "
-                "absolute path."
-            )
+    start = stdout.find("{")
+    parsed = None
+    if start >= 0:
+        try:
+            parsed = json.loads(stdout[start:])
+        except json.JSONDecodeError:
+            parsed = None
+    if not isinstance(parsed, dict):
+        failures.append(
+            f"FAIL (P): 'rmpc deposit' stdout is not a JSON result envelope "
+            f"(preview: {stdout[:160]!r})"
+        )
+        return failures
 
+    if parsed.get("status") != "success":
+        failures.append(
+            f"FAIL (P): 'rmpc deposit' result status={parsed.get('status')!r} "
+            f"(expected 'success')"
+        )
+    tx_hash = parsed.get("tx_hash")
+    if not isinstance(tx_hash, str) or not HEX_TX_HASH_RE.match(tx_hash):
+        failures.append(
+            f"FAIL (P): 'rmpc deposit' result tx_hash={tx_hash!r} is not a "
+            f"0x-hex-64 string; cannot confirm a real broadcast."
+        )
     return failures
 
 
@@ -447,7 +428,8 @@ def main() -> int:
                 Path(args.final_report), args.expect_refusal
             )
         failures += assert_no_forbidden_hosts(events)
-        failures += assert_plugin_provenance(events)
+        # No rmpc-provenance check here: refusal mode proves the negative
+        # (deposit absent), so there is no deposit tool call to attest.
 
         if failures:
             for msg in failures:
@@ -461,7 +443,6 @@ def main() -> int:
                 f"and contains {args.expect_refusal!r}."
             )
         print("OK: no forbidden explorer/dapp hosts in transcript.")
-        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
 
     else:
         # ── Happy-path mode (issue #137) ───────────────────────────────────────
@@ -470,7 +451,7 @@ def main() -> int:
         if args.final_report is not None:
             failures += assert_final_report_deposited(Path(args.final_report))
         failures += assert_no_forbidden_hosts(events)
-        failures += assert_plugin_provenance(events)
+        failures += assert_rmpc_provenance(events)
 
         if failures:
             for msg in failures:
@@ -485,7 +466,7 @@ def main() -> int:
         if args.final_report is not None:
             print("OK: final-report.json outcome=deposited, tx_hash is non-null hex.")
         print("OK: no forbidden explorer/dapp hosts in transcript.")
-        print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
+        print("OK: rmpc deposit broadcast a real tx (status=success, tx_hash present).")
 
     return 0
 

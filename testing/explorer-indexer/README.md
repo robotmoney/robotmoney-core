@@ -1,11 +1,11 @@
 # Explorer indexer integration tests
 
-Canonical: Plan tracking issue #109 (formerly `docs/implementation-plan.md` §11) + `docs/technical/explorer-schema-decisions.md` (issue #56).
+Canonical: Plan tracking issue #109 (formerly `Plan tracking issue #109` §11) + `docs/technical/explorer-schema-decisions.md` (issue #56).
 Implements: issue #57 / PR #76.
 
 The explorer-indexer crate lives at `services/explorer-indexer/`. Its
 integration tests boot a Postgres testcontainer and (for the fork
-scenario) a Base-mainnet fork-anvil via the Phase 2 `rmpc-fork-e2e`
+scenario) a forked-Base fork-anvil via the Phase 2 `rmpc-fork-e2e`
 harness. Run them from the crate directory:
 
 ```sh

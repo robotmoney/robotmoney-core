@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5 — Geth+Lighthouse smoke test
+//! Canonical: Plan tracking issue #109 §5 — Geth+Lighthouse smoke test
 //!
 //! Smoke test for the e2e harness scaffold. Boots the Docker
 //! Geth+Lighthouse devnet via [`Fixture::new`], runs `forge script

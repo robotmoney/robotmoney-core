@@ -1,5 +1,5 @@
 # DeployAgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:**
 Script
@@ -7,15 +7,15 @@ Script
 **Title:**
 DeployAgentTokenVault
 
-Deploys `AgentTokenVault` and seeds it with the canonical MVP
-six-token shortlist (ADR-0001): JUNO, ROBOTMONEY, BANKR, ZYFAI,
-GIZA, DEUS — Base-only, equal-weight, ADMIN_ROLE-curated. Token
-addresses are read from `config/agent-token-shortlist.json`; no
+Deploys `AgentTokenVault` and seeds it with the active three-token
+demo shortlist: BNKR, JUNO, RM. Token, pool, adapter, and
+venue data are read from `config/agent-token-shortlist.json`; no
 token address is hardcoded in Solidity source.
 Chain selection: `block.chainid == 8453` (Base mainnet) reads the
 `mainnet` block of the config. Any other chain id reads stand-in
 ERC20 + pool addresses from `DEVNET_AGENT_TOKEN_<SYMBOL>` /
-`DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` env
+`DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` /
+`DEVNET_AGENT_ADAPTER_<SYMBOL>` env
 overrides, matching the single-production-codebase principle: the
 same script ships everywhere, only the address source differs.
 Required env vars:
@@ -56,20 +56,20 @@ uint256 public constant PER_DEPOSIT_CAP = 1_000_000 * 1e6
 
 ## State Variables
 ### SYMBOLS
-Canonical MVP shortlist symbols in deploy order (ADR-0001).
+Active shortlist symbols in deploy order.
 Ordering is load-bearing: AgentTokenVault.shortlist() returns
 tokens in this order, and the dapp/tests assert on it.
 
 
 ```solidity
-string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"]
+string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"]
 ```
 
 
 ## Functions
 ### run
 
-Broadcast entrypoint. Deploys the vault, seeds the six-token
+Broadcast entrypoint. Deploys the vault, seeds the three-token
 shortlist, optionally registers it, and writes a deployment JSON.
 
 
@@ -89,18 +89,25 @@ function _deployAndSeed(
     address emergencyResponder,
     address swapRouter,
     address usdc,
-    Entry[6] memory entries
+    Entry[3] memory entries
 ) internal returns (Deployed memory d);
 ```
 
 ### _resolveShortlist
 
-Resolve the six shortlist entries from config (mainnet) or env
+Resolve the three shortlist entries from config (mainnet) or env
 overrides (devnet), selected by chain id.
 
 
 ```solidity
-function _resolveShortlist() internal view returns (Entry[6] memory entries);
+function _resolveShortlist() internal view returns (Entry[3] memory entries);
+```
+
+### _venueFromString
+
+
+```solidity
+function _venueFromString(string memory value) internal pure returns (BasketVault.Venue);
 ```
 
 ### _readConfig
@@ -153,7 +160,7 @@ function _envStringOrDefault(string memory key, string memory fallback_)
 
 ## Structs
 ### Entry
-A single resolved shortlist entry (token + USDC V3 pool + fee).
+A single resolved shortlist entry.
 
 
 ```solidity
@@ -162,6 +169,8 @@ struct Entry {
     address token;
     address pool;
     uint24 swapFee;
+    address adapter;
+    BasketVault.Venue venue;
 }
 ```
 

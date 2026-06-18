@@ -1,5 +1,5 @@
 # IPortfolioRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/interfaces/IPortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/gateway/interfaces/IPortfolioRouter.sol)
 
 **Title:**
 IPortfolioRouter
@@ -47,9 +47,13 @@ USDC only to `assetRecipient`.
 
 
 ```solidity
-function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
-    external
-    returns (uint256[] memory assetsPerLeg);
+function redeemFor(
+    address shareHolder,
+    address assetRecipient,
+    uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg,
+    uint256 deadline
+) external returns (uint256[] memory assetsPerLeg);
 ```
 **Parameters**
 
@@ -58,6 +62,8 @@ function redeemFor(address shareHolder, address assetRecipient, uint256[] callda
 |`shareHolder`|`address`|      Address whose vault shares are redeemed (must have approved the router to spend shares per vault).|
 |`assetRecipient`|`address`|   Address that receives the redeemed USDC per leg.|
 |`sharesPerLeg`|`uint256[]`|     Vault shares to redeem per leg (parallel to weight list). Length must match the current weight vector.|
+|`minAssetsPerLeg`|`uint256[]`|  Per-leg USDC slippage floor (parallel to `sharesPerLeg`). Reverts `SlippageExceeded` if realized proceeds fall below the floor. A floor of 0 disables the check for that leg; length must match `sharesPerLeg`.|
+|`deadline`|`uint256`|         Unix timestamp after which the call reverts `DeadlineExpired`. Pass `type(uint256).max` to disable.|
 
 **Returns**
 

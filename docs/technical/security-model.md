@@ -175,7 +175,7 @@ source. The manipulation-resistance posture is:
 
 | Attack | Required control |
 |---|---|
-| Flash-loan voting takeover (Beanstalk-class) | When `$ROBOTMONEY` / `veRM` governance ships, vote weight must be determined by a snapshotted or vote-escrowed balance, not a spot balance. Flash-loan acquisition of voting power must be provably ineffective. |
+| Flash-loan voting takeover (Beanstalk-class) | When `$RM` / `veRM` governance ships, vote weight must be determined by a snapshotted or vote-escrowed balance, not a spot balance. Flash-loan acquisition of voting power must be provably ineffective. |
 | Same-block propose-and-execute | All governance execution must include a mandatory delay between proposal and execution. This applies to both the `TimelockController` and any future token-governance module. |
 | Bribery / vote-buying markets | Acknowledged risk class. The governance design must document its stance on vote markets before the governance token ships. |
 | Treasury drain via malicious proposal | Treasury operations must be gated by the multisig-backed timelock. A treasury-drain proposal must be detectable and cancellable within the timelock delay window. |
@@ -192,7 +192,7 @@ source. The manipulation-resistance posture is:
 | Attack | Required control |
 |---|---|
 | Pre-0.8 integer overflow inheritance | All contracts must use Solidity ≥0.8. OZ dependency versions must be pinned in `foundry.toml` / `package.json`. Any dependency upgrade requires a PR with an explicit compatibility review. |
-| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. |
+| Unverified bytecode | All production contracts must be verified on BaseScan within one hour of deployment. The verified source must match the tagged commit in this repository. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` runs `forge script --broadcast --verify` and then calls `scripts/assert-basescan-verified.sh` for every deployed address, blocking the deploy job until all contracts are source-verified or the 3600 s timeout expires. |
 | Compromised npm/cargo dependency | `cargo audit`, npm/Bun dependency audit, and lockfile-integrity checks must run in CI and block on high-severity findings. Solidity, Rust, JS, and GitHub Actions dependencies must be pinned to exact versions or immutable SHAs. Any dependency update requires an explicit review comment in the PR. |
 | Compiler-bug exposure | Before each production deployment, the Solidity known-bug list for the compiler version in use must be reviewed and any applicable bugs documented and addressed. |
 | Adapter target contract upgrade | Compound v3 and Aave v3 are upgradeable by their own governance. This is an accepted upstream-trust assumption. A monitoring process must alert on upstream governance proposals that affect our adapter interfaces. Implemented by the governance-proposal monitor — see [docs/technical/upstream-monitoring-runbook.md](./upstream-monitoring-runbook.md#governance-proposal). |
@@ -243,7 +243,7 @@ This section maps onto `docs/architecture.md` §15.
 | Frontend JS injection (Bybit/Safe-class) | The dapp must be deployed with a strict Content Security Policy that disallows inline scripts and eval. Public production builds must be static, content-addressed or content-hash deployed, and reproducible from a signed tag. Third-party or CDN scripts are prohibited by default; if an exception is approved, Subresource Integrity hashes are required. The canonical deployment procedure must be documented and enforced. |
 | Build-pipeline compromise | Dapp release artifacts must be reproducibly buildable from a tagged commit. Release tags must be signed. Provenance attestation is required before public launch. |
 | DNS hijack / phishing clone domain | Official domain(s) must be documented, registrar-locked, DNSSEC-enabled where supported by the registrar/TLD, and monitored for record changes. If IPFS/content-addressed hosting is used, an ENS record must point to the pinned deployment. A canonical domain list must be published. |
-| TLS/cert mis-issuance | HSTS preload must be enabled on all dapp domains. |
+| TLS/cert mis-issuance | HSTS preload must be enabled on all dapp domains. The required header value `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` is emitted by the Vite preview server via `clients/dapp/src/lib/csp.ts` (`HSTS_HEADER_VALUE`) and verified in CI by `clients/dapp/scripts/check-hsts.sh` (suite-09 "Enforce HSTS preload header" step). Production CDN/nginx operators must copy this directive verbatim. Domain preload-list submission must be completed before public launch via hstspreload.org. |
 | XSS in dapp | A Content Security Policy that disallows inline scripts and eval must be enforced. This must be verified in CI before public launch. |
 | CSRF on backend signing endpoint | There must be no backend signing endpoint. Signing is client-side or agent-side only. |
 | WalletConnect-pairing abuse | Users must be educated on verifying the pairing origin. The dapp must display the connected chain and address prominently before any signing request. |
@@ -261,7 +261,7 @@ This section maps onto `docs/architecture.md` §15.
 | Base sequencer censorship | Force-inclusion via L1 must be documented in the user playbook. This is an accepted Base L2 risk. |
 | Base sequencer reorg | A minimum confirmation-depth policy must be documented per operation class and enforced by `rmpc` before reporting transaction finality. High-value admin and governance operations must distinguish "L2 included" from "L1 finalized." |
 | L1 reorg affecting L2 finality | Same as above. The confirmation-depth policy must account for L1 finality and must be surfaced in `rmpc` JSON output and dapp status copy. |
-| RPC provider outage | `rmpc` must support multiple RPC endpoints with automatic failover. The operator config must document the required redundancy. |
+| RPC provider outage | **Satisfied (issue #667).** `FailoverRpcClient` in `clients/rust-payment-client/src/rpc/mod.rs` retries every JSON-RPC call across an ordered list of endpoints; `Config.rpc_urls` (list) and the backward-compatible `Config.rpc_url` (single) are both accepted. `clients/rust-payment-client/config.example.toml` documents the minimum recommended redundancy (two endpoints from different providers). |
 | Mempool-leak exposing pending agent intents | Agent deposits are irreversible by design and carry no slippage surface on the vault leg; public mempool is accepted for MVP. When bucket-B/C legs ship, private orderflow submission must be evaluated. |
 | Time/clock skew on signer | Signing must use EVM block context, not wall time, for all deadline and expiry computations. |
 
@@ -271,8 +271,8 @@ This section maps onto `docs/architecture.md` §15.
 
 | Attack | Required control |
 |---|---|
-| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. |
-| Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. |
+| Deploy-key compromise pushes a malicious contract | Deploy artifacts must match a tagged, reviewed commit. BaseScan verification must complete within one hour of deploy. At least one second reviewer must sign off on the deploy before execution. **CI gate implemented** (issue #662): `.github/workflows/deploy-contracts.yml` uses a GitHub Actions `environment` requiring sign-off before execution, and asserts BaseScan verification within 3600 s. |
+| Verified-source / deployed-bytecode mismatch | All contracts must be verified on BaseScan. The CI deploy pipeline must assert verification before closing the deploy job. **CI gate implemented** (issue #662): `scripts/assert-basescan-verified.sh` polls the BaseScan `getsourcecode` API for each deployed address and exits non-zero if any contract is unverified when the timeout is reached. |
 | Secret leak via repo | `.gitignore` must exclude all `.env`, keystore, and credential files. CI must run a secrets-scanning step on every PR. |
 | CI runner compromise injecting deploy artifact | Deploy jobs must run on pinned, hardened runners. Production deploys must require explicit human approval in the CI pipeline. |
 | Backup loss / single-keeper-of-seed | Each Safe signer must independently back up their seed phrase to an offline, hardware-encrypted medium. No single person may hold sole recovery capability. |

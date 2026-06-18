@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -465,6 +465,13 @@ and AdapterForceRemoved is emitted with the correct lossAmount.
 function test_forceRemoveAdapter_deactivatesAdapterAndEmitsCorrectLoss() public;
 ```
 
+### test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts
+
+
+```solidity
+function test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts() public;
+```
+
 ### test_forceRemoveAdapter_revertsWhenCallerLacksEmergencyRole
 
 Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.
@@ -499,5 +506,29 @@ forceRemoveAdapter must pause deposits to close the share-price-crash arbitrage 
 
 ```solidity
 function test_forceRemoveAdapter_pausesDeposits() public;
+```
+
+### test_shutdownVault_isRecoverableByAdminNotEmergency
+
+EMERGENCY_ROLE can shut the vault down (deposits blocked,
+maxDeposit == 0) and the new ADMIN_ROLE-gated restoreVault
+re-opens deposits (maxDeposit > 0 and a deposit succeeds), while
+EMERGENCY_ROLE alone cannot restore (reverts). This proves a
+compromised emergency hot key can DoS but not permanently brick
+deposits — mirroring the documented pause/unpause asymmetry.
+
+
+```solidity
+function test_shutdownVault_isRecoverableByAdminNotEmergency() public;
+```
+
+### test_restoreVault_revertsWhenNotShutdownOrZeroCap
+
+restoreVault reverts when the vault is not shut down (NotShutdown)
+and when the supplied cap is zero (InvalidCap).
+
+
+```solidity
+function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public;
 ```
 

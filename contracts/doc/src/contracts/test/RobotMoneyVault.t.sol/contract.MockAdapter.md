@@ -1,5 +1,5 @@
 # MockAdapter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -31,6 +31,13 @@ Extra USDC credited directly (simulates protocol-level donation).
 
 ```solidity
 uint256 public donatedAmount
+```
+
+
+### revertTotalAssets
+
+```solidity
+bool public revertTotalAssets
 ```
 
 
@@ -94,6 +101,13 @@ Live USDC value held by this adapter (principal + accrued interest).
 function totalAssets() external view returns (uint256);
 ```
 
+### setRevertTotalAssets
+
+
+```solidity
+function setRevertTotalAssets(bool enabled) external;
+```
+
 ### rescueTokens
 
 Rescue non-USDC tokens accidentally sent to this contract.
@@ -126,5 +140,11 @@ function donateFromAttacker(address attacker, uint256 amount) external;
 
 ```solidity
 error OnlyVault();
+```
+
+### TotalAssetsUnavailable
+
+```solidity
+error TotalAssetsUnavailable();
 ```
 

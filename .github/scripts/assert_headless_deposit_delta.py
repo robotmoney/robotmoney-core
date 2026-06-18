@@ -23,7 +23,17 @@ The script:
    ``deposit_amount``, or ``assets`` in the event payload).
 2. Parses pre and post vault state, extracting ``total_assets`` (or
    equivalent: ``totalAssets``, ``vault_balance``).
-3. Asserts ``post - pre == deposit_amount``.
+3. Asserts ``post - pre`` is the deposit amount within a small tolerance.
+   On the real Aave V3 / Compound V3 / Morpho vault (issue #912 removed the
+   no-yield test adapter), ``total_assets`` is not a static balance: it
+   accrues yield every block, and adapters lose a few integer-division dust
+   units round-tripping USDC through yield-bearing tokens. So the measured
+   delta is ``deposit_amount + accrued_yield - rounding_dust`` and never
+   lands on the exact deposit amount. We therefore require the delta to sit
+   within ``[deposit - DELTA_LOWER_BPS, deposit + DELTA_UPPER_BPS]`` — the
+   lower bound still proves the deposit fully landed (no silent gateway
+   no-op), the upper bound still catches a gross wrong-vault / double-count
+   bug, while tolerating real yield + rounding.
 4. Exits 0 on match, non-zero otherwise.
 """
 
@@ -37,6 +47,16 @@ from pathlib import Path
 
 DEPOSIT_AMOUNT_KEYS = ("amount", "deposit_amount", "assets", "value")
 TOTAL_ASSETS_KEYS = ("total_assets", "totalAssets", "vault_balance", "assets")
+
+# Tolerance band for the on-chain totalAssets delta vs the deposit amount on a
+# real-yield vault (issue #912). Lower bound: at most 10 bps short, covering
+# adapter integer-division rounding dust (Deploy.s.sol's seed deposit allows a
+# comparable 1 bps loss). Upper bound: at most 100 bps over, covering yield
+# accrued between the pre/post snapshots while still catching gross
+# double-count / wrong-vault errors.
+DELTA_LOWER_BPS = 10
+DELTA_UPPER_BPS = 100
+BPS_DENOMINATOR = 10_000
 
 
 def load_ndjson(path: Path) -> list[dict]:
@@ -75,28 +95,46 @@ def _find_in_dict(obj: object, keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _deposit_event(ev: dict) -> dict | None:
+    """Return the `part.state` of a completed `rmpc deposit` bash tool_use event
+    (exit 0), matching opencode 1.16.x's real schema. Returns None otherwise.
+
+    opencode emits `{"type": "tool_use", "part": {"tool": "bash", "state":
+    {"status": "completed", "input": {"command": "rmpc deposit ..."},
+    "metadata": {"exit": 0}, "output": "<rmpc stdout>"}}}`.
+    """
+    if ev.get("type") != "tool_use":
+        return None
+    part = ev.get("part")
+    if not isinstance(part, dict) or part.get("tool") != "bash":
+        return None
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return None
+    inp = state.get("input")
+    cmd = inp.get("command") if isinstance(inp, dict) else None
+    if not isinstance(cmd, str) or "rmpc" not in cmd or "deposit" not in cmd:
+        return None
+    if state.get("status") != "completed":
+        return None
+    meta = state.get("metadata")
+    if not isinstance(meta, dict) or meta.get("exit") != 0:
+        return None
+    return state
+
+
 def deposit_amount_from_transcript(events: list[dict]) -> int | None:
     """Return the deposit amount (smallest unit) reported in the transcript.
 
-    Looks for the first ``tool.result`` event whose serialized form mentions
-    ``deposit`` and ``exit_code == 0`` and extracts a numeric ``amount``
-    (or equivalent key) from anywhere inside the event payload, including
-    the parsed ``stdout`` JSON.
+    Looks for the completed `rmpc deposit` bash tool_use event and extracts a
+    numeric ``amount`` (or equivalent key) from the rmpc result JSON in its
+    stdout (``part.state.output``).
     """
     for ev in events:
-        if ev.get("type") != "tool.result":
+        state = _deposit_event(ev)
+        if state is None:
             continue
-        raw = json.dumps(ev)
-        if "deposit" not in raw:
-            continue
-        if ev.get("exit_code") != 0:
-            continue
-        amount = _find_in_dict(ev, DEPOSIT_AMOUNT_KEYS)
-        if amount is not None:
-            return amount
-        # Try parsing stdout as JSON.
-        for key in ("stdout", "output", "result", "text"):
-            val = ev.get(key)
+        for val in (state.get("output"), (state.get("metadata") or {}).get("output")):
             if isinstance(val, str) and val.strip():
                 start = val.find("{")
                 if start >= 0:
@@ -176,17 +214,20 @@ def main() -> int:
         return 1
 
     delta = post - pre
-    if delta != amount:
+    lower = amount - (amount * DELTA_LOWER_BPS) // BPS_DENOMINATOR
+    upper = amount + (amount * DELTA_UPPER_BPS) // BPS_DENOMINATOR
+    if not (lower <= delta <= upper):
         print(
-            f"FAIL: on-chain delta {delta} does not equal transcript-reported "
-            f"deposit amount {amount} (pre={pre}, post={post}).",
+            f"FAIL: on-chain delta {delta} outside tolerance "
+            f"[{lower}, {upper}] for transcript-reported deposit amount "
+            f"{amount} (pre={pre}, post={post}).",
             file=sys.stderr,
         )
         return 1
 
     print(
-        f"OK: on-chain delta {delta} matches transcript-reported deposit "
-        f"amount {amount} (pre={pre}, post={post})."
+        f"OK: on-chain delta {delta} within tolerance [{lower}, {upper}] of "
+        f"transcript-reported deposit amount {amount} (pre={pre}, post={post})."
     )
     return 0
 

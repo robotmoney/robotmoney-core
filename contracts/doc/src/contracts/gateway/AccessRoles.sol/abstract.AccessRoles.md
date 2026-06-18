@@ -1,5 +1,5 @@
 # AccessRoles
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/AccessRoles.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/gateway/AccessRoles.sol)
 
 **Inherits:**
 AccessControl
@@ -9,7 +9,7 @@ AccessRoles
 
 Role constants and AccessControl wiring for the RobotMoney gateway.
 
-Three roles, all distinct keys (see `docs/implementation-plan.md` §2.1):
+Three roles, all distinct keys (see `Plan tracking issue #109` §2.1):
 - `ADMIN_ROLE`  — grants/revokes other roles, sets policy, unpauses.
 - `PAUSER_ROLE` — `pause()` only. Asymmetric with unpause by design:
 pausing is a stop-the-world tool that must be fast and unilateral

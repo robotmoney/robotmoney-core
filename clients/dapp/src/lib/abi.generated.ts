@@ -2571,6 +2571,11 @@ export const vaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "ReentrancyGuardReentrantCall",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "SafeERC20FailedOperation",
     inputs: [
       {
@@ -3633,6 +3638,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "restoreVault",
+    inputs: [
+      {
+        name: "newTvlCap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "revokeRole",
     inputs: [
       {
@@ -4547,6 +4565,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "VaultRestored",
+    inputs: [
+      {
+        name: "newTvlCap",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "Withdraw",
     inputs: [
       {
@@ -4920,6 +4951,22 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "InsufficientAdapterLiquidity",
+    inputs: [
+      {
+        name: "requested",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      {
+        name: "available",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "InvalidCap",
     inputs: [],
   },
@@ -4946,6 +4993,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "NoActiveAdapters",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "NotShutdown",
     inputs: [],
   },
   {
@@ -5057,6 +5109,49 @@ export const registryAbiGenerated = [
         name: "",
         type: "bytes32",
         internalType: "bytes32",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "getRoleMember",
+    inputs: [
+      {
+        name: "role",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "getRoleMemberCount",
+    inputs: [
+      {
+        name: "role",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
       },
     ],
     stateMutability: "view",
@@ -5551,6 +5646,11 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "NotRegistered",
     inputs: [],
   },
@@ -5782,6 +5882,49 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "getRoleMember",
+    inputs: [
+      {
+        name: "role",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "getRoleMemberCount",
+    inputs: [
+      {
+        name: "role",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+    ],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "getWeights",
     inputs: [],
     outputs: [
@@ -5923,6 +6066,16 @@ export const routerAbiGenerated = [
         name: "sharesPerLeg",
         type: "uint256[]",
         internalType: "uint256[]",
+      },
+      {
+        name: "minAssetsPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+      {
+        name: "deadline",
+        type: "uint256",
+        internalType: "uint256",
       },
     ],
     outputs: [
@@ -6404,6 +6557,11 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "DeadlineExpired",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "FailedInnerCall",
     inputs: [],
   },
@@ -6414,7 +6572,17 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "LengthMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "MinAssetsLengthMismatch",
     inputs: [],
   },
   {
@@ -6452,6 +6620,22 @@ export const routerAbiGenerated = [
     type: "error",
     name: "SlippageExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "UnauthorizedRedeemer",
+    inputs: [
+      {
+        name: "shareHolder",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "caller",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

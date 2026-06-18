@@ -10,7 +10,7 @@ import {AdapterBytecodeGuard} from "../script/AdapterBytecodeGuard.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 
 /// @dev A contrived "proxy adapter" whose runtime bytecode contains a
 ///      `DELEGATECALL` opcode. Mirrors the EIP-1167 minimal-proxy shape: a
@@ -95,10 +95,10 @@ contract AdapterDelegatecallGuardTest is Test {
         assertFalse(guard.containsDelegatecall(address(morpho).code));
     }
 
-    function test_requireNoDelegatecall_passesForPassthroughAdapter() public {
-        PassthroughAdapter passthrough = new PassthroughAdapter(usdc, vaultAddr);
-        guard.requireNoDelegatecall(address(passthrough));
-        assertFalse(guard.containsDelegatecall(address(passthrough).code));
+    function test_requireNoDelegatecall_passesForNoYieldAdapter() public {
+        NoYieldTestAdapter noYield = new NoYieldTestAdapter(usdc, vaultAddr);
+        guard.requireNoDelegatecall(address(noYield));
+        assertFalse(guard.containsDelegatecall(address(noYield).code));
     }
 
     // ─── PUSH-immediate false-positive guard ───────────────────────────

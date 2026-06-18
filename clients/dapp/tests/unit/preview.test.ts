@@ -67,7 +67,8 @@ describe("buildPreview", () => {
     );
     expect(p.ok).toBe(false);
     if (p.ok) return;
-    expect(p.reason).toMatch(/bytecode hash/i);
+    // reason is now a typed ProductReasonCode — unverified bytecode maps to "unknown_revert"
+    expect(p.reason).toBe("unknown_revert");
   });
 
   it("flags pause on non-fork env as unsafe", () => {

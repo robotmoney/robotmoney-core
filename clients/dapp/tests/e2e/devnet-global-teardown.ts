@@ -6,7 +6,7 @@
  * child process started by devnet-global-setup.ts, triggering the binary's
  * Drop teardown of both docker compose stacks (devnet chain + dapp stack).
  *
- * Canonical: docs/implementation-plan.md §10.5, issue #230.
+ * Canonical: Plan tracking issue #109 §10.5, issue #230.
  */
 
 export { globalTeardown as default } from "./devnet-global-setup";

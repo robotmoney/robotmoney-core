@@ -1,5 +1,5 @@
 # AgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/vaults/AgentTokenVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/vaults/AgentTokenVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -37,7 +37,7 @@ The contract enforces pool cardinality and token/USDC pairing on-chain
 via BasketVault.addAsset(); all other gate criteria are verified off-chain
 by the Safe signers at proposal time.
 ## Operational notes
-The canonical MVP shortlist (six Base-only tokens, equal-weight) is seeded
+The active shortlist is seeded
 from config/agent-token-shortlist.json via
 contracts/script/DeployAgentTokenVault.s.sol — no token address is
 hardcoded here.

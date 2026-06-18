@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -780,5 +780,16 @@ the default vector while leaving defaultWeights untouched.
 
 ```solidity
 function test_clearVotedWeights_revertsToDefault() public;
+```
+
+### test_lastAdminFloor_governance_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder on RouterGovernance cannot renounce or
+revoke itself to zero admins (LastAdminFloor); after a second
+admin is granted, the original can be dropped.
+
+
+```solidity
+function test_lastAdminFloor_governance_cannotDropSoleAdmin() public;
 ```
 

@@ -1,5 +1,5 @@
 # DemoRwaStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the RWA vault devnet stubs (PRD §11.4).
 Deploys the deSPXA stand-in token, its USDC pool stub, the demo

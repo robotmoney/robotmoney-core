@@ -10,6 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -1274,7 +1275,7 @@ contract PortfolioRouterTest is Test {
                 PortfolioRouter.UnauthorizedRedeemer.selector, depositor, stranger
             )
         );
-        router.redeemFor(depositor, stranger, sharesToRedeem);
+        router.redeemFor(depositor, stranger, sharesToRedeem, new uint256[](2), type(uint256).max);
     }
 
     /// @notice shareHolder can call redeemFor on their own shares.
@@ -1301,13 +1302,129 @@ contract PortfolioRouterTest is Test {
         sharesToRedeem[1] = shares[1];
 
         vm.prank(depositor);
-        uint256[] memory assetsOut = router.redeemFor(depositor, depositor, sharesToRedeem);
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor, depositor, sharesToRedeem, new uint256[](2), type(uint256).max
+        );
 
         assertEq(assetsOut[0], shares[0]);
         assertEq(assetsOut[1], shares[1]);
         assertEq(vaultA.balanceOf(depositor), 0);
         assertEq(vaultB.balanceOf(depositor), 0);
         assertEq(usdc.balanceOf(depositor), amount);
+    }
+
+    // ─── L-8: redeemFor per-leg slippage floor + deadline ──────────────────────
+
+    /// @dev Deposit `amount`, fund both vaults to cover redemption, approve the
+    ///      router on both share tokens, and return the per-leg share array.
+    function _depositAndApproveForRedeem(uint256 amount)
+        internal
+        returns (uint256[] memory sharesToRedeem)
+    {
+        _setEqualWeights();
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        usdc.mint(address(vaultA), amount);
+        usdc.mint(address(vaultB), amount);
+
+        vm.prank(depositor);
+        vaultA.approve(address(router), shares[0]);
+        vm.prank(depositor);
+        vaultB.approve(address(router), shares[1]);
+
+        sharesToRedeem = new uint256[](2);
+        sharesToRedeem[0] = shares[0];
+        sharesToRedeem[1] = shares[1];
+    }
+
+    /// @notice redeemFor reverts SlippageExceeded when realized per-leg proceeds
+    ///         fall below the caller-supplied minAssetsPerLeg floor.
+    function test_redeemFor_revertsWhenBelowMinAssetsFloor() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        // MockRouterVault redeems 1:1, so each leg yields sharesToRedeem[i].
+        // Set the second leg's floor one wei above its proceeds → revert.
+        uint256[] memory minAssets = new uint256[](2);
+        minAssets[0] = 0;
+        minAssets[1] = sharesToRedeem[1] + 1;
+
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.SlippageExceeded.selector);
+        router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, type(uint256).max);
+    }
+
+    /// @notice redeemFor reverts DeadlineExpired when block.timestamp exceeds the
+    ///         supplied deadline, and the floor/deadline both pass at-or-above the
+    ///         floor before the deadline (happy path settles).
+    function test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        // Move time forward so a past deadline is unambiguously expired.
+        vm.warp(1_000_000);
+        uint256[] memory minAssets = new uint256[](2); // zero floors
+
+        // Expired deadline → revert before any redemption.
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.DeadlineExpired.selector);
+        router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, block.timestamp - 1);
+
+        // At-or-above floor, before deadline → succeeds.
+        // Floor exactly equals 1:1 proceeds; deadline is in the future.
+        minAssets[0] = sharesToRedeem[0];
+        minAssets[1] = sharesToRedeem[1];
+        vm.prank(depositor);
+        uint256[] memory assetsOut =
+            router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, block.timestamp + 60);
+        assertEq(assetsOut[0], sharesToRedeem[0], "leg 0 proceeds at floor");
+        assertEq(assetsOut[1], sharesToRedeem[1], "leg 1 proceeds at floor");
+        assertEq(usdc.balanceOf(depositor), amount, "depositor received full USDC");
+    }
+
+    /// @notice redeemFor reverts MinAssetsLengthMismatch when the floor array
+    ///         length does not match the effective leg count.
+    function test_redeemFor_revertsOnMinAssetsLengthMismatch() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        uint256[] memory badLenFloor = new uint256[](1); // should be length 2
+
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.MinAssetsLengthMismatch.selector);
+        router.redeemFor(depositor, depositor, sharesToRedeem, badLenFloor, type(uint256).max);
+    }
+
+    // ─── L-10: last-admin floor ────────────────────────────────────────────────
+
+    /// @notice The sole ADMIN_ROLE holder cannot renounceRole itself to an admin
+    ///         count of zero (LastAdminFloor), and cannot revokeRole itself
+    ///         either; after first granting a second admin, the old admin can be
+    ///         dropped (floor only blocks the LAST admin).
+    function test_lastAdminFloor_router_cannotDropSoleAdmin() public {
+        bytes32 adminRole = router.ADMIN_ROLE();
+        assertEq(router.getRoleMemberCount(adminRole), 1, "expected a single admin");
+
+        // renounce by the sole admin → reverts.
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        router.renounceRole(adminRole, admin);
+
+        // revoke the sole admin (admin is also the role-admin) → reverts.
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        router.revokeRole(adminRole, admin);
+
+        // Grant a second admin, then the original can be removed.
+        address admin2 = makeAddr("admin2");
+        vm.prank(admin);
+        router.grantRole(adminRole, admin2);
+        vm.prank(admin2);
+        router.revokeRole(adminRole, admin);
+        assertEq(router.getRoleMemberCount(adminRole), 1, "second admin remains");
+        assertTrue(router.hasRole(adminRole, admin2), "admin2 retains the role");
     }
 
     /// @notice With no proposal ever passed (voted vector inactive), the router

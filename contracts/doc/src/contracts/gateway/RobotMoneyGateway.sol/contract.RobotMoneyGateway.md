@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -12,7 +12,7 @@ the agent, enforces per-agent caps and a per-window gross cap,
 calls the vault, and routes the resulting `rmUSDC` shares to a
 per-agent configured receiver.
 
-Implements `docs/implementation-plan.md` §2.2. Custom errors only;
+Implements `Plan tracking issue #109` §2.2. Custom errors only;
 OZ v5 SafeERC20; the gateway must never custody `rmUSDC`. Idempotency
 hash deliberately excludes `deadline`.
 
@@ -111,8 +111,10 @@ IPortfolioRouter public immutable routerContract
 
 ## State Variables
 ### commitments
-Pending commitments keyed by `commitHash =
-keccak256(abi.encode(agent, depositor, salt))`. Cleared on reveal.
+Pending commitments keyed by
+`keccak256(abi.encode(commitHash, committer))`. Caller scoping
+prevents another account from overwriting a commitment observed
+in the mempool or on-chain.
 
 
 ```solidity
@@ -169,6 +171,48 @@ Per-agent rolling withdrawal window state. See `WithdrawWindow`.
 
 ```solidity
 mapping(address => WithdrawWindow) public agentWithdrawWindow
+```
+
+
+### _depositWindowEntries
+
+```solidity
+mapping(address => WindowEntry[]) private _depositWindowEntries
+```
+
+
+### _depositWindowHead
+
+```solidity
+mapping(address => uint256) private _depositWindowHead
+```
+
+
+### _depositWindowTotal
+
+```solidity
+mapping(address => uint256) private _depositWindowTotal
+```
+
+
+### _withdrawWindowEntries
+
+```solidity
+mapping(address => WindowEntry[]) private _withdrawWindowEntries
+```
+
+
+### _withdrawWindowHead
+
+```solidity
+mapping(address => uint256) private _withdrawWindowHead
+```
+
+
+### _withdrawWindowTotal
+
+```solidity
+mapping(address => uint256) private _withdrawWindowTotal
 ```
 
 
@@ -321,6 +365,33 @@ the deposit side is equally hardened against calendar-boundary bursts.
 
 ```solidity
 function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) internal;
+```
+
+### _pruneWindow
+
+
+```solidity
+function _pruneWindow(WindowEntry[] storage entries, uint256 head, uint256 total)
+    internal
+    view
+    returns (uint256 newHead, uint256 newTotal);
+```
+
+### _effectiveWindowTotal
+
+
+```solidity
+function _effectiveWindowTotal(WindowEntry[] storage entries, uint256 head, uint256 total)
+    internal
+    view
+    returns (uint256);
+```
+
+### _commitmentKey
+
+
+```solidity
+function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32);
 ```
 
 ### commitAuthorization
@@ -1059,6 +1130,15 @@ struct WithdrawWindow {
 |`windowStart`|`uint64`|Unix-seconds anchor of the agent's current rolling window. Zero when the agent has never withdrawn.|
 |`gross`|`uint256`|      Cumulative shares redeemed since `windowStart`.|
 
+### WindowEntry
+
+```solidity
+struct WindowEntry {
+    uint64 timestamp;
+    uint256 amount;
+}
+```
+
 ### DepositArgs
 Internal args struct to avoid stack-too-deep in `depositTo`.
 
@@ -1092,6 +1172,7 @@ struct RouterWithdrawArgs {
     uint256 totalShares;
     uint64 windowId;
     address[] vaultList;
+    uint256[] shareBalancesBefore;
 }
 ```
 

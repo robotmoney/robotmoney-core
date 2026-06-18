@@ -1,5 +1,5 @@
 # DeployRouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployRouterGovernance.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/script/DeployRouterGovernance.s.sol)
 
 **Inherits:**
 Script
@@ -18,7 +18,8 @@ ADMIN_ADDRESS      — receives ADMIN_ROLE on the governance contract
 ROUTER_ADDRESS     — deployed PortfolioRouter address
 Optional env vars:
 VOTING_PERIOD      — voting period in seconds (default: 3600 — 1 hour)
-EXECUTION_DELAY    — delay from voting end to execution in seconds (default: 0)
+EXECUTION_DELAY    — delay from voting end to execution in seconds
+(default: 3600 — 1 hour, the contract's MIN_EXECUTION_DELAY)
 QUORUM_THRESHOLD   — minimum FOR voting power for quorum (default: 1)
 DEPLOYMENT_OUT     — path for the output JSON
 (default: "deployments/governance-<chain_id>.json")
@@ -35,11 +36,13 @@ uint64 public constant DEFAULT_VOTING_PERIOD = 3600
 
 
 ### DEFAULT_EXECUTION_DELAY
-Default execution delay: 0 seconds (immediate after quorum).
+Default execution delay: 1 hour in seconds. Must be >=
+RouterGovernance.MIN_EXECUTION_DELAY (1 hour), or the
+constructor reverts with ExecutionDelayBelowMinimum().
 
 
 ```solidity
-uint64 public constant DEFAULT_EXECUTION_DELAY = 0
+uint64 public constant DEFAULT_EXECUTION_DELAY = 3600
 ```
 
 

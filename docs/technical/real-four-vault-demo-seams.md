@@ -2,7 +2,7 @@
 
 **Scout issue:** #541
 **Date:** 2026-06-02
-**Canonical docs:** `docs/implementation-plan.md`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`
+**Canonical docs:** `Plan tracking issue #109`, `docs/prd.md` §11, `docs/technical/basket-vault-gap-report.md`
 **Phase:** Real four-vault demo (Plan #109, issues #541–#568)
 
 ---
@@ -122,7 +122,7 @@ The hermetic fork fixture (`testing/fixtures/fork-state/CURRENT.*`) currently
 ingests only the addresses listed in
 `testing/ethereum-testnet/config/fork-block.json::ingested_addresses`. None of
 the Aerodrome pools, Uniswap V4 pools, or DEX pool contracts for the new basket
-tokens (BNKR, JUNO, ROBOTMONEY/deSPXA) are in that list.
+tokens (BNKR, JUNO, RM/deSPXA) are in that list.
 
 Hot files:
 
@@ -295,7 +295,7 @@ wETH/USDC, cbBTC/USDC, and wSOL/USDC, plus the Aave/Compound/Morpho adapters.
 |---|---|---|
 | BNKR (BANKR) | Uniswap V3 BNKR/USDC | Address TBD — `config/agent-token-shortlist.json` records `"TODO: confirm Base mainnet BANKR token + USDC V3 pool"` |
 | JUNO | Uniswap V4 JUNO/USDC | Uniswap V4 on Base; pool address TBD — ADR-0001 revision (#543) must resolve |
-| ROBOTMONEY ($RM) | Uniswap V4 or Aerodrome $RM/USDC | `config/agent-token-shortlist.json` records `"TODO: wire deployed RmToken address"` |
+| RM | Uniswap V4 or Aerodrome $RM/USDC | `config/agent-token-shortlist.json` records `"TODO: wire deployed RmToken address"` |
 | deSPXA (Centrifuge) | Aerodrome deSPXA/USDC secondary market | ADR #548 resolves pool address; no primary ERC-7540 NAV redeem (async+KYC) |
 | Aerodrome router | `Router.sol` / `PoolFactory.sol` | Deployed contracts on Base; address needed for adapter wiring |
 | Uniswap V4 PoolManager | `0x...` | Base-mainnet PoolManager address; needed for the V4 adapter |
@@ -409,7 +409,7 @@ Every file path below exists in the tree at the time of this commit:
 - `testing/smoke-test/tests/demo_seeding.rs`
 - `testing/smoke-test/tests/full_stack_demo_tvl.rs`
 - `docs/prd.md`
-- `docs/implementation-plan.md`
+- `Plan tracking issue #109`
 - `docs/technical/basket-vault-gap-report.md`
 - `docs/technical/demo-seeding-seams.md`
 - `docs/adr/ADR-0001-mvp-agent-token-shortlist.md`

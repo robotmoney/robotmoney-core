@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -714,6 +714,61 @@ shareHolder can call redeemFor on their own shares.
 
 ```solidity
 function test_redeemFor_shareHolderCanRedeem() public;
+```
+
+### _depositAndApproveForRedeem
+
+Deposit `amount`, fund both vaults to cover redemption, approve the
+router on both share tokens, and return the per-leg share array.
+
+
+```solidity
+function _depositAndApproveForRedeem(uint256 amount)
+    internal
+    returns (uint256[] memory sharesToRedeem);
+```
+
+### test_redeemFor_revertsWhenBelowMinAssetsFloor
+
+redeemFor reverts SlippageExceeded when realized per-leg proceeds
+fall below the caller-supplied minAssetsPerLeg floor.
+
+
+```solidity
+function test_redeemFor_revertsWhenBelowMinAssetsFloor() public;
+```
+
+### test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline
+
+redeemFor reverts DeadlineExpired when block.timestamp exceeds the
+supplied deadline, and the floor/deadline both pass at-or-above the
+floor before the deadline (happy path settles).
+
+
+```solidity
+function test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline() public;
+```
+
+### test_redeemFor_revertsOnMinAssetsLengthMismatch
+
+redeemFor reverts MinAssetsLengthMismatch when the floor array
+length does not match the effective leg count.
+
+
+```solidity
+function test_redeemFor_revertsOnMinAssetsLengthMismatch() public;
+```
+
+### test_lastAdminFloor_router_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder cannot renounceRole itself to an admin
+count of zero (LastAdminFloor), and cannot revokeRole itself
+either; after first granting a second admin, the old admin can be
+dropped (floor only blocks the LAST admin).
+
+
+```solidity
+function test_lastAdminFloor_router_cannotDropSoleAdmin() public;
 ```
 
 ### test_previewDeposit_uses_defaultWeights_when_no_proposal

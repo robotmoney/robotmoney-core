@@ -1,6 +1,13 @@
 # Canonical: docs/development/ci-suites.md §14
 #
 # WHY THIS SUITE EXISTS
+# This suite is the CI contract for `make testnet`: the cli_meta matrix entry boots
+# `cargo run -p smoke-test -- --full-stack` — the exact path `make testnet` runs — so a
+# devnet boot regression (e.g. a deploy script drifting from a contract invariant, like
+# the RouterGovernance ExecutionDelayBelowMinimum revert) is caught in CI on push to
+# main/dev/dev-phase-* and in the nightly full-suite run (suite-21), not only when a
+# human next runs `make testnet` locally.
+#
 # The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.
 # If Fixture::new() is broken — because a Docker image changed, the genesis script
 # regressed, or a port mapping shifted — every one of those suites will fail at boot
@@ -44,20 +51,14 @@
 name: smoke-test-devnet-boot-teardown
 
 on:
-  # HEAVY tier (issue #600): this devnet boot/teardown suite is NOT run on ordinary
-  # feature-branch PRs (to main/dev). It is re-anchored at the phase-integration
-  # boundary — push to dev-phase-* staging branches and dev (and main), plus PRs
-  # that target a dev-phase-* branch. See docs/development/ci-suites.md (CI velocity tiers).
+  # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
+  # runs on every pull_request targeting dev (no path filter, so the gate always
+  # reports for any branch merging to dev) and on push to dev for merged-commit
+  # coverage. See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev, "dev-phase-*"]
+    branches: [dev]
   pull_request:
-    branches: ["dev-phase-*"]
-    paths:
-      - "testing/smoke-test/**"
-      - "testing/ethereum-testnet/**"
-      - "contracts/**"
-      - "config/dex-pools.json"
-      - ".github/workflows/suite-14-smoke-test.yml"
+    branches: [dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -84,6 +85,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # check-fork-manifest.sh uses `cast index` to validate the harness USDC
+      # balance slot in the produced genesis alloc, so Foundry is required even
+      # though this job never boots a devnet.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
@@ -108,6 +117,15 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo test -p smoke-test --lib fork_manifest::tests -- --nocapture
 
+      # Hermetic unit tests for the boot harness internals: the zombie-reaper
+      # stale-vs-current classification (run-id labels) and the compose collision
+      # guard. No Docker required — exercises the pure decision logic so a reaper
+      # regression is caught here in seconds rather than as a mysterious zombie
+      # collision in the devnet matrix below.
+      - name: harness unit tests (reaper + compose guard, hermetic)
+        working-directory: testing/smoke-test
+        run: "cargo test -p smoke-test --lib tests:: -- --nocapture"
+
   # PARALLEL DEVNET MATRIX (issue #600): each devnet-booting binary used to run as a
   # SERIAL step in one job, each booting Geth+Lighthouse on port 8545 (suite ~38m).
   # Splitting them into a matrix gives one runner per binary, each booting + tearing
@@ -120,13 +138,13 @@ jobs:
   devnet:
     name: smoke-test-devnet-${{ matrix.binary }}
     runs-on: ubuntu-latest
-    # 45 min (was 30): the job boots the devnet three times — cli_meta
-    # (--full-stack), fixture_meta, and the issue #592 demo_seeding four-vault
-    # step. On slower GitHub-hosted runners each chain boot can take several
-    # minutes, so the third boot pushed the 30-min budget over the edge and the
-    # job was cancelled mid-step. 45 min gives headroom for all three boots
-    # plus the inter-step compose-down without masking a genuinely hung boot.
-    timeout-minutes: 45
+    # 70 min (was 45): full_stack_demo_tvl boots the entire compose stack and,
+    # since the rust-services image is built from source, recompiles the indexer
+    # (cargo --release) before the 90s indexer-settle wait — on slower
+    # GitHub-hosted runners this tipped the heaviest binary past the 45-min cap
+    # and it was cancelled at exactly 45m (issue #880). 70 min gives headroom for
+    # the build + boot + settle without masking a genuinely hung boot.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -156,36 +174,24 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
+      # The four-vault real-TVL gate (issue #592) IS the `demo_seeding` matrix
+      # binary: `cargo test --release --test demo_seeding` asserts the
+      # VaultRegistry lists exactly four Active vaults (PRD §11.1–§11.4), the
+      # router weights cover the three router-eligible vaults summing to 10000
+      # bps (the deSPXA RWA vault is direct-seed-only, never weighted —
+      # ADR-0006 §1), and that **all four** vaults report non-zero on-chain
+      # totalAssets after seeding. It therefore runs exactly once across this
+      # matrix — on the `demo_seeding` binary — and is NOT re-appended as an
+      # unconditional final step on every binary (issue #915): that previously
+      # booted a second devnet + reseed on cli_meta/fixture_meta/full_stack_demo_tvl
+      # (~25 min each on full_stack_demo_tvl) with zero net coverage, since the
+      # assertions already run as the demo_seeding binary. Runs single-threaded
+      # for the same fixed-port reason as fixture_meta.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
         run: cargo test -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
-
-      # The smoke-test fixture hardcodes the Docker compose project name
-      # `ethereum-testnet` and refuses to boot if those containers already
-      # exist. The preceding cli_meta / fixture_meta steps each tear down via
-      # `Drop`, but on a busy runner that teardown can still be settling when
-      # the next step's `Fixture::new()` runs — leaving the chain containers
-      # half-up and failing the boot with "compose project already running
-      # containers". Force a clean slot before the four-vault step so it always
-      # starts from zero containers. Mirrors the safety-net teardown below.
-      - name: Ensure clean devnet slot before four-vault test
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true
-
-      # Issue #592 CI gate: four-vault real-TVL end state. Boots the devnet
-      # fixture, seeds the simulated depositors, and asserts the VaultRegistry
-      # lists exactly four Active vaults (PRD §11.1–§11.4), the router weights
-      # cover the three router-eligible vaults summing to 10000 bps (the deSPXA
-      # RWA vault is direct-seed-only, never weighted — ADR-0006 §1), and that
-      # **all four** vaults report non-zero on-chain totalAssets after seeding.
-      # Runs single-threaded for the same fixed-port reason as fixture_meta.
-      - name: cargo test (four-vault real-TVL — registry/router/seeded TVL)
-        working-directory: testing/smoke-test
-        env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-demo_seeding.log
-        run: cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture
 
       - name: Upload smoke-test logs
         if: always()

@@ -2,7 +2,7 @@
 //!
 //! `signer` module — `AgentSigner` trait and backends.
 //!
-//! Issue #8 / `docs/implementation-plan.md` §3.2–§3.3. The trait is
+//! Issue #8 / `Plan tracking issue #109` §3.2–§3.3. The trait is
 //! deliberately narrow: only [`AgentSigner::sign_eip1559_hash`] — the
 //! live deposit path. Raw `sign_hash` / `sign_message` /
 //! `sign_typed_data` are intentionally absent so future HSM/KMS

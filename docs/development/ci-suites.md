@@ -177,7 +177,7 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 ### 7. Rust client integration tests
 **Suggested file:** `.github/workflows/rmpc-integration.yml`
 **Environment:** `devnet` (Geth + Lighthouse)
-**Trigger paths:** `clients/rust-payment-client/**`, `testing/ethereum-testnet/e2e-rust/**`, `contracts/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 **Jobs:**
 - `geth-tests` — devnet-backed scenarios; runs immediately; should not run if suite 6 (`rmpc-unit`) is failing on the same commit (enforce via `workflow_run` dependency or branch protection)
@@ -254,14 +254,15 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 6. `bunx tsc -b` — TypeScript type check
 7. `bun run test` — Vitest: component rendering, browser-side key generation, credential boundary (no key material in DOM), form validation
 8. `bun run build` — verify production build succeeds
-9. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, and the dev-only vitest UI advisory) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
+9. `bash scripts/check-csp.sh` — Enforce strict CSP: builds the production bundle, serves it with `vite preview`, then asserts the `Content-Security-Policy` response header is present and contains `script-src` but neither `unsafe-inline` nor `unsafe-eval`; also checks the baked-in `<meta http-equiv="Content-Security-Policy">` tag in `index.html` (issue #665)
+10. `bash scripts/audit-deps.sh` — dependency vulnerability scan wrapping `bun audit --audit-level=high`; exits non-zero on any high or critical advisory (CVSS ≥ 7.0). Uses `bun audit` (not `npm audit`) because the lockfile is `bun.lock`; `npm audit` fails with `ENOLOCK` without a `package-lock.json`. The script carries a dated allowlist of pre-existing high/critical advisories (axios via the wallet-connector SDK, the dev-only vitest UI advisory, and the esbuild Deno-install-path advisory — build-time only, not reachable via bun installs) so the gate has a green baseline and blocks merges on any new advisory. To accept a known advisory temporarily, add its GHSA id to the allowlist in `clients/dapp/scripts/audit-deps.sh` with a reason and expiry. Do not lower `--audit-level`.
 
 ---
 
 ### 10. dApp E2E tests
 **File:** `.github/workflows/suite-10-dapp-e2e.yml`
 **Environment:** `devnet` (smoke-test full stack)
-**Trigger paths:** `clients/dapp/**`, `contracts/**`, `testing/smoke-test/**`, `testing/ethereum-testnet/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 Single job runs every Playwright spec against a real Geth+Lighthouse
 devnet booted by Playwright's `globalSetup` (`devnet-global-setup.ts`),
@@ -390,7 +391,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 ### 14. smoke-test library
 **Suggested file:** `.github/workflows/smoke-test.yml`
 **Environment:** `devnet` (Geth + Lighthouse)
-**Trigger paths:** `testing/smoke-test/**`, `testing/ethereum-testnet/**`, `contracts/**`
+**Tier / triggers:** HEAVY — gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`.
 
 Validates the `smoke-test` crate — the canonical devnet fixture library — in
 isolation, independent of any client (rmpc, dapp, explorer).
@@ -406,7 +407,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`
+11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`. **This gate runs exactly once per suite run — on the `demo_seeding` matrix binary only** (see de-dup note below).
 12. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
@@ -420,6 +421,18 @@ isolation, independent of any client (rmpc, dapp, explorer).
 > (`GET /v1/vaults` returns exactly four Active entries, each non-zero
 > `total_assets`) boots the heavier `DappStack` and is run locally / via the
 > dapp suites rather than this fixture-only suite.
+>
+> **Parallel matrix + four-vault de-dup (issues #600, #915):** the
+> devnet-booting binaries run as a parallel matrix
+> `[cli_meta, fixture_meta, demo_seeding, full_stack_demo_tvl]` (`fail-fast:
+> false`), one runner per binary, each booting and tearing down its own
+> Geth+Lighthouse stack. The four-vault real-TVL gate (step 11) **is** the
+> `demo_seeding` matrix binary, so it runs exactly once per suite run. It is
+> *not* re-appended as an unconditional final step on every binary: doing so
+> previously booted a second devnet + reseed on
+> `cli_meta`/`fixture_meta`/`full_stack_demo_tvl` (~25 min of redundant
+> boot+seed on the slowest binary) with zero net coverage, since the
+> assertions already run as the `demo_seeding` binary.
 
 ---
 
@@ -449,32 +462,206 @@ isolation, independent of any client (rmpc, dapp, explorer).
 
 ---
 
+### 18. Secrets scan (gitleaks)
+**Suggested file:** `.github/workflows/suite-18-secrets-scan.yml`
+**Environment:** `none`
+**Trigger paths:** All PRs (no `paths:` filter — secrets can appear in any file)
+
+Runs [gitleaks](https://github.com/gitleaks/gitleaks) on every PR commit to
+detect accidentally committed credentials before they reach the default branch.
+The gate is intentionally path-unfiltered: a secret committed to a test fixture,
+a config file, or a doc is just as dangerous as one committed to source code.
+
+**Design rationale (security-model.md §13):**
+- A pinned gitleaks binary is used rather than the latest release so the
+  detector behaviour is deterministic and upgrades are deliberate.
+- The configuration (`.gitleaks.toml`) extends the upstream built-in provider
+  ruleset (`[extend] useDefault = true`) so that upstream rule improvements
+  (new provider patterns for AWS, GCP, GitHub, Stripe, etc.) flow in
+  automatically when the pinned action version is bumped.
+- An allowlist in `.gitleaks.toml` covers known-safe test fixtures (Hardhat
+  deterministic devnet keys, public on-chain addresses). Every allowlist entry
+  carries a comment naming the fixture it covers. Real credentials are never
+  allowlisted. When a fixture is removed, its allowlist entry must be deleted too.
+
+**Jobs:**
+- `secrets-scan` — single job; runs immediately on every PR
+
+**Steps:**
+1. Checkout repository (full history — `fetch-depth: 0` so gitleaks can diff the PR range)
+2. Run gitleaks at pinned version with `--config .gitleaks.toml` — scans all commits in the PR; exits non-zero on any unallowlisted secret pattern, blocking merge
+
+---
+
+### 18b. Security gates (cargo-audit, bun-audit, CSP)
+**Suggested file:** `.github/workflows/suite-18-security-gates.yml`
+**Environment:** `none`
+**Trigger paths:** `Cargo.lock`, `clients/dapp/bun.lock`, `clients/dapp/package.json`, `clients/dapp/scripts/audit-deps.sh`, `clients/dapp/scripts/check-csp.sh`, and the workflow file itself
+
+**Jobs:**
+- `cargo-audit` — Rust dependency vulnerability scan; runs immediately on every PR
+- `bun-audit` — JavaScript/TypeScript dependency vulnerability scan; runs in parallel with `cargo-audit`
+- `csp-gate` — Content-Security-Policy strict-mode assertion; runs in parallel with the audit jobs
+
+**Design rationale (issue #804, #813, #835):**
+Three fast, dependency-driven security gates that catch vulnerability advisories and policy violations before review, not after deployment. Each gate:
+- Runs on every PR without devnet or chain cost (pure static analysis)
+- Blocks merge on violations via exit status
+- Uses a transparent, auditable allowlist for pre-existing sub-critical advisories with dated expiry comments
+
+**Cargo audit (Rust dependencies):**
+Scans `Cargo.lock` and all workspace `Cargo.lock` files (root workspace, `services/explorer-indexer`, `testing/doctests`, `testing/ethereum-testnet/e2e-rust`, `testing/fork-e2e-rust`) against the RustSec advisory database. Advisory allow-list and severity policy live in `.cargo/audit.toml` (issue #813):
+- Blocks on any HIGH or CRITICAL advisory (CVSS ≥ 7.0)
+- Downgrades unmaintained and notice advisories to warnings
+- To accept a known low-risk advisory temporarily, add its RUSTSEC id to the `ignore` list in `.cargo/audit.toml` with a reason and expiry comment
+
+Installation method: cargo-audit is installed via `cargo install cargo-audit --locked` rather than the `rustsec/audit-check` GitHub action to avoid the action's `checks:write` permission requirement, which causes annotation errors on PRs from external contributors.
+
+**Bun audit (JavaScript/TypeScript dependencies):**
+Scans `clients/dapp/bun.lock` and `package.json` for JS advisory database (npm) hits via `bun audit --audit-level=high`. Blocks on any HIGH or CRITICAL advisory. The transitive CRITICAL (vitest <3.2.6) and HIGH (axios) advisories were previously resolved by pinning vitest/@vitest/browser to ^3.2.6 and axios to ^1.17.0 via package.json `overrides` (issue #813). The `--audit-level=high` flag (bun's native severity control; the previous `--level high` was unrecognized and silently ignored) suppresses sub-HIGH advisories from both output and exit code, allowing moderate transitive advisories (vite, esbuild, ws, uuid, hono, brace-expansion) to remain without blocking the gate. Implementation: `bun audit` is wrapped by `clients/dapp/scripts/audit-deps.sh` (issue #835), which runs the same allow-list logic used by suite 9 (dapp-quality), so accepted-advisory justifications live in exactly one place.
+
+**CSP gate (Content-Security-Policy):**
+Runs `clients/dapp/scripts/check-csp.sh` (shipped in issue #735). The script:
+1. Installs dapp dependencies via `bun install --frozen-lockfile`
+2. Builds the production bundle
+3. Serves it with `vite preview` and asserts the `Content-Security-Policy` response header is present and contains `script-src` but neither `unsafe-inline` nor `unsafe-eval`
+4. Checks the baked-in `<meta http-equiv="Content-Security-Policy">` tag in `index.html`
+
+Catches CSP weakening by dependency upgrades before deployment.
+
+**Steps — `cargo-audit` job:**
+1. Checkout repository
+2. Install Rust toolchain (stable)
+3. Rust cache via `Swatinem/rust-cache@v2`
+4. `cargo install cargo-audit --locked`
+5. `cargo audit` — exits non-zero on any HIGH/CRITICAL advisory or on any unallowlisted advisory
+
+**Steps — `bun-audit` job:**
+1. Checkout repository
+2. Install Bun
+3. Change to `clients/dapp` and run `bash scripts/audit-deps.sh` — wraps `bun audit --audit-level=high` with allow-list logic; exits non-zero on any unallowlisted HIGH/CRITICAL advisory
+
+**Steps — `csp-gate` job:**
+1. Checkout repository
+2. Install Bun
+3. Change to `clients/dapp` and run `bun install --frozen-lockfile`
+4. `bash scripts/check-csp.sh` — build production bundle, serve via vite, verify CSP headers; exits non-zero if CSP is too permissive
+
+---
+
+### 19. ERC-4626 precondition checks and full-stack demo-TVL matrix
+**Suggested file:** `.github/workflows/suite-19-erc4626-demo-tvl-matrix.yml`
+**Environment:** `anvil` (precondition) / `devnet` (demo-tvl)
+**Trigger paths:** `contracts/test/ERC4626PreconditionChecks.t.sol`, `testing/smoke-test/tests/full_stack_demo_tvl.rs`, and the workflow file itself
+
+**Tier:** HEAVY — the `dev` merge gate. Runs on every `pull_request` targeting `dev` (no `paths:` filter) and on `push` to `dev`. Not triggered on PRs to other branches, keeping routine feature-PR cycles fast.
+
+**Jobs:**
+- `erc4626-precondition` — matrix-sharded forge tests; runs immediately
+- `demo-tvl` — full-stack demo-TVL integration test against Geth+Lighthouse devnet; runs in parallel with precondition
+
+**Design rationale (issue #814, #804):**
+Two complementary test-matrix expansions that live in one suite to keep the total workflow count manageable and share HEAVY-tier trigger logic.
+
+**ERC-4626 precondition tests (issue #814):**
+`contracts/test/ERC4626PreconditionChecks.t.sol` asserts invariants across the adapter and exit-fee matrix. The precondition suite validates:
+- `asset()` and `decimals()` correctness for each adapter (passthrough, aave, compound, morpho)
+- Empty-vault share-price invariants (no rounding drift when vault has zero assets)
+- Adapter pairing consistency
+
+The matrix shards by exit-fee tier (`EXIT_FEE_BPS` = 0, 30, 100) so each tier's Foundry fuzz run (256 runs per tier) stays isolated and fast. Uses an `exit_fee_bps` matrix variable to parameterize the test.
+
+**Full-stack demo-TVL test (issue #804):**
+`testing/smoke-test/tests/full_stack_demo_tvl.rs` is a heavy INTEGRATION test that boots the full DappStack (Geth+Lighthouse devnet, contracts deployed by Fixture, dapp bundled with keccak-256 hash verification) and seeds the demo depositors, then asserts the four-vault real-TVL end state:
+- `VaultRegistry.listVaults()` returns exactly four Active vaults (PRD §11.1–§11.4)
+- `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps, while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1)
+- All four vaults report non-zero `totalAssets` after seeding
+
+This is the HEAVY-tier integration-layer half of the four-vault real-TVL test pyramid (the contract-layer half is suite 1–2, step 7). It is not run on routine feature PRs because DappStack boot + seeding takes 25–35 minutes; instead, it runs as part of the `dev` merge gate (PRs into `dev` and push to `dev`).
+
+**Activation history:**
+- `erc4626-precondition`: activated in issue #814 — ERC4626PreconditionChecks.t.sol created and `if: false` removed
+- `demo-tvl`: activated in issue #804 — full_stack_demo_tvl.rs exists; bun runner dependency resolved via `oven-sh/setup-bun@v2`
+
+**Steps — `erc4626-precondition` job (matrix over exit_fee_bps: [0, 30, 100]):**
+1. Checkout repository (recursive submodules)
+2. Install Foundry toolchain (stable)
+3. `forge test --match-contract ERC4626PreconditionChecks --fuzz-runs 256 -vv` with `EXIT_FEE_BPS` env var set to the matrix value
+4. Repeat for each exit-fee tier in parallel
+
+**Steps — `demo-tvl` job:**
+1. Checkout repository (recursive submodules)
+2. Verify Docker is available
+3. Install Rust toolchain (stable)
+4. Install Foundry toolchain (stable)
+5. Install Bun (needed by DappStack dapp-build step)
+6. Rust cache via `Swatinem/rust-cache@v2` pointing to `testing/smoke-test -> target`
+7. `cargo build -p smoke-test` (smoke-test crate)
+8. `cargo test -p smoke-test --release --test full_stack_demo_tvl -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, seeds demo depositors, asserts four-vault end state, then tears down
+9. Safety-net teardown: `docker compose down -v --remove-orphans || true` (always runs, even on failure)
+
+---
+
+### 21. Nightly full-suite orchestrator (nightly-full-suite)
+**Suggested file:** `.github/workflows/suite-21-nightly.yml`
+**Tier:** nightly
+**Environment:** `none` (dispatches other suites; no direct job steps)
+**Trigger:** `schedule` — `0 2 * * *` (02:00 UTC) + `workflow_dispatch`
+
+Dispatches every registered CI suite against the `dev` HEAD via the GitHub
+`workflow_dispatch` REST endpoint. Ensures every suite receives a daily green/red
+signal regardless of whether that day's commits touch each suite's path filters.
+
+**Design rationale:**
+- Several suites are intentionally not triggered on feature-branch PRs (e.g. suites
+  that call live external services, or heavy devnet matrices) and may go days
+  without running if no commit touches their path filters. The nightly orchestrator
+  guarantees at least one run per day.
+- `workflow_dispatch` on each target workflow is used rather than duplicating job
+  steps — each suite retains its own timeout, matrix, and concurrency settings.
+- Scheduled at 02:00 UTC to avoid collision with other nightly workflows (e.g.
+  suite-11b opencode-headless at 03:17 UTC).
+- The default `GITHUB_TOKEN` provides the `actions: write` permission required for
+  `workflow_dispatch` on private repositories.
+
+**Jobs:**
+- `dispatch-all-suites` — single job; iterates over all suite workflow files and
+  calls `gh workflow run <file> --ref dev`
+
+**Steps:**
+1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref
+2. (Suites run independently; this job only fires the dispatches and exits)
+
+---
+
 ## CI velocity tiers
 
-Issue #600 splits CI into two tiers so a routine feature PR waits only on cheap,
-deterministic feedback while expensive devnet integration is proven where
-cross-feature interactions actually matter.
+CI is split into two tiers so a routine PR gets fast, cheap feedback while the
+expensive devnet integration battery gates the `dev` merge boundary, where
+cross-feature interactions actually land.
 
-- **QUICK tier** — runs on every feature-branch PR (`pull_request` to `main`/`dev`).
-  Forge unit + invariant tests, solidity fmt/natspec/slither, dapp
-  lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage, rmpc unit, hermetic
-  fork-fixture integration, abi-drift, doc/manifest guards, and this tier guard.
-  This is the only gate a routine feature PR blocks on.
-- **HEAVY tier** — relocated off per-feature-PR triggers and re-anchored at the
-  **phase-integration boundary**: `push` to per-phase staging branches
-  (`dev-phase-*`) and `dev` (and `main`), plus `pull_request`s that target a
-  `dev-phase-*` branch. The devnet e2e matrices (`rust-client-devnet-integration`,
-  `smoke-test-devnet-boot-teardown`), the full-devnet `dapp-e2e` Playwright suite,
-  and the `forge-coverage-gate` job all live here. No integration coverage is
-  lost — every heavy suite removed from per-PR triggers is re-anchored at the
-  `dev-phase-*` / `dev` boundary.
+- **LIGHT (quick) tier** — runs on `pull_request`s to **any branch** and on
+  `push` to `dev`/`dev-phase-*`. Forge unit + invariant tests, solidity
+  fmt/natspec/slither, dapp lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage,
+  rmpc unit, hermetic fork-fixture integration, abi-drift, doc/manifest guards, and
+  the security gates. This is the feedback a routine feature PR blocks on.
+- **HEAVY tier** — the `dev` merge gate. Runs on every `pull_request` targeting
+  `dev` (no `paths:` filter, so the gate always reports for any branch merging
+  into `dev`) and on `push` to `dev` for merged-commit coverage. The devnet e2e
+  matrices (`rust-client-devnet-integration`, `smoke-test-devnet-boot-teardown`),
+  the full-devnet `dapp-e2e` Playwright suite, the `erc4626-demo-tvl-matrix`, and
+  the `forge-coverage-gate` job all live here. Every branch that opens a PR into
+  `dev` runs the full heavy battery before it can land.
 
-Structural invariants (enforced by `scripts/ci/check-workflow-tiers.sh`, run by
-the `ci-velocity-tier-guard` workflow on every PR):
+To make a heavy suite actually *block* a merge, add its check to the required
+status checks on `dev`'s branch-protection rule (a GitHub setting, not repo YAML).
+
+Structural conventions (kept by convention; a prior static tier-guard workflow
+that enforced them was removed as overkill):
 
 - Every PR-triggered workflow declares `concurrency.cancel-in-progress` (enabled
   for `pull_request` events) with a `${{ github.ref }}`-keyed group, so re-pushing
-  a PR cancels superseded runs while `push:main`/`dev` runs keep a distinct,
+  a PR cancels superseded runs while `push:dev` runs keep a distinct,
   non-cancelling lane and merged-commit coverage always completes.
 - `rust-client-devnet-integration` (suite-07) and `smoke-test-devnet-boot-teardown`
   (suite-14) express their devnet binaries as a `fail-fast: false` job matrix —
@@ -487,12 +674,11 @@ the `ci-velocity-tier-guard` workflow on every PR):
 
 ### Tier mapping
 
-Every workflow's `name:` and its tier. The guard fails if a heavy suite is
-reachable from a feature-branch PR or if this table drifts from the workflows.
+Every workflow's `name:` and its tier.
 
 | Workflow `name:` | Tier | Notes |
 |------------------|------|-------|
-| `forge-unit-invariant-coverage` | quick | `unit`/`invariant` quick on feature PRs; the `forge-coverage-gate` job is heavy and `if:`-gated to push / `dev-phase-*` |
+| `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
 | `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
@@ -508,11 +694,15 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
 | `natspec-coverage` | quick | |
-| `ci-velocity-tier-guard` | quick | runs `scripts/ci/check-workflow-tiers.sh` |
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
+| `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
+| `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
+| `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
 | `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
+| `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
+| `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
 
 ---
 
@@ -534,3 +724,7 @@ reachable from a feature-branch PR or if this table drifts from the workflows.
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
+| 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` | `none` |
+| 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) \| `demo-tvl` | `anvil` / `devnet` |
+| 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |
+| 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |

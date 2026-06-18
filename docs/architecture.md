@@ -10,7 +10,7 @@
 ## 1. Overview
 
 Robot Money is a USDC treasury system for human depositors, autonomous
-agents, and token holders. The product architecture has three on-chain
+agents, and governance voters. The product architecture has three on-chain
 allocation layers: the Portfolio Router at the outer product layer,
 individual Robot Money vaults at the exposure layer, and vault adapters
 inside each vault for venue-specific strategy execution. Agent access has
@@ -18,6 +18,11 @@ a separate permission and safety layer: the gateway. Human and agent
 clients share the same read-before-write safety model: chain state is the
 authority for signing and execution, while indexed data is used only for
 display, history, and public observability.
+
+Current governance uses admin-assigned voting power: `ADMIN_ROLE` assigns
+each voter's power and controls proposal creation. Token-holder voting
+(RM-balance-weighted) is a future goal and is not active in the current
+deployment. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
 ## 2. Core Model
 
@@ -75,16 +80,27 @@ weight, and unavailable leg.
 
 ### 2.3 Governance Boundary
 
-`$ROBOTMONEY` governance controls Portfolio Router target weights across
-active vaults. It does not currently govern vault onboarding, vault
-retirement, per-vault asset selection, per-vault strategy internals,
-adapter selection, adapter caps, fees, or agent permissions.
+**Current MVP:** Governance voting power is admin-assigned.
+`RouterGovernance.sol` is the shipped governance contract. `ADMIN_ROLE`
+assigns each voter's weight and creates proposals; there is no automatic
+RM-balance snapshot. Governance controls Portfolio Router target weights
+across active vaults and nothing else. It does not govern vault
+onboarding, vault retirement, per-vault asset selection, per-vault
+strategy internals, adapter selection, adapter caps, fees, or agent
+permissions.
 
-The governance architecture must expose proposal state, vote casting,
-vote history, cadence metadata, execution state, and the resulting router
-weights. Those surfaces are required for both the dapp and programmatic
-read clients; the implementation of quorum, delay, and execution remains
-an open decision.
+**Future goal:** Token-holder voting weighted by RM-balance snapshot
+(ERC-20 Votes / EIP-5805) replaces admin assignment once the RM token's
+historical-balance interface is confirmed and a real token distribution
+exists. The quorum, cadence, execution-delay, and setWeights call-path
+decisions are recorded in
+`docs/technical/governance-decisions.md`. Until that phase ships,
+admin-assigned voting power remains the only active governance model.
+
+The governance read surface must expose proposal state, vote tallies,
+cadence metadata, execution state, and the resulting router weights. Those
+surfaces are required for both the dapp and programmatic read clients.
+See `docs/technical/governance-decisions.md` for the accepted parameters.
 
 ## 3. Technology Stack
 
@@ -141,9 +157,35 @@ same contracts ship into test, demo, and mainnet — only the registry
 flag's value differs across environments. See
 `docs/development/single-production-codebase.md` for the principle.
 
-Future vault categories include thematic/RWA vaults. Those need
-separate execution, oracle, liquidity, legal, and disclosure
-architecture before production use.
+The source tree also contains `RwaVault`, a shipped ERC-4626 USDC vault
+for tokenised real-world assets. The current deployment holds deSPXA
+(Centrifuge / Janus Henderson / Anemoy tokenised S&P 500 on Base).
+Key architectural characteristics:
+
+- **Entry and exit via Aerodrome secondary market only.** Primary NAV
+  redemption through the Centrifuge V3 ERC-7540 epoch operator is a
+  permanent non-goal: a permissionless smart-contract vault cannot
+  satisfy the KYC requirement. All deposits and withdrawals swap
+  USDC↔deSPXA through an Aerodrome CL pool.
+- **Chronicle push oracle for NAV pricing.** Aerodrome DEX TWAP is
+  unsuitable for thin RWA liquidity. `ChronicleOracleAdapter` prices NAV
+  and slippage floors via a Chronicle on-chain signed price feed.
+  `RwaVault` enforces a heartbeat window (default 24 h); price-sensitive
+  operations revert with `StalePriceFeed` if the feed is stale.
+- **Issuer freeze-control risk.** The deSPXA issuer may freeze token
+  transfers at any time, blocking all Aerodrome swaps and therefore all
+  vault deposits and withdrawals. Existing rmRWA holders retain their
+  shares; no funds are confiscated. Admin should pause the vault when a
+  freeze is detected to surface user-facing messages instead of opaque
+  ERC-20 reverts. See `docs/adr/ADR-0006-despxa-rwa-vault-design.md` §4.
+- **Single-asset basket.** `RwaVault` holds exactly one basket asset
+  (deSPXA). `maxAssets()` returns 1 to enforce this constraint.
+- **Router eligibility.** `RwaVault` is a `BasketVault` subclass.
+  Router eligibility follows the same `VaultRegistry.isRouterEligible`
+  registry-flag model as other basket vaults. The flag is flipped by
+  ADMIN_ROLE once pool cardinality, oracle freshness, and the intra-vault
+  rebalancing model are certified. `RwaVault` is marked Active — real
+  asset, seeded, Router-eligible per `docs/prd.md` §11.4.
 
 ### 4.2 Portfolio Router
 
@@ -194,7 +236,7 @@ Mutating adapter functions are callable only by the owning vault. Adapter
 selection and caps are privileged vault-management operations and expand
 the audit surface of that vault.
 
-Current stable-yield adapters:
+Current stable-yield adapters (for `RobotMoneyVault`):
 
 - `MorphoAdapter` deposits USDC into the Morpho Gauntlet USDC Prime
   ERC-4626 vault.
@@ -202,7 +244,29 @@ Current stable-yield adapters:
   exposure.
 - `CompoundV3Adapter` supplies USDC to Compound V3 Comet on Base and
   forwards withdrawn USDC back to the vault.
-- `PassthroughAdapter` is for devnet and smoke tests only.
+
+Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
+`BasketVault` subclasses including `RwaVault`, `ProtocolAssetVault`, and
+`AgentTokenVault`):
+
+- `AerodromeSwapAdapter` routes USDC↔asset swaps through the Aerodrome
+  Finance Router on Base (concentrated-liquidity CL pools). NAV and
+  slippage floors are priced via an Aerodrome CL pool TWAP (arithmetic-mean
+  tick over a configurable window, using the same `observe()` ABI as
+  Uniswap V3). Only Aerodrome CL pools are supported; classic stable/volatile
+  pools do not expose `observe()`.
+- `UniswapV4SwapAdapter` routes USDC↔asset swaps through the Uniswap V4
+  Router (`exactInputSingle`) on Base. TWAP reads use the V4 pool's
+  `observe()` method (EIP-7680 compatible, identical ABI to V3). Tick
+  spacing is derived from the fee tier using Uniswap V4's standard mapping
+  (500→10, 3000→60, 10000→200). Pools with hooks or custom tick spacings
+  require a bespoke adapter.
+- `ChronicleOracleAdapter` routes USDC↔asset swaps through the Aerodrome
+  Router (same swap path as `AerodromeSwapAdapter`) but prices NAV via a
+  Chronicle on-chain push oracle instead of a DEX TWAP. Used by `RwaVault`
+  for deSPXA where DEX liquidity is insufficient for a manipulation-resistant
+  TWAP. Staleness enforcement (heartbeat check) is delegated to the owning
+  vault, keeping the adapter stateless.
 
 ### 4.4 Synchronous Redemption
 
@@ -547,6 +611,41 @@ process-per-call command. MCP is deferred; any future MCP surface must
 inherit `rmpc`'s command schema, chain/config pinning, and refusal
 semantics rather than becoming a new signing authority.
 
+### 5.6 Mint/Burn Watchdog
+
+`services/watchdog` is the automated circuit-breaker monitor required by
+`docs/technical/security-model.md` §9 ("No anomaly detection on mint/burn
+rate"). It was shipped in PR #787 (issue #658). It is a standalone Rust
+service that closes the security-model gap by watching gateway mint and burn
+flow and reacting without a human in the loop.
+
+Its role is rate monitoring and automated containment. On each poll cycle
+(default `--poll-interval-secs 12`, also configurable through
+`WATCHDOG_POLL_INTERVAL_SECS`) it aggregates rolling per-block and per-hour
+mint and burn volume from the explorer indexer database and compares each
+total against the TOML-configured global limits
+(`global.per_{block,hour}_{mint,burn}_limit_usdc`). Optional
+`vault.<address>` entries override those limits per vault. The service reads
+the indexed event history; it is not an authoritative signer for normal
+operations.
+
+On a threshold breach the watchdog follows `action.mode`: `alert`, `pause`,
+or `pause_and_alert`. The alert path dispatches PagerDuty-compatible
+structured JSON through `src/alert.rs` to `action.webhook_url`. The pause
+path constructs and submits a `gateway.pause()` EIP-155 transaction through
+`src/pause.rs`, using `action.gateway_rpc_url`,
+`action.gateway_address`, and the funded PAUSER_ROLE key in
+`action.pauser_private_key_hex`. The pauser is distinct from `ADMIN_ROLE`:
+it can pause but cannot unpause, matching the guardian/quorum separation in
+security-model.md §9. Unpause still requires `ADMIN_ROLE` through the
+timelock.
+
+The configured maximum response-time SLA is
+`sla.max_response_secs = 300` (five minutes) from breach detection to
+pause/alert dispatch; startup rejects a zero value. The service is exercised
+by CI suite-20 (`tests/threshold_breach.rs`, `tests/alert_webhook.rs`) and is
+described in `docs/development/ci-suites.md`.
+
 ## 6. Data and Trust Boundaries
 
 ### 6.1 Authoritative Data
@@ -616,6 +715,45 @@ API surfaces must map known failures to stable product reason codes such
 as `paused`, `vault_disabled`, `cap_exceeded`, `expired_policy`,
 `insufficient_allowance`, `insufficient_balance`, `unavailable_leg`,
 `fee_cap_exceeded`, and `slippage_bound_exceeded`.
+
+### 7.2.1 Client Stability Integration Seams
+
+The client-stability integration seams reserved here are now shipped; this
+section documents the stable surfaces rather than pending work.
+
+The stable dapp contract is `ProductReasonCode` in
+`clients/dapp/src/lib/productReasonCode.ts`. It includes the nine product
+codes above plus `unknown_revert` as the only catch-all. The mapping layer
+translates contract custom errors, JSON-RPC error data, and preview refusals
+into that union, inspecting structured revert data before message text;
+provider-specific messages are diagnostic context, not stable API values.
+
+The Rust boundary is `RmpcError` in
+`clients/rust-payment-client/src/errors.rs`. Product failures use named
+variants whose `Display` prefixes are operator-visible contracts. The
+explicit `RmpcError`-to-product-code mapping is in place; RPC transport,
+decode, and unknown server errors are kept distinct from known contract
+refusals and are never misclassified as such.
+
+Router deposits are exposed through `DepositDestination` in
+`clients/rust-payment-client/src/cli.rs`. `rmpc deposit --destination router`
+routes the router variant through `depositTo`, while the default remains the
+vault-only path. Deadlines on the shared deposit path are computed from the
+EVM block timestamp, not wall-clock.
+
+Confirmation policy is enforced through `OperationClass`, `RequiredFinality`,
+and `ConfirmationDepthPolicy` in `clients/rust-payment-client/src/config.rs`,
+with per-operation-class defaults, TOML integration, `get-tx` enforcement,
+and dapp status copy all shipped. These structures coexist with the
+multi-endpoint `rpc_urls` failover config in the same module.
+
+Policy-state reads have two distinct authorities. `rmpc get-agent` and the
+`get-position` command use live chain reads for signing and treasury
+decisions. The Explorer API owner lookup
+(`GET /v1/accounts/:address/policies`) is an indexed, historical account view
+and remains explicitly non-authoritative. The dapp timelocked-proposals panel
+and the RWA-vault issuer freeze-control risk disclosure are shipped on the
+dapp surface, isolated from the Rust hot-file lane.
 
 ## 7.3 Single Production Codebase
 
@@ -687,23 +825,23 @@ this architecture:
 | Compound V3 Comet | Stable-yield venue | Current adapter target. | `docs/technical/adapter-architecture.md` §4 |
 | Postgres | Explorer database | Accepted for every environment that runs the indexer. | `docs/technical/explorer-schema-decisions.md` §3.1 |
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
-| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | retired `docs/implementation-plan.md` §0 (git history) |
+| HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | Plan tracking issue #109 §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
 
 ## 10. Open Decisions
 
 | Decision | Tradeoff | Recommended default |
 | --- | --- | --- |
-| Portfolio Router contract design | Execution model resolved: all-or-revert. Remaining open: contract API, preview call signatures, cap enforcement across legs, and governance weight execution path. | Build a dedicated router contract; do not fold router behavior into adapters or `rmpc`. |
-| Vault registry contract | Resolved: on-chain contract. PRD requires observable vault registry, mandates, statuses, caps, and risk labels; the registry must expose stable read methods and emit events indexable by the explorer. | Add an on-chain registry with stable read methods and event history, then index it. |
-| Router-weight governance implementation | PRD fixes the governance surface but not the voting contract, cadence enforcement, quorum, delay, or execution path. | Keep governance narrow: one weight-vote module that can update router weights only. |
-| Protocol-asset and agent-token vault execution | These vaults need swaps, oracles, slippage bounds, liquidity rules, and asset-selection criteria. | Require separate ADRs before implementation; exclude from router until synchronous redemption and pricing are proven. |
+| Portfolio Router contract design | Resolved: `contracts/PortfolioRouter.sol` is shipped. Execution model is all-or-revert; contract API, preview call signatures, cap enforcement across legs, and weight-execution path are all implemented. `VaultRegistry.isRouterEligible` expresses production readiness as registry state (see §4.2). The router is not yet on the production mainnet deployment manifest; mainnet onboarding remains planned work on the Plan tracking issue (#109). | — |
+| Vault registry contract | Resolved: `contracts/VaultRegistry.sol` is shipped with stable read methods and event history, indexed by the explorer. Router eligibility is expressed as `setRouterEligible(vault, eligible)` on the registry. | — |
+| Router-weight governance implementation | Resolved (MVP shipped): `contracts/RouterGovernance.sol` is deployed with admin-assigned voting power. `ADMIN_ROLE` assigns voter weights and creates proposals. Quorum, voting period, and execution delay are `ADMIN_ROLE`-configurable storage variables, not fixed in the contract: `setQuorumThreshold`, `setVotingPeriod`, and `setExecutionDelay` adjust them, bounded only by the constant floors `MIN_QUORUM_THRESHOLD` (1), `MIN_VOTING_PERIOD` (1 hour), and `MIN_EXECUTION_DELAY` (1 hour). There is no `cadenceWindow` variable and quorum is an absolute voting-power threshold, not a 5 %-of-`RM.totalSupply()` denominator. `contracts/script/DeployRouterGovernance.s.sol` defaults to a 1-hour voting period, 1-hour execution delay, and quorum 1. The 5 %/7-day/5-day/48 h figures are deferred token-holder-governance targets, not shipped contract constants. Token-holder voting (RM-balance snapshot via ERC-20 Votes) is a future goal; the snapshot-mechanism risk is documented in `docs/technical/governance-decisions.md` §6.1. | Current admin-assigned MVP is the active model; do not build RM-snapshot voting until `docs/technical/governance-decisions.md` §6.1 is resolved and a real token distribution exists. |
+| Protocol-asset and agent-token vault execution | Resolved (contracts shipped): `contracts/vaults/ProtocolAssetVault.sol` (wETH/cbBTC/wSOL) and `contracts/vaults/AgentTokenVault.sol` (admin-curated agent-economy tokens) are in the source tree. Router eligibility for each vault remains ADMIN_ROLE-gated via `VaultRegistry.setRouterEligible`: both vaults stay ineligible by default until pool cardinality, per-asset TWAP windows, and the intra-vault rebalancing model are certified (see `docs/development/open-questions.md` §3.15). | Flip `isRouterEligible` only after TWAP windows, pool cardinality, and the rebalancing model are certified per §4.1. |
 | Management fee and swap-fee-share mechanism | Resolved: deferred to a future phase. Current phase ships exit-fee-only disclosure. | Require a separate ADR and contract design before management fee or swap-fee-share are implemented. |
 | Protocol revenue and buyback-and-burn execution | Resolved: deferred to a future phase alongside management fee and swap-fee-share. | Require a separate ADR; when implemented, add a narrow revenue collector plus buyback executor with indexed events and admin bounds. |
 | On-chain admin timelock | Resolved: required. `docs/technical/security-model.md` §4 deferred this until bucket-B/C governance landed; VaultRegistry, PortfolioRouter, and RouterGovernance are now in the codebase. All five protocol contracts must transfer `ADMIN_ROLE` to an OZ `TimelockController` before mainnet scale. | Deploy `TimelockController`; transfer `ADMIN_ROLE` on all five contracts to it; configure existing Safe as proposer and canceller; prefer open execution unless a restricted Safe executor is explicitly justified. See §4.5 and issue #414. |
-| Production JSON-RPC provider | Safety-critical reads depend on provider correctness and availability. | Support configured primary plus documented fallback; defer multi-RPC consensus until a specific risk justifies it. |
+| Production JSON-RPC provider | Resolved: automatic failover shipped in issue #667 through the ordered `rpc_urls` array in `clients/rust-payment-client/src/config.rs` and endpoint rotation in `clients/rust-payment-client/src/rpc/mod.rs`. Safety-critical reads depend on provider correctness and availability; cross-provider consensus checking remains a separate, deferred decision. | Configure the ordered `rpc_urls` list so `rmpc` rotates to the next endpoint on transport failure. Multi-RPC consensus comparison for high-value reads stays deferred until a specific risk justifies it. |
 | Production signer vendor | Architecture requires a production-grade HSM/KMS/device-bound signer for Base mainnet writes, but no vendor is chosen. | Keep signer backend trait stable; refuse software-keystore signing on Base mainnet until a production operator picks HSM/KMS. |
-| Dapp hosting and CSP | Security model flags XSS/build compromise as unresolved. | Require static hosting with strict CSP, pinned dependencies, and release provenance before public mainnet use. |
+| Dapp hosting and CSP | Resolved: strict CSP shipped in PR #735 via `clients/dapp/src/lib/csp.ts` Vite plugin and `clients/dapp/scripts/check-csp.sh` CI check. | Maintain strict CSP policy; enforce via CI `check-csp.sh`; require static hosting with pinned dependencies and release provenance before public mainnet use. |
 | Email/notification provider | No product or technical doc selects one. | Leave out until a concrete notification workflow is specified. |
 
 ## 11. Source Coverage
@@ -713,7 +851,7 @@ this architecture:
 | `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, and out-of-scope boundaries. | Implementation sequencing. |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
-| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation. | Future vault categories and Portfolio Router. |
+| `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaVault subclasses). | None. |
 | `docs/technical/security-model.md` | Role separation, live-chain safety decisions, dapp/web2 risks, upstream protocol risks, infrastructure risks, triage backlog. | Exhaustive attack table details; kept in the security model. |
 | `docs/technical/rmpc-read-output-contract.md` | Stable JSON envelope, JSON-RPC source lock, partial-read contract, decimal-string integer serialization. | Per-command flag spelling and future indexer source variant. |
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |
@@ -721,4 +859,4 @@ this architecture:
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
 | `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
-| retired `docs/implementation-plan.md` (git history; live plan: Plan tracking issue #109) | Existing shipped components and stale areas were used as implementation status context only. | Delivery sequence is intentionally not reproduced here. |
+| Plan tracking issue #109 (GitHub) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the live plan is the canonical source. | Implementation-plan file references; those were retired 2026-06-09. |

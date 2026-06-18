@@ -41,6 +41,11 @@ type Props = Readonly<{
   routerAddress?: Address;
   /** RM token address for the Faucet tab drip button (issue #365). Optional. */
   rmTokenAddress?: Address;
+  /**
+   * TimelockController address (issue #647 / architecture §4.5).
+   * Forwarded to AdminFlow → buildAdminTabs → TimelockPanel.
+   */
+  timelockAddress?: Address;
 }>;
 
 export function AgentsPanel(props: Props) {
@@ -160,6 +165,7 @@ export function AgentsPanel(props: Props) {
       registryAddress={props.registryAddress}
       routerAddress={props.routerAddress}
       rmTokenAddress={props.rmTokenAddress}
+      timelockAddress={props.timelockAddress}
     />
   );
 }

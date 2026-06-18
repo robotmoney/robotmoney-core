@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5.1 — Protocol-scope vault registry reads
+//! Canonical: Plan tracking issue #109 §5.1 — Protocol-scope vault registry reads
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //! ADR: docs/technical/vault-registry-decisions.md §3.4
 //!
@@ -34,7 +34,7 @@ use crate::config::Config;
 use crate::gateway::{MockVault, VaultRegistry};
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -106,7 +106,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-vaults: rpc client init failed: {e}");
@@ -136,7 +136,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 /// (chain id, block number, `listVaults()`) propagate as `Err`; per-vault
 /// sub-read failures are captured via `record_err` on the builder.
 async fn read_vaults(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
 ) -> crate::errors::Result<Envelope<GetVaultsData>> {
     let chain_id = rpc.chain_id().await?;
@@ -212,7 +212,7 @@ fn vault_status_to_str(s: u8) -> &'static str {
 
 /// Call `VaultRegistry.listVaults()` and return the decoded `address[]`.
 async fn call_list_vaults(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     block_tag: &str,
 ) -> crate::errors::Result<Vec<Address>> {
@@ -235,7 +235,7 @@ async fn call_list_vaults(
 
 /// Call `VaultRegistry.getVault(address)` and return the decoded `VaultRecord`.
 async fn call_get_vault(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     registry: Address,
     vault: Address,
     block_tag: &str,
@@ -258,7 +258,7 @@ async fn call_get_vault(
 
 /// Call `vault.totalAssets()` and return the decoded `U256`.
 async fn call_total_assets(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     vault: Address,
     block_tag: &str,
 ) -> std::result::Result<U256, String> {

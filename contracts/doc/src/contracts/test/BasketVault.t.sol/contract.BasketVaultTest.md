@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -317,15 +317,13 @@ emergency unwind completes successfully.
 function test_emergencyUnwind_bothFloorsSatisfied_succeeds() public;
 ```
 
-### test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck
+### test_emergencyUnwindWithOverride_isOracleIndependent
 
-emergencyUnwindWithOverride also applies the TWAP floor as a secondary
-check alongside the configured appliedFloor. A swap below the TWAP floor
-is rejected even when maxLossBps is generous.
+Override execution remains available when the TWAP oracle is unavailable.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_twapFloorAppliedAsSecondaryCheck() public;
+function test_emergencyUnwindWithOverride_isOracleIndependent() public;
 ```
 
 ### test_setTwapWindow_emitsEvent
@@ -397,22 +395,22 @@ emergencyUnwindWithOverride succeeds when vault is already paused.
 function test_emergencyUnwindWithOverride_succeedsWhenAlreadyPaused() public;
 ```
 
-### test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwind on unpaused vault still pauses the vault.
+emergencyUnwind on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwind_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwind_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
-### test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused
+### test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused
 
-emergencyUnwindWithOverride on unpaused vault still pauses the vault.
+emergencyUnwindWithOverride on an unpaused vault pauses deposits only.
 
 
 ```solidity
-function test_emergencyUnwindWithOverride_pausesVaultWhenNotAlreadyPaused() public;
+function test_emergencyUnwindWithOverride_pausesDepositsWhenNotAlreadyPaused() public;
 ```
 
 ### test_emergencyUnwind_requiresEmergencyRole_adminOnlyReverts
@@ -432,6 +430,27 @@ pool's observationCardinality is 1 (Uniswap deployment default).
 
 ```solidity
 function test_addAsset_revertsWhenPoolCardinalityIsOne() public;
+```
+
+### test_addAsset_revertsWithoutFullTwapHistory
+
+
+```solidity
+function test_addAsset_revertsWithoutFullTwapHistory() public;
+```
+
+### test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable
+
+
+```solidity
+function test_emergencyUnwind_usesConfiguredFloorWhenOracleUnavailable() public;
+```
+
+### test_emergencyUnwind_blocksDepositsButAllowsRedemption
+
+
+```solidity
+function test_emergencyUnwind_blocksDepositsButAllowsRedemption() public;
 ```
 
 ### test_addAsset_succeedsWhenCardinalityMeetsMinimum
@@ -588,6 +607,17 @@ least targetShares (ERC-4626 symmetry with slippage haircut).
 
 ```solidity
 function test_previewMint_notCheaperThanDeposit_dilutionPrevented() public;
+```
+
+### test_withdrawAndPreviewWithdraw_revertRedeemOnly
+
+withdraw() and previewWithdraw() revert with RedeemOnly because
+BasketVault proportional-swap exits cannot guarantee the ERC-4626
+exactness guarantee. Users must use redeem() instead.
+
+
+```solidity
+function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public;
 ```
 
 ## Events

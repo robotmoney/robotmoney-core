@@ -1,0 +1,88 @@
+# Canonical: docs/development/ci-suites.md §20
+#
+# WHY THIS SUITE EXISTS
+# The security model (docs/technical/security-model.md §9) requires an automated
+# watchdog to monitor per-block and per-hour mint/burn volume and trigger a pause
+# or alert on breach. This suite verifies that the watchdog compiles, passes unit
+# tests, and that the threshold-breach detection pipeline works end-to-end against
+# a real Postgres testcontainer (volume queries → breach detection → alert dispatch).
+#
+# WHY TESTS ARE SPLIT INTO fast AND pg
+# Unit tests (config validation, RLP encoding, alert payload shape) need no Docker.
+# Breach detection and alert integration tests need a Postgres testcontainer.
+# Splitting keeps the fast job under 5 minutes and lets the pg job fail independently
+# without hiding unit test results.
+#
+# GOTCHAS
+# - The threshold_breach tests start a MockWebhookServer on localhost. If the runner
+#   is behind a strict firewall that blocks loopback TCP, the alert dispatch will fail.
+#   GitHub-hosted ubuntu-latest runners have unrestricted loopback — no special setup.
+# - The pg integration tests skip cleanly when Docker is unavailable (try_pg_fixture
+#   returns None). If you see all tests passing but CycleResult::Breached is never
+#   exercised, check that Docker is present on the runner.
+
+name: watchdog-rate-monitor
+
+on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
+  push:
+    branches: [dev, "dev-phase-*"]
+  pull_request:
+  workflow_dispatch:
+
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt — they keep a
+# distinct concurrency lane per ref and never cancel, so merged-commit coverage
+# always completes. See docs/development/ci-suites.md (CI velocity tiers).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fast:
+    name: watchdog-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy -p watchdog
+        run: cargo clippy -p watchdog -- -D warnings
+
+      - name: cargo test -p watchdog --lib (unit tests, no Docker)
+        run: cargo test -p watchdog --lib -- --nocapture
+
+  pg:
+    name: watchdog-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build test binaries
+        working-directory: services/watchdog
+        run: cargo test --no-run
+
+      - name: Alert webhook integration test
+        working-directory: services/watchdog
+        run: cargo test --test alert_webhook -- --nocapture
+
+      - name: Threshold breach integration test
+        working-directory: services/watchdog
+        run: cargo test --test threshold_breach -- --nocapture

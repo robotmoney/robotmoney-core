@@ -1,8 +1,7 @@
 # MockAerodromeRouter
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/BasketVault.t.sol)
 
-Mock Aerodrome Router: records calls and disburses pre-set amounts.
-Mimics the IAerodromeRouter.swapExactTokensForTokens signature.
+Mock Aerodrome Slipstream router and CL factory.
 
 
 ## State Variables
@@ -23,13 +22,10 @@ bool public enforceDeadline
 ```
 
 
-### returnEmptyAmounts
-When set, return an empty amounts array (malformed router response,
-audit 2026-06-09 L-7 regression input).
-
+### pools
 
 ```solidity
-bool public returnEmptyAmounts
+mapping(bytes32 => address) public pools
 ```
 
 
@@ -48,31 +44,30 @@ function setAmountOut(uint256 amountOut_) external;
 function setEnforceDeadline(bool enforce_) external;
 ```
 
-### setReturnEmptyAmounts
+### setPool
 
 
 ```solidity
-function setReturnEmptyAmounts(bool empty_) external;
+function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external;
 ```
 
-### swapExactTokensForTokens
+### exactInputSingle
 
 
 ```solidity
-function swapExactTokensForTokens(
-    uint256 amountIn,
-    uint256 amountOutMin,
-    IAerodromeRouter.Route[] calldata routes,
-    address to,
-    uint256 deadline
-) external returns (uint256[] memory amounts);
+function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+    external
+    returns (uint256);
 ```
 
-### defaultFactory
+### getPool
 
 
 ```solidity
-function defaultFactory() external pure returns (address);
+function getPool(address tokenA, address tokenB, int24 tickSpacing)
+    external
+    view
+    returns (address);
 ```
 
 ## Errors

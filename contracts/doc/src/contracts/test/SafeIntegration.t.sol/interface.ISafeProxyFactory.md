@@ -1,5 +1,5 @@
 # ISafeProxyFactory
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/SafeIntegration.t.sol)
 
 **Title:**
 ISafeProxyFactory — minimal interface for Safe{Wallet} ProxyFactory.

@@ -351,15 +351,13 @@ async fn run_inner(
     };
     for (bn, contract) in &event_blocks_per_contract {
         if *contract == cfg.vault {
-            rows_inserted +=
-                snapshot_vault_address(db, rpc, cfg.chain_id, cfg.vault, *bn).await? as i64;
+            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, cfg.vault, *bn).await;
         }
     }
     // Snapshot all registered vaults for every block where the router processed deposits.
     for bn in &router_event_blocks {
         for vault in &heartbeat_vaults {
-            rows_inserted +=
-                snapshot_vault_address(db, rpc, cfg.chain_id, *vault, *bn).await? as i64;
+            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, *vault, *bn).await;
         }
     }
 
@@ -394,8 +392,7 @@ async fn run_inner(
             None => true,
         };
         if needs_heartbeat {
-            rows_inserted +=
-                snapshot_vault_address(db, rpc, cfg.chain_id, vault, target).await? as i64;
+            rows_inserted += snapshot_vault_or_skip(db, rpc, cfg.chain_id, vault, target).await;
         }
     }
 
@@ -570,10 +567,12 @@ async fn handle_log(
                 log.log_index as i32,
                 log.tx_hash.0,
                 decoded.agent.into_array(),
+                Some(decoded.owner.into_array()),
                 false,
                 Some(decoded.validUntil as i64),
                 Some(decoded.maxPerPayment),
                 Some(decoded.maxPerWindow),
+                None, // window_usage_to_date not available from AgentAuthorized event
                 Some(decoded.shareReceiver.into_array()),
             )
             .await?;
@@ -604,10 +603,12 @@ async fn handle_log(
                 log.log_index as i32,
                 log.tx_hash.0,
                 decoded.agent.into_array(),
+                Some(decoded.owner.into_array()),
                 true,
                 None,
                 None,
                 None,
+                None, // window_usage_to_date not available from AgentRevoked event
                 None,
             )
             .await?;
@@ -1054,6 +1055,33 @@ fn into_alloy_log(log: &LogEntry) -> alloy_primitives::Log {
 
 /// Read totalAssets / totalSupply / exitFeeBps / tvlCap / paused from a
 /// vault at `block` and write a `vault_snapshots` row.
+/// Snapshot one vault, logging and skipping on failure instead of propagating.
+///
+/// A single vault's `totalAssets()`/`totalSupply()` read can fail for reasons
+/// that must not wedge the whole indexer — e.g. the call lands on a block where
+/// that vault had no code yet (router-event-block snapshots of a vault registered
+/// later return an empty `eth_call` -> "u256 read: short response (0 bytes)"), or
+/// a transient revert. Previously the `?` in `snapshot_vault_address` aborted the
+/// entire tick, so one un-snapshottable vault left every other registered vault's
+/// TVL null forever and stalled the indexer (issue #878). Returning the rows
+/// inserted (0 on failure) keeps the tick advancing; the next heartbeat re-snaps
+/// the skipped vault at `target`, where it does have code.
+async fn snapshot_vault_or_skip(
+    db: &Db,
+    rpc: &JsonRpc,
+    chain_id: i64,
+    vault: Address,
+    block: u64,
+) -> i64 {
+    match snapshot_vault_address(db, rpc, chain_id, vault, block).await {
+        Ok(n) => n as i64,
+        Err(e) => {
+            tracing::warn!(vault = %vault, block, error = %e, "skipping vault snapshot");
+            0
+        }
+    }
+}
+
 async fn snapshot_vault_address(
     db: &Db,
     rpc: &JsonRpc,

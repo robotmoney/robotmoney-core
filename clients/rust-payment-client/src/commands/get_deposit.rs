@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — Phase 3 Direct Chain-Read Query Tooling
+//! Canonical: Plan tracking issue #109 §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
 //!
 //! `rmpc get-deposit --deposit-id 0x…` — gateway deposit lookup by id.
@@ -36,7 +36,7 @@ use crate::config::Config;
 use crate::gateway::RobotMoneyGateway;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{RawLog, RpcClient};
+use crate::rpc::RawLog;
 
 const EXIT_OK: i32 = 0;
 const EXIT_INPUT_FAIL: i32 = 2;
@@ -96,7 +96,7 @@ pub fn run(config_path: &Path, deposit_id_hex: &str, pretty: bool) -> i32 {
         }
     };
 
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-deposit: rpc client init failed: {e}");

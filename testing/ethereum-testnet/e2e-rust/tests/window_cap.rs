@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5 — Window-cap scenario
+//! Canonical: Plan tracking issue #109 §5 — Window-cap scenario
 //!
 //! Per-agent `maxPerWindow` enforcement on the Geth+Lighthouse devnet.
 //! This scenario lives in its own test binary because it requires a

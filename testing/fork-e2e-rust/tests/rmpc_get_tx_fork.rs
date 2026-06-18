@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — fork test for
+//! Canonical: Plan tracking issue #109 §9 — fork test for
 //! `rmpc get-tx`. Issue #50.
 //!
 //! Sends a no-op USDC `approve(0,0)` transaction on the fork to

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — `rmpc get-tx`
+//! Canonical: Plan tracking issue #109 §9 — `rmpc get-tx`
 //!
 //! Integration tests for `rmpc get-tx` (issue #50).
 

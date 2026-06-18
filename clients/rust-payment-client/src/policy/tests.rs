@@ -8,6 +8,7 @@
 use super::*;
 use crate::config::{Config, SignerConfig};
 use crate::errors::RmpcError;
+use crate::rpc::FailoverRpcClient;
 use alloy_primitives::{address, hex as ahex, keccak256, Address, B256, U256};
 use alloy_sol_types::SolCall;
 use mockito::Matcher;
@@ -27,7 +28,8 @@ fn config() -> Config {
     let hash = keccak256(GATEWAY_CODE);
     Config {
         chain_id: 31337,
-        rpc_url: "http://placeholder".into(),
+        rpc_url: Some("http://placeholder".into()),
+        rpc_urls: None,
         gateway_address: format!("{GATEWAY:#x}"),
         usdc_address: format!("{USDC:#x}"),
         vault_address: format!("{VAULT:#x}"),
@@ -256,7 +258,7 @@ async fn happy_path_returns_ok_report() {
     let cfg = config();
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let report = pf.run(inputs(100)).await.expect("preflight ok");
     assert_eq!(report.chain_id, cfg.chain_id);
@@ -279,7 +281,7 @@ async fn chain_id_mismatch_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(matches!(err, RmpcError::ErrChainIdMismatch), "got {err:?}");
@@ -304,7 +306,7 @@ async fn empty_code_refuses_with_code_hash_mismatch() {
         .create_async()
         .await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(matches!(err, RmpcError::ErrCodeHashMismatch), "got {err:?}");
@@ -330,7 +332,7 @@ async fn code_hash_mismatch_refuses() {
         .create_async()
         .await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(matches!(err, RmpcError::ErrCodeHashMismatch), "got {err:?}");
@@ -352,7 +354,7 @@ async fn paused_gateway_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(matches!(err, RmpcError::ErrGatewayPaused), "got {err:?}");
@@ -375,7 +377,7 @@ async fn usdc_address_mismatch_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     match err {
@@ -400,7 +402,7 @@ async fn vault_address_mismatch_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     match err {
@@ -430,7 +432,7 @@ async fn inactive_agent_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(
@@ -460,7 +462,7 @@ async fn expired_agent_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(
@@ -490,7 +492,7 @@ async fn over_per_payment_cap_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(1_000)).await.unwrap_err();
     match err {
@@ -516,7 +518,7 @@ async fn over_window_cap_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(1_000)).await.unwrap_err();
     match err {
@@ -540,7 +542,7 @@ async fn allowance_too_low_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(
@@ -564,7 +566,7 @@ async fn balance_too_low_refuses() {
         .await;
     install_happy_path_mocks(&mut server, &cfg).await;
 
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf.run(inputs(100)).await.unwrap_err();
     assert!(
@@ -689,7 +691,7 @@ async fn withdraw_gateway_rejects_when_deposit_caps_high_withdraw_caps_low() {
         U256::ZERO,                   // withdrawWindowGross     = 0
     )
     .await;
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let err = pf
         .run_withdraw_gateway(PreflightInputs {
@@ -727,7 +729,7 @@ async fn withdraw_gateway_allows_when_deposit_caps_low_withdraw_caps_high() {
         U256::ZERO,             // withdrawWindowGross      = 0
     )
     .await;
-    let rpc = RpcClient::new(server.url()).unwrap();
+    let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
     let pf = Preflight::new(&rpc, &cfg);
     let result = pf
         .run_withdraw_gateway(PreflightInputs {

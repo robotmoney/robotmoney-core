@@ -2,11 +2,11 @@
 name = "rmpc-fork-e2e"
 version = "0.1.0"
 edition = "2021"
-description = "Phase 2 forked-mainnet e2e harness for Robot Money — drives anvil-fork against Base mainnet."
+description = "Phase 2 forked-Base e2e harness for Robot Money — drives anvil-fork against Base."
 license = "MIT"
 publish = false
 
-# Canonical: docs/implementation-plan.md §8 — Phase 2 Forked Smart-Contract E2E.
+# Canonical: Plan tracking issue #109 §8 — Phase 2 Forked Smart-Contract E2E.
 # Decision record: docs/technical/fork-e2e-decisions.md (issue #47).
 # Implements: issue #48.
 

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md — "Router-weight governance" phase
+//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
 //! Implements: issue #309
 //!
 //! Fork e2e scenarios for the RouterGovernance → PortfolioRouter weight
@@ -341,14 +341,15 @@ fn governance_propose_vote_execute() {
     let vault_a = deploy_mock_vault(&deployer, usdc);
     let vault_b = deploy_mock_vault(&deployer, usdc);
 
-    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 30 s, quorum = 1.
+    // voting_period = 3600 s (MIN_VOTING_PERIOD), execution_delay = 3600 s
+    // (MIN_EXECUTION_DELAY), quorum = 1.
     let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
     let governance = deploy_router_governance(
         &deployer,
         router,
         deployer.address,
         3600,             // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
-        30,               // executionDelay
+        3600,             // executionDelay — MIN_EXECUTION_DELAY enforced by constructor
         U256::from(1u64), // quorumThreshold
     );
 
@@ -431,8 +432,8 @@ fn governance_propose_vote_execute() {
     assert_eq!(vote_receipt.status, 1, "vote must succeed");
     eprintln!("[governance_propose_vote_execute] vote cast");
 
-    // Advance time past voting period (3600 s) + execution delay (30 s).
-    advance_time(&fx, 3631);
+    // Advance time past voting period (3600 s) + execution delay (3600 s).
+    advance_time(&fx, 7201);
 
     // State must now be Queued (quorum reached, delay elapsed).
     let state_after_time = read_proposal_state(&deployer, governance, proposal_id);
@@ -542,7 +543,7 @@ fn governance_quorum_not_reached() {
         router,
         deployer.address,
         3600,                // votingPeriod — MIN_VOTING_PERIOD enforced by constructor
-        30,                  // executionDelay
+        3600,                // executionDelay — MIN_EXECUTION_DELAY enforced by constructor
         U256::from(1000u64), // quorumThreshold — unreachable
     );
 

@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -404,14 +404,13 @@ function test_depositTo_routerPath_revertsOnUsdcCustodyInvariant() public;
 function test_depositTo_revertsOnFeeOnTransferToken() public;
 ```
 
-### test_depositTo_vaultPath_revertsOnPreCallShareCustody
+### test_depositTo_vaultPath_ignoresPreexistingDonatedShares
 
-`depositTo` vault path: pre-call share custody invariant — gateway must
-hold zero shares of the destination vault before the call.
+Preexisting donated shares do not brick the vault deposit path.
 
 
 ```solidity
-function test_depositTo_vaultPath_revertsOnPreCallShareCustody() public;
+function test_depositTo_vaultPath_ignoresPreexistingDonatedShares() public;
 ```
 
 ### test_depositTo_vaultPath_revertsOnPostCallShareCustody
@@ -630,6 +629,96 @@ router: AgentWithdrawalRouted event is emitted with correct indexed topics.
 
 ```solidity
 function test_withdrawFromRouter_emitsAgentWithdrawalRoutedEvent() public;
+```
+
+### test_withdrawFromRouter_revertsOnExpiredDeadline
+
+DeadlineExpired: deadline is in the past → revert.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnExpiredDeadline() public;
+```
+
+### test_withdrawFromRouter_revertsOnDeadlineTooFar
+
+DeadlineTooFar: deadline is beyond MAX_DEADLINE_SKEW → revert.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnDeadlineTooFar() public;
+```
+
+### test_withdrawFromRouter_revertsOnExpiredPolicy
+
+AgentPolicyExpired: policy validUntil is in the past → revert.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnExpiredPolicy() public;
+```
+
+### test_withdrawFromRouter_allowedSourceVaults_skipsZeroShareLegs
+
+allowedSourceVaults zero-shares continue: a zero-shares leg for a
+vault not in the allowlist must be silently skipped (not revert).
+This exercises the `if (sharesPerLeg[i] == 0) continue;` branch at
+the top of the allowedSourceVaults validation loop.
+
+
+```solidity
+function test_withdrawFromRouter_allowedSourceVaults_skipsZeroShareLegs() public;
+```
+
+### test_withdrawFromRouter_zeroShareLeg_skippedInPullAndClearLoops
+
+Zero-shares continue in share-pull and approval-clear loops: a
+successful withdrawal with one zero leg exercises both
+`if (sharesPerLeg[i] == 0) continue;` branches in
+_executeRouterWithdraw (lines 1056 and 1068).
+
+
+```solidity
+function test_withdrawFromRouter_zeroShareLeg_skippedInPullAndClearLoops() public;
+```
+
+### test_withdrawFromRouter_revertsOnShareCustodyInvariant
+
+ShareCustodyInvariantViolated: router vault leaks one share back to
+the gateway during redeemFor → post-call custody check fires.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnShareCustodyInvariant() public;
+```
+
+### _buildLeakyGateway
+
+Build a gateway whose only vault is LeakyRedeemRouterVault.
+
+
+```solidity
+function _buildLeakyGateway()
+    internal
+    returns (
+        RobotMoneyGateway leakyGateway,
+        LeakyRedeemRouterVault leakyVault,
+        PortfolioRouter leakyRouter
+    );
+```
+
+### _doLeakyWithdraw
+
+Authorize an agent, deposit via leakyRouter, then attempt the
+withdraw that trips ShareCustodyInvariantViolated.
+
+
+```solidity
+function _doLeakyWithdraw(
+    RobotMoneyGateway leakyGateway,
+    LeakyRedeemRouterVault leakyVault,
+    PortfolioRouter leakyRouter
+) internal;
 ```
 
 ### _assertWithdrawalRoutedLog

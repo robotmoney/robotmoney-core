@@ -190,8 +190,11 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     event EmergencyWithdrawAdapterCalled(
         uint256 indexed index, address indexed adapter, uint256 amount, bool success
     );
-    /// @notice Emitted when the vault is permanently shut down.
+    /// @notice Emitted when the vault is shut down.
     event Shutdown();
+    /// @notice Emitted when a shut-down vault is restored and deposits re-open.
+    /// @param newTvlCap The fresh TVL cap set on restore.
+    event VaultRestored(uint256 newTvlCap);
     /// @notice Emitted when deposit pause state changes.
     /// @param paused True when deposits are blocked, false when unblocked.
     event DepositsPausedChanged(bool paused);
@@ -212,8 +215,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     error CannotRescueAsset();
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
-    /// @notice Operation rejected because the vault has been permanently shut down.
+    /// @notice Operation rejected because the vault has been shut down.
     error VaultShutdown();
+    /// @notice `restoreVault` called while the vault is not in a shut-down state.
+    error NotShutdown();
     /// @notice Exit-fee bps argument exceeds `MAX_EXIT_FEE_BPS` (1%).
     error InvalidFee();
     /// @notice Generic admin parameter validation failure (zero/out-of-range value).
@@ -431,6 +436,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (remaining > 0) emit UnroutedDeposit(remaining);
     }
 
+    // slither-disable-start reentrancy-events
+    // `_routeDeposit()` and `rebalance()` are `nonReentrant`; the emitted
+    // event happens after the guarded external adapter calls and the warning is
+    // a false positive.
     function _allocateTo(uint256 i, uint256 amount) internal {
         IStrategyAdapter adpt = adapters[i].adapter;
         address adptAddr = address(adpt);
@@ -439,6 +448,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         adpt.deploy(amount);
         emit Allocated(i, adptAddr, amount);
     }
+
+    // slither-disable-end reentrancy-events
 
     // ─── Synchronous withdraw / redeem ────────────────────────────────
 
@@ -543,6 +554,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
+    // slither-disable-start reentrancy-balance
+    // The public entrypoints that reach this helper are `nonReentrant`; the
+    // pre-call balance reads are therefore protected and the stale-balance
+    // warning is a false positive.
     function _pullProportional(uint256 assetsNeeded) internal {
         if (assetsNeeded == 0) return;
 
@@ -606,6 +621,8 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
         }
     }
+
+    // slither-disable-end reentrancy-balance
 
     // ─── Adapter management ──────────────────────────────────────────
 
@@ -797,7 +814,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             if (!adapters[i].active) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             address adptAddr = address(adpt);
-            uint256 balance = adpt.totalAssets();
+            uint256 balance;
+            try adpt.totalAssets() returns (uint256 reported) {
+                balance = reported;
+            } catch {
+                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
+                continue;
+            }
             if (balance == 0) continue;
             try adpt.withdraw(balance) returns (uint256 actual) {
                 emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
@@ -820,7 +843,13 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             revert AdapterNotFound();
         }
         _setDepositsPaused(true);
-        uint256 balance = adapters[index].adapter.totalAssets();
+        uint256 balance;
+        try adapters[index].adapter.totalAssets() returns (uint256 reported) {
+            balance = reported;
+        } catch {
+            emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, false);
+            return;
+        }
         if (balance == 0) {
             emit EmergencyWithdrawAdapterCalled(index, address(adapters[index].adapter), 0, true);
             return;
@@ -840,17 +869,43 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE) {
         if (index >= adapters.length || !adapters[index].active) revert AdapterNotFound();
         _setDepositsPaused(true);
-        uint256 lossAmount = adapters[index].adapter.totalAssets();
+        IStrategyAdapter adapter = adapters[index].adapter;
         adapters[index].active = false;
-        emit AdapterForceRemoved(index, address(adapters[index].adapter), lossAmount);
+        uint256 lossAmount;
+        try adapter.totalAssets() returns (uint256 reported) {
+            lossAmount = reported;
+        } catch {}
+        emit AdapterForceRemoved(index, address(adapter), lossAmount);
     }
 
-    /// @notice Permanently shut down the vault: set `shutdown = true` and zero the TVL cap.
-    ///         Irreversible. Restricted to `EMERGENCY_ROLE`.
+    /// @notice Shut down the vault: set `shutdown = true` and zero the TVL cap.
+    ///         Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`
+    ///         via `restoreVault`, mirroring the `pause`/`unpause` trust
+    ///         asymmetry: a compromised emergency hot key can DoS deposits but
+    ///         cannot permanently brick the vault — re-opening requires the
+    ///         higher-trust admin role.
     function shutdownVault() external onlyRole(EMERGENCY_ROLE) {
         shutdown = true;
         tvlCap = 0;
         emit Shutdown();
+    }
+
+    /// @notice Reverse a `shutdownVault` and re-open deposits. Restricted to
+    ///         `ADMIN_ROLE`. Intentionally asymmetric: shutting down is fast and
+    ///         unilateral (`EMERGENCY_ROLE`); restoring is deliberate and requires
+    ///         the higher-trust admin role. Because `shutdownVault` zeroed the TVL
+    ///         cap, the admin supplies a fresh cap so deposits resume under an
+    ///         explicit limit rather than silently reusing a stale value.
+    /// @param newTvlCap New maximum total assets in 6-decimal USDC units (must be > 0).
+    function restoreVault(uint256 newTvlCap) external onlyRole(ADMIN_ROLE) {
+        if (!shutdown) revert NotShutdown();
+        if (newTvlCap == 0) revert InvalidCap();
+        if (perDepositCap > newTvlCap) revert InvalidParam();
+        shutdown = false;
+        uint256 old = tvlCap;
+        tvlCap = newTvlCap;
+        emit VaultRestored(newTvlCap);
+        emit TvlCapUpdated(old, newTvlCap);
     }
 
     // ─── Param setters ────────────────────────────────────────────────

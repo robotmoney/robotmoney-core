@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md — "Router-weight governance" phase
+//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
 //! Implements: issue #309 (rmpc get-governance subprocess assertion)
 //!
 //! `rmpc get-governance` — direct on-chain read of RouterGovernance state.
@@ -28,7 +28,7 @@ use crate::config::Config;
 use crate::gateway::RouterGovernance;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -122,7 +122,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-governance: rpc client init failed: {e}");
@@ -149,7 +149,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 }
 
 async fn read_governance(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
 ) -> crate::errors::Result<Envelope<GovernanceData>> {
     let chain_id = rpc.chain_id().await?;
@@ -221,7 +221,7 @@ async fn read_governance(
 }
 
 async fn call_current_proposal_id(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
     block_tag: &str,
 ) -> crate::errors::Result<U256> {
@@ -244,7 +244,7 @@ async fn call_current_proposal_id(
 }
 
 async fn call_cadence_params(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
     block_tag: &str,
 ) -> crate::errors::Result<(u64, u64, U256, U256)> {
@@ -271,7 +271,7 @@ async fn call_cadence_params(
 }
 
 async fn call_current_weights(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
     block_tag: &str,
 ) -> crate::errors::Result<(Vec<Address>, Vec<U256>)> {
@@ -293,7 +293,7 @@ async fn call_current_weights(
 }
 
 async fn call_active_proposal(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     governance: Address,
     block_tag: &str,
 ) -> std::result::Result<ProposalSummary, String> {

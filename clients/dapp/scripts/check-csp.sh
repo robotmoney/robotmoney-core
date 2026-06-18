@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verifies the dapp emits a strict Content-Security-Policy (issue #665).
 #
-# Canonical: docs/implementation-plan.md "Backend and dapp hardening".
+# Canonical: docs/architecture.md §5.3 — Human Dapp (CSP enforcement, issue #665).
 #
 # Builds the production bundle, serves it with `vite preview`, then asserts the
 # `Content-Security-Policy` response header is present and contains `script-src`

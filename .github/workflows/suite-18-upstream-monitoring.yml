@@ -20,10 +20,10 @@
 name: upstream-contract-monitoring
 
 on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
   workflow_dispatch:
   schedule:
     # Nightly at 03:00 UTC.
@@ -48,6 +48,16 @@ jobs:
 
       - name: Run upstream monitoring mock tests
         run: bash .github/scripts/tests/test_upstream_monitoring.sh
+
+  assert-basescan-mock-tests:
+    name: assert-basescan-mock-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run assert-basescan-verified unit tests (mock mode)
+        run: bash .github/scripts/tests/test_assert_basescan_verified.sh
 
   live-monitor:
     name: live-monitor

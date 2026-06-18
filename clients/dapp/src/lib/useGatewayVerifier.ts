@@ -75,7 +75,7 @@ export function useGatewayVerifier(
     if (targetChainId !== undefined && chainId !== targetChainId) {
       setState({
         status: "refused",
-        reason: `Wallet is on chain ${chainId}, expected ${targetChainId}.`,
+        reason: "unknown_revert",
       });
       return;
     }
@@ -84,7 +84,7 @@ export function useGatewayVerifier(
     if (!provider) {
       setState({
         status: "refused",
-        reason: "No injected wallet provider (window.ethereum is undefined).",
+        reason: "unknown_revert",
       });
       return;
     }
@@ -97,7 +97,6 @@ export function useGatewayVerifier(
     cancelRef.current = token;
 
     async function attempt(p: Eip1193Provider): Promise<void> {
-      let lastError: string | undefined;
       for (let i = 0; i < RETRY_DELAYS_MS.length; i++) {
         if (token.cancelled) return;
         if (RETRY_DELAYS_MS[i] > 0) {
@@ -115,16 +114,14 @@ export function useGatewayVerifier(
           setState(computeVerificationState(gatewayAddress, expectedCodeHash, resolvedCode));
           return;
         } catch (err) {
-          lastError = (err as { message?: string }).message ?? String(err);
+          void err; // error captured but not forwarded — product reason is always "unknown_revert"
           if (token.cancelled) return;
         }
       }
       if (!token.cancelled) {
         setState({
           status: "refused",
-          reason:
-            `Wallet returned an error for eth_getCode(${gatewayAddress}) after ` +
-            `${RETRY_DELAYS_MS.length} retries: ${lastError ?? "unknown"}`,
+          reason: "unknown_revert",
         });
       }
     }

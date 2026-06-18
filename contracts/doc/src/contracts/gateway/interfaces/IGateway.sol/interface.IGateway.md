@@ -1,12 +1,12 @@
 # IGateway
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
 
 Minimal interface stub for the RobotMoney deposit gateway.
 
-Per the MVP plan (`docs/implementation-plan.md` §2.2), the gateway
+Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
 exposes a single state-mutating entrypoint for agents (`deposit`),
 a permissionless depositor-owned authorize/revoke/policy surface
 (`authorizeAgent`, `revokeAgent`, `setPolicy`), and a protocol-wide

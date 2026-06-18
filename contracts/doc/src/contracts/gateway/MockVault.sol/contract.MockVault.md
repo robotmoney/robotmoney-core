@@ -1,8 +1,8 @@
 # MockVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/gateway/MockVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/gateway/MockVault.sol)
 
 **Inherits:**
-ERC20
+ERC20, ReentrancyGuard
 
 **Title:**
 MockVault
@@ -74,7 +74,11 @@ via `transferFrom`, mints `shares == assets` to `receiver`.
 
 
 ```solidity
-function deposit(uint256 assets, address receiver) external virtual returns (uint256 shares);
+function deposit(uint256 assets, address receiver)
+    external
+    virtual
+    nonReentrant
+    returns (uint256 shares);
 ```
 **Parameters**
 
@@ -100,6 +104,7 @@ transfers `assets == shares` USDC (1:1, no exit fee) to `receiver`.
 function redeem(uint256 shares, address receiver, address owner)
     external
     virtual
+    nonReentrant
     returns (uint256 assets);
 ```
 **Parameters**

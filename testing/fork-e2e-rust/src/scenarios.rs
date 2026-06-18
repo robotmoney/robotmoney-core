@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §8 ("Required scenarios").
+//! Canonical: Plan tracking issue #109 §8 ("Required scenarios").
 //!
 //! Shared helpers used by the five §8 scenarios. The scenarios
 //! themselves live as `#[test]` cases under `tests/` so each one
@@ -87,8 +87,21 @@ pub fn approve_usdc(
     spender: Address,
     amount: U256,
 ) -> Result<Receipt, HarnessError> {
+    approve_usdc_on(account, crate::addresses::USDC, spender, amount)
+}
+
+/// Approve `spender` to pull `amount` of the USDC token at `usdc_token`.
+/// Network-aware variant of [`approve_usdc`] used by the multi-network adapter
+/// tests, which must target Base canonical USDC or Base Sepolia USDC depending on
+/// the [`crate::Network`] under test (issue #839).
+pub fn approve_usdc_on(
+    account: &Account<'_>,
+    usdc_token: Address,
+    spender: Address,
+    amount: U256,
+) -> Result<Receipt, HarnessError> {
     let call = IERC20::approveCall { spender, amount };
-    account.send(crate::addresses::USDC, &call, U256::ZERO, 100_000)
+    account.send(usdc_token, &call, U256::ZERO, 100_000)
 }
 
 /// Deposit USDC into the vault on behalf of `receiver`.

@@ -1,6 +1,6 @@
 # Full-stack dapp overlay for the Robot Money devnet.
 #
-# Canonical: Plan tracking issue #109 (formerly docs/implementation-plan.md §10.5 — Phase 4.5.)
+# Canonical: Plan tracking issue #109 §10.5 — Phase 4.5.
 # Used by: testing/smoke-test (--full-stack flag, issue #228).
 #
 # Brings up Postgres, explorer-indexer, explorer-api, and the dapp
@@ -23,6 +23,8 @@
 #   #   INDEXER_CHAIN_ID=918453
 #   #   INDEXER_CHAIN_NAME=devnet
 #   #   EXPLORER_API_CHAIN_ID=918453
+#   #   INDEXER_REGISTRY=          — VaultRegistry address (enables /v1/vaults)
+#   #   INDEXER_PORTFOLIO_ROUTER=  — PortfolioRouter address (enables /v1/router/weights)
 #   #   POSTGRES_PORT=5432
 #   #   EXPLORER_API_PORT=8080
 #   #   DAPP_PORT=5173
@@ -35,10 +37,20 @@
 
 name: robotmoney-dapp
 
+# Run-identity labels (testnet boot hardening) — see docker-compose.yaml for the
+# rationale. The harness injects SMOKE_RUN_ID / SMOKE_RUN_CREATED so a later boot
+# can reap dapp containers stranded by a previous run instead of colliding on the
+# fixed container names. Defaults keep standalone `docker compose` usage working.
+x-testnet-labels: &testnet-labels
+  com.robotmoney.testnet: "1"
+  com.robotmoney.testnet.run-id: "${SMOKE_RUN_ID:-standalone}"
+  com.robotmoney.testnet.created: "${SMOKE_RUN_CREATED:-0}"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: dapp-postgres
+    labels: *testnet-labels
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
@@ -48,30 +60,49 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robotmoney} -d ${POSTGRES_DB:-explorer}"]
-      interval: 5s
+      # 2s cadence so indexer + explorer-api (depends_on postgres: service_healthy)
+      # start promptly once Postgres accepts connections.
+      interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 15
 
+  # indexer + explorer-api run the SAME image (built once from the shared Rust
+  # build container, docker/rust-services.Dockerfile) with different entrypoints,
+  # so the workspace compiles once instead of once per service. This service owns
+  # the build; explorer-api reuses the resulting robotmoney-rust-services:devnet tag.
   explorer-indexer:
+    image: robotmoney-rust-services:devnet
     build:
       context: ../../..
-      dockerfile: services/explorer-indexer/Dockerfile
+      dockerfile: docker/rust-services.Dockerfile
+    entrypoint: ["/usr/local/bin/indexer"]
     container_name: dapp-explorer-indexer
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Issue #775: join the ethereum-testnet_default network so the indexer
+    # can reach Geth directly via the `geth` service hostname (port 8545
+    # inside the chain network) instead of relying on host.docker.internal,
+    # which is not reachable on all Docker host configurations.
+    networks:
+      - default
+      - chain-net
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
-      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8545}
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://geth:8545}
       INDEXER_CHAIN_ID: ${INDEXER_CHAIN_ID:-918453}
       INDEXER_CHAIN_NAME: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_RPC_LABEL: ${INDEXER_CHAIN_NAME:-devnet}
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
+      # Issue #615: INDEXER_PORTFOLIO_ROUTER enables WeightsSet / DefaultWeightsSet
+      # and RouterDeposit event ingestion from the PortfolioRouter contract.  Without
+      # this the explorer /v1/router/weights endpoint returns an empty weight list
+      # even when the deploy script called setWeights() before the dapp stack booted.
+      INDEXER_PORTFOLIO_ROUTER: ${INDEXER_PORTFOLIO_ROUTER:-}
       # Bit 2 (INDEXER_MULTI_VAULT_EVENTS) enables VaultRegistered /
       # VaultStatusChanged event ingestion from the VaultRegistry.  Without
       # this flag the /v1/vaults explorer endpoint returns an empty list even
@@ -81,15 +112,20 @@ services:
       # config/feature-flags.json id=2; services/explorer-indexer/src/feature_flags.rs.
       FEATURE_FLAGS: ${FEATURE_FLAGS:-4}
 
+  # Reuses the robotmoney-rust-services:devnet image built by explorer-indexer
+  # (no build: of its own) and selects the explorer-api binary via entrypoint.
+  # depends_on explorer-indexer so the shared image is built before this starts.
   explorer-api:
-    build:
-      context: ../../..
-      dockerfile: clients/explorer-api/Dockerfile
+    image: robotmoney-rust-services:devnet
+    entrypoint: ["/usr/local/bin/explorer-api"]
     container_name: dapp-explorer-api
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      explorer-indexer:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-robotmoney}:${POSTGRES_PASSWORD:-robotmoney}@postgres:5432/${POSTGRES_DB:-explorer}
       EXPLORER_API_CHAIN_ID: ${EXPLORER_API_CHAIN_ID:-918453}
@@ -99,9 +135,11 @@ services:
       - "127.0.0.1:${EXPLORER_API_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
-      interval: 5s
+      # 2s cadence so dapp (depends_on explorer-api: service_healthy) starts
+      # promptly once the API answers /health.
+      interval: 2s
       timeout: 5s
-      retries: 20
+      retries: 30
 
   dapp:
     build:
@@ -143,6 +181,7 @@ services:
         # integrity check stay consistent.
         VITE_FAUCET_DRIP_ETH_WEI: ${VITE_FAUCET_DRIP_ETH_WEI:-10000000000000000}
     container_name: dapp-frontend
+    labels: *testnet-labels
     restart: unless-stopped
     depends_on:
       explorer-api:
@@ -151,6 +190,17 @@ services:
       - "127.0.0.1:${DAPP_PORT:-5173}:5173"
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"const r = await fetch('http://localhost:5173'); process.exit(r.ok ? 0 : 1)\""]
-      interval: 5s
+      interval: 2s
       timeout: 5s
-      retries: 20
+      retries: 30
+
+# Issue #775: chain-net joins the ethereum-testnet_default Docker network
+# created by docker-compose.yaml (the chain compose stack) so that
+# explorer-indexer can reach Geth via the `geth` service name rather than
+# host.docker.internal.  The ethereum-testnet stack must be running before
+# this overlay is brought up (the README and standalone usage instructions
+# already require this).
+networks:
+  chain-net:
+    external: true
+    name: ethereum-testnet_default

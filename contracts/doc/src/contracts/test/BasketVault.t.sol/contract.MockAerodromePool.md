@@ -1,5 +1,5 @@
 # MockAerodromePool
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/BasketVault.t.sol)
 
 Aerodrome-style CL pool mock: observe() returns tick cumulatives like MockPool.
 Also implements token0/token1 and slot0 so addAsset cardinality check passes.
@@ -17,6 +17,13 @@ address public immutable token0
 
 ```solidity
 address public immutable token1
+```
+
+
+### tickSpacing
+
+```solidity
+int24 public constant tickSpacing = 100
 ```
 
 

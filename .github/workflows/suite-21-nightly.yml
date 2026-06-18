@@ -1,0 +1,85 @@
+# Canonical: docs/development/ci-suites.md §21 — Nightly full-suite run
+#
+# WHY THIS SUITE EXISTS
+# The per-commit CI on dev runs all workflows that are triggered on push:dev.
+# However several suites are either too heavy for per-commit runs (suite-11b
+# opencode-headless, which calls a live LLM), currently disabled pending
+# implementation (suite-18-security-gates, suite-19-erc4626-demo-tvl-matrix),
+# or benefit from a periodic re-run against the latest HEAD to catch
+# time-dependent regressions (flaky tests, upstream API drift, stale fixtures).
+# This nightly orchestrator re-dispatches ALL suites against dev HEAD so every
+# suite gets a daily green/red signal regardless of whether that day's commits
+# touched its path filters.
+#
+# WHY workflow_dispatch ON EACH SUITE
+# Re-running via the REST API's workflow_dispatch endpoint is the simplest way
+# to re-trigger each suite against a specific ref without duplicating job steps.
+# Each suite retains its own timeout, matrix, and concurrency settings.
+#
+# WHY 02:00 UTC
+# Avoids collision with suite-11b (03:17 UTC) and suite-18-upstream-monitoring
+# (03:00 UTC). The nightly run should complete before those fire so artifacts
+# don't overlap.
+#
+# WHY secrets.GITHUB_TOKEN IS SUFFICIENT
+# workflow_dispatch only requires the `actions: write` permission which the
+# default GITHUB_TOKEN has on private repos.
+
+name: nightly-full-suite
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC nightly
+  workflow_dispatch:      # allow manual trigger
+
+concurrency:
+  group: nightly-full-suite
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch-all-suites:
+    name: Dispatch all CI suites against dev HEAD
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch suites
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: dev
+        run: |
+          set -euo pipefail
+          SUITES=(
+            natspec-coverage.yml
+            suite-01-02-forge-tests.yml
+            suite-03-solidity-quality.yml
+            suite-04-rust-quality.yml
+            suite-05-fork-integration.yml
+            suite-06-rmpc-unit.yml
+            suite-07-rmpc-integration.yml
+            suite-08-explorer-indexer.yml
+            suite-09-dapp-quality.yml
+            suite-10-dapp-e2e.yml
+            suite-11a-opencode-smoke.yml
+            suite-11b-opencode-headless.yml
+            suite-12-openclaw.yml
+            suite-13-doc-checks.yml
+            suite-14-smoke-test.yml
+            suite-15-regime-classifier.yml
+            suite-16-abi-drift.yml
+            suite-18-secrets-scan.yml
+            suite-18-security-gates.yml
+            suite-18-upstream-monitoring.yml
+            suite-19-erc4626-demo-tvl-matrix.yml
+            suite-20-watchdog.yml
+          )
+          for workflow in "${SUITES[@]}"; do
+            echo "Dispatching $workflow..."
+            gh api -X POST \
+              "repos/${REPO}/actions/workflows/${workflow}/dispatches" \
+              --field ref="${REF}" || echo "WARNING: failed to dispatch $workflow"
+          done
+          echo "All dispatches sent."

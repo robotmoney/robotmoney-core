@@ -17,9 +17,14 @@
 //! - [`fork_manifest::ForkManifest`] — typed view over
 //!   `testing/ethereum-testnet/config/fork-block.json` (issue #255).
 
+/// Dev-scout module for Base testnet fixture support (issue #842).
+/// Automated account funding seams for Base testnet e2e tests (issue #839).
+pub mod base_testnet;
 pub mod fork_manifest;
 pub mod genesis_alloc;
 pub mod logging;
+/// Dev-scout map for the real-adapter state injection boundary (issue #739).
+pub mod real_adapter_state;
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
@@ -28,7 +33,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{keccak256, Address};
 use serde::Deserialize;
@@ -502,17 +507,12 @@ impl Fixture {
     /// Boot the Docker Geth+Lighthouse devnet, run the gateway deploy
     /// script, and fund the test EOAs.
     ///
-    /// The Geth devnet boots from a genesis snapshot that contains only
-    /// warm-storage slots (produced by `anvil --dump-state`).  Real Aave,
-    /// Compound, and Morpho contracts have bytecode but no on-chain state at
-    /// the ingested addresses, so any call returning `uint256` (e.g.
-    /// `balanceOf`) would ABI-decode empty return-data and revert — aborting
-    /// every deposit.  We therefore deploy a single `PassthroughAdapter`
-    /// instead of the three real protocol adapters for smoke-test runs.
-    /// Fork-based integration tests (`ForkFixture`) use real adapters because
-    /// they fork Base mainnet where protocol state is present.
+    /// The Geth devnet boots from a genesis snapshot that carries real Aave V3,
+    /// Compound V3, and Morpho storage (produced by `scripts/devnet/snapshot-fork.sh`
+    /// with the adapter warming step from issue #685).  Deploy.s.sol deploys the
+    /// three real protocol adapters by default.
     pub fn new() -> Result<Self, HarnessError> {
-        Self::with_deploy_env(&[("USE_PASSTHROUGH_ADAPTER", "true")])
+        Self::with_deploy_env(&[])
     }
 
     /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
@@ -598,6 +598,13 @@ impl Fixture {
                 compose_files_owned.join(" "),
             ),
         );
+        // Stamp this boot with a unique run-id (exported for the compose label
+        // interpolation) and reap any containers stranded by a previous run
+        // before asserting the project is idle. Replaces the old "error out and
+        // make the operator clean up by hand" behaviour on a zombie collision.
+        let (run_id, _run_created) = ensure_run_identity();
+        logging::info("smoke-test", format!("boot run-id={run_id}"));
+        reap_stale_testnet_containers(&run_id);
         ensure_compose_project_idle(&compose_dir, &compose_files_owned)?;
         let cleanup_compose_files = compose_files_owned.clone();
         let cleanup_compose_dir = compose_dir.clone();
@@ -757,6 +764,23 @@ impl Fixture {
             "post-readiness chain RPC stable; starting deployment",
         );
 
+        // Deploy.s.sol run() performs a mandatory 1,000 USDC seed deposit from
+        // the broadcaster (issue #656), so the deployer must hold USDC before
+        // the forge script runs. Drip from HARNESS_USDC_HOLDER (genesis grant).
+        const DEPLOYER_USDC_GRANT: u128 = 10_000 * 1_000_000; // 10k USDC, 6dp
+        fund_usdc_to_deployer(&rpc_url, DEPLOYER_USDC_GRANT).inspect_err(|err| {
+            logging::error("smoke-test", format!("deployer USDC funding failed: {err}"));
+            log_compose_state(
+                &compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "deployer USDC funding failure",
+                200,
+            );
+            cleanup();
+        })?;
+
         let dep_out = tmp.path().join("deployment.json");
         let agent_hex = format!("{:#x}", agent_address());
         run_forge_deploy_with_env(
@@ -809,6 +833,21 @@ impl Fixture {
         })?;
 
         let registry_deployment = read_registry_deployment(&reg_out)?;
+
+        // Confirm the registry actually reports the vault as registered before
+        // pinning the router simulation's fork block. `--slow` waits for the
+        // registerVault receipt, but Geth's "latest" can still briefly lag the
+        // mined block on a loaded runner, so fetching the head immediately can
+        // pin a fork block that predates the registration — intermittently
+        // failing the router deploy with NotRegistered() (issue #880).
+        wait_for_vault_registered(&rpc_url, &registry_deployment.registry, &deployment.vault)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("vault registration wait failed: {err}"),
+                );
+                cleanup();
+            })?;
 
         // Pin the fork block for the router simulation to the current chain
         // head — guarantees the simulation sees the registerVault tx that
@@ -949,7 +988,7 @@ impl Fixture {
         // The Arachnid factory is pre-installed in the devnet genesis alloc by
         // `genesis_alloc::ARACHNID_FACTORY_ADDR`. This step makes the
         // landing-page price strip resolve slot0 on the fresh devnet instead of
-        // rendering 'unavailable' (mainnet pool addresses have no bytecode here).
+        // rendering 'unavailable' (Base pool addresses have no bytecode here).
         let stubs_out = tmp.path().join("demo-uniswap-v3-stubs.json");
         run_forge_deploy_demo_uniswap_v3_stubs(&repo_root, &rpc_url, &stubs_out).inspect_err(
             |err| {
@@ -1248,6 +1287,22 @@ impl Fixture {
     // ---- on-chain poke helpers --------------------------------------
 
     /// Send a transaction via `cast send` from an arbitrary private key.
+    ///
+    /// The gas limit is the node's `eth_estimateGas` result scaled by a 1.5x
+    /// buffer (see [`Fixture::estimate_gas_buffered`]) rather than the bare
+    /// estimate `cast send` would otherwise forward. This mirrors production
+    /// wallets (MetaMask et al. always pad) and the dapp-e2e mock wallet fix
+    /// from issue #897: Geth under-estimates transactions whose true cost grows
+    /// with same-block state — e.g. several depositors routing into the same
+    /// strategy adapter in one block, where the later txs cost more than an
+    /// estimate taken against the pre-block state — or that earn storage-clear
+    /// gas refunds. Without the buffer those txs mine with too low a gas cap and
+    /// revert out-of-gas; with `cast send` reporting only the receipt, the
+    /// failure was silent. See `docs/testing/geth-gas-estimation.md`.
+    ///
+    /// Reverted transactions (receipt `status != 0x1`, including out-of-gas) now
+    /// surface as an `Err` instead of an `Ok(tx_hash)`, so a failed deposit can
+    /// no longer masquerade as a successful one.
     pub fn cast_send(
         &self,
         private_key_hex: &str,
@@ -1256,10 +1311,14 @@ impl Fixture {
         args: &[&str],
     ) -> Result<String, HarnessError> {
         let to_hex = format!("{to:#x}");
+        let from = derive_address(&privkey_hex_to_bytes(private_key_hex)?);
+        let from_hex = format!("{from:#x}");
         logging::debug(
             "rpc",
             format!("eth_sendRawTransaction via cast send {sig} -> {to_hex}"),
         );
+        let gas_limit = self.estimate_gas_buffered(&from_hex, &to_hex, sig, args)?;
+        let gas_limit_s = gas_limit.to_string();
         let mut cmd = Command::new("cast");
         cmd.args([
             "send",
@@ -1267,6 +1326,8 @@ impl Fixture {
             &self.rpc_url,
             "--private-key",
             private_key_hex,
+            "--gas-limit",
+            &gas_limit_s,
             &to_hex,
             sig,
         ]);
@@ -1285,10 +1346,144 @@ impl Fixture {
         }
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
-        Ok(v.get("transactionHash")
+        let tx_hash = v
+            .get("transactionHash")
             .and_then(|x| x.as_str())
             .unwrap_or("")
-            .to_string())
+            .to_string();
+        // `cast send` exits 0 as soon as the tx mines — even when it mines as a
+        // REVERTED tx (receipt `status == 0x0`). Gas estimation catches most
+        // reverts up front, but a tx whose state changes between estimate and
+        // inclusion (or one sent with an explicit `--gas-limit`) can land
+        // reverted with a zero process exit. Assert the receipt status so a
+        // reverted seeding tx fails loudly instead of being silently accepted.
+        let status = v.get("status").and_then(|x| x.as_str()).ok_or_else(|| {
+            HarnessError::other(format!(
+                "cast send {sig} receipt missing status field: {}",
+                String::from_utf8_lossy(&out.stdout)
+            ))
+        })?;
+        if !receipt_status_succeeded(status) {
+            let reason = self.tx_revert_reason(&tx_hash);
+            return Err(HarnessError::other(format!(
+                "cast send {sig} -> {to_hex} mined as a REVERTED tx (receipt status={status}, hash={tx_hash}){reason}"
+            )));
+        }
+        Ok(tx_hash)
+    }
+
+    /// Best-effort decode of a reverted tx's revert reason via `cast run`,
+    /// appended to the harness error for fast diagnosis. Returns an empty
+    /// string when no reason can be recovered (e.g. `cast run` unavailable),
+    /// so the caller's error stays well-formed regardless.
+    fn tx_revert_reason(&self, tx_hash: &str) -> String {
+        if tx_hash.is_empty() {
+            return String::new();
+        }
+        let out = match Command::new("cast")
+            .args(["run", "--rpc-url", &self.rpc_url, tx_hash])
+            .output()
+        {
+            Ok(out) => out,
+            Err(_) => return String::new(),
+        };
+        let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        let reason = text
+            .lines()
+            .find(|l| {
+                let l = l.to_lowercase();
+                l.contains("revert") || l.contains("error")
+            })
+            .map(str::trim)
+            .unwrap_or("");
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!("; revert: {reason}")
+        }
+    }
+
+    /// Read `token.balanceOf(owner)` via a plain `eth_call` (`cast call`).
+    /// Used to verify deposits actually minted shares to the recipient. No
+    /// signing, no impersonation — a read-only query against the live chain.
+    pub fn erc20_balance_of(&self, token: Address, owner: Address) -> Result<u128, HarnessError> {
+        // balanceOf(address) selector 0x70a08231, owner left-padded to 32 bytes.
+        let data = format!(
+            "0x70a08231000000000000000000000000{}",
+            format!("{owner:#x}").trim_start_matches("0x")
+        );
+        let out = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                &self.rpc_url,
+                &format!("{token:#x}"),
+                &data,
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast call balanceOf({owner:#x}) on {token:#x} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let s = raw.trim().trim_start_matches("0x");
+        if s.is_empty() || s.chars().all(|c| c == '0') {
+            return Ok(0);
+        }
+        // The ABI word is up to 256 bits. The demo seeds share counts well
+        // within u128, but a value past 2^128 must not silently read back as
+        // zero: if the high half is non-zero, saturate so the non-zero check
+        // stays honest; otherwise return the exact low-128-bit value.
+        let low = &s[s.len().saturating_sub(32)..];
+        let high_nonzero = s.len() > 32 && s[..s.len() - 32].chars().any(|c| c != '0');
+        let low_val = u128::from_str_radix(low, 16).unwrap_or(u128::MAX);
+        Ok(if high_nonzero { u128::MAX } else { low_val })
+    }
+
+    /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
+    ///
+    /// A failing estimate means the transaction would revert on-chain (the node
+    /// rejects the `eth_estimateGas` call); we propagate that as an `Err` so the
+    /// caller never sends a doomed transaction. See `cast_send` for why the
+    /// buffer is required.
+    fn estimate_gas_buffered(
+        &self,
+        from_hex: &str,
+        to_hex: &str,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<u128, HarnessError> {
+        let mut cmd = Command::new("cast");
+        cmd.args([
+            "estimate",
+            "--rpc-url",
+            &self.rpc_url,
+            "--from",
+            from_hex,
+            to_hex,
+            sig,
+        ]);
+        for a in args {
+            cmd.arg(a);
+        }
+        let out = cmd.output()?;
+        logging::log_command_output("cast", &out);
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast estimate {sig} failed (tx would revert): from={from_hex} to={to_hex} stdout={} stderr={}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let est: u128 = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .map_err(|e| HarnessError::other(format!("cast estimate {sig} parse: {e}")))?;
+        // 1.5x buffer, matching the dapp-e2e mock-wallet policy (issue #897).
+        Ok(est.saturating_mul(3) / 2)
     }
 
     /// Approve `gateway` to pull `amount` USDC from the agent EOA.
@@ -1383,7 +1578,7 @@ impl Fixture {
     /// 1. **Router deposit** — `PortfolioRouter.deposit(uint256,uint256[])`
     ///    splits `per_user_usdc` across all four router-eligible vaults by the
     ///    on-chain 8500/500/500/500 bps weight vector (issue #621): the primary
-    ///    `RobotMoneyVault` (§11.1, `PassthroughAdapter`), `RwaVault` (§11.4,
+    ///    `RobotMoneyVault` (§11.1, real Aave/Compound/Morpho adapters), `RwaVault` (§11.4,
     ///    rmRWA, ADR-0006 §1 amended 2026-06-05), `ProtocolAssetVault` (§11.2,
     ///    rmPROTO) and `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The
     ///    basket and RWA legs execute real USDC → token swaps through the demo
@@ -1432,9 +1627,14 @@ impl Fixture {
         count: u32,
         per_user_usdc: u128,
     ) -> Result<Vec<(Address, String)>, HarnessError> {
-        // Each depositor runs two deposit paths (router split + direct RWA),
-        // each consuming `per_user_usdc`, so fund twice the per-path amount.
-        let total_usdc = per_user_usdc.saturating_mul(2);
+        // Each depositor runs the router split plus a direct belt-and-suspenders
+        // deposit into ALL FOUR vaults (primary §11.1, Protocol §11.2, Agent
+        // §11.3, RWA §11.4). The router's weighted split can intermittently
+        // under-fund a vault on a busy chain — leaving it at zero TVL or leaving
+        // a depositor with no shares (issue #882) — so the direct deposits
+        // guarantee every vault has non-zero TVL and every depositor holds shares
+        // in each. Fund five per-path budgets (router + four direct deposits).
+        let total_usdc = per_user_usdc.saturating_mul(5);
         let keys: Vec<(String, Address)> = (0..count).map(demo_depositor_key).collect();
 
         // ── Funding phase ────────────────────────────────────────────────
@@ -1471,12 +1671,18 @@ impl Fixture {
         // nor depend on one another; the chain mines them in parallel.
         let router_hex = format!("{:#x}", self.router());
         let rwa_hex = format!("{:#x}", self.rwa_vault());
+        let protocol_hex = format!("{:#x}", self.demo_protocol_vault());
+        let agent_hex = format!("{:#x}", self.demo_agent_vault());
+        let primary_hex = format!("{:#x}", self.vault());
         let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
             let handles: Vec<_> = keys
                 .iter()
                 .map(|(pk_hex, depositor)| {
                     let router_hex = &router_hex;
                     let rwa_hex = &rwa_hex;
+                    let protocol_hex = &protocol_hex;
+                    let agent_hex = &agent_hex;
+                    let primary_hex = &primary_hex;
                     s.spawn(move || -> Result<(Address, String), HarnessError> {
                         let depositor_hex = format!("{depositor:#x}");
 
@@ -1498,6 +1704,47 @@ impl Fixture {
                             &[&per_user_usdc.to_string(), "[]"],
                         )?;
 
+                        // Direct deposit into the primary vault too. The router
+                        // leg already routes ~8500 bps here, but the router
+                        // deposit can intermittently leave a depositor with no
+                        // primary-vault shares on a busy chain (issue #882); a
+                        // direct deposit guarantees every depositor holds primary
+                        // shares. NOTE: the primary RobotMoneyVault on the Geth
+                        // devnet routes deposits through the real Aave/Compound/
+                        // Morpho strategy adapters (NOT a 1:1 no-yield adapter,
+                        // an earlier comment claimed that in error). That real-
+                        // adapter path can intermittently revert under load, which
+                        // — when swallowed — left the depositor with zero primary
+                        // shares (issue #904). We now assert the receipt status in
+                        // cast_send and re-read the post-deposit share balance so a
+                        // mis-minted deposit surfaces the true on-chain failure
+                        // here rather than as a downstream per-depositor flake.
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[primary_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
+                        // ERC-4626 `deposit` mints shares to `depositor`; the
+                        // primary-share guarantee this seeding exists to provide
+                        // only holds if those shares actually landed. Verify a
+                        // non-zero primary-vault `balanceOf(depositor)` and fail
+                        // loudly (with the on-chain context) otherwise.
+                        let primary_shares = self.erc20_balance_of(self.vault(), *depositor)?;
+                        if primary_shares == 0 {
+                            return Err(HarnessError::other(format!(
+                                "primary-vault deposit minted no shares to depositor {depositor_hex}: \
+                                 balanceOf(vault={primary_hex}) == 0 after deposit(amount={per_user_usdc}). \
+                                 The primary vault's real-adapter routing likely reverted on the Geth devnet."
+                            )));
+                        }
+
                         // Approve and deposit directly into the §11.4 RWA vault,
                         // which is Active but not router-eligible. Shares go to
                         // the depositor.
@@ -1510,6 +1757,36 @@ impl Fixture {
                         self.cast_send(
                             pk_hex,
                             self.rwa_vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
+
+                        // Direct belt-and-suspenders deposits into the two basket
+                        // vaults (Protocol §11.2, Agent §11.3). The router's
+                        // weighted split can under-fund a basket leg on a busy
+                        // chain (issue #882); a direct deposit guarantees non-zero
+                        // TVL. Each swaps USDC -> basket via the demo stub routers.
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[protocol_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.demo_protocol_vault(),
+                            "deposit(uint256,address)",
+                            &[&per_user_usdc.to_string(), &depositor_hex],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.usdc(),
+                            "approve(address,uint256)",
+                            &[agent_hex, &per_user_usdc.to_string()],
+                        )?;
+                        self.cast_send(
+                            pk_hex,
+                            self.demo_agent_vault(),
                             "deposit(uint256,address)",
                             &[&per_user_usdc.to_string(), &depositor_hex],
                         )?;
@@ -1660,6 +1937,18 @@ fn render_genesis_alloc_overlay(
     Ok(Some(absolute))
 }
 
+/// Parse a `0x`-prefixed (or bare) 32-byte hex private key into raw bytes.
+/// Used to recover the sender address for gas estimation in [`Fixture::cast_send`].
+fn privkey_hex_to_bytes(pk_hex: &str) -> Result<[u8; 32], HarnessError> {
+    let s = pk_hex.strip_prefix("0x").unwrap_or(pk_hex);
+    let bytes =
+        hex::decode(s).map_err(|e| HarnessError::other(format!("invalid private key hex: {e}")))?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| HarnessError::other("private key must be exactly 32 bytes"))
+}
+
 fn derive_address(privkey: &[u8; 32]) -> Address {
     use k256::ecdsa::SigningKey;
     let sk = SigningKey::from_bytes(privkey.into()).expect("static privkey is valid");
@@ -1702,6 +1991,17 @@ fn parse_addr(s: &str) -> Address {
     s.parse::<Address>().unwrap_or(Address::ZERO)
 }
 
+/// Sub-second readiness poll cadence for HTTP/RPC probes: a quickly-booting
+/// service is detected within a quarter second rather than waiting out a
+/// multi-second tick. The per-request timeout (5s) still bounds a hung probe,
+/// so tightening the cadence costs nothing but a few extra cheap calls.
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Block-height poll cadence. Slower than [`READINESS_POLL_INTERVAL`] because a
+/// new block only arrives once per slot, so polling faster cannot surface one
+/// sooner.
+const BLOCK_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
 #[allow(dead_code)]
 fn wait_for_rpc(url: &str, timeout: Duration) -> Result<(), HarnessError> {
     wait_for_rpc_with_probe(url, timeout, None)
@@ -1723,7 +2023,8 @@ fn wait_for_rpc_with_probe(
         "method": "eth_chainId",
         "params": []
     });
-    let deadline = std::time::Instant::now() + timeout;
+    let started = std::time::Instant::now();
+    let deadline = started + timeout;
     #[allow(unused_assignments)]
     let mut last_error: Option<String> = None;
     let mut unreachable_since: Option<std::time::Instant> = None;
@@ -1744,7 +2045,13 @@ fn wait_for_rpc_with_probe(
                                 ),
                             );
                         }
-                        logging::debug("rpc", format!("{url} returned chainId"));
+                        logging::info(
+                            "rpc",
+                            format!(
+                                "{url} ready in {}ms (chainId)",
+                                started.elapsed().as_millis()
+                            ),
+                        );
                         return Ok(());
                     }
                     last_error = Some("missing result field".to_string());
@@ -1791,7 +2098,7 @@ fn wait_for_rpc_with_probe(
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
     }
     Err(HarnessError::RpcTimeout {
         url: url.to_string(),
@@ -1938,12 +2245,144 @@ fn wait_for_block_height_with_probe(
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(1000));
+        std::thread::sleep(BLOCK_POLL_INTERVAL);
     }
     Err(HarnessError::RpcTimeout {
         url: url.to_string(),
         timeout,
     })
+}
+
+/// Environment variables the compose files read to stamp run-identity labels
+/// onto every container (see docker-compose.yaml / docker-compose.dapp.yaml).
+const RUN_ID_ENV: &str = "SMOKE_RUN_ID";
+const RUN_CREATED_ENV: &str = "SMOKE_RUN_CREATED";
+
+/// Docker label key carrying the run-id of the boot that created a container.
+/// A boot reaps containers in our compose projects whose run-id differs from
+/// its own (i.e. stranded by a previous, now-dead run).
+const RUN_ID_LABEL: &str = "com.robotmoney.testnet.run-id";
+
+/// Compose projects whose containers belong to a devnet boot. The reaper scans
+/// only these so it never touches unrelated containers on the host.
+const TESTNET_COMPOSE_PROJECTS: [&str; 2] = ["ethereum-testnet", "robotmoney-dapp"];
+
+/// Mint (once per process) a unique run-id and creation timestamp and export
+/// them so child `docker compose` invocations stamp them as container labels.
+/// Idempotent: a run-id already set earlier in the same process is reused, so
+/// the chain stack and the dapp overlay share one identity and are reaped
+/// together. Mirrors the existing SMOKE_GENESIS_ALLOC_FILE env-passing pattern.
+fn ensure_run_identity() -> (String, String) {
+    if let (Ok(id), Ok(created)) = (std::env::var(RUN_ID_ENV), std::env::var(RUN_CREATED_ENV)) {
+        if !id.is_empty() {
+            return (id, created);
+        }
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let created = now.as_secs().to_string();
+    // Sub-second precision plus the pid keeps two boots from the same process
+    // (or two processes within the same second) distinct.
+    let run_id = format!("{:016x}-{:x}", now.as_nanos() as u64, std::process::id());
+    std::env::set_var(RUN_ID_ENV, &run_id);
+    std::env::set_var(RUN_CREATED_ENV, &created);
+    (run_id, created)
+}
+
+/// Parse `docker ps` label output (lines of `<id>\t<run-id>\t<name>`) and return
+/// the `(id, name)` pairs whose run-id differs from `current_run_id` — i.e. the
+/// containers stranded by a previous run. Pure (no docker), so the
+/// stale-vs-current decision is unit-tested without a live daemon.
+fn stale_containers_from_listing(listing: &str, current_run_id: &str) -> Vec<(String, String)> {
+    let mut stale = Vec::new();
+    for line in listing.lines() {
+        let mut cols = line.split('\t');
+        let id = cols.next().unwrap_or("").trim();
+        let run_id = cols.next().unwrap_or("").trim();
+        let name = cols.next().unwrap_or("").trim();
+        if id.is_empty() || run_id == current_run_id {
+            continue;
+        }
+        stale.push((id.to_string(), name.to_string()));
+    }
+    stale
+}
+
+/// Force-remove devnet containers stranded by a previous run. Scans only our
+/// compose projects (via Docker's built-in `com.docker.compose.project` label)
+/// and removes any container whose run-id label differs from `current_run_id`.
+/// Containers from the current run are protected by the run-id match; legacy
+/// containers booted before run-id labels existed carry an empty run-id and so
+/// are treated as stale and reaped. Best-effort: docker errors are logged, not
+/// propagated, so a transient `docker` hiccup never blocks a boot.
+fn reap_stale_testnet_containers(current_run_id: &str) {
+    let mut stale: Vec<(String, String)> = Vec::new();
+    for project in TESTNET_COMPOSE_PROJECTS {
+        let listing = Command::new("docker")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &format!("label=com.docker.compose.project={project}"),
+                "--format",
+                &format!("{{{{.ID}}}}\t{{{{.Label \"{RUN_ID_LABEL}\"}}}}\t{{{{.Names}}}}"),
+            ])
+            .output();
+        match listing {
+            Ok(out) if out.status.success() => {
+                stale.extend(stale_containers_from_listing(
+                    &String::from_utf8_lossy(&out.stdout),
+                    current_run_id,
+                ));
+            }
+            Ok(out) => logging::warn(
+                "smoke-test",
+                format!(
+                    "reaper: `docker ps` for project {project} failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            ),
+            Err(err) => {
+                logging::warn(
+                    "smoke-test",
+                    format!("reaper: `docker ps` not runnable: {err}"),
+                );
+                return;
+            }
+        }
+    }
+    if stale.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = stale.iter().map(|(_, n)| n.as_str()).collect();
+    logging::info(
+        "smoke-test",
+        format!(
+            "reaper: removing {} container(s) stranded by previous run(s): {}",
+            stale.len(),
+            names.join(", ")
+        ),
+    );
+    let mut rm = Command::new("docker");
+    rm.args(["rm", "-f"]);
+    for (id, _) in &stale {
+        rm.arg(id);
+    }
+    match rm.output() {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => logging::warn(
+            "smoke-test",
+            format!(
+                "reaper: `docker rm -f` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ),
+        Err(err) => logging::warn(
+            "smoke-test",
+            format!("reaper: `docker rm -f` not runnable: {err}"),
+        ),
+    }
 }
 
 fn ensure_compose_project_idle(
@@ -2005,6 +2444,48 @@ fn parse_compose_ps_stdout(stdout: &[u8]) -> Result<Vec<String>, HarnessError> {
         }
     }
     Ok(running)
+}
+
+/// Fund the deployer EOA with USDC from HARNESS_USDC_HOLDER before the forge
+/// deploy runs. Deploy.s.sol `run()` executes a mandatory seed deposit of
+/// `SEED_DEPOSIT_AMOUNT` (1,000 USDC) from the broadcaster (issue #656), so
+/// the deployer must hold USDC *before* deployment — `Fixture::fund_usdc` is
+/// not available yet at that point in the boot sequence.
+fn fund_usdc_to_deployer(rpc_url: &str, amount_units: u128) -> Result<String, HarnessError> {
+    logging::debug(
+        "rpc",
+        format!(
+            "eth_sendRawTransaction via cast send usdc transfer {amount_units} -> {DEPLOYER_ADDRESS_HEX}"
+        ),
+    );
+    let out = Command::new("cast")
+        .args([
+            "send",
+            "--rpc-url",
+            rpc_url,
+            "--private-key",
+            HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
+            genesis_alloc::BASE_USDC_ADDR,
+            "transfer(address,uint256)",
+            DEPLOYER_ADDRESS_HEX,
+            &amount_units.to_string(),
+            "--json",
+        ])
+        .output()?;
+    logging::log_command_output("cast", &out);
+    if !out.status.success() {
+        return Err(HarnessError::other(format!(
+            "fund deployer usdc failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| HarnessError::other(format!("fund deployer usdc json: {e}")))?;
+    Ok(v.get("transactionHash")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 fn fund_eth_from_deployer(
@@ -2086,6 +2567,19 @@ fn run_forge_deploy_with_env(
         )));
     }
     Ok(())
+}
+
+/// Interpret a transaction receipt `status` word from `cast send --json`.
+///
+/// Foundry emits the status as a hex quantity: `"0x1"` for a successful tx and
+/// `"0x0"` for a reverted one. A reverted tx (status `0x0`) still mines, so
+/// `cast send` exits 0 and the calling harness used to swallow the revert
+/// (issue #904). Returns `true` only when the word denotes a non-zero (success)
+/// status, treating any non-zero hex word as success to stay robust to future
+/// formatting; an empty or all-zero word is a failure.
+fn receipt_status_succeeded(status: &str) -> bool {
+    let stripped = status.trim_start_matches("0x").trim_start_matches("0X");
+    !stripped.is_empty() && stripped.chars().any(|c| c != '0')
 }
 
 fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
@@ -2207,6 +2701,46 @@ fn fetch_current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
     s.parse::<u64>().map_err(|e| {
         HarnessError::Other(format!("cast block-number returned non-integer {s:?}: {e}"))
     })
+}
+
+/// Poll the VaultRegistry until `vault` appears in `listVaults()`, so the
+/// PortfolioRouter deploy — whose simulation is pinned to the chain head right
+/// after — forks a block that already includes the `registerVault` tx. Avoids
+/// the intermittent `setRouterEligible -> NotRegistered()` race where Geth's
+/// "latest" lags the just-mined registration on a loaded CI runner (issue #880).
+fn wait_for_vault_registered(
+    rpc_url: &str,
+    registry: &str,
+    vault: &str,
+) -> Result<(), HarnessError> {
+    let needle = vault.to_lowercase();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        match Command::new("cast")
+            .args([
+                "call",
+                registry,
+                "listVaults()(address[])",
+                "--rpc-url",
+                rpc_url,
+            ])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                last = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                if last.contains(&needle) {
+                    return Ok(());
+                }
+            }
+            Ok(out) => last = String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(HarnessError::Other(format!(
+        "vault {vault} not visible in registry {registry} listVaults() after 30s; last: {last}"
+    )))
 }
 
 fn read_router_deployment(path: &Path) -> Result<RouterDeploymentJson, HarnessError> {
@@ -2683,7 +3217,7 @@ pub struct DappEndpoints {
 /// explorer-indexer + Postgres) started by `--full-stack`. Drop tears
 /// the stack down unconditionally.
 ///
-/// Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
+/// Canonical: Plan tracking issue #109 §10.5 — Phase 4.5.
 /// Boot via [`DappStack::boot`] after the chain fixture is ready and
 /// contracts are deployed.
 pub struct DappStack {
@@ -2732,6 +3266,11 @@ impl DappStack {
     /// contract addresses as build args. Waits for the dapp and
     /// explorer-api health checks to pass before returning.
     pub fn boot(fixture: &Fixture, opts: DappStackOptions) -> Result<Self, HarnessError> {
+        // Share the chain boot's run-id (already set in this process) so the
+        // dapp containers carry the same run-identity labels and are reaped
+        // together; mint one defensively if a caller boots the dapp stack
+        // without first booting the chain fixture.
+        ensure_run_identity();
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
         let gateway_hex = fixture.gateway_hex();
         let vault_hex = fixture.vault_hex();
@@ -2800,10 +3339,10 @@ impl DappStack {
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
             // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
             ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
-            (
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the service name, not via
+            // host.docker.internal which is unreachable on some Docker configs.
+            ("INDEXER_RPC_URL", "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL", "".to_string()),
             ("VITE_EXPLORER_API_URL", "".to_string()),
             ("VITE_DAPP_URL", "".to_string()),
@@ -2897,14 +3436,8 @@ impl DappStack {
                 "INDEXER_PORTFOLIO_ROUTER".into(),
                 fixture.router_hex().to_string(),
             ),
-            (
-                "INDEXER_PORTFOLIO_ROUTER".into(),
-                fixture.router_hex().to_string(),
-            ),
-            (
-                "INDEXER_RPC_URL".into(),
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            ),
+            // Issue #775: see dapp_log_env comment above.
+            ("INDEXER_RPC_URL".into(), "http://geth:8545".to_string()),
             ("VITE_DEVNET_RPC_URL".into(), vite_rpc_url.clone()),
             (
                 "VITE_EXPLORER_API_URL".into(),
@@ -2952,11 +3485,11 @@ impl DappStack {
             .env("INDEXER_REGISTRY", fixture.registry_hex())
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
             .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
-            // RPC is on the host; containers reach it via host.docker.internal
-            .env(
-                "INDEXER_RPC_URL",
-                format!("http://host.docker.internal:{}", fixture.rpc_port()),
-            )
+            // Issue #775: indexer reaches Geth via the chain Docker network
+            // (ethereum-testnet_default) using the `geth` service name — no
+            // host port needed. The dapp compose connects to that network via
+            // the chain-net external network reference in docker-compose.dapp.yaml.
+            .env("INDEXER_RPC_URL", "http://geth:8545")
             // VITE_FORK_RPC_URL intentionally NOT set: the dapp routes all
             // chain reads through the user's wallet RPC (see
             // docs/technical/dapp-topology.md §2). VITE_DEVNET_RPC_URL is
@@ -3357,7 +3890,8 @@ fn wait_for_http_ok_with_probe(
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| HarnessError::other(format!("reqwest builder: {e}")))?;
-    let deadline = std::time::Instant::now() + timeout;
+    let started = std::time::Instant::now();
+    let deadline = started + timeout;
     let mut last = String::new();
     while std::time::Instant::now() < deadline {
         if let Some(probe) = health_probe.as_deref_mut() {
@@ -3365,13 +3899,20 @@ fn wait_for_http_ok_with_probe(
         }
         match client.get(url).send() {
             Ok(resp) if resp.status().is_success() => {
-                logging::debug("http", format!("{url} returned {}", resp.status()));
+                logging::info(
+                    "http",
+                    format!(
+                        "{url} ready in {}ms (HTTP {})",
+                        started.elapsed().as_millis(),
+                        resp.status()
+                    ),
+                );
                 return Ok(());
             }
             Ok(resp) => last = format!("HTTP {}", resp.status()),
             Err(e) => last = format!("{e}"),
         }
-        std::thread::sleep(Duration::from_secs(2));
+        std::thread::sleep(READINESS_POLL_INTERVAL);
     }
     Err(HarnessError::other(format!(
         "service at {url} not healthy after {timeout:?}: {last}"
@@ -3398,5 +3939,63 @@ mod tests {
     fn parse_compose_ps_stdout_ignores_empty_output() {
         let names = parse_compose_ps_stdout(b"\n\n").expect("parse empty output");
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn reaper_keeps_current_run_and_marks_others_stale() {
+        // `docker ps` label listing: <id>\t<run-id>\t<name>. CURRENT is the
+        // active boot; PREVIOUS is a stranded run; the empty-run-id row is a
+        // legacy container booted before run-id labels existed.
+        let listing = "\
+aaa111\tCURRENT\teth-execution
+bbb222\tPREVIOUS\teth-execution
+ccc333\t\teth-beacon
+";
+        let stale = stale_containers_from_listing(listing, "CURRENT");
+        assert_eq!(
+            stale,
+            vec![
+                ("bbb222".to_string(), "eth-execution".to_string()),
+                ("ccc333".to_string(), "eth-beacon".to_string()),
+            ],
+            "previous-run and legacy (empty run-id) containers are stale; current run is kept"
+        );
+    }
+
+    #[test]
+    fn reaper_listing_tolerates_blank_lines_and_missing_columns() {
+        let listing = "\n\nddd444\tOLD\n";
+        // Missing name column -> name parses as empty string, still flagged stale.
+        let stale = stale_containers_from_listing(listing, "CURRENT");
+        assert_eq!(stale, vec![("ddd444".to_string(), String::new())]);
+    }
+
+    #[test]
+    fn run_identity_is_stable_and_distinct_per_id() {
+        // Two distinct ids never collide on the formatted prefix shape.
+        let a = format!("{:016x}-{:x}", 1u64, 2u32);
+        let b = format!("{:016x}-{:x}", 3u64, 2u32);
+        assert_ne!(a, b);
+        assert!(a.contains('-'));
+    }
+
+    #[test]
+    fn receipt_status_succeeded_accepts_success_word() {
+        // `cast send --json` reports a successful tx as status "0x1" (issue #904).
+        assert!(receipt_status_succeeded("0x1"));
+        assert!(receipt_status_succeeded("0X1"));
+        // Robust to a non-canonical non-zero word.
+        assert!(receipt_status_succeeded("0x01"));
+    }
+
+    #[test]
+    fn receipt_status_succeeded_rejects_reverted_receipt() {
+        // A reverted tx mines with status "0x0"; cast send still exits 0, so the
+        // status word is the only signal that the tx reverted (issue #904).
+        assert!(!receipt_status_succeeded("0x0"));
+        assert!(!receipt_status_succeeded("0x00"));
+        // A malformed/empty word must never be treated as success.
+        assert!(!receipt_status_succeeded("0x"));
+        assert!(!receipt_status_succeeded(""));
     }
 }

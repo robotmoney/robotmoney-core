@@ -23,15 +23,15 @@ fn fixture_parses_with_rmpc_config_loader() {
     // Spot-check the fields the walkthrough story depends on.
     assert_eq!(
         cfg.chain_id, 8453,
-        "walkthrough targets Base mainnet (8453)"
+        "walkthrough targets the forked Base chain (8453)"
     );
     assert!(
         cfg.signer.allow_software_fallback,
         "fork-only walkthrough requires software fallback to be enabled"
     );
     assert!(
-        cfg.rpc_url.starts_with("http://127.0.0.1") || cfg.rpc_url.starts_with("http://localhost"),
-        "walkthrough config must point at a local anvil fork; got {}",
+        cfg.rpc_url.as_deref().is_some_and(|u| u.starts_with("http://127.0.0.1") || u.starts_with("http://localhost")),
+        "walkthrough config must point at a local anvil fork; got {:?}",
         cfg.rpc_url
     );
 }

@@ -394,16 +394,21 @@ impl Db {
         log_index: i32,
         tx_hash: [u8; 32],
         agent: [u8; 20],
+        owner: Option<[u8; 20]>,
         revoked: bool,
         valid_until: Option<i64>,
         max_per_payment: Option<U256>,
         max_per_window: Option<U256>,
+        window_usage_to_date: Option<U256>,
         share_receiver: Option<[u8; 20]>,
     ) -> Result<u64, DbError> {
         let sr_bytes: Option<&[u8]> = share_receiver.as_ref().map(|a| &a[..]);
+        let owner_bytes: Option<&[u8]> = owner.as_ref().map(|a| &a[..]);
         let r = sqlx::query(
-            "INSERT INTO agent_policies (chain_id, block_number, log_index, tx_hash, agent, revoked, valid_until, max_per_payment, max_per_window, share_receiver) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+            "INSERT INTO agent_policies \
+             (chain_id, block_number, log_index, tx_hash, agent, owner, revoked, valid_until, \
+              max_per_payment, max_per_window, window_usage_to_date, share_receiver) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (chain_id, block_number, log_index) DO NOTHING",
         )
         .bind(chain_id)
@@ -411,10 +416,12 @@ impl Db {
         .bind(log_index)
         .bind(&tx_hash[..])
         .bind(&agent[..])
+        .bind(owner_bytes)
         .bind(revoked)
         .bind(valid_until)
         .bind(max_per_payment.map(u256_to_decimal))
         .bind(max_per_window.map(u256_to_decimal))
+        .bind(window_usage_to_date.map(u256_to_decimal))
         .bind(sr_bytes)
         .execute(&self.pool)
         .await?;

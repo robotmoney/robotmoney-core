@@ -135,6 +135,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     address public feeRecipient;
     uint256 public maxSlippageBps;
     bool public shutdown;
+    bool public depositsPaused;
     mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
     /// @notice Per-asset TWAP window in seconds. `0` falls back to
     ///         `DEFAULT_TWAP_WINDOW` so newly registered assets are
@@ -164,6 +165,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     event FeeRecipientUpdated(address oldRecipient, address newRecipient);
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
+    event DepositsPausedSet(bool paused);
     event Shutdown();
     event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
     event EmergencyUnwindGuardSet(
@@ -211,6 +213,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error NoActiveAssets();
     error CannotRescueUsdc();
     error EmergencyUnwindOverrideDisabled();
+    error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
     error AssetInBasket();
     /// @dev Raised when a router swap on the override path returns less USDC than
@@ -243,6 +246,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      the asset, then wait until the pool has accumulated enough
     ///      observations to cover the full window before depositing.
     error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
+    error InsufficientObservationHistory(address pool, uint32 requiredWindow);
     /// @dev Raised by addAsset() when the pool's in-range liquidity (as
     ///      returned by `IUniswapV3Pool.liquidity()`) is below
     ///      `MIN_POOL_LIQUIDITY`. Thin pools cannot guarantee synchronous
@@ -250,6 +254,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      eligibility requirement (gap-report §1). Provide depth before
     ///      registering the asset.
     error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+    /// @dev Raised by withdraw() and previewWithdraw(). BasketVault cannot
+    ///      guarantee ERC-4626 exactness for proportional-swap exits — use
+    ///      redeem() instead, which returns actual swap proceeds.
+    error RedeemOnly();
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -356,6 +364,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         nonReentrant
     {
         if (shutdown) revert VaultShutdown();
+        if (depositsPaused) revert EnforcedPause();
         if (usdcAmount > perDepositCap) revert PerDepositCapExceeded();
         // Pre-swap totalAssets() check; post-swap NAV may differ slightly due to slippage.
         if (totalAssets() + usdcAmount > tvlCap) revert TVLCapExceeded();
@@ -492,7 +501,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         (`type(uint256).max`) for ERC-4626 conformance: max* views MUST
     ///         return 0 when deposits are disabled (audit 2026-06-09, L-16).
     function maxDeposit(address) public view override returns (uint256) {
-        if (paused() || shutdown) return 0;
+        if (paused() || depositsPaused || shutdown) return 0;
         if (_activeAssetCount() == 0) return 0;
         if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
             return type(uint256).max;
@@ -514,16 +523,17 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return previewDeposit(assets_);
     }
 
-    /// @notice Estimated shares required to receive `assets_` net USDC (spot-priced, pre-slippage).
-    function previewWithdraw(uint256 assets_) public view override returns (uint256) {
-        uint256 gross = exitFeeBps == 0
-            ? assets_
-            : assets_.mulDiv(MAX_BPS, MAX_BPS - exitFeeBps, Math.Rounding.Ceil);
-        return _convertToShares(gross, Math.Rounding.Ceil);
+    /// @notice BasketVault cannot guarantee ERC-4626 withdraw exactness because
+    ///         the actual USDC delivered depends on proportional swap execution
+    ///         and variable on-chain slippage. Use `redeem()` instead — the ERC-4626
+    ///         redeem guarantee (actual ≥ previewRedeem) is enforced at the swap level.
+    function previewWithdraw(uint256) public view override returns (uint256) {
+        revert RedeemOnly();
     }
 
-    /// @dev Ignores the ERC-4626 `assets` parameter because actual USDC received depends
-    ///      on swap execution. Users should use `redeem` for this vault type.
+    /// @dev Performs a proportional-swap withdrawal. The `assets` parameter
+    ///      is intentionally unused because the actual USDC received depends on
+    ///      swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
     ///      Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
     function _withdraw(
         address caller,
@@ -638,6 +648,19 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return w == 0 ? DEFAULT_TWAP_WINDOW : w;
     }
 
+    /// @notice Address of the externally-linked `TickMath` library this vault
+    ///         `DELEGATECALL`s on the NAV / `totalAssets()` path.
+    /// @dev `TickMath.getSqrtRatioAtTick` is a `public` library function, so the
+    ///      compiler links it as a separate deployed contract and bakes its
+    ///      address into this vault's runtime bytecode. Exposing it lets deploy
+    ///      scripts and tests assert the linked library's runtime codehash equals
+    ///      the audited artifact (finding L3-D1): a mislinked or zero address —
+    ///      or one whose code does not match — must fail the deploy assertion.
+    /// @return lib The linked `TickMath` library address.
+    function tickMathLibrary() external pure returns (address lib) {
+        return address(TickMath);
+    }
+
     /// @dev Compute the time-weighted-average sqrtPriceX96 for `pool` over the
     ///      per-asset window and forward to the shared sqrtPriceX96 ratio math.
     ///      The non-USDC asset's window governs the read: when quoting
@@ -714,8 +737,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @param pool_     DEX pool pairing `token_` with USDC (either token0 or token1).
     ///                  For the Uniswap V3 default path, this is the V3 pool address.
     ///                  For Aerodrome, this is the CL pool address used for TWAP reads.
-    /// @param swapFee_  Fee parameter forwarded to the adapter (Uniswap V3 fee tier;
-    ///                  unused by Aerodrome adapters but kept for interface uniformity).
+    /// @param swapFee_  Venue parameter forwarded to execution: Uniswap fee tier
+    ///                  for V3/V4, or signed tick spacing for Aerodrome Slipstream.
     /// @param adapter_  Swap+TWAP adapter address implementing `IBasketSwapAdapter`.
     ///                  Pass `address(0)` to use the built-in Uniswap V3 default path
     ///                  (venue = V3). For V4 or Aerodrome, pass the deployed adapter
@@ -754,6 +777,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (observationCardinality < MIN_POOL_CARDINALITY) {
             revert InsufficientPoolCardinality(pool_, MIN_POOL_CARDINALITY, observationCardinality);
         }
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = DEFAULT_TWAP_WINDOW;
+        secondsAgos[1] = 0;
+        try IUniswapV3Pool(pool_).observe(secondsAgos) returns (int56[] memory, uint160[] memory) {}
+        catch {
+            revert InsufficientObservationHistory(pool_, DEFAULT_TWAP_WINDOW);
+        }
         // Verify that the pool has sufficient in-range liquidity to absorb
         // vault-sized trades within the configured slippage bound. Thin pools
         // break the synchronous-redemption guarantee (gap-report §1).
@@ -785,40 +815,55 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     // ─── Emergency ────────────────────────────────────────────────────
 
     function pause() external onlyRole(EMERGENCY_ROLE) {
+        _setDepositsPaused(true);
         _pause();
     }
 
     function unpause() external onlyRole(ADMIN_ROLE) {
+        _setDepositsPaused(false);
         _unpause();
     }
 
-    /// @dev Pause only when not already paused. Silently no-ops when the
-    ///      contract is already paused so that the common incident sequence
-    ///      pause() → emergencyUnwind() does not revert with EnforcedPause.
-    function _pauseIfNotPaused() internal {
-        if (!paused()) _pause();
+    function _setDepositsPaused(bool paused_) internal {
+        if (depositsPaused == paused_) return;
+        depositsPaused = paused_;
+        emit DepositsPausedSet(paused_);
     }
 
-    /// @notice Pause and swap all basket assets back to USDC using live TWAP-derived floors.
+    /// @notice Pause deposits and swap all basket assets back to USDC.
     /// @dev The effective per-leg floor is max(TWAP-derived, configured minUsdcOut), so the
     ///      admin-set value acts as a secondary lower bound while the live TWAP guards against
-    ///      stale configuration being exploited by a sandwich attacker.
+    ///      stale configuration being exploited by a sandwich attacker. If the
+    ///      oracle is unavailable, a non-zero configured floor is required.
     ///      Reverts when any router leg cannot satisfy its effective floor.
     function emergencyUnwind() public virtual onlyRole(EMERGENCY_ROLE) nonReentrant {
-        _pauseIfNotPaused();
+        _setDepositsPaused(true);
         uint256 len = assets.length;
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
             AssetInfo memory assetInfo = assets[i];
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
-            uint256 twapFloor = _twapUsdcValue(
-                    assetInfo.pool, assetInfo.token, assetInfo.adapter, bal
-                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
             uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
-            uint256 effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
+            uint256 effectiveFloor;
+            try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
+                uint256 twapFloor = twapValue * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+                effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
+            } catch {
+                if (configuredMin == 0) revert EmergencyFloorUnavailable(assetInfo.token);
+                effectiveFloor = configuredMin;
+            }
             _emergencyUnwindAsset(assetInfo, effectiveFloor);
         }
+    }
+
+    function emergencyTwapUsdcValue(AssetInfo calldata assetInfo, uint256 amount)
+        external
+        view
+        returns (uint256)
+    {
+        if (msg.sender != address(this)) revert InvalidParam();
+        return _twapUsdcValue(assetInfo.pool, assetInfo.token, assetInfo.adapter, amount);
     }
 
     /// @notice Explicit high-risk emergency unwind for tokens whose guard permits overrides.
@@ -826,18 +871,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      Even on the override path, swap outputs are bounded by an upper-loss
     ///      cap derived from the admin-configured `minUsdcOut` reference floor:
     ///      `appliedFloor = minUsdcOut * (MAX_BPS - maxLossBps) / MAX_BPS`.
-    ///      Additionally a live TWAP floor (max(TWAP-derived, appliedFloor)) is applied
-    ///      as a secondary guard to prevent sandwich exploitation of a stale `minUsdcOut`.
-    ///      Swaps whose realized USDC output is below the effective floor revert with
-    ///      `EmergencyUnwindLossCapExceeded`, preventing catastrophic loss even when
-    ///      override is enabled.
+    ///      The override is deliberately oracle-independent so a broken oracle
+    ///      cannot block incident response. The configured loss cap remains mandatory.
     function emergencyUnwindWithOverride(address[] calldata tokens)
         public
         virtual
         onlyRole(EMERGENCY_ROLE)
         nonReentrant
     {
-        _pauseIfNotPaused();
+        _setDepositsPaused(true);
         uint256 len = tokens.length;
         for (uint256 i = 0; i < len; i++) {
             EmergencyUnwindGuard memory guard = emergencyUnwindGuard[tokens[i]];
@@ -846,14 +888,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
             if (bal == 0) continue;
             uint256 appliedFloor = guard.minUsdcOut * (MAX_BPS - guard.maxLossBps) / MAX_BPS;
-            uint256 twapFloor = _twapUsdcValue(
-                    assetInfo.pool, assetInfo.token, assetInfo.adapter, bal
-                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
-            uint256 effectiveFloor = twapFloor > appliedFloor ? twapFloor : appliedFloor;
             emit EmergencyUnwindOverrideUsed(
-                assetInfo.token, bal, guard.minUsdcOut, effectiveFloor, msg.sender
+                assetInfo.token, bal, guard.minUsdcOut, appliedFloor, msg.sender
             );
-            _emergencyUnwindAssetWithCap(assetInfo, effectiveFloor);
+            _emergencyUnwindAssetWithCap(assetInfo, appliedFloor);
         }
     }
 
@@ -867,7 +905,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @dev Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
     ///      and `_sellProportional` skip them, so any balance that reappears after
     ///      `removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
-    function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
+    // slither-disable-start reentrancy-events
+    // This emergency recovery path is already `nonReentrant`; the emit after the
+    // guarded token transfer is intentional and the detector is a false positive.
+    function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE) {
         if (token == address(_USDC)) revert CannotRescueUsdc();
         if (to == address(0)) revert ZeroAddress();
         uint256 len = assets.length;
@@ -878,6 +919,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         IERC20(token).safeTransfer(to, balance);
         emit EmergencyTokenRecovered(token, to, balance);
     }
+    // slither-disable-end reentrancy-events
 
     // ─── Param setters ────────────────────────────────────────────────
 
@@ -1099,6 +1141,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         revert AssetNotFound();
     }
 
+    // slither-disable-start reentrancy-balance
+    // The caller (`emergencyUnwind`) holds the contract-level `nonReentrant`
+    // guard, so the pre-call `balanceOf` read cannot be observed by a
+    // reentrant call before the swap completes. The emitted `Swapped` event
+    // uses the freshly-returned `received` amount, not the stale balance.
     function _emergencyUnwindAsset(AssetInfo memory assetInfo, uint256 minUsdcOut) internal {
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
         if (bal == 0) return;
@@ -1113,6 +1160,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         );
         emit Swapped(assetInfo.token, address(_USDC), bal, received);
     }
+
+    // slither-disable-end reentrancy-balance
 
     /// @dev Override-path swap helper. Passes `appliedFloor` as the router-level
     ///      `amountOutMinimum` and additionally enforces the cap with a typed

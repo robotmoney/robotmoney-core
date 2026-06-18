@@ -19,10 +19,10 @@ assets via `IUniswapV3Pool.observe()` TWAP. This works for assets whose
 deepest liquidity lives on Uniswap V3.
 
 For the Real four-vault demo (Plan #109, issues #541–#568) the basket vaults
-must hold JUNO and ROBOTMONEY tokens. On Base mainnet:
+must hold JUNO and RM tokens. On Base mainnet:
 
 - **JUNO** — deepest liquidity is on **Uniswap V4**.
-- **ROBOTMONEY** — deepest liquidity is on **Aerodrome**.
+- **RM** — deepest liquidity is on **Aerodrome**.
 
 Neither token has a meaningful Uniswap V3 pool, so `exactInputSingle` would
 revert or produce catastrophic slippage. The swap-and-oracle abstraction must
@@ -213,7 +213,7 @@ the expected venue for each demo asset:
 |-------|-------|-----------|
 | WETH, cbBTC, wSOL | Uniswap V3 | Deep V3 liquidity on Base |
 | JUNO | Uniswap V4 | Primary JUNO/USDC pool is V4 on Base |
-| ROBOTMONEY | Aerodrome | Primary ROBOTMONEY/USDC pool is Aerodrome on Base |
+| RM | Aerodrome | Primary RM/USDC pool is Aerodrome on Base |
 
 ### 7. Scope boundary
 

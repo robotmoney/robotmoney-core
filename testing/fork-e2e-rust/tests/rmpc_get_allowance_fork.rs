@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — fork test for
+//! Canonical: Plan tracking issue #109 §9 — fork test for
 //! `rmpc get-allowance`. Issue #50.
 //!
 //! Boots an anvil-fork, has the ephemeral user `approve(spender, X)`

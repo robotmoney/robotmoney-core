@@ -1,5 +1,5 @@
 //! Canonical: docs/architecture.md §3 — Technology Stack
-//! (See also: docs/implementation-plan.md — Full-stack integration phase)
+//! (See also: Plan tracking issue #109 — Full-stack integration phase)
 //! CLI entry point: `cargo r smoke-test`
 //!
 //! Boots the full Geth+Lighthouse devnet with deployed contracts and
@@ -12,7 +12,7 @@
 //! printing a structured endpoint summary once all services are healthy.
 //! Dropping or Ctrl-C tears down both compose stacks.
 //!
-//! Canonical: docs/implementation-plan.md §10.5 — Phase 4.5.
+//! Canonical: Plan tracking issue #109 §10.5 — Phase 4.5.
 
 use clap::Parser;
 use std::io::BufRead;

@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -7,8 +7,8 @@ Test
 Exercises the deploy script in-process and asserts the post-deploy
 invariants the operator and downstream tooling rely on (issue #10).
 The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
-+ MorphoAdapter (issue #363) instead of MockVault or PassthroughAdapter.
-MockVault and PassthroughAdapter are retained only for their own unit
++ MorphoAdapter (issue #363) instead of MockVault.
+MockVault is retained only for its own unit
 tests.  The script always binds the gateway to an externally-supplied
 USDC token; this test deploys a `TestERC20` helper and passes its
 address in.  The smoke-test devnet does the same with the canonical
@@ -84,6 +84,22 @@ function _run() internal returns (Deploy.Deployed memory);
 
 ```solidity
 function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public;
+```
+
+### test_deploy_wiresThreeDistinctRealAdapterAddresses
+
+The production deploy path wires exactly three DISTINCT real
+adapter addresses — no single-address aliasing. This is the
+regression guard for the removed test-only no-yield deploy hatch
+(issue #912), which used to alias all three typed adapter fields
+to one no-yield adapter instance. `runInProcessWith` shares the
+same `_doDeploy` adapter-construction code path as the broadcast
+`run()` entrypoint, so this exercises the `run()`-equivalent
+wiring.
+
+
+```solidity
+function test_deploy_wiresThreeDistinctRealAdapterAddresses() public;
 ```
 
 ### test_deploy_authorizesAgentWithSanePolicy
@@ -165,5 +181,76 @@ function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
 
 ```solidity
 function test_deploy_envDriven_runInProcessSucceeds() public;
+```
+
+### _canonicalTickMath
+
+The audited reference is the TickMath library linked into the test
+artifact set, which is identical to the one linked into the deploy
+scripts and the basket vaults (same compiled build). Using it as the
+reference — rather than a hardcoded codehash — keeps the assertion
+robust across compiler/metadata variance while still detecting a
+mislink (a vault pointing at a different address or empty code).
+
+
+```solidity
+function _canonicalTickMath() internal pure returns (address);
+```
+
+### _deployBasketVault
+
+Deploy a representative basket-family vault (uses the TickMath link)
+with no real swap router; totalAssets() with an empty basket returns
+the vault's USDC balance and never touches TickMath, so it is a
+non-reverting in-range probe.
+
+
+```solidity
+function _deployBasketVault() internal returns (BasketVault);
+```
+
+### test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange
+
+The basket vault's linked TickMath library is the canonical
+instance (non-zero, has code, same address + codehash as the
+artifact's `TickMath`), and totalAssets() is non-reverting and in
+range. Positive arm of the deploy-time assertion.
+
+
+```solidity
+function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public;
+```
+
+### test_tickMathLink_deployAssertsCanonicalLibrary
+
+The Deploy.s.sol deploy path asserts the linked TickMath is
+present: a successful in-process deploy implies the link-sanity
+check inside _doDeploy passed.
+
+
+```solidity
+function test_tickMathLink_deployAssertsCanonicalLibrary() public;
+```
+
+### test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck
+
+A deliberately wrong (and a zero) linked-library address fails the
+same codehash check the deploy assertion enforces. Proves the
+assertion is not vacuous — a mislinked library does not pass.
+
+
+```solidity
+function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public;
+```
+
+### test_tickMathLink_deployAssertionRevertsOnMislink
+
+The actual DeployDemoExtraVaults TickMath link-integrity assertion
+reverts when a vault links a zero (no-code) or wrong (non-TickMath)
+library — proving the deploy assertion fails closed on mislink.
+
+
+```solidity
+function test_tickMathLink_deployAssertionRevertsOnMislink() public;
 ```
 

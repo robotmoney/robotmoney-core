@@ -1,12 +1,12 @@
 # ADR — Security hardening seam map
 
 > Scope: dev-scout report for issue #434, covering the Security hardening
-> phase in `docs/implementation-plan.md`. This report is documentation only:
+> phase in `Plan tracking issue #109`. This report is documentation only:
 > no allowlist, eligibility, unwind, dapp, or signer behaviour changes are
 > introduced here.
 >
 > Canonical inputs: `docs/technical/security-model.md`, `docs/architecture.md`, and
-> `docs/implementation-plan.md`.
+> `Plan tracking issue #109`.
 
 ## 1. Status
 
@@ -63,9 +63,10 @@ error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
 
 The address allowlist lets operators approve exact deployed adapter instances.
 The code-hash allowlist prevents an approved address entry from being used for
-an unexpected implementation in tests and deployment scripts. Devnet
-`PassthroughAdapter` can be allowed by deployment profile, but production deploy
-scripts must not approve devnet-only adapter code hashes.
+an unexpected implementation in tests and deployment scripts. Test-only no-yield
+adapters (e.g. the `NoYieldTestAdapter` fixture under `contracts/test/`) may be
+allowed in unit tests, but production deploy scripts must not approve any
+test-only adapter code hashes.
 
 Allocation code should treat the `active` flag as necessary but not sufficient:
 any path that can send USDC to an adapter (`_allocateTo`, `rebalance`,

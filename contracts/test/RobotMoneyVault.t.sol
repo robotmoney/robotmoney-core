@@ -12,7 +12,7 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
@@ -42,8 +42,10 @@ contract MockAdapter is IStrategyAdapter {
 
     /// @notice Extra USDC credited directly (simulates protocol-level donation).
     uint256 public donatedAmount;
+    bool public revertTotalAssets;
 
     error OnlyVault();
+    error TotalAssetsUnavailable();
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -76,7 +78,12 @@ contract MockAdapter is IStrategyAdapter {
 
     /// @inheritdoc IStrategyAdapter
     function totalAssets() external view returns (uint256) {
+        if (revertTotalAssets) revert TotalAssetsUnavailable();
         return USDC.balanceOf(address(this));
+    }
+
+    function setRevertTotalAssets(bool enabled) external {
+        revertTotalAssets = enabled;
     }
 
     /// @inheritdoc IStrategyAdapter
@@ -239,7 +246,10 @@ contract RobotMoneyVaultTest is Test {
     }
 
     function test_addAdapter_revertsWhenAdapterCodeHashNotAllowed() public {
-        PassthroughAdapter unapproved = new PassthroughAdapter(address(usdc), address(vault));
+        // Distinct-bytecode adapter whose codehash is never allowlisted in
+        // setUp (MockAdapter's codehash is, so it could not exercise the
+        // codehash-gate revert here).
+        NoYieldTestAdapter unapproved = new NoYieldTestAdapter(address(usdc), address(vault));
         vm.prank(admin);
         vault.setAdapterAllowed(address(unapproved), true);
 
@@ -301,18 +311,20 @@ contract RobotMoneyVaultTest is Test {
         CompoundV3Adapter compound =
             new CompoundV3Adapter(comet, address(usdc), address(typedVault));
         MorphoAdapter morpho = new MorphoAdapter(morphoVault, address(usdc), address(typedVault));
-        PassthroughAdapter passthrough = new PassthroughAdapter(address(usdc), address(typedVault));
+        // Fourth, generic no-yield adapter to prove the vault accepts multiple
+        // distinct adapter instances (not just the three real protocol types).
+        MockAdapter generic = new MockAdapter(address(usdc), address(typedVault));
 
         _allowAdapter(typedVault, address(aave));
         _allowAdapter(typedVault, address(compound));
         _allowAdapter(typedVault, address(morpho));
-        _allowAdapter(typedVault, address(passthrough));
+        _allowAdapter(typedVault, address(generic));
 
         vm.startPrank(admin);
         typedVault.addAdapter(address(aave), 2_500);
         typedVault.addAdapter(address(compound), 2_500);
         typedVault.addAdapter(address(morpho), 2_500);
-        typedVault.addAdapter(address(passthrough), 2_500);
+        typedVault.addAdapter(address(generic), 2_500);
         vm.stopPrank();
 
         assertEq(typedVault.adapterCount(), 4, "all approved adapter types should be added");
@@ -1002,6 +1014,22 @@ contract RobotMoneyVaultTest is Test {
         );
     }
 
+    function test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts() public {
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(depositAmount, alice);
+        adapter.setRevertTotalAssets(true);
+
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit RobotMoneyVault.AdapterForceRemoved(0, address(adapter), 0);
+        vm.prank(admin);
+        vault.forceRemoveAdapter(0);
+
+        (,, bool active) = vault.adapters(0);
+        assertFalse(active, "reverting adapter must be quarantined");
+        assertEq(vault.totalAssets(), 0, "inactive reverting adapter must not block healthy views");
+    }
+
     /// @notice Calling forceRemoveAdapter without EMERGENCY_ROLE must revert with AccessControl error.
     function test_forceRemoveAdapter_revertsWhenCallerLacksEmergencyRole() public {
         bytes32 emergencyRole = vault.EMERGENCY_ROLE();
@@ -1059,5 +1087,79 @@ contract RobotMoneyVaultTest is Test {
             )
         );
         vault.deposit(100 * ONE_USDC, bob);
+    }
+
+    // ─── L-3: shutdown recoverability ──────────────────────────────────────────
+
+    /// @notice EMERGENCY_ROLE can shut the vault down (deposits blocked,
+    ///         maxDeposit == 0) and the new ADMIN_ROLE-gated restoreVault
+    ///         re-opens deposits (maxDeposit > 0 and a deposit succeeds), while
+    ///         EMERGENCY_ROLE alone cannot restore (reverts). This proves a
+    ///         compromised emergency hot key can DoS but not permanently brick
+    ///         deposits — mirroring the documented pause/unpause asymmetry.
+    function test_shutdownVault_isRecoverableByAdminNotEmergency() public {
+        // Distinct EMERGENCY_ROLE holder (lower-trust hot key); admin keeps
+        // ADMIN_ROLE only. This separation is what the trust model assumes.
+        address emergency = makeAddr("emergency");
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        vm.prank(admin);
+        vault.grantRole(emergencyRole, emergency);
+
+        // Sanity: deposits open before shutdown.
+        assertGt(vault.maxDeposit(alice), 0, "deposits should be open pre-shutdown");
+
+        // 1. EMERGENCY_ROLE shuts the vault down: deposits blocked, cap zeroed.
+        vm.prank(emergency);
+        vault.shutdownVault();
+        assertTrue(vault.isShutdown(), "vault should be shut down");
+        assertEq(vault.maxDeposit(alice), 0, "maxDeposit must be 0 after shutdown");
+        assertEq(vault.tvlCap(), 0, "tvlCap must be zeroed by shutdown");
+
+        // A deposit must revert while shut down.
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", alice, 100 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(100 * ONE_USDC, alice);
+
+        // 2. EMERGENCY_ROLE alone CANNOT restore (it lacks ADMIN_ROLE).
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergency);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", emergency, adminRole
+            )
+        );
+        vault.restoreVault(TVL_CAP);
+
+        // 3. ADMIN_ROLE restores: deposits re-open with a fresh cap.
+        vm.prank(admin);
+        vault.restoreVault(TVL_CAP);
+        assertFalse(vault.isShutdown(), "vault should no longer be shut down");
+        assertEq(vault.tvlCap(), TVL_CAP, "restore must set the supplied TVL cap");
+        assertGt(vault.maxDeposit(alice), 0, "deposits should re-open after restore");
+
+        // A deposit now succeeds.
+        vm.prank(alice);
+        uint256 shares = vault.deposit(100 * ONE_USDC, alice);
+        assertGt(shares, 0, "deposit after restore must mint shares");
+    }
+
+    /// @notice restoreVault reverts when the vault is not shut down (NotShutdown)
+    ///         and when the supplied cap is zero (InvalidCap).
+    function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public {
+        // Not shut down → NotShutdown.
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.NotShutdown.selector);
+        vault.restoreVault(TVL_CAP);
+
+        // Shut down, then a zero cap is rejected.
+        vm.prank(admin);
+        vault.shutdownVault();
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.InvalidCap.selector);
+        vault.restoreVault(0);
     }
 }

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md — "Router-weight governance" phase
+//! Canonical: Plan tracking issue #109 — "Router-weight governance" phase
 //! Implements: issue #309 (rmpc get-router subprocess assertion)
 //!
 //! `rmpc get-router` — direct on-chain read of Portfolio Router state.
@@ -26,7 +26,7 @@ use crate::config::Config;
 use crate::gateway::PortfolioRouter;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{DecimalU256, Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, RpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -89,7 +89,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
             return EXIT_STARTUP_FAIL;
         }
     };
-    let rpc = match RpcClient::new(&cfg.rpc_url) {
+    let rpc = match cfg.rpc_client() {
         Ok(c) => c,
         Err(e) => {
             log::error!("rmpc get-router: rpc client init failed: {e}");
@@ -116,7 +116,7 @@ pub fn run(config_path: &Path, pretty: bool) -> i32 {
 }
 
 async fn read_router(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     router: Address,
 ) -> crate::errors::Result<Envelope<RouterData>> {
     let chain_id = rpc.chain_id().await?;
@@ -162,7 +162,7 @@ async fn read_router(
 }
 
 async fn call_get_weights(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     router: Address,
     block_tag: &str,
 ) -> crate::errors::Result<(Vec<Address>, Vec<U256>)> {
@@ -184,7 +184,7 @@ async fn call_get_weights(
 }
 
 async fn call_router_cap(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     router: Address,
     block_tag: &str,
 ) -> std::result::Result<U256, String> {

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5 — Phase 1 End-to-end test plan
+//! Canonical: Plan tracking issue #109 §5 — Phase 1 End-to-end test plan
 //!
 //! rmpc integration test fixture. Wraps [`smoke_test::Fixture`] (the
 //! devnet + deployed contracts) and adds:
@@ -97,31 +97,18 @@ pub struct Fixture {
 impl Fixture {
     /// Boot the devnet, build rmpc, write a keystore and config.
     ///
-    /// Uses `PassthroughAdapter` on the Geth+Lighthouse devnet (injected
-    /// automatically by [`Self::with_deploy_env`]).
+    /// Deploys the three real Aave/Compound/Morpho adapters against the warmed
+    /// fork-state snapshot the devnet boots from (real protocol storage is
+    /// present, so no test passthrough hatch is needed).
     pub fn new() -> Result<Self, HarnessError> {
         Self::with_deploy_env(&[])
     }
 
     /// Like [`Self::new`] but passes extra env vars to `forge script Deploy`.
-    ///
-    /// `USE_PASSTHROUGH_ADAPTER=true` is always injected (unless the caller
-    /// explicitly overrides it) so the Geth+Lighthouse devnet never tries to
-    /// call real Aave/Compound/Morpho contracts that have no on-chain storage
-    /// in the genesis snapshot.
     pub fn with_deploy_env(extra_deploy_env: &[(&str, &str)]) -> Result<Self, HarnessError> {
         // Build rmpc first so we fail fast before the 60-90s devnet boot.
         let rmpc_bin = ensure_rmpc_built()?;
-        // Always include USE_PASSTHROUGH_ADAPTER unless the caller overrides it.
-        let mut env: Vec<(&str, &str)> = vec![("USE_PASSTHROUGH_ADAPTER", "true")];
-        for &(k, v) in extra_deploy_env {
-            // Caller override wins: drop our default if the key appears.
-            if k == "USE_PASSTHROUGH_ADAPTER" {
-                env.retain(|(ek, _)| *ek != "USE_PASSTHROUGH_ADAPTER");
-            }
-            env.push((k, v));
-        }
-        let devnet = smoke_test::Fixture::with_deploy_env(&env)?;
+        let devnet = smoke_test::Fixture::with_deploy_env(extra_deploy_env)?;
         let (keystore_path, config_path, state_dir) = write_keystore_and_config(&devnet)?;
         Ok(Fixture {
             devnet,

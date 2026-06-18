@@ -15,7 +15,7 @@
  * with the supplied private key.
  */
 import type { Page } from "@playwright/test";
-import { createWalletClient, http, type Hex, type Address } from "viem";
+import { createPublicClient, createWalletClient, http, type Hex, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { DevnetEndpoints } from "./devnet";
 
@@ -53,6 +53,9 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
     account,
     transport: http(opts.rpcUrl),
   });
+  const publicClient = createPublicClient({
+    transport: http(opts.rpcUrl),
+  });
 
   await page.exposeBinding("__rmpcRpc", async (_source, body: unknown) => {
     const res = await fetch(opts.rpcUrl, {
@@ -72,12 +75,34 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
           value?: Hex;
           gas?: Hex;
         }>;
+        // Gas handling mirrors a real injected wallet (e.g. MetaMask).
+        //
+        // The dapp's `writeContract(simulateResult.request)` does NOT set a
+        // `gas` field (viem's `simulateContract` returns only abi/address/
+        // args/account — see the upstream action), so an injected wallet is
+        // responsible for filling gas. A bare `eth_estimateGas` is not safe
+        // to use verbatim: Geth under-estimates transactions that trigger
+        // gas refunds (e.g. an ERC-4626 `redeem` that burns shares and
+        // clears storage slots), so a tx sent with exactly the estimate
+        // mines but reverts out-of-gas — the balance never changes and the
+        // failure is silent. Real wallets pad the estimate; we do the same
+        // with a 1.5x buffer so the harness behaves like production.
+        let gas: bigint | undefined = tx.gas ? BigInt(tx.gas) : undefined;
+        if (gas === undefined) {
+          const estimated = await publicClient.estimateGas({
+            account: account.address,
+            to: tx.to,
+            data: tx.data,
+            value: tx.value ? BigInt(tx.value) : undefined,
+          });
+          gas = (estimated * 3n) / 2n;
+        }
         return walletClient.sendTransaction({
           chain: null,
           to: tx.to,
           data: tx.data,
           value: tx.value ? BigInt(tx.value) : undefined,
-          gas: tx.gas ? BigInt(tx.gas) : undefined,
+          gas,
         });
       }
       case "personal_sign":
@@ -179,24 +204,63 @@ export async function injectWallet(page: Page, opts: InjectWalletOptions): Promi
 }
 
 /**
- * Click the unified "Connect wallet" button. Use after `injectWallet`
- * and `page.goto()`. The button is rendered by AgentsPanel when the
- * wallet-gated action surface is active.
+ * Click the unified "Connect wallet" button and wait until AgentsPanel
+ * has flipped from the connect gate to the post-connect agent surface
+ * (the onboarding wizard or the admin tabs). Use after `injectWallet`
+ * and `page.goto()`.
  *
- * Verifies the connected address via the /debug page (which replaced
- * the old slide-out debug panel toggle).
+ * Connecting flips AgentsPanel in place — no navigation, no page reload,
+ * no wagmi reconnect-on-mount. Waiting for the agent surface is itself
+ * proof the wallet connected, so there is nothing to verify on a separate
+ * page. (An earlier implementation round-tripped through `/debug` to read
+ * `connected-address`; that added two full reloads per connect and relied
+ * on reconnect-on-mount winning a first-paint race twice — the source of
+ * the intermittent suite-10 failures where neither `onboarding-wizard`
+ * nor `admin-tabs` ever appeared. The `/debug` route itself is covered by
+ * `tests/unit/debug-page.test.tsx`.)
  */
 export async function connectInjectedWallet(page: Page): Promise<void> {
   const { expect } = await import("@playwright/test");
   const button = page.getByTestId("connect-wallet").first();
   await expect(button).toBeVisible();
   await button.click();
-  // Navigate to /debug to confirm the wallet address appears, then return.
-  const currentUrl = page.url();
-  const debugUrl = new URL("/debug", currentUrl).toString();
-  await page.goto(debugUrl);
-  await expect(page.getByTestId("connected-address")).toBeVisible({ timeout: 10_000 });
-  await page.goto(currentUrl);
+  await ensureWalletConnected(page);
+}
+
+/**
+ * Wait until the post-connect agent surface (onboarding wizard or admin
+ * tabs) is on screen, clicking Connect again if the gate is still shown.
+ *
+ * Covers two cases with one helper:
+ *   - the initial click's connect mutation hasn't rendered yet (normal), and
+ *   - a connect/reconnect attempt that silently didn't take — e.g. wagmi's
+ *     reconnect-on-mount losing the first-paint race after a full reload,
+ *     which leaves AgentsPanel parked on the gate with no auto-recovery.
+ *
+ * The injected provider answers `eth_requestAccounts` synchronously, so a
+ * re-click re-establishes the session immediately. A no-op re-click never
+ * happens: we only click when the surface failed to appear AND the gate is
+ * still visible.
+ */
+export async function ensureWalletConnected(page: Page): Promise<void> {
+  const { expect } = await import("@playwright/test");
+  const gate = page.getByTestId("connect-wallet").first();
+  const surface = page.getByTestId("onboarding-wizard").or(page.getByTestId("admin-tabs"));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Give the in-flight connect a chance to render the surface.
+    const settled = await surface
+      .waitFor({ state: "visible", timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (settled) return;
+    // Surface never came up; if the gate is still showing the connect did
+    // not take — click it and retry.
+    if (await gate.isVisible().catch(() => false)) {
+      await gate.click();
+    }
+  }
+  // Final settle — surface a clear error if Connect never took.
+  await expect(surface).toBeVisible({ timeout: 30_000 });
 }
 
 /**

@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §9 — `rmpc get-agent`
+//! Canonical: Plan tracking issue #109 §9 — `rmpc get-agent`
 //!
 //! Integration tests for `rmpc get-agent` (issue #49).
 

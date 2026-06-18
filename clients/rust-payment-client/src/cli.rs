@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §4.8 — CLI surface
+//! Canonical: Plan tracking issue #109 §4.8 — CLI surface
 //!
 //! Argument parsing for the `rmpc` CLI.
 //!
@@ -7,6 +7,17 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+
+/// Planned `rmpc deposit` execution route.
+///
+/// Issue #649 owns adding this as a parsed CLI argument and routing `Router`
+/// through `RobotMoneyGateway.depositTo`. Keeping the enum unwired here avoids
+/// accepting a flag that still executes the existing vault-only path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DepositDestination {
+    Vault,
+    Router,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "rmpc", version, about = "Robot Money payment client")]
@@ -18,6 +29,12 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Sign and broadcast a USDC deposit through the gateway.
+    ///
+    /// When `--destination` is supplied the call encodes
+    /// `gateway.depositTo(orderId, amount, deadline, idempotencyKey,
+    /// destination, minSharesPerLeg)`, routing the deposit through the
+    /// PortfolioRouter at that address. Without `--destination` the
+    /// existing single-vault `gateway.deposit()` path is used unchanged.
     Deposit {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -40,16 +57,32 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the deposit tx envelope. Default 750_000 — the
-        /// vault path can perform cold ERC-4626, adapter allowlist, and
-        /// strategy-allocation writes on first interaction.
-        #[arg(long = "gas-limit", default_value_t = 750_000)]
+        /// Gas limit for the deposit tx envelope. Default 3_000_000 — a
+        /// deposit allocates across the three real yield adapters and reads
+        /// `totalAssets()` on each, including the Morpho Gauntlet USDC Prime
+        /// vault whose `convertToAssets` iterates its multi-market supply
+        /// queue (per-market `idToMarketParams`/`extSloads`/`market` reads
+        /// plus AdaptiveCurveIRM accrual). On a real-adapter vault this path
+        /// costs ~1.55M gas, so the historical 750_000 default ran out of gas
+        /// once the now-removed no-yield test adapter no longer
+        /// short-circuited `totalAssets()` (issue #912).
+        #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
         /// When set, this beats both the TOML `max_fee_per_gas_cap`
         /// field and the per-chain default for any chain id.
         #[arg(long = "fee-cap")]
         fee_cap: Option<u64>,
+        /// Router-deposit destination: 0x-prefixed address of the
+        /// PortfolioRouter to route through. When provided the command
+        /// calls `gateway.depositTo()` instead of `gateway.deposit()`.
+        #[arg(long)]
+        destination: Option<String>,
+        /// Per-leg minimum shares for the router deposit (repeatable or
+        /// comma-separated decimal U256 values). Only meaningful together
+        /// with `--destination`; defaults to an empty slice when omitted.
+        #[arg(long = "min-shares-per-leg", value_delimiter = ',', num_args = 0..)]
+        min_shares_per_leg: Vec<String>,
         /// Pretty-print the JSON output (multi-line, indented).
         #[arg(long)]
         pretty: bool,
@@ -153,7 +186,7 @@ pub enum Command {
     },
     /// Read an ERC-20 token balance for an address (USDC by default).
     ///
-    /// Per docs/implementation-plan.md §9 / docs/technical/rmpc-read-output-contract.md.
+    /// Per Plan tracking issue #109 §9 / docs/technical/rmpc-read-output-contract.md.
     GetBalance {
         /// Path to the operator config TOML.
         #[arg(long, short = 'c')]
@@ -291,8 +324,14 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the withdraw tx envelope. Default 350_000.
-        #[arg(long = "gas-limit", default_value_t = 350_000)]
+        /// Gas limit for the withdraw tx envelope. Default 3_000_000 — a
+        /// redemption reads `totalAssets()` across the three real yield
+        /// adapters (including the Morpho Gauntlet USDC Prime multi-market
+        /// `convertToAssets` loop) AND performs the real adapter withdrawal,
+        /// so it is at least as expensive as a deposit. The historical
+        /// 350_000 default was sized for the now-removed no-yield test
+        /// adapter (issue #912).
+        #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei.
         #[arg(long = "fee-cap")]

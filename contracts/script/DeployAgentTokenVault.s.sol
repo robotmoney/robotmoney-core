@@ -23,16 +23,16 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 
 /// @title DeployAgentTokenVault
-/// @notice Deploys `AgentTokenVault` and seeds it with the canonical MVP
-///         six-token shortlist (ADR-0001): JUNO, ROBOTMONEY, BANKR, ZYFAI,
-///         GIZA, DEUS — Base-only, equal-weight, ADMIN_ROLE-curated. Token
-///         addresses are read from `config/agent-token-shortlist.json`; no
+/// @notice Deploys `AgentTokenVault` and seeds it with the active three-token
+///         demo shortlist: BNKR, JUNO, RM. Token, pool, adapter, and
+///         venue data are read from `config/agent-token-shortlist.json`; no
 ///         token address is hardcoded in Solidity source.
 ///
 ///         Chain selection: `block.chainid == 8453` (Base mainnet) reads the
 ///         `mainnet` block of the config. Any other chain id reads stand-in
 ///         ERC20 + pool addresses from `DEVNET_AGENT_TOKEN_<SYMBOL>` /
-///         `DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` env
+///         `DEVNET_AGENT_POOL_<SYMBOL>` / `DEVNET_AGENT_FEE_<SYMBOL>` /
+///         `DEVNET_AGENT_ADAPTER_<SYMBOL>` env
 ///         overrides, matching the single-production-codebase principle: the
 ///         same script ships everywhere, only the address source differs.
 ///
@@ -57,21 +57,23 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 contract DeployAgentTokenVault is Script {
     using stdJson for string;
 
-    /// @notice Canonical MVP shortlist symbols in deploy order (ADR-0001).
+    /// @notice Active shortlist symbols in deploy order.
     ///         Ordering is load-bearing: AgentTokenVault.shortlist() returns
     ///         tokens in this order, and the dapp/tests assert on it.
-    string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"];
+    string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"];
 
     /// @notice TVL/per-deposit caps mirrored from the other demo vaults.
     uint256 public constant TVL_CAP = 10_000_000 * 1e6;
     uint256 public constant PER_DEPOSIT_CAP = 1_000_000 * 1e6;
 
-    /// @notice A single resolved shortlist entry (token + USDC V3 pool + fee).
+    /// @notice A single resolved shortlist entry.
     struct Entry {
         string symbol;
         address token;
         address pool;
         uint24 swapFee;
+        address adapter;
+        BasketVault.Venue venue;
     }
 
     /// @notice Result returned to in-process callers (e.g. forge tests).
@@ -85,7 +87,7 @@ contract DeployAgentTokenVault is Script {
         bool registered;
     }
 
-    /// @notice Broadcast entrypoint. Deploys the vault, seeds the six-token
+    /// @notice Broadcast entrypoint. Deploys the vault, seeds the three-token
     ///         shortlist, optionally registers it, and writes a deployment JSON.
     function run() external returns (Deployed memory d) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
@@ -97,7 +99,7 @@ contract DeployAgentTokenVault is Script {
         require(swapRouter != address(0), "SWAP_ROUTER=0");
         require(usdc != address(0), "USDC_ADDRESS=0");
 
-        Entry[6] memory entries = _resolveShortlist();
+        Entry[3] memory entries = _resolveShortlist();
 
         vm.startBroadcast();
         d = _deployAndSeed(admin, emergencyResponder, swapRouter, usdc, entries);
@@ -114,7 +116,7 @@ contract DeployAgentTokenVault is Script {
         address emergencyResponder,
         address swapRouter,
         address usdc,
-        Entry[6] memory entries
+        Entry[3] memory entries
     ) internal returns (Deployed memory d) {
         AgentTokenVault vault = new AgentTokenVault(
             IERC20(usdc),
@@ -134,8 +136,8 @@ contract DeployAgentTokenVault is Script {
                 entries[i].token,
                 entries[i].pool,
                 entries[i].swapFee,
-                address(0),
-                BasketVault.Venue.V3
+                entries[i].adapter,
+                entries[i].venue
             );
             d.tokens[i] = entries[i].token;
         }
@@ -147,9 +149,9 @@ contract DeployAgentTokenVault is Script {
         }
     }
 
-    /// @dev Resolve the six shortlist entries from config (mainnet) or env
+    /// @dev Resolve the three shortlist entries from config (mainnet) or env
     ///      overrides (devnet), selected by chain id.
-    function _resolveShortlist() internal view returns (Entry[6] memory entries) {
+    function _resolveShortlist() internal view returns (Entry[3] memory entries) {
         bool isMainnet = block.chainid == 8453;
         string memory json = isMainnet ? _readConfig() : "";
 
@@ -161,17 +163,37 @@ contract DeployAgentTokenVault is Script {
                 entries[i].token = json.readAddress(string.concat(base, ".token"));
                 entries[i].pool = json.readAddress(string.concat(base, ".pool"));
                 entries[i].swapFee = uint24(json.readUint(string.concat(base, ".swapFee")));
+                entries[i].adapter = json.readAddress(string.concat(base, ".adapter"));
+                entries[i].venue = _venueFromString(json.readString(string.concat(base, ".venue")));
                 require(entries[i].token != address(0), "mainnet token unset in config");
                 require(entries[i].pool != address(0), "mainnet pool unset in config");
+                if (entries[i].venue != BasketVault.Venue.V3) {
+                    require(entries[i].adapter != address(0), "mainnet adapter unset in config");
+                }
             } else {
                 entries[i].token = vm.envAddress(string.concat("DEVNET_AGENT_TOKEN_", sym));
                 entries[i].pool = vm.envAddress(string.concat("DEVNET_AGENT_POOL_", sym));
                 entries[i].swapFee =
                     uint24(_envUintOrDefault(string.concat("DEVNET_AGENT_FEE_", sym), 10_000));
+                entries[i].adapter = _envAddressOrZero(string.concat("DEVNET_AGENT_ADAPTER_", sym));
+                entries[i].venue = i == 0
+                    ? BasketVault.Venue.V3
+                    : i == 1 ? BasketVault.Venue.V4 : BasketVault.Venue.Aerodrome;
                 require(entries[i].token != address(0), "devnet token override unset");
                 require(entries[i].pool != address(0), "devnet pool override unset");
+                if (entries[i].venue != BasketVault.Venue.V3) {
+                    require(entries[i].adapter != address(0), "devnet adapter override unset");
+                }
             }
         }
+    }
+
+    function _venueFromString(string memory value) internal pure returns (BasketVault.Venue) {
+        bytes32 venueHash = keccak256(bytes(value));
+        if (venueHash == keccak256("V3")) return BasketVault.Venue.V3;
+        if (venueHash == keccak256("V4")) return BasketVault.Venue.V4;
+        if (venueHash == keccak256("Aerodrome")) return BasketVault.Venue.Aerodrome;
+        revert("unsupported venue");
     }
 
     function _readConfig() internal view returns (string memory) {

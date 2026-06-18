@@ -5,7 +5,7 @@
 //            router-eligible count and stale-defaultWeights-length guard)
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 
 /// @dev Minimal view the registry needs from `PortfolioRouter` to keep the
 ///      default weight vector's length consistent with router eligibility.
@@ -28,7 +28,7 @@ interface IRouterDefaultWeights {
 /// `setVaultStatus`. This role is self-administered (its own role-admin)
 /// so the deployer is the sole initial admin, matching the gateway's
 /// access-control pattern.
-contract VaultRegistry is AccessControl {
+contract VaultRegistry is AdminFloorAccessControl {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants/revokes other roles, registers vaults, changes vault status.

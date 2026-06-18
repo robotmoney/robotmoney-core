@@ -1,9 +1,9 @@
-//! Canonical: docs/implementation-plan.md §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
+//! Canonical: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol (typed ABI bindings)
 //!
 //! `gateway` module — typed `alloy-sol-types` bindings for the on-chain
 //! contracts the daemon interacts with.
 //!
-//! Per issue #11 and `docs/implementation-plan.md` §3.5: typed ABI
+//! Per issue #11 and `Plan tracking issue #109` §3.5: typed ABI
 //! encode/decode for `RobotMoneyGateway`, plus read-side bindings for the
 //! standard ERC-20 `allowance`+`balanceOf` views (used against real USDC in
 //! production and against test ERC-20 deployments in CI) and the `MockVault`
@@ -83,6 +83,17 @@ mod tests {
         let expected = &keccak256(canonical.as_bytes())[..4];
         let actual = RobotMoneyGateway::depositCall::SELECTOR;
         assert_eq!(&actual, expected, "deposit selector drift");
+    }
+
+    /// The `depositTo` selector must match
+    /// `keccak256("depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])")[..4]`.
+    /// This cross-checks the router-deposit ABI binding added in issue #649.
+    #[test]
+    fn deposit_to_selector_matches_canonical_signature() {
+        let canonical = "depositTo(bytes32,uint256,uint64,bytes32,address,uint256[])";
+        let expected = &keccak256(canonical.as_bytes())[..4];
+        let actual = RobotMoneyGateway::depositToCall::SELECTOR;
+        assert_eq!(&actual, expected, "depositTo selector drift");
     }
 
     /// `authorizeAgent(address,(bool,uint64,uint256,uint256,address,address[],address,uint256,uint256,address[]))` —

@@ -1,5 +1,5 @@
 # AgentTokenVaultTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/test/AgentTokenVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/AgentTokenVault.t.sol)
 
 **Inherits:**
 Test
@@ -24,7 +24,7 @@ uint256 internal constant N = 6
 ### SYMBOLS
 
 ```solidity
-string[6] internal SYMBOLS = ["JUNO", "ROBOTMONEY", "BANKR", "ZYFAI", "GIZA", "DEUS"]
+string[6] internal SYMBOLS = ["JUNO", "RM", "BANKR", "ZYFAI", "GIZA", "DEUS"]
 ```
 
 
@@ -141,7 +141,7 @@ function test_governance_shortlist_remove_delay_is_24h() public view;
 
 Exercises the real demo seed chain: DeployDemoExtraVaults.run()
 deploys + seeds AgentTokenVault with the three real-asset demo
-tokens (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome), registers it in
+tokens (BNKR/V3, JUNO/V4, RM/Aerodrome), registers it in
 VaultRegistry, and makes it router-eligible (issue #560).
 The vault is reachable via the same registry path the dapp uses.
 

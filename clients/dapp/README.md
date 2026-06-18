@@ -1,6 +1,6 @@
 # `clients/dapp` — Human admin dapp (issue #60)
 
-Implements the retired `docs/implementation-plan.md` §12 (git history; live plan: Plan tracking issue #109) against the credential / custody / preview / export decisions in [`docs/technical/dapp-credential-decisions.md`](../../docs/technical/dapp-credential-decisions.md).
+Implements the retired `Plan tracking issue #109` §12 (git history; live plan: Plan tracking issue #109) against the credential / custody / preview / export decisions in [`docs/technical/dapp-credential-decisions.md`](../../docs/technical/dapp-credential-decisions.md).
 
 ## Package manager
 

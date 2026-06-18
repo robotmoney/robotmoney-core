@@ -1,17 +1,17 @@
 # AgentBasketStubDeployer
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the AgentTokenVault devnet basket
-stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+stand-ins (PRD §11.3 — BNKR/JUNO/RM, three real-asset demo tokens)
 AND the per-asset swap router stubs + adapters. Its constructor performs
 all 11 sub-CREATEs in a single broadcaster transaction:
-- 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+- 3 × DemoBasketToken (BNKR, JUNO, RM)
 - 3 × DemoUsdcPool
 - DemoV3SwapRouter (BNKR built-in path)
 - DemoV4SwapRouter (JUNO V4 path)
-- DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+- DemoAerodromeRouter (RM Aerodrome path)
 - UniswapV4SwapAdapter (JUNO)
-- AerodromeSwapAdapter (ROBOTMONEY)
+- AerodromeSwapAdapter (RM)
 Collapsed into one broadcaster CREATE to minimize on-chain tx count
 and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 
@@ -55,7 +55,7 @@ address public aeroAdapter
 ### AGENT_SYMBOLS_3
 
 ```solidity
-string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"]
+string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "RM"]
 ```
 
 

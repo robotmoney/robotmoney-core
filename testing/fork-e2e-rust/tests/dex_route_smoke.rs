@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §8 — scenario 2
+//! Canonical: Plan tracking issue #109 §8 — scenario 2
 //! (`dex_route_smoke`).
 //!
 //! Smallest meaningful DEX interaction: USDC -> WETH single-hop
@@ -9,7 +9,7 @@
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::sol;
-use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IERC20};
+use rmpc_fork_e2e::{addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IERC20};
 
 sol! {
     /// Subset of Uniswap V3 SwapRouter02 we exercise. Selector
@@ -33,7 +33,7 @@ const SWAP_USDC: u64 = 100_000_000; // 100 USDC
 
 #[test]
 fn dex_route_smoke() {
-    skip_if_no_mainnet_fork!();
+    skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[dex_route_smoke] {}", fx.summary_line());
 

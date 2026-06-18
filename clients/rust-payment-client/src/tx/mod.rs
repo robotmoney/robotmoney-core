@@ -1,9 +1,9 @@
 //! Canonical: docs/architecture.md §7 — Rust Client (tx envelope build/sign/broadcast)
-//! (See also: docs/implementation-plan.md §4.5 — ABI encoding)
+//! (See also: Plan tracking issue #109 §4.5 — ABI encoding)
 //!
 //! `tx` — EIP-1559 transaction envelope construction and broadcast.
 //!
-//! Per `docs/implementation-plan.md` §3.5/§3.7 and issue #12. The
+//! Per `Plan tracking issue #109` §3.5/§3.7 and issue #12. The
 //! daemon builds typed EIP-1559 (`type=0x02`) transactions only — legacy
 //! and EIP-2930 envelopes are intentionally not supported. Construction
 //! is split from signing so unit tests can encode/decode envelopes
@@ -43,7 +43,7 @@ use alloy_rpc_types::TransactionReceipt;
 
 use crate::errors::{Result, RmpcError};
 use crate::fees::FeeBid;
-use crate::rpc::RpcClient;
+use crate::rpc::FailoverRpcClient;
 
 /// Default per-poll interval while waiting for a receipt. The Geth-layer
 /// e2e tests run on 12-second blocks, so polling every 1s is roughly 12
@@ -152,13 +152,16 @@ pub(crate) fn sign_eip1559_with_key(
 /// Broadcast a raw EIP-1559 envelope. Thin wrapper that exists so the
 /// deposit command (#16) doesn't reach into the rpc client directly and
 /// so we have one place to add observability later.
-pub async fn broadcast(rpc: &RpcClient, raw: &Bytes) -> Result<B256> {
+pub async fn broadcast(rpc: &FailoverRpcClient, raw: &Bytes) -> Result<B256> {
     rpc.send_raw_transaction(raw).await
 }
 
 /// Poll for a receipt with the MVP defaults (see
 /// [`RECEIPT_POLL_INTERVAL_MS`] / [`RECEIPT_POLL_MAX_ATTEMPTS`]).
-pub async fn wait_for_receipt(rpc: &RpcClient, tx_hash: B256) -> Result<TransactionReceipt> {
+pub async fn wait_for_receipt(
+    rpc: &FailoverRpcClient,
+    tx_hash: B256,
+) -> Result<TransactionReceipt> {
     wait_for_receipt_with(
         rpc,
         tx_hash,
@@ -173,7 +176,7 @@ pub async fn wait_for_receipt(rpc: &RpcClient, tx_hash: B256) -> Result<Transact
 /// exhausted budget surfaces as [`RmpcError::ErrRpcTransport`] with a
 /// timeout message so log-scrapers can match on it.
 pub async fn wait_for_receipt_with(
-    rpc: &RpcClient,
+    rpc: &FailoverRpcClient,
     tx_hash: B256,
     interval: std::time::Duration,
     max_attempts: u32,
@@ -366,11 +369,95 @@ mod tests {
             .with_body(receipt_json)
             .create_async()
             .await;
-        let rpc = RpcClient::new(server2.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server2.url()]).unwrap();
         let r = wait_for_receipt_with(&rpc, tx_hash, std::time::Duration::from_millis(1), 5)
             .await
             .expect("receipt");
         assert_eq!(r.transaction_hash, tx_hash);
+    }
+
+    /// Geth's post-boot/post-mine "transaction indexing is in progress"
+    /// transient (-32000) must be treated like a pending receipt: the loop
+    /// keeps polling and returns Ok once the receipt appears, never bailing
+    /// on the transient.
+    #[tokio::test]
+    async fn wait_for_receipt_retries_past_indexing_transient() {
+        let tx_hash = keccak256(b"indexing-then-receipt");
+        let receipt_json = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{
+                "transactionHash":"{}",
+                "transactionIndex":"0x0",
+                "blockHash":"0x{}",
+                "blockNumber":"0x1",
+                "from":"0x{}",
+                "to":"0x{}",
+                "cumulativeGasUsed":"0x5208",
+                "gasUsed":"0x5208",
+                "contractAddress":null,
+                "logs":[],
+                "status":"0x1",
+                "logsBloom":"0x{}",
+                "type":"0x2",
+                "effectiveGasPrice":"0x1"
+            }}}}"#,
+            format_args!("0x{}", hex::encode(tx_hash)),
+            "11".repeat(32),
+            "aa".repeat(20),
+            "bb".repeat(20),
+            "00".repeat(256),
+        );
+
+        let mut server = mockito::Server::new_async().await;
+        // First two polls hit Geth's indexing transient; the third yields the
+        // receipt. `expect(2)` on the transient retires it after two hits so
+        // the receipt mock then matches.
+        let _transient = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"transaction indexing is in progress"}}"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+        let _receipt = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(receipt_json)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let r = wait_for_receipt_with(&rpc, tx_hash, std::time::Duration::from_millis(1), 10)
+            .await
+            .expect("receipt after indexing transient");
+        assert_eq!(r.transaction_hash, tx_hash);
+        _transient.assert_async().await;
+    }
+
+    /// An unrelated JSON-RPC server error (not the indexing transient) must
+    /// propagate immediately, never be swallowed as "pending".
+    #[tokio::test]
+    async fn wait_for_receipt_propagates_unrelated_rpc_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid argument"}}"#,
+            )
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let err = wait_for_receipt_with(&rpc, B256::ZERO, std::time::Duration::from_millis(1), 5)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrRpcServer { code: -32602, .. }),
+            "unrelated error should propagate, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -383,7 +470,7 @@ mod tests {
             .expect_at_least(2)
             .create_async()
             .await;
-        let rpc = RpcClient::new(server.url()).unwrap();
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
         let err = wait_for_receipt_with(&rpc, B256::ZERO, std::time::Duration::from_millis(1), 3)
             .await
             .unwrap_err();

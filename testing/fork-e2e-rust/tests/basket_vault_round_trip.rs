@@ -1,18 +1,18 @@
-//! Canonical: docs/implementation-plan.md §"Multi-vault devnet" line 280
+//! Canonical: Plan tracking issue #109 §"Multi-vault devnet" line 280
 //! (`[ ] Fork e2e: multi-vault round-trip including basket vaults`).
 //!
 //! End-to-end round-trip through `ProtocolAssetVault` and `AgentTokenVault`
-//! against a live Base-mainnet fork. Both vaults are deployed transiently on
-//! the fork (they are not yet deployed on Base mainnet) so the test exercises
+//! against a live forked Base block. Both vaults are deployed transiently on
+//! the fork (they are not yet deployed on Base) so the test exercises
 //! the real basket-vault deposit/withdrawal logic — weighted-swap deposit and
-//! proportional-sell redemption — against genuine mainnet Uniswap V3 pool
+//! proportional-sell redemption — against genuine Base Uniswap V3 pool
 //! state and real TWAP oracle data.
 //!
 //! ## Test structure
 //!
 //! For each basket vault:
 //!  1. Deploy the vault contract on the fork with the test account as admin.
-//!  2. Add one confirmed mainnet asset (cbBTC for ProtocolAssetVault, JUNO
+//!  2. Add one confirmed Base asset (cbBTC for ProtocolAssetVault, JUNO
 //!     for AgentTokenVault) so the basket is non-empty.
 //!  3. Approve USDC → deposit → assert shares > 0.
 //!  4. Redeem → assert net USDC delta within exitFeeBps + maxSlippageBps +
@@ -30,13 +30,13 @@
 //!
 //! ## Skip behaviour
 //!
-//! The test is gated with `skip_if_no_mainnet_fork!()` — it exits cleanly
+//! The test is gated with `skip_if_no_devnet_fork!()` — it exits cleanly
 //! when `RMPC_FORK_RPC_URL` is unset so contributors without an archive RPC
 //! can still run `cargo test`.
 
 use alloy_primitives::{Address, Bytes, U256};
 use rmpc_fork_e2e::{
-    addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IBasketVault, IERC20,
+    addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IBasketVault, IERC20,
 };
 
 // 50 USDC (6 decimals).
@@ -316,13 +316,13 @@ fn basket_round_trip(
 // ── Test entrypoints ──────────────────────────────────────────────────────────
 
 /// Full deposit/withdrawal round-trip through `ProtocolAssetVault` and
-/// `AgentTokenVault` against a live Base-mainnet fork.
+/// `AgentTokenVault` against a live forked Base block.
 ///
 /// Requires `RMPC_FORK_RPC_URL` + anvil on PATH. Skips cleanly when
 /// the archive RPC is not configured.
 #[test]
 fn basket_vault_round_trip() {
-    skip_if_no_mainnet_fork!();
+    skip_if_no_devnet_fork!();
 
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[basket_vault_round_trip] {}", fx.summary_line());

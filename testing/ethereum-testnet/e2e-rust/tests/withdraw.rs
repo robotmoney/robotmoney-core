@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5 — End-to-end scenarios
+//! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //! (See also: docs/technical/rmpc-read-output-contract.md)
 //!
 //! Suite-07 withdraw scenarios for `rmpc withdraw` against the Geth+Lighthouse

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
-// Implements: docs/implementation-plan.md "Router-weight governance" phase
+// Implements: Plan tracking issue #109 "Router-weight governance" phase
 // Implements: issue #309, issue #496
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
 
@@ -23,7 +24,7 @@ import {BpsMath} from "./lib/BpsMath.sol";
 ///         - One active proposal at a time (simple linear cadence).
 ///
 /// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
-contract RouterGovernance is AccessControl {
+contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Grants voting power to addresses, creates proposals, sets params.
@@ -443,7 +444,10 @@ contract RouterGovernance is AccessControl {
     /// @notice Execute a queued proposal — call `router.setWeights` with the
     ///         proposed weight vector. Anyone may call once quorum is reached
     ///         and the execution delay has elapsed.
-    function execute(uint256 proposalId) external {
+    // slither-disable-start reentrancy-events
+    // `execute()` is `nonReentrant`; the event emission follows the guarded
+    // router call and the detector is a false positive here.
+    function execute(uint256 proposalId) external nonReentrant {
         Proposal storage p = _proposals[proposalId];
         if (p.id == 0) revert NoActiveProposal();
         if (p.executed) revert AlreadyExecuted();
@@ -470,6 +474,8 @@ contract RouterGovernance is AccessControl {
         emit ProposalExecuted(proposalId, msg.sender);
         emit WeightsApplied(proposalId, p.vaults, p.bps);
     }
+
+    // slither-disable-end reentrancy-events
 
     // ─── Read surface ────────────────────────────────────────────────────────
 

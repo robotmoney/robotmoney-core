@@ -1,4 +1,4 @@
-//! Canonical: docs/implementation-plan.md §5 — End-to-end scenarios
+//! Canonical: Plan tracking issue #109 §5 — End-to-end scenarios
 //!
 //! End-to-end scenario tests for `rmpc` against the Geth+Lighthouse
 //! devnet (issues #18, #19, #37).

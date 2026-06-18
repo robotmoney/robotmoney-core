@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
-// Implements: docs/implementation-plan.md "Router-weight governance" phase
+// Implements: Plan tracking issue #109 "Router-weight governance" phase
 // Implements: issue #365 (RM token drip in faucet tab)
 pragma solidity ^0.8.24;
 

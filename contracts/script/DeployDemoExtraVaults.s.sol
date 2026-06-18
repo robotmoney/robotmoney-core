@@ -16,6 +16,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {RwaVault} from "../vaults/RwaVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
@@ -23,6 +24,7 @@ import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {ChronicleOracleAdapter} from "../adapters/ChronicleOracleAdapter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
+import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 
 /// @notice Demo-only stand-in ERC20 for the basket-vault devnet seeds. The
 ///         devnet has no real liquidity for the PRD §11.2 protocol basket
@@ -46,6 +48,7 @@ contract DemoBasketToken is ERC20 {
 contract DemoUsdcPool {
     address public immutable token0;
     address public immutable token1;
+    int24 public constant tickSpacing = 10_000;
 
     constructor(address tokenA, address tokenB) {
         // Order is irrelevant to addAsset's check; store as given.
@@ -135,27 +138,37 @@ contract DemoV4SwapRouter {
 
 /// @notice Minimal Aerodrome router stub for demo purposes. Records swaps at
 ///         a 1:1 rate, minting output token to the recipient. Demo-only.
-///         Used by AgentTokenVault for its ROBOTMONEY leg, where the pool TWAP
+///         Used by AgentTokenVault for its RM leg, where the pool TWAP
 ///         also returns 1:1 (DemoUsdcPool.observe returns zero ticks), so
 ///         totalAssets ≈ totalDeposits and no share inflation occurs.
 contract DemoAerodromeRouter {
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256, /* amountOutMin */
-        IAerodromeRouter.Route[] calldata routes,
-        address to,
-        uint256 /* deadline */
-    ) external returns (uint256[] memory amounts) {
-        require(routes.length > 0, "no routes");
-        IERC20(routes[0].from).transferFrom(msg.sender, address(this), amountIn);
-        DemoBasketToken(routes[0].to).mint(to, amountIn);
-        amounts = new uint256[](2);
-        amounts[0] = amountIn;
-        amounts[1] = amountIn;
+    mapping(bytes32 => address) public pools;
+
+    function setPool(address tokenA, address tokenB, int24 tickSpacing, address pool) external {
+        pools[keccak256(abi.encode(tokenA, tokenB, tickSpacing))] = pool;
+        pools[keccak256(abi.encode(tokenB, tokenA, tickSpacing))] = pool;
     }
 
-    function defaultFactory() external pure returns (address) {
-        return address(0);
+    function getPool(address tokenA, address tokenB, int24 tickSpacing)
+        external
+        view
+        returns (address)
+    {
+        return pools[keccak256(abi.encode(tokenA, tokenB, tickSpacing))];
+    }
+
+    function exactInputSingle(IAerodromeSlipstreamRouter.ExactInputSingleParams calldata params)
+        external
+        returns (uint256)
+    {
+        require(
+            pools[keccak256(abi.encode(params.tokenIn, params.tokenOut, params.tickSpacing))]
+                != address(0),
+            "pool not configured"
+        );
+        IERC20(params.tokenIn).transferFrom(msg.sender, address(this), params.amountIn);
+        DemoBasketToken(params.tokenOut).mint(params.recipient, params.amountIn);
+        return params.amountIn;
     }
 }
 
@@ -279,16 +292,16 @@ contract DemoRwaStubDeployer {
 }
 
 /// @notice One-shot batch deployer for the AgentTokenVault devnet basket
-///         stand-ins (PRD §11.3 — BNKR/JUNO/ROBOTMONEY, three real-asset demo tokens)
+///         stand-ins (PRD §11.3 — BNKR/JUNO/RM, three real-asset demo tokens)
 ///         AND the per-asset swap router stubs + adapters. Its constructor performs
 ///         all 11 sub-CREATEs in a single broadcaster transaction:
-///           - 3 × DemoBasketToken (BNKR, JUNO, ROBOTMONEY)
+///           - 3 × DemoBasketToken (BNKR, JUNO, RM)
 ///           - 3 × DemoUsdcPool
 ///           - DemoV3SwapRouter (BNKR built-in path)
 ///           - DemoV4SwapRouter (JUNO V4 path)
-///           - DemoAerodromeRouter (ROBOTMONEY Aerodrome path)
+///           - DemoAerodromeRouter (RM Aerodrome path)
 ///           - UniswapV4SwapAdapter (JUNO)
-///           - AerodromeSwapAdapter (ROBOTMONEY)
+///           - AerodromeSwapAdapter (RM)
 ///         Collapsed into one broadcaster CREATE to minimize on-chain tx count
 ///         and keep smoke-test devnet boot inside the 30m CI budget. Demo-only.
 contract AgentBasketStubDeployer {
@@ -298,7 +311,7 @@ contract AgentBasketStubDeployer {
     address public v4Adapter;
     address public aeroAdapter;
 
-    string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "ROBOTMONEY"];
+    string[3] internal AGENT_SYMBOLS_3 = ["BNKR", "JUNO", "RM"];
 
     constructor(address usdc) {
         // Deploy router stubs first so adapters can reference them.
@@ -308,8 +321,7 @@ contract AgentBasketStubDeployer {
 
         v3Router = address(v3);
         v4Adapter = address(new UniswapV4SwapAdapter(address(v4Router)));
-        aeroAdapter =
-            address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter), false));
+        aeroAdapter = address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter)));
 
         for (uint256 i = 0; i < 3; i++) {
             DemoBasketToken token = new DemoBasketToken(
@@ -318,6 +330,7 @@ contract AgentBasketStubDeployer {
             tokens[i] = token;
             pools[i] = new DemoUsdcPool(address(token), usdc);
         }
+        aeroRouter.setPool(address(tokens[2]), usdc, 10_000, address(pools[2]));
     }
 }
 
@@ -488,10 +501,10 @@ contract DeployDemoExtraVaults is Script {
         /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
         address[] protocolTokens;
         /// @dev `AgentTokenVault` (PRD §11.3). Registered Active AND router-eligible
-        ///      (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome). Included in defaultWeights.
+        ///      (BNKR/V3, JUNO/V4, RM/Aerodrome). Included in defaultWeights.
         address agentTokenVault;
         /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
-        ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
+        ///      (three real-asset demo stubs: BNKR, JUNO, RM).
         address[] agentTokens;
         /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
         ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
@@ -499,20 +512,20 @@ contract DeployDemoExtraVaults is Script {
         address rwaVault;
         /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
         address v4Adapter;
-        /// @dev AerodromeSwapAdapter deployed for ROBOTMONEY (Venue.Aerodrome).
+        /// @dev AerodromeSwapAdapter deployed for RM (Venue.Aerodrome).
         address aeroAdapter;
     }
 
     /// @notice Real four-vault demo agent-token symbols: BNKR (V3), JUNO (V4),
-    ///         ROBOTMONEY (V4/Aerodrome). Three-token basket per issue #560.
-    string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
+    ///         RM (V4/Aerodrome). Three-token basket per issue #560.
+    string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "RM"];
     /// @notice Swap fee tier for BNKR (Uniswap V3, 1% pool tier — illiquid agent token).
     uint24 internal constant DEMO_AGENT_BNKR_FEE = 10_000;
     /// @notice Swap fee tier for JUNO (Uniswap V4, 1% pool tier).
     uint24 internal constant DEMO_AGENT_JUNO_FEE = 10_000;
-    /// @notice Swap fee tier for ROBOTMONEY (Aerodrome — fee param unused by adapter
+    /// @notice Swap fee tier for RM (Aerodrome — fee param unused by adapter
     ///         but kept for interface uniformity; 1% matches the illiquid stance).
-    uint24 internal constant DEMO_AGENT_ROBOTMONEY_FEE = 10_000;
+    uint24 internal constant DEMO_AGENT_RM_FEE = 10_000;
 
     /// @notice ProtocolAssetVault basket symbols (PRD §11.2 — wETH, cbBTC, wSOL).
     string[3] internal PROTOCOL_SYMBOLS = ["wETH", "cbBTC", "wSOL"];
@@ -616,6 +629,56 @@ contract DeployDemoExtraVaults is Script {
     function _doDeploy(Params memory p) internal returns (Deployed memory d) {
         _VaultAddrs memory v = _deployVaults(p);
         d = _wireAndRegister(p, v);
+        // Finding L3-D1: the four basket-family vaults DELEGATECALL a
+        // deploy-time-linked TickMath library on the NAV / totalAssets() path.
+        // Fail the deploy if any vault links a mislinked/zero/non-canonical
+        // library, or if any vault's totalAssets() reverts or is out of range.
+        _assertTickMathLinkIntegrity(d.protocolVault, d.rwaVault, d.agentTokenVault);
+    }
+
+    /// @dev Assert the TickMath library link integrity for all four basket-family
+    ///      vaults (finding L3-D1). Each vault exposes the linked library address
+    ///      via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
+    ///      TickMath and is excluded.
+    ///
+    ///      The audited reference is the TickMath library linked into THIS deploy
+    ///      script (`address(TickMath)`): the script and the vault contracts are
+    ///      compiled and linked together in the same artifact set, so a correctly
+    ///      linked vault must point at the identical library instance with the
+    ///      identical runtime codehash. Comparing against the script's own linked
+    ///      library — rather than a hardcoded codehash — keeps the check robust
+    ///      across compiler/metadata variance while still failing closed on a
+    ///      mislink. Checks, per vault:
+    ///        1. linked address is non-zero and has non-empty runtime code;
+    ///        2. linked address equals the script's canonical `address(TickMath)`;
+    ///        3. linked runtime codehash equals the canonical library's codehash;
+    ///        4. `totalAssets()` does not revert and is within a sane USDC range.
+    ///      A deliberately wrong/zero linked address fails check 1/2/3.
+    function _assertTickMathLinkIntegrity(
+        address protocolVault,
+        address rwaVault,
+        address agentVault
+    ) internal view {
+        address[3] memory vaults = [protocolVault, rwaVault, agentVault];
+        address canonicalLib = address(TickMath);
+        bytes32 canonicalCodehash = canonicalLib.codehash;
+        require(canonicalLib != address(0), "TickMath: zero linked library");
+        require(canonicalLib.code.length > 0, "TickMath: linked library has no code");
+
+        for (uint256 i = 0; i < vaults.length; i++) {
+            address lib = BasketVault(vaults[i]).tickMathLibrary();
+            require(lib != address(0), "TickMath: zero linked library");
+            require(lib.code.length > 0, "TickMath: linked library has no code");
+            require(lib == canonicalLib, "TickMath: vault links non-canonical library");
+            require(lib.codehash == canonicalCodehash, "TickMath: codehash mismatch");
+
+            // Per-vault totalAssets() sanity probe: non-reverting, in range.
+            uint256 nav = BasketVault(vaults[i]).totalAssets();
+            // Cap mirrors the demo TVL ceiling with generous headroom — a wildly
+            // out-of-range NAV implies a broken price path (e.g. a mislinked
+            // library returning garbage sqrt ratios).
+            require(nav <= DEMO_TVL_CAP * 1000, "TickMath: totalAssets out of range");
+        }
     }
 
     /// @dev Phase 1: deploy all vaults, stubs, and adapters.
@@ -707,7 +770,7 @@ contract DeployDemoExtraVaults is Script {
 
         // 2. Seed AgentTokenVault (PRD §11.3) with the real four-vault demo
         //    three-token basket: BNKR (Venue.V3), JUNO (Venue.V4 via v4Adapter),
-        //    ROBOTMONEY (Venue.Aerodrome via aeroAdapter). Register it Active
+        //    RM (Venue.Aerodrome via aeroAdapter). Register it Active
         //    and make it router-eligible — the demo deploy wires working multi-DEX
         //    swap adapters so a routed deposit succeeds end-to-end on devnet.
         d.agentTokens = _seedAgentTokenVault(
@@ -771,7 +834,7 @@ contract DeployDemoExtraVaults is Script {
     ///      `AgentTokenVault` via `addAsset` with per-asset venue selection:
     ///        index 0: BNKR  — Venue.V3  (built-in SWAP_ROUTER, adapter = address(0))
     ///        index 1: JUNO  — Venue.V4  (UniswapV4SwapAdapter)
-    ///        index 2: ROBOTMONEY — Venue.Aerodrome (AerodromeSwapAdapter)
+    ///        index 2: RM — Venue.Aerodrome (AerodromeSwapAdapter)
     ///
     ///      Tokens + USDC pool stubs were already created inside
     ///      `AgentBasketStubDeployer`. Demo pools satisfy the cardinality and
@@ -804,12 +867,12 @@ contract DeployDemoExtraVaults is Script {
             BasketVault.Venue.V4
         );
 
-        // ROBOTMONEY — Venue.Aerodrome via AerodromeSwapAdapter.
+        // RM — Venue.Aerodrome via AerodromeSwapAdapter.
         tokens[2] = address(seeder.tokens(2));
         vault.addAsset(
             tokens[2],
             address(seeder.pools(2)),
-            DEMO_AGENT_ROBOTMONEY_FEE,
+            DEMO_AGENT_RM_FEE,
             aeroAdapterAddr,
             BasketVault.Venue.Aerodrome
         );
@@ -912,9 +975,7 @@ contract DeployDemoExtraVaults is Script {
         console2.log("DeployDemoExtraVaults complete");
         console2.log("  protocolVault :", d.protocolVault, "(router-eligible, wETH/cbBTC/wSOL)");
         console2.log("  protocolTokens:", d.protocolTokens.length);
-        console2.log(
-            "  agentVault    :", d.agentTokenVault, "(router-eligible, BNKR/JUNO/ROBOTMONEY)"
-        );
+        console2.log("  agentVault    :", d.agentTokenVault, "(router-eligible, BNKR/JUNO/RM)");
         console2.log("  agentTokens   :", d.agentTokens.length, "(V3/V4/Aerodrome)");
         console2.log("  v4Adapter     :", d.v4Adapter);
         console2.log("  aeroAdapter   :", d.aeroAdapter);

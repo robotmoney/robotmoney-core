@@ -1,8 +1,8 @@
-//! Canonical: docs/implementation-plan.md §8 — issue #363 (devnet adapter
+//! Canonical: Plan tracking issue #109 §8 — issue #363 (devnet adapter
 //! round-trip).
 //!
 //! Verifies that the real Aave V3, Compound V3, and Morpho adapters
-//! registered with `RobotMoneyVault` on the forked Base mainnet each
+//! registered with `RobotMoneyVault` on the forked Base block each
 //! correctly mediate a deposit → withdraw round-trip:
 //!
 //! 1. Fund an ephemeral wallet with forked USDC.
@@ -13,26 +13,26 @@
 //!
 //! Exercises the full protocol path: USDC → vault → adapter →
 //! Aave/Compound/Morpho pool → back to user. This requires a live
-//! mainnet fork so the external protocol state is available.
+//! forked Base block so the external protocol state is available.
 
 use alloy_primitives::{Address, U256};
 use rmpc_fork_e2e::{
-    addresses, scenarios, skip_if_no_mainnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
+    addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
 };
 
 const DEPOSIT_USDC: u64 = 50_000_000; // 50 USDC (6 decimals)
 
 /// Deposit into the vault and redeem through the real adapter stack.
-/// The vault on the forked Base mainnet has all three adapters registered;
+/// The vault on the forked Base block has all three adapters registered;
 /// funds flow into the active adapters on each deposit. We assert:
 /// - shares minted > 0
 /// - maxRedeem > 0 immediately after deposit
 /// - net USDC loss after redeem ≤ exitFeeBps + 10 bps slack + 1 wei
 #[test]
 fn devnet_adapter_round_trip() {
-    // Requires a live Base mainnet fork — protocol storage (Aave pool,
+    // Requires a live forked Base block — protocol storage (Aave pool,
     // Morpho vault, Compound Comet) must exist at the pinned block.
-    skip_if_no_mainnet_fork!();
+    skip_if_no_devnet_fork!();
 
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[devnet_adapter_round_trip] {}", fx.summary_line());
