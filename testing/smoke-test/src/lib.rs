@@ -1287,6 +1287,22 @@ impl Fixture {
     // ---- on-chain poke helpers --------------------------------------
 
     /// Send a transaction via `cast send` from an arbitrary private key.
+    ///
+    /// The gas limit is the node's `eth_estimateGas` result scaled by a 1.5x
+    /// buffer (see [`Fixture::estimate_gas_buffered`]) rather than the bare
+    /// estimate `cast send` would otherwise forward. This mirrors production
+    /// wallets (MetaMask et al. always pad) and the dapp-e2e mock wallet fix
+    /// from issue #897: Geth under-estimates transactions whose true cost grows
+    /// with same-block state — e.g. several depositors routing into the same
+    /// strategy adapter in one block, where the later txs cost more than an
+    /// estimate taken against the pre-block state — or that earn storage-clear
+    /// gas refunds. Without the buffer those txs mine with too low a gas cap and
+    /// revert out-of-gas; with `cast send` reporting only the receipt, the
+    /// failure was silent. See `docs/testing/geth-gas-estimation.md`.
+    ///
+    /// Reverted transactions (receipt `status != 0x1`, including out-of-gas) now
+    /// surface as an `Err` instead of an `Ok(tx_hash)`, so a failed deposit can
+    /// no longer masquerade as a successful one.
     pub fn cast_send(
         &self,
         private_key_hex: &str,
@@ -1295,10 +1311,14 @@ impl Fixture {
         args: &[&str],
     ) -> Result<String, HarnessError> {
         let to_hex = format!("{to:#x}");
+        let from = derive_address(&privkey_hex_to_bytes(private_key_hex)?);
+        let from_hex = format!("{from:#x}");
         logging::debug(
             "rpc",
             format!("eth_sendRawTransaction via cast send {sig} -> {to_hex}"),
         );
+        let gas_limit = self.estimate_gas_buffered(&from_hex, &to_hex, sig, args)?;
+        let gas_limit_s = gas_limit.to_string();
         let mut cmd = Command::new("cast");
         cmd.args([
             "send",
@@ -1306,6 +1326,8 @@ impl Fixture {
             &self.rpc_url,
             "--private-key",
             private_key_hex,
+            "--gas-limit",
+            &gas_limit_s,
             &to_hex,
             sig,
         ]);
@@ -1324,10 +1346,63 @@ impl Fixture {
         }
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
+        // `cast send` exits 0 once the tx is mined regardless of its execution
+        // status, so an on-chain revert (e.g. out-of-gas) is invisible unless we
+        // inspect the receipt. Fail loudly: a swallowed revert is exactly how the
+        // four-vault seeding flake hid (the reverted deposit minted no shares).
+        let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
+        if status != "0x1" {
+            return Err(HarnessError::other(format!(
+                "cast send {sig} mined but reverted (status={status}): from={from_hex} to={to_hex} gasLimit={gas_limit}"
+            )));
+        }
         Ok(v.get("transactionHash")
             .and_then(|x| x.as_str())
             .unwrap_or("")
             .to_string())
+    }
+
+    /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
+    ///
+    /// A failing estimate means the transaction would revert on-chain (the node
+    /// rejects the `eth_estimateGas` call); we propagate that as an `Err` so the
+    /// caller never sends a doomed transaction. See `cast_send` for why the
+    /// buffer is required.
+    fn estimate_gas_buffered(
+        &self,
+        from_hex: &str,
+        to_hex: &str,
+        sig: &str,
+        args: &[&str],
+    ) -> Result<u128, HarnessError> {
+        let mut cmd = Command::new("cast");
+        cmd.args([
+            "estimate",
+            "--rpc-url",
+            &self.rpc_url,
+            "--from",
+            from_hex,
+            to_hex,
+            sig,
+        ]);
+        for a in args {
+            cmd.arg(a);
+        }
+        let out = cmd.output()?;
+        logging::log_command_output("cast", &out);
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast estimate {sig} failed (tx would revert): from={from_hex} to={to_hex} stdout={} stderr={}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let est: u128 = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .map_err(|e| HarnessError::other(format!("cast estimate {sig} parse: {e}")))?;
+        // 1.5x buffer, matching the dapp-e2e mock-wallet policy (issue #897).
+        Ok(est.saturating_mul(3) / 2)
     }
 
     /// Approve `gateway` to pull `amount` USDC from the agent EOA.
@@ -1757,6 +1832,18 @@ fn render_genesis_alloc_overlay(
         absolute.display()
     );
     Ok(Some(absolute))
+}
+
+/// Parse a `0x`-prefixed (or bare) 32-byte hex private key into raw bytes.
+/// Used to recover the sender address for gas estimation in [`Fixture::cast_send`].
+fn privkey_hex_to_bytes(pk_hex: &str) -> Result<[u8; 32], HarnessError> {
+    let s = pk_hex.strip_prefix("0x").unwrap_or(pk_hex);
+    let bytes =
+        hex::decode(s).map_err(|e| HarnessError::other(format!("invalid private key hex: {e}")))?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| HarnessError::other("private key must be exactly 32 bytes"))
 }
 
 fn derive_address(privkey: &[u8; 32]) -> Address {

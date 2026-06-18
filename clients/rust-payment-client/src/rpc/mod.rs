@@ -64,6 +64,21 @@ struct JsonRpcErrorObj {
     message: String,
 }
 
+/// Returns `true` iff `err` is Geth's transient "transaction indexing is in
+/// progress" JSON-RPC error (code -32000). Right after a block is mined —
+/// especially just after devnet boot — Geth reports a mined transaction as
+/// not-yet-indexed for a brief window, so `eth_getTransactionReceipt`
+/// transiently fails. Receipt-wait loops treat this as "pending" rather than
+/// fatal. Matched narrowly (code -32000 AND the stable indexing-progress
+/// message substring) so genuinely-unrelated server errors still propagate.
+pub(crate) fn is_indexing_transient(err: &RmpcError) -> bool {
+    matches!(
+        err,
+        RmpcError::ErrRpcServer { code: -32000, message }
+            if message.contains("indexing is in progress")
+    )
+}
+
 /// `eth_call` request shape — the daemon only uses the latest block and
 /// only ever fills `to` and `data`. Anything else is left to whichever
 /// caller cares (e.g. simulation tooling outside scope of #11).
@@ -230,12 +245,27 @@ impl RpcClient {
     /// `eth_getTransactionReceipt` — `None` while pending. Decoded into the
     /// alloy receipt struct so callers can pull logs / status without
     /// re-parsing.
+    ///
+    /// Geth has a brief window right after a block is mined (especially just
+    /// after devnet boot) where a transaction is mined but not yet indexed,
+    /// so this method transiently returns JSON-RPC error -32000 with message
+    /// "transaction indexing is in progress" (see [`is_indexing_transient`]).
+    /// That transient is mapped to `Ok(None)` so it presents identically to a
+    /// genuinely-pending receipt: callers polling on `None` keep polling
+    /// within their existing budget instead of bailing out. All other
+    /// JSON-RPC errors propagate unchanged.
     pub async fn get_transaction_receipt(
         &self,
         tx_hash: B256,
     ) -> Result<Option<TransactionReceipt>> {
-        self.call("eth_getTransactionReceipt", json!([tx_hash]))
+        match self
+            .call("eth_getTransactionReceipt", json!([tx_hash]))
             .await
+        {
+            Ok(receipt) => Ok(receipt),
+            Err(e) if is_indexing_transient(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// `eth_getLogs` — query logs by address + topics. The filter object
@@ -780,6 +810,71 @@ mod tests {
         let c = RpcClient::new(server.url()).unwrap();
         let r = c.get_transaction_receipt(B256::ZERO).await.unwrap();
         assert!(r.is_none());
+    }
+
+    /// Predicate: matches only Geth's -32000 indexing transient, and rejects
+    /// unrelated server / transport / decode errors so callers never swallow
+    /// genuine failures.
+    #[test]
+    fn is_indexing_transient_matches_only_geth_transient() {
+        assert!(is_indexing_transient(&RmpcError::ErrRpcServer {
+            code: -32000,
+            message: "transaction indexing is in progress".to_string(),
+        }));
+        // Same code but unrelated message must not match.
+        assert!(!is_indexing_transient(&RmpcError::ErrRpcServer {
+            code: -32000,
+            message: "execution reverted".to_string(),
+        }));
+        // Right message but a different code must not match.
+        assert!(!is_indexing_transient(&RmpcError::ErrRpcServer {
+            code: -32602,
+            message: "transaction indexing is in progress".to_string(),
+        }));
+        // Non-server errors never match.
+        assert!(!is_indexing_transient(&RmpcError::ErrRpcTransport(
+            "indexing is in progress".to_string()
+        )));
+    }
+
+    /// Geth's indexing transient is surfaced by `get_transaction_receipt` as
+    /// `Ok(None)` — identical to a pending receipt — so receipt-wait loops
+    /// keep polling instead of bailing on a hard error.
+    #[tokio::test]
+    async fn indexing_transient_receipt_decodes_to_none() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"transaction indexing is in progress"}}"#,
+            )
+            .create_async()
+            .await;
+        let c = RpcClient::new(server.url()).unwrap();
+        let r = c.get_transaction_receipt(B256::ZERO).await.unwrap();
+        assert!(r.is_none());
+    }
+
+    /// An unrelated JSON-RPC server error still propagates from
+    /// `get_transaction_receipt` — the transient tolerance is narrow.
+    #[tokio::test]
+    async fn unrelated_receipt_error_propagates() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#,
+            )
+            .create_async()
+            .await;
+        let c = RpcClient::new(server.url()).unwrap();
+        let err = c.get_transaction_receipt(B256::ZERO).await.unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrRpcServer { code: -32000, .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
