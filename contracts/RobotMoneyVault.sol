@@ -13,6 +13,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
+import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
 /// @title RobotMoneyVault
 /// @notice Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight target across active
@@ -211,8 +212,6 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     error TVLCapExceeded();
     /// @notice A single deposit exceeds the per-deposit cap.
     error PerDepositCapExceeded();
-    /// @notice `rescueToken` refused because the token is the vault's own asset (USDC).
-    error CannotRescueAsset();
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
     /// @notice Operation rejected because the vault has been shut down.
@@ -946,16 +945,27 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit FeeRecipientUpdated(old, newRecipient);
     }
 
-    /// @notice Rescue accidentally-sent ERC-20 tokens (cannot rescue USDC or vault shares).
-    ///         Restricted to `ADMIN_ROLE`.
-    /// @param token ERC-20 token to rescue (must not be the vault asset or vault share token).
-    /// @param to    Recipient address for the rescued tokens.
-    function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
-        if (token == asset()) revert CannotRescueAsset();
-        if (token == address(this)) revert CannotRescueAsset();
-        if (to == address(0)) revert ZeroAddress();
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(to, balance);
+    /// @notice Permissionlessly sweep a NON-protected foreign token held by the
+    ///         vault to the fixed quarantine address (custody invariants
+    ///         INV-1/INV-2).
+    ///
+    ///         Anyone may call; the destination is a hardcoded constant, never
+    ///         caller-supplied. This replaces the deleted arbitrary-recipient
+    ///         `rescueTokens(token,to)` admin function (INV-1: no admin/role
+    ///         function may route a protocol or depositor asset to a
+    ///         caller-supplied recipient). The vault asset (USDC, already counted
+    ///         in `totalAssets` and redeemable) and the vault share token cannot
+    ///         be swept; protocol-asset donations therefore stay in NAV and accrue
+    ///         pro-rata to all holders (INV-2). Adapter strategy tokens live on
+    ///         the adapters, each of which exposes its own guarded
+    ///         `sweepForeignToken`.
+    /// @param token Foreign ERC-20 to quarantine. Must not be the vault asset or
+    ///        the vault share token.
+    function sweepForeignToken(address token) external nonReentrant {
+        if (token == asset() || token == address(this)) {
+            revert ForeignTokenQuarantine.TokenIsProtected(token);
+        }
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────

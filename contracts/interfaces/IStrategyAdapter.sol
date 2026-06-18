@@ -17,8 +17,10 @@ interface IStrategyAdapter {
     /// @notice Live USDC value held by this adapter (principal + accrued interest).
     function totalAssets() external view returns (uint256);
 
-    /// @notice Rescue non-USDC tokens accidentally sent to this contract.
-    /// @param token Address of the ERC-20 token to rescue (must not be USDC or the protocol token).
-    /// @param to    Recipient address for the rescued tokens.
-    function rescueTokens(address token, address to) external;
+    /// @notice Permissionlessly sweep a NON-protected foreign token to the fixed
+    ///         quarantine address (custody invariants INV-1/INV-2). Anyone may
+    ///         call; the destination is a hardcoded constant, never caller-supplied.
+    ///         Reverts when `token` is USDC or the adapter's strategy/share token.
+    /// @param token Address of the foreign ERC-20 to quarantine.
+    function sweepForeignToken(address token) external;
 }

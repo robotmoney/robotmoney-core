@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {IAavePool} from "../interfaces/IAavePool.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @title AaveV3Adapter
 /// @notice Strategy adapter that supplies USDC to Aave V3 Pool on Base.
@@ -34,8 +35,6 @@ contract AaveV3Adapter is IStrategyAdapter {
     /// @param requested Amount of USDC requested for withdrawal.
     /// @param actual    Amount of USDC actually received from the pool.
     error WithdrawShortfall(uint256 requested, uint256 actual);
-    /// @notice `rescueToken` refused — the token is USDC or the aToken (protected vault assets).
-    error CannotRescueProtectedToken();
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -80,12 +79,10 @@ contract AaveV3Adapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function rescueTokens(address token, address to) external onlyVault {
+    function sweepForeignToken(address token) external {
         if (token == address(USDC) || token == address(A_TOKEN)) {
-            revert CannotRescueProtectedToken();
+            revert ForeignTokenQuarantine.TokenIsProtected(token);
         }
-        if (to == address(0)) revert ZeroAddress();
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(to, balance);
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 }

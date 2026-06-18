@@ -5,6 +5,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
+import {ForeignTokenQuarantine} from "../../lib/ForeignTokenQuarantine.sol";
 
 /// @title NoYieldTestAdapter
 /// @notice A test-only, no-yield IStrategyAdapter that simply holds deposited
@@ -32,8 +33,6 @@ contract NoYieldTestAdapter is IStrategyAdapter {
     error OnlyVault();
     /// @notice Constructor received a zero address.
     error ZeroAddress();
-    /// @notice Attempted to rescue USDC (the protected vault asset).
-    error CannotRescueUsdc();
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -77,10 +76,10 @@ contract NoYieldTestAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    /// @dev USDC cannot be rescued (it is the protected vault asset). Any other
-    ///      token accidentally sent to this contract may be rescued by the vault.
-    function rescueTokens(address token, address to) external onlyVault {
-        if (token == address(USDC)) revert CannotRescueUsdc();
-        IERC20(token).safeTransfer(to, IERC20(token).balanceOf(address(this)));
+    /// @dev USDC (the protected vault asset) cannot be swept. Any other token
+    ///      accidentally sent to this contract is permissionlessly quarantined.
+    function sweepForeignToken(address token) external {
+        if (token == address(USDC)) revert ForeignTokenQuarantine.TokenIsProtected(token);
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 }

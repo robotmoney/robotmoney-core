@@ -26,6 +26,7 @@ import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
 ///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -283,39 +284,106 @@ contract BasketVaultTest is Test {
         vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
-    function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public {
-        vm.expectRevert(BasketVault.AssetInBasket.selector);
-        vm.prank(admin);
-        vault.rescueTokens(address(basketToken), admin);
+    /// @notice INV-1: an ACTIVE basket asset may never be swept to quarantine —
+    ///         it is a protocol/depositor asset counted in NAV.
+    function test_sweepForeignToken_revertsForActiveBasketAsset() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ForeignTokenQuarantine.TokenIsProtected.selector, address(basketToken)
+            )
+        );
+        vault.sweepForeignToken(address(basketToken));
     }
 
-    function test_rescueTokens_succeedsForNonBasketAsset() public {
+    /// @notice INV-1: USDC (the vault asset) and the share token may never be swept.
+    function test_sweepForeignToken_revertsForUsdcAndShareToken() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
+        );
+        vault.sweepForeignToken(address(usdc));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(vault))
+        );
+        vault.sweepForeignToken(address(vault));
+    }
+
+    /// @notice INV-2: a genuinely foreign token is permissionlessly swept to the
+    ///         fixed quarantine address — no admin role, no caller-supplied
+    ///         recipient.
+    function test_sweepForeignToken_permissionlessForNonBasketAsset() public {
         TestERC20 stray = new TestERC20();
         stray.mint(address(vault), 5 * ONE_USDC);
+        address stranger = makeAddr("stranger");
 
-        vm.prank(admin);
-        vault.rescueTokens(address(stray), admin);
+        vm.prank(stranger);
+        vault.sweepForeignToken(address(stray));
 
-        assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
+        assertEq(
+            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            5 * ONE_USDC,
+            "stray ERC-20 quarantined"
+        );
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
     }
 
-    /// @notice A removed (inactive) basket asset's token is rescuable when a balance
-    ///         reappears later — `totalAssets`/`_sellProportional` skip inactive
-    ///         entries, so the balance would otherwise be stranded forever
-    ///         (audit 2026-06-09, L-15).
-    function test_rescueTokens_succeedsForInactiveBasketAsset() public {
+    /// @notice INV-1: a removed (inactive) basket asset is STILL protected from the
+    ///         quarantine sweep — it is re-absorbed into NAV instead, never routed
+    ///         away (replaces the audit 2026-06-09 L-15 admin rescue path).
+    function test_sweepForeignToken_revertsForInactiveBasketAsset() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        basketToken.mint(address(vault), 7 * ONE_USDC);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ForeignTokenQuarantine.TokenIsProtected.selector, address(basketToken)
+            )
+        );
+        vault.sweepForeignToken(address(basketToken));
+    }
+
+    /// @notice INV-2: a balance reappearing on a removed basket asset is
+    ///         permissionlessly re-absorbed — swapped to USDC into NAV — so it
+    ///         stays redeemable by holders, with no admin-routable path.
+    function test_reabsorbRemovedAsset_creditsNavPermissionlessly() public {
         vm.prank(admin);
         vault.removeAsset(0); // vault holds zero basketToken, removal allowed
 
         // A balance reappears after removal (e.g. late airdrop or refund).
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // Fund the swap router so it can pay out USDC for the re-absorb swap.
+        // Pool is 1:1 (tick=0); 1% slippage floor → minUsdcOut = 6.93 USDC.
+        uint256 usdcOut = 7 * ONE_USDC;
+        router.setAmountOut(usdcOut);
+        usdc.mint(address(router), usdcOut);
+
+        uint256 navBefore = vault.totalAssets();
+
+        // Permissionless: an arbitrary stranger triggers re-absorption.
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vault.reabsorbRemovedAsset(0);
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "reappeared balance consumed");
+        assertEq(
+            basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            0,
+            "re-absorbed asset must NOT be quarantined"
+        );
+        assertEq(
+            vault.totalAssets(), navBefore + usdcOut, "NAV rises by re-absorbed USDC for all holders"
+        );
+    }
+
+    /// @notice An active asset cannot be re-absorbed (it is sold proportionally on
+    ///         withdrawal, not swept).
+    function test_reabsorbRemovedAsset_revertsForActiveAsset() public {
         basketToken.mint(address(vault), 7 * ONE_USDC);
-
-        vm.prank(admin);
-        vault.rescueTokens(address(basketToken), admin);
-
-        assertEq(basketToken.balanceOf(admin), 7 * ONE_USDC, "reappeared balance recovered");
-        assertEq(basketToken.balanceOf(address(vault)), 0, "vault no longer holds the token");
+        vm.expectRevert(BasketVault.AssetInBasket.selector);
+        vault.reabsorbRemovedAsset(0);
     }
 
     // ─── maxDeposit / maxMint 4626 conformance (audit 2026-06-09, L-16) ───────

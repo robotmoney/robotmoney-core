@@ -28,6 +28,7 @@ import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {TickMath} from "../lib/TickMath.sol";
 import {BpsMath} from "../lib/BpsMath.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @title BasketVault
 /// @notice Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
@@ -167,7 +168,6 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
     event DepositsPausedSet(bool paused);
     event Shutdown();
-    event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
     event EmergencyUnwindGuardSet(
         address indexed token,
         uint256 oldMinUsdcOut,
@@ -211,7 +211,6 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error AssetNotFound();
     error AssetStillHeld();
     error NoActiveAssets();
-    error CannotRescueUsdc();
     error EmergencyUnwindOverrideDisabled();
     error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
@@ -405,9 +404,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             firstActive = false;
             if (swapIn == 0) continue;
 
-            uint256 minOut = _twapTokenValue(
-                    assets[i].pool, assets[i].token, assets[i].adapter, swapIn
-                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 minOut = _applySlippage(
+                _twapTokenValue(assets[i].pool, assets[i].token, assets[i].adapter, swapIn)
+            );
 
             uint256 amountOut = _executeSwap(
                 assets[i].adapter,
@@ -587,9 +586,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
-            uint256 minUsdcOut = _twapUsdcValue(
-                    assets[i].pool, assets[i].token, assets[i].adapter, sellAmount
-                ) * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+            uint256 minUsdcOut = _slippageFloor(assets[i], sellAmount);
 
             uint256 received = _executeSwap(
                 assets[i].adapter,
@@ -812,6 +809,57 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         emit AssetRemoved(index, assets[index].token);
     }
 
+    /// @notice Re-absorb a balance that has reappeared on a removed (inactive)
+    ///         basket asset by swapping it to USDC into NAV (custody invariant
+    ///         INV-2). Permissionless: anyone may trigger it, and the proceeds
+    ///         always land in this vault — there is NO caller-supplied recipient
+    ///         and no admin-routable path (INV-1).
+    /// @dev Replaces the deleted admin `rescueTokens` escape hatch for inactive
+    ///      basket assets (audit 2026-06-09 L-15). `totalAssets` and
+    ///      `_sellProportional` skip inactive assets, so a balance that
+    ///      reappears after `removeAsset` (e.g. a late airdrop, a delayed
+    ///      transfer, or a residual dust sweep from the underlying venue) would
+    ///      otherwise be uncounted and unredeemable. Swapping it back to USDC
+    ///      credits it to ALL holders pro-rata (NAV rises), keeping the
+    ///      no-stranded-asset invariant without arbitrary admin routing. The
+    ///      min-out is TWAP-derived and slippage-bounded exactly like the
+    ///      proportional-withdraw sell leg, so the swap fails closed if the
+    ///      oracle is unavailable or the price is manipulated.
+    /// @param index Registry index of an inactive (removed) basket asset.
+    function reabsorbRemovedAsset(uint256 index) external nonReentrant {
+        AssetInfo memory assetInfo = assets[index]; // reverts on OOB index
+        // Only inactive (removed) entries qualify: active assets are already
+        // counted in NAV and are sold proportionally on withdrawal.
+        if (assetInfo.active) revert AssetInBasket();
+
+        // TWAP-derived, slippage-bounded floor (same construction as the
+        // proportional-withdraw sell leg). `_emergencyUnwindAsset` re-reads the
+        // balance, no-ops on a zero balance, otherwise swaps to USDC into this
+        // vault and emits `Swapped`; the proceeds land in NAV and are counted by
+        // `totalAssets`, crediting all holders pro-rata with no caller-supplied
+        // recipient.
+        uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
+        _emergencyUnwindAsset(assetInfo, _slippageFloor(assetInfo, bal));
+    }
+
+    /// @dev TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
+    ///      basket asset. Shared by the proportional-withdraw sell leg and the
+    ///      removed-asset re-absorption path.
+    function _slippageFloor(AssetInfo memory assetInfo, uint256 amount)
+        internal
+        view
+        returns (uint256)
+    {
+        return _applySlippage(
+            _twapUsdcValue(assetInfo.pool, assetInfo.token, assetInfo.adapter, amount)
+        );
+    }
+
+    /// @dev Apply the configured max-slippage haircut to a USDC value.
+    function _applySlippage(uint256 usdcValue) internal view returns (uint256) {
+        return usdcValue * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+    }
+
     // ─── Emergency ────────────────────────────────────────────────────
 
     function pause() external onlyRole(EMERGENCY_ROLE) {
@@ -847,7 +895,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             uint256 configuredMin = emergencyUnwindGuard[assetInfo.token].minUsdcOut;
             uint256 effectiveFloor;
             try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-                uint256 twapFloor = twapValue * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+                uint256 twapFloor = _applySlippage(twapValue);
                 effectiveFloor = twapFloor > configuredMin ? twapFloor : configuredMin;
             } catch {
                 if (configuredMin == 0) revert EmergencyFloorUnavailable(assetInfo.token);
@@ -901,25 +949,37 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         emit Shutdown();
     }
 
-    /// @notice Recover accidentally sent ERC-20 tokens (not USDC or active basket assets). ADMIN_ROLE.
-    /// @dev Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
-    ///      and `_sellProportional` skip them, so any balance that reappears after
-    ///      `removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
-    // slither-disable-start reentrancy-events
-    // This emergency recovery path is already `nonReentrant`; the emit after the
-    // guarded token transfer is intentional and the detector is a false positive.
-    function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE) {
-        if (token == address(_USDC)) revert CannotRescueUsdc();
-        if (to == address(0)) revert ZeroAddress();
+    /// @notice Permissionlessly sweep a NON-protected foreign token held by the
+    ///         vault to the fixed quarantine address (custody invariants
+    ///         INV-1/INV-2).
+    ///
+    ///         Anyone may call; the destination is a hardcoded constant, never
+    ///         caller-supplied. This replaces the deleted arbitrary-recipient
+    ///         `rescueTokens(token,to)` admin function (INV-1). Reverts when
+    ///         `token` is USDC, the vault share token, or ANY basket asset —
+    ///         active OR configured-but-inactive. Inactive (removed) basket
+    ///         assets are NOT swept here: a balance that reappears on a removed
+    ///         asset is re-absorbed into NAV via `reabsorbRemovedAsset` (INV-2),
+    ///         never routed to an admin or to quarantine, so it stays redeemable
+    ///         by holders (this is the no-stranded-asset replacement for the
+    ///         audit 2026-06-09 L-15 admin rescue path).
+    /// @param token Foreign ERC-20 to quarantine. Must not be USDC, the share
+    ///        token, or any active/configured basket asset.
+    function sweepForeignToken(address token) external {
+        // No `nonReentrant`: this only moves a NON-protected foreign token (never
+        // a protocol/depositor asset counted in NAV), so a reentrant token can at
+        // worst re-enter into a zero-balance no-op that reverts.
+        // Protected = USDC, the share token, or ANY registered basket asset
+        // (active OR configured-but-inactive). Inactive entries are re-absorbed
+        // into NAV via `reabsorbRemovedAsset`, never quarantined.
+        bool protected_ = token == address(_USDC) || token == address(this);
         uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (assets[i].active && token == assets[i].token) revert AssetInBasket();
+        for (uint256 i = 0; i < len && !protected_; i++) {
+            if (token == assets[i].token) protected_ = true;
         }
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(to, balance);
-        emit EmergencyTokenRecovered(token, to, balance);
+        if (protected_) revert ForeignTokenQuarantine.TokenIsProtected(token);
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
-    // slither-disable-end reentrancy-events
 
     // ─── Param setters ────────────────────────────────────────────────
 

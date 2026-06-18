@@ -14,6 +14,7 @@ import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
 
@@ -87,7 +88,7 @@ contract MockAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function rescueTokens(address, address) external onlyVault {}
+    function sweepForeignToken(address) external {}
 
     /// @notice Simulate a protocol-level donation: credits USDC directly to the adapter
     ///         without going through the vault (models Aave `supply(onBehalfOf=adapter)`,
@@ -141,7 +142,7 @@ contract ShortfallAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function rescueTokens(address, address) external {}
+    function sweepForeignToken(address) external {}
 }
 
 // ─── Vault harness ───────────────────────────────────────────────────────────
@@ -1161,5 +1162,75 @@ contract RobotMoneyVaultTest is Test {
         vm.prank(admin);
         vm.expectRevert(RobotMoneyVault.InvalidCap.selector);
         vault.restoreVault(0);
+    }
+
+    // ─── Custody invariants: foreign-token quarantine & NAV donation (#929) ────
+
+    /// @notice INV-1: the vault asset (USDC) can never be swept out — it is a
+    ///         protocol/depositor asset counted in NAV and redeemable by holders.
+    function test_sweepForeignToken_revertsForVaultAsset() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
+        );
+        vault.sweepForeignToken(address(usdc));
+    }
+
+    /// @notice INV-1: the vault share token can never be swept out.
+    function test_sweepForeignToken_revertsForShareToken() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(vault))
+        );
+        vault.sweepForeignToken(address(vault));
+    }
+
+    /// @notice INV-2: a genuinely foreign token is permissionlessly swept to the
+    ///         fixed quarantine address by ANY caller — no admin role, no
+    ///         caller-supplied recipient (replaces deleted `rescueTokens`).
+    function test_sweepForeignToken_permissionlessToQuarantine() public {
+        TestUSDC stray = new TestUSDC();
+        stray.mint(address(vault), 9 * ONE_USDC);
+
+        vm.prank(attacker);
+        vault.sweepForeignToken(address(stray));
+
+        assertEq(stray.balanceOf(address(vault)), 0, "vault swept clean");
+        assertEq(
+            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            9 * ONE_USDC,
+            "stray token quarantined"
+        );
+    }
+
+    /// @notice INV-2: donating the vault asset (USDC) directly to the vault
+    ///         strictly increases totalAssets and credits ALL holders pro-rata —
+    ///         the donation is absorbed into NAV, not routable to any admin.
+    function test_donatingVaultAsset_raisesNavForAllHolders() public {
+        // Two holders deposit equally.
+        uint256 amount = 1_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+        vm.prank(bob);
+        vault.deposit(amount, bob);
+
+        uint256 aliceBefore = vault.convertToAssets(vault.balanceOf(alice));
+        uint256 bobBefore = vault.convertToAssets(vault.balanceOf(bob));
+        uint256 totalBefore = vault.totalAssets();
+
+        // Donate USDC straight to the vault (idle balance is counted in totalAssets).
+        uint256 donation = 500 * ONE_USDC;
+        usdc.mint(address(vault), donation);
+
+        assertEq(vault.totalAssets(), totalBefore + donation, "donation must raise totalAssets");
+        assertGt(
+            vault.convertToAssets(vault.balanceOf(alice)), aliceBefore, "alice NAV must rise"
+        );
+        assertGt(vault.convertToAssets(vault.balanceOf(bob)), bobBefore, "bob NAV must rise");
+        // Equal holders gain equally (pro-rata), within rounding.
+        assertApproxEqAbs(
+            vault.convertToAssets(vault.balanceOf(alice)),
+            vault.convertToAssets(vault.balanceOf(bob)),
+            1,
+            "equal holders gain equally"
+        );
     }
 }

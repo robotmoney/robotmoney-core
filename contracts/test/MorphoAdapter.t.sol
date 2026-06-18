@@ -8,6 +8,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @dev Minimal ERC-4626 mock vault that supports both deposit and withdraw.
 ///      withdraw() sends `assets` USDC directly to `receiver` (normal behaviour).
@@ -236,38 +237,43 @@ contract MorphoAdapterTest is Test {
     }
 
     // -----------------------------------------------------------------------
-    // rescueTokens
+    // sweepForeignToken (custody invariants INV-1/INV-2)
     // -----------------------------------------------------------------------
 
-    function test_rescueTokens_revertsForProtectedUSDC() public {
-        vm.prank(vault);
-        vm.expectRevert(MorphoAdapter.CannotRescueProtectedToken.selector);
-        adapter.rescueTokens(address(usdc), vault);
+    function test_sweepForeignToken_revertsForProtectedUSDC() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
+        );
+        adapter.sweepForeignToken(address(usdc));
     }
 
-    function test_rescueTokens_revertsForProtectedMorphoShares() public {
-        vm.prank(vault);
-        vm.expectRevert(MorphoAdapter.CannotRescueProtectedToken.selector);
-        adapter.rescueTokens(address(morphoVault), vault);
+    function test_sweepForeignToken_revertsForProtectedMorphoShares() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ForeignTokenQuarantine.TokenIsProtected.selector, address(morphoVault)
+            )
+        );
+        adapter.sweepForeignToken(address(morphoVault));
     }
 
-    function test_rescueTokens_revertsOnZeroAddress() public {
+    function test_sweepForeignToken_zeroBalanceIsNoop() public {
         TestERC20 other = new TestERC20();
-        vm.prank(vault);
-        vm.expectRevert(MorphoAdapter.ZeroAddress.selector);
-        adapter.rescueTokens(address(other), address(0));
+        // No balance to move — the sweep is a harmless no-op (no revert).
+        adapter.sweepForeignToken(address(other));
+        assertEq(other.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0);
     }
 
-    function test_rescueTokens_transfersUnprotectedToken() public {
+    function test_sweepForeignToken_permissionlessToQuarantine() public {
+        // INV-1/INV-2: anyone may sweep a foreign token; it lands at the fixed
+        // quarantine address, never a caller-supplied recipient.
         TestERC20 other = new TestERC20();
-        usdc.mint(address(adapter), 10 * ONE_USDC); // put something different in
         other.mint(address(adapter), 5 * ONE_USDC);
-        address recipient = makeAddr("recipient");
+        address stranger = makeAddr("stranger");
 
-        vm.prank(vault);
-        adapter.rescueTokens(address(other), recipient);
+        vm.prank(stranger);
+        adapter.sweepForeignToken(address(other));
 
-        assertEq(other.balanceOf(recipient), 5 * ONE_USDC);
+        assertEq(other.balanceOf(ForeignTokenQuarantine.QUARANTINE), 5 * ONE_USDC);
         assertEq(other.balanceOf(address(adapter)), 0);
     }
 }

@@ -15,6 +15,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {VaultRegistry} from "./VaultRegistry.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
+import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
@@ -135,12 +136,6 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param oldCap Previous cap (0 = uncapped).
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
-
-    /// @notice Emitted when stranded USDC is recovered from the router by an
-    ///         ADMIN_ROLE holder via `rescueUsdc`.
-    /// @param to     Recipient of the recovered USDC.
-    /// @param amount Amount of USDC transferred.
-    event RescuedUsdc(address indexed to, uint256 amount);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -347,26 +342,24 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         vaultCap[vault] = cap;
     }
 
-    /// @notice Transfer the entire USDC balance held by this contract to `to`.
-    ///         Intended as an emergency recovery path for USDC that becomes
-    ///         stranded in the router through edge cases not covered by the
-    ///         `UsdcCustodyInvariantViolated` deposit guard (e.g. direct
-    ///         transfers, or USDC approved but not pulled by a vault that
-    ///         reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
-    /// @param to  Recipient of all stranded USDC held by the router.
-    // slither-disable-start reentrancy-events
-    // The router is already `nonReentrant` on its state-mutating entrypoints;
-    // this recovery path only emits after the guarded token transfer and the
-    // event ordering is intentional.
-    function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE) {
-        if (to == address(0)) revert ZeroAddress();
-        uint256 amount = usdc.balanceOf(address(this));
-        if (amount == 0) return;
-        usdc.safeTransfer(to, amount);
-        emit RescuedUsdc(to, amount);
+    /// @notice Permissionlessly sweep a NON-protected foreign token held by the
+    ///         router to the fixed quarantine address (custody invariants
+    ///         INV-1/INV-2).
+    ///
+    ///         The router moves zero USDC out via any admin path: under the
+    ///         all-or-revert deposit/redeem semantics it never holds USDC across
+    ///         transactions, and the old arbitrary-recipient `rescueUsdc` —
+    ///         which forwarded USDC to a caller-supplied address — is DELETED
+    ///         (INV-1: no admin/role function may route a protocol or depositor
+    ///         asset to a caller-supplied recipient). The only asset movement
+    ///         that remains is this permissionless sweep of foreign (non-USDC)
+    ///         tokens to a single hardcoded quarantine address; the destination
+    ///         can never be chosen by the caller. Reverts when `token` is USDC.
+    /// @param token Foreign ERC-20 to quarantine. Must not be the router's USDC.
+    function sweepForeignToken(address token) external nonReentrant {
+        if (token == address(usdc)) revert ForeignTokenQuarantine.TokenIsProtected(token);
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
-
-    // slither-disable-end reentrancy-events
 
     // ─── Preview ─────────────────────────────────────────────────────────────
 

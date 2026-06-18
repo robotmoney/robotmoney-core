@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @dev Tests for NoYieldTestAdapter and its integration with RobotMoneyVault.
 ///
@@ -92,18 +93,27 @@ contract NoYieldTestAdapterTest is Test {
         adapter.withdraw(ONE_USDC);
     }
 
-    function test_rescueTokens_revertsForNonVault() public {
+    function test_sweepForeignToken_permissionlessToQuarantine() public {
+        // INV-1/INV-2: a foreign token is swept to the fixed quarantine address
+        // by ANY caller (permissionless) — no arbitrary recipient.
         TestERC20 other = new TestERC20();
+        other.mint(address(adapter), 7e18);
         vm.prank(attacker);
-        vm.expectRevert(NoYieldTestAdapter.OnlyVault.selector);
-        adapter.rescueTokens(address(other), attacker);
+        adapter.sweepForeignToken(address(other));
+        assertEq(other.balanceOf(address(adapter)), 0, "adapter not swept");
+        assertEq(
+            other.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            7e18,
+            "tokens not in quarantine"
+        );
     }
 
-    function test_rescueTokens_revertsForUsdc() public {
-        // Even the vault cannot rescue its own protected asset.
-        vm.prank(address(vault));
-        vm.expectRevert(NoYieldTestAdapter.CannotRescueUsdc.selector);
-        adapter.rescueTokens(address(usdc), admin);
+    function test_sweepForeignToken_revertsForUsdc() public {
+        // USDC is the protected vault asset and may never be swept.
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
+        );
+        adapter.sweepForeignToken(address(usdc));
     }
 
     // ── totalAssets ───────────────────────────────────────────────────────
