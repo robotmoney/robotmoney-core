@@ -1,5 +1,5 @@
 # RobotMoneyVault4626Conformance
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/RobotMoneyVault4626Conformance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/RobotMoneyVault4626Conformance.t.sol)
 
 **Inherits:**
 ERC4626Test
@@ -12,7 +12,7 @@ the a16z `erc4626-tests` suite.
 
 Configured for the *vanilla* ERC-4626 surface: `exitFeeBps == 0` so that
 `preview*` ↔ `redeem`/`withdraw` parity holds without fee adjustment. A
-single `PassthroughAdapter` is registered with a 100% cap so that
+single no-yield test adapter is registered with a 100% cap so that
 `_deposit`'s `NoActiveAdapters` guard passes and yield can be simulated
 by minting to the vault's idle balance (counted by `totalAssets()`).
 Direct invocation must skip the deprecated `testFail_*` names that the

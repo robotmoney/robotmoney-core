@@ -151,19 +151,6 @@ Protected tokens:
 - USDC.
 - The configured Morpho vault share token.
 
-### Passthrough
-
-`PassthroughAdapter` is a no-yield adapter for devnet and smoke-test
-deployments.
-
-Behavior:
-
-- `deploy` does nothing because USDC is already held by the adapter.
-- `totalAssets` returns the adapter's raw USDC balance.
-- `withdraw` transfers up to the requested amount back to the vault.
-
-This adapter is not a mainnet yield strategy.
-
 ## 5. Vault Controls
 
 Adapters are controlled by `RobotMoneyVault`, not by users or agents.

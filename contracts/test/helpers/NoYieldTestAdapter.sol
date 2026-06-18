@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.3 — Vault Adapters (devnet/test passthrough)
-// Issue: #277 — Wire RobotMoneyVault + PassthroughAdapter into smoke-test devnet
+// Canonical: docs/architecture.md §4.3 — Vault Adapters
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
 
-/// @title PassthroughAdapter
-/// @notice A no-yield IStrategyAdapter that simply holds deposited USDC in this
-///         contract with no external protocol calls. Intended solely for smoke-test
-///         devnet deployments where real yield adapters (AaveV3, Morpho, etc.) are
-///         unavailable or unnecessary.
+/// @title NoYieldTestAdapter
+/// @notice A test-only, no-yield IStrategyAdapter that simply holds deposited
+///         USDC in this contract with no external protocol calls. It exists
+///         purely to give RobotMoneyVault unit tests a lossless, deterministic
+///         adapter that satisfies the IStrategyAdapter interface without
+///         depending on real Aave/Compound/Morpho protocol state.
 ///
-/// @dev This adapter satisfies the IStrategyAdapter interface required by
-///      RobotMoneyVault.addAdapter(). No interest accrues — totalAssets() always
+/// @dev Lives under `contracts/test/` so it is NOT part of the production
+///      artifact set (`foundry.toml` `src = "contracts"`, `test =
+///      "contracts/test"`). No interest accrues — `totalAssets()` always
 ///      returns the raw USDC balance held by this contract.
 ///
-///      Usage: deploy this adapter, then call vault.addAdapter(address(adapter), capBps)
-///      from the ADMIN_ROLE account so the vault routes deposits through it.
-///
-///      This adapter must NOT be used on mainnet — it provides zero yield.
-contract PassthroughAdapter is IStrategyAdapter {
+///      This adapter must NEVER be deployed to a live chain — it provides zero
+///      yield and exists only as a unit-test fixture.
+contract NoYieldTestAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
     /// @notice USDC token address.

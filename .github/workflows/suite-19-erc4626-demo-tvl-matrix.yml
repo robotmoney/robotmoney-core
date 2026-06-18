@@ -41,7 +41,7 @@ jobs:
   # ── ERC-4626 precondition checks ───────────────────────────────────────────
   # Activated in issue #814: contracts/test/ERC4626PreconditionChecks.t.sol asserts
   # asset()/decimals()/empty-vault share-price invariants for each exitFeeBps tier
-  # × adapter (passthrough, aave, compound, morpho). The matrix shards the run by
+  # × adapter (aave, compound, morpho). The matrix shards the run by
   # exit-fee tier; the test reads the EXIT_FEE_BPS env var for its matrix-env tier.
   erc4626-precondition:
     name: erc4626-precondition
