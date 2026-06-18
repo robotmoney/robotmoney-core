@@ -32,6 +32,14 @@ fs_permissions = [
     { access = "read", path = "./config" },
 ]
 
+# Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth
+# keep the stateful fuzzing deterministic and within CI time budget while still
+# exercising thousands of deposit/withdraw/donate/sweep sequences per invariant.
+[invariant]
+runs = 64
+depth = 128
+fail_on_revert = false
+
 [fmt]
 line_length = 100
 tab_width = 4
