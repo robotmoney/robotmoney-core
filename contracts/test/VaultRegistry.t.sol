@@ -5,6 +5,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 
 /// @notice Minimal stand-in for `PortfolioRouter` exposing only the
 ///         `defaultWeightsLength()` view the registry's stale-length guard
@@ -420,5 +421,31 @@ contract VaultRegistryTest is Test {
         assertTrue(registry.isRouterEligible(vault1));
         assertTrue(registry.isRouterEligible(vault2));
         vm.stopPrank();
+    }
+
+    // ─── L-10: last-admin floor ────────────────────────────────────────────────
+
+    /// @notice The sole ADMIN_ROLE holder on VaultRegistry cannot renounce or
+    ///         revoke itself to zero admins (LastAdminFloor); after a second
+    ///         admin is granted, the original can be dropped.
+    function test_lastAdminFloor_registry_cannotDropSoleAdmin() public {
+        bytes32 adminRole = registry.ADMIN_ROLE();
+        assertEq(registry.getRoleMemberCount(adminRole), 1, "expected a single registry admin");
+
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        registry.renounceRole(adminRole, admin);
+
+        vm.prank(admin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        registry.revokeRole(adminRole, admin);
+
+        address admin2 = makeAddr("registryAdmin2");
+        vm.prank(admin);
+        registry.grantRole(adminRole, admin2);
+        vm.prank(admin2);
+        registry.revokeRole(adminRole, admin);
+        assertEq(registry.getRoleMemberCount(adminRole), 1, "second registry admin remains");
+        assertTrue(registry.hasRole(adminRole, admin2), "admin2 retains the role");
     }
 }

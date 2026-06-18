@@ -561,10 +561,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // have ERC-20 allowance on the vault share token. Without this check
         // any address can front-run a shareHolder's approval tx and call
         // redeemFor, burning shares at a caller-specified share count.
-        if (
-            msg.sender != shareHolder
-                && IERC20(vault).allowance(shareHolder, msg.sender) < shares
-        ) {
+        if (msg.sender != shareHolder && IERC20(vault).allowance(shareHolder, msg.sender) < shares)
+        {
             revert UnauthorizedRedeemer(shareHolder, msg.sender);
         }
 

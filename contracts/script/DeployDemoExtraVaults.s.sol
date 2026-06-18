@@ -655,10 +655,11 @@ contract DeployDemoExtraVaults is Script {
     ///        4. `totalAssets()` does not revert and is within a sane USDC range.
     ///      A deliberately wrong/zero linked address fails check 1/2; a tampered
     ///      library fails check 2.
-    function _assertTickMathLinkIntegrity(address protocolVault, address rwaVault, address agentVault)
-        internal
-        view
-    {
+    function _assertTickMathLinkIntegrity(
+        address protocolVault,
+        address rwaVault,
+        address agentVault
+    ) internal view {
         address[3] memory vaults = [protocolVault, rwaVault, agentVault];
         address expectedLib = BasketVault(vaults[0]).tickMathLibrary();
 

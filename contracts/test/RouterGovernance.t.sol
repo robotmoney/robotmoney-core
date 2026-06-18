@@ -10,6 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {RouterGovernance} from "../RouterGovernance.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
+import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -1234,5 +1235,31 @@ contract RouterGovernanceTest is Test {
         assertEq(eV.length, 2);
         assertEq(eB[0], 7_000);
         assertEq(eB[1], 3_000);
+    }
+
+    // ─── L-10: last-admin floor ────────────────────────────────────────────────
+
+    /// @notice The sole ADMIN_ROLE holder on RouterGovernance cannot renounce or
+    ///         revoke itself to zero admins (LastAdminFloor); after a second
+    ///         admin is granted, the original can be dropped.
+    function test_lastAdminFloor_governance_cannotDropSoleAdmin() public {
+        bytes32 adminRole = gov.ADMIN_ROLE();
+        assertEq(gov.getRoleMemberCount(adminRole), 1, "expected a single gov admin");
+
+        vm.prank(govAdmin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        gov.renounceRole(adminRole, govAdmin);
+
+        vm.prank(govAdmin);
+        vm.expectRevert(AdminFloorAccessControl.LastAdminFloor.selector);
+        gov.revokeRole(adminRole, govAdmin);
+
+        address gov2 = makeAddr("gov2");
+        vm.prank(govAdmin);
+        gov.grantRole(adminRole, gov2);
+        vm.prank(gov2);
+        gov.revokeRole(adminRole, govAdmin);
+        assertEq(gov.getRoleMemberCount(adminRole), 1, "second gov admin remains");
+        assertTrue(gov.hasRole(adminRole, gov2), "gov2 retains the role");
     }
 }

@@ -3,8 +3,9 @@
 // (See also: docs/architecture.md §2.3 — Governance Boundary)
 pragma solidity ^0.8.24;
 
-import {AccessControlEnumerable} from
-    "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {
+    AccessControlEnumerable
+} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
 
 /// @title AdminFloorAccessControl
 /// @notice `AccessControlEnumerable` with a "last-admin floor": the final
@@ -38,16 +39,8 @@ abstract contract AdminFloorAccessControl is AccessControlEnumerable {
     /// @inheritdoc AccessControlEnumerable
     /// @dev Reverts when the revoke would remove the final `ADMIN_ROLE` holder.
     ///      Covers both `revokeRole` and `renounceRole`, which both route here.
-    function _revokeRole(bytes32 role, address account)
-        internal
-        virtual
-        override
-        returns (bool)
-    {
-        if (
-            role == FLOOR_ADMIN_ROLE && hasRole(role, account)
-                && getRoleMemberCount(role) == 1
-        ) {
+    function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {
+        if (role == FLOOR_ADMIN_ROLE && hasRole(role, account) && getRoleMemberCount(role) == 1) {
             revert LastAdminFloor();
         }
         return super._revokeRole(role, account);
