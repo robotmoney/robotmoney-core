@@ -25,12 +25,12 @@ The script:
    equivalent: ``totalAssets``, ``vault_balance``).
 3. Asserts ``post - pre`` is the deposit amount within a small tolerance.
    On the real Aave V3 / Compound V3 / Morpho vault (issue #912 removed the
-   no-yield PassthroughAdapter), ``total_assets`` is not a static balance:
-   it accrues yield every block, and adapters lose a few integer-division
-   dust units round-tripping USDC through yield-bearing tokens. So the
-   measured delta is ``deposit_amount + accrued_yield - rounding_dust`` and
-   never lands on the exact deposit amount. We therefore require the delta to
-   sit within ``[deposit - DELTA_LOWER_BPS, deposit + DELTA_UPPER_BPS]`` — the
+   no-yield test adapter), ``total_assets`` is not a static balance: it
+   accrues yield every block, and adapters lose a few integer-division dust
+   units round-tripping USDC through yield-bearing tokens. So the measured
+   delta is ``deposit_amount + accrued_yield - rounding_dust`` and never
+   lands on the exact deposit amount. We therefore require the delta to sit
+   within ``[deposit - DELTA_LOWER_BPS, deposit + DELTA_UPPER_BPS]`` — the
    lower bound still proves the deposit fully landed (no silent gateway
    no-op), the upper bound still catches a gross wrong-vault / double-count
    bug, while tolerating real yield + rounding.

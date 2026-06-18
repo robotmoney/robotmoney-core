@@ -64,8 +64,8 @@ pub enum Command {
         /// queue (per-market `idToMarketParams`/`extSloads`/`market` reads
         /// plus AdaptiveCurveIRM accrual). On a real-adapter vault this path
         /// costs ~1.55M gas, so the historical 750_000 default ran out of gas
-        /// once the now-removed PassthroughAdapter no longer short-circuited
-        /// `totalAssets()` (issue #912).
+        /// once the now-removed no-yield test adapter no longer
+        /// short-circuited `totalAssets()` (issue #912).
         #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
@@ -329,8 +329,8 @@ pub enum Command {
         /// adapters (including the Morpho Gauntlet USDC Prime multi-market
         /// `convertToAssets` loop) AND performs the real adapter withdrawal,
         /// so it is at least as expensive as a deposit. The historical
-        /// 350_000 default was sized for the now-removed PassthroughAdapter
-        /// (issue #912).
+        /// 350_000 default was sized for the now-removed no-yield test
+        /// adapter (issue #912).
         #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei.
