@@ -15,8 +15,8 @@
  *   (C) When the explorer API returns an empty proposal list the panel
  *       renders the "No proposals found" notice without error.
  *
- * The GovernancePanel is rendered inside the dapp via a
- * `?governance=1` URL param (or a dedicated governance tab) in the
+ * The GovernancePanel is rendered inside the dapp under the
+ * "Router Governance" tab (testId `tab-router-governance`) in the
  * smoke-test devnet build. Specs that navigate to the panel intercept
  * the governance API endpoint with `page.route()` so they run without a
  * live RouterGovernance on-chain deployment. The interceptor is removed
@@ -66,10 +66,10 @@ function makeProposalsResponse(status: "open" | "passed" | "executed" | "expired
 /**
  * Navigate to the dapp and locate the GovernancePanel element.
  *
- * The GovernancePanel is accessible either via a "Governance" tab in
- * AdminFlow or via the `?governance=1` URL toggle. If neither is
- * present in the bundle the helper returns null and the calling spec
- * skips gracefully.
+ * The GovernancePanel is accessible via the "Router Governance" tab
+ * (testId `tab-router-governance`, with a legacy `tab-governance`
+ * fallback). If the tab is not present in the bundle the helper returns
+ * false and the calling spec skips gracefully.
  */
 async function navigateToGovernancePanel(
   page: import("@playwright/test").Page,
@@ -85,22 +85,21 @@ async function navigateToGovernancePanel(
   await connectInjectedWallet(page);
   await dismissOnboardingIfPresent(page);
 
-  // Attempt 1: click the Governance tab if it exists in AdminFlow.
-  const governanceTab = page.getByTestId("tab-governance");
-  if (await governanceTab.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await governanceTab.click();
+  // Click the "Router Governance" tab. The main dapp surface uses
+  // `id: "router-governance"` → testId `tab-router-governance`; the legacy
+  // `tab-governance` testid (inside AdminFlow) is tried for backwards
+  // compatibility. GovernancePanel is not behind the connect gate, so the
+  // tab is reachable on the default surface.
+  const routerGovTab = page.getByTestId("tab-router-governance");
+  const legacyGovTab = page.getByTestId("tab-governance");
+  if (await routerGovTab.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await routerGovTab.click();
     await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
     return true;
   }
-
-  // Attempt 2: reload with ?governance=1 toggle (devnet-build dev shortcut).
-  await page.goto(`${endpoints.dapp_url}?governance=1`);
-  if (
-    await page
-      .getByTestId("governance-panel")
-      .isVisible({ timeout: 10_000 })
-      .catch(() => false)
-  ) {
+  if (await legacyGovTab.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await legacyGovTab.click();
+    await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
     return true;
   }
 
@@ -131,9 +130,9 @@ test.describe("suite-10: GovernancePanel E2E", () => {
     if (!found) {
       test.skip(
         true,
-        "GovernancePanel is not yet mounted in the dapp bundle (no tab-governance or " +
-          "?governance=1 toggle). The panel ships as a standalone component in issue #322 — " +
-          "wire it into AdminFlow/buildAdminTabs to activate this spec.",
+        "GovernancePanel is not yet mounted in the dapp bundle (no tab-router-governance). " +
+          "The panel ships as a standalone component in issue #322 — " +
+          "wire it into the dapp tab tree to activate this spec.",
       );
       return;
     }
