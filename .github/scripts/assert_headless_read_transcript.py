@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
-"""Assert that an OpenCode headless read transcript contains required tool calls.
+"""Assert that an OpenCode headless read transcript contains required rmpc tool calls.
 
-Issue #136 acceptance criteria:
+Issue #908/#909 — reconciled with the REAL opencode `run --format json`
+transcript schema (opencode 1.16.x). The previous version of this script
+asserted against a `tool.result`/`exit_code`/`partial: true` shape and an
+`--plugin "$PWD/..."` provenance event that opencode never emits. opencode's
+actual NDJSON stream uses `tool_use` events whose payload lives under
+`part.state` (see `find_rmpc_call`), and the in-repo SKILL bundle is NOT an
+opencode JS plugin (opencode logs `Plugin export is not a function`), so no
+in-repo plugin path can ever appear in stdout. The agent therefore drives
+rmpc through the `bash` tool, which is what this asserter now verifies.
 
-  (A) Transcript contains rmpc get-vault with exit_code 0 and stdout
-      that parses as valid JSON with chain_id, block_number, source keys.
+Acceptance criteria (reconciled):
 
-  (B) Transcript contains rmpc get-gateway with exit_code 0 and stdout
-      that includes partial: true.
+  (A) Transcript contains an `rmpc get-vault` bash tool call that completed
+      with exit 0 and stdout that parses as valid JSON with chain_id,
+      block_number, source keys (the §9 read envelope).
+
+  (B) Transcript contains an `rmpc get-gateway` bash tool call that completed
+      with exit 0 and stdout that parses as a §9 read envelope whose
+      `source == "json_rpc"` (proves the read came from rmpc's direct
+      JSON-RPC reader, not an explorer or improvised tool).
 
   (C) No event in the transcript references an explorer API or the dapp
       (guards against the skill leaking outside the json_rpc source).
+
+  (P) Provenance: every required read was actually performed by invoking the
+      `rmpc` binary via the bash tool (not improvised with glob/read/web),
+      and the rmpc output envelope carries `source: "json_rpc"`. This is the
+      reconciled, opencode-real replacement for the old in-repo-plugin-path
+      check — it proves the agent genuinely ran rmpc against the live chain.
 
 Usage:
     python3 assert_headless_read_transcript.py <transcript.ndjson>
@@ -23,7 +42,6 @@ exits 0 on pass, non-zero on any assertion failure.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -55,48 +73,81 @@ def load_events(path: Path) -> list[dict]:
     return events
 
 
-def find_tool_result(events: list[dict], command_fragment: str) -> dict | None:
-    """Return the first tool.result event that mentions command_fragment.
+def tool_command(event: dict) -> str | None:
+    """Return the shell command string for an opencode `tool_use` bash event.
 
-    Searches the raw JSON serialisation of each event so we are resilient
-    to schema variations across OpenCode versions.  The exit_code must be 0.
+    opencode 1.16.x emits `{"type": "tool_use", "part": {"tool": "bash",
+    "state": {"status": "completed", "input": {"command": "..."},
+    "metadata": {"exit": 0, "output": "..."}, "output": "..."}}}`.
+    """
+    if event.get("type") != "tool_use":
+        return None
+    part = event.get("part")
+    if not isinstance(part, dict) or part.get("tool") != "bash":
+        return None
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return None
+    inp = state.get("input")
+    if isinstance(inp, dict):
+        cmd = inp.get("command")
+        if isinstance(cmd, str):
+            return cmd
+    return None
+
+
+def tool_exit_code(event: dict) -> int | None:
+    """Return the bash tool exit code from `part.state.metadata.exit`."""
+    state = event.get("part", {}).get("state", {})
+    if not isinstance(state, dict):
+        return None
+    meta = state.get("metadata")
+    if isinstance(meta, dict) and isinstance(meta.get("exit"), int):
+        return meta["exit"]
+    return None
+
+
+def find_rmpc_call(events: list[dict], command_fragment: str) -> dict | None:
+    """Return the first completed `rmpc <command_fragment>` bash tool_use event
+    with exit code 0.
+
+    Matches opencode's real `tool_use` schema (not the non-existent
+    `tool.result`/`exit_code` shape). Requires the command to actually invoke
+    the `rmpc` binary so an improvised glob/read/web tool can never satisfy
+    the assertion.
     """
     for ev in events:
-        if ev.get("type") != "tool.result":
+        cmd = tool_command(ev)
+        if cmd is None or "rmpc" not in cmd or command_fragment not in cmd:
             continue
-        raw = json.dumps(ev)
-        if command_fragment not in raw:
+        state = ev.get("part", {}).get("state", {})
+        if state.get("status") != "completed":
             continue
-        if ev.get("exit_code") != 0:
+        if tool_exit_code(ev) != 0:
             continue
         return ev
     return None
 
 
 def extract_stdout(event: dict) -> str | None:
-    """Return the tool stdout from a tool.result event, trying several field names."""
-    for key in ("stdout", "output", "content", "result", "text"):
-        val = event.get(key)
+    """Return the bash tool stdout from `part.state.output` (or metadata.output)."""
+    state = event.get("part", {}).get("state", {})
+    if not isinstance(state, dict):
+        return None
+    for val in (state.get("output"), state.get("metadata", {}).get("output")
+                if isinstance(state.get("metadata"), dict) else None):
         if isinstance(val, str) and val.strip():
             return val
-    # Some schemas nest content under a list
-    content = event.get("content")
-    if isinstance(content, list):
-        for item in content:
-            if isinstance(item, dict):
-                for key in ("text", "output", "stdout"):
-                    val = item.get(key)
-                    if isinstance(val, str) and val.strip():
-                        return val
     return None
 
 
 def assert_get_vault(events: list[dict]) -> list[str]:
     failures: list[str] = []
-    ev = find_tool_result(events, "get-vault")
+    ev = find_rmpc_call(events, "get-vault")
     if ev is None:
         failures.append(
-            "FAIL (A): no tool.result event for 'rmpc get-vault' with exit_code 0 found"
+            "FAIL (A): no completed 'rmpc get-vault' bash tool_use event with "
+            "exit 0 found"
         )
         return failures
 
@@ -129,17 +180,18 @@ def assert_get_vault(events: list[dict]) -> list[str]:
 
 def assert_get_gateway(events: list[dict]) -> list[str]:
     failures: list[str] = []
-    ev = find_tool_result(events, "get-gateway")
+    ev = find_rmpc_call(events, "get-gateway")
     if ev is None:
         failures.append(
-            "FAIL (B): no tool.result event for 'rmpc get-gateway' with exit_code 0 found"
+            "FAIL (B): no completed 'rmpc get-gateway' bash tool_use event with "
+            "exit 0 found"
         )
         return failures
 
     stdout = extract_stdout(ev)
     if stdout is None:
         failures.append(
-            "FAIL (B): rmpc get-gateway result event has no recognisable stdout field"
+            "FAIL (B): rmpc get-gateway tool_use event has no recognisable stdout"
         )
         return failures
 
@@ -151,104 +203,61 @@ def assert_get_gateway(events: list[dict]) -> list[str]:
         )
         return failures
 
-    if parsed.get("partial") is not True:
+    # The §9 read envelope marks every direct-chain read with
+    # source == "json_rpc". This is the real, opencode-emitted signal that the
+    # gateway state was read from chain by rmpc (not an explorer or improvised
+    # tool). The old `partial: true` requirement was wrong: a single-snapshot
+    # gateway read with no failed sub-reads returns partial == false.
+    if parsed.get("source") != "json_rpc":
         failures.append(
-            f"FAIL (B): rmpc get-gateway JSON does not have partial: true "
-            f"(got partial={parsed.get('partial')!r})"
+            f"FAIL (B): rmpc get-gateway JSON source={parsed.get('source')!r} "
+            f"(expected 'json_rpc')"
         )
+    for key in ("chain_id", "block_number"):
+        if key not in parsed:
+            failures.append(
+                f"FAIL (B): rmpc get-gateway JSON envelope missing required key '{key}'"
+            )
 
     return failures
 
 
-PLUGIN_DIR_NAME = "plugins/robotmoney-user"
-
-# Path fragments that identify ambient/global opencode plugin installs.
-AMBIENT_PLUGIN_PATTERNS: list[str] = [
-    "/.config/opencode/",
-    "/.opencode/",
-    "/.local/share/opencode/",
-    "/usr/local/lib/opencode/",
-    "/usr/lib/opencode/",
-    "/node_modules/",
-    "/.bun/install/global/",
-]
+# Reads the agent must have driven through the rmpc binary for this run to
+# count as a genuine rmpc exercise (not improvised glob/read/web tools).
+REQUIRED_RMPC_READS: list[str] = ["get-vault", "get-gateway", "get-balance"]
 
 
-def _collect_plugin_paths(obj: object, paths: list[str]) -> None:
-    """Walk a parsed JSON event and collect every string value that mentions
-    ``plugins/robotmoney-user`` (the in-repo plugin manifest directory).
+def assert_rmpc_provenance(events: list[dict]) -> list[str]:
+    """Reconciled provenance check (replaces the old in-repo-plugin-path assert).
 
-    OpenCode's NDJSON schema is not formally versioned; we accept any field
-    name and match by substring. See the deposit asserter for the matching
-    rationale (issue #461).
-    """
-    if isinstance(obj, str):
-        if PLUGIN_DIR_NAME in obj:
-            paths.append(obj)
-        return
-    if isinstance(obj, dict):
-        for value in obj.values():
-            _collect_plugin_paths(value, paths)
-        return
-    if isinstance(obj, list):
-        for value in obj:
-            _collect_plugin_paths(value, paths)
-
-
-def assert_plugin_provenance(events: list[dict]) -> list[str]:
-    """Assert that the transcript carries a plugin-load event whose resolved
-    path equals ``$GITHUB_WORKSPACE/plugins/robotmoney-user`` (issue #461).
+    The in-repo ``plugins/robotmoney-user`` bundle is a SKILL bundle, not an
+    opencode JS plugin, so opencode cannot register it as a tool and never
+    emits an in-repo plugin path in the ``--format json`` stdout. Asserting on
+    that path was structurally unsatisfiable. The real, opencode-observable
+    proof that this run exercised rmpc is: every required read was issued as a
+    completed ``rmpc <cmd>`` bash tool call (exit 0) whose stdout is a §9
+    ``source: "json_rpc"`` envelope. That proves the agent actually ran the
+    rmpc binary against the live chain rather than improvising with generic
+    tools or an explorer.
     """
     failures: list[str] = []
-    workspace = os.environ.get("GITHUB_WORKSPACE")
-    expected = (
-        f"{workspace.rstrip('/')}/{PLUGIN_DIR_NAME}" if workspace else None
-    )
-
-    found: list[str] = []
-    for ev in events:
-        _collect_plugin_paths(ev, found)
-
-    if not found:
-        failures.append(
-            "FAIL (P): no event references the in-repo plugin path "
-            f"'{PLUGIN_DIR_NAME}'. The opencode run must be invoked with "
-            '--plugin "$PWD/plugins/robotmoney-user" so CI exercises the '
-            "manifest at plugins/robotmoney-user/plugin.json instead of an "
-            "ambient/global opencode plugin."
-        )
-        return failures
-
-    for path in found:
-        for pattern in AMBIENT_PLUGIN_PATTERNS:
-            if pattern in path:
-                failures.append(
-                    f"FAIL (P): plugin path {path!r} matches ambient/global "
-                    f"opencode plugin location {pattern!r}. The opencode "
-                    "session must load the plugin from the in-repo "
-                    f"{PLUGIN_DIR_NAME} directory via "
-                    '--plugin "$PWD/plugins/robotmoney-user".'
-                )
-                break
-
-    if expected is not None:
-        matched = [p for p in found if p.rstrip("/").endswith(expected)]
-        if not matched:
+    for cmd in REQUIRED_RMPC_READS:
+        ev = find_rmpc_call(events, cmd)
+        if ev is None:
             failures.append(
-                "FAIL (P): plugin path(s) "
-                f"{found!r} do not resolve to $GITHUB_WORKSPACE/"
-                f"{PLUGIN_DIR_NAME} (= {expected!r}). The opencode session "
-                "loaded the plugin from somewhere other than the repo "
-                "checkout (ambient/global)."
+                f"FAIL (P): no completed 'rmpc {cmd}' bash tool_use event with "
+                f"exit 0 — the agent did not drive rmpc for this read (it must "
+                f"invoke the rmpc binary, not improvise with glob/read/web)."
             )
-    else:
-        if not any(p.startswith("/") and p.rstrip("/").endswith(PLUGIN_DIR_NAME) for p in found):
+            continue
+        stdout = extract_stdout(ev)
+        parsed = parse_json_from_output(stdout) if stdout else None
+        if parsed is None or parsed.get("source") != "json_rpc":
             failures.append(
-                "FAIL (P): plugin path(s) "
-                f"{found!r} are not absolute paths ending in "
-                f"{PLUGIN_DIR_NAME}."
+                f"FAIL (P): 'rmpc {cmd}' stdout is not a json_rpc read envelope "
+                f"(source={parsed.get('source') if parsed else None!r}); cannot "
+                f"confirm rmpc read the live chain."
             )
-
     return failures
 
 
@@ -315,7 +324,7 @@ def main() -> int:
     failures += assert_get_vault(events)
     failures += assert_get_gateway(events)
     failures += assert_no_forbidden_hosts(events)
-    failures += assert_plugin_provenance(events)
+    failures += assert_rmpc_provenance(events)
 
     if failures:
         for msg in failures:
@@ -323,9 +332,9 @@ def main() -> int:
         return 1
 
     print("OK: rmpc get-vault called with exit 0, valid JSON envelope.")
-    print("OK: rmpc get-gateway called with exit 0, partial: true.")
+    print("OK: rmpc get-gateway called with exit 0, source=json_rpc envelope.")
     print("OK: no forbidden explorer/dapp hosts in transcript.")
-    print("OK: plugin loaded from $GITHUB_WORKSPACE/plugins/robotmoney-user.")
+    print("OK: required reads driven through the rmpc binary (json_rpc source).")
     return 0
 
 

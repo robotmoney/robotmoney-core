@@ -67,13 +67,42 @@ def event_mentions_deposit(event: object) -> bool:
 
 
 def find_deposit_tx_hash(events: list[dict]) -> str | None:
-    """Scan transcript events for a 0x66-char tx hash on a deposit event."""
+    """Scan transcript events for the deposit tx hash.
+
+    opencode 1.16.x emits the rmpc deposit result JSON (with ``tx_hash``) as a
+    *string* under ``part.state.output``, not as native event dict keys. So for
+    every event that mentions ``deposit`` we (a) look for a real ``tx_hash``
+    dict key, and (b) parse any ``part.state.output`` / ``metadata.output``
+    string as JSON and look for ``tx_hash`` there. The first 0x-66-hex match
+    wins.
+    """
     for ev in events:
         if not event_mentions_deposit(ev):
             continue
+        # (a) native dict keys
         found = _find_hash(ev)
         if found is not None:
             return found
+        # (b) rmpc stdout JSON nested as a string under part.state.output
+        state = ev.get("part", {}).get("state", {})
+        if isinstance(state, dict):
+            outputs = [state.get("output")]
+            meta = state.get("metadata")
+            if isinstance(meta, dict):
+                outputs.append(meta.get("output"))
+            for out in outputs:
+                if not isinstance(out, str):
+                    continue
+                start = out.find("{")
+                if start < 0:
+                    continue
+                try:
+                    parsed = json.loads(out[start:])
+                except json.JSONDecodeError:
+                    continue
+                found = _find_hash(parsed)
+                if found is not None:
+                    return found
     return None
 
 

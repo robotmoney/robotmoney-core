@@ -75,28 +75,46 @@ def _find_in_dict(obj: object, keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _deposit_event(ev: dict) -> dict | None:
+    """Return the `part.state` of a completed `rmpc deposit` bash tool_use event
+    (exit 0), matching opencode 1.16.x's real schema. Returns None otherwise.
+
+    opencode emits `{"type": "tool_use", "part": {"tool": "bash", "state":
+    {"status": "completed", "input": {"command": "rmpc deposit ..."},
+    "metadata": {"exit": 0}, "output": "<rmpc stdout>"}}}`.
+    """
+    if ev.get("type") != "tool_use":
+        return None
+    part = ev.get("part")
+    if not isinstance(part, dict) or part.get("tool") != "bash":
+        return None
+    state = part.get("state")
+    if not isinstance(state, dict):
+        return None
+    inp = state.get("input")
+    cmd = inp.get("command") if isinstance(inp, dict) else None
+    if not isinstance(cmd, str) or "rmpc" not in cmd or "deposit" not in cmd:
+        return None
+    if state.get("status") != "completed":
+        return None
+    meta = state.get("metadata")
+    if not isinstance(meta, dict) or meta.get("exit") != 0:
+        return None
+    return state
+
+
 def deposit_amount_from_transcript(events: list[dict]) -> int | None:
     """Return the deposit amount (smallest unit) reported in the transcript.
 
-    Looks for the first ``tool.result`` event whose serialized form mentions
-    ``deposit`` and ``exit_code == 0`` and extracts a numeric ``amount``
-    (or equivalent key) from anywhere inside the event payload, including
-    the parsed ``stdout`` JSON.
+    Looks for the completed `rmpc deposit` bash tool_use event and extracts a
+    numeric ``amount`` (or equivalent key) from the rmpc result JSON in its
+    stdout (``part.state.output``).
     """
     for ev in events:
-        if ev.get("type") != "tool.result":
+        state = _deposit_event(ev)
+        if state is None:
             continue
-        raw = json.dumps(ev)
-        if "deposit" not in raw:
-            continue
-        if ev.get("exit_code") != 0:
-            continue
-        amount = _find_in_dict(ev, DEPOSIT_AMOUNT_KEYS)
-        if amount is not None:
-            return amount
-        # Try parsing stdout as JSON.
-        for key in ("stdout", "output", "result", "text"):
-            val = ev.get(key)
+        for val in (state.get("output"), (state.get("metadata") or {}).get("output")):
             if isinstance(val, str) and val.strip():
                 start = val.find("{")
                 if start >= 0:

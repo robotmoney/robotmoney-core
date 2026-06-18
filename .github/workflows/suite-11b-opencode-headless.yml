@@ -103,6 +103,13 @@ jobs:
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
+      # Put the freshly-built rmpc on PATH so the headless agent's `rmpc <cmd>`
+      # calls resolve without it having to `find` the binary — the prompt tells
+      # the agent "rmpc is on PATH", so make that literally true and keep the
+      # run deterministic.
+      - name: Put rmpc on PATH
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+
       - name: Start Anvil devnet
         run: |
           anvil &
@@ -138,6 +145,13 @@ jobs:
             --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
           USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
+          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
+          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
+          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
+          # must be minted that seed before the deploy or the deposit reverts with
+          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       # Issue #469: this step replaces the broken keystore-import
       # invocation that previously lived in this workflow (it passed the
@@ -199,8 +213,27 @@ jobs:
           # deposit. anvil_setBalance is the standard Anvil-only fast path.
           cast rpc anvil_setBalance "$AGENT_ADDR_FROM_KEYSTORE" "0xDE0B6B3A7640000" \
             --rpc-url http://127.0.0.1:8545
+          # Fund the agent with mock USDC too: the gateway deposit pulls
+          # `transferFrom(agent, gateway, amount)`, so the headless "deposit 1 USDC"
+          # run reverts with ERC20InsufficientBalance unless the generated key
+          # actually holds USDC. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDRESS" "mint(address,uint256)" "$AGENT_ADDR_FROM_KEYSTORE" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
+          # Persist the agent privkey (masked) so a post-deploy step can sign
+          # the USDC approval from the agent itself once the gateway address is
+          # known. rmpc has no approve command (approvals flow through the human
+          # dapp, not the agent client), and the deposit preflight (§4.4) hard-
+          # refuses when allowance(agent, gateway) < amount.
+          echo "::add-mask::$AGENT_PRIVKEY"
+          echo "AGENT_PRIVKEY=$AGENT_PRIVKEY" >> $GITHUB_ENV
 
       - name: Deploy contracts on devnet (authorizes generated agent)
+        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
+        # default real adapters' seed-deposit totalAssets() reverts with
+        # 'call to non-contract address'. PassthroughAdapter is the documented
+        # lossless escape hatch for non-forked devnets.
+        env:
+          USE_PASSTHROUGH_ADAPTER: "true"
         run: |
           mkdir -p deployments
           # Deploy.s.sol reads AGENT_ADDRESS from env and calls
@@ -252,14 +285,33 @@ jobs:
           fi
           echo "OK: generated agent $AGENT_ADDRESS is owned by $PARENT_ADDRESS and holds AGENT_ROLE"
 
+      # Approve the gateway to pull the agent's USDC, signed by the generated
+      # agent key. rmpc's deposit preflight (§4.4) hard-refuses when
+      # allowance(agent, gateway) < amount, and rmpc deliberately has no
+      # approve command. Without this the headless deposit would silently fail
+      # preflight. The approval is signed by the same generated key that signs
+      # the deposit, keeping the single-identity onboarding proof intact.
+      - name: Approve gateway to pull agent USDC
+        run: |
+          set -euo pipefail
+          cast send "$USDC_ADDRESS" "approve(address,uint256)" "$GATEWAY_ADDRESS" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$AGENT_PRIVKEY"
+          ALLOWANCE=$(cast call "$USDC_ADDRESS" "allowance(address,address)(uint256)" \
+            "$AGENT_ADDRESS" "$GATEWAY_ADDRESS" --rpc-url http://127.0.0.1:8545 | awk '{print $1}')
+          echo "OK: agent->gateway USDC allowance = $ALLOWANCE"
+
       # The opencode skill requires a config.toml that pins chain id, RPC,
-      # gateway/vault/USDC addresses, the gateway runtime-hash, and the
-      # keystore path. Build it now so the generated key's keystore is the
-      # signer for the headless deposit — i.e. step 4/5/deposit share one
-      # identity (the freshly-authorized agent).
+      # gateway/vault/USDC addresses, the gateway runtime-hash, the keystore
+      # path, and a state_dir (the per-agent nonce-lock + replay-cache dir —
+      # rmpc deposit fails fast with no silent /tmp fallback when it is unset).
+      # Build it now so the generated key's keystore is the signer for the
+      # headless deposit — i.e. step 4/5/deposit share one identity (the
+      # freshly-authorized agent).
       - name: Write rmpc config.toml pointing at generated keystore
         run: |
           set -euo pipefail
+          STATE_DIR="${RUNNER_TEMP}/robotmoney-opencode/state"
+          mkdir -p "$STATE_DIR"
           CONFIG="${RUNNER_TEMP}/robotmoney-opencode/config.toml"
           CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
           cat > "$CONFIG" <<EOF
@@ -269,6 +321,7 @@ jobs:
           usdc_address          = "$USDC_ADDRESS"
           vault_address         = "$VAULT_ADDRESS"
           gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
+          state_dir             = "$STATE_DIR"
 
           [signer]
           allow_software_fallback = true
@@ -283,14 +336,39 @@ jobs:
           ./target/release/rmpc get-vault --config "$RMPC_CONFIG" --pretty \
             > "${RUNNER_TEMP}/robotmoney-opencode/vault-pre.json"
 
-      - name: Install robotmoney-cli plugin
-        run: opencode plugin "$PWD/plugins/robotmoney-user"
+      - name: Install robotmoney-user skill bundle into opencode config
+        # NOTE: plugins/robotmoney-user is a Claude-style SKILL bundle, NOT an
+        # opencode JS plugin. `opencode plugin <path>` records it in
+        # .opencode/opencode.json, but opencode's loader logs "Plugin export is
+        # not a function" and never registers it as a tool. The headless agent
+        # therefore drives rmpc through the built-in `bash` tool, guided by the
+        # explicit prompt below. See docs/technical/opencode-headless-invocation.md.
+        run: opencode plugin "$PWD/plugins/robotmoney-user" || true
 
       - name: Headless deposit run
+        env:
+          # Belt-and-suspenders: the config already pins state_dir, but export
+          # RMPC_STATE_DIR so any rmpc invocation in the agent's shell resolves
+          # the per-agent nonce-lock dir even if it omits --config nuances.
+          RMPC_STATE_DIR: ${{ runner.temp }}/robotmoney-opencode/state
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          opencode run "deposit 1 USDC to the vault using config $RMPC_CONFIG" --format json \
+          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode/state"
+          ORDER_ID="0x$(openssl rand -hex 32)"
+          # Explicit, deterministic prompt: opencode cannot load the SKILL
+          # bundle as a tool, so we name the exact rmpc commands (read prefix in
+          # the order the asserter requires, then deposit). The agent runs each
+          # via the bash tool; the transcript then contains real `rmpc` tool
+          # calls with exit 0 against the live devnet.
+          # Single-line prompt (no embedded newlines) so the YAML block scalar
+          # and shell quoting stay simple. The numbered steps are separated by
+          # " | " — opencode/big-pickle follows them deterministically.
+          PROMPT="You are operating the Robot Money rmpc client against a local devnet to make a guarded USDC deposit. The rmpc binary is on PATH. RMPC_STATE_DIR and RMPC_KEYSTORE_PASSPHRASE are already set in your shell. Using the bash tool ONLY, run EXACTLY these commands in this exact order, one per bash call, printing each command's output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-agent --config ${RMPC_CONFIG} --agent ${AGENT_ADDRESS} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty | (4) rmpc get-allowance --config ${RMPC_CONFIG} --owner ${AGENT_ADDRESS} --spender ${GATEWAY_ADDRESS} --pretty | (5) rmpc self-check --config ${RMPC_CONFIG} --pretty | (6) rmpc deposit --config ${RMPC_CONFIG} --amount 1000000 --order-id ${ORDER_ID} --pretty. After the deposit, report the deposit's tx_hash and amount, then stop."
+          # Pin the free, no-credential opencode zen model (the default opencode
+          # selects on a fresh CI runner). Pinning keeps the run deterministic
+          # and avoids drift to a model that would need an API-key secret the
+          # repo does not have.
+          opencode run "$PROMPT" --model opencode/big-pickle --format json --dangerously-skip-permissions \
             | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
           test -s "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json" \
             || { echo "FAIL: headless deposit produced empty transcript"; exit 1; }
@@ -364,6 +442,13 @@ jobs:
       - name: Build rmpc binary
         run: cargo build --release --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
 
+      # Put the freshly-built rmpc on PATH so the headless agent's `rmpc <cmd>`
+      # calls resolve without it having to `find` the binary — the prompt tells
+      # the agent "rmpc is on PATH", so make that literally true and keep the
+      # run deterministic.
+      - name: Put rmpc on PATH
+        run: echo "$PWD/target/release" >> "$GITHUB_PATH"
+
       - name: Start Anvil devnet
         run: |
           anvil &
@@ -390,8 +475,21 @@ jobs:
             --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
           USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
           echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
+          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
+          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
+          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
+          # must be minted that seed before the deploy or the deposit reverts with
+          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
+          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
+            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       - name: Deploy contracts + fund agent on devnet
+        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
+        # default real adapters' seed-deposit totalAssets() reverts with
+        # 'call to non-contract address'. PassthroughAdapter is the documented
+        # lossless escape hatch for non-forked devnets.
+        env:
+          USE_PASSTHROUGH_ADAPTER: "true"
         run: |
           mkdir -p deployments
           forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
@@ -399,14 +497,58 @@ jobs:
       - name: Read-only isolation assertions
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_read_only -- --nocapture
 
-      - name: Install robotmoney-cli plugin
-        run: opencode plugin "$PWD/plugins/robotmoney-user"
+      # rmpc reads require a config.toml pinning chain id, RPC, and the deployed
+      # gateway/vault/USDC addresses. The read job is read-only, but rmpc's
+      # ClientConfig makes the [signer] table a REQUIRED field (SignerConfig is
+      # non-Option in clients/rust-payment-client/src/config.rs), so a config
+      # without [signer] fails to deserialize and every rmpc command exits 3 —
+      # which is exactly what the first dispatch hit. Read commands never load
+      # the keystore (they only read chain state), so a [signer] block with
+      # allow_software_fallback=true and a dummy keystore_path satisfies the
+      # schema without needing a real key.
+      - name: Write rmpc read config.toml
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
+          DEPLOYMENT_JSON="deployments/$(cast chain-id --rpc-url http://127.0.0.1:8545).json"
+          GATEWAY=$(jq -r '.gateway' "$DEPLOYMENT_JSON")
+          VAULT=$(jq -r '.vault' "$DEPLOYMENT_JSON")
+          GATEWAY_RUNTIME_HASH=$(jq -r '.gateway_runtime_hash' "$DEPLOYMENT_JSON")
+          echo "GATEWAY_ADDRESS=$GATEWAY" >> $GITHUB_ENV
+          CONFIG="${RUNNER_TEMP}/robotmoney-opencode/config.toml"
+          CHAIN_ID=$(cast chain-id --rpc-url http://127.0.0.1:8545)
+          cat > "$CONFIG" <<EOF
+          chain_id              = $CHAIN_ID
+          rpc_url               = "http://127.0.0.1:8545"
+          gateway_address       = "$GATEWAY"
+          usdc_address          = "$USDC_ADDRESS"
+          vault_address         = "$VAULT"
+          gateway_runtime_hash  = "$GATEWAY_RUNTIME_HASH"
+
+          [signer]
+          allow_software_fallback = true
+          keystore_path           = "${RUNNER_TEMP}/robotmoney-opencode/read-only-unused-keystore.json"
+          EOF
+          echo "RMPC_CONFIG=$CONFIG" >> $GITHUB_ENV
+
+      - name: Install robotmoney-user skill bundle into opencode config
+        # plugins/robotmoney-user is a SKILL bundle, not an opencode JS plugin;
+        # opencode cannot register it as a tool. The explicit prompt below drives
+        # rmpc through the bash tool instead. See
+        # docs/technical/opencode-headless-invocation.md.
+        run: opencode plugin "$PWD/plugins/robotmoney-user" || true
 
       - name: Headless read run
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          opencode run "show me the vault state and my balance" --format json \
+          # Explicit, deterministic prompt naming the exact rmpc read commands.
+          # opencode cannot load the SKILL bundle as a tool, so a vague prompt
+          # makes the agent improvise (glob/read/task) and never run rmpc.
+          # Single-line prompt (no embedded newlines) so the YAML block scalar
+          # and shell quoting stay simple.
+          PROMPT="You are operating the Robot Money rmpc client against a local devnet. The rmpc binary is on PATH. Using the bash tool ONLY, run EXACTLY these read commands in this exact order, one per bash call, printing each command's JSON output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-gateway --config ${RMPC_CONFIG} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty. After running the three commands, summarize the vault state, gateway state, and balance, then stop."
+          opencode run "$PROMPT" --model opencode/big-pickle --format json --dangerously-skip-permissions \
             | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
           test -s "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json" \
             || { echo "FAIL: headless read produced empty transcript"; exit 1; }
