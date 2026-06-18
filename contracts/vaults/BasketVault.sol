@@ -27,6 +27,7 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {TickMath} from "../lib/TickMath.sol";
+import {BpsMath} from "../lib/BpsMath.sol";
 
 /// @title BasketVault
 /// @notice Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
@@ -49,7 +50,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     uint256 public constant MAX_EXIT_FEE_BPS = 100; // 1%
     uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% hard ceiling
-    uint256 public constant MAX_BPS = 10_000;
+    /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
+    ///         shared `BpsMath.BPS_DENOMINATOR` so fee/slippage/weight math
+    ///         cannot drift.
+    uint256 public constant MAX_BPS = BpsMath.BPS_DENOMINATOR;
 
     // ─── TWAP oracle config ───────────────────────────────────────────
     //

@@ -14,6 +14,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {VaultRegistry} from "./VaultRegistry.sol";
+import {BpsMath} from "./lib/BpsMath.sol";
 
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
@@ -46,8 +47,9 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
-    /// @notice Basis-points denominator (10 000 = 100%).
-    uint256 public constant BPS_DENOMINATOR = 10_000;
+    /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
+    ///         shared `BpsMath.BPS_DENOMINATOR` so fee/weight math cannot drift.
+    uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 

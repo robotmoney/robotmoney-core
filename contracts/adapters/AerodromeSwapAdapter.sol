@@ -13,11 +13,9 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
-import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
-import {TickMath} from "../lib/TickMath.sol";
+import {TwapTickMath} from "../lib/TwapTickMath.sol";
 
 /// @title AerodromeSwapAdapter
 /// @notice BasketVault swap adapter for Aerodrome Finance CL pools.
@@ -35,7 +33,6 @@ import {TickMath} from "../lib/TickMath.sol";
 ///         can resolve the pool deterministically.
 contract AerodromeSwapAdapter is IBasketSwapAdapter {
     using SafeERC20 for IERC20;
-    using Math for uint256;
 
     // ─── Immutables ───────────────────────────────────────────────────
 
@@ -132,53 +129,9 @@ contract AerodromeSwapAdapter is IBasketSwapAdapter {
         if (window == 0) revert ZeroWindow();
         if (baseAmount == 0) return 0;
 
-        _checkPoolPair(pool, baseToken, quoteToken);
+        TwapTickMath.checkPoolPair(pool, baseToken, quoteToken);
 
-        int24 meanTick = _meanTick(pool, window);
-        quoteAmount = _priceFromTick(meanTick, baseToken, quoteToken, baseAmount);
-    }
-
-    /// @dev Validates that `pool` pairs exactly `baseToken` and `quoteToken`.
-    function _checkPoolPair(address pool, address baseToken, address quoteToken) internal view {
-        address t0 = IAerodromePool(pool).token0();
-        address t1 = IAerodromePool(pool).token1();
-        bool validPair =
-            (t0 == baseToken && t1 == quoteToken) || (t1 == baseToken && t0 == quoteToken);
-        if (!validPair) revert PoolTokenMismatch();
-    }
-
-    /// @dev Compute arithmetic-mean tick over `[window, 0]` seconds via `observe()`.
-    function _meanTick(address pool, uint32 window) internal view returns (int24) {
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = window;
-        secondsAgos[1] = 0;
-        (int56[] memory tickCumulatives,) = IAerodromePool(pool).observe(secondsAgos);
-        int56 delta = tickCumulatives[1] - tickCumulatives[0];
-        int24 tick = int24(delta / int56(uint56(window)));
-        // Match Uniswap OracleLibrary rounding: negative-and-not-exact rounds toward -∞.
-        if (delta < 0 && (delta % int56(uint56(window)) != 0)) tick--;
-        return tick;
-    }
-
-    /// @dev Convert a TWAP mean tick to an output amount using sqrtPriceX96 math.
-    function _priceFromTick(
-        int24 meanTick,
-        address baseToken,
-        address quoteToken,
-        uint256 baseAmount
-    ) internal pure returns (uint256 quoteAmount) {
-        uint256 sqrtP = uint256(TickMath.getSqrtRatioAtTick(meanTick));
-        bool zeroForOne = baseToken < quoteToken;
-        if (sqrtP <= type(uint128).max) {
-            uint256 ratioX192 = sqrtP * sqrtP;
-            quoteAmount = zeroForOne
-                ? baseAmount.mulDiv(ratioX192, 1 << 192)
-                : baseAmount.mulDiv(1 << 192, ratioX192);
-        } else {
-            uint256 ratioX128 = Math.mulDiv(sqrtP, sqrtP, 1 << 64);
-            quoteAmount = zeroForOne
-                ? baseAmount.mulDiv(ratioX128, 1 << 128)
-                : baseAmount.mulDiv(1 << 128, ratioX128);
-        }
+        int24 meanTick = TwapTickMath.meanTick(pool, window);
+        quoteAmount = TwapTickMath.priceFromTick(meanTick, baseToken, quoteToken, baseAmount);
     }
 }
