@@ -1346,20 +1346,101 @@ impl Fixture {
         }
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
-        // `cast send` exits 0 once the tx is mined regardless of its execution
-        // status, so an on-chain revert (e.g. out-of-gas) is invisible unless we
-        // inspect the receipt. Fail loudly: a swallowed revert is exactly how the
-        // four-vault seeding flake hid (the reverted deposit minted no shares).
-        let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-        if status != "0x1" {
-            return Err(HarnessError::other(format!(
-                "cast send {sig} mined but reverted (status={status}): from={from_hex} to={to_hex} gasLimit={gas_limit}"
-            )));
-        }
-        Ok(v.get("transactionHash")
+        let tx_hash = v
+            .get("transactionHash")
             .and_then(|x| x.as_str())
             .unwrap_or("")
-            .to_string())
+            .to_string();
+        // `cast send` exits 0 as soon as the tx mines — even when it mines as a
+        // REVERTED tx (receipt `status == 0x0`). Gas estimation catches most
+        // reverts up front, but a tx whose state changes between estimate and
+        // inclusion (or one sent with an explicit `--gas-limit`) can land
+        // reverted with a zero process exit. Assert the receipt status so a
+        // reverted seeding tx fails loudly instead of being silently accepted.
+        let status = v.get("status").and_then(|x| x.as_str()).ok_or_else(|| {
+            HarnessError::other(format!(
+                "cast send {sig} receipt missing status field: {}",
+                String::from_utf8_lossy(&out.stdout)
+            ))
+        })?;
+        if !receipt_status_succeeded(status) {
+            let reason = self.tx_revert_reason(&tx_hash);
+            return Err(HarnessError::other(format!(
+                "cast send {sig} -> {to_hex} mined as a REVERTED tx (receipt status={status}, hash={tx_hash}){reason}"
+            )));
+        }
+        Ok(tx_hash)
+    }
+
+    /// Best-effort decode of a reverted tx's revert reason via `cast run`,
+    /// appended to the harness error for fast diagnosis. Returns an empty
+    /// string when no reason can be recovered (e.g. `cast run` unavailable),
+    /// so the caller's error stays well-formed regardless.
+    fn tx_revert_reason(&self, tx_hash: &str) -> String {
+        if tx_hash.is_empty() {
+            return String::new();
+        }
+        let out = match Command::new("cast")
+            .args(["run", "--rpc-url", &self.rpc_url, tx_hash])
+            .output()
+        {
+            Ok(out) => out,
+            Err(_) => return String::new(),
+        };
+        let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        let reason = text
+            .lines()
+            .find(|l| {
+                let l = l.to_lowercase();
+                l.contains("revert") || l.contains("error")
+            })
+            .map(str::trim)
+            .unwrap_or("");
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!("; revert: {reason}")
+        }
+    }
+
+    /// Read `token.balanceOf(owner)` via a plain `eth_call` (`cast call`).
+    /// Used to verify deposits actually minted shares to the recipient. No
+    /// signing, no impersonation — a read-only query against the live chain.
+    pub fn erc20_balance_of(&self, token: Address, owner: Address) -> Result<u128, HarnessError> {
+        // balanceOf(address) selector 0x70a08231, owner left-padded to 32 bytes.
+        let data = format!(
+            "0x70a08231000000000000000000000000{}",
+            format!("{owner:#x}").trim_start_matches("0x")
+        );
+        let out = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                &self.rpc_url,
+                &format!("{token:#x}"),
+                &data,
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast call balanceOf({owner:#x}) on {token:#x} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let s = raw.trim().trim_start_matches("0x");
+        if s.is_empty() || s.chars().all(|c| c == '0') {
+            return Ok(0);
+        }
+        // The ABI word is up to 256 bits. The demo seeds share counts well
+        // within u128, but a value past 2^128 must not silently read back as
+        // zero: if the high half is non-zero, saturate so the non-zero check
+        // stays honest; otherwise return the exact low-128-bit value.
+        let low = &s[s.len().saturating_sub(32)..];
+        let high_nonzero = s.len() > 32 && s[..s.len() - 32].chars().any(|c| c != '0');
+        let low_val = u128::from_str_radix(low, 16).unwrap_or(u128::MAX);
+        Ok(if high_nonzero { u128::MAX } else { low_val })
     }
 
     /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
@@ -1628,7 +1709,16 @@ impl Fixture {
                         // deposit can intermittently leave a depositor with no
                         // primary-vault shares on a busy chain (issue #882); a
                         // direct deposit guarantees every depositor holds primary
-                        // shares (1:1 via the PassthroughAdapter).
+                        // shares. NOTE: the primary RobotMoneyVault on the Geth
+                        // devnet routes deposits through the real Aave/Compound/
+                        // Morpho strategy adapters (NOT a 1:1 PassthroughAdapter,
+                        // an earlier comment claimed that in error). That real-
+                        // adapter path can intermittently revert under load, which
+                        // — when swallowed — left the depositor with zero primary
+                        // shares (issue #904). We now assert the receipt status in
+                        // cast_send and re-read the post-deposit share balance so a
+                        // mis-minted deposit surfaces the true on-chain failure
+                        // here rather than as a downstream per-depositor flake.
                         self.cast_send(
                             pk_hex,
                             self.usdc(),
@@ -1641,6 +1731,19 @@ impl Fixture {
                             "deposit(uint256,address)",
                             &[&per_user_usdc.to_string(), &depositor_hex],
                         )?;
+                        // ERC-4626 `deposit` mints shares to `depositor`; the
+                        // primary-share guarantee this seeding exists to provide
+                        // only holds if those shares actually landed. Verify a
+                        // non-zero primary-vault `balanceOf(depositor)` and fail
+                        // loudly (with the on-chain context) otherwise.
+                        let primary_shares = self.erc20_balance_of(self.vault(), *depositor)?;
+                        if primary_shares == 0 {
+                            return Err(HarnessError::other(format!(
+                                "primary-vault deposit minted no shares to depositor {depositor_hex}: \
+                                 balanceOf(vault={primary_hex}) == 0 after deposit(amount={per_user_usdc}). \
+                                 The primary vault's real-adapter routing likely reverted on the Geth devnet."
+                            )));
+                        }
 
                         // Approve and deposit directly into the §11.4 RWA vault,
                         // which is Active but not router-eligible. Shares go to
@@ -2464,6 +2567,19 @@ fn run_forge_deploy_with_env(
         )));
     }
     Ok(())
+}
+
+/// Interpret a transaction receipt `status` word from `cast send --json`.
+///
+/// Foundry emits the status as a hex quantity: `"0x1"` for a successful tx and
+/// `"0x0"` for a reverted one. A reverted tx (status `0x0`) still mines, so
+/// `cast send` exits 0 and the calling harness used to swallow the revert
+/// (issue #904). Returns `true` only when the word denotes a non-zero (success)
+/// status, treating any non-zero hex word as success to stay robust to future
+/// formatting; an empty or all-zero word is a failure.
+fn receipt_status_succeeded(status: &str) -> bool {
+    let stripped = status.trim_start_matches("0x").trim_start_matches("0X");
+    !stripped.is_empty() && stripped.chars().any(|c| c != '0')
 }
 
 fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
@@ -3861,5 +3977,25 @@ ccc333\t\teth-beacon
         let b = format!("{:016x}-{:x}", 3u64, 2u32);
         assert_ne!(a, b);
         assert!(a.contains('-'));
+    }
+
+    #[test]
+    fn receipt_status_succeeded_accepts_success_word() {
+        // `cast send --json` reports a successful tx as status "0x1" (issue #904).
+        assert!(receipt_status_succeeded("0x1"));
+        assert!(receipt_status_succeeded("0X1"));
+        // Robust to a non-canonical non-zero word.
+        assert!(receipt_status_succeeded("0x01"));
+    }
+
+    #[test]
+    fn receipt_status_succeeded_rejects_reverted_receipt() {
+        // A reverted tx mines with status "0x0"; cast send still exits 0, so the
+        // status word is the only signal that the tx reverted (issue #904).
+        assert!(!receipt_status_succeeded("0x0"));
+        assert!(!receipt_status_succeeded("0x00"));
+        // A malformed/empty word must never be treated as success.
+        assert!(!receipt_status_succeeded("0x"));
+        assert!(!receipt_status_succeeded(""));
     }
 }
