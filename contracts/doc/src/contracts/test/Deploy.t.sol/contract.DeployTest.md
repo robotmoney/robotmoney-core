@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -19,6 +19,21 @@ therefore succeeds even though AAVE_V3_POOL et al. are not deployed
 in the forge unit-test environment. Actual protocol interaction is
 tested by the fork regression suite (VaultForkRegressions.t.sol) and
 the fork-e2e-rust harness.
+
+
+## Constants
+### TICKMATH_AUDITED_CODEHASH
+Audited runtime codehash of the canonical `TickMath` library,
+pinned identically to both deploy scripts. If this drifts, the
+library or compiler settings changed and the deploy-time
+assertion in `Deploy.s.sol` / `DeployDemoExtraVaults.s.sol` must
+be re-pinned.
+
+
+```solidity
+bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
+    0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e
+```
 
 
 ## State Variables
@@ -181,5 +196,62 @@ function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
 
 ```solidity
 function test_deploy_envDriven_runInProcessSucceeds() public;
+```
+
+### _deployBasketVault
+
+Deploy a representative basket-family vault (uses the TickMath link)
+with no real swap router; totalAssets() with an empty basket returns
+the vault's USDC balance and never touches TickMath, so it is a
+non-reverting in-range probe.
+
+
+```solidity
+function _deployBasketVault() internal returns (BasketVault);
+```
+
+### test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange
+
+The linked TickMath library has non-empty code and a runtime
+codehash equal to the audited artifact, and the basket vault's
+totalAssets() is non-reverting and in range. This is the positive
+arm of the deploy-time assertion.
+
+
+```solidity
+function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public;
+```
+
+### test_tickMathLink_deployAssertsCanonicalLibrary
+
+The Deploy.s.sol deploy path asserts TickMath canonicality: a
+successful in-process deploy implies the linked library's codehash
+equals the audited constant (the assertion runs inside _doDeploy).
+
+
+```solidity
+function test_tickMathLink_deployAssertsCanonicalLibrary() public;
+```
+
+### test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck
+
+A deliberately wrong (and a zero) linked-library address fails the
+same codehash check the deploy assertion enforces. Proves the
+assertion is not vacuous — a mislinked library does not pass.
+
+
+```solidity
+function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public;
+```
+
+### test_tickMathLink_deployAssertionRevertsOnMislink
+
+The actual DeployDemoExtraVaults TickMath link-integrity assertion
+reverts when a vault links a zero (no-code) or wrong (non-TickMath)
+library — proving the deploy assertion fails closed on mislink.
+
+
+```solidity
+function test_tickMathLink_deployAssertionRevertsOnMislink() public;
 ```
 

@@ -1,5 +1,5 @@
 # ERC4626PreconditionChecks
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/ERC4626PreconditionChecks.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/test/ERC4626PreconditionChecks.t.sol)
 
 **Inherits:**
 Test

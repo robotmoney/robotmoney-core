@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -474,6 +474,29 @@ the effective window without reading the raw mapping fallback.
 ```solidity
 function effectiveTwapWindow(address token) public view returns (uint32);
 ```
+
+### tickMathLibrary
+
+Address of the externally-linked `TickMath` library this vault
+`DELEGATECALL`s on the NAV / `totalAssets()` path.
+
+`TickMath.getSqrtRatioAtTick` is a `public` library function, so the
+compiler links it as a separate deployed contract and bakes its
+address into this vault's runtime bytecode. Exposing it lets deploy
+scripts and tests assert the linked library's runtime codehash equals
+the audited artifact (finding L3-D1): a mislinked or zero address —
+or one whose code does not match — must fail the deploy assertion.
+
+
+```solidity
+function tickMathLibrary() external pure returns (address lib);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`lib`|`address`|The linked `TickMath` library address.|
+
 
 ### _twapQuote
 
