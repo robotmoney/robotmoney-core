@@ -407,7 +407,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
-11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`
+11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`. **This gate runs exactly once per suite run — on the `demo_seeding` matrix binary only** (see de-dup note below).
 12. Upload smoke-test logs from `$RUNNER_TEMP/robotmoney-smoke-test/` as a CI artifact, then run `docker compose down -v --remove-orphans || true` for the safety-net teardown
 
 > **Note:** Step 10 exercises `Fixture::new()` end-to-end — the same code
@@ -421,6 +421,18 @@ isolation, independent of any client (rmpc, dapp, explorer).
 > (`GET /v1/vaults` returns exactly four Active entries, each non-zero
 > `total_assets`) boots the heavier `DappStack` and is run locally / via the
 > dapp suites rather than this fixture-only suite.
+>
+> **Parallel matrix + four-vault de-dup (issues #600, #915):** the
+> devnet-booting binaries run as a parallel matrix
+> `[cli_meta, fixture_meta, demo_seeding, full_stack_demo_tvl]` (`fail-fast:
+> false`), one runner per binary, each booting and tearing down its own
+> Geth+Lighthouse stack. The four-vault real-TVL gate (step 11) **is** the
+> `demo_seeding` matrix binary, so it runs exactly once per suite run. It is
+> *not* re-appended as an unconditional final step on every binary: doing so
+> previously booted a second devnet + reseed on
+> `cli_meta`/`fixture_meta`/`full_stack_demo_tvl` (~25 min of redundant
+> boot+seed on the slowest binary) with zero net coverage, since the
+> assertions already run as the `demo_seeding` binary.
 
 ---
 
