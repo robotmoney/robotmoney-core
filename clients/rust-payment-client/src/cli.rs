@@ -57,10 +57,16 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the deposit tx envelope. Default 750_000 — the
-        /// vault path can perform cold ERC-4626, adapter allowlist, and
-        /// strategy-allocation writes on first interaction.
-        #[arg(long = "gas-limit", default_value_t = 750_000)]
+        /// Gas limit for the deposit tx envelope. Default 3_000_000 — a
+        /// deposit allocates across the three real yield adapters and reads
+        /// `totalAssets()` on each, including the Morpho Gauntlet USDC Prime
+        /// vault whose `convertToAssets` iterates its multi-market supply
+        /// queue (per-market `idToMarketParams`/`extSloads`/`market` reads
+        /// plus AdaptiveCurveIRM accrual). On a real-adapter vault this path
+        /// costs ~1.55M gas, so the historical 750_000 default ran out of gas
+        /// once the now-removed PassthroughAdapter no longer short-circuited
+        /// `totalAssets()` (issue #912).
+        #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei (issue #93).
         /// When set, this beats both the TOML `max_fee_per_gas_cap`
@@ -318,8 +324,14 @@ pub enum Command {
         /// Maximum seconds to wait for the receipt. Default 60.
         #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
         receipt_timeout_secs: u64,
-        /// Gas limit for the withdraw tx envelope. Default 350_000.
-        #[arg(long = "gas-limit", default_value_t = 350_000)]
+        /// Gas limit for the withdraw tx envelope. Default 3_000_000 — a
+        /// redemption reads `totalAssets()` across the three real yield
+        /// adapters (including the Morpho Gauntlet USDC Prime multi-market
+        /// `convertToAssets` loop) AND performs the real adapter withdrawal,
+        /// so it is at least as expensive as a deposit. The historical
+        /// 350_000 default was sized for the now-removed PassthroughAdapter
+        /// (issue #912).
+        #[arg(long = "gas-limit", default_value_t = 3_000_000)]
         gas_limit: u64,
         /// Optional override for `max_fee_per_gas_cap` in wei.
         #[arg(long = "fee-cap")]
