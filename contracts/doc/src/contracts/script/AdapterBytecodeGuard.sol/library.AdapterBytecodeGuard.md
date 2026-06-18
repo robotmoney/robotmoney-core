@@ -13,7 +13,7 @@ adapter's *bytecode codehash* in the allowlist. If a future adapter
 were deployed behind a minimal delegatecall proxy, the pinned hash
 would cover the proxy bytecode only and the implementation could
 be hot-swapped without violating the allowlist. The current
-production set (Aave V3, Compound V3, Morpho, Passthrough) is
+production set (Aave V3, Compound V3, Morpho) is
 direct-deployed and has no `DELEGATECALL` in its runtime bytecode.
 This guard enforces that invariant on every adapter the deploy
 script approves, and is exercised by a contrived-proxy regression
