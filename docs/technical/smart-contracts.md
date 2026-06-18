@@ -141,13 +141,13 @@ RobotMoneyVault
 
 | Variable | Initial | Setter | Notes |
 |---|---|---|---|
-| `tvlCap` | constructor arg | `setTvlCap` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0 |
+| `tvlCap` | constructor arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
 | `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
 | `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
 | `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
 | `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved for onboarding and future allocation |
 | `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
-| `shutdown` | `false` | `shutdownVault` (EMERGENCY) | **Irreversible** — once true, `deposit` always reverts |
+| `shutdown` | `false` | `shutdownVault` (EMERGENCY), `restoreVault` (ADMIN) | While true, `deposit` reverts; recoverable — `restoreVault(newTvlCap)` (ADMIN) clears it and re-opens deposits |
 | `maxRebalanceBpsPerCall` | 2500 (25%) | `setMaxRebalanceBpsPerCall` (ADMIN) | Throttle per `rebalance()` call |
 | `minRebalanceInterval` | 12 hours | `setMinRebalanceInterval` (ADMIN) | Minimum time between rebalances |
 
@@ -198,7 +198,17 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 | `emergencyWithdraw()` | EMERGENCY | Pauses vault, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index |
 | `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
-| `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Irreversible. Deposits revert with `VaultShutdown()`. Withdrawals continue. |
+| `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
+
+`shutdownVault()` is not permanent. It is reversed by `restoreVault(uint256 newTvlCap)`,
+an **ADMIN**-only recovery path. The asymmetry mirrors `pause`/`unpause`: a
+compromised emergency hot key can DoS deposits, but only the higher-trust admin
+role can re-open the vault. Because `shutdownVault` zeroes `tvlCap`, the admin
+must supply a fresh cap rather than silently reusing a stale value:
+
+| Function | Role | Effect |
+|---|---|---|
+| `restoreVault(uint256 newTvlCap)` | ADMIN | Reverts with `NotShutdown()` unless `shutdown == true`. Requires `newTvlCap > 0` (else `InvalidCap()`) and `perDepositCap <= newTvlCap` (else `InvalidParam()`). Clears `shutdown`, sets `tvlCap = newTvlCap`, emits `VaultRestored(newTvlCap)` and `TvlCapUpdated(old, newTvlCap)`. Deposits resume under the new cap. |
 
 ### 3.9 Rebalance
 
@@ -321,7 +331,8 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `emergencyWithdraw()` | EMERGENCY | Pull all adapters |
 | `emergencyWithdrawAdapter(uint256)` | EMERGENCY | Pull one adapter |
 | `forceRemoveAdapter(uint256)` | EMERGENCY | Write off a broken adapter |
-| `shutdownVault()` | EMERGENCY | Irreversible deposit kill |
+| `shutdownVault()` | EMERGENCY | Halt deposits, zero `tvlCap` (recoverable by ADMIN via `restoreVault`) |
+| `restoreVault(uint256)` | ADMIN | Reverse a shutdown and re-open deposits under a fresh TVL cap |
 | `rescueTokens(address, address)` | ADMIN | Sweep non-USDC tokens |
 | `getAdapterDrift()` | view | Returns current/target/drift per adapter |
 | `isRebalanceAvailable()` | view | Check rebalance cooldown |
