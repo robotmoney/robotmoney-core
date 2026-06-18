@@ -504,36 +504,27 @@ test.describe("fresh-account governance E2E — drip ETH + RM then vote (issue #
     // Navigate to the "Router Governance" tab. The main dapp surface uses
     // `id: "router-governance"` → testId `tab-router-governance`. The legacy
     // `tab-governance` testid (inside AdminFlow) is also tried for backwards
-    // compatibility in case the tab was moved. Falls back to `?governance=1`.
+    // compatibility in case the tab was moved. GovernancePanel is not behind
+    // the connect gate, so the tab is reachable on the default surface.
     const routerGovTab = page.getByTestId("tab-router-governance");
     const legacyGovTab = page.getByTestId("tab-governance");
     const tabFound =
       (await routerGovTab.isVisible({ timeout: 5_000 }).catch(() => false)) ||
       (await legacyGovTab.isVisible({ timeout: 2_000 }).catch(() => false));
-    if (tabFound) {
-      if (await routerGovTab.isVisible().catch(() => false)) {
-        await routerGovTab.click();
-      } else {
-        await legacyGovTab.click();
-      }
-      await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
-    } else {
-      // Fall back to ?governance=1 URL toggle (devnet-only dev shortcut).
-      await page.goto(`${endpoints.dapp_url}?governance=1`);
-      const panelVisible = await page
-        .getByTestId("governance-panel")
-        .isVisible({ timeout: 15_000 })
-        .catch(() => false);
-      if (!panelVisible) {
-        test.skip(
-          true,
-          "GovernancePanel is not yet mounted in the dapp bundle (no tab-router-governance or " +
-            "?governance=1 toggle). Wire GovernancePanel into the dapp tab tree to " +
-            "activate this spec (see issue #322).",
-        );
-        return;
-      }
+    if (!tabFound) {
+      test.skip(
+        true,
+        "GovernancePanel is not yet mounted in the dapp bundle (no tab-router-governance). " +
+          "Wire GovernancePanel into the dapp tab tree to activate this spec (see issue #322).",
+      );
+      return;
     }
+    if (await routerGovTab.isVisible().catch(() => false)) {
+      await routerGovTab.click();
+    } else {
+      await legacyGovTab.click();
+    }
+    await expect(page.getByTestId("governance-panel")).toBeVisible({ timeout: 15_000 });
 
     // Wait for the proposal to render.
     const votingPrompt = page.getByTestId("governance-voting-prompt");

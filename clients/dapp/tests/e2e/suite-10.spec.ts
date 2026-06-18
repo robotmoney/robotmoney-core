@@ -136,25 +136,47 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     const tvlCells = page.getByTestId("vault-list-row-tvl");
     const statusCells = page.getByTestId("vault-list-row-status");
 
-    const tvlCount = await tvlCells.count();
-    expect(tvlCount, "each registered vault must have a TVL cell").toBeGreaterThanOrEqual(
-      registeredVaults.length,
-    );
+    // Snapshot a stable element list (locator.all()) so a mid-loop re-render
+    // cannot misalign indices, and poll each read so a transient blank/loading
+    // cell does not fail the one-shot assertion (explorer indexer lag).
+    await expect
+      .poll(
+        async () => {
+          const rows = await tvlCells.all();
+          if (rows.length < registeredVaults.length) return false;
+          for (const row of rows) {
+            const tvlText = (await row.textContent())?.trim();
+            if (!tvlText) return false;
+          }
+          return true;
+        },
+        {
+          message: "each registered vault must have a TVL cell with a non-blank value",
+          timeout: 120_000,
+          intervals: [5_000],
+        },
+      )
+      .toBe(true);
 
-    for (let i = 0; i < tvlCount; i++) {
-      const tvlText = await tvlCells.nth(i).textContent();
-      expect(tvlText?.trim(), `vault row ${i} TVL must not be blank`).toBeTruthy();
-    }
-
-    const statusCount = await statusCells.count();
-    expect(statusCount, "each registered vault must have a status cell").toBeGreaterThanOrEqual(
-      registeredVaults.length,
-    );
-
-    for (let i = 0; i < statusCount; i++) {
-      const statusText = await statusCells.nth(i).textContent();
-      expect(["Active", "Paused", "Retired"]).toContain(statusText?.trim());
-    }
+    await expect
+      .poll(
+        async () => {
+          const rows = await statusCells.all();
+          if (rows.length < registeredVaults.length) return false;
+          for (const row of rows) {
+            const statusText = (await row.textContent())?.trim();
+            if (!["Active", "Paused", "Retired"].includes(statusText ?? "")) return false;
+          }
+          return true;
+        },
+        {
+          message:
+            "each registered vault must have a status cell reading Active / Paused / Retired",
+          timeout: 120_000,
+          intervals: [5_000],
+        },
+      )
+      .toBe(true);
   });
 
   test("VaultList shows correct status for registered vaults", async ({ page }) => {
@@ -169,13 +191,27 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     await expect(table).toBeVisible({ timeout: 15_000 });
 
     const statusCells = page.getByTestId("vault-list-row-status");
-    const count = await statusCells.count();
-    expect(count).toBeGreaterThan(0);
 
-    for (let i = 0; i < count; i++) {
-      const text = await statusCells.nth(i).textContent();
-      expect(["Active", "Paused", "Retired"]).toContain(text);
-    }
+    // Snapshot the rows (locator.all()) and poll: a transient loading state
+    // must not fail the one-shot status assertion (explorer indexer lag).
+    await expect
+      .poll(
+        async () => {
+          const rows = await statusCells.all();
+          if (rows.length === 0) return false;
+          for (const row of rows) {
+            const text = (await row.textContent())?.trim();
+            if (!["Active", "Paused", "Retired"].includes(text ?? "")) return false;
+          }
+          return true;
+        },
+        {
+          message: "every vault row status must read Active / Paused / Retired",
+          timeout: 120_000,
+          intervals: [5_000],
+        },
+      )
+      .toBe(true);
   });
 
   test("ProtocolStats aggregate TVL is a parseable number", async ({ page }) => {
@@ -298,15 +334,16 @@ test.describe("Suite-10: Protocol layer — no wallet required", () => {
     // was done during DappStack::boot but the indexer may still be catching
     // up, so we poll until every card has a non-zero TVL.
     const tvlCells = page.getByTestId("landing-vault-card-tvl");
-    const count = await tvlCells.count();
-    expect(count, "expected 4 TVL cells for Active vault cards").toBe(4);
 
     await expect
       .poll(
         async () => {
-          for (let i = 0; i < count; i++) {
-            const text = (await tvlCells.nth(i).textContent()) ?? "";
-            const trimmed = text.trim();
+          // Snapshot a stable element list each poll iteration (locator.all())
+          // so a mid-loop re-render cannot misalign indices.
+          const cells = await tvlCells.all();
+          if (cells.length !== 4) return false;
+          for (const cell of cells) {
+            const trimmed = ((await cell.textContent()) ?? "").trim();
             // "0", "—", or blank all mean no TVL yet.
             if (trimmed === "" || trimmed === "—" || trimmed === "0") return false;
           }
