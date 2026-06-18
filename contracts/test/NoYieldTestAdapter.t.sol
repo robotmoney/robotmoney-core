@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.3 — Vault Adapters (devnet/test passthrough)
-// Issue: #277 — Wire RobotMoneyVault + PassthroughAdapter into smoke-test devnet
+// Canonical: docs/architecture.md §4.3 — Vault Adapters (test no-yield adapter)
+// Test fixture for the test-only NoYieldTestAdapter.
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
@@ -8,25 +8,25 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 
-/// @dev Tests for PassthroughAdapter and its integration with RobotMoneyVault.
+/// @dev Tests for NoYieldTestAdapter and its integration with RobotMoneyVault.
 ///
 ///      Key invariants under test:
-///      - PassthroughAdapter correctly holds USDC after deploy().
-///      - PassthroughAdapter returns USDC on withdraw().
+///      - NoYieldTestAdapter correctly holds USDC after deploy().
+///      - NoYieldTestAdapter returns USDC on withdraw().
 ///      - totalAssets() reflects the held balance.
 ///      - Only VAULT can call mutating functions.
 ///      - rescueTokens reverts for USDC.
 ///
-///      Integration (testPassthroughRoundTrip):
-///      - Deposit 1e6 USDC into a fresh RobotMoneyVault + PassthroughAdapter.
+///      Integration (testNoYieldRoundTrip):
+///      - Deposit 1e6 USDC into a fresh RobotMoneyVault + NoYieldTestAdapter.
 ///      - Assert balanceOf >= 1e24 raw shares (decimalsOffset=18).
 ///      - Assert previewRedeem returns >= 999_000 (zero-fee, within rounding).
-contract PassthroughAdapterTest is Test {
+contract NoYieldTestAdapterTest is Test {
     TestERC20 internal usdc;
     RobotMoneyVault internal vault;
-    PassthroughAdapter internal adapter;
+    NoYieldTestAdapter internal adapter;
 
     address internal admin = makeAddr("admin");
     address internal user = makeAddr("user");
@@ -47,7 +47,7 @@ contract PassthroughAdapterTest is Test {
             admin // EMERGENCY_ROLE
         );
         // Deploy adapter and wire into vault
-        adapter = new PassthroughAdapter(address(usdc), address(vault));
+        adapter = new NoYieldTestAdapter(address(usdc), address(vault));
         vm.prank(admin);
         vault.setAdapterAllowed(address(adapter), true);
         vm.prank(admin);
@@ -69,40 +69,40 @@ contract PassthroughAdapterTest is Test {
     }
 
     function test_constructor_revertsOnZeroUsdc() public {
-        vm.expectRevert(PassthroughAdapter.ZeroAddress.selector);
-        new PassthroughAdapter(address(0), address(vault));
+        vm.expectRevert(NoYieldTestAdapter.ZeroAddress.selector);
+        new NoYieldTestAdapter(address(0), address(vault));
     }
 
     function test_constructor_revertsOnZeroVault() public {
-        vm.expectRevert(PassthroughAdapter.ZeroAddress.selector);
-        new PassthroughAdapter(address(usdc), address(0));
+        vm.expectRevert(NoYieldTestAdapter.ZeroAddress.selector);
+        new NoYieldTestAdapter(address(usdc), address(0));
     }
 
     // ── Access control ────────────────────────────────────────────────────
 
     function test_deploy_revertsForNonVault() public {
         vm.prank(attacker);
-        vm.expectRevert(PassthroughAdapter.OnlyVault.selector);
+        vm.expectRevert(NoYieldTestAdapter.OnlyVault.selector);
         adapter.deploy(ONE_USDC);
     }
 
     function test_withdraw_revertsForNonVault() public {
         vm.prank(attacker);
-        vm.expectRevert(PassthroughAdapter.OnlyVault.selector);
+        vm.expectRevert(NoYieldTestAdapter.OnlyVault.selector);
         adapter.withdraw(ONE_USDC);
     }
 
     function test_rescueTokens_revertsForNonVault() public {
         TestERC20 other = new TestERC20();
         vm.prank(attacker);
-        vm.expectRevert(PassthroughAdapter.OnlyVault.selector);
+        vm.expectRevert(NoYieldTestAdapter.OnlyVault.selector);
         adapter.rescueTokens(address(other), attacker);
     }
 
     function test_rescueTokens_revertsForUsdc() public {
         // Even the vault cannot rescue its own protected asset.
         vm.prank(address(vault));
-        vm.expectRevert(PassthroughAdapter.CannotRescueUsdc.selector);
+        vm.expectRevert(NoYieldTestAdapter.CannotRescueUsdc.selector);
         adapter.rescueTokens(address(usdc), admin);
     }
 
@@ -153,10 +153,10 @@ contract PassthroughAdapterTest is Test {
     // ── Integration: deposit→redeem round-trip ────────────────────────────
 
     /// @notice Issue #277 acceptance criterion: deposit 1e6 USDC into fresh
-    ///         RobotMoneyVault + PassthroughAdapter, assert:
+    ///         RobotMoneyVault + NoYieldTestAdapter, assert:
     ///           - balanceOf(user) >= 1e24 (decimalsOffset=18)
     ///           - previewRedeem(balanceOf) >= 999_000 (zero-fee, within rounding)
-    function testPassthroughRoundTrip() public {
+    function testNoYieldRoundTrip() public {
         uint256 depositAmount = ONE_USDC; // 1 USDC
 
         // --- Deposit ---

@@ -244,7 +244,6 @@ Current stable-yield adapters (for `RobotMoneyVault`):
   exposure.
 - `CompoundV3Adapter` supplies USDC to Compound V3 Comet on Base and
   forwards withdrawn USDC back to the vault.
-- `PassthroughAdapter` is for devnet and smoke tests only.
 
 Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
 `BasketVault` subclasses including `RwaVault`, `ProtocolAssetVault`, and

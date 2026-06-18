@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -7,8 +7,8 @@ Test
 Exercises the deploy script in-process and asserts the post-deploy
 invariants the operator and downstream tooling rely on (issue #10).
 The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
-+ MorphoAdapter (issue #363) instead of MockVault or PassthroughAdapter.
-MockVault and PassthroughAdapter are retained only for their own unit
++ MorphoAdapter (issue #363) instead of MockVault.
+MockVault is retained only for its own unit
 tests.  The script always binds the gateway to an externally-supplied
 USDC token; this test deploys a `TestERC20` helper and passes its
 address in.  The smoke-test devnet does the same with the canonical
@@ -84,6 +84,22 @@ function _run() internal returns (Deploy.Deployed memory);
 
 ```solidity
 function test_deploy_wiresUsdcVaultAndAdminPauserRoles() public;
+```
+
+### test_deploy_wiresThreeDistinctRealAdapterAddresses
+
+The production deploy path wires exactly three DISTINCT real
+adapter addresses — no single-address aliasing. This is the
+regression guard for the removed test-only no-yield deploy hatch
+(issue #912), which used to alias all three typed adapter fields
+to one no-yield adapter instance. `runInProcessWith` shares the
+same `_doDeploy` adapter-construction code path as the broadcast
+`run()` entrypoint, so this exercises the `run()`-equivalent
+wiring.
+
+
+```solidity
+function test_deploy_wiresThreeDistinctRealAdapterAddresses() public;
 ```
 
 ### test_deploy_authorizesAgentWithSanePolicy

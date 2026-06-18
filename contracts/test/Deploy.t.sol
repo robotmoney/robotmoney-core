@@ -17,8 +17,8 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 /// @dev Exercises the deploy script in-process and asserts the post-deploy
 ///      invariants the operator and downstream tooling rely on (issue #10).
 ///      The script deploys RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter
-///      + MorphoAdapter (issue #363) instead of MockVault or PassthroughAdapter.
-///      MockVault and PassthroughAdapter are retained only for their own unit
+///      + MorphoAdapter (issue #363) instead of MockVault.
+///      MockVault is retained only for its own unit
 ///      tests.  The script always binds the gateway to an externally-supplied
 ///      USDC token; this test deploys a `TestERC20` helper and passes its
 ///      address in.  The smoke-test devnet does the same with the canonical
@@ -83,6 +83,50 @@ contract DeployTest is Test {
 
         // Runtime hash pinned correctly.
         assertEq(d.gatewayRuntimeHash, keccak256(address(d.gateway).code));
+    }
+
+    /// @notice The production deploy path wires exactly three DISTINCT real
+    ///         adapter addresses — no single-address aliasing. This is the
+    ///         regression guard for the removed test-only no-yield deploy hatch
+    ///         (issue #912), which used to alias all three typed adapter fields
+    ///         to one no-yield adapter instance. `runInProcessWith` shares the
+    ///         same `_doDeploy` adapter-construction code path as the broadcast
+    ///         `run()` entrypoint, so this exercises the `run()`-equivalent
+    ///         wiring.
+    function test_deploy_wiresThreeDistinctRealAdapterAddresses() public {
+        Deploy.Deployed memory d = _run();
+
+        address aave = address(d.aaveAdapter);
+        address compound = address(d.compoundAdapter);
+        address morpho = address(d.morphoAdapter);
+
+        // No zero addresses.
+        assertTrue(aave != address(0), "aaveAdapter is zero");
+        assertTrue(compound != address(0), "compoundAdapter is zero");
+        assertTrue(morpho != address(0), "morphoAdapter is zero");
+
+        // All three are pairwise distinct — no single-address aliasing.
+        assertTrue(aave != compound, "aave aliases compound");
+        assertTrue(aave != morpho, "aave aliases morpho");
+        assertTrue(compound != morpho, "compound aliases morpho");
+
+        // Each is a real, distinct adapter type wired to the vault: the three
+        // real adapters expose the Base-mainnet protocol immutables that a
+        // single aliased no-yield adapter could not.
+        assertEq(address(d.aaveAdapter.POOL()), script.AAVE_V3_POOL(), "aave POOL mismatch");
+        assertEq(
+            address(d.compoundAdapter.COMET()),
+            script.COMPOUND_V3_COMET(),
+            "compound COMET mismatch"
+        );
+        assertEq(
+            address(d.morphoAdapter.MORPHO_VAULT()),
+            script.MORPHO_GAUNTLET_USDC_PRIME(),
+            "morpho vault mismatch"
+        );
+
+        // Exactly three active adapters registered (no fourth, no single-arm).
+        assertEq(d.vault.activeAdapterCount(), 3, "vault should have 3 active adapters");
     }
 
     function test_deploy_authorizesAgentWithSanePolicy() public {

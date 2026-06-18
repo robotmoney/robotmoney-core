@@ -5,7 +5,7 @@ import {ERC4626Test} from "erc4626-tests/ERC4626.test.sol";
 import {IERC20 as OZIERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
 /// @title RobotMoneyVault4626Conformance
@@ -14,7 +14,7 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///
 /// @dev Configured for the *vanilla* ERC-4626 surface: `exitFeeBps == 0` so that
 ///      `preview*` ↔ `redeem`/`withdraw` parity holds without fee adjustment. A
-///      single `PassthroughAdapter` is registered with a 100% cap so that
+///      single no-yield test adapter is registered with a 100% cap so that
 ///      `_deposit`'s `NoActiveAdapters` guard passes and yield can be simulated
 ///      by minting to the vault's idle balance (counted by `totalAssets()`).
 ///
@@ -39,7 +39,7 @@ contract RobotMoneyVault4626Conformance is ERC4626Test {
             address(this) // emergencyResponder — this test contract
         );
 
-        PassthroughAdapter adapter = new PassthroughAdapter(address(underlying), address(vault));
+        NoYieldTestAdapter adapter = new NoYieldTestAdapter(address(underlying), address(vault));
         vault.setAdapterAllowed(address(adapter), true);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vault.addAdapter(address(adapter), 10000); // 100% cap
@@ -69,7 +69,7 @@ contract RobotMoneyVault4626ConformanceWithFee is ERC4626Test {
             address(this) // emergencyResponder
         );
 
-        PassthroughAdapter adapter = new PassthroughAdapter(address(underlying), address(vault));
+        NoYieldTestAdapter adapter = new NoYieldTestAdapter(address(underlying), address(vault));
         vault.setAdapterAllowed(address(adapter), true);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vault.addAdapter(address(adapter), 10000); // 100% cap

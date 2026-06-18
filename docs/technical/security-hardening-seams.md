@@ -63,9 +63,10 @@ error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
 
 The address allowlist lets operators approve exact deployed adapter instances.
 The code-hash allowlist prevents an approved address entry from being used for
-an unexpected implementation in tests and deployment scripts. Devnet
-`PassthroughAdapter` can be allowed by deployment profile, but production deploy
-scripts must not approve devnet-only adapter code hashes.
+an unexpected implementation in tests and deployment scripts. Test-only no-yield
+adapters (e.g. the `NoYieldTestAdapter` fixture under `contracts/test/`) may be
+allowed in unit tests, but production deploy scripts must not approve any
+test-only adapter code hashes.
 
 Allocation code should treat the `active` flag as necessary but not sufficient:
 any path that can send USDC to an adapter (`_allocateTo`, `rebalance`,

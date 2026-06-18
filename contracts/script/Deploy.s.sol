@@ -12,7 +12,6 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
@@ -29,8 +28,6 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///
 ///         MockVault is NOT deployed by this script; it is only used by
 ///         gateway deposit-routing unit tests directly. See issue #277.
-///         PassthroughAdapter is NOT registered by this script; it is
-///         retained in the codebase for unit tests only. See issue #363.
 /// @dev Implements `Plan tracking issue #109` §5 step 1–2 and
 ///      satisfies issue #10. Inputs are env-driven so the same script works
 ///      on Anvil, the docker devnet, and (with care) any throwaway L1.
@@ -57,17 +54,6 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 ///        AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 ///        DEPLOYMENT_OUT         — output JSON path,
 ///                                 default = "deployments/<chain_id>.json"
-///        USE_PASSTHROUGH_ADAPTER — bool, default = false.
-///                                 When true, deploys a single `PassthroughAdapter`
-///                                 instead of the three real protocol adapters.
-///                                 Required on the Geth+Lighthouse smoke-test devnet
-///                                 because that chain boots from a genesis snapshot
-///                                 containing only warm-storage slots — real Aave,
-///                                 Compound, and Morpho contracts have bytecode but
-///                                 no on-chain state, so any call that returns a
-///                                 uint256 (e.g. `balanceOf`) would be ABI-decoded
-///                                 from an empty return and revert.  Set automatically
-///                                 by the smoke-test Rust harness.
 contract Deploy is Script {
     using stdJson for string;
 
@@ -81,9 +67,6 @@ contract Deploy is Script {
     ///      use the separate `MockVault` import directly.
     ///      `aaveAdapter`, `compoundAdapter`, and `morphoAdapter` are the
     ///      real protocol adapters registered with the vault at deploy time.
-    ///      When `USE_PASSTHROUGH_ADAPTER=true` all three adapter fields point
-    ///      to the same `PassthroughAdapter` instance (Geth devnet only — real
-    ///      protocol contracts have no on-chain state there).
     struct Deployed {
         address usdc;
         RobotMoneyVault vault;
@@ -96,10 +79,6 @@ contract Deploy is Script {
         address agent;
         address shareReceiver;
         bytes32 gatewayRuntimeHash;
-        /// @dev True when deployed with `USE_PASSTHROUGH_ADAPTER=true`.
-        ///      All three adapter fields share the same `PassthroughAdapter`
-        ///      address; only one `addAdapter` call is needed.
-        bool passthroughMode;
     }
 
     /// @notice Canonical Base mainnet USDC (FiatTokenProxy). The smoke-test
@@ -163,10 +142,10 @@ contract Deploy is Script {
         uint256 seedShares = d.vault.deposit(SEED_DEPOSIT_AMOUNT, d.admin);
         // Allow up to 1 bps (0.01%) rounding loss when real yield-protocol adapters
         // (Aave V3, Compound V3, Morpho) convert USDC to yield-bearing tokens and
-        // back. PassthroughAdapter is lossless (exact amount round-trips), but real
-        // adapters may lose a few token dust units due to integer division in
-        // exchange-rate math. The security property here is that assets actually
-        // landed in the vault (totalAssets > 0), not that the exact amount round-tripped.
+        // back. Real adapters may lose a few token dust units due to integer
+        // division in exchange-rate math. The security property here is that
+        // assets actually landed in the vault (totalAssets > 0), not that the
+        // exact amount round-tripped.
         require(
             d.vault.totalAssets() >= SEED_DEPOSIT_AMOUNT * 9_999 / 10_000,
             "seed deposit: totalAssets too low"
@@ -305,17 +284,12 @@ contract Deploy is Script {
     }
 
     function _approveAndRegisterAdapters(Deployed memory d) internal {
-        if (d.passthroughMode) {
-            _approveAdapter(d.vault, address(d.aaveAdapter));
-            d.vault.addAdapter(address(d.aaveAdapter), 10_000);
-        } else {
-            _approveAdapter(d.vault, address(d.aaveAdapter));
-            _approveAdapter(d.vault, address(d.compoundAdapter));
-            _approveAdapter(d.vault, address(d.morphoAdapter));
-            d.vault.addAdapter(address(d.aaveAdapter), 3_334);
-            d.vault.addAdapter(address(d.compoundAdapter), 3_333);
-            d.vault.addAdapter(address(d.morphoAdapter), 3_333);
-        }
+        _approveAdapter(d.vault, address(d.aaveAdapter));
+        _approveAdapter(d.vault, address(d.compoundAdapter));
+        _approveAdapter(d.vault, address(d.morphoAdapter));
+        d.vault.addAdapter(address(d.aaveAdapter), 3_334);
+        d.vault.addAdapter(address(d.compoundAdapter), 3_333);
+        d.vault.addAdapter(address(d.morphoAdapter), 3_333);
     }
 
     /// @dev Executes the mandatory seed deposit of SEED_DEPOSIT_AMOUNT USDC from
@@ -382,8 +356,7 @@ contract Deploy is Script {
         //    vault. Deployed with exitFeeBps=0 and real Aave V3, Compound V3,
         //    and Morpho strategy adapters using canonical Base mainnet protocol
         //    addresses (issue #363). MockVault is retained in the codebase only
-        //    for gateway deposit-routing unit tests. PassthroughAdapter is
-        //    retained for unit tests only and is NOT registered here.
+        //    for gateway deposit-routing unit tests.
         //
         //    Vault constructor parameters:
         //      tvlCap        = 10M USDC (generous for devnet, no real risk)
@@ -416,28 +389,13 @@ contract Deploy is Script {
         // see run(), runInProcess(), and runInProcessWith() — because the
         // caller context differs between broadcast and in-process test modes.
         //
-        // USE_PASSTHROUGH_ADAPTER=true → deploy one PassthroughAdapter and
-        // alias all three typed fields to its address.  No longer needed for
-        // the Geth+Lighthouse smoke-test devnet: the genesis snapshot now
-        // carries real Aave V3 / Compound V3 / Morpho storage (issue #685 —
-        // adapter warming round-trip in scripts/devnet/snapshot-fork.sh).
-        // Kept as an escape hatch for local debugging only — Fixture::new()
-        // no longer passes this env var.
-        d.passthroughMode = vm.envOr("USE_PASSTHROUGH_ADAPTER", false);
-        if (d.passthroughMode) {
-            PassthroughAdapter pt = new PassthroughAdapter(d.usdc, address(d.vault));
-            d.aaveAdapter = AaveV3Adapter(address(pt));
-            d.compoundAdapter = CompoundV3Adapter(address(pt));
-            d.morphoAdapter = MorphoAdapter(address(pt));
-        } else {
-            // Protocol addresses are Base mainnet constants — production or
-            // Anvil fork deployments where real protocol state is available.
-            d.aaveAdapter =
-                new AaveV3Adapter(AAVE_V3_POOL, d.usdc, AAVE_V3_A_TOKEN, address(d.vault));
-            d.compoundAdapter = new CompoundV3Adapter(COMPOUND_V3_COMET, d.usdc, address(d.vault));
-            d.morphoAdapter =
-                new MorphoAdapter(MORPHO_GAUNTLET_USDC_PRIME, d.usdc, address(d.vault));
-        }
+        // Protocol addresses are Base mainnet constants — production or Anvil
+        // fork deployments where real protocol state is available (the devnet
+        // genesis/fork-state snapshot carries real Aave V3 / Compound V3 /
+        // Morpho storage; see scripts/devnet/snapshot-fork.sh).
+        d.aaveAdapter = new AaveV3Adapter(AAVE_V3_POOL, d.usdc, AAVE_V3_A_TOKEN, address(d.vault));
+        d.compoundAdapter = new CompoundV3Adapter(COMPOUND_V3_COMET, d.usdc, address(d.vault));
+        d.morphoAdapter = new MorphoAdapter(MORPHO_GAUNTLET_USDC_PRIME, d.usdc, address(d.vault));
         d.gateway = new RobotMoneyGateway(
             IERC20(d.usdc), IERC4626(address(d.vault)), d.admin, d.pauser, address(0)
         );
@@ -453,15 +411,9 @@ contract Deploy is Script {
         //    forge unit tests mint via the `TestERC20` helper directly.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
 
-        if (d.passthroughMode) {
-            console2.log(
-                "RobotMoneyVault + PassthroughAdapter (x3 alias) + RobotMoneyGateway deployed [USE_PASSTHROUGH_ADAPTER=true]"
-            );
-        } else {
-            console2.log(
-                "RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter + MorphoAdapter + RobotMoneyGateway deployed"
-            );
-        }
+        console2.log(
+            "RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter + MorphoAdapter + RobotMoneyGateway deployed"
+        );
         console2.log("  usdc             :", d.usdc);
         console2.log("  vault            :", address(d.vault));
         console2.log("  aave_adapter     :", address(d.aaveAdapter));

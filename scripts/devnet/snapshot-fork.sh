@@ -290,8 +290,8 @@ rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP"
 #   snapshot actually executes a deposit→redeem through each adapter, the
 #   protocol contracts land in genesis with bytecode but no live reserve /
 #   index / position storage, so `balanceOf`/`accrue` style calls decode
-#   empty returndata and revert — which is exactly why the devnet was
-#   pinned to PassthroughAdapter before this issue.
+#   empty returndata and revert — which is exactly why the devnet relied on
+#   a test-only no-yield deploy hatch before issue #685 warmed this storage.
 #
 #   Running one deposit and one partial redeem here forces anvil to fetch
 #   the reserve config, liquidity/borrow index, aToken supply, Comet base

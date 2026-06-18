@@ -1578,7 +1578,7 @@ impl Fixture {
     /// 1. **Router deposit** — `PortfolioRouter.deposit(uint256,uint256[])`
     ///    splits `per_user_usdc` across all four router-eligible vaults by the
     ///    on-chain 8500/500/500/500 bps weight vector (issue #621): the primary
-    ///    `RobotMoneyVault` (§11.1, `PassthroughAdapter`), `RwaVault` (§11.4,
+    ///    `RobotMoneyVault` (§11.1, real Aave/Compound/Morpho adapters), `RwaVault` (§11.4,
     ///    rmRWA, ADR-0006 §1 amended 2026-06-05), `ProtocolAssetVault` (§11.2,
     ///    rmPROTO) and `AgentTokenVault` (§11.3, rmAGENT, issues #559/#560). The
     ///    basket and RWA legs execute real USDC → token swaps through the demo
@@ -1711,7 +1711,7 @@ impl Fixture {
                         // direct deposit guarantees every depositor holds primary
                         // shares. NOTE: the primary RobotMoneyVault on the Geth
                         // devnet routes deposits through the real Aave/Compound/
-                        // Morpho strategy adapters (NOT a 1:1 PassthroughAdapter,
+                        // Morpho strategy adapters (NOT a 1:1 no-yield adapter,
                         // an earlier comment claimed that in error). That real-
                         // adapter path can intermittently revert under load, which
                         // — when swallowed — left the depositor with zero primary

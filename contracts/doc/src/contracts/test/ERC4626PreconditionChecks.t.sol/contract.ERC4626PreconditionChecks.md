@@ -1,5 +1,5 @@
 # ERC4626PreconditionChecks
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/ERC4626PreconditionChecks.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/ERC4626PreconditionChecks.t.sol)
 
 **Inherits:**
 Test
@@ -8,7 +8,7 @@ Test
 ERC4626PreconditionChecks
 
 Suite-19 precondition gate. For every `exitFeeBps` tier
-(0, 30, 100) × adapter (passthrough, aave, compound, morpho)
+(0, 30, 100) × adapter (aave, compound, morpho)
 this asserts the vault's structural ERC-4626 preconditions on a
 freshly-deployed, empty vault: `asset()`, `decimals()`, and the
 empty-vault share-price invariants. The CI matrix re-runs this
@@ -147,7 +147,6 @@ function _deployAdapter(AdapterKind kind, RobotMoneyVault vault, TestERC20 usdc)
 
 ```solidity
 enum AdapterKind {
-    Passthrough,
     Aave,
     Compound,
     Morpho

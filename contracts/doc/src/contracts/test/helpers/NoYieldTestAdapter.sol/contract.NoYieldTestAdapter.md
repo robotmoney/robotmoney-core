@@ -1,23 +1,24 @@
-# PassthroughAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/adapters/PassthroughAdapter.sol)
+# NoYieldTestAdapter
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/helpers/NoYieldTestAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
 
 **Title:**
-PassthroughAdapter
+NoYieldTestAdapter
 
-A no-yield IStrategyAdapter that simply holds deposited USDC in this
-contract with no external protocol calls. Intended solely for smoke-test
-devnet deployments where real yield adapters (AaveV3, Morpho, etc.) are
-unavailable or unnecessary.
+A test-only, no-yield IStrategyAdapter that simply holds deposited
+USDC in this contract with no external protocol calls. It exists
+purely to give RobotMoneyVault unit tests a lossless, deterministic
+adapter that satisfies the IStrategyAdapter interface without
+depending on real Aave/Compound/Morpho protocol state.
 
-This adapter satisfies the IStrategyAdapter interface required by
-RobotMoneyVault.addAdapter(). No interest accrues — totalAssets() always
+Lives under `contracts/test/` so it is NOT part of the production
+artifact set (`foundry.toml` `src = "contracts"`, `test =
+"contracts/test"`). No interest accrues — `totalAssets()` always
 returns the raw USDC balance held by this contract.
-Usage: deploy this adapter, then call vault.addAdapter(address(adapter), capBps)
-from the ADMIN_ROLE account so the vault routes deposits through it.
-This adapter must NOT be used on mainnet — it provides zero yield.
+This adapter must NEVER be deployed to a live chain — it provides zero
+yield and exists only as a unit-test fixture.
 
 
 ## Constants

@@ -17,7 +17,7 @@ import {RwaVault} from "../vaults/RwaVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {AdapterBytecodeGuard} from "../script/AdapterBytecodeGuard.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
@@ -52,12 +52,13 @@ contract DeployDemoExtraVaultsTest is Test {
         registry = new VaultRegistry(admin);
         router = new PortfolioRouter(address(usdc), address(registry), admin);
 
-        // Deploy + wire the primary vault the same way Deploy.s.sol does on
-        // the devnet (passthrough adapter), register it, and opt it in.
+        // Deploy + wire the primary vault, register it, and opt it in. A
+        // no-yield test adapter stands in for the real protocol adapters this
+        // unit test does not exercise.
         primaryVault = new RobotMoneyVault(
             IERC20(address(usdc)), 10_000_000 * 1e6, 1_000_000 * 1e6, 0, admin, admin, admin
         );
-        PassthroughAdapter adapter = new PassthroughAdapter(address(usdc), address(primaryVault));
+        NoYieldTestAdapter adapter = new NoYieldTestAdapter(address(usdc), address(primaryVault));
         AdapterBytecodeGuard.requireNoDelegatecall(address(adapter));
         primaryVault.setAdapterAllowed(address(adapter), true);
         primaryVault.setAdapterCodeHashAllowed(address(adapter).codehash, true);

@@ -1,8 +1,9 @@
 //! Smoke-test: RobotMoneyVault deposit→redeem round-trip on the devnet.
 //!
-//! Verifies that the smoke-test devnet deploys RobotMoneyVault + PassthroughAdapter
-//! and that a full deposit→redeem round-trip returns USDC within rounding tolerance
-//! at exitFeeBps=0. Issue #277 test-plan item 3.
+//! Verifies that the smoke-test devnet deploys RobotMoneyVault wired to the
+//! three real Aave/Compound/Morpho adapters and that a full deposit→redeem
+//! round-trip returns USDC within rounding tolerance at exitFeeBps=0.
+//! Issue #277 test-plan item 3.
 //!
 //! Run with:
 //!   cargo test -p smoke-test --release --test vault_deposit_redeem -- --test-threads=1 --nocapture
@@ -80,7 +81,7 @@ fn erc20_balance(rpc_url: &str, token: Address, owner: Address) -> u128 {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Full deposit→redeem round-trip with RobotMoneyVault + PassthroughAdapter.
+/// Full deposit→redeem round-trip with RobotMoneyVault + real adapters.
 ///
 /// Steps:
 /// 1. Agent approves vault to pull USDC.

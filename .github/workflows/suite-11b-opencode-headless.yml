@@ -110,13 +110,20 @@ jobs:
       - name: Put rmpc on PATH
         run: echo "$PWD/target/release" >> "$GITHUB_PATH"
 
-      - name: Start Anvil devnet
+      # Boot Anvil from the warmed Base fork-state fixture so the three REAL
+      # Aave V3 / Compound V3 / Morpho adapters have live protocol storage to
+      # call (issue #912 — this replaced the bare non-forked anvil that forced
+      # the now-deleted test-only no-yield deploy hatch). The helper loads
+      # testing/fixtures/fork-state/CURRENT.anvil-state, replays the canonical
+      # Base USDC proxy storage seed + impl bytecode, advances the next-block
+      # timestamp, and funds ADMIN with USDC (the agent is funded later, after
+      # its key is generated). It prints the canonical Base USDC address.
+      - name: Start Anvil devnet from fork-state fixture
         run: |
-          anvil &
-          for i in $(seq 1 30); do
-            cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break
-            sleep 1
-          done
+          set -euo pipefail
+          ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
+          USDC_ADDR=$(scripts/devnet/boot-fork-state-anvil.sh http://127.0.0.1:8545 "$ADMIN")
+          echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       # Issue #469: derive ADMIN/PAUSER/SHARE_RECEIVER from Anvil's funded
       # accounts, but DO NOT pre-bake AGENT_ADDRESS from an Anvil account.
@@ -137,21 +144,6 @@ jobs:
           # (msg.sender at authorizeAgent) for the later authorization assert.
           ADMIN=$(echo "$ACCOUNTS" | jq -r '.[0]')
           echo "PARENT_ADDRESS=$ADMIN" >> $GITHUB_ENV
-
-      - name: Deploy mock USDC
-        run: |
-          set -euo pipefail
-          DEPLOY_OUT=$(forge create contracts/test/helpers/TestERC20.sol:TestERC20 \
-            --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
-          USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
-          echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
-          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
-          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
-          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
-          # must be minted that seed before the deploy or the deposit reverts with
-          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
-          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
-            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
 
       # Issue #469: this step replaces the broken keystore-import
       # invocation that previously lived in this workflow (it passed the
@@ -213,12 +205,16 @@ jobs:
           # deposit. anvil_setBalance is the standard Anvil-only fast path.
           cast rpc anvil_setBalance "$AGENT_ADDR_FROM_KEYSTORE" "0xDE0B6B3A7640000" \
             --rpc-url http://127.0.0.1:8545
-          # Fund the agent with mock USDC too: the gateway deposit pulls
+          # Fund the agent with USDC too: the gateway deposit pulls
           # `transferFrom(agent, gateway, amount)`, so the headless "deposit 1 USDC"
           # run reverts with ERC20InsufficientBalance unless the generated key
-          # actually holds USDC. mint() is permissionless on TestERC20.
-          cast send "$USDC_ADDRESS" "mint(address,uint256)" "$AGENT_ADDR_FROM_KEYSTORE" 1000000000 \
-            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
+          # actually holds USDC. The fork-state USDC is the canonical Base
+          # FiatToken (no permissionless mint), so write the agent's balance
+          # slot directly — the same hermetic technique scripts/devnet/snapshot-fork.sh
+          # uses for the deployer. FiatToken balances mapping lives at slot 9.
+          AGENT_BAL_SLOT=$(cast index address "$AGENT_ADDR_FROM_KEYSTORE" 9)
+          cast rpc anvil_setStorageAt "$USDC_ADDRESS" "$AGENT_BAL_SLOT" \
+            "$(cast to-uint256 1000000000)" --rpc-url http://127.0.0.1:8545
           # Persist the agent privkey (masked) so a post-deploy step can sign
           # the USDC approval from the agent itself once the gateway address is
           # known. rmpc has no approve command (approvals flow through the human
@@ -228,12 +224,9 @@ jobs:
           echo "AGENT_PRIVKEY=$AGENT_PRIVKEY" >> $GITHUB_ENV
 
       - name: Deploy contracts on devnet (authorizes generated agent)
-        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
-        # default real adapters' seed-deposit totalAssets() reverts with
-        # 'call to non-contract address'. PassthroughAdapter is the documented
-        # lossless escape hatch for non-forked devnets.
-        env:
-          USE_PASSTHROUGH_ADAPTER: "true"
+        # Deploys the three real Aave/Compound/Morpho adapters against the
+        # warmed Base fork-state fixture (real protocol storage is present, so
+        # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
           # Deploy.s.sol reads AGENT_ADDRESS from env and calls
@@ -449,13 +442,17 @@ jobs:
       - name: Put rmpc on PATH
         run: echo "$PWD/target/release" >> "$GITHUB_PATH"
 
-      - name: Start Anvil devnet
+      # Boot Anvil from the warmed Base fork-state fixture (issue #912) so the
+      # three real adapters have live protocol storage; fund ADMIN (deployer)
+      # and the read-only AGENT account with USDC. See the deposit job for the
+      # rationale and the helper's seed/funding steps.
+      - name: Start Anvil devnet from fork-state fixture
         run: |
-          anvil &
-          for i in $(seq 1 30); do
-            cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break
-            sleep 1
-          done
+          set -euo pipefail
+          ADMIN=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
+          AGENT=$(cast wallet address --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 2)
+          USDC_ADDR=$(scripts/devnet/boot-fork-state-anvil.sh http://127.0.0.1:8545 "$ADMIN" "$AGENT")
+          echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
 
       - name: Derive deploy addresses from Anvil accounts
         run: |
@@ -468,28 +465,10 @@ jobs:
           PRIVKEY=$(cast wallet private-key --mnemonic "test test test test test test test test test test test junk" --mnemonic-index 0)
           echo "ANVIL_PRIVKEY=$PRIVKEY" >> $GITHUB_ENV
 
-      - name: Deploy mock USDC
-        run: |
-          set -euo pipefail
-          DEPLOY_OUT=$(forge create contracts/test/helpers/TestERC20.sol:TestERC20 \
-            --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY" 2>&1)
-          USDC_ADDR=$(echo "$DEPLOY_OUT" | grep "Deployed to:" | awk '{print $NF}')
-          echo "USDC_ADDRESS=$USDC_ADDR" >> $GITHUB_ENV
-          # Deploy.s.sol seeds the vault with SEED_DEPOSIT_AMOUNT (1,000 USDC)
-          # from the broadcaster (ADMIN_ADDRESS) to prevent the share-price
-          # inflation attack. TestERC20 starts at zero supply, so the broadcaster
-          # must be minted that seed before the deploy or the deposit reverts with
-          # ERC20InsufficientBalance. mint() is permissionless on TestERC20.
-          cast send "$USDC_ADDR" "mint(address,uint256)" "$ADMIN_ADDRESS" 1000000000 \
-            --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
-
       - name: Deploy contracts + fund agent on devnet
-        # Non-forked anvil has no real Aave/Compound/Morpho storage, so the
-        # default real adapters' seed-deposit totalAssets() reverts with
-        # 'call to non-contract address'. PassthroughAdapter is the documented
-        # lossless escape hatch for non-forked devnets.
-        env:
-          USE_PASSTHROUGH_ADAPTER: "true"
+        # Deploys the three real Aave/Compound/Morpho adapters against the
+        # warmed Base fork-state fixture (real protocol storage is present, so
+        # the seed-deposit totalAssets() succeeds — no passthrough hatch needed).
         run: |
           mkdir -p deployments
           forge script contracts/script/Deploy.s.sol --broadcast --rpc-url http://127.0.0.1:8545 --private-key "$ANVIL_PRIVKEY"
