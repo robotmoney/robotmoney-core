@@ -1365,10 +1365,29 @@ impl Rpc {
     pub fn wait_for_receipt(&self, hash: B256, timeout: Duration) -> Result<Receipt, HarnessError> {
         let start = Instant::now();
         loop {
-            let resp: serde_json::Value = self.rpc(
+            let resp: serde_json::Value = match self.rpc(
                 "eth_getTransactionReceipt",
                 serde_json::json!([format!("{:#x}", hash)]),
-            )?;
+            ) {
+                Ok(resp) => resp,
+                // Geth has a brief window right after a block is mined
+                // (especially just after devnet boot) where a tx is mined but
+                // not yet indexed, so eth_getTransactionReceipt transiently
+                // returns JSON-RPC error -32000 "transaction indexing is in
+                // progress". Treat it exactly like a null/pending receipt:
+                // honour the timeout, back off, and poll again. All other RPC
+                // errors propagate immediately.
+                Err(e) if is_indexing_transient(&e) => {
+                    if start.elapsed() > timeout {
+                        return Err(HarnessError::Rpc(format!(
+                            "receipt for {hash:?} not seen within {timeout:?}"
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if !resp.is_null() {
                 let status = resp.get("status").and_then(|s| s.as_str()).unwrap_or("0x0");
                 let gas_used = resp
@@ -1462,6 +1481,20 @@ impl Rpc {
 
 // -- Helpers -------------------------------------------------------
 
+/// Returns `true` iff `err` is Geth's transient "transaction indexing is in
+/// progress" error (JSON-RPC code -32000). Right after a block is mined —
+/// especially just after devnet boot — Geth reports a mined transaction as
+/// not-yet-indexed for a brief window, so `eth_getTransactionReceipt`
+/// transiently fails. [`Rpc::wait_for_receipt`] treats this like a pending
+/// receipt instead of a hard failure. Matched narrowly on the stable
+/// indexing-progress message substring so unrelated RPC errors still
+/// propagate. The harness `rpc()` helper stringifies the full JSON-RPC error
+/// object (code + message + data) into `HarnessError::Rpc`, so matching on the
+/// substring covers both the message and `data` placements Geth uses.
+fn is_indexing_transient(err: &HarnessError) -> bool {
+    matches!(err, HarnessError::Rpc(msg) if msg.contains("indexing is in progress"))
+}
+
 fn resolve_fork_pin(upstream: &str) -> Result<ForkPin, HarnessError> {
     if let Ok(v) = std::env::var("RMPC_FORK_BLOCK") {
         let block: u64 = v
@@ -1553,4 +1586,36 @@ fn sign_eip1559(tx: &TxEip1559, sk: &SigningKey) -> alloy_primitives::Signature 
     let s = U256::from_be_slice(&sig.s().to_bytes());
     let v: bool = matches!(recid.to_byte(), 1);
     alloy_primitives::Signature::from_rs_and_parity(r, s, v).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The transient-detection predicate that gates [`Rpc::wait_for_receipt`]'s
+    /// retry: it must match Geth's "indexing is in progress" message (however
+    /// `rpc()` stringifies the JSON-RPC error object) and nothing else, so the
+    /// receipt-wait loop retries the indexing window but propagates every
+    /// unrelated RPC error.
+    #[test]
+    fn is_indexing_transient_matches_geth_window_only() {
+        // The harness `rpc()` helper formats the whole JSON-RPC error object
+        // into the message; both the `message` and `data` placements Geth uses
+        // carry the same substring.
+        assert!(is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"transaction indexing is in progress\"}".to_string(),
+        )));
+        assert!(is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"the method ... is not available\",\"data\":\"transaction indexing is in progress\"}".to_string(),
+        )));
+        // Unrelated RPC error must not be treated as a transient.
+        assert!(!is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"execution reverted\"}"
+                .to_string(),
+        )));
+        // A non-RPC harness error never matches.
+        assert!(!is_indexing_transient(&HarnessError::BadForkBlock(
+            "indexing is in progress".to_string()
+        )));
+    }
 }
