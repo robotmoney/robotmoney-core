@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -308,5 +308,16 @@ default vector is present.
 
 ```solidity
 function test_bypassSequence_blockedAtUnlink() public;
+```
+
+### test_lastAdminFloor_registry_cannotDropSoleAdmin
+
+The sole ADMIN_ROLE holder on VaultRegistry cannot renounce or
+revoke itself to zero admins (LastAdminFloor); after a second
+admin is granted, the original can be dropped.
+
+
+```solidity
+function test_lastAdminFloor_registry_cannotDropSoleAdmin() public;
 ```
 

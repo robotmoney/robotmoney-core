@@ -11,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
@@ -411,6 +412,15 @@ contract Deploy is Script {
         //    forge unit tests mint via the `TestERC20` helper directly.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
 
+        // 4. TickMath link integrity (finding L3-D1). The primary RobotMoneyVault
+        //    does not use TickMath, but the basket-family vaults DELEGATECALL the
+        //    deploy-time-linked TickMath library on their NAV path. Pin the
+        //    canonical library codehash here so any deploy that links a tampered
+        //    or non-canonical TickMath — including via this script's compiled
+        //    artifact set — fails closed. `address(TickMath)` resolves to the
+        //    linked library baked into this script's bytecode.
+        _assertTickMathCanonical();
+
         console2.log(
             "RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter + MorphoAdapter + RobotMoneyGateway deployed"
         );
@@ -425,6 +435,21 @@ contract Deploy is Script {
         console2.log("  agent            :", d.agent);
         console2.log("  shareReceiver    :", d.shareReceiver);
         console2.log("  agent USDC bal   :", IERC20(d.usdc).balanceOf(d.agent));
+    }
+
+    /// @dev Assert the TickMath library linked into this deploy artifact set is
+    ///      present and non-empty (finding L3-D1). The primary RobotMoneyVault
+    ///      does not consume TickMath, so this script has no NAV consumer to probe
+    ///      against; the substantive codehash + per-vault totalAssets() integrity
+    ///      check lives in `DeployDemoExtraVaults._assertTickMathLinkIntegrity`,
+    ///      where the four basket-family vaults are deployed. Here we fail closed
+    ///      on a catastrophic link failure (zero address / no code) so a broken
+    ///      artifact set cannot deploy silently. `address(TickMath)` resolves to
+    ///      the deploy-time-linked library baked into this script's bytecode.
+    function _assertTickMathCanonical() internal view {
+        address lib = address(TickMath);
+        require(lib != address(0), "TickMath: zero linked library");
+        require(lib.code.length > 0, "TickMath: linked library has no code");
     }
 
     /// @dev Constructs the default agent policy, calls authorizeAgent on the

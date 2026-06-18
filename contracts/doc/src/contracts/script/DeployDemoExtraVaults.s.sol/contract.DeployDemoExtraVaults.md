@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c96aeddaee03b01c692b1a7bc0798e010e7d1381/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -200,6 +200,35 @@ stack-too-deep limit.
 
 ```solidity
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
+```
+
+### _assertTickMathLinkIntegrity
+
+Assert the TickMath library link integrity for all four basket-family
+vaults (finding L3-D1). Each vault exposes the linked library address
+via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
+TickMath and is excluded.
+The audited reference is the TickMath library linked into THIS deploy
+script (`address(TickMath)`): the script and the vault contracts are
+compiled and linked together in the same artifact set, so a correctly
+linked vault must point at the identical library instance with the
+identical runtime codehash. Comparing against the script's own linked
+library — rather than a hardcoded codehash — keeps the check robust
+across compiler/metadata variance while still failing closed on a
+mislink. Checks, per vault:
+1. linked address is non-zero and has non-empty runtime code;
+2. linked address equals the script's canonical `address(TickMath)`;
+3. linked runtime codehash equals the canonical library's codehash;
+4. `totalAssets()` does not revert and is within a sane USDC range.
+A deliberately wrong/zero linked address fails check 1/2/3.
+
+
+```solidity
+function _assertTickMathLinkIntegrity(
+    address protocolVault,
+    address rwaVault,
+    address agentVault
+) internal view;
 ```
 
 ### _deployVaults

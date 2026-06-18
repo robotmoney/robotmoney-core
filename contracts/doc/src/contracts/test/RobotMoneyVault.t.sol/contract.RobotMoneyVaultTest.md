@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -506,5 +506,29 @@ forceRemoveAdapter must pause deposits to close the share-price-crash arbitrage 
 
 ```solidity
 function test_forceRemoveAdapter_pausesDeposits() public;
+```
+
+### test_shutdownVault_isRecoverableByAdminNotEmergency
+
+EMERGENCY_ROLE can shut the vault down (deposits blocked,
+maxDeposit == 0) and the new ADMIN_ROLE-gated restoreVault
+re-opens deposits (maxDeposit > 0 and a deposit succeeds), while
+EMERGENCY_ROLE alone cannot restore (reverts). This proves a
+compromised emergency hot key can DoS but not permanently brick
+deposits — mirroring the documented pause/unpause asymmetry.
+
+
+```solidity
+function test_shutdownVault_isRecoverableByAdminNotEmergency() public;
+```
+
+### test_restoreVault_revertsWhenNotShutdownOrZeroCap
+
+restoreVault reverts when the vault is not shut down (NotShutdown)
+and when the supplied cap is zero (InvalidCap).
+
+
+```solidity
+function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public;
 ```
 

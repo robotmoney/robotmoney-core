@@ -27,10 +27,20 @@ interface IPortfolioRouter {
     /// @param assetRecipient    Address that receives the redeemed USDC per leg.
     /// @param sharesPerLeg      Vault shares to redeem per leg (parallel to weight list).
     ///                          Length must match the current weight vector.
+    /// @param minAssetsPerLeg   Per-leg USDC slippage floor (parallel to `sharesPerLeg`).
+    ///                          Reverts `SlippageExceeded` if realized proceeds fall
+    ///                          below the floor. A floor of 0 disables the check for
+    ///                          that leg; length must match `sharesPerLeg`.
+    /// @param deadline          Unix timestamp after which the call reverts
+    ///                          `DeadlineExpired`. Pass `type(uint256).max` to disable.
     /// @return assetsPerLeg     USDC received per leg (parallel to `sharesPerLeg`).
-    function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
-        external
-        returns (uint256[] memory assetsPerLeg);
+    function redeemFor(
+        address shareHolder,
+        address assetRecipient,
+        uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
+        uint256 deadline
+    ) external returns (uint256[] memory assetsPerLeg);
 
     /// @notice Return the currently active vault list used for deposit/redeem
     ///         routing (the voted vector when active, otherwise the default).

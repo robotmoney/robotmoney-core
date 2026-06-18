@@ -31,6 +31,8 @@
 - [ConfusedDeputyGuardsTest](ConfusedDeputyGuards.t.sol/contract.ConfusedDeputyGuardsTest.md)
 - [BasketVaultSwapGuardsTest](ConfusedDeputyGuards.t.sol/contract.BasketVaultSwapGuardsTest.md)
 - [PortfolioRouterRuntimeEligibilityTest](ConfusedDeputyGuards.t.sol/contract.PortfolioRouterRuntimeEligibilityTest.md)
+- [BadTickMathVault](Deploy.t.sol/contract.BadTickMathVault.md)
+- [DeployDemoExtraVaultsHarness](Deploy.t.sol/contract.DeployDemoExtraVaultsHarness.md)
 - [DeployTest](Deploy.t.sol/contract.DeployTest.md)
 - [IERC4626Min](DeployDemoExtraVaults.t.sol/interface.IERC4626Min.md)
 - [DeployDemoExtraVaultsTest](DeployDemoExtraVaults.t.sol/contract.DeployDemoExtraVaultsTest.md)

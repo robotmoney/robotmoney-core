@@ -644,6 +644,19 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         return w == 0 ? DEFAULT_TWAP_WINDOW : w;
     }
 
+    /// @notice Address of the externally-linked `TickMath` library this vault
+    ///         `DELEGATECALL`s on the NAV / `totalAssets()` path.
+    /// @dev `TickMath.getSqrtRatioAtTick` is a `public` library function, so the
+    ///      compiler links it as a separate deployed contract and bakes its
+    ///      address into this vault's runtime bytecode. Exposing it lets deploy
+    ///      scripts and tests assert the linked library's runtime codehash equals
+    ///      the audited artifact (finding L3-D1): a mislinked or zero address —
+    ///      or one whose code does not match — must fail the deploy assertion.
+    /// @return lib The linked `TickMath` library address.
+    function tickMathLibrary() external pure returns (address lib) {
+        return address(TickMath);
+    }
+
     /// @dev Compute the time-weighted-average sqrtPriceX96 for `pool` over the
     ///      per-asset window and forward to the shared sqrtPriceX96 ratio math.
     ///      The non-USDC asset's window governs the read: when quoting

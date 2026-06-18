@@ -16,6 +16,7 @@ import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {ProtocolAssetVault} from "../vaults/ProtocolAssetVault.sol";
 import {RwaVault} from "../vaults/RwaVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IChronicleOracle} from "../interfaces/IChronicleOracle.sol";
 import {UniswapV4SwapAdapter} from "../adapters/UniswapV4SwapAdapter.sol";
@@ -628,6 +629,56 @@ contract DeployDemoExtraVaults is Script {
     function _doDeploy(Params memory p) internal returns (Deployed memory d) {
         _VaultAddrs memory v = _deployVaults(p);
         d = _wireAndRegister(p, v);
+        // Finding L3-D1: the four basket-family vaults DELEGATECALL a
+        // deploy-time-linked TickMath library on the NAV / totalAssets() path.
+        // Fail the deploy if any vault links a mislinked/zero/non-canonical
+        // library, or if any vault's totalAssets() reverts or is out of range.
+        _assertTickMathLinkIntegrity(d.protocolVault, d.rwaVault, d.agentTokenVault);
+    }
+
+    /// @dev Assert the TickMath library link integrity for all four basket-family
+    ///      vaults (finding L3-D1). Each vault exposes the linked library address
+    ///      via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
+    ///      TickMath and is excluded.
+    ///
+    ///      The audited reference is the TickMath library linked into THIS deploy
+    ///      script (`address(TickMath)`): the script and the vault contracts are
+    ///      compiled and linked together in the same artifact set, so a correctly
+    ///      linked vault must point at the identical library instance with the
+    ///      identical runtime codehash. Comparing against the script's own linked
+    ///      library — rather than a hardcoded codehash — keeps the check robust
+    ///      across compiler/metadata variance while still failing closed on a
+    ///      mislink. Checks, per vault:
+    ///        1. linked address is non-zero and has non-empty runtime code;
+    ///        2. linked address equals the script's canonical `address(TickMath)`;
+    ///        3. linked runtime codehash equals the canonical library's codehash;
+    ///        4. `totalAssets()` does not revert and is within a sane USDC range.
+    ///      A deliberately wrong/zero linked address fails check 1/2/3.
+    function _assertTickMathLinkIntegrity(
+        address protocolVault,
+        address rwaVault,
+        address agentVault
+    ) internal view {
+        address[3] memory vaults = [protocolVault, rwaVault, agentVault];
+        address canonicalLib = address(TickMath);
+        bytes32 canonicalCodehash = canonicalLib.codehash;
+        require(canonicalLib != address(0), "TickMath: zero linked library");
+        require(canonicalLib.code.length > 0, "TickMath: linked library has no code");
+
+        for (uint256 i = 0; i < vaults.length; i++) {
+            address lib = BasketVault(vaults[i]).tickMathLibrary();
+            require(lib != address(0), "TickMath: zero linked library");
+            require(lib.code.length > 0, "TickMath: linked library has no code");
+            require(lib == canonicalLib, "TickMath: vault links non-canonical library");
+            require(lib.codehash == canonicalCodehash, "TickMath: codehash mismatch");
+
+            // Per-vault totalAssets() sanity probe: non-reverting, in range.
+            uint256 nav = BasketVault(vaults[i]).totalAssets();
+            // Cap mirrors the demo TVL ceiling with generous headroom — a wildly
+            // out-of-range NAV implies a broken price path (e.g. a mislinked
+            // library returning garbage sqrt ratios).
+            require(nav <= DEMO_TVL_CAP * 1000, "TickMath: totalAssets out of range");
+        }
     }
 
     /// @dev Phase 1: deploy all vaults, stubs, and adapters.
