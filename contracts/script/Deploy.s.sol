@@ -11,6 +11,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {AdapterBytecodeGuard} from "./AdapterBytecodeGuard.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
@@ -411,6 +412,15 @@ contract Deploy is Script {
         //    forge unit tests mint via the `TestERC20` helper directly.
         d.gatewayRuntimeHash = keccak256(address(d.gateway).code);
 
+        // 4. TickMath link integrity (finding L3-D1). The primary RobotMoneyVault
+        //    does not use TickMath, but the basket-family vaults DELEGATECALL the
+        //    deploy-time-linked TickMath library on their NAV path. Pin the
+        //    canonical library codehash here so any deploy that links a tampered
+        //    or non-canonical TickMath — including via this script's compiled
+        //    artifact set — fails closed. `address(TickMath)` resolves to the
+        //    linked library baked into this script's bytecode.
+        _assertTickMathCanonical();
+
         console2.log(
             "RobotMoneyVault + AaveV3Adapter + CompoundV3Adapter + MorphoAdapter + RobotMoneyGateway deployed"
         );
@@ -425,6 +435,26 @@ contract Deploy is Script {
         console2.log("  agent            :", d.agent);
         console2.log("  shareReceiver    :", d.shareReceiver);
         console2.log("  agent USDC bal   :", IERC20(d.usdc).balanceOf(d.agent));
+    }
+
+    /// @notice Audited runtime codehash of the canonical `TickMath` library.
+    ///         Must equal `DeployDemoExtraVaults.TICKMATH_AUDITED_CODEHASH`;
+    ///         both scripts pin the same value so a tampered library fails either
+    ///         deploy path (finding L3-D1). Regenerate via the
+    ///         `Deploy.t.sol` TickMath link-integrity test if the library or
+    ///         compiler settings legitimately change.
+    bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
+        0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e;
+
+    /// @dev Assert the TickMath library linked into this deploy artifact set is
+    ///      the canonical, audited code (finding L3-D1). `address(TickMath)`
+    ///      resolves to the deploy-time-linked library; a zero/mislinked or
+    ///      tampered library fails closed before any vault relies on its NAV math.
+    function _assertTickMathCanonical() internal view {
+        address lib = address(TickMath);
+        require(lib != address(0), "TickMath: zero linked library");
+        require(lib.code.length > 0, "TickMath: linked library has no code");
+        require(lib.codehash == TICKMATH_AUDITED_CODEHASH, "TickMath: codehash mismatch");
     }
 
     /// @dev Constructs the default agent policy, calls authorizeAgent on the

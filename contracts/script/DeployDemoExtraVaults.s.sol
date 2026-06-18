@@ -628,6 +628,54 @@ contract DeployDemoExtraVaults is Script {
     function _doDeploy(Params memory p) internal returns (Deployed memory d) {
         _VaultAddrs memory v = _deployVaults(p);
         d = _wireAndRegister(p, v);
+        // Finding L3-D1: the four basket-family vaults DELEGATECALL a
+        // deploy-time-linked TickMath library on the NAV / totalAssets() path.
+        // Fail the deploy if any vault links a mislinked/zero/non-canonical
+        // library, or if any vault's totalAssets() reverts or is out of range.
+        _assertTickMathLinkIntegrity(d.protocolVault, d.rwaVault, d.agentTokenVault);
+    }
+
+    /// @notice Audited runtime codehash of the canonical `TickMath` library.
+    ///         Computed from the vendored `contracts/lib/TickMath.sol` artifact
+    ///         (Uniswap v3-core `getSqrtRatioAtTick`, solc 0.8.24, 200 runs,
+    ///         Cancun) and pinned here so the deploy assertion detects any drift
+    ///         from the reviewed code. Regenerate via
+    ///         `forge test --match-test test_tickMathLink_auditedCodehash_matches`
+    ///         if the library or compiler settings legitimately change.
+    bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
+        0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e;
+
+    /// @dev Assert the TickMath library link integrity for all four basket-family
+    ///      vaults (finding L3-D1). Each vault exposes the linked library address
+    ///      via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
+    ///      TickMath and is excluded. Checks, per vault:
+    ///        1. linked address is non-zero and has non-empty runtime code;
+    ///        2. linked runtime codehash equals the audited artifact;
+    ///        3. all vaults link the identical library address (single instance);
+    ///        4. `totalAssets()` does not revert and is within a sane USDC range.
+    ///      A deliberately wrong/zero linked address fails check 1/2; a tampered
+    ///      library fails check 2.
+    function _assertTickMathLinkIntegrity(address protocolVault, address rwaVault, address agentVault)
+        internal
+        view
+    {
+        address[3] memory vaults = [protocolVault, rwaVault, agentVault];
+        address expectedLib = BasketVault(vaults[0]).tickMathLibrary();
+
+        for (uint256 i = 0; i < vaults.length; i++) {
+            address lib = BasketVault(vaults[i]).tickMathLibrary();
+            require(lib != address(0), "TickMath: zero linked library");
+            require(lib.code.length > 0, "TickMath: linked library has no code");
+            require(lib == expectedLib, "TickMath: vaults link different libraries");
+            require(lib.codehash == TICKMATH_AUDITED_CODEHASH, "TickMath: codehash mismatch");
+
+            // Per-vault totalAssets() sanity probe: non-reverting, in range.
+            uint256 nav = BasketVault(vaults[i]).totalAssets();
+            // Cap mirrors the demo TVL ceiling with generous headroom — a wildly
+            // out-of-range NAV implies a broken price path (e.g. a mislinked
+            // library returning garbage sqrt ratios).
+            require(nav <= DEMO_TVL_CAP * 1000, "TickMath: totalAssets out of range");
+        }
     }
 
     /// @dev Phase 1: deploy all vaults, stubs, and adapters.

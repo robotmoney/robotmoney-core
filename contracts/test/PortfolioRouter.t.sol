@@ -1274,7 +1274,9 @@ contract PortfolioRouterTest is Test {
                 PortfolioRouter.UnauthorizedRedeemer.selector, depositor, stranger
             )
         );
-        router.redeemFor(depositor, stranger, sharesToRedeem);
+        router.redeemFor(
+            depositor, stranger, sharesToRedeem, new uint256[](2), type(uint256).max
+        );
     }
 
     /// @notice shareHolder can call redeemFor on their own shares.
@@ -1301,7 +1303,9 @@ contract PortfolioRouterTest is Test {
         sharesToRedeem[1] = shares[1];
 
         vm.prank(depositor);
-        uint256[] memory assetsOut = router.redeemFor(depositor, depositor, sharesToRedeem);
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor, depositor, sharesToRedeem, new uint256[](2), type(uint256).max
+        );
 
         assertEq(assetsOut[0], shares[0]);
         assertEq(assetsOut[1], shares[1]);
