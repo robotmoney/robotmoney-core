@@ -177,8 +177,9 @@ Emergency controls:
   drain one adapter.
 - `forceRemoveAdapter(index)` marks an adapter inactive without
   withdrawing. Assets left there are treated as lost.
-- `shutdownVault()` permanently disables deposits by setting shutdown
-  and zeroing the TVL cap.
+- `shutdownVault()` disables deposits by setting shutdown and zeroing
+  the TVL cap. It is recoverable: `restoreVault(newTvlCap)` (ADMIN_ROLE)
+  clears the shutdown flag and re-opens deposits under a fresh cap.
 
 ## 6. Risk Model
 

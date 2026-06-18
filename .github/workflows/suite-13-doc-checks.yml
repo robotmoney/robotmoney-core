@@ -98,6 +98,15 @@ jobs:
       - name: Passthrough-removal invariant (issue #912 / #921)
         run: python3 .github/scripts/check_no_passthrough_adapter.py
 
+      - name: Self-test shutdownVault recoverability docs guard (issue #923)
+        # Confirms the stale-wording / missing-restoreVault / `permanently`
+        # rules fire BEFORE running the real check, so a silent regression in
+        # the guard cannot let a stale "irreversible shutdown" claim ship.
+        run: python3 .github/scripts/check_shutdown_restore_docs.py --self-test
+
+      - name: shutdownVault recoverability docs invariant (issue #923)
+        run: python3 .github/scripts/check_shutdown_restore_docs.py
+
       - name: RmpcError §7.2 variants documented in rmpc-read-output-contract.md (issue #806)
         run: python3 .github/scripts/check_rmpc_error_variants_doc.py
 
