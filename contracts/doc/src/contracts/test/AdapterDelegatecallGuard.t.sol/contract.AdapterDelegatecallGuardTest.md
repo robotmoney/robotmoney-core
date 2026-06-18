@@ -1,5 +1,5 @@
 # AdapterDelegatecallGuardTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/AdapterDelegatecallGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/AdapterDelegatecallGuard.t.sol)
 
 **Inherits:**
 Test
@@ -63,11 +63,11 @@ function test_requireNoDelegatecall_passesForCompoundAdapter() public;
 function test_requireNoDelegatecall_passesForMorphoAdapter() public;
 ```
 
-### test_requireNoDelegatecall_passesForPassthroughAdapter
+### test_requireNoDelegatecall_passesForNoYieldAdapter
 
 
 ```solidity
-function test_requireNoDelegatecall_passesForPassthroughAdapter() public;
+function test_requireNoDelegatecall_passesForNoYieldAdapter() public;
 ```
 
 ### test_containsDelegatecall_skipsPushImmediate

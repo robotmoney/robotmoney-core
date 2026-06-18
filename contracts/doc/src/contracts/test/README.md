@@ -54,7 +54,7 @@
 - [MockMorphoVault](MorphoAdapter.t.sol/contract.MockMorphoVault.md)
 - [ShortfallMorphoVault](MorphoAdapter.t.sol/contract.ShortfallMorphoVault.md)
 - [MorphoAdapterTest](MorphoAdapter.t.sol/contract.MorphoAdapterTest.md)
-- [PassthroughAdapterTest](PassthroughAdapter.t.sol/contract.PassthroughAdapterTest.md)
+- [NoYieldTestAdapterTest](NoYieldTestAdapter.t.sol/contract.NoYieldTestAdapterTest.md)
 - [MockUSDC](PortfolioRouter.t.sol/contract.MockUSDC.md)
 - [MockRouterVault](PortfolioRouter.t.sol/contract.MockRouterVault.md)
 - [PartialAcceptVault](PortfolioRouter.t.sol/contract.PartialAcceptVault.md)

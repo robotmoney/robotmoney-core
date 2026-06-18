@@ -1,18 +1,18 @@
-# PassthroughAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/test/PassthroughAdapter.t.sol)
+# NoYieldTestAdapterTest
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/NoYieldTestAdapter.t.sol)
 
 **Inherits:**
 Test
 
-Tests for PassthroughAdapter and its integration with RobotMoneyVault.
+Tests for NoYieldTestAdapter and its integration with RobotMoneyVault.
 Key invariants under test:
-- PassthroughAdapter correctly holds USDC after deploy().
-- PassthroughAdapter returns USDC on withdraw().
+- NoYieldTestAdapter correctly holds USDC after deploy().
+- NoYieldTestAdapter returns USDC on withdraw().
 - totalAssets() reflects the held balance.
 - Only VAULT can call mutating functions.
 - rescueTokens reverts for USDC.
-Integration (testPassthroughRoundTrip):
-- Deposit 1e6 USDC into a fresh RobotMoneyVault + PassthroughAdapter.
+Integration (testNoYieldRoundTrip):
+- Deposit 1e6 USDC into a fresh RobotMoneyVault + NoYieldTestAdapter.
 - Assert balanceOf >= 1e24 raw shares (decimalsOffset=18).
 - Assert previewRedeem returns >= 999_000 (zero-fee, within rounding).
 
@@ -43,7 +43,7 @@ RobotMoneyVault internal vault
 ### adapter
 
 ```solidity
-PassthroughAdapter internal adapter
+NoYieldTestAdapter internal adapter
 ```
 
 
@@ -167,15 +167,15 @@ function test_withdraw_overBalance_returnsActual() public;
 function test_withdraw_zeroBalance_returnsZero() public;
 ```
 
-### testPassthroughRoundTrip
+### testNoYieldRoundTrip
 
 Issue #277 acceptance criterion: deposit 1e6 USDC into fresh
-RobotMoneyVault + PassthroughAdapter, assert:
+RobotMoneyVault + NoYieldTestAdapter, assert:
 - balanceOf(user) >= 1e24 (decimalsOffset=18)
 - previewRedeem(balanceOf) >= 999_000 (zero-fee, within rounding)
 
 
 ```solidity
-function testPassthroughRoundTrip() public;
+function testNoYieldRoundTrip() public;
 ```
 

@@ -12,7 +12,7 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
+import {NoYieldTestAdapter} from "./helpers/NoYieldTestAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 
 // ─── Minimal USDC mock ───────────────────────────────────────────────────────
@@ -246,7 +246,10 @@ contract RobotMoneyVaultTest is Test {
     }
 
     function test_addAdapter_revertsWhenAdapterCodeHashNotAllowed() public {
-        PassthroughAdapter unapproved = new PassthroughAdapter(address(usdc), address(vault));
+        // Distinct-bytecode adapter whose codehash is never allowlisted in
+        // setUp (MockAdapter's codehash is, so it could not exercise the
+        // codehash-gate revert here).
+        NoYieldTestAdapter unapproved = new NoYieldTestAdapter(address(usdc), address(vault));
         vm.prank(admin);
         vault.setAdapterAllowed(address(unapproved), true);
 
@@ -308,18 +311,20 @@ contract RobotMoneyVaultTest is Test {
         CompoundV3Adapter compound =
             new CompoundV3Adapter(comet, address(usdc), address(typedVault));
         MorphoAdapter morpho = new MorphoAdapter(morphoVault, address(usdc), address(typedVault));
-        PassthroughAdapter passthrough = new PassthroughAdapter(address(usdc), address(typedVault));
+        // Fourth, generic no-yield adapter to prove the vault accepts multiple
+        // distinct adapter instances (not just the three real protocol types).
+        MockAdapter generic = new MockAdapter(address(usdc), address(typedVault));
 
         _allowAdapter(typedVault, address(aave));
         _allowAdapter(typedVault, address(compound));
         _allowAdapter(typedVault, address(morpho));
-        _allowAdapter(typedVault, address(passthrough));
+        _allowAdapter(typedVault, address(generic));
 
         vm.startPrank(admin);
         typedVault.addAdapter(address(aave), 2_500);
         typedVault.addAdapter(address(compound), 2_500);
         typedVault.addAdapter(address(morpho), 2_500);
-        typedVault.addAdapter(address(passthrough), 2_500);
+        typedVault.addAdapter(address(generic), 2_500);
         vm.stopPrank();
 
         assertEq(typedVault.adapterCount(), 4, "all approved adapter types should be added");
