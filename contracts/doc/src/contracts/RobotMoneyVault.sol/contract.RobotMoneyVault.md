@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64abc76af5e5cb6274bcad2a01525a762981c62c/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -67,11 +67,13 @@ uint256 public constant MAX_ADAPTERS = 20
 
 
 ### MAX_BPS
-Basis-points denominator (10 000 = 100%).
+Basis-points denominator (10 000 = 100%). Narrowed to `uint16`
+from the shared `BpsMath.BPS_DENOMINATOR` to preserve this
+constant's existing public type and call-site arithmetic.
 
 
 ```solidity
-uint16 public constant MAX_BPS = 10000
+uint16 public constant MAX_BPS = uint16(BpsMath.BPS_DENOMINATOR)
 ```
 
 

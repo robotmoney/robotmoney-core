@@ -12,6 +12,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
+import {BpsMath} from "./lib/BpsMath.sol";
 
 /// @title RobotMoneyVault
 /// @notice Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight target across active
@@ -45,8 +46,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     uint256 public constant MAX_EXIT_FEE_BPS = 100;
     /// @notice Maximum number of strategy adapters the vault can hold.
     uint256 public constant MAX_ADAPTERS = 20;
-    /// @notice Basis-points denominator (10 000 = 100%).
-    uint16 public constant MAX_BPS = 10000;
+    /// @notice Basis-points denominator (10 000 = 100%). Narrowed to `uint16`
+    ///         from the shared `BpsMath.BPS_DENOMINATOR` to preserve this
+    ///         constant's existing public type and call-site arithmetic.
+    uint16 public constant MAX_BPS = uint16(BpsMath.BPS_DENOMINATOR);
     /// @notice Keeper can never move more than 50% of TVL in a single rebalance call.
     uint16 public constant MAX_REBALANCE_BPS_CEILING = 5000;
     /// @notice Minimum enforced interval between rebalance calls (1 hour).

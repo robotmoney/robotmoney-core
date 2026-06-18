@@ -161,3 +161,33 @@ jobs:
             exit 1
           fi
           echo "Single-production-codebase grep gate passed."
+
+      - name: Shared BpsMath + TwapTickMath — no duplicate constants or inline TWAP helpers (issue #927)
+        # Enforces the issue #927 behaviour-preserving extraction:
+        #   (1) the basis-points denominator (10000) lives only in
+        #       contracts/lib/BpsMath.sol — PortfolioRouter, RouterGovernance,
+        #       RobotMoneyVault, and BasketVault must consume the shared
+        #       constant rather than redefining their own BPS_DENOMINATOR /
+        #       MAX_BPS = 10000 literal.
+        #   (2) the TWAP tick helpers _checkPoolPair / _meanTick / _priceFromTick
+        #       live only in contracts/lib/TwapTickMath.sol — the Aerodrome and
+        #       Uniswap V4 adapters must delegate, not carry inline copies.
+        run: |
+          set -euo pipefail
+          BPS_DUP=$(grep -REn "(BPS_DENOMINATOR|MAX_BPS)[[:space:]]*=[[:space:]]*10_?000" \
+              contracts/PortfolioRouter.sol contracts/RouterGovernance.sol \
+              contracts/RobotMoneyVault.sol contracts/vaults/BasketVault.sol || true)
+          if [ -n "$BPS_DUP" ]; then
+            echo "::error::Duplicate basis-points denominator constant found (issue #927 — consume BpsMath.BPS_DENOMINATOR)." >&2
+            echo "$BPS_DUP" >&2
+            exit 1
+          fi
+          TWAP_INLINE=$(grep -REn "function (_meanTick|_priceFromTick|_checkPoolPair)" \
+              contracts/adapters/AerodromeSwapAdapter.sol \
+              contracts/adapters/UniswapV4SwapAdapter.sol || true)
+          if [ -n "$TWAP_INLINE" ]; then
+            echo "::error::Inline TWAP helper body found in a swap adapter (issue #927 — delegate to TwapTickMath)." >&2
+            echo "$TWAP_INLINE" >&2
+            exit 1
+          fi
+          echo "Shared BpsMath + TwapTickMath grep gate passed."

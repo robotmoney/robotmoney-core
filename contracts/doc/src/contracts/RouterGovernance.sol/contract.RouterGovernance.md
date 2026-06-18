@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/39e1ef6f3c3c12310bb1f076d49c99097546b91c/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/64abc76af5e5cb6274bcad2a01525a762981c62c/contracts/RouterGovernance.sol)
 
 **Inherits:**
 AccessControl
@@ -32,11 +32,12 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
 
 
 ### BPS_DENOMINATOR
-Basis-points denominator (10 000 = 100%).
+Basis-points denominator (10 000 = 100%). Sourced from the
+shared `BpsMath.BPS_DENOMINATOR` so weight-sum math cannot drift.
 
 
 ```solidity
-uint256 public constant BPS_DENOMINATOR = 10_000
+uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR
 ```
 
 
