@@ -174,36 +174,24 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
+      # The four-vault real-TVL gate (issue #592) IS the `demo_seeding` matrix
+      # binary: `cargo test --release --test demo_seeding` asserts the
+      # VaultRegistry lists exactly four Active vaults (PRD §11.1–§11.4), the
+      # router weights cover the three router-eligible vaults summing to 10000
+      # bps (the deSPXA RWA vault is direct-seed-only, never weighted —
+      # ADR-0006 §1), and that **all four** vaults report non-zero on-chain
+      # totalAssets after seeding. It therefore runs exactly once across this
+      # matrix — on the `demo_seeding` binary — and is NOT re-appended as an
+      # unconditional final step on every binary (issue #915): that previously
+      # booted a second devnet + reseed on cli_meta/fixture_meta/full_stack_demo_tvl
+      # (~25 min each on full_stack_demo_tvl) with zero net coverage, since the
+      # assertions already run as the demo_seeding binary. Runs single-threaded
+      # for the same fixed-port reason as fixture_meta.
       - name: cargo test (${{ matrix.binary }} — boots + tears down its own devnet)
         working-directory: testing/smoke-test
         env:
           SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-${{ matrix.binary }}.log
         run: cargo test -p smoke-test --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
-
-      # The smoke-test fixture hardcodes the Docker compose project name
-      # `ethereum-testnet` and refuses to boot if those containers already
-      # exist. The preceding cli_meta / fixture_meta steps each tear down via
-      # `Drop`, but on a busy runner that teardown can still be settling when
-      # the next step's `Fixture::new()` runs — leaving the chain containers
-      # half-up and failing the boot with "compose project already running
-      # containers". Force a clean slot before the four-vault step so it always
-      # starts from zero containers. Mirrors the safety-net teardown below.
-      - name: Ensure clean devnet slot before four-vault test
-        working-directory: testing/ethereum-testnet/config
-        run: docker compose down -v --remove-orphans || true
-
-      # Issue #592 CI gate: four-vault real-TVL end state. Boots the devnet
-      # fixture, seeds the simulated depositors, and asserts the VaultRegistry
-      # lists exactly four Active vaults (PRD §11.1–§11.4), the router weights
-      # cover the three router-eligible vaults summing to 10000 bps (the deSPXA
-      # RWA vault is direct-seed-only, never weighted — ADR-0006 §1), and that
-      # **all four** vaults report non-zero on-chain totalAssets after seeding.
-      # Runs single-threaded for the same fixed-port reason as fixture_meta.
-      - name: cargo test (four-vault real-TVL — registry/router/seeded TVL)
-        working-directory: testing/smoke-test
-        env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-demo_seeding.log
-        run: cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture
 
       - name: Upload smoke-test logs
         if: always()
