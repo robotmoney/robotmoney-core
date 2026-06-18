@@ -9,7 +9,7 @@
 #
 # This mirrors testing/fork-e2e-rust/src/lib.rs::ForkFixture (the canonical
 # --load-state consumer) and scripts/devnet/snapshot-fork.sh:
-#   1. anvil --load-state CURRENT.anvil-state --chain-id <pin>
+#   1. anvil --load-state CURRENT.anvil-state --chain-id <devnet pin>
 #   2. Replay the canonical Base USDC proxy storage seed + implementation
 #      bytecode (usdc-storage-seed.json) so the forked FiatTokenProxy behaves
 #      like the production token (issue #249).
@@ -17,6 +17,18 @@
 #      getReserveNormalizedIncome math stays monotonic (issue #656).
 #   4. Fund each requested address with USDC by writing the FiatToken
 #      balances slot directly (slot 9) — no whale impersonation, hermetic.
+#
+# CHAIN ID: the devnet runs at the synthetic dev chain id 918453 — the same id
+# the Geth+Lighthouse smoke-test devnet uses (testing/ethereum-testnet/config) —
+# NOT the fixture's source chain id 8453. rmpc classifies chain id 8453 as
+# `production_base` and HARD-REFUSES software-keystore writes there
+# (ErrProductionSignerRequired, clients/rust-payment-client/src/network_env.rs +
+# signer/mod.rs); the opencode-headless deposit job signs with a software
+# keystore, so booting at 8453 makes every deposit refuse before broadcast.
+# The forked Aave V3 / Compound V3 / Morpho contracts do not depend on
+# block.chainid for deposits, so re-stamping the runtime chain id is safe and
+# keeps the real protocol storage intact. The fixture's CURRENT.json.chain_id
+# (8453) still records the SOURCE chain for fork-state alignment checks.
 #
 # Usage:
 #   scripts/devnet/boot-fork-state-anvil.sh <rpc_url> <fund_addr> [<fund_addr> ...]
@@ -60,11 +72,17 @@ ANVIL_PORT="${RPC_URL##*:}"
 ANVIL_PORT="${ANVIL_PORT%%/*}"
 [[ "$ANVIL_PORT" =~ ^[0-9]+$ ]] || ANVIL_PORT=8545
 
-CHAIN_ID="$(jq -r '.chain_id' "$META_FILE")"
-[[ "$CHAIN_ID" =~ ^[0-9]+$ ]] || { echo "FAIL: CURRENT.json has no numeric chain_id" >&2; exit 1; }
+# Source chain id recorded in the fixture (8453). Used only to sanity-check
+# the fixture metadata is well-formed; the devnet does NOT run at this id.
+SOURCE_CHAIN_ID="$(jq -r '.chain_id' "$META_FILE")"
+[[ "$SOURCE_CHAIN_ID" =~ ^[0-9]+$ ]] || { echo "FAIL: CURRENT.json has no numeric chain_id" >&2; exit 1; }
 
-echo "[fork-anvil] booting anvil --load-state $STATE_FILE --chain-id $CHAIN_ID on port $ANVIL_PORT" >&2
-anvil --port "$ANVIL_PORT" --load-state "$STATE_FILE" --chain-id "$CHAIN_ID" \
+# Synthetic dev chain id the devnet actually runs at (non-production, so rmpc
+# permits software-keystore writes). Matches the Geth smoke-test devnet.
+DEVNET_CHAIN_ID=918453
+
+echo "[fork-anvil] booting anvil --load-state $STATE_FILE --chain-id $DEVNET_CHAIN_ID (source $SOURCE_CHAIN_ID) on port $ANVIL_PORT" >&2
+anvil --port "$ANVIL_PORT" --load-state "$STATE_FILE" --chain-id "$DEVNET_CHAIN_ID" \
   >/tmp/fork-anvil.log 2>&1 &
 
 # Wait for the RPC to come up.
@@ -75,11 +93,12 @@ done
 cast block-number --rpc-url "$RPC_URL" >/dev/null 2>&1 \
   || { echo "FAIL: anvil did not become ready; log:" >&2; cat /tmp/fork-anvil.log >&2; exit 1; }
 
-# Confirm the chain id matches the fixture pin (a mismatched fixture would
-# silently route real-adapter calls at the wrong addresses).
+# Confirm anvil stamped the requested dev chain id (a mismatch would silently
+# re-classify the network and either re-trigger the production write refusal or
+# desync the rmpc config's pinned chain_id).
 LIVE_CID="$(cast chain-id --rpc-url "$RPC_URL")"
-[ "$LIVE_CID" = "$CHAIN_ID" ] \
-  || { echo "FAIL: live chain-id $LIVE_CID != fixture chain_id $CHAIN_ID" >&2; exit 1; }
+[ "$LIVE_CID" = "$DEVNET_CHAIN_ID" ] \
+  || { echo "FAIL: live chain-id $LIVE_CID != devnet chain id $DEVNET_CHAIN_ID" >&2; exit 1; }
 
 # --- 1. Replay the canonical Base USDC proxy storage seed + impl bytecode ---
 # The --load-state fixture captures the proxy runtime bytecode but not its
