@@ -1,5 +1,5 @@
 # NoYieldTestAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/helpers/NoYieldTestAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/test/helpers/NoYieldTestAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -117,23 +117,25 @@ Live USDC value held by this adapter (principal + accrued interest).
 function totalAssets() external view returns (uint256);
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue non-USDC tokens accidentally sent to this contract.
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
 
-USDC cannot be rescued (it is the protected vault asset). Any other
-token accidentally sent to this contract may be rescued by the vault.
+USDC (the protected vault asset) cannot be swept. Any other token
+accidentally sent to this contract is permissionlessly quarantined.
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyVault;
+function sweepForeignToken(address token) external;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|Address of the ERC-20 token to rescue (must not be USDC or the protocol token).|
-|`to`|`address`|   Recipient address for the rescued tokens.|
+|`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
 
 ## Errors
@@ -151,13 +153,5 @@ Constructor received a zero address.
 
 ```solidity
 error ZeroAddress();
-```
-
-### CannotRescueUsdc
-Attempted to rescue USDC (the protected vault asset).
-
-
-```solidity
-error CannotRescueUsdc();
 ```
 

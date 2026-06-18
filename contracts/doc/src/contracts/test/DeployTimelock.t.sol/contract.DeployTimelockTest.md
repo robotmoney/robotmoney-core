@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -259,6 +259,47 @@ new address has ADMIN_ROLE on VaultRegistry.
 
 ```solidity
 function test_timelockRouted_adminRoleGrant_succeedsAfterDelay() public;
+```
+
+### test_INV3_setFeeRecipient_directHotKeyCallReverts
+
+INV-3: a direct (non-timelock) setFeeRecipient call from the Safe
+hot key reverts — the Safe holds PROPOSER/EXECUTOR on the timelock,
+not ADMIN_ROLE on the vault.
+
+
+```solidity
+function test_INV3_setFeeRecipient_directHotKeyCallReverts() public;
+```
+
+### test_INV3_setExitFeeBps_directHotKeyCallReverts
+
+INV-3: a direct (non-timelock) setExitFeeBps call from the Safe hot
+key reverts for the same reason.
+
+
+```solidity
+function test_INV3_setExitFeeBps_directHotKeyCallReverts() public;
+```
+
+### test_INV3_setFeeRecipient_succeedsViaTimelock
+
+INV-3: setFeeRecipient succeeds ONLY when routed through the
+TimelockController (schedule → delay → execute).
+
+
+```solidity
+function test_INV3_setFeeRecipient_succeedsViaTimelock() public;
+```
+
+### test_INV3_setExitFeeBps_succeedsViaTimelock
+
+INV-3: setExitFeeBps succeeds ONLY when routed through the
+TimelockController.
+
+
+```solidity
+function test_INV3_setExitFeeBps_succeedsViaTimelock() public;
 ```
 
 ### test_deploy_revertsOnZeroSafe

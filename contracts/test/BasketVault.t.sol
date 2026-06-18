@@ -15,6 +15,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
@@ -384,6 +385,50 @@ contract BasketVaultTest is Test {
         basketToken.mint(address(vault), 7 * ONE_USDC);
         vm.expectRevert(BasketVault.AssetInBasket.selector);
         vault.reabsorbRemovedAsset(0);
+    }
+
+    // ─── INV-3: fee setters are governance-gated (issue #929) ─────────────────
+    //
+    // Fee setters are `onlyRole(ADMIN_ROLE)`. In production ADMIN_ROLE is held by
+    // the TimelockController (see DeployTimelock.s.sol / DeployTimelock.t.sol),
+    // so they change only via multisig + timelock. Here we prove the gate by
+    // asserting the hot EMERGENCY key cannot move fees and ADMIN can.
+
+    function test_INV3_setFeeRecipient_revertsForHotEmergencyKey() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergencyResponder,
+                adminRole
+            )
+        );
+        vault.setFeeRecipient(makeAddr("newRecipient"));
+    }
+
+    function test_INV3_setExitFeeBps_revertsForHotEmergencyKey() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergencyResponder,
+                adminRole
+            )
+        );
+        vault.setExitFeeBps(50);
+    }
+
+    function test_INV3_feeSetters_succeedForAdminRole() public {
+        address newRecipient = makeAddr("newRecipient");
+        vm.prank(admin);
+        vault.setFeeRecipient(newRecipient);
+        assertEq(vault.feeRecipient(), newRecipient, "fee recipient updated by admin");
+
+        vm.prank(admin);
+        vault.setExitFeeBps(50);
+        assertEq(vault.exitFeeBps(), 50, "exit fee updated by admin");
     }
 
     // ─── maxDeposit / maxMint 4626 conformance (audit 2026-06-09, L-16) ───────

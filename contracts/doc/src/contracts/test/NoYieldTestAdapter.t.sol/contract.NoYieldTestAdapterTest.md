@@ -1,5 +1,5 @@
 # NoYieldTestAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/NoYieldTestAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/test/NoYieldTestAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -111,18 +111,18 @@ function test_deploy_revertsForNonVault() public;
 function test_withdraw_revertsForNonVault() public;
 ```
 
-### test_rescueTokens_revertsForNonVault
+### test_sweepForeignToken_permissionlessToQuarantine
 
 
 ```solidity
-function test_rescueTokens_revertsForNonVault() public;
+function test_sweepForeignToken_permissionlessToQuarantine() public;
 ```
 
-### test_rescueTokens_revertsForUsdc
+### test_sweepForeignToken_revertsForUsdc
 
 
 ```solidity
-function test_rescueTokens_revertsForUsdc() public;
+function test_sweepForeignToken_revertsForUsdc() public;
 ```
 
 ### test_totalAssets_zeroWhenEmpty

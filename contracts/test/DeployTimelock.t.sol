@@ -330,6 +330,80 @@ contract DeployTimelockTest is Test {
         );
     }
 
+    // ─── INV-3: fee setters are governance- (timelock-) gated (issue #929) ─────
+    //
+    // After DeployTimelock, ADMIN_ROLE on RobotMoneyVault is held only by the
+    // TimelockController. INV-3 requires the fee recipient and fee parameters to
+    // change ONLY through the timelock; a direct call from any hot key — even the
+    // Safe multisig that proposes/executes timelock operations — must revert
+    // because the Safe does not hold ADMIN_ROLE on the vault itself.
+
+    /// @notice INV-3: a direct (non-timelock) setFeeRecipient call from the Safe
+    ///         hot key reverts — the Safe holds PROPOSER/EXECUTOR on the timelock,
+    ///         not ADMIN_ROLE on the vault.
+    function test_INV3_setFeeRecipient_directHotKeyCallReverts() public {
+        address newRecipient = makeAddr("newFeeRecipient");
+        vm.prank(safe);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
+            )
+        );
+        vault.setFeeRecipient(newRecipient);
+    }
+
+    /// @notice INV-3: a direct (non-timelock) setExitFeeBps call from the Safe hot
+    ///         key reverts for the same reason.
+    function test_INV3_setExitFeeBps_directHotKeyCallReverts() public {
+        vm.prank(safe);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
+            )
+        );
+        vault.setExitFeeBps(50);
+    }
+
+    /// @notice INV-3: setFeeRecipient succeeds ONLY when routed through the
+    ///         TimelockController (schedule → delay → execute).
+    function test_INV3_setFeeRecipient_succeedsViaTimelock() public {
+        address newRecipient = makeAddr("newFeeRecipient");
+        bytes memory callData = abi.encodeCall(RobotMoneyVault.setFeeRecipient, (newRecipient));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("inv3-fee-recipient");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+
+        // Pre-delay execution must revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
+    }
+
+    /// @notice INV-3: setExitFeeBps succeeds ONLY when routed through the
+    ///         TimelockController.
+    function test_INV3_setExitFeeBps_succeedsViaTimelock() public {
+        uint256 newFee = 75;
+        bytes memory callData = abi.encodeCall(RobotMoneyVault.setExitFeeBps, (newFee));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("inv3-exit-fee");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
+    }
+
     // ─── Revert cases — script validation ────────────────────────────────────
 
     function test_deploy_revertsOnZeroSafe() public {

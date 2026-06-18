@@ -1,5 +1,5 @@
 # MorphoAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -120,31 +120,31 @@ function test_withdraw_typeMaxDoesNotRevertOnShortfall() public;
 function test_totalAssets_reflectsDeployedShares() public;
 ```
 
-### test_rescueTokens_revertsForProtectedUSDC
+### test_sweepForeignToken_revertsForProtectedUSDC
 
 
 ```solidity
-function test_rescueTokens_revertsForProtectedUSDC() public;
+function test_sweepForeignToken_revertsForProtectedUSDC() public;
 ```
 
-### test_rescueTokens_revertsForProtectedMorphoShares
+### test_sweepForeignToken_revertsForProtectedMorphoShares
 
 
 ```solidity
-function test_rescueTokens_revertsForProtectedMorphoShares() public;
+function test_sweepForeignToken_revertsForProtectedMorphoShares() public;
 ```
 
-### test_rescueTokens_revertsOnZeroAddress
+### test_sweepForeignToken_zeroBalanceIsNoop
 
 
 ```solidity
-function test_rescueTokens_revertsOnZeroAddress() public;
+function test_sweepForeignToken_zeroBalanceIsNoop() public;
 ```
 
-### test_rescueTokens_transfersUnprotectedToken
+### test_sweepForeignToken_permissionlessToQuarantine
 
 
 ```solidity
-function test_rescueTokens_transfersUnprotectedToken() public;
+function test_sweepForeignToken_permissionlessToQuarantine() public;
 ```
 

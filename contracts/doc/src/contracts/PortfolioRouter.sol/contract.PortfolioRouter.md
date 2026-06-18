@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -36,12 +36,11 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
 
 
 ### BPS_DENOMINATOR
-Basis-points denominator (10 000 = 100%). Sourced from the
-shared `BpsMath.BPS_DENOMINATOR` so fee/weight math cannot drift.
+Basis-points denominator (10 000 = 100%).
 
 
 ```solidity
-uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR
+uint256 public constant BPS_DENOMINATOR = 10_000
 ```
 
 
@@ -237,24 +236,30 @@ Restricted to `ADMIN_ROLE`.
 function setVaultCap(address vault, uint256 cap) external onlyRole(ADMIN_ROLE);
 ```
 
-### rescueUsdc
+### sweepForeignToken
 
-Transfer the entire USDC balance held by this contract to `to`.
-Intended as an emergency recovery path for USDC that becomes
-stranded in the router through edge cases not covered by the
-`UsdcCustodyInvariantViolated` deposit guard (e.g. direct
-transfers, or USDC approved but not pulled by a vault that
-reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
+Permissionlessly sweep a NON-protected foreign token held by the
+router to the fixed quarantine address (custody invariants
+INV-1/INV-2).
+The router moves zero USDC out via any admin path: under the
+all-or-revert deposit/redeem semantics it never holds USDC across
+transactions, and the old arbitrary-recipient `rescueUsdc` —
+which forwarded USDC to a caller-supplied address — is DELETED
+(INV-1: no admin/role function may route a protocol or depositor
+asset to a caller-supplied recipient). The only asset movement
+that remains is this permissionless sweep of foreign (non-USDC)
+tokens to a single hardcoded quarantine address; the destination
+can never be chosen by the caller. Reverts when `token` is USDC.
 
 
 ```solidity
-function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE);
+function sweepForeignToken(address token) external nonReentrant;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`to`|`address`| Recipient of all stranded USDC held by the router.|
+|`token`|`address`|Foreign ERC-20 to quarantine. Must not be the router's USDC.|
 
 
 ### previewDeposit
@@ -667,22 +672,6 @@ event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 |`vault`|`address`| Vault address.|
 |`oldCap`|`uint256`|Previous cap (0 = uncapped).|
 |`newCap`|`uint256`|New cap (0 = uncapped).|
-
-### RescuedUsdc
-Emitted when stranded USDC is recovered from the router by an
-ADMIN_ROLE holder via `rescueUsdc`.
-
-
-```solidity
-event RescuedUsdc(address indexed to, uint256 amount);
-```
-
-**Parameters**
-
-|Name|Type|Description|
-|----|----|-----------|
-|`to`|`address`|    Recipient of the recovered USDC.|
-|`amount`|`uint256`|Amount of USDC transferred.|
 
 ## Errors
 ### ZeroAddress

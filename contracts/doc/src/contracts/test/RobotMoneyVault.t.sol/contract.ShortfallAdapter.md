@@ -1,5 +1,5 @@
 # ShortfallAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -103,19 +103,21 @@ Live USDC value held by this adapter (principal + accrued interest).
 function totalAssets() external view returns (uint256);
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue non-USDC tokens accidentally sent to this contract.
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
 
 
 ```solidity
-function rescueTokens(address, address) external;
+function sweepForeignToken(address) external;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`<none>`|`address`||
 |`<none>`|`address`||
 
 

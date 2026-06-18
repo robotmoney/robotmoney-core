@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -67,13 +67,11 @@ uint256 public constant MAX_ADAPTERS = 20
 
 
 ### MAX_BPS
-Basis-points denominator (10 000 = 100%). Narrowed to `uint16`
-from the shared `BpsMath.BPS_DENOMINATOR` to preserve this
-constant's existing public type and call-site arithmetic.
+Basis-points denominator (10 000 = 100%).
 
 
 ```solidity
-uint16 public constant MAX_BPS = uint16(BpsMath.BPS_DENOMINATOR)
+uint16 public constant MAX_BPS = 10000
 ```
 
 
@@ -750,21 +748,31 @@ function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 |`newRecipient`|`address`|New address to receive collected exit fees.|
 
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue accidentally-sent ERC-20 tokens (cannot rescue USDC or vault shares).
-Restricted to `ADMIN_ROLE`.
+Permissionlessly sweep a NON-protected foreign token held by the
+vault to the fixed quarantine address (custody invariants
+INV-1/INV-2).
+Anyone may call; the destination is a hardcoded constant, never
+caller-supplied. This replaces the deleted arbitrary-recipient
+`rescueTokens(token,to)` admin function (INV-1: no admin/role
+function may route a protocol or depositor asset to a
+caller-supplied recipient). The vault asset (USDC, already counted
+in `totalAssets` and redeemable) and the vault share token cannot
+be swept; protocol-asset donations therefore stay in NAV and accrue
+pro-rata to all holders (INV-2). Adapter strategy tokens live on
+the adapters, each of which exposes its own guarded
+`sweepForeignToken`.
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE);
+function sweepForeignToken(address token) external nonReentrant;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|ERC-20 token to rescue (must not be the vault asset or vault share token).|
-|`to`|`address`|   Recipient address for the rescued tokens.|
+|`token`|`address`|Foreign ERC-20 to quarantine. Must not be the vault asset or the vault share token.|
 
 
 ### _setDepositsPaused
@@ -1306,14 +1314,6 @@ A single deposit exceeds the per-deposit cap.
 
 ```solidity
 error PerDepositCapExceeded();
-```
-
-### CannotRescueAsset
-`rescueToken` refused because the token is the vault's own asset (USDC).
-
-
-```solidity
-error CannotRescueAsset();
 ```
 
 ### ZeroAddress

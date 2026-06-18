@@ -225,17 +225,22 @@ mainnet onboarding remain planned work on the Plan tracking issue (#109).
 ### 4.3 Vault Adapters
 
 Adapters are internal to one vault. They normalize venue-specific
-deposit, withdrawal, valuation, and rescue behavior behind
-`IStrategyAdapter`:
+deposit, withdrawal, and valuation behavior behind `IStrategyAdapter`:
 
 - `deploy(uint256 amount)`;
 - `withdraw(uint256 amount) returns (uint256 actual)`;
 - `totalAssets() returns (uint256)`;
-- `rescueTokens(address token, address to)`.
+- `sweepForeignToken(address token)`.
 
-Mutating adapter functions are callable only by the owning vault. Adapter
-selection and caps are privileged vault-management operations and expand
-the audit surface of that vault.
+The value-moving functions (`deploy`, `withdraw`) are callable only by the
+owning vault. Adapter selection and caps are privileged vault-management
+operations and expand the audit surface of that vault.
+
+`sweepForeignToken` is the permissionless foreign-token quarantine sweep
+(custody invariants INV-1/INV-2, see §6 and `docs/prd.md` §12): anyone may
+call it, but it moves only NON-protected tokens to a single hardcoded
+quarantine address — never a caller-supplied recipient. There is no
+arbitrary-recipient `rescueTokens(token,to)` (deleted, INV-1).
 
 Current stable-yield adapters (for `RobotMoneyVault`):
 
@@ -870,8 +875,19 @@ this architecture:
 - Users and agents must call vaults or the Portfolio Router, not
   adapters or raw underlying venues.
 - Adapters must restrict mutating functions to their owning vault.
-- Adapter rescue functions must not sweep USDC or protected receipt
-  tokens.
+- Custody invariants INV-1/INV-2/INV-3 (see `docs/prd.md` §12) are
+  mandatory: no admin/role/vault function may route a protocol or depositor
+  asset to a caller-supplied recipient (INV-1, the arbitrary-recipient
+  `rescueTokens`/`rescueUsdc` functions are deleted); every protocol or
+  depositor asset is redeemable or absorbed into NAV, with non-whitelisted
+  foreign tokens getting a permissionless `sweepForeignToken` to a single
+  hardcoded quarantine address (INV-2); and the fee recipient, fee
+  parameters, and quarantine address change only through the
+  `TimelockController` (INV-3).
+- The permissionless `sweepForeignToken` must move only NON-protected
+  tokens (never USDC, the share token, a basket asset, or a protected
+  receipt token) and only to the fixed `ForeignTokenQuarantine.QUARANTINE`
+  address — never a caller-supplied recipient.
 - Vaults and router legs must enforce caps before accepting deposits.
 - Any router leg with slippage, oracle, liquidity, or quote-freshness
   risk must surface bounds before signing.

@@ -1,5 +1,5 @@
 # CompoundV3Adapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/adapters/CompoundV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/adapters/CompoundV3Adapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -105,20 +105,22 @@ Live USDC value held by this adapter (principal + accrued interest).
 function totalAssets() external view returns (uint256);
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue non-USDC tokens accidentally sent to this contract.
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyVault;
+function sweepForeignToken(address token) external;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|Address of the ERC-20 token to rescue (must not be USDC or the protocol token).|
-|`to`|`address`|   Recipient address for the rescued tokens.|
+|`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
 
 ## Errors
@@ -152,12 +154,4 @@ error WithdrawShortfall(uint256 requested, uint256 actual);
 |----|----|-----------|
 |`requested`|`uint256`|Amount of USDC requested for withdrawal.|
 |`actual`|`uint256`|   Amount of USDC actually received from Compound.|
-
-### CannotRescueProtectedToken
-`rescueToken` refused — the token is USDC or the Comet share (protected vault assets).
-
-
-```solidity
-error CannotRescueProtectedToken();
-```
 
