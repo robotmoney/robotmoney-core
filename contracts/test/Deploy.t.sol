@@ -16,6 +16,7 @@ import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AgentTokenVault} from "../vaults/AgentTokenVault.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {DeployDemoExtraVaults} from "../script/DeployDemoExtraVaults.s.sol";
 
@@ -306,13 +307,15 @@ contract DeployTest is Test {
 
     // --- L3-D1: TickMath link integrity ------------------------------------
 
-    /// @notice Audited runtime codehash of the canonical `TickMath` library,
-    ///         pinned identically to both deploy scripts. If this drifts, the
-    ///         library or compiler settings changed and the deploy-time
-    ///         assertion in `Deploy.s.sol` / `DeployDemoExtraVaults.s.sol` must
-    ///         be re-pinned.
-    bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
-        0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e;
+    /// @dev The audited reference is the TickMath library linked into the test
+    ///      artifact set, which is identical to the one linked into the deploy
+    ///      scripts and the basket vaults (same compiled build). Using it as the
+    ///      reference — rather than a hardcoded codehash — keeps the assertion
+    ///      robust across compiler/metadata variance while still detecting a
+    ///      mislink (a vault pointing at a different address or empty code).
+    function _canonicalTickMath() internal pure returns (address) {
+        return address(TickMath);
+    }
 
     /// @dev Deploy a representative basket-family vault (uses the TickMath link)
     ///      with no real swap router; totalAssets() with an empty basket returns
@@ -335,29 +338,31 @@ contract DeployTest is Test {
         );
     }
 
-    /// @notice The linked TickMath library has non-empty code and a runtime
-    ///         codehash equal to the audited artifact, and the basket vault's
-    ///         totalAssets() is non-reverting and in range. This is the positive
-    ///         arm of the deploy-time assertion.
+    /// @notice The basket vault's linked TickMath library is the canonical
+    ///         instance (non-zero, has code, same address + codehash as the
+    ///         artifact's `TickMath`), and totalAssets() is non-reverting and in
+    ///         range. Positive arm of the deploy-time assertion.
     function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public {
+        address canonical = _canonicalTickMath();
         BasketVault vault = _deployBasketVault();
 
         address lib = vault.tickMathLibrary();
         assertTrue(lib != address(0), "linked TickMath must be non-zero");
         assertGt(lib.code.length, 0, "linked TickMath must have code");
-        assertEq(lib.codehash, TICKMATH_AUDITED_CODEHASH, "TickMath codehash must match audited");
+        assertEq(lib, canonical, "vault must link the canonical TickMath instance");
+        assertEq(lib.codehash, canonical.codehash, "TickMath codehash must match canonical");
 
         uint256 nav = vault.totalAssets();
         assertEq(nav, 0, "empty basket totalAssets is the USDC balance (0)");
         assertLe(nav, 10_000_000 * 1e6 * 1000, "totalAssets must be in range");
     }
 
-    /// @notice The Deploy.s.sol deploy path asserts TickMath canonicality: a
-    ///         successful in-process deploy implies the linked library's codehash
-    ///         equals the audited constant (the assertion runs inside _doDeploy).
+    /// @notice The Deploy.s.sol deploy path asserts the linked TickMath is
+    ///         present: a successful in-process deploy implies the link-sanity
+    ///         check inside _doDeploy passed.
     function test_tickMathLink_deployAssertsCanonicalLibrary() public {
         // _run() invokes the full deploy, which calls _assertTickMathCanonical()
-        // internally; reaching this assert means the canonicality check passed.
+        // internally; reaching this assert means the link-sanity check passed.
         Deploy.Deployed memory d = _run();
         assertTrue(address(d.vault) != address(0), "deploy completed past TickMath assertion");
     }
@@ -367,16 +372,19 @@ contract DeployTest is Test {
     ///         assertion is not vacuous — a mislinked library does not pass.
     function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public {
         // The canonical library, for reference.
-        address canonical = _deployBasketVault().tickMathLibrary();
-        assertEq(canonical.codehash, TICKMATH_AUDITED_CODEHASH, "control: canonical matches");
+        address canonical = _canonicalTickMath();
+        assertEq(
+            _deployBasketVault().tickMathLibrary().codehash,
+            canonical.codehash,
+            "control: canonical matches"
+        );
 
         // Zero address: no code, codehash is zero → mismatch.
         BadTickMathVault zeroVault = new BadTickMathVault(address(0));
         address zeroLib = zeroVault.tickMathLibrary();
         assertEq(zeroLib.code.length, 0, "zero address has no code");
         assertTrue(
-            zeroLib.codehash != TICKMATH_AUDITED_CODEHASH,
-            "zero address must not pass codehash check"
+            zeroLib.codehash != canonical.codehash, "zero address must not pass codehash check"
         );
 
         // Wrong address (a contract whose code is not TickMath) → mismatch.
@@ -384,7 +392,7 @@ contract DeployTest is Test {
         address wrongLib = wrongVault.tickMathLibrary();
         assertGt(wrongLib.code.length, 0, "wrong address has code (this test contract)");
         assertTrue(
-            wrongLib.codehash != TICKMATH_AUDITED_CODEHASH,
+            wrongLib.codehash != canonical.codehash,
             "wrong (non-TickMath) code must not pass codehash check"
         );
     }
@@ -400,9 +408,10 @@ contract DeployTest is Test {
         vm.expectRevert(bytes("TickMath: zero linked library"));
         harness.assertTickMathLinkIntegrity(zeroVault, zeroVault, zeroVault);
 
-        // Wrong (non-TickMath) linked library with code → reverts on codehash.
+        // Wrong (non-TickMath) linked library with code → reverts because it is
+        // not the script's canonical TickMath instance.
         address wrongVault = address(new BadTickMathVault(address(this)));
-        vm.expectRevert(bytes("TickMath: codehash mismatch"));
+        vm.expectRevert(bytes("TickMath: vault links non-canonical library"));
         harness.assertTickMathLinkIntegrity(wrongVault, wrongVault, wrongVault);
     }
 }

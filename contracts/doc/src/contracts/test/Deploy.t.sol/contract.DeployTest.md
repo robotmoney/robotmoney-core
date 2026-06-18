@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -19,21 +19,6 @@ therefore succeeds even though AAVE_V3_POOL et al. are not deployed
 in the forge unit-test environment. Actual protocol interaction is
 tested by the fork regression suite (VaultForkRegressions.t.sol) and
 the fork-e2e-rust harness.
-
-
-## Constants
-### TICKMATH_AUDITED_CODEHASH
-Audited runtime codehash of the canonical `TickMath` library,
-pinned identically to both deploy scripts. If this drifts, the
-library or compiler settings changed and the deploy-time
-assertion in `Deploy.s.sol` / `DeployDemoExtraVaults.s.sol` must
-be re-pinned.
-
-
-```solidity
-bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
-    0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e
-```
 
 
 ## State Variables
@@ -198,6 +183,20 @@ function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
 function test_deploy_envDriven_runInProcessSucceeds() public;
 ```
 
+### _canonicalTickMath
+
+The audited reference is the TickMath library linked into the test
+artifact set, which is identical to the one linked into the deploy
+scripts and the basket vaults (same compiled build). Using it as the
+reference — rather than a hardcoded codehash — keeps the assertion
+robust across compiler/metadata variance while still detecting a
+mislink (a vault pointing at a different address or empty code).
+
+
+```solidity
+function _canonicalTickMath() internal pure returns (address);
+```
+
 ### _deployBasketVault
 
 Deploy a representative basket-family vault (uses the TickMath link)
@@ -212,10 +211,10 @@ function _deployBasketVault() internal returns (BasketVault);
 
 ### test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange
 
-The linked TickMath library has non-empty code and a runtime
-codehash equal to the audited artifact, and the basket vault's
-totalAssets() is non-reverting and in range. This is the positive
-arm of the deploy-time assertion.
+The basket vault's linked TickMath library is the canonical
+instance (non-zero, has code, same address + codehash as the
+artifact's `TickMath`), and totalAssets() is non-reverting and in
+range. Positive arm of the deploy-time assertion.
 
 
 ```solidity
@@ -224,9 +223,9 @@ function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public
 
 ### test_tickMathLink_deployAssertsCanonicalLibrary
 
-The Deploy.s.sol deploy path asserts TickMath canonicality: a
-successful in-process deploy implies the linked library's codehash
-equals the audited constant (the assertion runs inside _doDeploy).
+The Deploy.s.sol deploy path asserts the linked TickMath is
+present: a successful in-process deploy implies the link-sanity
+check inside _doDeploy passed.
 
 
 ```solidity

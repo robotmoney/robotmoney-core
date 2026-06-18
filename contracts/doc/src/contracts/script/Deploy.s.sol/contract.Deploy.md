@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -148,21 +148,6 @@ See docs/technical/security-model.md ยง3 and docs/technical/smart-contracts.md ย
 
 ```solidity
 uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6
-```
-
-
-### TICKMATH_AUDITED_CODEHASH
-Audited runtime codehash of the canonical `TickMath` library.
-Must equal `DeployDemoExtraVaults.TICKMATH_AUDITED_CODEHASH`;
-both scripts pin the same value so a tampered library fails either
-deploy path (finding L3-D1). Regenerate via the
-`Deploy.t.sol` TickMath link-integrity test if the library or
-compiler settings legitimately change.
-
-
-```solidity
-bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
-    0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e
 ```
 
 
@@ -320,9 +305,14 @@ function _doDeploy(Params memory p) internal returns (Deployed memory d);
 ### _assertTickMathCanonical
 
 Assert the TickMath library linked into this deploy artifact set is
-the canonical, audited code (finding L3-D1). `address(TickMath)`
-resolves to the deploy-time-linked library; a zero/mislinked or
-tampered library fails closed before any vault relies on its NAV math.
+present and non-empty (finding L3-D1). The primary RobotMoneyVault
+does not consume TickMath, so this script has no NAV consumer to probe
+against; the substantive codehash + per-vault totalAssets() integrity
+check lives in `DeployDemoExtraVaults._assertTickMathLinkIntegrity`,
+where the four basket-family vaults are deployed. Here we fail closed
+on a catastrophic link failure (zero address / no code) so a broken
+artifact set cannot deploy silently. `address(TickMath)` resolves to
+the deploy-time-linked library baked into this script's bytecode.
 
 
 ```solidity

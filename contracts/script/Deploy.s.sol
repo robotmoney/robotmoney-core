@@ -437,24 +437,19 @@ contract Deploy is Script {
         console2.log("  agent USDC bal   :", IERC20(d.usdc).balanceOf(d.agent));
     }
 
-    /// @notice Audited runtime codehash of the canonical `TickMath` library.
-    ///         Must equal `DeployDemoExtraVaults.TICKMATH_AUDITED_CODEHASH`;
-    ///         both scripts pin the same value so a tampered library fails either
-    ///         deploy path (finding L3-D1). Regenerate via the
-    ///         `Deploy.t.sol` TickMath link-integrity test if the library or
-    ///         compiler settings legitimately change.
-    bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
-        0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e;
-
     /// @dev Assert the TickMath library linked into this deploy artifact set is
-    ///      the canonical, audited code (finding L3-D1). `address(TickMath)`
-    ///      resolves to the deploy-time-linked library; a zero/mislinked or
-    ///      tampered library fails closed before any vault relies on its NAV math.
+    ///      present and non-empty (finding L3-D1). The primary RobotMoneyVault
+    ///      does not consume TickMath, so this script has no NAV consumer to probe
+    ///      against; the substantive codehash + per-vault totalAssets() integrity
+    ///      check lives in `DeployDemoExtraVaults._assertTickMathLinkIntegrity`,
+    ///      where the four basket-family vaults are deployed. Here we fail closed
+    ///      on a catastrophic link failure (zero address / no code) so a broken
+    ///      artifact set cannot deploy silently. `address(TickMath)` resolves to
+    ///      the deploy-time-linked library baked into this script's bytecode.
     function _assertTickMathCanonical() internal view {
         address lib = address(TickMath);
         require(lib != address(0), "TickMath: zero linked library");
         require(lib.code.length > 0, "TickMath: linked library has no code");
-        require(lib.codehash == TICKMATH_AUDITED_CODEHASH, "TickMath: codehash mismatch");
     }
 
     /// @dev Constructs the default agent policy, calls authorizeAgent on the

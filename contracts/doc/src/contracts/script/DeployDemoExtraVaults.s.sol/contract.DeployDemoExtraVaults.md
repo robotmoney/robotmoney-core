@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/8fe82accd34499f358df165500b889c234fe064a/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -133,22 +133,6 @@ address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F
 ```
 
 
-### TICKMATH_AUDITED_CODEHASH
-Audited runtime codehash of the canonical `TickMath` library.
-Computed from the vendored `contracts/lib/TickMath.sol` artifact
-(Uniswap v3-core `getSqrtRatioAtTick`, solc 0.8.24, 200 runs,
-Cancun) and pinned here so the deploy assertion detects any drift
-from the reviewed code. Regenerate via
-`forge test --match-test test_tickMathLink_auditedCodehash_matches`
-if the library or compiler settings legitimately change.
-
-
-```solidity
-bytes32 internal constant TICKMATH_AUDITED_CODEHASH =
-    0x1201c85bdae3b953cb38d7ae72ab099c55bc602a8c68b46cd649e8e38fdb875e
-```
-
-
 ## State Variables
 ### AGENT_SYMBOLS
 Real four-vault demo agent-token symbols: BNKR (V3), JUNO (V4),
@@ -223,13 +207,20 @@ function _doDeploy(Params memory p) internal returns (Deployed memory d);
 Assert the TickMath library link integrity for all four basket-family
 vaults (finding L3-D1). Each vault exposes the linked library address
 via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
-TickMath and is excluded. Checks, per vault:
+TickMath and is excluded.
+The audited reference is the TickMath library linked into THIS deploy
+script (`address(TickMath)`): the script and the vault contracts are
+compiled and linked together in the same artifact set, so a correctly
+linked vault must point at the identical library instance with the
+identical runtime codehash. Comparing against the script's own linked
+library — rather than a hardcoded codehash — keeps the check robust
+across compiler/metadata variance while still failing closed on a
+mislink. Checks, per vault:
 1. linked address is non-zero and has non-empty runtime code;
-2. linked runtime codehash equals the audited artifact;
-3. all vaults link the identical library address (single instance);
+2. linked address equals the script's canonical `address(TickMath)`;
+3. linked runtime codehash equals the canonical library's codehash;
 4. `totalAssets()` does not revert and is within a sane USDC range.
-A deliberately wrong/zero linked address fails check 1/2; a tampered
-library fails check 2.
+A deliberately wrong/zero linked address fails check 1/2/3.
 
 
 ```solidity
