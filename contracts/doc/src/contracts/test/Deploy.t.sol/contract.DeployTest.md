@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -181,5 +181,76 @@ function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
 
 ```solidity
 function test_deploy_envDriven_runInProcessSucceeds() public;
+```
+
+### _canonicalTickMath
+
+The audited reference is the TickMath library linked into the test
+artifact set, which is identical to the one linked into the deploy
+scripts and the basket vaults (same compiled build). Using it as the
+reference — rather than a hardcoded codehash — keeps the assertion
+robust across compiler/metadata variance while still detecting a
+mislink (a vault pointing at a different address or empty code).
+
+
+```solidity
+function _canonicalTickMath() internal pure returns (address);
+```
+
+### _deployBasketVault
+
+Deploy a representative basket-family vault (uses the TickMath link)
+with no real swap router; totalAssets() with an empty basket returns
+the vault's USDC balance and never touches TickMath, so it is a
+non-reverting in-range probe.
+
+
+```solidity
+function _deployBasketVault() internal returns (BasketVault);
+```
+
+### test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange
+
+The basket vault's linked TickMath library is the canonical
+instance (non-zero, has code, same address + codehash as the
+artifact's `TickMath`), and totalAssets() is non-reverting and in
+range. Positive arm of the deploy-time assertion.
+
+
+```solidity
+function test_tickMathLink_codehashMatchesAudited_andTotalAssetsInRange() public;
+```
+
+### test_tickMathLink_deployAssertsCanonicalLibrary
+
+The Deploy.s.sol deploy path asserts the linked TickMath is
+present: a successful in-process deploy implies the link-sanity
+check inside _doDeploy passed.
+
+
+```solidity
+function test_tickMathLink_deployAssertsCanonicalLibrary() public;
+```
+
+### test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck
+
+A deliberately wrong (and a zero) linked-library address fails the
+same codehash check the deploy assertion enforces. Proves the
+assertion is not vacuous — a mislinked library does not pass.
+
+
+```solidity
+function test_tickMathLink_wrongOrZeroAddressFailsCodehashCheck() public;
+```
+
+### test_tickMathLink_deployAssertionRevertsOnMislink
+
+The actual DeployDemoExtraVaults TickMath link-integrity assertion
+reverts when a vault links a zero (no-code) or wrong (non-TickMath)
+library — proving the deploy assertion fails closed on mislink.
+
+
+```solidity
+function test_tickMathLink_deployAssertionRevertsOnMislink() public;
 ```
 

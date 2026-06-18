@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/02a4fd3dee14b8669b98a5140837b0585fe22a79/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -300,6 +300,23 @@ function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 
 ```solidity
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
+```
+
+### _assertTickMathCanonical
+
+Assert the TickMath library linked into this deploy artifact set is
+present and non-empty (finding L3-D1). The primary RobotMoneyVault
+does not consume TickMath, so this script has no NAV consumer to probe
+against; the substantive codehash + per-vault totalAssets() integrity
+check lives in `DeployDemoExtraVaults._assertTickMathLinkIntegrity`,
+where the four basket-family vaults are deployed. Here we fail closed
+on a catastrophic link failure (zero address / no code) so a broken
+artifact set cannot deploy silently. `address(TickMath)` resolves to
+the deploy-time-linked library baked into this script's bytecode.
+
+
+```solidity
+function _assertTickMathCanonical() internal view;
 ```
 
 ### _authorizeDeployAgent

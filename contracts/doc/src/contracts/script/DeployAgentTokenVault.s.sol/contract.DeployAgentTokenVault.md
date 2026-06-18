@@ -1,5 +1,5 @@
 # DeployAgentTokenVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c96aeddaee03b01c692b1a7bc0798e010e7d1381/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:**
 Script

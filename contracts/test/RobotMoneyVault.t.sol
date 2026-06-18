@@ -1088,4 +1088,78 @@ contract RobotMoneyVaultTest is Test {
         );
         vault.deposit(100 * ONE_USDC, bob);
     }
+
+    // ─── L-3: shutdown recoverability ──────────────────────────────────────────
+
+    /// @notice EMERGENCY_ROLE can shut the vault down (deposits blocked,
+    ///         maxDeposit == 0) and the new ADMIN_ROLE-gated restoreVault
+    ///         re-opens deposits (maxDeposit > 0 and a deposit succeeds), while
+    ///         EMERGENCY_ROLE alone cannot restore (reverts). This proves a
+    ///         compromised emergency hot key can DoS but not permanently brick
+    ///         deposits — mirroring the documented pause/unpause asymmetry.
+    function test_shutdownVault_isRecoverableByAdminNotEmergency() public {
+        // Distinct EMERGENCY_ROLE holder (lower-trust hot key); admin keeps
+        // ADMIN_ROLE only. This separation is what the trust model assumes.
+        address emergency = makeAddr("emergency");
+        bytes32 emergencyRole = vault.EMERGENCY_ROLE();
+        vm.prank(admin);
+        vault.grantRole(emergencyRole, emergency);
+
+        // Sanity: deposits open before shutdown.
+        assertGt(vault.maxDeposit(alice), 0, "deposits should be open pre-shutdown");
+
+        // 1. EMERGENCY_ROLE shuts the vault down: deposits blocked, cap zeroed.
+        vm.prank(emergency);
+        vault.shutdownVault();
+        assertTrue(vault.isShutdown(), "vault should be shut down");
+        assertEq(vault.maxDeposit(alice), 0, "maxDeposit must be 0 after shutdown");
+        assertEq(vault.tvlCap(), 0, "tvlCap must be zeroed by shutdown");
+
+        // A deposit must revert while shut down.
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", alice, 100 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(100 * ONE_USDC, alice);
+
+        // 2. EMERGENCY_ROLE alone CANNOT restore (it lacks ADMIN_ROLE).
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergency);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", emergency, adminRole
+            )
+        );
+        vault.restoreVault(TVL_CAP);
+
+        // 3. ADMIN_ROLE restores: deposits re-open with a fresh cap.
+        vm.prank(admin);
+        vault.restoreVault(TVL_CAP);
+        assertFalse(vault.isShutdown(), "vault should no longer be shut down");
+        assertEq(vault.tvlCap(), TVL_CAP, "restore must set the supplied TVL cap");
+        assertGt(vault.maxDeposit(alice), 0, "deposits should re-open after restore");
+
+        // A deposit now succeeds.
+        vm.prank(alice);
+        uint256 shares = vault.deposit(100 * ONE_USDC, alice);
+        assertGt(shares, 0, "deposit after restore must mint shares");
+    }
+
+    /// @notice restoreVault reverts when the vault is not shut down (NotShutdown)
+    ///         and when the supplied cap is zero (InvalidCap).
+    function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public {
+        // Not shut down → NotShutdown.
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.NotShutdown.selector);
+        vault.restoreVault(TVL_CAP);
+
+        // Shut down, then a zero cap is rejected.
+        vm.prank(admin);
+        vault.shutdownVault();
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.InvalidCap.selector);
+        vault.restoreVault(0);
+    }
 }

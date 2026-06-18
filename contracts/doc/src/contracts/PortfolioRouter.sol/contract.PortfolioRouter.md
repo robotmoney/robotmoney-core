@@ -1,8 +1,8 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/965f0332a19461dd11d5d5acce5e2d9fe9b00bd3/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/PortfolioRouter.sol)
 
 **Inherits:**
-AccessControl, ReentrancyGuard
+[AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
 
 **Title:**
 PortfolioRouter
@@ -348,10 +348,13 @@ is created in the router — each vault sends USDC directly to
 
 
 ```solidity
-function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
-    external
-    nonReentrant
-    returns (uint256[] memory assetsPerLeg);
+function redeemFor(
+    address shareHolder,
+    address assetRecipient,
+    uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg,
+    uint256 deadline
+) external nonReentrant returns (uint256[] memory assetsPerLeg);
 ```
 **Parameters**
 
@@ -360,12 +363,47 @@ function redeemFor(address shareHolder, address assetRecipient, uint256[] callda
 |`shareHolder`|`address`|      Address whose vault shares are redeemed (the `owner` passed to `vault.redeem`). Either equals the caller (gateway self-custody flow: shares pulled from the user and held only during the call frame), or must have approved the caller on each vault's share token for at least that leg's share count. Direct user approvals to this router are forbidden (see SECURITY note above).|
 |`assetRecipient`|`address`|   Address that receives redeemed USDC. The router forwards each leg's USDC here; it never custodies USDC.|
 |`sharesPerLeg`|`uint256[]`|     Shares to redeem per leg (parallel to effective weight vector). Length must match the effective vault list. Zero-share legs are accepted (and skipped) so the caller can specify partial positions.|
+|`minAssetsPerLeg`|`uint256[]`|  Per-leg minimum USDC out (slippage floor), parallel to `sharesPerLeg`. Mirrors the deposit path's `minSharesPerLeg`: each non-zero leg reverts with `SlippageExceeded` if realized proceeds fall below the floor. Length must match `sharesPerLeg`. A floor of 0 disables the check for that leg.|
+|`deadline`|`uint256`|         Unix timestamp after which the call reverts with `DeadlineExpired`. Pass `type(uint256).max` to disable.|
 
 **Returns**
 
 |Name|Type|Description|
 |----|----|-----------|
 |`assetsPerLeg`|`uint256[]`|    USDC received per leg (parallel to `sharesPerLeg`).|
+
+
+### _redeemLeg
+
+Redeem a single leg: validate registry status and the confused-deputy
+guard, call `vault.redeem`, then enforce the per-leg slippage floor
+(finding L-8). Extracted from `redeemFor` to bound stack depth.
+
+
+```solidity
+function _redeemLeg(
+    address vault,
+    address shareHolder,
+    address assetRecipient,
+    uint256 shares,
+    uint256 minAssets
+) private returns (uint256 assetsOut);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|      Vault whose shares are redeemed.|
+|`shareHolder`|`address`|Owner of the shares (the `owner` passed to `vault.redeem`).|
+|`assetRecipient`|`address`|Address that receives the leg's USDC.|
+|`shares`|`uint256`|     Shares to redeem on this leg (caller guarantees > 0).|
+|`minAssets`|`uint256`|  Per-leg minimum USDC out; reverts `SlippageExceeded` below it.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`assetsOut`|`uint256`| Realized USDC for this leg.|
 
 
 ### _depositTo
@@ -686,12 +724,29 @@ error VaultNotRegistered();
 error MinSharesLengthMismatch();
 ```
 
+### MinAssetsLengthMismatch
+`minAssetsPerLeg` length does not match the number of active legs.
+
+
+```solidity
+error MinAssetsLengthMismatch();
+```
+
 ### SlippageExceeded
-A vault returned fewer shares than the depositor's minimum.
+A vault returned fewer shares (deposit) or assets (redeem) than the
+caller-supplied per-leg minimum.
 
 
 ```solidity
 error SlippageExceeded();
+```
+
+### DeadlineExpired
+The supplied `deadline` has passed (`block.timestamp > deadline`).
+
+
+```solidity
+error DeadlineExpired();
 ```
 
 ### RouterCapExceeded
