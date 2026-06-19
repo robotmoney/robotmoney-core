@@ -17,9 +17,14 @@
  * component and VaultList always display the same block_number — no
  * mixed-block state. The pollInterval prop is forwarded to ExplorerProvider in
  * tests to control re-fetch timing without fake timers.
+ *
+ * Each vault card now includes a 'Details' link (issue #941) that navigates to
+ * the Portfolio Explorer tab and opens VaultDetail for that vault.
+ * onSelectVault is called with the vault address; onSwitchToExplorer switches
+ * the enclosing Tabs to the portfolio-explorer panel. No wallet connection is
+ * required.
  */
 import { useExplorer } from "../lib/ExplorerContext";
-import { VaultCardAssets } from "./VaultCardAssets";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -33,7 +38,14 @@ const STATUS_LABEL: Record<number, string> = {
  */
 const VAULT_STATUS_ACTIVE = 0;
 
-export function VaultCards() {
+interface VaultCardsProps {
+  /** Called with the vault address when the user clicks 'Details'. */
+  onSelectVault?: (address: string) => void;
+  /** Called (after onSelectVault) to switch the enclosing Tabs to Portfolio Explorer. */
+  onSwitchToExplorer?: () => void;
+}
+
+export function VaultCards({ onSelectVault, onSwitchToExplorer }: VaultCardsProps = {}) {
   const { vaults, blockNumber, vaultsLoading, vaultsError } = useExplorer();
 
   if (vaultsLoading) {
@@ -52,6 +64,11 @@ export function VaultCards() {
         <p data-testid="landing-vault-cards-error">{vaultsError}</p>
       </section>
     );
+  }
+
+  function handleDetails(address: string) {
+    onSelectVault?.(address);
+    onSwitchToExplorer?.();
   }
 
   return (
@@ -109,11 +126,14 @@ export function VaultCards() {
                     Future — coming soon
                   </p>
                 )}
-                <VaultCardAssets
-                  vaultAddress={vault.address}
-                  riskLabel={vault.risk_label}
-                  status={vault.status}
-                />
+                <button
+                  type="button"
+                  data-testid="landing-vault-card-details"
+                  className="vault-card-details-link"
+                  onClick={() => handleDetails(vault.address)}
+                >
+                  Details
+                </button>
               </article>
             );
           })}
