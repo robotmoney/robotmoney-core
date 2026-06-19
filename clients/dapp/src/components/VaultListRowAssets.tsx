@@ -102,7 +102,7 @@ export function VaultListRowAssets({ vaultAddress, riskLabel, status }: VaultLis
   const isStableYield = riskLabel === "STABLE_YIELD";
 
   return (
-    <>
+    <span data-testid="vault-list-row-assets-risk-label" data-risk-label={riskLabel}>
       <button
         data-testid="vault-list-row-assets-toggle"
         onClick={() => setExpanded((v) => !v)}
@@ -124,6 +124,6 @@ export function VaultListRowAssets({ vaultAddress, riskLabel, status }: VaultLis
             <AssetRow token="0x0000000000000000000000000000000000000000" label="deSPXA" />
           </ul>
         ))}
-    </>
+    </span>
   );
 }
