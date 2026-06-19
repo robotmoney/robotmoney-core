@@ -57,6 +57,19 @@ Posture is consistent with the 2026-06-18 holistic review: the items below are
 in-trust-model hardening and lifecycle-composition gaps, **not** blockers to the
 documented trust model — except **F-01**, which is a stated mainnet hard gate.
 
+> **Update — Layer 2 added (2026-06-19).** A follow-on adversarial pass drilled
+> each finding for n-th-order / cross-finding effects. It re-grades several findings
+> (one **down** in interpretation, six **up** by composition) and surfaces ~10
+> categories the external report did not open — including two new **High**s
+> (NC-1 RwaVault stale-oracle redeem brick, NC-2 unvetted BasketVault adapters).
+> See [Layer 2 — N-order composition](#layer-2--n-order-composition-re-grades--new-categories).
+> The single load-bearing insight: in BasketVault/RwaVault the internal
+> `maxSlippageBps` floor is derived from the **same TWAP that prices NAV**, so it is
+> not an independent backstop — which is why a cluster of Mediums composes into Highs.
+
+The severity column below records the **as-verified (Layer 1)** grade; the **Re-grade**
+column records the Layer 2 composition-aware grade where it differs.
+
 ---
 
 ## Severity summary
@@ -283,6 +296,122 @@ Consistent with the 2026-06-09/06-18 triage; no new action beyond annotate/suppr
 
 ---
 
+## Layer 2 — N-order composition: re-grades & new categories
+
+The external report explicitly stopped at "each contract is safe alone; the risk is
+composition." This layer pushes past that ceiling: each finding was drilled for
+cross-finding chains, severity re-graded by **reachable composed impact**, and the
+surface swept for categories the report never opened. Claims marked **(✓ verified)**
+were re-read against source in this session; the rest carry the supporting pass's
+file:line citations.
+
+**Load-bearing insight.** In `BasketVault`/`RwaVault` the internal `maxSlippageBps`
+floor is computed from `_slippageFloor → _twapUsdcValue` — the **same TWAP that prices
+NAV**. So whenever that TWAP is wrong (pool misconfig, multi-block drag, or a stale
+Chronicle feed), the "slippage protection" is wrong in lockstep and provides **no
+independent backstop**. This is why F-09/F-11/F-16 are one value-extraction chain, not
+three coincidental Mediums.
+
+### Re-grades
+
+| ID | L1 grade | L2 re-grade | Deciding assumption that moves it |
+|---|---|---|---|
+| **F-01** | High | **High — re-characterized** | NOT a theft path: every gateway flow (`deposit`/`depositTo`/`withdraw`/`withdrawFromRouter`) pulls USDC from `msg.sender`, an attacker-minted agent moves only its own approved funds, and `_authorizeAgentInternal` reverts `AgentAlreadyOwned` so existing agents can't be hijacked. Retained Gateway `DEFAULT_ADMIN_ROLE` = governance-capture / liveness (mint rogue agents, re-acquire ADMIN, block the Timelock from rotating roles). (✓ verified) |
+| **F-04** | Med (mostly mitigated) | **Med (residual)** | Headline drift is fixed by atomic `retire()`, but the `setVaultStatus(Paused)` back-door composes with all-or-revert deposits (see F-13) → not "arguably Low". |
+| **F-06** | Med | **High (basket family)** | `BasketVault._withdraw` is `whenNotPaused`; `pause()`=EMERGENCY_ROLE, `unpause()`=ADMIN_ROLE; basket vaults use plain `AccessControl` (no last-admin floor) and have no `restoreVault`. Hot-key pause + last-ADMIN renounce = **permanent withdrawal freeze**. (✓ verified) |
+| **F-08** | Med | **High (conditional)** | If any RWA token is configured `overrideAllowed && maxLossBps==MAX_BPS`, one EMERGENCY key sets stale-override + override-unwind and dumps the basket at ~0 floor under an unverifiable NAV. Hinges on guard config. |
+| **F-09** | Med | **High (misconfig) / Med (honest)** | `addAsset` never asserts execution pool (from `swapFee_`) == TWAP `pool_`. One wrong `swapFee_` write silently decouples NAV-pricing from execution → mint-cheap/redeem-dear. Honest-config degrades to multi-block TWAP drag (cardinality floor is only 2). (✓ verified: `addAsset` has no equality check) |
+| **F-11** | Low | **Med** | Gateway hardcodes the per-leg floor to zero, removing the only *independent* USDC-denominated floor on the agent redeem path; the remaining internal floor is TWAP-co-manipulated. |
+| **F-13** | Low | **Med** | Amplifier: any single non-Active leg (F-04 residual / F-05) reverts the **whole router's** deposits while `previewDeposit` reports the basket healthy. |
+| **F-16** | Info | **Med** | The pricing-model half of the F-09 chain (TWAP-mark mint vs spot fill); not informational once the pool-equality gap exists. |
+| **F-17 / F-19** | Info | **Info (urgency lower)** | No wrong price *today*: deSPXA=18-dec, and a real pool's mean tick is within int24, so the hardcoded `1e12` and the `int24` cast cannot misprice now. Latent only. |
+
+F-02/F-03 **hold at Med**: the direct-`redeem()` bypass is genuinely available because
+receipt tokens are custodied by the depositor's `shareReceiver`, not the gateway/router
+(the `ShareCustodyInvariantViolated` checks enforce the gateway never holds shares).
+The one exception is RwaVault — see NC-1.
+
+### New categories (not F-01…F-19)
+
+**High**
+
+- **NC-1 — RwaVault stale oracle bricks *all* user redemptions (✓ verified).**
+  `redeem → previewRedeem → totalAssets → _checkOracleFreshness` reverts
+  `StalePriceFeed` (`vaults/RwaVault.sol:199-217`). The stale-override only relaxes
+  `emergencyUnwind`, **not** user `redeem`, and the freshness check is unconditional —
+  so redeem reverts *even after* emergency-unwind to idle USDC. During any heartbeat
+  breach, RWA funds are trapped with no permissionless exit. This is "fail-closed by
+  design" (ADR-0006 §2) but directly contradicts the report's blanket "funds aren't
+  trapped — direct redeem always works." **Fix:** short-circuit freshness when the
+  vault holds zero priced RWA tokens.
+- **NC-2 — BasketVault adapters are unvetted (✓ verified).** `addAsset(token, pool,
+  swapFee, adapter, venue)` (`vaults/BasketVault.sol:753-802`) accepts `adapter` as an
+  arbitrary address — **no allowlist, no codehash pin, no DELEGATECALL guard**, unlike
+  RobotMoneyVault's `_requireAdapterEligible`. The adapter is *both* the swap executor
+  (receives a token approval) *and* the `twapPrice` NAV oracle. ADMIN-gated, so
+  trust-bounded, but a strictly weaker, undocumented control surface than the sibling
+  vault for the same asset class. **Fix:** mirror RobotMoneyVault's codehash allowlist
+  + delegatecall guard.
+
+**Medium**
+
+- **NC-3 — BasketVault `pause()` is a bidirectional freeze (✓ verified).** Low-trust
+  EMERGENCY_ROLE freezes *withdrawals* (not just deposits); only ADMIN_ROLE clears it.
+  Defeats the direct-redeem bypass for the duration; combines with F-01/F-06.
+- **NC-4 — One `setVaultStatus(vault, Paused)` bricks whole-router deposits** while
+  `previewDeposit` still reports the other legs available (F-04 residual × F-13).
+  Single call, whole-router blast radius, masked from monitors.
+- **NC-5 — Router `redeemFor` binds `sharesPerLeg[i]` positionally to the mutable
+  weight vector**, not to an explicit vault. A governance reweight between agent-sign
+  and execution can redeem the *wrong receipt token* at that vault's exit haircut;
+  idempotency won't catch it (F-15 omits the leg vector). **Fix:** bind redemption to
+  an explicit hashed `vaults[]`.
+- **NC-6 — Deposit/redeem mark-vs-haircut asymmetry is a farmable leak.** Shares mint
+  on slippage-discounted NAV but captured tokens are re-marked at full TWAP → every
+  deposit transfers value to incumbents (up to **300 bps** on AgentTokenVault). No
+  `previewRedeem(previewDeposit(x)) <= x` invariant test exists. **Fix:** mint on
+  realized swap proceeds; add the round-trip invariant.
+- **NC-7 — Gateway rolling-window arrays grow unbounded.**
+  `_depositWindowEntries`/`_withdrawWindowEntries` are append-only, pruned by a head
+  pointer and never compacted → a high-frequency agent eventually hits a gas wall and
+  is **permanently self-DoS'd**, with no admin reset. **Fix:** ring buffer / coarse
+  time-bucket counters.
+- **NC-8 — Permissionless `reabsorbRemovedAsset` weaponizable.** Dust-send +
+  degraded-pool `observe()` revert can brick reabsorption (stranding the very balance
+  it exists to recover); `addAsset` also lets a removed token be re-added as a
+  *duplicate* `AssetInfo`. **Fix:** quarantine fallback on TWAP failure; reject/reuse
+  existing inactive entry on re-add.
+- **NC-9 — `depositTo` paymentId omits `destination`.** Same
+  `(orderId, amount, idempotencyKey)` with a different `destination` collides;
+  first-to-land forces single-vault vs router routing substitution (sharper than
+  F-15's generic note). **Fix:** fold `destination` + `keccak256(minSharesPerLeg)` into
+  the hash.
+- **NC-10 — Role-separation grant-DoS during handover.** `AccessRoles._grantRole`
+  reverts on tier overlap; registering the intended future ADMIN/PAUSER multisig
+  address as an AGENT first (commit/reveal is permissionless) blocks that address from
+  ever being granted ADMIN/PAUSER. **Fix:** check `agentOwner`/`AGENT_ROLE` is clear
+  before granting privileged roles; fix role ordering in deploy.
+
+**Low / Info**
+
+- **NC-11** — exit fee charged on share-implied *gross* (not realized pull) →
+  socialized to remaining holders when an adapter over-reports.
+- **NC-12** — `AaveV3Adapter`/`MorphoAdapter` use non-zeroing `safeIncreaseAllowance`,
+  against the codebase's `forceApprove(…,0)` convention.
+- Latent: a fee-on-transfer / rebasing basket token would silently corrupt NAV
+  (`addAsset` has no screen); read-only reentrancy on `totalAssets()` (vault itself is
+  guarded — integrator note); the Timelock/Safe is a single liveness point the
+  admin-floor *masks*; cross-asset rounding bias slightly favors redeemers.
+
+### Fix-interaction warning (F-01 remediation)
+
+The F-01 fix must `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` **and** move `authorizeAgent`
+to `ADMIN_ROLE` before/at the same time as revoking the deployer's Gateway
+`DEFAULT_ADMIN_ROLE`. A *naked* revoke would make `AGENT_ROLE` ungrantable forever
+(no floor on it), trading F-01 for a permanent agent-onboarding brick.
+
+---
+
 ## Test-coverage gaps (confirmed zero cross-contract coverage)
 
 The external report's coverage gaps reproduce — these multi-contract lifecycle
@@ -295,6 +424,17 @@ combinations have no regression tests:
   `EMERGENCY_ROLE` after handover (F-01).
 - Negative test: registered TWAP pool ≠ execution pool (F-09).
 
+Layer 2 chains additionally uncovered:
+
+- User `redeem` on RwaVault reverts while the Chronicle feed is stale, including after
+  emergency-unwind to idle USDC (NC-1).
+- A single `setVaultStatus(vault, Paused)` reverts every router deposit while
+  `previewDeposit` still reports the basket available (NC-4 / F-13).
+- Router redemption maps `sharesPerLeg` to the wrong vault after a between-sign
+  reweight (NC-5).
+- `previewRedeem(previewDeposit(x)) <= x` round-trip invariant on each basket vault
+  (NC-6 / F-16).
+
 Single-contract boundary coverage (ConfusedDeputyGuards, AdapterDelegatecallGuard,
 AccessRoles, CustodyInvariant) remains good.
 
@@ -302,18 +442,30 @@ AccessRoles, CustodyInvariant) remains good.
 
 ## Suggested remediation order
 
+Reordered to reflect the Layer 2 re-grades (composition-aware severity).
+
 1. **(High) F-01** — complete the Timelock handover (Gateway `DEFAULT_ADMIN_ROLE` +
-   all-vault `EMERGENCY_ROLE`) and broaden the assertions. Mainnet hard gate.
-2. **(Med) F-02 + F-03** — fix router exit semantics (allow `Retired`; redeem by
-   actual holdings / explicit list).
-3. **(Med) F-05 + F-13** + **F-04 residual** — status-validate weight vectors,
-   skip-and-renormalise deposits, close the `setVaultStatus`/Paused back-door.
-   (F-04 down-prioritized: the headline drift already shipped fixed.)
-4. **(Med) F-06 + F-07 + F-08** — unify the vault control plane (admin-floor,
-   restore path, stale-override gating).
-5. **(Med) F-09 + F-10** — TWAP/execution pool consistency check; RWA
-   NAV-vs-market deviation guard.
-6. **(Low) F-11 + F-12 + F-15 + F-14** — forward router floor/deadline, cap
-   semantics, idempotency-hash fields, revoked-adapter NAV handling.
-7. **(Tests)** add the cross-contract regression cases above, prioritizing
-   F-01/F-02/F-03/F-05.
+   all-vault `EMERGENCY_ROLE`) and broaden the assertions. **Mind the fix-interaction
+   warning** (redirect `AGENT_ROLE` admin before revoking). Mainnet hard gate.
+2. **(High, Layer 2) NC-1 + NC-2 + F-06 + F-08 + F-09** — RwaVault freshness
+   short-circuit on user redeem; vet BasketVault adapters (codehash + delegatecall
+   guard); give the basket family an `ADMIN_ROLE` admin-floor + `restoreVault`; move
+   the RWA stale-override gating up; assert execution-pool == TWAP-pool in `addAsset`.
+3. **(Med) F-02 + F-03 + NC-5** — fix router exit semantics (allow `Retired`; redeem
+   by actual holdings / explicit hashed `vaults[]`, closing positional wrong-leg
+   redemption).
+4. **(Med) F-05 + F-13 + F-04 residual + NC-4** — status-validate weight vectors,
+   skip-and-renormalise deposits, close the `setVaultStatus`/Paused back-door (one
+   call currently bricks whole-router deposits while preview reports healthy).
+5. **(Med) F-10 + F-11 + F-16 + NC-6** — RWA NAV-vs-market deviation guard; forward a
+   real per-leg floor through the gateway; mint basket shares on realized proceeds; add
+   the `previewRedeem(previewDeposit(x)) <= x` invariant.
+6. **(Med) NC-3 + NC-7 + NC-8 + NC-9 + NC-10** — basket withdrawal-pause separation;
+   bound the gateway window arrays; reabsorb quarantine fallback + de-dup re-add;
+   fold `destination`/leg-vector into idempotency hashes; guard the handover grant-DoS.
+7. **(Low) F-12 + F-14 + F-15 + NC-11 + NC-12 + F-07** — cap semantics, revoked-adapter
+   NAV handling, idempotency-hash fields, exit-fee-on-realized, approval-zeroing,
+   basket `restoreVault` (if not done in step 2).
+8. **(Tests)** add the cross-contract regression cases below, prioritizing
+   F-01/F-02/F-03/F-05 and the Layer 2 chains (NC-1 stale redeem, NC-4 whole-router
+   deposit DoS, F-09 misconfig pool mismatch).
