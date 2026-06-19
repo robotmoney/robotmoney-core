@@ -194,6 +194,41 @@ contract VaultRegistry is AdminFloorAccessControl {
         emit VaultRegistered(vault, metadata.name, metadata.asset);
     }
 
+    // ─── SCOUT SEAM (issue #951 → #942): unified governance `retire()` (DI-2) ──
+    //
+    // Canonical design: docs/architecture.md §4.7 "Decided target (per decision
+    // #925, graduated-authority model)" and docs/prd.md §6 Vault lifecycle +
+    // §12 INV-3. Decided but NOT YET IMPLEMENTED — this dev-scout maps the seam
+    // only; the contract work belongs to #942.
+    //
+    // The gap: today registry `Retired` (this `setVaultStatus`, governance-gated)
+    // and the vault `shutdown` flag (RobotMoneyVault.shutdownVault, emergency hot
+    // key) are TWO independent enforcement points. A vault can be `Retired` here
+    // yet still accept direct deposits, or be `shut-down` at the vault while still
+    // `Active` here — the two layers can drift.
+    //
+    // Decided target: a single deliberate, timelock-gated governance `retire`
+    // action that flips registry status to `Retired` AND halts vault deposits in
+    // one call so the layers cannot drift. Emergency `shutdownVault` stays
+    // `EMERGENCY_ROLE`, vault-only, with no registry/lifecycle change.
+    //
+    // Implementation seam for #942 (choose one in that issue, do NOT here):
+    //   (a) New `VaultRegistry.retire(address vault)` (ADMIN_ROLE = TimelockController
+    //       per DeployTimelock) that sets `_status[vault] = Retired` and calls a
+    //       vault-side deposit-halt entrypoint, OR
+    //   (b) A coordinator/script-level governance action that sequences
+    //       `setVaultStatus(vault, Retired)` + the vault deposit halt atomically.
+    // Authority: governance (multisig + `TimelockController`) — see the §4.7
+    // authority-tier table and DeployTimelock.t.sol (timelock holds ADMIN_ROLE).
+    // Relation to `shutdownVault`: retire() is the deliberate, recoverable
+    // (abort = `setVaultStatus(vault, Active)`) lifecycle decision; `shutdownVault`
+    // remains the emergency vault-only overlay that makes no lifecycle decision.
+    //
+    // No stub function is added here: introducing an unguarded/no-op `retire()`
+    // on the registry would change the public ABI and risk a partial action
+    // shipping ahead of #942. The seam is the documented entrypoint above plus
+    // the existing `setVaultStatus(... Retired)` mechanism it will consolidate.
+
     /// @notice Update a vault's lifecycle status. Restricted to `ADMIN_ROLE`.
     /// @param vault      Address of an already-registered vault.
     /// @param newStatus  New lifecycle status (Active, Paused, or Retired).
