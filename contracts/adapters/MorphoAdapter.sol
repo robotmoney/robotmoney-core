@@ -7,6 +7,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 /// @title MorphoAdapter
 /// @notice Wraps the Morpho Gauntlet USDC Prime vault on Base.
@@ -29,8 +30,6 @@ contract MorphoAdapter is IStrategyAdapter {
     /// @param requested Amount of USDC requested for withdrawal.
     /// @param actual    Amount of USDC actually received by VAULT.
     error WithdrawShortfall(uint256 requested, uint256 actual);
-    /// @notice `rescueToken` refused — the token is USDC or the Morpho vault share (protected vault assets).
-    error CannotRescueProtectedToken();
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
 
@@ -84,12 +83,16 @@ contract MorphoAdapter is IStrategyAdapter {
     }
 
     /// @inheritdoc IStrategyAdapter
-    function rescueTokens(address token, address to) external onlyVault {
+    function sweepForeignToken(address token) external {
         if (token == address(USDC) || token == address(MORPHO_VAULT)) {
-            revert CannotRescueProtectedToken();
+            revert ForeignTokenQuarantine.TokenIsProtected(token);
         }
-        if (to == address(0)) revert ZeroAddress();
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(to, balance);
+        ForeignTokenQuarantine.sweep(token, msg.sender);
     }
+
+    /// @inheritdoc IStrategyAdapter
+    /// @dev Morpho Gauntlet USDC Prime yield accrues automatically into the
+    ///      ERC-4626 share price — there are no discrete claimable reward tokens
+    ///      on this venue. This function is a no-op and always succeeds.
+    function harvestRewards() external {}
 }

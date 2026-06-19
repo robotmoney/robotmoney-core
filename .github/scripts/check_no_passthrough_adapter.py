@@ -55,6 +55,7 @@ ALLOWLIST_PATHS = {
     "docs/technical/testcode-removal-seams.md",
     "docs/code-reviews/gap-analysis-20260607.md",
     "docs/code-review/smart-contract-vulnerability-audit-20260609.md",
+    "docs/code-review/smart-contract-holistic-review-20260618.md",
     "docs/code-reviews/security-review-20260612.md",
 }
 

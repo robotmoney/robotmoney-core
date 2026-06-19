@@ -1,5 +1,5 @@
 # UniswapV4SwapAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/adapters/UniswapV4SwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/adapters/UniswapV4SwapAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)
@@ -127,38 +127,6 @@ function twapPrice(
 |----|----|-----------|
 |`quoteAmount`|`uint256`|Estimated amount of `quoteToken` for `baseAmount` of `baseToken`.|
 
-
-### _checkPoolPair
-
-Validates that `pool` pairs exactly `baseToken` and `quoteToken`.
-
-
-```solidity
-function _checkPoolPair(address pool, address baseToken, address quoteToken) internal view;
-```
-
-### _meanTick
-
-Compute arithmetic-mean tick over `[window, 0]` seconds via `observe()`.
-
-
-```solidity
-function _meanTick(address pool, uint32 window) internal view returns (int24);
-```
-
-### _priceFromTick
-
-Convert a TWAP mean tick to an output amount using sqrtPriceX96 math.
-
-
-```solidity
-function _priceFromTick(
-    int24 meanTick,
-    address baseToken,
-    address quoteToken,
-    uint256 baseAmount
-) internal pure returns (uint256 quoteAmount);
-```
 
 ### _tickSpacingForFee
 

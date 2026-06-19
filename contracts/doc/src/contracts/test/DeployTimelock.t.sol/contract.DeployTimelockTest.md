@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -259,6 +259,70 @@ new address has ADMIN_ROLE on VaultRegistry.
 
 ```solidity
 function test_timelockRouted_adminRoleGrant_succeedsAfterDelay() public;
+```
+
+### test_INV3_setFeeRecipient_directHotKeyCallReverts
+
+INV-3: a direct (non-timelock) setFeeRecipient call from the Safe
+hot key reverts — the Safe holds PROPOSER/EXECUTOR on the timelock,
+not ADMIN_ROLE on the vault.
+
+
+```solidity
+function test_INV3_setFeeRecipient_directHotKeyCallReverts() public;
+```
+
+### test_INV3_setExitFeeBps_directHotKeyCallReverts
+
+INV-3: a direct (non-timelock) setExitFeeBps call from the Safe hot
+key reverts for the same reason.
+
+
+```solidity
+function test_INV3_setExitFeeBps_directHotKeyCallReverts() public;
+```
+
+### test_INV3_setFeeRecipient_succeedsViaTimelock
+
+INV-3: setFeeRecipient succeeds ONLY when routed through the
+TimelockController (schedule → delay → execute).
+
+
+```solidity
+function test_INV3_setFeeRecipient_succeedsViaTimelock() public;
+```
+
+### test_INV3_setExitFeeBps_succeedsViaTimelock
+
+INV-3: setExitFeeBps succeeds ONLY when routed through the
+TimelockController.
+
+
+```solidity
+function test_INV3_setExitFeeBps_succeedsViaTimelock() public;
+```
+
+### test_AC3_setQuarantineAddress_directHotKeyCallReverts
+
+AC3: a direct (non-timelock) setQuarantineAddress call from the
+Safe hot key reverts — the Safe holds only PROPOSER/EXECUTOR on
+the timelock, not ADMIN_ROLE on the vault.
+
+
+```solidity
+function test_AC3_setQuarantineAddress_directHotKeyCallReverts() public;
+```
+
+### test_AC3_setQuarantineAddress_succeedsViaTimelock
+
+AC3: setQuarantineAddress succeeds ONLY when routed through the
+TimelockController (schedule → delay → execute). After the update,
+foreign-token sweeps on the vault go to the new address, not the
+old constant — proving the governed quarantine model is end-to-end.
+
+
+```solidity
+function test_AC3_setQuarantineAddress_succeedsViaTimelock() public;
 ```
 
 ### test_deploy_revertsOnZeroSafe

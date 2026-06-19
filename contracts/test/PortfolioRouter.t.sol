@@ -11,6 +11,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {AdminFloorAccessControl} from "../lib/AdminFloorAccessControl.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -1045,8 +1046,11 @@ contract PortfolioRouterTest is Test {
     // After _executeLegs completes, usdc.balanceOf(address(router)) must be
     // zero. If any vault accepts less than its allocated legAmount the whole
     // deposit reverts with UsdcCustodyInvariantViolated so no USDC is left
-    // stranded. A separate rescueUsdc path is available to ADMIN_ROLE to
-    // recover USDC that arrives through other means (direct transfers, etc.).
+    // stranded. The router never holds USDC across transactions, and the old
+    // arbitrary-recipient `rescueUsdc` path is DELETED (INV-1): no admin/role
+    // function may route USDC to a caller-supplied recipient. The only asset
+    // movement left is the permissionless foreign-token quarantine sweep, which
+    // refuses USDC.
 
     /// @dev Deploy and register a PartialAcceptVault, marking it router-eligible.
     function _deployPartialVault() internal returns (PartialAcceptVault pv) {
@@ -1096,56 +1100,41 @@ contract PortfolioRouterTest is Test {
         assertEq(usdc.balanceOf(address(router)), 0, "router must hold zero USDC after deposit");
     }
 
-    /// @notice AC#2: rescueUsdc called by ADMIN_ROLE transfers the full stranded
-    ///         balance and emits RescuedUsdc.
-    function test_rescueUsdc_adminTransfersBalance_andEmitsEvent() public {
-        // Strand USDC in the router by direct transfer (simulating a recovery scenario).
-        uint256 stranded = 500 * ONE_USDC;
-        usdc.mint(address(router), stranded);
-        assertEq(usdc.balanceOf(address(router)), stranded);
-
-        address recipient = makeAddr("recipient");
-
-        vm.prank(admin);
-        vm.expectEmit(true, false, false, true);
-        emit PortfolioRouter.RescuedUsdc(recipient, stranded);
-        router.rescueUsdc(recipient);
-
-        assertEq(usdc.balanceOf(address(router)), 0, "router must be empty after rescue");
-        assertEq(usdc.balanceOf(recipient), stranded, "recipient must receive stranded amount");
-    }
-
-    /// @notice AC#3: rescueUsdc called by a non-ADMIN_ROLE account reverts with
-    ///         the standard AccessControl error.
-    function test_rescueUsdc_revertsForNonAdmin() public {
-        usdc.mint(address(router), 100 * ONE_USDC);
-
-        bytes32 role = router.ADMIN_ROLE();
-        vm.prank(stranger);
+    /// @notice INV-1: USDC (a protocol asset) can never be swept out of the router.
+    ///         The deleted `rescueUsdc` is replaced by a sweep that refuses USDC,
+    ///         so there is no admin/role path that routes USDC to any recipient.
+    function test_sweepForeignToken_revertsForUsdc() public {
+        usdc.mint(address(router), 500 * ONE_USDC);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
-            )
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
         );
-        router.rescueUsdc(stranger);
+        router.sweepForeignToken(address(usdc));
+        assertEq(usdc.balanceOf(address(router)), 500 * ONE_USDC, "USDC must stay put");
     }
 
-    /// @notice rescueUsdc reverts when the recipient is address(0).
-    function test_rescueUsdc_revertsOnZeroAddress() public {
-        usdc.mint(address(router), 100 * ONE_USDC);
-        vm.prank(admin);
-        vm.expectRevert(PortfolioRouter.ZeroAddress.selector);
-        router.rescueUsdc(address(0));
+    /// @notice INV-2: a foreign (non-USDC) token that lands on the router is
+    ///         permissionlessly swept to the fixed quarantine address — any
+    ///         caller, never a caller-supplied recipient.
+    function test_sweepForeignToken_permissionlessToQuarantine() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 250 * ONE_USDC);
+
+        vm.prank(stranger);
+        router.sweepForeignToken(address(stray));
+
+        assertEq(stray.balanceOf(address(router)), 0, "router must be empty after sweep");
+        assertEq(
+            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            250 * ONE_USDC,
+            "stray token quarantined"
+        );
     }
 
-    /// @notice rescueUsdc is a no-op (no event, no revert) when the router holds
-    ///         zero USDC — useful for defensive calls in scripts.
-    function test_rescueUsdc_noopWhenBalanceIsZero() public {
-        assertEq(usdc.balanceOf(address(router)), 0);
-        vm.prank(admin);
-        // Should not revert and should not emit RescuedUsdc.
-        router.rescueUsdc(admin);
-        assertEq(usdc.balanceOf(address(router)), 0);
+    /// @notice The sweep is a harmless no-op when there is nothing to move.
+    function test_sweepForeignToken_zeroBalanceIsNoop() public {
+        MockUSDC stray = new MockUSDC();
+        router.sweepForeignToken(address(stray));
+        assertEq(stray.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0);
     }
 
     // ─── RWA/Thematic placeholder coexistence (issue #479) ────────────────────

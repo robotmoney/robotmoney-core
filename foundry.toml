@@ -20,12 +20,25 @@ fs_permissions = [
     { access = "read-write", path = "/tmp" },
     { access = "read-write", path = "/repo/deployments" },
     # Read-only access to docs/ so foundry regression tests can grep for
-    # canonical production-readiness warnings (issue #427).
+    # canonical production-readiness warnings (issue #427) and the PRD
+    # 'Security invariants' section (issue #929).
     { access = "read", path = "./docs" },
+    # Read-only access to contracts/ so the custody-invariant guard test
+    # (CustodyInvariantGuard.t.sol, issue #929) can scan production source for
+    # forbidden arbitrary-recipient asset movers (INV-1).
+    { access = "read", path = "./contracts" },
     # Read-only access to config/ so DeployAgentTokenVault.s.sol can read the
     # canonical MVP shortlist (config/agent-token-shortlist.json, ADR-0001).
     { access = "read", path = "./config" },
 ]
+
+# Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth
+# keep the stateful fuzzing deterministic and within CI time budget while still
+# exercising thousands of deposit/withdraw/donate/sweep sequences per invariant.
+[invariant]
+runs = 64
+depth = 128
+fail_on_revert = false
 
 [fmt]
 line_length = 100

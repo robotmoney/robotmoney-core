@@ -122,7 +122,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 ### 5. Fork integration tests (protocol adapters)
 **Suggested file:** `.github/workflows/fork-integration.yml`
 **Environment:** `fork`
-**Trigger paths:** `testing/fork-e2e-rust/**`
+**Tier / triggers:** HEAVY — 4 Geth/Anvil devnet slots, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
 
 **Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
 This suite forks **Base mainnet** state (real deployed contracts, real DEX pools, real USDC) and runs the Rust client (`rmpc`) against it. The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes — bugs that only show up against actually-deployed mainnet contracts. The smoke-test devnet (Geth+Lighthouse, see suite 14) cannot do this: it deploys fresh contracts on an empty chain, so it cannot tell you "the calldata `rmpc` generates still matches what is deployed at the real gateway address on Base."
@@ -643,15 +643,17 @@ cross-feature interactions actually land.
 - **LIGHT (quick) tier** — runs on `pull_request`s to **any branch** and on
   `push` to `dev`/`dev-phase-*`. Forge unit + invariant tests, solidity
   fmt/natspec/slither, dapp lint/typecheck/vitest/build, rust fmt/clippy/doc-coverage,
-  rmpc unit, hermetic fork-fixture integration, abi-drift, doc/manifest guards, and
-  the security gates. This is the feedback a routine feature PR blocks on.
+  rmpc unit, abi-drift, doc/manifest guards, and the security gates. This is the
+  feedback a routine feature PR blocks on.
 - **HEAVY tier** — the `dev` merge gate. Runs on every `pull_request` targeting
   `dev` (no `paths:` filter, so the gate always reports for any branch merging
   into `dev`) and on `push` to `dev` for merged-commit coverage. The devnet e2e
   matrices (`rust-client-devnet-integration`, `smoke-test-devnet-boot-teardown`),
-  the full-devnet `dapp-e2e` Playwright suite, the `erc4626-demo-tvl-matrix`, and
-  the `forge-coverage-gate` job all live here. Every branch that opens a PR into
-  `dev` runs the full heavy battery before it can land.
+  the fork-adapter integration matrix (`fork-protocol-adapter-integration`,
+  4 Geth/Anvil slots, 20-25 min), the full-devnet `dapp-e2e` Playwright suite,
+  the `erc4626-demo-tvl-matrix`, and the `forge-coverage-gate` job all live here.
+  Every branch that opens a PR into `dev` runs the full heavy battery before it
+  can land.
 
 To make a heavy suite actually *block* a merge, add its check to the required
 status checks on `dev`'s branch-protection rule (a GitHub setting, not repo YAML).
@@ -681,7 +683,7 @@ Every workflow's `name:` and its tier.
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
-| `fork-protocol-adapter-integration` | quick | hermetic fork fixtures; no live archive RPC required |
+| `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev` |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |

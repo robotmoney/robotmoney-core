@@ -15,6 +15,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
@@ -26,6 +27,8 @@ import {IAerodromeRouter} from "../interfaces/IAerodromeRouter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
+import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
 ///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -283,39 +286,152 @@ contract BasketVaultTest is Test {
         vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
-    function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public {
-        vm.expectRevert(BasketVault.AssetInBasket.selector);
-        vm.prank(admin);
-        vault.rescueTokens(address(basketToken), admin);
+    /// @notice INV-1: an ACTIVE basket asset may never be swept to quarantine —
+    ///         it is a protocol/depositor asset counted in NAV.
+    function test_sweepForeignToken_revertsForActiveBasketAsset() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ForeignTokenQuarantine.TokenIsProtected.selector, address(basketToken)
+            )
+        );
+        vault.sweepForeignToken(address(basketToken));
     }
 
-    function test_rescueTokens_succeedsForNonBasketAsset() public {
+    /// @notice INV-1: USDC (the vault asset) and the share token may never be swept.
+    function test_sweepForeignToken_revertsForUsdcAndShareToken() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(usdc))
+        );
+        vault.sweepForeignToken(address(usdc));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ForeignTokenQuarantine.TokenIsProtected.selector, address(vault))
+        );
+        vault.sweepForeignToken(address(vault));
+    }
+
+    /// @notice INV-2: a genuinely foreign token is permissionlessly swept to the
+    ///         fixed quarantine address — no admin role, no caller-supplied
+    ///         recipient.
+    function test_sweepForeignToken_permissionlessForNonBasketAsset() public {
         TestERC20 stray = new TestERC20();
         stray.mint(address(vault), 5 * ONE_USDC);
+        address stranger = makeAddr("stranger");
 
-        vm.prank(admin);
-        vault.rescueTokens(address(stray), admin);
+        vm.prank(stranger);
+        vault.sweepForeignToken(address(stray));
 
-        assertEq(stray.balanceOf(admin), 5 * ONE_USDC, "stray ERC-20 recovered");
+        assertEq(
+            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            5 * ONE_USDC,
+            "stray ERC-20 quarantined"
+        );
         assertEq(stray.balanceOf(address(vault)), 0, "vault no longer holds stray ERC-20");
     }
 
-    /// @notice A removed (inactive) basket asset's token is rescuable when a balance
-    ///         reappears later — `totalAssets`/`_sellProportional` skip inactive
-    ///         entries, so the balance would otherwise be stranded forever
-    ///         (audit 2026-06-09, L-15).
-    function test_rescueTokens_succeedsForInactiveBasketAsset() public {
+    /// @notice INV-1: a removed (inactive) basket asset is STILL protected from the
+    ///         quarantine sweep — it is re-absorbed into NAV instead, never routed
+    ///         away (replaces the audit 2026-06-09 L-15 admin rescue path).
+    function test_sweepForeignToken_revertsForInactiveBasketAsset() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        basketToken.mint(address(vault), 7 * ONE_USDC);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ForeignTokenQuarantine.TokenIsProtected.selector, address(basketToken)
+            )
+        );
+        vault.sweepForeignToken(address(basketToken));
+    }
+
+    /// @notice INV-2: a balance reappearing on a removed basket asset is
+    ///         permissionlessly re-absorbed — swapped to USDC into NAV — so it
+    ///         stays redeemable by holders, with no admin-routable path.
+    function test_reabsorbRemovedAsset_creditsNavPermissionlessly() public {
         vm.prank(admin);
         vault.removeAsset(0); // vault holds zero basketToken, removal allowed
 
         // A balance reappears after removal (e.g. late airdrop or refund).
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // Fund the swap router so it can pay out USDC for the re-absorb swap.
+        // Pool is 1:1 (tick=0); 1% slippage floor → minUsdcOut = 6.93 USDC.
+        uint256 usdcOut = 7 * ONE_USDC;
+        router.setAmountOut(usdcOut);
+        usdc.mint(address(router), usdcOut);
+
+        uint256 navBefore = vault.totalAssets();
+
+        // Permissionless: an arbitrary stranger triggers re-absorption.
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vault.reabsorbRemovedAsset(0);
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "reappeared balance consumed");
+        assertEq(
+            basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            0,
+            "re-absorbed asset must NOT be quarantined"
+        );
+        assertEq(
+            vault.totalAssets(),
+            navBefore + usdcOut,
+            "NAV rises by re-absorbed USDC for all holders"
+        );
+    }
+
+    /// @notice An active asset cannot be re-absorbed (it is sold proportionally on
+    ///         withdrawal, not swept).
+    function test_reabsorbRemovedAsset_revertsForActiveAsset() public {
         basketToken.mint(address(vault), 7 * ONE_USDC);
+        vm.expectRevert(BasketVault.AssetInBasket.selector);
+        vault.reabsorbRemovedAsset(0);
+    }
+
+    // ─── INV-3: fee setters are governance-gated (issue #929) ─────────────────
+    //
+    // Fee setters are `onlyRole(ADMIN_ROLE)`. In production ADMIN_ROLE is held by
+    // the TimelockController (see DeployTimelock.s.sol / DeployTimelock.t.sol),
+    // so they change only via multisig + timelock. Here we prove the gate by
+    // asserting the hot EMERGENCY key cannot move fees and ADMIN can.
+
+    function test_INV3_setFeeRecipient_revertsForHotEmergencyKey() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergencyResponder,
+                adminRole
+            )
+        );
+        vault.setFeeRecipient(makeAddr("newRecipient"));
+    }
+
+    function test_INV3_setExitFeeBps_revertsForHotEmergencyKey() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(emergencyResponder);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergencyResponder,
+                adminRole
+            )
+        );
+        vault.setExitFeeBps(50);
+    }
+
+    function test_INV3_feeSetters_succeedForAdminRole() public {
+        address newRecipient = makeAddr("newRecipient");
+        vm.prank(admin);
+        vault.setFeeRecipient(newRecipient);
+        assertEq(vault.feeRecipient(), newRecipient, "fee recipient updated by admin");
 
         vm.prank(admin);
-        vault.rescueTokens(address(basketToken), admin);
-
-        assertEq(basketToken.balanceOf(admin), 7 * ONE_USDC, "reappeared balance recovered");
-        assertEq(basketToken.balanceOf(address(vault)), 0, "vault no longer holds the token");
+        vault.setExitFeeBps(50);
+        assertEq(vault.exitFeeBps(), 50, "exit fee updated by admin");
     }
 
     // ─── maxDeposit / maxMint 4626 conformance (audit 2026-06-09, L-16) ───────
@@ -3009,5 +3125,127 @@ contract BasketVaultVenueSelectorTest is Test {
             0,
             "mixed: aeroToken received via Aerodrome"
         );
+    }
+}
+
+// ─── AC7 timelock-gated fee setter tests (issue #929) ────────────────────
+//
+// AC7: fee setters are gated to ADMIN_ROLE, which in production is held ONLY
+//      by the TimelockController, so fee changes require governance.
+//
+// These tests spin up a minimal TimelockController, transfer ADMIN_ROLE to it,
+// and prove:
+//   - direct (non-timelock) calls revert with AccessControlUnauthorizedAccount
+//   - timelock-routed calls (schedule → warp → execute) succeed.
+//
+// Note: BasketVault uses the hardcoded ForeignTokenQuarantine.QUARANTINE constant
+// for sweeps (not a settable address) — the quarantine-address setter is only on
+// RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
+
+/// @dev A minimal mock Safe with threshold >= 2 (satisfies DeployTimelock guards).
+contract MockSafe929 {
+    function getThreshold() external pure returns (uint256) {
+        return 2;
+    }
+}
+
+contract BasketVaultTimelockTest is Test {
+    uint256 internal constant ONE_USDC = 1e6;
+    uint256 internal constant MIN_DELAY = 2 days;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    TestERC20 internal usdc;
+    MockSwapRouter internal swapRouter;
+    BasketVaultHarness internal vault;
+    TimelockController internal timelock;
+
+    address internal admin = makeAddr("bvTimelockAdmin");
+    address internal emergencyResponder = makeAddr("bvTimelockEmergency");
+    address internal safe;
+    address internal hotKey = makeAddr("hotKey"); // simulates a non-admin caller
+
+    function setUp() public {
+        usdc = new TestERC20();
+        swapRouter = new MockSwapRouter();
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
+        );
+        safe = address(new MockSafe929());
+
+        // Deploy a TimelockController with `safe` as proposer + executor.
+        address[] memory proposers = new address[](1);
+        proposers[0] = safe;
+        address[] memory executors = new address[](1);
+        executors[0] = safe;
+        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+
+        // Transfer ADMIN_ROLE from admin EOA to TimelockController.
+        vm.startPrank(admin);
+        vault.grantRole(ADMIN_ROLE, address(timelock));
+        vault.revokeRole(ADMIN_ROLE, admin);
+        vm.stopPrank();
+    }
+
+    // ─── AC7: fee setters are timelock-gated on BasketVault ─────────────────
+
+    /// @notice AC7: direct setFeeRecipient from a hot key reverts.
+    function test_AC7_basket_setFeeRecipient_directCallReverts() public {
+        vm.prank(hotKey);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
+            )
+        );
+        vault.setFeeRecipient(makeAddr("newFeeRecipient"));
+    }
+
+    /// @notice AC7: direct setExitFeeBps from a hot key reverts.
+    function test_AC7_basket_setExitFeeBps_directCallReverts() public {
+        vm.prank(hotKey);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
+            )
+        );
+        vault.setExitFeeBps(50);
+    }
+
+    /// @notice AC7: setFeeRecipient succeeds ONLY via TimelockController.
+    function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public {
+        address newRecipient = makeAddr("newFeeRecipient");
+        bytes memory callData = abi.encodeCall(BasketVault.setFeeRecipient, (newRecipient));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac7-basket-fee-recipient");
+
+        vm.prank(safe);
+        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+
+        // Pre-delay revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
+    }
+
+    /// @notice AC7: setExitFeeBps succeeds ONLY via TimelockController.
+    function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public {
+        uint256 newFee = 50;
+        bytes memory callData = abi.encodeCall(BasketVault.setExitFeeBps, (newFee));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac7-basket-exit-fee");
+
+        vm.prank(safe);
+        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
 }

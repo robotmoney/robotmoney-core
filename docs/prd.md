@@ -490,3 +490,54 @@ The vault is registered in `VaultRegistry` as Active. The Portfolio
 Router may allocate to it once the Chronicle oracle integration and
 Aerodrome adapter are deployed and the vault passes the standard Router
 eligibility checks (`isRouterEligible` returns true).
+
+## 12. Security invariants
+
+The protocol is non-custodial and enforces three custody invariants. They
+mitigate at source — preventing stranded or mis-routed assets — rather than
+relying on after-the-fact recovery. They are the source of truth for the
+contract surface; the implementing code lives in `contracts/`
+(`ForeignTokenQuarantine.sol`, the vaults, the router, and the strategy
+adapters) and is documented in `docs/architecture.md`,
+`docs/technical/smart-contracts.md`, and
+`docs/technical/adapter-architecture.md`.
+
+**INV-1 — No arbitrary admin routing.** No admin-, role-, or vault-gated
+function may route a protocol or depositor asset to a caller-supplied
+recipient. The historical arbitrary-recipient rescue functions
+(`PortfolioRouter.rescueUsdc`, `RobotMoneyVault.rescueTokens`,
+`BasketVault.rescueTokens`, and the Aave/Compound/Morpho adapter
+`rescueTokens`) are deleted, along with `IStrategyAdapter.rescueTokens`. The
+only asset movement an operator can trigger is recovering NON-whitelisted,
+already-quarantined tokens from a separate fixed trash address, and only via
+multisig + offline governance.
+
+**INV-2 — No stranded assets.** Every protocol or depositor asset is always
+redeemable by holders or absorbed into NAV: protocol-asset donations accrue
+pro-rata to all holders (USDC idle balances and active basket-asset balances
+are counted in `totalAssets`, safe from inflation via the 1e18 decimals
+offset); underlying-protocol emissions are harvested to the vault; a balance
+that reappears on a removed (inactive) basket asset is re-absorbed into NAV
+via `BasketVault.reabsorbRemovedAsset` (swapped to USDC, credited to holders),
+never routed to an admin; rounding and dust always favor holders, never the
+router or the fee recipient; and the router holds zero USDC after operations.
+Non-whitelisted foreign tokens cannot be rejected on receipt nor
+returned-to-sender (the sender is not knowable on-chain), so they are inert
+(uncounted, un-redeemable) but additionally get a **deterministic
+permissionless sweep** to a single hardcoded quarantine ("trash") address via
+`sweepForeignToken(token)` — so nothing is permanently stuck. Anyone may
+trigger the sweep; the destination is a compile-time constant, never
+caller-supplied. An offline multisig governance process empties the trash
+address (the reverse-mistakes safety valve).
+
+**INV-3 — Governance-gated fee and quarantine control.** The fee recipient,
+the fee parameters, and the quarantine address change only through the
+`TimelockController` (multisig + timelock); direct non-timelock calls revert.
+This is the same graduated-authority model used for the protocol's deliberate
+value and lifecycle actions: permissionless actions (foreign-token sweep,
+harvest trigger) need no privilege; emergency actions (pause, emergency
+withdraw to the vault only, force-remove adapter) use the hot emergency key
+and can only de-risk, never extract; and governance actions (unpause, restore,
+retire, fee-recipient and fee-parameter changes, adapter add/allowlist/caps,
+quarantine set and recover) require multisig + timelock. Depositor principal
+is moved by the depositor alone.

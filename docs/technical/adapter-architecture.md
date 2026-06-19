@@ -48,11 +48,16 @@ All adapters implement `IStrategyAdapter`:
   the venue and returns it to the vault.
 - `totalAssets() returns (uint256)` reports live USDC-denominated value
   held by the adapter.
-- `rescueTokens(address token, address to)` lets the vault recover
-  accidental non-protected tokens.
+- `sweepForeignToken(address token)` is the permissionless foreign-token
+  quarantine sweep (custody invariants INV-1/INV-2): anyone may call it,
+  but it moves only NON-protected tokens to a single hardcoded quarantine
+  address — never a caller-supplied recipient. The old arbitrary-recipient
+  `rescueTokens(token,to)` is deleted (INV-1).
 
-All mutating adapter functions are restricted to the owning vault by an
-`onlyVault` check in each implementation.
+The value-moving adapter functions (`deploy`, `withdraw`) are restricted to
+the owning vault by an `onlyVault` check in each implementation;
+`sweepForeignToken` is intentionally permissionless (its destination is a
+compile-time constant, so it cannot route value to an arbitrary recipient).
 
 ## 3. Vault Flow
 
@@ -200,8 +205,11 @@ Primary risks:
   allowances must be cleared where possible.
 - **Permission risk.** Mutating adapter functions must only be callable
   by the owning vault.
-- **Protected-token rescue risk.** Rescue paths must not allow USDC or
-  venue receipt tokens to be swept away.
+- **Protected-token sweep risk (INV-1/INV-2).** The permissionless
+  `sweepForeignToken` path must reject USDC and venue receipt tokens, and
+  may move tokens only to the fixed quarantine address — never to a
+  caller-supplied recipient (the deleted `rescueTokens` was the source of
+  this finding, audit L-11/L-15).
 - **Integration drift.** Venue APIs, token implementations, proxy
   upgrades, and chain deployments can change after adapter deployment.
 - **Composability risk.** ERC-4626 venue adapters, such as Morpho,
@@ -218,7 +226,9 @@ Any production adapter must satisfy these properties before activation:
 - `deploy` handles approvals narrowly and clears residual allowances.
 - `withdraw` measures or verifies actual USDC delivered.
 - `totalAssets` returns live USDC-denominated value.
-- `rescueTokens` rejects protected assets.
+- `sweepForeignToken` rejects protected assets (USDC, receipt/share token)
+  and quarantines only to the fixed `ForeignTokenQuarantine.QUARANTINE`
+  address; there is no arbitrary-recipient rescue path (INV-1).
 - Adapter behavior is covered by unit tests and, where external venue
   behavior matters, fork tests.
 - Emergency withdrawal and force-removal behavior is documented.

@@ -1,5 +1,5 @@
 # MockAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -108,21 +108,42 @@ function totalAssets() external view returns (uint256);
 function setRevertTotalAssets(bool enabled) external;
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue non-USDC tokens accidentally sent to this contract.
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
 
 
 ```solidity
-function rescueTokens(address, address) external onlyVault;
+function sweepForeignToken(address) external;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
 |`<none>`|`address`||
-|`<none>`|`address`||
 
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+Adapters that have no on-chain claimable rewards (e.g. Aave
+interest accrues automatically in the aToken balance) implement
+this as a no-op. Adapters with discrete reward tokens claim them
+here, swap to USDC, and credit the vault. This function MUST NOT
+revert when there are no rewards to claim.
+
+
+```solidity
+function harvestRewards() external;
+```
 
 ### donateFromAttacker
 
