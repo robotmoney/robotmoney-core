@@ -888,6 +888,31 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit AdapterForceRemoved(index, address(adapter), lossAmount);
     }
 
+    // ─── SCOUT SEAM (issue #951 → #942): how vault deposit-halt relates to ────
+    //     the planned unified governance `retire()` (DI-2).
+    //
+    // Canonical: docs/architecture.md §4.7 (decided target, decision #925) and
+    // §4.5 authority tiers; docs/prd.md §12 INV-3.
+    //
+    // `shutdownVault` below is the EMERGENCY-tier, vault-only deposit hard-stop
+    // (hot key). It is deliberately NOT a lifecycle decision: it makes no change
+    // in the registry. The planned governance `retire()` (tracked in #942) needs
+    // a deliberate, governance-tier (multisig + TimelockController) way to halt
+    // deposits that is distinct from this emergency overlay, so a registry
+    // `Retired` flip and the vault deposit-halt land atomically.
+    //
+    // Seam options for #942 (do NOT implement here — dev-scout maps only):
+    //   (a) Reuse `setTvlCap(0)` (already ADMIN_ROLE = governance) as the
+    //       governance deposit-halt leg, leaving `shutdown`/`restoreVault` as the
+    //       emergency path untouched, OR
+    //   (b) Add a new ADMIN_ROLE-gated `retireDeposits()` entrypoint that sets a
+    //       lifecycle-retired flag distinct from the emergency `shutdown` flag so
+    //       the two paths never alias.
+    // Recovery/abort of a governance retire is the deliberate governance action
+    // `VaultRegistry.setVaultStatus(vault, Active)` (+ re-open via the chosen
+    // deposit path), mirroring the `restoreVault` asymmetry below. The emergency
+    // `shutdown`/`restoreVault` pair stays exactly as-is.
+
     /// @notice Shut down the vault: set `shutdown = true` and zero the TVL cap.
     ///         Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`
     ///         via `restoreVault`, mirroring the `pause`/`unpause` trust

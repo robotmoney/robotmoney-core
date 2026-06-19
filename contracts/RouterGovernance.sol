@@ -23,6 +23,19 @@ import {BpsMath} from "./lib/BpsMath.sol";
 ///           resulting weights for rmpc and dapp reads.
 ///         - One active proposal at a time (simple linear cadence).
 ///
+/// SCOUT SEAM (issue #951 → #942): the planned unified governance `retire()`
+/// (DI-2, decision #925; docs/architecture.md §4.7) does NOT belong here.
+/// RouterGovernance controls router target weights only (constraint above) and
+/// cannot govern vault internals or registry lifecycle. `retire()` is a
+/// TimelockController-gated registry/vault action (the timelock holds ADMIN_ROLE
+/// on VaultRegistry and RobotMoneyVault — see DeployTimelock.t.sol), not a
+/// router-weight proposal. The only adjacent concern for #942 is that retiring a
+/// vault should be followed by a router-weight proposal that drops the retired
+/// vault to 0 bps so no new deposits route to it — but that re-weight is an
+/// ordinary `propose()`/`execute()` flow here, requiring NO new code in this
+/// contract. This seam exists to prevent a future implementer from wrongly
+/// modelling `retire()` as a RouterGovernance proposal type.
+///
 /// Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
 contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     // ─── Roles ───────────────────────────────────────────────────────────────

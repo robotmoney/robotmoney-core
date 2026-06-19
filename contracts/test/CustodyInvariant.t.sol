@@ -112,6 +112,44 @@ contract CustodyHandler is Test {
     function actorAt(uint256 i) external view returns (address) {
         return actors[i];
     }
+
+    // ─── SCOUT SEAM (issue #951 → #943): expand custody-invariant harness (AC4) ──
+    //
+    // Canonical: docs/prd.md §12 INV-1/INV-2; contracts/test/CustodyInvariantGuard.t.sol;
+    // docs/code-review/smart-contract-holistic-review-20260618.md (custody/USDC
+    // invariants). The current handler drives deposit / withdraw / donate /
+    // sweep-foreign. #943 must extend it with three more fuzzed sequences so the
+    // INV-2 redeemability and NAV-monotonicity invariants below also hold across
+    // the vault's adapter-custody surface. Add these as NEW public handler
+    // methods in #943 (each new public method widens the fuzz target set, which
+    // is why they are NOT added here — a dev-scout must not change runtime fuzz
+    // behaviour). Seam shape for each:
+    //
+    //   function rebalance(uint256 seed) external { ... vault.rebalance(); ... }
+    //     - Drives the permissionless `RobotMoneyVault.rebalance()` (and/or
+    //       admin `adminRebalance(targetBalances)` under vm.prank(admin)) so
+    //       custody invariants survive idle⇄adapter reshuffles. Respect
+    //       `setMaxRebalanceBpsPerCall` / `setMinRebalanceInterval` (warp time)
+    //       to avoid all-revert no-ops.
+    //
+    //   function removeAsset(uint256 seed) external { ... vault.removeAdapter(i) ... }
+    //     - Exercises ADMIN_ROLE `removeAdapter(index)` (graceful, funds reabsorbed
+    //       to idle) and, separately, EMERGENCY `forceRemoveAdapter(index)` /
+    //       `emergencyWithdrawAdapter(index)`. INV-2 must hold after reabsorb;
+    //       force-remove treats adapter assets as lost (NAV may fall) — assert the
+    //       *redeemable ≤ totalAssets* relation, not strict NAV monotonicity, in
+    //       that branch (the existing donation-only monotonicity invariant would
+    //       need a force-remove-aware variant).
+    //
+    //   function routerZeroBalance(uint256 seed) external { ... }
+    //     - Drives the vault into a router/adapter-zero-balance state (e.g. remove
+    //       all adapters or rebalance everything to idle) and asserts deposits,
+    //       redemptions and totalAssets accounting stay correct with no adapter
+    //       custody outstanding (router-zero-balance custody invariant).
+    //
+    // Wire each new handler so `targetSelector`/`targetContract` in the test
+    // contract picks it up. Keep `try/catch` on the bounded calls so a legitimate
+    // revert (cooldown, cap, empty set) does not abort an invariant run.
 }
 
 contract CustodyInvariantTest is StdInvariant, Test {
@@ -145,7 +183,26 @@ contract CustodyInvariantTest is StdInvariant, Test {
 
         handler = new CustodyHandler(vault, usdc, foreign);
         targetContract(address(handler));
+
+        // SCOUT SEAM (issue #951 → #943): when #943 adds the rebalance /
+        // remove-asset-reabsorb / router-zero-balance handler methods (see the
+        // seam block at the foot of CustodyHandler), constrain the fuzz target to
+        // the intended selectors via `targetSelector(FuzzSelector(...))` if any
+        // new view/admin helpers must be excluded. The current single
+        // `targetContract` line already auto-includes every public handler
+        // method, so newly added handler entrypoints are picked up automatically.
     }
+
+    // SCOUT SEAM (issue #951 → #943): NEW invariants to add alongside the new
+    // handler sequences. The two existing redeemability/NAV invariants below
+    // already cover deposit/withdraw/donate/sweep; #943 must confirm they still
+    // hold under rebalance and graceful adapter-reabsorb, and add a
+    // force-remove-aware NAV invariant. Because EMERGENCY `forceRemoveAdapter`
+    // intentionally treats adapter assets as lost, NAV can fall on that branch —
+    // the donation-monotonicity assumption no longer holds globally. #943 should
+    // either (a) keep force-remove out of the handler used by a strict NAV
+    // invariant, or (b) replace strict NAV monotonicity with a redeemable ≤ NAV
+    // invariant that survives the loss. Document the choice inline when #943 lands.
 
     /// @notice INV-2: the sum of every holder's redeemable assets never exceeds
     ///         totalAssets — accounting never over-promises and every share is
