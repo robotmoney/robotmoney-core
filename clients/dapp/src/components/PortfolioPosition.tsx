@@ -129,31 +129,31 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
           ) : (
             <>
               <div className="table-scroll">
-              <table data-testid="portfolio-position-table">
-                <thead>
-                  <tr>
-                    <th>Vault</th>
-                    <th>Risk</th>
-                    <th>Shares</th>
-                    <th>USDC value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.positions.map((pos) => {
-                    const usdc = usdcValues[pos.vault_address.toLowerCase()];
-                    return (
-                      <tr key={pos.vault_address} data-testid="portfolio-position-row">
-                        <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
-                        <td data-testid="portfolio-position-row-risk">{pos.risk_label}</td>
-                        <td data-testid="portfolio-position-row-shares">{pos.shares}</td>
-                        <td data-testid="portfolio-position-row-usdc">
-                          {usdc !== undefined ? usdc : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                <table data-testid="portfolio-position-table">
+                  <thead>
+                    <tr>
+                      <th>Vault</th>
+                      <th>Risk</th>
+                      <th>Shares</th>
+                      <th>USDC value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {state.positions.map((pos) => {
+                      const usdc = usdcValues[pos.vault_address.toLowerCase()];
+                      return (
+                        <tr key={pos.vault_address} data-testid="portfolio-position-row">
+                          <td data-testid="portfolio-position-row-vault">{pos.vault_name}</td>
+                          <td data-testid="portfolio-position-row-risk">{pos.risk_label}</td>
+                          <td data-testid="portfolio-position-row-shares">{pos.shares}</td>
+                          <td data-testid="portfolio-position-row-usdc">
+                            {usdc !== undefined ? usdc : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
 
               <p data-testid="portfolio-position-total">

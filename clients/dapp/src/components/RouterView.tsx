@@ -121,44 +121,44 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
             {weightSourceLabel}
           </p>
           <div className="table-scroll">
-          <table data-testid="router-view-weights-table">
-            <thead>
-              <tr>
-                <th>Vault</th>
-                <th>Weight (bps)</th>
-                <th>Allocation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {weights.current_weights.map((w) => (
-                <tr key={w.vault} data-testid="router-view-weight-row">
-                  <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
-                  <td data-testid="router-view-weight-bps">
-                    <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
-                    {" bps ("}
-                    <span data-testid="router-view-weight-bps-pct">
-                      {formatPercentFromNumber(w.bps)}
-                    </span>
-                    {")"}
-                  </td>
-                  <td data-testid="router-view-weight-bar-cell">
-                    <div
-                      data-testid="router-view-weight-bar"
-                      className="weight-bar"
-                      style={{
-                        width: formatPercentFromNumber(w.bps),
-                        background: "var(--accent, #4f8ef7)",
-                        height: "0.75em",
-                        borderRadius: "2px",
-                        minWidth: "2px",
-                      }}
-                      title={`${formatPercentFromNumber(w.bps)}`}
-                    />
-                  </td>
+            <table data-testid="router-view-weights-table">
+              <thead>
+                <tr>
+                  <th>Vault</th>
+                  <th>Weight (bps)</th>
+                  <th>Allocation</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {weights.current_weights.map((w) => (
+                  <tr key={w.vault} data-testid="router-view-weight-row">
+                    <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
+                    <td data-testid="router-view-weight-bps">
+                      <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
+                      {" bps ("}
+                      <span data-testid="router-view-weight-bps-pct">
+                        {formatPercentFromNumber(w.bps)}
+                      </span>
+                      {")"}
+                    </td>
+                    <td data-testid="router-view-weight-bar-cell">
+                      <div
+                        data-testid="router-view-weight-bar"
+                        className="weight-bar"
+                        style={{
+                          width: formatPercentFromNumber(w.bps),
+                          background: "var(--accent, #4f8ef7)",
+                          height: "0.75em",
+                          borderRadius: "2px",
+                          minWidth: "2px",
+                        }}
+                        title={`${formatPercentFromNumber(w.bps)}`}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
       )}
@@ -186,33 +186,33 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
         <p data-testid="router-view-history-empty">No weight history.</p>
       ) : (
         <div className="table-scroll">
-        <table data-testid="router-view-history-table">
-          <thead>
-            <tr>
-              <th>Block</th>
-              <th>Tx Hash</th>
-              <th>Weights</th>
-            </tr>
-          </thead>
-          <tbody>
-            {weights.history.map((entry) => (
-              <tr key={entry.block_number} data-testid="router-view-history-row">
-                <td data-testid="router-view-history-block">{entry.block_number}</td>
-                <td data-testid="router-view-history-tx" className="font-mono">
-                  {entry.tx_hash}
-                </td>
-                <td>
-                  {entry.weights
-                    .map(
-                      (w) =>
-                        `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
-                    )
-                    .join(", ")}
-                </td>
+          <table data-testid="router-view-history-table">
+            <thead>
+              <tr>
+                <th>Block</th>
+                <th>Tx Hash</th>
+                <th>Weights</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {weights.history.map((entry) => (
+                <tr key={entry.block_number} data-testid="router-view-history-row">
+                  <td data-testid="router-view-history-block">{entry.block_number}</td>
+                  <td data-testid="router-view-history-tx" className="font-mono">
+                    {entry.tx_hash}
+                  </td>
+                  <td>
+                    {entry.weights
+                      .map(
+                        (w) =>
+                          `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
+                      )
+                      .join(", ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

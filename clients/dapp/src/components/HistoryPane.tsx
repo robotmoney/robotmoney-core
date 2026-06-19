@@ -88,28 +88,28 @@ export function HistoryPane(props: HistoryPaneProps) {
             <p data-testid="history-pane-empty">No deposits indexed for this agent.</p>
           ) : (
             <div className="table-scroll">
-            <table data-testid="history-pane-table">
-              <thead>
-                <tr>
-                  <th>Block</th>
-                  <th>Indexed at</th>
-                  <th>Tx hash</th>
-                  <th>Payment id</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.rows.map((row) => (
-                  <tr key={`${row.tx_hash}-${row.log_index}`} data-testid="history-pane-row">
-                    <td data-testid="history-pane-row-block">{row.block_number}</td>
-                    <td data-testid="history-pane-row-indexed-at">{row.indexed_at}</td>
-                    <td data-testid="history-pane-row-tx">{row.tx_hash}</td>
-                    <td data-testid="history-pane-row-payment-id">{row.payment_id}</td>
-                    <td data-testid="history-pane-row-amount">{row.amount}</td>
+              <table data-testid="history-pane-table">
+                <thead>
+                  <tr>
+                    <th>Block</th>
+                    <th>Indexed at</th>
+                    <th>Tx hash</th>
+                    <th>Payment id</th>
+                    <th>Amount</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {state.rows.map((row) => (
+                    <tr key={`${row.tx_hash}-${row.log_index}`} data-testid="history-pane-row">
+                      <td data-testid="history-pane-row-block">{row.block_number}</td>
+                      <td data-testid="history-pane-row-indexed-at">{row.indexed_at}</td>
+                      <td data-testid="history-pane-row-tx">{row.tx_hash}</td>
+                      <td data-testid="history-pane-row-payment-id">{row.payment_id}</td>
+                      <td data-testid="history-pane-row-amount">{row.amount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>

@@ -398,30 +398,30 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
         </p>
       ) : (
         <div className="table-scroll">
-        <table data-testid="timelock-pending-ops">
-          <thead>
-            <tr>
-              <th>Operation ID</th>
-              <th>Ready At (UTC)</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {timelock.pendingOps.map((op) => (
-              <tr key={op.operationId} data-testid={`timelock-op-${op.operationId}`}>
-                <td>
-                  <code data-testid="timelock-op-id">{op.operationId}</code>
-                </td>
-                <td data-testid="timelock-op-eta">
-                  {new Date(Number(op.readyTimestamp) * 1000).toISOString()}
-                </td>
-                <td data-testid="timelock-op-status">
-                  {op.status === "ready" ? "Ready to execute" : "Waiting for delay"}
-                </td>
+          <table data-testid="timelock-pending-ops">
+            <thead>
+              <tr>
+                <th>Operation ID</th>
+                <th>Ready At (UTC)</th>
+                <th>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {timelock.pendingOps.map((op) => (
+                <tr key={op.operationId} data-testid={`timelock-op-${op.operationId}`}>
+                  <td>
+                    <code data-testid="timelock-op-id">{op.operationId}</code>
+                  </td>
+                  <td data-testid="timelock-op-eta">
+                    {new Date(Number(op.readyTimestamp) * 1000).toISOString()}
+                  </td>
+                  <td data-testid="timelock-op-status">
+                    {op.status === "ready" ? "Ready to execute" : "Waiting for delay"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
