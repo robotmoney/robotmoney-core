@@ -1,5 +1,5 @@
 # MockPoolForGuards
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/ConfusedDeputyGuards.t.sol)
 
 Uniswap V3 pool stub. token0/token1 are set at construction.
 observe() returns linear tick cumulative (tick rate 0 → 1:1 price).

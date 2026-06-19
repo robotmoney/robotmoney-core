@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -558,6 +558,60 @@ Deactivate a basket asset. The vault must hold zero of that token. Restricted to
 function removeAsset(uint256 index) external onlyRole(ADMIN_ROLE);
 ```
 
+### reabsorbRemovedAsset
+
+Re-absorb a balance that has reappeared on a removed (inactive)
+basket asset by swapping it to USDC into NAV (custody invariant
+INV-2). Permissionless: anyone may trigger it, and the proceeds
+always land in this vault — there is NO caller-supplied recipient
+and no admin-routable path (INV-1).
+
+Replaces the deleted admin `rescueTokens` escape hatch for inactive
+basket assets (audit 2026-06-09 L-15). `totalAssets` and
+`_sellProportional` skip inactive assets, so a balance that
+reappears after `removeAsset` (e.g. a late airdrop, a delayed
+transfer, or a residual dust sweep from the underlying venue) would
+otherwise be uncounted and unredeemable. Swapping it back to USDC
+credits it to ALL holders pro-rata (NAV rises), keeping the
+no-stranded-asset invariant without arbitrary admin routing. The
+min-out is TWAP-derived and slippage-bounded exactly like the
+proportional-withdraw sell leg, so the swap fails closed if the
+oracle is unavailable or the price is manipulated.
+
+
+```solidity
+function reabsorbRemovedAsset(uint256 index) external nonReentrant;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`index`|`uint256`|Registry index of an inactive (removed) basket asset.|
+
+
+### _slippageFloor
+
+TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
+basket asset. Shared by the proportional-withdraw sell leg and the
+removed-asset re-absorption path.
+
+
+```solidity
+function _slippageFloor(AssetInfo memory assetInfo, uint256 amount)
+    internal
+    view
+    returns (uint256);
+```
+
+### _applySlippage
+
+Apply the configured max-slippage haircut to a USDC value.
+
+
+```solidity
+function _applySlippage(uint256 usdcValue) internal view returns (uint256);
+```
+
 ### pause
 
 
@@ -631,18 +685,32 @@ function emergencyUnwindWithOverride(address[] calldata tokens)
 function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Recover accidentally sent ERC-20 tokens (not USDC or active basket assets). ADMIN_ROLE.
-
-Inactive (removed) basket entries are deliberately rescuable: `totalAssets`
-and `_sellProportional` skip them, so any balance that reappears after
-`removeAsset` would otherwise be permanently stranded (audit 2026-06-09, L-15).
+Permissionlessly sweep a NON-protected foreign token held by the
+vault to the fixed quarantine address (custody invariants
+INV-1/INV-2).
+Anyone may call; the destination is a hardcoded constant, never
+caller-supplied. This replaces the deleted arbitrary-recipient
+`rescueTokens(token,to)` admin function (INV-1). Reverts when
+`token` is USDC, the vault share token, or ANY basket asset —
+active OR configured-but-inactive. Inactive (removed) basket
+assets are NOT swept here: a balance that reappears on a removed
+asset is re-absorbed into NAV via `reabsorbRemovedAsset` (INV-2),
+never routed to an admin or to quarantine, so it stays redeemable
+by holders (this is the no-stranded-asset replacement for the
+audit 2026-06-09 L-15 admin rescue path).
 
 
 ```solidity
-function rescueTokens(address token, address to) external nonReentrant onlyRole(ADMIN_ROLE);
+function sweepForeignToken(address token) external;
 ```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|Foreign ERC-20 to quarantine. Must not be USDC, the share token, or any active/configured basket asset.|
+
 
 ### setTvlCap
 
@@ -951,12 +1019,6 @@ event DepositsPausedSet(bool paused);
 event Shutdown();
 ```
 
-### EmergencyTokenRecovered
-
-```solidity
-event EmergencyTokenRecovered(address indexed token, address indexed to, uint256 amount);
-```
-
 ### EmergencyUnwindGuardSet
 
 ```solidity
@@ -1069,12 +1131,6 @@ error AssetStillHeld();
 
 ```solidity
 error NoActiveAssets();
-```
-
-### CannotRescueUsdc
-
-```solidity
-error CannotRescueUsdc();
 ```
 
 ### EmergencyUnwindOverrideDisabled

@@ -121,7 +121,7 @@ RobotMoneyVault
 
 | Role | Keccak | Granted at deploy | Powers |
 |---|---|---|---|
-| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees, `rescueTokens`, `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval` |
+| `ADMIN_ROLE` | `keccak256("ADMIN_ROLE")` | `_admin` constructor arg | Add/remove/reconfigure adapters, set caps/fees (governance-gated, INV-3: ADMIN_ROLE is held by the TimelockController in production), `rebalance`, `adminRebalance`, `setMaxRebalanceBps`, `setMinRebalanceInterval`. **No** `rescueTokens` — arbitrary-recipient rescue is deleted (INV-1); the only token movement is the permissionless `sweepForeignToken` |
 | `EMERGENCY_ROLE` | `keccak256("EMERGENCY_ROLE")` | `_admin` constructor arg | `pause`, `unpause`, `emergencyWithdraw`, `emergencyWithdrawAdapter`, `forceRemoveAdapter`, `shutdownVault` |
 | `KEEPER_ROLE` | `keccak256("KEEPER_ROLE")` | **Not granted at launch** | `rebalance` |
 
@@ -236,15 +236,15 @@ interface IStrategyAdapter {
     function deploy(uint256 amount) external;
     function withdraw(uint256 amount) external returns (uint256 actual);
     function totalAssets() external view returns (uint256);
-    function rescueTokens(address token, address to) external;
+    function sweepForeignToken(address token) external;
 }
 ```
 
-All three gate every mutating function with `onlyVault` — a simple `msg.sender == VAULT` check against the immutable constructor argument.
+All three gate every value-moving function (`deploy`, `withdraw`) with `onlyVault` — a simple `msg.sender == VAULT` check against the immutable constructor argument.
 
 All three expose public immutables: `USDC`, `VAULT`, and their protocol-specific contract (`MORPHO_VAULT`, `POOL`/`A_TOKEN`, `COMET`).
 
-All three implement `rescueTokens` that explicitly protects USDC and the protocol receipt token from being swept.
+All three implement `sweepForeignToken` — the permissionless foreign-token quarantine sweep that enforces custody invariants INV-1/INV-2 (see `docs/prd.md` §12 — Security invariants). It moves only NON-protected tokens to the single hardcoded quarantine address (`ForeignTokenQuarantine.QUARANTINE`), reverting when `token` is USDC or the protocol receipt token. There is no `rescueTokens(token,to)` — the old arbitrary-recipient rescue function is deleted (INV-1: no admin/role/vault function routes a protocol or depositor asset to a caller-supplied recipient).
 
 ### 4.1 MorphoAdapter
 
@@ -292,7 +292,7 @@ This design is the reason CompoundV3Adapter was compiled with `viaIR: true` — 
 | Upgradeability | None — all four contracts are direct, non-proxy deployments. No upgrade path exists |
 | Fee ceiling | `MAX_EXIT_FEE_BPS = 100` (1%) is an immutable constant. `setExitFeeBps` reverts above this |
 | Rebalance throttle | Keeper-triggered rebalance is throttled: `MIN_REBALANCE_INTERVAL_FLOOR = 1 hour` and `MAX_REBALANCE_BPS_CEILING = 5000` (50%) are immutable floors/ceilings |
-| Token rescue | `rescueTokens` on vault explicitly rejects `asset()` and `address(this)`. Adapter `rescueTokens` rejects USDC and the protocol receipt token |
+| Foreign-token quarantine (INV-1/INV-2) | Arbitrary-recipient rescue is deleted. `sweepForeignToken(token)` is permissionless and moves only NON-protected tokens to the hardcoded `ForeignTokenQuarantine.QUARANTINE` address (never a caller-supplied recipient). The vault sweep rejects `asset()` and `address(this)`; the BasketVault sweep additionally rejects every active/configured basket asset and re-absorbs removed-asset balances into NAV via `reabsorbRemovedAsset`; adapter sweeps reject USDC and the protocol receipt token |
 
 ---
 
@@ -333,7 +333,7 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `forceRemoveAdapter(uint256)` | EMERGENCY | Write off a broken adapter |
 | `shutdownVault()` | EMERGENCY | Halt deposits, zero `tvlCap` (recoverable by ADMIN via `restoreVault`) |
 | `restoreVault(uint256)` | ADMIN | Reverse a shutdown and re-open deposits under a fresh TVL cap |
-| `rescueTokens(address, address)` | ADMIN | Sweep non-USDC tokens |
+| `sweepForeignToken(address)` | permissionless | Quarantine a NON-protected foreign token to the fixed `QUARANTINE` address (INV-1/INV-2). Reverts for `asset()` / share token |
 | `getAdapterDrift()` | view | Returns current/target/drift per adapter |
 | `isRebalanceAvailable()` | view | Check rebalance cooldown |
 | `nextRebalanceAt()` | view | Timestamp of next allowed rebalance |

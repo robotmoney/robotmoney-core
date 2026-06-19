@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -113,30 +113,87 @@ function test_emergencyUnwindWithOverride_requiresEmergencyRole() public;
 function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public;
 ```
 
-### test_rescueTokens_revertsWhenTokenIsActiveBasketAsset
+### test_sweepForeignToken_revertsForActiveBasketAsset
+
+INV-1: an ACTIVE basket asset may never be swept to quarantine —
+it is a protocol/depositor asset counted in NAV.
 
 
 ```solidity
-function test_rescueTokens_revertsWhenTokenIsActiveBasketAsset() public;
+function test_sweepForeignToken_revertsForActiveBasketAsset() public;
 ```
 
-### test_rescueTokens_succeedsForNonBasketAsset
+### test_sweepForeignToken_revertsForUsdcAndShareToken
+
+INV-1: USDC (the vault asset) and the share token may never be swept.
 
 
 ```solidity
-function test_rescueTokens_succeedsForNonBasketAsset() public;
+function test_sweepForeignToken_revertsForUsdcAndShareToken() public;
 ```
 
-### test_rescueTokens_succeedsForInactiveBasketAsset
+### test_sweepForeignToken_permissionlessForNonBasketAsset
 
-A removed (inactive) basket asset's token is rescuable when a balance
-reappears later — `totalAssets`/`_sellProportional` skip inactive
-entries, so the balance would otherwise be stranded forever
-(audit 2026-06-09, L-15).
+INV-2: a genuinely foreign token is permissionlessly swept to the
+fixed quarantine address — no admin role, no caller-supplied
+recipient.
 
 
 ```solidity
-function test_rescueTokens_succeedsForInactiveBasketAsset() public;
+function test_sweepForeignToken_permissionlessForNonBasketAsset() public;
+```
+
+### test_sweepForeignToken_revertsForInactiveBasketAsset
+
+INV-1: a removed (inactive) basket asset is STILL protected from the
+quarantine sweep — it is re-absorbed into NAV instead, never routed
+away (replaces the audit 2026-06-09 L-15 admin rescue path).
+
+
+```solidity
+function test_sweepForeignToken_revertsForInactiveBasketAsset() public;
+```
+
+### test_reabsorbRemovedAsset_creditsNavPermissionlessly
+
+INV-2: a balance reappearing on a removed basket asset is
+permissionlessly re-absorbed — swapped to USDC into NAV — so it
+stays redeemable by holders, with no admin-routable path.
+
+
+```solidity
+function test_reabsorbRemovedAsset_creditsNavPermissionlessly() public;
+```
+
+### test_reabsorbRemovedAsset_revertsForActiveAsset
+
+An active asset cannot be re-absorbed (it is sold proportionally on
+withdrawal, not swept).
+
+
+```solidity
+function test_reabsorbRemovedAsset_revertsForActiveAsset() public;
+```
+
+### test_INV3_setFeeRecipient_revertsForHotEmergencyKey
+
+
+```solidity
+function test_INV3_setFeeRecipient_revertsForHotEmergencyKey() public;
+```
+
+### test_INV3_setExitFeeBps_revertsForHotEmergencyKey
+
+
+```solidity
+function test_INV3_setExitFeeBps_revertsForHotEmergencyKey() public;
+```
+
+### test_INV3_feeSetters_succeedForAdminRole
+
+
+```solidity
+function test_INV3_feeSetters_succeedForAdminRole() public;
 ```
 
 ### test_maxDeposit_reflectsPerDepositCap

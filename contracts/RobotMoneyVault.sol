@@ -13,6 +13,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "./interfaces/IStrategyAdapter.sol";
 import {BpsMath} from "./lib/BpsMath.sol";
+import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
 /// @title RobotMoneyVault
 /// @notice Multi-adapter ERC-4626 USDC vault on Base. Dynamic equal-weight target across active
@@ -79,6 +80,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     uint256 public exitFeeBps;
     /// @notice Recipient of collected exit fees.
     address public feeRecipient;
+    /// @notice Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+    ///         Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+    ///         the TimelockController (ADMIN_ROLE, INV-3). The timelock-settable
+    ///         model (vs. a pure compile-time constant) allows governance to
+    ///         redirect sweeps to an on-chain multisig that can empty the trash.
+    address public quarantineAddress;
 
     /// @notice Whether the vault has been permanently shut down. Irreversible.
     bool public shutdown;
@@ -180,6 +187,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @param oldRecipient Previous fee recipient address.
     /// @param newRecipient New fee recipient address.
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+    /// @notice Emitted when the quarantine address for foreign-token sweeps is updated.
+    /// @param oldAddr Previous quarantine address.
+    /// @param newAddr New quarantine address.
+    event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
     /// @notice Emitted when the emergency withdrawal flow is triggered (all adapters).
     event EmergencyWithdrawCalled();
     /// @notice Emitted per-adapter during an emergency withdrawal.
@@ -211,8 +222,6 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     error TVLCapExceeded();
     /// @notice A single deposit exceeds the per-deposit cap.
     error PerDepositCapExceeded();
-    /// @notice `rescueToken` refused because the token is the vault's own asset (USDC).
-    error CannotRescueAsset();
     /// @notice Constructor or admin call passed `address(0)` where a real address is required.
     error ZeroAddress();
     /// @notice Operation rejected because the vault has been shut down.
@@ -293,6 +302,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         perDepositCap = _perDepositCap;
         exitFeeBps = _exitFeeBps;
         feeRecipient = _feeRecipient;
+        quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
         maxRebalanceBpsPerCall = 2500; // 25%
         minRebalanceInterval = 12 hours;
@@ -946,16 +956,36 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit FeeRecipientUpdated(old, newRecipient);
     }
 
-    /// @notice Rescue accidentally-sent ERC-20 tokens (cannot rescue USDC or vault shares).
-    ///         Restricted to `ADMIN_ROLE`.
-    /// @param token ERC-20 token to rescue (must not be the vault asset or vault share token).
-    /// @param to    Recipient address for the rescued tokens.
-    function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE) {
-        if (token == asset()) revert CannotRescueAsset();
-        if (token == address(this)) revert CannotRescueAsset();
-        if (to == address(0)) revert ZeroAddress();
-        uint256 balance = IERC20(token).balanceOf(address(this));
-        IERC20(token).safeTransfer(to, balance);
+    /// @notice Update the quarantine address for foreign-token sweeps. Restricted
+    ///         to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+    /// @param newAddr New quarantine address. Must not be address(0).
+    function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE) {
+        if (newAddr == address(0)) revert ZeroAddress();
+        address old = quarantineAddress;
+        quarantineAddress = newAddr;
+        emit QuarantineAddressUpdated(old, newAddr);
+    }
+
+    /// @notice Permissionlessly sweep a NON-protected foreign token held by the
+    ///         vault to the governed quarantine address (custody invariants
+    ///         INV-1/INV-2).
+    ///
+    ///         Anyone may call; the destination is the timelock-gated
+    ///         `quarantineAddress` storage variable — never a caller-supplied
+    ///         address (INV-1). This replaces the deleted arbitrary-recipient
+    ///         `rescueTokens(token,to)` admin function. The vault asset (USDC,
+    ///         already counted in `totalAssets` and redeemable) and the vault
+    ///         share token cannot be swept; protocol-asset donations therefore
+    ///         stay in NAV and accrue pro-rata to all holders (INV-2). Adapter
+    ///         strategy tokens live on the adapters, each of which exposes its
+    ///         own guarded `sweepForeignToken`.
+    /// @param token Foreign ERC-20 to quarantine. Must not be the vault asset or
+    ///        the vault share token.
+    function sweepForeignToken(address token) external nonReentrant {
+        if (token == asset() || token == address(this)) {
+            revert ForeignTokenQuarantine.TokenIsProtected(token);
+        }
+        ForeignTokenQuarantine.sweep(token, quarantineAddress, msg.sender);
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────

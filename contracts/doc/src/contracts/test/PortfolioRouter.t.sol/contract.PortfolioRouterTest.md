@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -594,43 +594,35 @@ happy path without triggering UsdcCustodyInvariantViolated.
 function test_deposit_happyPath_leavesZeroUsdcInRouter() public;
 ```
 
-### test_rescueUsdc_adminTransfersBalance_andEmitsEvent
+### test_sweepForeignToken_revertsForUsdc
 
-AC#2: rescueUsdc called by ADMIN_ROLE transfers the full stranded
-balance and emits RescuedUsdc.
+INV-1: USDC (a protocol asset) can never be swept out of the router.
+The deleted `rescueUsdc` is replaced by a sweep that refuses USDC,
+so there is no admin/role path that routes USDC to any recipient.
 
 
 ```solidity
-function test_rescueUsdc_adminTransfersBalance_andEmitsEvent() public;
+function test_sweepForeignToken_revertsForUsdc() public;
 ```
 
-### test_rescueUsdc_revertsForNonAdmin
+### test_sweepForeignToken_permissionlessToQuarantine
 
-AC#3: rescueUsdc called by a non-ADMIN_ROLE account reverts with
-the standard AccessControl error.
+INV-2: a foreign (non-USDC) token that lands on the router is
+permissionlessly swept to the fixed quarantine address — any
+caller, never a caller-supplied recipient.
 
 
 ```solidity
-function test_rescueUsdc_revertsForNonAdmin() public;
+function test_sweepForeignToken_permissionlessToQuarantine() public;
 ```
 
-### test_rescueUsdc_revertsOnZeroAddress
+### test_sweepForeignToken_zeroBalanceIsNoop
 
-rescueUsdc reverts when the recipient is address(0).
-
-
-```solidity
-function test_rescueUsdc_revertsOnZeroAddress() public;
-```
-
-### test_rescueUsdc_noopWhenBalanceIsZero
-
-rescueUsdc is a no-op (no event, no revert) when the router holds
-zero USDC — useful for defensive calls in scripts.
+The sweep is a harmless no-op when there is nothing to move.
 
 
 ```solidity
-function test_rescueUsdc_noopWhenBalanceIsZero() public;
+function test_sweepForeignToken_zeroBalanceIsNoop() public;
 ```
 
 ### _registerRwaPlaceholder

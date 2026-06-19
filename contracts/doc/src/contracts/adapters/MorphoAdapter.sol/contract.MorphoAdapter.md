@@ -1,5 +1,5 @@
 # MorphoAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/adapters/MorphoAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/adapters/MorphoAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -102,21 +102,40 @@ Live USDC value held by this adapter (principal + accrued interest).
 function totalAssets() external view returns (uint256);
 ```
 
-### rescueTokens
+### sweepForeignToken
 
-Rescue non-USDC tokens accidentally sent to this contract.
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (custody invariants INV-1/INV-2). Anyone may
+call; the destination is a hardcoded constant, never caller-supplied.
+Reverts when `token` is USDC or the adapter's strategy/share token.
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyVault;
+function sweepForeignToken(address token) external;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|Address of the ERC-20 token to rescue (must not be USDC or the protocol token).|
-|`to`|`address`|   Recipient address for the rescued tokens.|
+|`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+Morpho Gauntlet USDC Prime yield accrues automatically into the
+ERC-4626 share price — there are no discrete claimable reward tokens
+on this venue. This function is a no-op and always succeeds.
+
+
+```solidity
+function harvestRewards() external;
+```
 
 ## Errors
 ### OnlyVault
@@ -141,14 +160,6 @@ error WithdrawShortfall(uint256 requested, uint256 actual);
 |----|----|-----------|
 |`requested`|`uint256`|Amount of USDC requested for withdrawal.|
 |`actual`|`uint256`|   Amount of USDC actually received by VAULT.|
-
-### CannotRescueProtectedToken
-`rescueToken` refused — the token is USDC or the Morpho vault share (protected vault assets).
-
-
-```solidity
-error CannotRescueProtectedToken();
-```
 
 ### ZeroAddress
 Constructor passed `address(0)` for one of the immutable addresses.

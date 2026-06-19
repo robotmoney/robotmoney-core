@@ -1,5 +1,5 @@
 # MorphoAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -120,31 +120,44 @@ function test_withdraw_typeMaxDoesNotRevertOnShortfall() public;
 function test_totalAssets_reflectsDeployedShares() public;
 ```
 
-### test_rescueTokens_revertsForProtectedUSDC
+### test_sweepForeignToken_revertsForProtectedUSDC
 
 
 ```solidity
-function test_rescueTokens_revertsForProtectedUSDC() public;
+function test_sweepForeignToken_revertsForProtectedUSDC() public;
 ```
 
-### test_rescueTokens_revertsForProtectedMorphoShares
+### test_sweepForeignToken_revertsForProtectedMorphoShares
 
 
 ```solidity
-function test_rescueTokens_revertsForProtectedMorphoShares() public;
+function test_sweepForeignToken_revertsForProtectedMorphoShares() public;
 ```
 
-### test_rescueTokens_revertsOnZeroAddress
+### test_sweepForeignToken_zeroBalanceIsNoop
 
 
 ```solidity
-function test_rescueTokens_revertsOnZeroAddress() public;
+function test_sweepForeignToken_zeroBalanceIsNoop() public;
 ```
 
-### test_rescueTokens_transfersUnprotectedToken
+### test_sweepForeignToken_permissionlessToQuarantine
 
 
 ```solidity
-function test_rescueTokens_transfersUnprotectedToken() public;
+function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+### test_harvestRewards_isPermissionlessNoopForMorpho
+
+AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
+Morpho Gauntlet USDC Prime yield accrues automatically in the
+ERC-4626 share price — there are no discrete claimable rewards.
+Anyone may call; it must not revert and the vault asset is
+never moved (no value leakage through harvest).
+
+
+```solidity
+function test_harvestRewards_isPermissionlessNoopForMorpho() public;
 ```
 
