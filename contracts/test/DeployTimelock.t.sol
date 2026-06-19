@@ -475,8 +475,7 @@ contract DeployTimelockTest is Test {
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Retire Target", asset: address(usdc), registeredAt: block.timestamp
         });
-        bytes memory callData =
-            abi.encodeCall(VaultRegistry.registerVault, (address(vault), meta));
+        bytes memory callData = abi.encodeCall(VaultRegistry.registerVault, (address(vault), meta));
         bytes32 salt = keccak256("retire-register");
         vm.prank(safe);
         d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);

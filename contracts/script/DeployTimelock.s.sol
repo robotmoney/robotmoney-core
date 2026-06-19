@@ -164,8 +164,7 @@ contract DeployTimelock is Script {
         // below). The vault gates `retire()`/`unretire()` to this registry only.
         IRetirableVaultLink(d.vault).setRegistry(d.registry);
         require(
-            IRetirableVaultLink(d.vault).registry() == d.registry,
-            "Vault registry link not set"
+            IRetirableVaultLink(d.vault).registry() == d.registry, "Vault registry link not set"
         );
 
         // RobotMoneyVault
