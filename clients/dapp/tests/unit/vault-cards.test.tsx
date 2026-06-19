@@ -10,24 +10,16 @@
  * VaultCards reads data from ExplorerContext (shared polling loop). Tests wrap
  * it in ExplorerProvider with a mocked fetchImpl that routes /v1/vaults and
  * /v1/stats separately — no network or wallet required.
+ *
+ * Details navigation tests (issue #941): each vault card has a 'Details'
+ * button that fires onSelectVault with the vault address and onSwitchToExplorer
+ * to navigate to the Portfolio Explorer tab.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, waitFor, within, fireEvent } from "./helpers/render";
 import { VaultCards } from "../../src/components/VaultCards";
 import { ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type { FetchLike, VaultsResponse, StatsResponse } from "../../src/lib/explorerApi";
-
-// Wagmi mock — VaultCardAssets calls useReadContract for basket vaults.
-// We return isLoading:true to test the loading path; static-entry vaults
-// (USDC, deSPXA) never call useReadContract regardless. render.tsx bypasses
-// this mock via vi.importActual so WagmiProvider is still real.
-vi.mock("wagmi", () => ({
-  useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
-  createConfig: () => ({}),
-  http: () => ({}),
-  fallback: (...args: unknown[]) => args[0],
-  unstable_connector: () => ({}),
-}));
 
 /** URL-routing fetchImpl for ExplorerProvider: vaults → vaultsFixture, stats → statsFixture. */
 function makeExplorerFetch(vaults: VaultsResponse, stats: StatsResponse | null = null): FetchLike {
@@ -248,130 +240,84 @@ describe("VaultCards — TVL display and polling", () => {
   });
 });
 
-// ─── Asset affordance tests (issue #620) ──────────────────────────────────────
+// ─── Details navigation tests (issue #941) ────────────────────────────────────
 
-describe("VaultCards — asset affordance (issue #620)", () => {
-  it("each vault card has an assets toggle button", async () => {
+describe("VaultCards — Details navigation (issue #941)", () => {
+  it("each vault card has a Details button", async () => {
     const { findAllByTestId } = render(
       <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
         <VaultCards />
       </ExplorerProvider>,
     );
-    const toggles = await findAllByTestId("landing-vault-card-assets-toggle");
-    expect(toggles).toHaveLength(4);
+    const detailsButtons = await findAllByTestId("landing-vault-card-details");
+    expect(detailsButtons).toHaveLength(4);
   });
 
-  it("STABLE_YIELD vault: assets panel shows static USDC entry", async () => {
-    const { findAllByTestId, queryAllByTestId } = render(
+  it("clicking Details on a vault card calls onSelectVault with the vault address", async () => {
+    const onSelectVault = vi.fn();
+    const onSwitchToExplorer = vi.fn();
+    const { findAllByTestId } = render(
       <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
-        <VaultCards />
+        <VaultCards onSelectVault={onSelectVault} onSwitchToExplorer={onSwitchToExplorer} />
       </ExplorerProvider>,
     );
+
     const cards = await findAllByTestId("landing-vault-card");
-    const usdcCard = cards.find(
-      (c) => within(c).getByTestId("landing-vault-card-risk").textContent === "STABLE_YIELD",
-    );
-    expect(usdcCard).toBeDefined();
+    // Click the Details button on the first card (STABLE_YIELD / USDC)
+    const firstCard = cards[0];
+    const detailsButton = within(firstCard).getByTestId("landing-vault-card-details");
+    fireEvent.click(detailsButton);
 
-    const toggle = within(usdcCard!).getByTestId("landing-vault-card-assets-toggle");
-
-    // Panel not visible before toggle
-    expect(queryAllByTestId("vault-card-assets-panel")).toHaveLength(0);
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      const panels = queryAllByTestId("vault-card-assets-panel");
-      expect(panels).toHaveLength(1);
-      expect(within(panels[0]).getByTestId("vault-card-asset-address").textContent).toBe("USDC");
-    });
+    expect(onSelectVault).toHaveBeenCalledWith("0x1111111111111111111111111111111111111111");
+    expect(onSwitchToExplorer).toHaveBeenCalledTimes(1);
   });
 
-  it("inactive SPECULATIVE (RWA) vault: assets panel shows static deSPXA entry", async () => {
-    const { findAllByTestId, queryAllByTestId } = render(
+  it("clicking Details on the RWA vault card calls onSelectVault with the RWA vault address", async () => {
+    const onSelectVault = vi.fn();
+    const onSwitchToExplorer = vi.fn();
+    const { findAllByTestId } = render(
       <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
-        <VaultCards />
+        <VaultCards onSelectVault={onSelectVault} onSwitchToExplorer={onSwitchToExplorer} />
       </ExplorerProvider>,
     );
+
     const cards = await findAllByTestId("landing-vault-card");
     const rwaCard = cards.find((c) => c.getAttribute("data-vault-active") === "false");
     expect(rwaCard).toBeDefined();
 
-    const toggle = within(rwaCard!).getByTestId("landing-vault-card-assets-toggle");
-    fireEvent.click(toggle);
+    const detailsButton = within(rwaCard!).getByTestId("landing-vault-card-details");
+    fireEvent.click(detailsButton);
 
-    await waitFor(() => {
-      const panels = queryAllByTestId("vault-card-assets-panel");
-      expect(panels).toHaveLength(1);
-      expect(within(panels[0]).getByTestId("vault-card-asset-address").textContent).toBe("deSPXA");
-    });
+    expect(onSelectVault).toHaveBeenCalledWith("0x4444444444444444444444444444444444444444");
+    expect(onSwitchToExplorer).toHaveBeenCalledTimes(1);
   });
 
-  it("VOLATILE basket vault: assets panel shows basket shortlist loading state", async () => {
+  it("clicking Details on each card calls onSelectVault with each vault's address", async () => {
+    const onSelectVault = vi.fn();
+    const { findAllByTestId } = render(
+      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
+        <VaultCards onSelectVault={onSelectVault} />
+      </ExplorerProvider>,
+    );
+
+    const cards = await findAllByTestId("landing-vault-card");
+    const expectedAddresses = fourVaultFixture.vaults.map((v) => v.address);
+
+    for (let i = 0; i < cards.length; i++) {
+      const detailsButton = within(cards[i]).getByTestId("landing-vault-card-details");
+      fireEvent.click(detailsButton);
+      expect(onSelectVault).toHaveBeenNthCalledWith(i + 1, expectedAddresses[i]);
+    }
+  });
+
+  it("no Assets toggle button is present (VaultCardAssets retired in #941)", async () => {
     const { findAllByTestId, queryAllByTestId } = render(
       <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
         <VaultCards />
       </ExplorerProvider>,
     );
-    const cards = await findAllByTestId("landing-vault-card");
-    const volatileCard = cards.find(
-      (c) => within(c).getByTestId("landing-vault-card-risk").textContent === "VOLATILE",
-    );
-    expect(volatileCard).toBeDefined();
-
-    const toggle = within(volatileCard!).getByTestId("landing-vault-card-assets-toggle");
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      const panels = queryAllByTestId("vault-card-assets-panel");
-      expect(panels).toHaveLength(1);
-      // wagmi mock returns isLoading:true → basket panel shows Loading…
-      expect(within(panels[0]).getByTestId("vault-card-assets-loading")).toBeTruthy();
-    });
-  });
-
-  it("active SPECULATIVE basket vault: assets panel shows basket shortlist loading state", async () => {
-    const { findAllByTestId, queryAllByTestId } = render(
-      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
-        <VaultCards />
-      </ExplorerProvider>,
-    );
-    const cards = await findAllByTestId("landing-vault-card");
-
-    // Active SPECULATIVE is the Agent Tokens vault (SPECULATIVE + status=0)
-    const activeSpecCards = cards.filter(
-      (c) =>
-        within(c).getByTestId("landing-vault-card-risk").textContent === "SPECULATIVE" &&
-        c.getAttribute("data-vault-active") === "true",
-    );
-    expect(activeSpecCards).toHaveLength(1);
-
-    const toggle = within(activeSpecCards[0]).getByTestId("landing-vault-card-assets-toggle");
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      const panels = queryAllByTestId("vault-card-assets-panel");
-      expect(panels).toHaveLength(1);
-      expect(within(panels[0]).getByTestId("vault-card-assets-loading")).toBeTruthy();
-    });
-  });
-
-  it("toggle collapses the panel on second click", async () => {
-    const { findAllByTestId, queryAllByTestId } = render(
-      <ExplorerProvider apiUrl="http://api" fetchImpl={makeExplorerFetch(fourVaultFixture)}>
-        <VaultCards />
-      </ExplorerProvider>,
-    );
-    const cards = await findAllByTestId("landing-vault-card");
-    const usdcCard = cards.find(
-      (c) => within(c).getByTestId("landing-vault-card-risk").textContent === "STABLE_YIELD",
-    );
-    const toggle = within(usdcCard!).getByTestId("landing-vault-card-assets-toggle");
-
-    fireEvent.click(toggle);
-    await waitFor(() => expect(queryAllByTestId("vault-card-assets-panel")).toHaveLength(1));
-
-    fireEvent.click(toggle);
-    await waitFor(() => expect(queryAllByTestId("vault-card-assets-panel")).toHaveLength(0));
+    // Wait for cards to render
+    await findAllByTestId("landing-vault-card");
+    expect(queryAllByTestId("landing-vault-card-assets-toggle")).toHaveLength(0);
   });
 });
