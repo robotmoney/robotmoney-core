@@ -12,6 +12,7 @@
 import { useState } from "react";
 import { useReadContract } from "wagmi";
 import { BASKET_VAULT_SHORTLIST_ABI, type ShortlistEntry } from "../lib/abi";
+import { formatTokenBalance } from "../lib/format";
 
 /** Render the last 6 hex chars of an address as 0x...XXXXXX. */
 function shortAddr(addr: string): string {
@@ -33,7 +34,9 @@ function AssetRow({ token, active, balance, label }: AssetRowProps) {
       {active != null && (
         <span data-testid="vault-list-asset-active">{active ? "active" : "inactive"}</span>
       )}
-      {balance != null && <span data-testid="vault-list-asset-balance">{balance.toString()}</span>}
+      {balance != null && (
+        <span data-testid="vault-list-asset-balance">{formatTokenBalance(balance, 6)}</span>
+      )}
     </li>
   );
 }

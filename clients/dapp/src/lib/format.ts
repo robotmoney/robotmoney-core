@@ -34,6 +34,7 @@ export const PLACEHOLDER = "—";
 
 /**
  * Divide a bigint into whole + fractional parts and return a decimal string.
+ * The whole part includes thousands separators (e.g. 1000000 → "1,000,000").
  *
  * @param raw       - the raw value in smallest units
  * @param decimals  - number of decimal places in the token (e.g. 6 for USDC)
@@ -48,7 +49,9 @@ function bigintToDecimalString(raw: bigint, decimals: number, maxFrac: number): 
   // Full-precision fractional part, then trim to maxFrac and strip trailing zeros.
   const fracFull = fracRaw.toString().padStart(decimals, "0");
   const fracTrimmed = fracFull.slice(0, maxFrac).replace(/0+$/, "");
-  const formatted = fracTrimmed.length > 0 ? `${whole}.${fracTrimmed}` : `${whole}`;
+  // Add thousands separators to the whole part.
+  const wholeStr = whole.toLocaleString("en-US");
+  const formatted = fracTrimmed.length > 0 ? `${wholeStr}.${fracTrimmed}` : `${wholeStr}`;
   return negative ? `−${formatted}` : formatted;
 }
 
@@ -136,13 +139,28 @@ export function formatBps(bps: number | undefined): string {
 
 /**
  * Format a numeric price value (USD or similar) for display.
- * Displays exactly 4 decimal places.
- * Example: 1.5 → "$1.5000", 0 → "$0.0000".
- *
- * For very large or very small values the standard toPrecision fallback
- * is used.
+ * Sub-$10 prices use 4 decimal places; $10+ prices use 2 decimal places.
+ * Whole-number parts include thousands separators.
+ * Example: 1.5 → "$1.5000", 1234.5678 → "$1,234.5678", 0 → "$0.0000".
  */
 export function formatPrice(value: number | undefined): string {
   if (value === undefined || value === null) return PLACEHOLDER;
-  return `$${value.toFixed(4)}`;
+  const fractionDigits = Math.abs(value) >= 10 ? 2 : 4;
+  const formatted = value.toLocaleString("en-US", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+  return `$${formatted}`;
+}
+
+/**
+ * Format a basis-points number as a human-readable percentage string.
+ * 10 000 bps = 100.00%.
+ * Example: 3334 → "33.34%", 100 → "1.00%".
+ *
+ * @param bps - integer basis-points value (0–10 000 for 0–100%)
+ */
+export function formatPercentFromNumber(bps: number | undefined): string {
+  if (bps === undefined || bps === null) return PLACEHOLDER;
+  return (bps / 100).toFixed(2) + "%";
 }
