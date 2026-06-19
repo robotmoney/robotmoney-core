@@ -106,4 +106,5 @@
 - [VaultCodeSizeGuard](VaultCodeSizeGuard.t.sol/contract.VaultCodeSizeGuard.md)
 - [VaultForkRegressions](VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
 - [MockDefaultWeightsRouter](VaultRegistry.t.sol/contract.MockDefaultWeightsRouter.md)
+- [MockRetirableVault](VaultRegistry.t.sol/contract.MockRetirableVault.md)
 - [VaultRegistryTest](VaultRegistry.t.sol/contract.VaultRegistryTest.md)

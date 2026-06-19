@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -16,6 +16,14 @@ mines and executes the operation successfully.
 AC4  Pre-delay execute reverts.
 AC5  TimelockController.getMinDelay() is verifiable on-chain.
 AC6  ADMIN_ROLE grant routed through Timelock succeeds.
+Unified governance `retire()` (DI-2, decision #925; docs/architecture.md §4.7)
+is a governance-tier action gated by this same TimelockController (the timelock
+holds ADMIN_ROLE on VaultRegistry and RobotMoneyVault — asserted by the AC1
+tests below). The `test_retire_*` / `test_shutdownVault_unchanged_*` tests in
+the "#942" section prove the retire action is reachable ONLY via the
+schedule → mine delay → execute path, reverts on a direct ADMIN_ROLE EOA call,
+atomically flips registry status `Retired` + the vault deposit-halt in one
+executed call, and leaves the emergency `shutdownVault` overlay unchanged.
 
 
 ## Constants
@@ -323,6 +331,61 @@ old constant — proving the governed quarantine model is end-to-end.
 
 ```solidity
 function test_AC3_setQuarantineAddress_succeedsViaTimelock() public;
+```
+
+### _registerVaultViaTimelock
+
+Register a vault through the timelock so later retire() tests have a
+registered target. Returns nothing — registers `address(vault)`.
+
+
+```solidity
+function _registerVaultViaTimelock() internal;
+```
+
+### test_retire_directHotKeyCallReverts
+
+#942 AC2: a direct (non-timelock) retire() call from the Safe hot
+key reverts — the Safe holds PROPOSER/EXECUTOR on the timelock, not
+ADMIN_ROLE on the registry.
+
+
+```solidity
+function test_retire_directHotKeyCallReverts() public;
+```
+
+### test_retire_directStrangerCallReverts
+
+#942 AC2: a stranger EOA likewise cannot call retire().
+
+
+```solidity
+function test_retire_directStrangerCallReverts() public;
+```
+
+### test_retire_succeedsViaTimelock_atomicallyHaltsDeposits
+
+#942 AC3: retire() routed through the TimelockController (schedule →
+delay → execute) atomically sets registry status to `Retired` AND
+halts vault deposits in one transaction. Pre-delay execution must
+revert, proving the action is reachable only after the delay.
+
+
+```solidity
+function test_retire_succeedsViaTimelock_atomicallyHaltsDeposits() public;
+```
+
+### test_shutdownVault_unchanged_makesNoRegistryChange
+
+#942: `shutdownVault` is unchanged — still EMERGENCY-tier,
+vault-only, with NO registry state change. The deployed vault's
+EMERGENCY_ROLE is held by the deploy script (set at construction
+and not transferred to the timelock); exercising it directly proves
+the emergency overlay still works and touches no registry state.
+
+
+```solidity
+function test_shutdownVault_unchanged_makesNoRegistryChange() public;
 ```
 
 ### test_deploy_revertsOnZeroSafe
