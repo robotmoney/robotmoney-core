@@ -19,7 +19,13 @@ interface TabsProps {
   testId?: string;
 }
 
-export function Tabs({ tabs, defaultTabId, activeTabId, onTabChange, testId = "admin-tabs" }: TabsProps) {
+export function Tabs({
+  tabs,
+  defaultTabId,
+  activeTabId,
+  onTabChange,
+  testId = "admin-tabs",
+}: TabsProps) {
   const initial = tabs.find((t) => t.id === defaultTabId)?.id ?? tabs[0]?.id ?? "";
   const [internalActive, setInternalActive] = useState(initial);
 

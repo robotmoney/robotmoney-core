@@ -127,9 +127,7 @@ function CompositionSection({ vaultAddress, riskLabel, status }: CompositionSect
       {isBasket ? (
         <BasketShortlistPanel vaultAddress={vaultAddress} />
       ) : isStableYield ? (
-        <p data-testid="vault-detail-composition-label">
-          Deposit: USDC → Receipt: rmUSDC
-        </p>
+        <p data-testid="vault-detail-composition-label">Deposit: USDC → Receipt: rmUSDC</p>
       ) : (
         /* Inactive SPECULATIVE (RWA placeholder) */
         <p data-testid="vault-detail-composition-label">
