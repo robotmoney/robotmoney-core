@@ -161,7 +161,7 @@ contract CustodyHandler is Test {
         uint256 count = vault.adapterCount();
         if (count == 0) return;
         uint256 index = seed % count;
-        (, , bool active, , ) = vault.getAdapterInfo(index);
+        (,, bool active,,) = vault.getAdapterInfo(index);
         if (!active) return;
 
         // Keep at least one active adapter so deposits/redeems still work.
@@ -171,7 +171,8 @@ contract CustodyHandler is Test {
 
         // 1. Reabsorb: drain the adapter's assets back to the vault's idle balance.
         vm.prank(admin);
-        try vault.emergencyWithdrawAdapter(index) {} catch {
+        try vault.emergencyWithdrawAdapter(index) {}
+        catch {
             return;
         }
         // Reabsorb must not destroy value: NAV is preserved (assets moved idle).
@@ -186,14 +187,14 @@ contract CustodyHandler is Test {
         //    the now-empty adapter. removeAdapter requires a zero balance.
         vm.startPrank(admin);
         vault.unpause();
-        (, , , uint256 adapterBalance, ) = vault.getAdapterInfo(index);
+        (,,, uint256 adapterBalance,) = vault.getAdapterInfo(index);
         if (adapterBalance == 0) {
             try vault.removeAdapter(index) {} catch {}
         }
         vm.stopPrank();
 
         // 4. The retired/drained adapter must hold no USDC.
-        (, , , uint256 finalBalance, ) = vault.getAdapterInfo(index);
+        (,,, uint256 finalBalance,) = vault.getAdapterInfo(index);
         assertEq(finalBalance, 0, "removed adapter still holds balance");
     }
 
@@ -208,7 +209,7 @@ contract CustodyHandler is Test {
         if (count == 0) return;
         vm.startPrank(admin);
         for (uint256 i = 0; i < count; i++) {
-            (, , bool active, , ) = vault.getAdapterInfo(i);
+            (,, bool active,,) = vault.getAdapterInfo(i);
             if (!active) continue;
             try vault.emergencyWithdrawAdapter(i) {} catch {}
         }
@@ -220,7 +221,7 @@ contract CustodyHandler is Test {
         // totalAssets == idle USDC and no adapter holds anything.
         uint256 adapterCustody;
         for (uint256 i = 0; i < count; i++) {
-            (, , bool active, uint256 bal, ) = vault.getAdapterInfo(i);
+            (,, bool active, uint256 bal,) = vault.getAdapterInfo(i);
             if (active) adapterCustody += bal;
         }
         assertEq(adapterCustody, 0, "adapter custody outstanding after full drain");
@@ -235,7 +236,7 @@ contract CustodyHandler is Test {
     function _hasActiveAdapter() internal view returns (bool) {
         uint256 count = vault.adapterCount();
         for (uint256 i = 0; i < count; i++) {
-            (, , bool active, , ) = vault.getAdapterInfo(i);
+            (,, bool active,,) = vault.getAdapterInfo(i);
             if (active) return true;
         }
         return false;
@@ -245,7 +246,7 @@ contract CustodyHandler is Test {
     function _activeAdapterTally() internal view returns (uint256 tally) {
         uint256 count = vault.adapterCount();
         for (uint256 i = 0; i < count; i++) {
-            (, , bool active, , ) = vault.getAdapterInfo(i);
+            (,, bool active,,) = vault.getAdapterInfo(i);
             if (active) tally++;
         }
     }
@@ -327,7 +328,7 @@ contract CustodyInvariantTest is StdInvariant, Test {
         uint256 count = vault.adapterCount();
         uint256 activeAdapterCustody;
         for (uint256 i = 0; i < count; i++) {
-            (, , bool active, uint256 bal, ) = vault.getAdapterInfo(i);
+            (,, bool active, uint256 bal,) = vault.getAdapterInfo(i);
             if (active) {
                 activeAdapterCustody += bal;
             } else {
