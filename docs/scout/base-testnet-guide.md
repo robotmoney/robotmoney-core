@@ -44,8 +44,13 @@ Tests gracefully skip if the env var is unset.
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `BASE_TESTNET_RPC_URL` | Base Sepolia RPC endpoint (required for live tests) | `https://base-sepolia.g.alchemy.com/v2/...` |
-| `RMPC_FORK_RPC_URL` | Base mainnet archive RPC for local fork (optional) | `https://base.g.alchemy.com/v2/...` |
+| `BASE_TESTNET_RPC_URL` | Base Sepolia RPC endpoint (required for live testnet tests) | `https://base-sepolia.g.alchemy.com/v2/...` |
+| `BASE_TESTNET_FUNDER_KEY` | Private key of a faucet-funded Base Sepolia EOA; seeds ephemeral test accounts via signed transfers (`ForkFixture::ephemeral_testnet`). Unset ⇒ testnet legs skip. | `0xabc…` |
+| `BASE_TESTNET_FUNDER_ADDR` | Address asserted by the smoke-test `eth_getBalance` funding gate (`base_testnet_account_funding_assertion`). | `0x1234…` |
+| `BASE_TESTNET_USDC_ADDR` | Override for Base Sepolia USDC (defaults to Circle's `0x036C…cF7e`). | `0x036C…cF7e` |
+| `RM_TESTNET_VAULT_ADDR` | Deployed `RobotMoneyVault` on Base Sepolia (deploy is a prerequisite, out of scope for #839). Unset ⇒ the vault-stack adapter leg (Compound/Morpho/Curve) skips. | `0x…` |
+| `RM_TESTNET_<PROTO>_ADAPTER_ADDR` | Deployed strategy-adapter addresses (`AAVE_V3`, `COMPOUND_V3`, `MORPHO`). | `0x…` |
+| `RMPC_FORK_RPC_URL` | Base archive RPC for local fork — required for the Robot Money Devnet leg of the parameterized adapter test (fixture-only is skipped). | `https://base.g.alchemy.com/v2/...` |
 
 ---
 
@@ -59,10 +64,10 @@ Tests use the `Network` enum to select configuration per-test:
 use rmpc_fork_e2e::Network;
 
 #[test]
-fn deposit_mainnet() {
-    let network = Network::BaseMainnet;
+fn deposit_robotmoney_devnet() {
+    let network = Network::RobotMoneyDevnet;
     let rpc_url = network.rpc_url()?;  // RMPC_FORK_RPC_URL
-    // ...test mainnet scenario
+    // ...test Robot Money Devnet scenario
 }
 
 #[test]
@@ -76,7 +81,7 @@ fn deposit_testnet() {
 **Future (issue #839):** A parameterized macro will avoid duplication:
 
 ```rust
-#[parameterized_e2e(Network::BaseMainnet, Network::BaseTestnet)]
+#[parameterized_e2e(Network::RobotMoneyDevnet, Network::BaseTestnet)]
 fn deposit(network: Network) {
     let rpc_url = network.rpc_url()?;
     // single test runs twice: once per network
@@ -125,13 +130,13 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 
 ---
 
-## Known divergences from mainnet
+## Known divergences from Base
 
-1. **Block timing:** Base Sepolia produces blocks slower than mainnet (~12s vs ~2s). Increase test timeouts if polling for block production.
+1. **Block timing:** Base Sepolia produces blocks slower than Base (~12s vs ~2s). Increase test timeouts if polling for block production.
 
 2. **Faucet availability:** Test account funding depends on external faucet APIs. Tests should skip gracefully if faucet is down (return `HarnessError::SkipNoRpc` or similar).
 
-3. **Gas prices:** Base Sepolia gas prices fluctuate less predictably. Hard-coded gas estimates from mainnet may fail; use dynamic `eth_estimateGas`.
+3. **Gas prices:** Base Sepolia gas prices fluctuate less predictably. Hard-coded gas estimates from Base may fail; use dynamic `eth_estimateGas`.
 
 4. **Service availability:** Live Aave/Curve/Uniswap pools on Sepolia may have low liquidity. Test swap sizes appropriately (smoke amounts, not real deposit sizes).
 
@@ -139,18 +144,27 @@ Deployment addresses will be stored in a registry module (e.g., `base_testnet::a
 
 ## CI integration
 
-**Suite 19 (Issue #843):** E2E tests with Base testnet support.
+The Base testnet adapter e2e runs as the `base-testnet-adapters` job in
+`.github/workflows/suite-05-fork-integration.yml` (shipped in PR #849). The job
+gracefully skips when `BASE_TESTNET_RPC_URL` is unset (the secret has no value).
 
 ```yaml
-# .github/workflows/suite-19-erc4626-demo-tvl.yml (example structure)
-env:
-  BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
+# .github/workflows/suite-05-fork-integration.yml (base-testnet-adapters job)
 jobs:
-  base-testnet-e2e:
+  base-testnet-adapters:
+    name: base-testnet-adapters
     runs-on: ubuntu-latest
+    env:
+      BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
+      BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
+      BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
+      RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}
     steps:
-      - run: cargo test --test base_testnet_fixture
-      - run: cargo test --release --test e2e -- --network base --nocapture
+      - name: Base testnet account-funding assertion (smoke-test)
+        run: cargo test -p smoke-test --release --test base_testnet_fixture -- --nocapture
+      - name: Base testnet multi-network adapter e2e (fork-e2e)
+        working-directory: testing/fork-e2e-rust
+        run: cargo test --release --test multi_network_adapters -- --test-threads=1 --nocapture
 ```
 
 ---
@@ -183,20 +197,32 @@ Verify the adapter is deployed to the expected address and has correct ABI. Chec
 
 ---
 
-## Future work (issue #839)
+## Implementation status (issue #839)
 
-- [ ] Deploy Robot Money contracts to Base Sepolia
-- [ ] Implement `BaseTestnetAccount::new()` with faucet integration
-- [ ] Wire parameterized `@network.each` test macro
-- [ ] Add CI job for Base testnet e2e suite
-- [ ] Document deployed contract addresses
-- [ ] Add tvl snapshot tests for multi-network adapter interaction
+Done in PR #849:
+
+- [x] Base Sepolia live-service address registry —
+  `testing/fork-e2e-rust/src/base_testnet_addresses.rs` (USDC, WETH9, Uniswap
+  V3 SwapRouter02, Aave V3 Pool) + `Network::{chain_id,usdc,weth9,…}` accessors.
+- [x] `BaseTestnetAccount::new()` + `assert_funded()` — real `eth_getBalance`
+  and ERC-20 `balanceOf` validation in `testing/smoke-test/src/base_testnet.rs`.
+- [x] Parameterized `parameterized_e2e!` macro (multi-network test template, no
+  copy-paste) + `ForkFixture::for_network` / `ephemeral_testnet`.
+- [x] Multi-network adapter e2e exercising live Uniswap/Aave (+ vault stack for
+  Compound/Morpho/Curve) — `testing/fork-e2e-rust/tests/multi_network_adapters.rs`.
+- [x] CI job `base-testnet-adapters` in `suite-05-fork-integration.yml`.
+
+Prerequisites (out of scope for #839 — flip the suite from "skipped" to
+"live-exercised" once provisioned):
+
+- [ ] Deploy Robot Money contracts to Base Sepolia and set `RM_TESTNET_*`.
+- [ ] Provision the `BASE_TESTNET_RPC_URL` / `BASE_TESTNET_FUNDER_KEY` CI secrets.
 
 ---
 
 ## Related docs
 
-- [docs/prd.md §11](../../prd.md) — Vault types and adapter ecosystem
-- [docs/development/smoke-test-design.md](../../development/smoke-test-design.md) — Devnet fixture design
-- [docs/technical/fork-e2e-decisions.md](../../technical/fork-e2e-decisions.md) — Fork harness design decisions
+- [docs/prd.md §11](../prd.md) — Vault types and adapter ecosystem
+- [docs/development/smoke-test-design.md](../development/smoke-test-design.md) — Devnet fixture design
+- [docs/technical/fork-e2e-decisions.md](../technical/fork-e2e-decisions.md) — Fork harness design decisions
 - Issue #839 — Full Base testnet e2e implementation

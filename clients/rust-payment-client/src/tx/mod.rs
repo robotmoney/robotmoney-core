@@ -376,6 +376,90 @@ mod tests {
         assert_eq!(r.transaction_hash, tx_hash);
     }
 
+    /// Geth's post-boot/post-mine "transaction indexing is in progress"
+    /// transient (-32000) must be treated like a pending receipt: the loop
+    /// keeps polling and returns Ok once the receipt appears, never bailing
+    /// on the transient.
+    #[tokio::test]
+    async fn wait_for_receipt_retries_past_indexing_transient() {
+        let tx_hash = keccak256(b"indexing-then-receipt");
+        let receipt_json = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{
+                "transactionHash":"{}",
+                "transactionIndex":"0x0",
+                "blockHash":"0x{}",
+                "blockNumber":"0x1",
+                "from":"0x{}",
+                "to":"0x{}",
+                "cumulativeGasUsed":"0x5208",
+                "gasUsed":"0x5208",
+                "contractAddress":null,
+                "logs":[],
+                "status":"0x1",
+                "logsBloom":"0x{}",
+                "type":"0x2",
+                "effectiveGasPrice":"0x1"
+            }}}}"#,
+            format_args!("0x{}", hex::encode(tx_hash)),
+            "11".repeat(32),
+            "aa".repeat(20),
+            "bb".repeat(20),
+            "00".repeat(256),
+        );
+
+        let mut server = mockito::Server::new_async().await;
+        // First two polls hit Geth's indexing transient; the third yields the
+        // receipt. `expect(2)` on the transient retires it after two hits so
+        // the receipt mock then matches.
+        let _transient = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"transaction indexing is in progress"}}"#,
+            )
+            .expect(2)
+            .create_async()
+            .await;
+        let _receipt = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(receipt_json)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let r = wait_for_receipt_with(&rpc, tx_hash, std::time::Duration::from_millis(1), 10)
+            .await
+            .expect("receipt after indexing transient");
+        assert_eq!(r.transaction_hash, tx_hash);
+        _transient.assert_async().await;
+    }
+
+    /// An unrelated JSON-RPC server error (not the indexing transient) must
+    /// propagate immediately, never be swallowed as "pending".
+    #[tokio::test]
+    async fn wait_for_receipt_propagates_unrelated_rpc_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid argument"}}"#,
+            )
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let err = wait_for_receipt_with(&rpc, B256::ZERO, std::time::Duration::from_millis(1), 5)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrRpcServer { code: -32602, .. }),
+            "unrelated error should propagate, got {err:?}"
+        );
+    }
+
     #[tokio::test]
     async fn wait_for_receipt_times_out_when_always_pending() {
         let mut server = mockito::Server::new_async().await;

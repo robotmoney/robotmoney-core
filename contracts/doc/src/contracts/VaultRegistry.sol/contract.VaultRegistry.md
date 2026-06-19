@@ -1,8 +1,8 @@
 # VaultRegistry
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/VaultRegistry.sol)
 
 **Inherits:**
-AccessControl
+[AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
 
 **Title:**
 VaultRegistry

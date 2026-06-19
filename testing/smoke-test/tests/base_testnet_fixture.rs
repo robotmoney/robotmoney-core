@@ -19,7 +19,7 @@
 //!   cargo test -p smoke-test --test base_testnet_fixture
 
 use smoke_test::base_testnet::{
-    AccountFundingAssertion, AccountFundingConfig, FundingMethod, RpcEndpoint,
+    AccountFundingAssertion, AccountFundingConfig, BaseTestnetAccount, FundingMethod, RpcEndpoint,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ fn account_funding_config_custom() {
 
 // ── Account funding assertions ────────────────────────────────────────────────
 
-/// Verify assertion defaults are reasonable for testnet (lower than mainnet requirements).
+/// Verify assertion defaults are reasonable for testnet (lower than the Robot Money Devnet requirements).
 #[test]
 fn account_funding_assertion_default() {
     let assertion = AccountFundingAssertion::default();
@@ -144,6 +144,67 @@ fn integration_seams_ready_for_issue_839() {
     // Verify structure is sound.
     assert!(config.eth_amount_wei >= assertion.min_eth_wei);
     assert!(config.usdc_amount_units >= assertion.min_usdc_units);
+}
+
+/// Issue #839: live `eth_getBalance` funding assertion against Base testnet.
+///
+/// When `BASE_TESTNET_RPC_URL` is set (CI with the secret provisioned), this
+/// binds a [`BaseTestnetAccount`] to the funded test EOA named by
+/// `BASE_TESTNET_FUNDER_ADDR` and asserts it holds at least the default
+/// [`AccountFundingAssertion`] thresholds (0.1 ETH / 10 USDC) via real
+/// `eth_getBalance` + `balanceOf` RPC calls. Without the secret it skips
+/// gracefully, so the local/laptop run passes.
+///
+/// Acceptance criterion: "Test account funding works … and all transactions
+/// execute on Base testnet (assert via … balances via eth_getBalance)".
+#[test]
+fn base_testnet_account_funding_assertion() {
+    use alloy_primitives::Address;
+
+    let endpoint = RpcEndpoint::EnvVar("BASE_TESTNET_RPC_URL".to_string());
+    // USDC on Base Sepolia (Circle testnet); overridable for non-default setups.
+    let usdc: Address = std::env::var("BASE_TESTNET_USDC_ADDR")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| {
+            "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+                .parse()
+                .unwrap()
+        });
+    // Address to assert. Defaults to the funder EOA (which the seed/faucet
+    // tops up). If unset alongside an unset RPC, the account constructor skips.
+    let who: Address = std::env::var("BASE_TESTNET_FUNDER_ADDR")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(Address::ZERO);
+
+    let account = match BaseTestnetAccount::new(&endpoint, who) {
+        Ok(a) => a,
+        Err(e) if e.is_skip() => {
+            eprintln!(
+                "[base_testnet_fixture] funding assertion skipped: BASE_TESTNET_RPC_URL unset"
+            );
+            return;
+        }
+        Err(e) => panic!("BaseTestnetAccount::new: {e}"),
+    };
+
+    if who == Address::ZERO {
+        eprintln!(
+            "[base_testnet_fixture] BASE_TESTNET_RPC_URL set but BASE_TESTNET_FUNDER_ADDR unset; \
+             skipping balance assertion (set the funder address in CI)."
+        );
+        return;
+    }
+
+    let assertion = AccountFundingAssertion::default();
+    account
+        .assert_funded(&assertion, usdc)
+        .expect("Base testnet account must be funded above thresholds");
+    eprintln!(
+        "[base_testnet_fixture] funding assertion OK for {:#x} (>= {} wei ETH, >= {} USDC units)",
+        who, assertion.min_eth_wei, assertion.min_usdc_units
+    );
 }
 
 /// Verify parameterized test template seams are in place.

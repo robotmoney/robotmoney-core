@@ -38,10 +38,10 @@
 name: doc-adr-runbook-migration-checks
 
 on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -88,6 +88,24 @@ jobs:
 
       - name: Four-vault reference invariant (issue #479)
         run: python3 .github/scripts/check_four_vault_references.py
+
+      - name: Self-test passthrough guard bare-substring rule (issue #921)
+        # Confirms the bare-`Passthrough` rule fires (and is correctly
+        # contracts/-scoped) BEFORE running the real check, so a silent
+        # regression in the rule cannot let stale natspec ship undetected.
+        run: python3 .github/scripts/check_no_passthrough_adapter.py --self-test
+
+      - name: Passthrough-removal invariant (issue #912 / #921)
+        run: python3 .github/scripts/check_no_passthrough_adapter.py
+
+      - name: Self-test shutdownVault recoverability docs guard (issue #923)
+        # Confirms the stale-wording / missing-restoreVault / `permanently`
+        # rules fire BEFORE running the real check, so a silent regression in
+        # the guard cannot let a stale "irreversible shutdown" claim ship.
+        run: python3 .github/scripts/check_shutdown_restore_docs.py --self-test
+
+      - name: shutdownVault recoverability docs invariant (issue #923)
+        run: python3 .github/scripts/check_shutdown_restore_docs.py
 
       - name: RmpcError §7.2 variants documented in rmpc-read-output-contract.md (issue #806)
         run: python3 .github/scripts/check_rmpc_error_variants_doc.py

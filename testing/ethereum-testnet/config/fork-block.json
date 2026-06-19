@@ -1,5 +1,5 @@
 {
-  "$comment": "Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections) and docs/technical/full-stack-devnet.md (Compose stack). This file is the single source of truth for the Base mainnet fork point that the smoke-test Geth+Lighthouse devnet boots from. The genesis ingester (see issue #255) reads `block_number` and `snapshot_uri` to populate `genesis.json::alloc` from Base state at the pinned block, restricted to `ingested_addresses`. The harness then patches USDC storage to grant `harness_usdc_holder` a clean-history USDC balance \u2014 see docs for the why (no whale impersonation). `block_number` and `snapshot_uri` MUST stay in lockstep with `testing/fixtures/fork-state/CURRENT.json` (the Anvil fork-e2e fixture) so both harnesses exercise identical on-chain state. The CI manifest validator asserts this alignment. ingested_addresses now includes the four-vault demo basket assets: Uniswap V3 pools for JUNO/ZYFAI, Uniswap V4 PoolManager (holds WOON V4 pool state), Aerodrome SlipStream pool for GIZA, and the Uniswap V3 deSPXA/USDC pool \u2014 plus corresponding token contracts. A fresh fork-state snapshot capturing this expanded ingest set is needed before the devnet image can be rebuilt; see scripts/devnet/snapshot-fork.sh.",
+  "$comment": "Canonical: docs/development/smoke-test-design.md (Devnet + USDC faucet sections) and docs/technical/full-stack-devnet.md (Compose stack). This file is the single source of truth for the Base fork point that the smoke-test Geth+Lighthouse devnet boots from. The genesis ingester (see issue #255) reads `block_number` and `snapshot_uri` to populate `genesis.json::alloc` from Base state at the pinned block, restricted to `ingested_addresses`. The harness then patches USDC storage to grant `harness_usdc_holder` a clean-history USDC balance \u2014 see docs for the why (no whale impersonation). `block_number` and `snapshot_uri` MUST stay in lockstep with `testing/fixtures/fork-state/CURRENT.json` (the Anvil fork-e2e fixture) so both harnesses exercise identical on-chain state. The CI manifest validator asserts this alignment. ingested_addresses now includes the four-vault demo basket assets: Uniswap V3 pools for JUNO/ZYFAI, Uniswap V4 PoolManager (holds WOON V4 pool state), Aerodrome SlipStream pool for GIZA, and the Uniswap V3 deSPXA/USDC pool \u2014 plus corresponding token contracts. A fresh fork-state snapshot capturing this expanded ingest set is needed before the devnet image can be rebuilt; see scripts/devnet/snapshot-fork.sh. ingested_addresses also includes the Aave V3 PoolAddressesProvider (0xe20fcbdb…), AaveOracle (0x2Cc0Fc26…), and the USDC price-feed chain (PriceCapAdapter 0xf52D010c… → EACAggregatorProxy 0x1550207e… → underlying aggregator 0x0fB39aE1…): Aave V3 `Pool.withdraw` calls `ADDRESSES_PROVIDER.getPriceOracle()` during its health-factor validation, so without the provider's code in genesis the withdraw STATICCALL hits a code-less account, returns empty returndata, and reverts — which made on-chain `redeem` revert even though supply succeeded (issue #894). Supply never reads the price oracle, so deposits worked but withdrawals did not.",
   "chain": "base",
   "block_number": 47170704,
   "block_hash": "0x3e74c5d2a8422e25b4c088f43fe2955c945cf9dfb769f5b7f5f2397d1ca0d049",
@@ -42,7 +42,12 @@
     "0x59dca05b6c26dbd64b5381374aAaC5CD05644C28",
     "0x7354Dc700A1A2ab9622f2292B60Ca1ceD5B204D0",
     "0x86AB1C62A8bf868E1b3E1ab87d587Aba6fbCbDC5",
-    "0xf9cc4F0D883F1a1eb2c253bdb46c254Ca51E1F44"
+    "0xf9cc4F0D883F1a1eb2c253bdb46c254Ca51E1F44",
+    "0xe20fcbdbffc4dd138ce8b2e6fbb6cb49777ad64d",
+    "0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156",
+    "0xf52D010c7d4ecBfda92c2509900593CE34535D86",
+    "0x1550207eAeB590D1557a6E6C066D3d57B5A4Dc65",
+    "0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877"
   ],
   "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
   "harness_usdc_grant_units": "1000000000000",

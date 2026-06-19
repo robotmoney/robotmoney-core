@@ -60,7 +60,7 @@ The nightly job:
 - Installs OpenCode 1.14.29 and `rmpc` from source.
 - Boots an Anvil fork at the pinned block.
 - Invokes `opencode run` with the step-5 read-only prompt from the
-  [walkthrough](../walkthroughs/opencode-readonly-fork.md).
+  [walkthrough](opencode-readonly-fork.md).
 - Captures the NDJSON transcript and runs the assertion script.
 - Asserts `rmpc get-vault` exit 0 with valid JSON envelope
   (`chain_id`, `block_number`, `source`).

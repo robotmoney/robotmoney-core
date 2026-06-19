@@ -1,0 +1,20 @@
+# Keep the repo-root build context small. The Rust service build container
+# (docker/rust-services.Dockerfile) and the dapp build both use the repo root as
+# their context, so everything not excluded here is sent to the Docker daemon on
+# every build. Only build outputs, VCS metadata, and vendored/generated trees are
+# excluded — all crate sources and manifests are kept so the cargo workspace
+# resolves.
+**/target
+.git
+**/node_modules
+.pnpm-store
+
+# Foundry vendored libs + generated output (not needed by the Rust or dapp builds).
+contracts/lib
+contracts/out
+contracts/cache
+contracts/doc
+
+# Local agent memory/cache and harness artefacts.
+.agents
+artifacts

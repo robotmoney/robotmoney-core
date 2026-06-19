@@ -6,7 +6,6 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
-import {PassthroughAdapter} from "../adapters/PassthroughAdapter.sol";
 import {AaveV3Adapter} from "../adapters/AaveV3Adapter.sol";
 import {CompoundV3Adapter} from "../adapters/CompoundV3Adapter.sol";
 import {MorphoAdapter} from "../adapters/MorphoAdapter.sol";
@@ -30,7 +29,7 @@ contract MockMorpho4626 {
 
 /// @title ERC4626PreconditionChecks
 /// @notice Suite-19 precondition gate. For every `exitFeeBps` tier
-///         (0, 30, 100) × adapter (passthrough, aave, compound, morpho)
+///         (0, 30, 100) × adapter (aave, compound, morpho)
 ///         this asserts the vault's structural ERC-4626 preconditions on a
 ///         freshly-deployed, empty vault: `asset()`, `decimals()`, and the
 ///         empty-vault share-price invariants. The CI matrix re-runs this
@@ -67,7 +66,6 @@ contract ERC4626PreconditionChecks is Test {
     address internal constant POOL_STUB = address(0xA00E);
 
     enum AdapterKind {
-        Passthrough,
         Aave,
         Compound,
         Morpho
@@ -98,7 +96,6 @@ contract ERC4626PreconditionChecks is Test {
     // ── Matrix driver ─────────────────────────────────────────────────────
 
     function _runAdapterMatrix(uint256 exitFeeBps) internal {
-        _assertPreconditions(AdapterKind.Passthrough, exitFeeBps);
         _assertPreconditions(AdapterKind.Aave, exitFeeBps);
         _assertPreconditions(AdapterKind.Compound, exitFeeBps);
         _assertPreconditions(AdapterKind.Morpho, exitFeeBps);
@@ -180,9 +177,6 @@ contract ERC4626PreconditionChecks is Test {
         internal
         returns (address)
     {
-        if (kind == AdapterKind.Passthrough) {
-            return address(new PassthroughAdapter(address(usdc), address(vault)));
-        }
         if (kind == AdapterKind.Aave) {
             // aToken stub: balanceOf(adapter) == 0 on an empty adapter.
             TestERC20 aToken = new TestERC20();

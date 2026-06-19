@@ -1,9 +1,9 @@
 # ADR-0001: MVP agent-token shortlist is hand-picked, not quant-filtered
 
-- **Status:** Accepted
-- **Date:** 2026-05-27
+- **Status:** Accepted (amended 2026-06-15 — see [Amendment](#amendment--2026-06-15-real-four-vault-demo-shortlist))
+- **Date:** 2026-05-27 (amended 2026-06-15)
 - **Deciders:** Product owner (recorded reply 2026-05-27)
-- **Related:** `docs/development/open-questions.md` §1.3, §1.4, §3.1; `docs/prd.md` §11.3
+- **Related:** `docs/development/open-questions.md` §1.3, §1.4, §3.1; `docs/prd.md` §11.3; [ADR-0004](ADR-0004-agent-token-shortlist-governance.md); [ADR-0005](ADR-0005-basketvault-multi-dex-routing.md); `config/agent-token-shortlist.json`
 
 ## Context
 
@@ -23,29 +23,82 @@ demo timeline.
 ## Decision
 
 For the MVP, the agent-token vault shortlist is **hand-picked by the
-product owner** and **equal-weighted** at deposit time. The MVP
-shortlist is:
+product owner** and **equal-weighted** at deposit time — not derived
+from a quantitative filter. This decision governs the *method*; the
+specific membership has since been revised for the Real four-vault demo
+(see [Amendment — 2026-06-15](#amendment--2026-06-15-real-four-vault-demo-shortlist)
+below).
+
+The current deployed shortlist is a three-token Base-only basket, each
+token routed through the DEX venue holding its deepest liquidity:
+
+| Token | Swap venue |
+|---|---|
+| BNKR | Uniswap V3 |
+| JUNO | Uniswap V4 |
+| RM ($RM) | Aerodrome |
+
+Token, pool, and adapter addresses live in
+`config/agent-token-shortlist.json` (never in Solidity source), which is
+the single source of truth for membership and per-asset venue. The
+multi-DEX per-asset routing model is specified in
+[ADR-0005](ADR-0005-basketvault-multi-dex-routing.md).
+
+Changes to the shortlist (add, remove, swap) flow through the existing
+admin path: a Safe (≥2-of-N) proposes/executes against the
+`TimelockController` that holds `ADMIN_ROLE` on the vault, now subject to
+the mandatory timelock delay and public veto window specified in
+[ADR-0004](ADR-0004-agent-token-shortlist-governance.md). There is no
+separate token-holder vote over membership in the MVP.
+
+## Amendment — 2026-06-15: Real four-vault demo shortlist
+
+The original 2026-05-27 shortlist assumed all four tokens traded as
+Uniswap V3 USDC pairs:
 
 - JUNO (`0x4e6c9f48f73e54ee5f3ab7e2992b2d733d0d0b07`)
 - Woon (`0x85eac631c800af804476b140f87039f742c28ba3`)
 - ZYFAI (`0xd080ed3c74a20250a2c9821885203034acd2d5ae`)
 - GIZA (`0x590830dfdf9a3f68afcdde2694773debdf267774`)
 
-Tokens excluded from the shortlist and rationale:
+The Real four-vault demo (Plan #109) requires the agent-token vault to
+hold real, on-chain-tradeable Base assets with enough DEX liquidity to
+support deposit/redeem swaps without catastrophic slippage. That
+requirement, together with the per-asset multi-DEX routing decision in
+[ADR-0005](ADR-0005-basketvault-multi-dex-routing.md), drove the
+following revisions:
 
-- **ROBOTMONEY** — the protocol's own token; including it in the vault
-  creates a self-referential conflict of interest.
-- **BANKR / BNKR** — not on the live product allocation; dropped.
-- **DEUS** — no active Base presence; dropped.
-- **PEAQ** — not native to Base; the vault is Base-only by deployment.
+- **Woon, ZYFAI, GIZA — removed.** They did not meet the demo's
+  liquidity / venue requirements as basket swap legs.
+- **BNKR — added (Uniswap V3).** Reinstated as a live Base
+  agent-economy token with a usable V3 USDC pool; this reverses the
+  original "dropped" determination.
+- **JUNO — retained, re-venued to Uniswap V4.** Its deepest USDC
+  liquidity is on Uniswap V4, not V3; routing follows ADR-0005.
+- **RM — added (Aerodrome).** This reverses the original
+  self-referential conflict-of-interest exclusion. As deployed, the code
+  applies **no self-referential or conflict-of-interest guard**:
+  `AgentTokenVault` treats RM identically to any other shortlist
+  entry — equal-weighted, with a token/pool/adapter triple routed through
+  the Aerodrome adapter (`BasketVault.Venue.Aerodrome`, asset index 2 in
+  the demo seed). Router-eligibility is generic vault-level registry
+  state (`VaultRegistry.isRouterEligible`) and is **not** conditioned on,
+  nor blocked by, RM's presence anywhere in the contract: in the
+  Real four-vault demo the agent-token vault — RM leg included —
+  is seeded Router-eligible and carries a leg in the router default
+  weight vector (`test_rmAGENT_is_router_eligible`). On mainnet,
+  Router-eligibility still depends on the generic hardening gates
+  (audit / TWAP oracle / liquidity proof), not on a RM-specific
+  check. The demo seeds RM as a stand-in `DemoBasketToken`; the
+  live `$RM` / `RmToken` address for a production deploy is an unresolved
+  `TODO` in `config/agent-token-shortlist.json`. The original
+  self-referential concern is therefore a governance/product
+  consideration only — it is **not** enforced or gated in code.
 
-Pool addresses (Uniswap V3 USDC pairs) must be confirmed per-token
-before mainnet deploy; see `config/agent-token-shortlist.json`.
-
-Changes to the shortlist (add, remove, swap) flow through the existing
-admin path: a Safe (≥2-of-N) proposes/executes against the
-`TimelockController` that holds `ADMIN_ROLE` on the vault. There is no
-separate token-holder vote over membership in the MVP.
+The hand-picked-not-quant-filtered method, the equal-weight allocation,
+and the admin-curation governance path are unchanged by this amendment.
+DEUS and PEAQ remain excluded for the reasons recorded in the original
+decision (no active Base presence; not Base-native, respectively).
 
 ## Consequences
 

@@ -24,7 +24,7 @@ import {VaultRegistry} from "../VaultRegistry.sol";
 
 /// @title DeployAgentTokenVault
 /// @notice Deploys `AgentTokenVault` and seeds it with the active three-token
-///         demo shortlist: BNKR, JUNO, ROBOTMONEY. Token, pool, adapter, and
+///         demo shortlist: BNKR, JUNO, RM. Token, pool, adapter, and
 ///         venue data are read from `config/agent-token-shortlist.json`; no
 ///         token address is hardcoded in Solidity source.
 ///
@@ -60,7 +60,7 @@ contract DeployAgentTokenVault is Script {
     /// @notice Active shortlist symbols in deploy order.
     ///         Ordering is load-bearing: AgentTokenVault.shortlist() returns
     ///         tokens in this order, and the dapp/tests assert on it.
-    string[3] internal SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"];
+    string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"];
 
     /// @notice TVL/per-deposit caps mirrored from the other demo vaults.
     uint256 public constant TVL_CAP = 10_000_000 * 1e6;

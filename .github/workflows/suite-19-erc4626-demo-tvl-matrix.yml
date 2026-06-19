@@ -11,8 +11,8 @@
 # 2. DEMO-TVL MATRIX (activated — issue #804)
 #    The full_stack_demo_tvl smoke test
 #    (testing/smoke-test/tests/full_stack_demo_tvl.rs) is wired here.
-#    Runs HEAVY tier only (dev-phase-* branches and dev/main) to keep ordinary
-#    PR cycles fast. Uses oven-sh/setup-bun@v2 for the DappStack dapp-build step.
+#    Runs HEAVY tier — it gates pull_requests targeting dev (and push to dev),
+#    not ordinary feature PRs. Uses oven-sh/setup-bun@v2 for the DappStack dapp-build step.
 #
 # ACTIVATION HISTORY
 # - erc4626-precondition: activated in issue #814 — ERC4626PreconditionChecks.t.sol
@@ -23,14 +23,14 @@
 name: erc4626-demo-tvl-matrix
 
 on:
+  # HEAVY tier: merge gate for `dev` — runs on every pull_request targeting dev
+  # (no path filter, so the gate always reports for any branch merging to dev)
+  # and on push to dev for merged-commit coverage.
+  # See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [main, dev, "dev-phase-*"]
+    branches: [dev]
   pull_request:
-    branches: ["dev-phase-*"]
-    paths:
-      - "contracts/test/ERC4626PreconditionChecks.t.sol"
-      - "testing/smoke-test/tests/full_stack_demo_tvl.rs"
-      - ".github/workflows/suite-19-erc4626-demo-tvl-matrix.yml"
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
@@ -41,7 +41,7 @@ jobs:
   # ── ERC-4626 precondition checks ───────────────────────────────────────────
   # Activated in issue #814: contracts/test/ERC4626PreconditionChecks.t.sol asserts
   # asset()/decimals()/empty-vault share-price invariants for each exitFeeBps tier
-  # × adapter (passthrough, aave, compound, morpho). The matrix shards the run by
+  # × adapter (aave, compound, morpho). The matrix shards the run by
   # exit-fee tier; the test reads the EXIT_FEE_BPS env var for its matrix-env tier.
   erc4626-precondition:
     name: erc4626-precondition

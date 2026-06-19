@@ -15,10 +15,9 @@
 //! `testing/fixtures/fork-state/genesis-alloc.json` now carries real protocol
 //! storage for all three adapters.
 //!
-//! [`crate::Fixture::new`] no longer passes `USE_PASSTHROUGH_ADAPTER=true`.
-//! `Deploy.s.sol` deploys real adapters by default. `PassthroughAdapter` is
-//! retained as a debugging escape hatch only (pass `USE_PASSTHROUGH_ADAPTER=true`
-//! via [`crate::Fixture::with_deploy_env`] if needed).
+//! `Deploy.s.sol` deploys the three real adapters unconditionally — the
+//! test-only no-yield deploy hatch was removed in issue #912, so every devnet
+//! boot exercises real Aave V3 / Compound V3 / Morpho protocol state.
 //!
 //! # Ownership
 //!

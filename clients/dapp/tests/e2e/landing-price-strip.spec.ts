@@ -83,12 +83,26 @@ test("landing price strip matches Base mainnet at fork block", async ({ page }) 
   for (const pair of expected.pairs) {
     const value = page.getByTestId(`landing-price-cell-${pair.id}-value`);
     await expect(value).not.toHaveText("unavailable");
-    const text = (await value.textContent()) ?? "";
-    const numeric = Number(text.replace(/[$,\s]/g, ""));
-    expect(Number.isFinite(numeric)).toBeTruthy();
     const exp = pair.expected_price as number;
-    const driftPct = (Math.abs(numeric - exp) / exp) * 100;
-    expect(driftPct).toBeLessThanOrEqual(expected.tolerance_pct);
+    // Poll the numeric read so a transient loading/blank cell does not fail
+    // the one-shot drift assertion (the price feed paints asynchronously).
+    // The polled predicate is the SAME correctness check: parseable, in-bound.
+    await expect
+      .poll(
+        async () => {
+          const text = (await value.textContent()) ?? "";
+          const numeric = Number(text.replace(/[$,\s]/g, ""));
+          if (!Number.isFinite(numeric)) return false;
+          const driftPct = (Math.abs(numeric - exp) / exp) * 100;
+          return driftPct <= expected.tolerance_pct;
+        },
+        {
+          message: `landing price cell ${pair.id} must render within ${expected.tolerance_pct}% of ${exp}`,
+          timeout: 60_000,
+          intervals: [2_000],
+        },
+      )
+      .toBe(true);
   }
 });
 

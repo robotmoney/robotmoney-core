@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -656,13 +656,37 @@ function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE);
 
 ### shutdownVault
 
-Permanently shut down the vault: set `shutdown = true` and zero the TVL cap.
-Irreversible. Restricted to `EMERGENCY_ROLE`.
+Shut down the vault: set `shutdown = true` and zero the TVL cap.
+Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`
+via `restoreVault`, mirroring the `pause`/`unpause` trust
+asymmetry: a compromised emergency hot key can DoS deposits but
+cannot permanently brick the vault — re-opening requires the
+higher-trust admin role.
 
 
 ```solidity
 function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 ```
+
+### restoreVault
+
+Reverse a `shutdownVault` and re-open deposits. Restricted to
+`ADMIN_ROLE`. Intentionally asymmetric: shutting down is fast and
+unilateral (`EMERGENCY_ROLE`); restoring is deliberate and requires
+the higher-trust admin role. Because `shutdownVault` zeroed the TVL
+cap, the admin supplies a fresh cap so deposits resume under an
+explicit limit rather than silently reusing a stale value.
+
+
+```solidity
+function restoreVault(uint256 newTvlCap) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newTvlCap`|`uint256`|New maximum total assets in 6-decimal USDC units (must be > 0).|
+
 
 ### setTvlCap
 
@@ -1202,12 +1226,26 @@ event EmergencyWithdrawAdapterCalled(
 |`success`|`bool`|Whether the adapter's withdraw call succeeded.|
 
 ### Shutdown
-Emitted when the vault is permanently shut down.
+Emitted when the vault is shut down.
 
 
 ```solidity
 event Shutdown();
 ```
+
+### VaultRestored
+Emitted when a shut-down vault is restored and deposits re-open.
+
+
+```solidity
+event VaultRestored(uint256 newTvlCap);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newTvlCap`|`uint256`|The fresh TVL cap set on restore.|
 
 ### DepositsPausedChanged
 Emitted when deposit pause state changes.
@@ -1285,11 +1323,19 @@ error ZeroAddress();
 ```
 
 ### VaultShutdown
-Operation rejected because the vault has been permanently shut down.
+Operation rejected because the vault has been shut down.
 
 
 ```solidity
 error VaultShutdown();
+```
+
+### NotShutdown
+`restoreVault` called while the vault is not in a shut-down state.
+
+
+```solidity
+error NotShutdown();
 ```
 
 ### InvalidFee

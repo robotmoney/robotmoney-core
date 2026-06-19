@@ -1,5 +1,5 @@
 # DeployDemoExtraVaults
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/DeployDemoExtraVaults.s.sol)
 
 **Inherits:**
 Script
@@ -72,13 +72,13 @@ uint24 internal constant DEMO_AGENT_JUNO_FEE = 10_000
 ```
 
 
-### DEMO_AGENT_ROBOTMONEY_FEE
-Swap fee tier for ROBOTMONEY (Aerodrome — fee param unused by adapter
+### DEMO_AGENT_RM_FEE
+Swap fee tier for RM (Aerodrome — fee param unused by adapter
 but kept for interface uniformity; 1% matches the illiquid stance).
 
 
 ```solidity
-uint24 internal constant DEMO_AGENT_ROBOTMONEY_FEE = 10_000
+uint24 internal constant DEMO_AGENT_RM_FEE = 10_000
 ```
 
 
@@ -136,11 +136,11 @@ address internal constant DEFAULT_SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F
 ## State Variables
 ### AGENT_SYMBOLS
 Real four-vault demo agent-token symbols: BNKR (V3), JUNO (V4),
-ROBOTMONEY (V4/Aerodrome). Three-token basket per issue #560.
+RM (V4/Aerodrome). Three-token basket per issue #560.
 
 
 ```solidity
-string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"]
+string[3] internal AGENT_SYMBOLS = ["BNKR", "JUNO", "RM"]
 ```
 
 
@@ -202,6 +202,35 @@ stack-too-deep limit.
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
 ```
 
+### _assertTickMathLinkIntegrity
+
+Assert the TickMath library link integrity for all four basket-family
+vaults (finding L3-D1). Each vault exposes the linked library address
+via `tickMathLibrary()`; the primary `RobotMoneyVault` does not use
+TickMath and is excluded.
+The audited reference is the TickMath library linked into THIS deploy
+script (`address(TickMath)`): the script and the vault contracts are
+compiled and linked together in the same artifact set, so a correctly
+linked vault must point at the identical library instance with the
+identical runtime codehash. Comparing against the script's own linked
+library — rather than a hardcoded codehash — keeps the check robust
+across compiler/metadata variance while still failing closed on a
+mislink. Checks, per vault:
+1. linked address is non-zero and has non-empty runtime code;
+2. linked address equals the script's canonical `address(TickMath)`;
+3. linked runtime codehash equals the canonical library's codehash;
+4. `totalAssets()` does not revert and is within a sane USDC range.
+A deliberately wrong/zero linked address fails check 1/2/3.
+
+
+```solidity
+function _assertTickMathLinkIntegrity(
+    address protocolVault,
+    address rwaVault,
+    address agentVault
+) internal view;
+```
+
 ### _deployVaults
 
 Phase 1: deploy all vaults, stubs, and adapters.
@@ -249,7 +278,7 @@ Wire the three real-asset demo tokens into the pre-built
 `AgentTokenVault` via `addAsset` with per-asset venue selection:
 index 0: BNKR  — Venue.V3  (built-in SWAP_ROUTER, adapter = address(0))
 index 1: JUNO  — Venue.V4  (UniswapV4SwapAdapter)
-index 2: ROBOTMONEY — Venue.Aerodrome (AerodromeSwapAdapter)
+index 2: RM — Venue.Aerodrome (AerodromeSwapAdapter)
 Tokens + USDC pool stubs were already created inside
 `AgentBasketStubDeployer`. Demo pools satisfy the cardinality and
 liquidity gates in BasketVault.addAsset via stub returns.
@@ -362,10 +391,10 @@ struct Deployed {
     /// @dev Devnet stand-in ERC20 addresses seeded into ProtocolAssetVault.
     address[] protocolTokens;
     /// @dev `AgentTokenVault` (PRD §11.3). Registered Active AND router-eligible
-    ///      (BNKR/V3, JUNO/V4, ROBOTMONEY/Aerodrome). Included in defaultWeights.
+    ///      (BNKR/V3, JUNO/V4, RM/Aerodrome). Included in defaultWeights.
     address agentTokenVault;
     /// @dev Devnet stand-in ERC20 addresses seeded into AgentTokenVault
-    ///      (three real-asset demo stubs: BNKR, JUNO, ROBOTMONEY).
+    ///      (three real-asset demo stubs: BNKR, JUNO, RM).
     address[] agentTokens;
     /// @dev `RwaVault` (PRD §11.4, deSPXA). Registered Active AND router-eligible at
     ///      500 bps (issue #621, ADR-0006 §1 amended 2026-06-05). The Aerodrome swap
@@ -373,7 +402,7 @@ struct Deployed {
     address rwaVault;
     /// @dev UniswapV4SwapAdapter deployed for JUNO (Venue.V4).
     address v4Adapter;
-    /// @dev AerodromeSwapAdapter deployed for ROBOTMONEY (Venue.Aerodrome).
+    /// @dev AerodromeSwapAdapter deployed for RM (Venue.Aerodrome).
     address aeroAdapter;
 }
 ```

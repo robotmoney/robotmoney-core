@@ -290,8 +290,8 @@ rm -f "$REG_OUT_TMP" "$ROUTER_OUT_TMP" "$GOV_OUT_TMP"
 #   snapshot actually executes a deposit→redeem through each adapter, the
 #   protocol contracts land in genesis with bytecode but no live reserve /
 #   index / position storage, so `balanceOf`/`accrue` style calls decode
-#   empty returndata and revert — which is exactly why the devnet was
-#   pinned to PassthroughAdapter before this issue.
+#   empty returndata and revert — which is exactly why the devnet relied on
+#   a test-only no-yield deploy hatch before issue #685 warmed this storage.
 #
 #   Running one deposit and one partial redeem here forces anvil to fetch
 #   the reserve config, liquidity/borrow index, aToken supply, Comet base
@@ -388,6 +388,17 @@ WARM_ADDRESSES=(
   "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"  # Aave V3 Pool
   "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB"  # Aave V3 aUSDC
   "0xb125E6687d4313864e53df431d5425969c15Eb2F"  # Compound V3 cUSDCv3
+  # Aave V3 price-oracle chain (issue #894). Pool.withdraw calls
+  # ADDRESSES_PROVIDER.getPriceOracle() during health-factor validation; if the
+  # provider has no code on the devnet the STATICCALL returns empty returndata
+  # and the whole withdraw (hence vault redeem) reverts, while supply — which
+  # never reads the oracle — still works. Warm the provider plus the oracle and
+  # USDC price-feed chain it points at so the withdraw path resolves.
+  "0xe20fcbdbffc4dd138ce8b2e6fbb6cb49777ad64d"  # Aave V3 PoolAddressesProvider
+  "0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156"  # AaveOracle
+  "0xf52D010c7d4ecBfda92c2509900593CE34535D86"  # USDC PriceCapAdapter (getSourceOfAsset)
+  "0x1550207eAeB590D1557a6E6C066D3d57B5A4Dc65"  # USDC/USD EACAggregatorProxy
+  "0x0fB39aE1d48Faf8CA5ea8DbF7e134e07386A7877"  # USDC/USD underlying aggregator
   # Safe v1.4.1 singleton and proxy factory (used by DeployTimelock.s.sol).
   "0x41675C099F32341bf84BFc5382aF534df5C7461a"  # Safe singleton v1.4.1
   "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67"  # SafeProxyFactory v1.4.1

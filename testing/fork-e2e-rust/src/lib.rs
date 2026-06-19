@@ -2,7 +2,7 @@
 //! Decision record: docs/technical/fork-e2e-decisions.md (issue #47).
 //! Implements: issue #48.
 //!
-//! Forked-mainnet end-to-end harness for Robot Money. Each test boots
+//! Forked-Base end-to-end harness for Robot Money. Each test boots
 //! its own `anvil --fork-url $RMPC_FORK_RPC_URL --fork-block-number
 //! $RMPC_FORK_BLOCK` backend (per §3.5 of the ADR, fork-restart per
 //! test, no shared backend), creates an ephemeral secp256k1 signer,
@@ -22,7 +22,7 @@
 //! - [`Account`] — the ephemeral key bound to a fixture, plus
 //!   [`Account::send`] / [`Account::call`] helpers that hide
 //!   nonce/gas/eip-1559 plumbing.
-//! - [`addresses`] module — Base-mainnet contract addresses, parsed
+//! - [`addresses`] module — Base contract addresses, parsed
 //!   once and re-exported.
 //!
 //! Reads use only JSON-RPC (per §8 outputs and §3.1 of the ADR — no
@@ -46,6 +46,10 @@ pub mod addresses;
 /// Dev-scout module for Base testnet e2e infrastructure (issue #842).
 /// Multi-network parameter configuration and integration seams for issue #839.
 pub mod base_testnet;
+/// Deployed contract addresses for Base Sepolia (testnet, chain 84532).
+/// Mirror of [`addresses`] for the parameterized multi-network e2e tests
+/// (issue #839).
+pub mod base_testnet_addresses;
 pub mod scenarios;
 
 // -- Deployed addresses module is re-exported for ergonomic use ----
@@ -137,13 +141,13 @@ macro_rules! skip_in_testnet_mode {
     };
 }
 
-/// Skip the test unless a live mainnet fork RPC is available via
+/// Skip the test unless a live forked-Base RPC is available via
 /// `RMPC_FORK_RPC_URL`. Use this for tests that read storage from
-/// production Base mainnet contracts (e.g. `abi_address_sanity`),
+/// production Base contracts (e.g. `abi_address_sanity`),
 /// which require a real fork rather than the checked-in fixture
-/// (the fixture has bytecode but not full storage for mainnet contracts).
+/// (the fixture has bytecode but not full storage for Base contracts).
 #[macro_export]
-macro_rules! skip_if_no_mainnet_fork {
+macro_rules! skip_if_no_devnet_fork {
     () => {
         if which::which("anvil").is_err()
             || !std::env::var("RMPC_FORK_RPC_URL")
@@ -152,9 +156,78 @@ macro_rules! skip_if_no_mainnet_fork {
         {
             eprintln!(
                 "[fork-e2e] skipping: RMPC_FORK_RPC_URL not set. \
-                 This test requires a live Base mainnet archive RPC."
+                 This test requires a live Base archive RPC."
             );
             return;
+        }
+    };
+}
+
+/// Run a single e2e test body once per [`Network`] (issue #839, decision D3:
+/// comprehensive coverage across networks "using parameterized fixtures and
+/// shared test templates to avoid code duplication"). The body receives a
+/// `network: Network` binding and a booted [`ForkFixture`] bound to that
+/// network; it is invoked once for [`Network::RobotMoneyDevnet`] and once for
+/// [`Network::BaseTestnet`].
+///
+/// A network whose RPC endpoint is unavailable
+/// ([`HarnessError::SkipNoRpc`]) is skipped with an `eprintln!` line rather
+/// than failing — so `cargo test` on a contributor laptop (no testnet secret)
+/// still passes, and CI that *does* set `BASE_TESTNET_RPC_URL` exercises the
+/// live path. At least one network must successfully boot, otherwise the test
+/// is a no-op skip (the same graceful-skip contract every fork-e2e test
+/// honours).
+///
+/// # Example
+/// ```ignore
+/// parameterized_e2e!(dex_route, |network, fx| {
+///     // single body runs once per network; `fx` is bound to `network`.
+///     assert_eq!(fx.chain_id, network.chain_id());
+/// });
+/// ```
+#[macro_export]
+macro_rules! parameterized_e2e {
+    ($name:ident, $body:expr) => {
+        #[test]
+        fn $name() {
+            let run = |network: $crate::Network, fx: $crate::ForkFixture| {
+                let f: &dyn Fn($crate::Network, $crate::ForkFixture) = &$body;
+                f(network, fx);
+            };
+            let mut ran = 0usize;
+            for &network in $crate::Network::ALL {
+                match $crate::ForkFixture::for_network(network) {
+                    Ok(fx) => {
+                        eprintln!(
+                            "[{}] running on {} (chain_id={})",
+                            stringify!($name),
+                            network.name(),
+                            fx.chain_id
+                        );
+                        run(network, fx);
+                        ran += 1;
+                    }
+                    Err(e) if e.is_skip() => {
+                        eprintln!(
+                            "[{}] skipping {}: RPC endpoint not configured",
+                            stringify!($name),
+                            network.name()
+                        );
+                    }
+                    Err(e) => panic!(
+                        "[{}] {} boot failed: {e}",
+                        stringify!($name),
+                        network.name()
+                    ),
+                }
+            }
+            if ran == 0 {
+                eprintln!(
+                    "[{}] no network RPC configured; set RMPC_FORK_RPC_URL / \
+                     RMPC_TESTNET_RPC_URL (devnet) or BASE_TESTNET_RPC_URL (testnet) to run.",
+                    stringify!($name)
+                );
+            }
         }
     };
 }
@@ -219,7 +292,7 @@ pub fn can_run() -> bool {
 /// `RMPC_FORK_BLOCK` is unset. Matches §3.2 of the ADR.
 const LOCAL_LAG_BLOCKS: u64 = 50;
 
-/// Base mainnet chain id. Hard-coded — Phase 2 only targets Base
+/// Base chain id. Hard-coded — Phase 2 only targets Base
 /// per §3.1 of the ADR.
 pub const BASE_CHAIN_ID: u64 = 8453;
 
@@ -234,7 +307,7 @@ pub const USDC_PROXY_ADMIN_SLOT: B256 =
 
 /// Path (relative to workspace root) of the committed USDC storage
 /// seed: proxy storage slots + implementation address and bytecode
-/// captured from Base mainnet. Applied by
+/// captured from a Base block. Applied by
 /// [`ForkFixture::apply_usdc_storage_seed`] on every boot so the
 /// checked-in `--load-state` snapshot — which only carries the
 /// proxy's runtime bytecode, not its admin/impl storage — becomes
@@ -571,6 +644,65 @@ impl ForkFixture {
         Ok(())
     }
 
+    /// Boot a fixture for a specific [`Network`] (issue #839 multi-network e2e).
+    ///
+    /// - [`Network::RobotMoneyDevnet`] delegates to [`Self::new`] — anvil-fork or the
+    ///   checked-in fixture, exactly as the existing Phase 2 scenarios use.
+    /// - [`Network::BaseTestnet`] connects **directly** to the live Base Sepolia
+    ///   RPC named by `BASE_TESTNET_RPC_URL` (no anvil, no fork). The connected
+    ///   endpoint's chain id is verified to equal [`Network::chain_id`] so a
+    ///   mis-pointed RPC fails loudly.
+    ///
+    /// Returns [`HarnessError::SkipNoRpc`] when the network's RPC endpoint is
+    /// unset — callers (and the [`crate::parameterized_e2e`] macro) treat that
+    /// as a graceful skip, never a failure.
+    pub fn for_network(network: Network) -> Result<Self, HarnessError> {
+        match network {
+            Network::RobotMoneyDevnet => {
+                // These are *live third-party service* tests (Aave/Uniswap/Curve
+                // pools). The checked-in `--load-state` fixture carries vault +
+                // USDC storage but NOT the full external-pool storage, so a swap
+                // against it reverts. Require a live upstream — `RMPC_FORK_RPC_URL`
+                // (anvil-fork) or `RMPC_TESTNET_RPC_URL` (shared devnet) — and skip
+                // the fixture-only case, mirroring `skip_if_no_devnet_fork!`.
+                let has_live_upstream = std::env::var("RMPC_FORK_RPC_URL")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                    || std::env::var("RMPC_TESTNET_RPC_URL")
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false);
+                if !has_live_upstream {
+                    return Err(HarnessError::SkipNoRpc);
+                }
+                Self::new()
+            }
+            Network::BaseTestnet => {
+                let url = network.rpc_url().ok_or(HarnessError::SkipNoRpc)?;
+                let fx = Self::new_live(&url)?;
+                if fx.chain_id != network.chain_id() {
+                    return Err(HarnessError::Rpc(format!(
+                        "BASE_TESTNET_RPC_URL reports chain id {} but {} expects {} — \
+                         endpoint points at the wrong chain",
+                        fx.chain_id,
+                        network.name(),
+                        network.chain_id()
+                    )));
+                }
+                Ok(fx)
+            }
+        }
+    }
+
+    /// Connect to a live external chain at `url` (e.g. Base Sepolia). No anvil
+    /// is spawned and no admin RPCs (`anvil_*`) are used — only standard
+    /// JSON-RPC. Account funding on such a chain must go through a pre-funded
+    /// EOA / faucet (see [`Self::ephemeral_testnet`]); the `anvil_setBalance`
+    /// path is unavailable. Shares the read/transport plumbing with
+    /// [`Self::new_testnet`].
+    fn new_live(url: &str) -> Result<Self, HarnessError> {
+        Self::new_testnet(url)
+    }
+
     /// Connect to a shared Geth+Lighthouse devnet at `url`. No anvil is spawned.
     /// USDC storage is pre-seeded in the genesis alloc (genesis-alloc.json loaded
     /// via docker-compose.alloc.yaml), so `apply_usdc_storage_seed` is NOT called
@@ -669,6 +801,88 @@ impl ForkFixture {
             rpc: self.rpc.clone(),
             tx_hashes: &self.tx_hashes,
         })
+    }
+
+    /// Build a fresh ephemeral account on a **live external chain** (Base
+    /// Sepolia), funded by seeded transfers from a pre-funded funder EOA.
+    ///
+    /// On Base Sepolia there are no anvil admin RPCs and the genesis-funded
+    /// `HARNESS_USDC_HOLDER` does not exist, so the funder key is supplied via
+    /// the `BASE_TESTNET_FUNDER_KEY` env var (a faucet-funded testnet EOA's
+    /// private key). The funder sends `eth_wei` native ETH and, when
+    /// `usdc_units > 0`, `usdc_units` of `usdc_token` to the new account.
+    ///
+    /// Returns [`HarnessError::SkipNoRpc`] when `BASE_TESTNET_FUNDER_KEY` is
+    /// unset — without a funder we cannot seed an account on a real chain, so
+    /// the dependent test skips gracefully rather than failing. (A deployed CI
+    /// environment provides this secret alongside `BASE_TESTNET_RPC_URL`.)
+    pub fn ephemeral_testnet(
+        &self,
+        usdc_token: Address,
+        eth_wei: U256,
+        usdc_units: U256,
+    ) -> Result<Account<'_>, HarnessError> {
+        let funder_key = std::env::var("BASE_TESTNET_FUNDER_KEY")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .ok_or(HarnessError::SkipNoRpc)?;
+
+        let signer = SigningKey::random(&mut rand_core::OsRng);
+        let addr = derive_address(&signer);
+        self.fund_from_external_funder(&funder_key, usdc_token, addr, eth_wei, usdc_units)?;
+
+        Ok(Account {
+            signer,
+            address: addr,
+            fixture_rpc_url: self.rpc_url.clone(),
+            chain_id: self.chain_id,
+            rpc: self.rpc.clone(),
+            tx_hashes: &self.tx_hashes,
+        })
+    }
+
+    /// Seed `to` with native ETH and USDC by signing transfers from the
+    /// `BASE_TESTNET_FUNDER_KEY` EOA. Live-chain analogue of
+    /// [`Self::fund_from_harness_holder`]; uses only standard JSON-RPC.
+    fn fund_from_external_funder(
+        &self,
+        funder_key_hex: &str,
+        usdc_token: Address,
+        to: Address,
+        eth_wei: U256,
+        usdc_units: U256,
+    ) -> Result<(), HarnessError> {
+        let key_hex = funder_key_hex.trim_start_matches("0x");
+        let key_bytes = hex::decode(key_hex)
+            .map_err(|e| HarnessError::Rpc(format!("BASE_TESTNET_FUNDER_KEY hex: {e}")))?;
+        let key_arr: [u8; 32] = key_bytes
+            .try_into()
+            .map_err(|_| HarnessError::Rpc("BASE_TESTNET_FUNDER_KEY wrong length".into()))?;
+        let funder_signer = SigningKey::from_bytes((&key_arr).into())
+            .map_err(|e| HarnessError::Rpc(format!("funder signer: {e}")))?;
+        let funder_addr = derive_address(&funder_signer);
+
+        let funder_tx_hashes = Mutex::new(Vec::<B256>::new());
+        let funder = Account {
+            signer: funder_signer,
+            address: funder_addr,
+            fixture_rpc_url: self.rpc_url.clone(),
+            chain_id: self.chain_id,
+            rpc: self.rpc.clone(),
+            tx_hashes: &funder_tx_hashes,
+        };
+
+        if eth_wei > U256::ZERO {
+            funder.send_raw(to, alloy_primitives::Bytes::new(), eth_wei, 21_000)?;
+        }
+        if usdc_units > U256::ZERO {
+            let call = IERC20::transferCall {
+                to,
+                amount: usdc_units,
+            };
+            funder.send(usdc_token, &call, U256::ZERO, 200_000)?;
+        }
+        Ok(())
     }
 
     /// Read RPC handle.
@@ -1151,10 +1365,29 @@ impl Rpc {
     pub fn wait_for_receipt(&self, hash: B256, timeout: Duration) -> Result<Receipt, HarnessError> {
         let start = Instant::now();
         loop {
-            let resp: serde_json::Value = self.rpc(
+            let resp: serde_json::Value = match self.rpc(
                 "eth_getTransactionReceipt",
                 serde_json::json!([format!("{:#x}", hash)]),
-            )?;
+            ) {
+                Ok(resp) => resp,
+                // Geth has a brief window right after a block is mined
+                // (especially just after devnet boot) where a tx is mined but
+                // not yet indexed, so eth_getTransactionReceipt transiently
+                // returns JSON-RPC error -32000 "transaction indexing is in
+                // progress". Treat it exactly like a null/pending receipt:
+                // honour the timeout, back off, and poll again. All other RPC
+                // errors propagate immediately.
+                Err(e) if is_indexing_transient(&e) => {
+                    if start.elapsed() > timeout {
+                        return Err(HarnessError::Rpc(format!(
+                            "receipt for {hash:?} not seen within {timeout:?}"
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if !resp.is_null() {
                 let status = resp.get("status").and_then(|s| s.as_str()).unwrap_or("0x0");
                 let gas_used = resp
@@ -1248,6 +1481,20 @@ impl Rpc {
 
 // -- Helpers -------------------------------------------------------
 
+/// Returns `true` iff `err` is Geth's transient "transaction indexing is in
+/// progress" error (JSON-RPC code -32000). Right after a block is mined —
+/// especially just after devnet boot — Geth reports a mined transaction as
+/// not-yet-indexed for a brief window, so `eth_getTransactionReceipt`
+/// transiently fails. [`Rpc::wait_for_receipt`] treats this like a pending
+/// receipt instead of a hard failure. Matched narrowly on the stable
+/// indexing-progress message substring so unrelated RPC errors still
+/// propagate. The harness `rpc()` helper stringifies the full JSON-RPC error
+/// object (code + message + data) into `HarnessError::Rpc`, so matching on the
+/// substring covers both the message and `data` placements Geth uses.
+fn is_indexing_transient(err: &HarnessError) -> bool {
+    matches!(err, HarnessError::Rpc(msg) if msg.contains("indexing is in progress"))
+}
+
 fn resolve_fork_pin(upstream: &str) -> Result<ForkPin, HarnessError> {
     if let Ok(v) = std::env::var("RMPC_FORK_BLOCK") {
         let block: u64 = v
@@ -1339,4 +1586,36 @@ fn sign_eip1559(tx: &TxEip1559, sk: &SigningKey) -> alloy_primitives::Signature 
     let s = U256::from_be_slice(&sig.s().to_bytes());
     let v: bool = matches!(recid.to_byte(), 1);
     alloy_primitives::Signature::from_rs_and_parity(r, s, v).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The transient-detection predicate that gates [`Rpc::wait_for_receipt`]'s
+    /// retry: it must match Geth's "indexing is in progress" message (however
+    /// `rpc()` stringifies the JSON-RPC error object) and nothing else, so the
+    /// receipt-wait loop retries the indexing window but propagates every
+    /// unrelated RPC error.
+    #[test]
+    fn is_indexing_transient_matches_geth_window_only() {
+        // The harness `rpc()` helper formats the whole JSON-RPC error object
+        // into the message; both the `message` and `data` placements Geth uses
+        // carry the same substring.
+        assert!(is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"transaction indexing is in progress\"}".to_string(),
+        )));
+        assert!(is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"the method ... is not available\",\"data\":\"transaction indexing is in progress\"}".to_string(),
+        )));
+        // Unrelated RPC error must not be treated as a transient.
+        assert!(!is_indexing_transient(&HarnessError::Rpc(
+            "eth_getTransactionReceipt: {\"code\":-32000,\"message\":\"execution reverted\"}"
+                .to_string(),
+        )));
+        // A non-RPC harness error never matches.
+        assert!(!is_indexing_transient(&HarnessError::BadForkBlock(
+            "indexing is in progress".to_string()
+        )));
+    }
 }

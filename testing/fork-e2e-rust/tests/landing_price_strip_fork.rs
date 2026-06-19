@@ -22,7 +22,7 @@
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
-use rmpc_fork_e2e::{skip_if_no_mainnet_fork, ForkFixture};
+use rmpc_fork_e2e::{skip_if_no_devnet_fork, ForkFixture};
 
 sol! {
     /// The single field we read off a Uniswap V3 pool.
@@ -120,8 +120,8 @@ fn u256_to_f64(v: U256) -> f64 {
 }
 
 #[test]
-fn landing_price_strip_matches_base_mainnet_at_fork_block() {
-    skip_if_no_mainnet_fork!();
+fn landing_price_strip_matches_robotmoney_devnet_at_fork_block() {
+    skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[landing_price_strip_fork] {}", fx.summary_line());
 
@@ -186,7 +186,7 @@ fn landing_price_strip_matches_base_mainnet_at_fork_block() {
 
 #[test]
 fn landing_price_strip_cbbtc_and_wsol_pools_exist_at_fork_block() {
-    skip_if_no_mainnet_fork!();
+    skip_if_no_devnet_fork!();
     let fx = ForkFixture::new().expect("boot fork");
     let fixture = load_fixture();
     let caller: Address = "0x0000000000000000000000000000000000000001"

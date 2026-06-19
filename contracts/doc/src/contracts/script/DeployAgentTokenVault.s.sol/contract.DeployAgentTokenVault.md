@@ -1,5 +1,5 @@
 # DeployAgentTokenVault
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/script/DeployAgentTokenVault.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/DeployAgentTokenVault.s.sol)
 
 **Inherits:**
 Script
@@ -8,7 +8,7 @@ Script
 DeployAgentTokenVault
 
 Deploys `AgentTokenVault` and seeds it with the active three-token
-demo shortlist: BNKR, JUNO, ROBOTMONEY. Token, pool, adapter, and
+demo shortlist: BNKR, JUNO, RM. Token, pool, adapter, and
 venue data are read from `config/agent-token-shortlist.json`; no
 token address is hardcoded in Solidity source.
 Chain selection: `block.chainid == 8453` (Base mainnet) reads the
@@ -62,7 +62,7 @@ tokens in this order, and the dapp/tests assert on it.
 
 
 ```solidity
-string[3] internal SYMBOLS = ["BNKR", "JUNO", "ROBOTMONEY"]
+string[3] internal SYMBOLS = ["BNKR", "JUNO", "RM"]
 ```
 
 

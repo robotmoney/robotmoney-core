@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -15,8 +15,6 @@ distinct EOA via `authorizeAgent`, asserts role-separation, and
 writes a deployment JSON.
 MockVault is NOT deployed by this script; it is only used by
 gateway deposit-routing unit tests directly. See issue #277.
-PassthroughAdapter is NOT registered by this script; it is
-retained in the codebase for unit tests only. See issue #363.
 
 Implements `Plan tracking issue #109` §5 step 1–2 and
 satisfies issue #10. Inputs are env-driven so the same script works
@@ -42,17 +40,6 @@ AGENT_MAX_WITHDRAW_PER_PAYMENT  — uint256, default = 10_000 * 1e6 (shares, 6dp
 AGENT_MAX_WITHDRAW_PER_WINDOW   — uint256, default = 100_000 * 1e6
 DEPLOYMENT_OUT         — output JSON path,
 default = "deployments/<chain_id>.json"
-USE_PASSTHROUGH_ADAPTER — bool, default = false.
-When true, deploys a single `PassthroughAdapter`
-instead of the three real protocol adapters.
-Required on the Geth+Lighthouse smoke-test devnet
-because that chain boots from a genesis snapshot
-containing only warm-storage slots — real Aave,
-Compound, and Morpho contracts have bytecode but
-no on-chain state, so any call that returns a
-uint256 (e.g. `balanceOf`) would be ABI-decoded
-from an empty return and revert.  Set automatically
-by the smoke-test Rust harness.
 
 
 ## Constants
@@ -315,6 +302,23 @@ function _approveAdapter(RobotMoneyVault vault_, address adapter_) internal;
 function _doDeploy(Params memory p) internal returns (Deployed memory d);
 ```
 
+### _assertTickMathCanonical
+
+Assert the TickMath library linked into this deploy artifact set is
+present and non-empty (finding L3-D1). The primary RobotMoneyVault
+does not consume TickMath, so this script has no NAV consumer to probe
+against; the substantive codehash + per-vault totalAssets() integrity
+check lives in `DeployDemoExtraVaults._assertTickMathLinkIntegrity`,
+where the four basket-family vaults are deployed. Here we fail closed
+on a catastrophic link failure (zero address / no code) so a broken
+artifact set cannot deploy silently. `address(TickMath)` resolves to
+the deploy-time-linked library baked into this script's bytecode.
+
+
+```solidity
+function _assertTickMathCanonical() internal view;
+```
+
 ### _authorizeDeployAgent
 
 Constructs the default agent policy, calls authorizeAgent on the
@@ -357,9 +361,6 @@ integration tests). For gateway unit tests that still need MockVault,
 use the separate `MockVault` import directly.
 `aaveAdapter`, `compoundAdapter`, and `morphoAdapter` are the
 real protocol adapters registered with the vault at deploy time.
-When `USE_PASSTHROUGH_ADAPTER=true` all three adapter fields point
-to the same `PassthroughAdapter` instance (Geth devnet only — real
-protocol contracts have no on-chain state there).
 
 
 ```solidity
@@ -375,10 +376,6 @@ struct Deployed {
     address agent;
     address shareReceiver;
     bytes32 gatewayRuntimeHash;
-    /// @dev True when deployed with `USE_PASSTHROUGH_ADAPTER=true`.
-    ///      All three adapter fields share the same `PassthroughAdapter`
-    ///      address; only one `addAdapter` call is needed.
-    bool passthroughMode;
 }
 ```
 

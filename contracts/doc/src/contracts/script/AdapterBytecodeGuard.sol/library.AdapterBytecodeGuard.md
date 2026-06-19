@@ -1,5 +1,5 @@
 # AdapterBytecodeGuard
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/script/AdapterBytecodeGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/script/AdapterBytecodeGuard.sol)
 
 **Title:**
 AdapterBytecodeGuard
@@ -13,7 +13,7 @@ adapter's *bytecode codehash* in the allowlist. If a future adapter
 were deployed behind a minimal delegatecall proxy, the pinned hash
 would cover the proxy bytecode only and the implementation could
 be hot-swapped without violating the allowlist. The current
-production set (Aave V3, Compound V3, Morpho, Passthrough) is
+production set (Aave V3, Compound V3, Morpho) is
 direct-deployed and has no `DELEGATECALL` in its runtime bytecode.
 This guard enforces that invariant on every adapter the deploy
 script approves, and is exercised by a contrived-proxy regression

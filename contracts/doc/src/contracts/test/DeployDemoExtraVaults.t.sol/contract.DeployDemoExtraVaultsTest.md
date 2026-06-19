@@ -1,5 +1,5 @@
 # DeployDemoExtraVaultsTest
-[Git Source](https://github.com/lucky-tensor/robotmoney-monorepo/blob/eddfc6a75fd5558f18f4c48ae13aa1c3278c17e6/contracts/test/DeployDemoExtraVaults.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/DeployDemoExtraVaults.t.sol)
 
 **Inherits:**
 Test
@@ -94,7 +94,7 @@ function test_rmAGENT_is_router_eligible() public;
 
 ### test_rmAGENT_holds_three_token_basket
 
-rmAGENT holds exactly BNKR/JUNO/ROBOTMONEY — the three-token
+rmAGENT holds exactly BNKR/JUNO/RM — the three-token
 real-asset basket (issue #560 AC1).
 
 
@@ -114,7 +114,7 @@ function test_rmAGENT_in_defaultWeights() public;
 ### test_rmAGENT_basket_tokens_have_correct_venues
 
 The three basket tokens use the correct per-asset venues:
-BNKR → V3, JUNO → V4, ROBOTMONEY → Aerodrome (issue #560 AC1).
+BNKR → V3, JUNO → V4, RM → Aerodrome (issue #560 AC1).
 
 
 ```solidity
@@ -156,11 +156,11 @@ function _assertJunoAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed 
     view;
 ```
 
-### _assertRobotmoneyAsset
+### _assertRmAsset
 
 
 ```solidity
-function _assertRobotmoneyAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed memory d)
+function _assertRmAsset(AgentTokenVault vault, DeployDemoExtraVaults.Deployed memory d)
     internal
     view;
 ```

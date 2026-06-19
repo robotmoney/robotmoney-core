@@ -29,10 +29,12 @@
 name: forge-unit-invariant-coverage
 
 on:
+  # The `unit`/`invariant` jobs are LIGHT tier and run on PRs to any branch and
+  # on push to dev/dev-phase-*. The `coverage` job is HEAVY tier and gates the
+  # `dev` merge boundary via its own `if:` guard (push-to-dev or PR-into-dev).
   push:
-    branches: [main, dev]
+    branches: [dev, "dev-phase-*"]
   pull_request:
-    branches: [main, dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -189,14 +191,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [unit, invariant]
-    # HEAVY tier (issue #600): unit + invariant stay quick and run on every feature
-    # PR, but the expensive lcov coverage gate is re-anchored at the phase-integration
-    # boundary. It runs on push (dev / dev-phase-* / main) and on PRs that target a
-    # dev-phase-* branch, but NOT on ordinary feature-branch PRs (to main/dev).
+    # HEAVY tier: unit + invariant stay light and run on PRs to any branch, but the
+    # expensive lcov coverage gate is anchored at the `dev` merge boundary — it runs
+    # on push to dev and on pull_requests targeting dev (the dev merge gate), not on
+    # ordinary feature PRs or dev-phase-* pushes.
     # See docs/development/ci-suites.md (CI velocity tiers).
     if: >-
-      github.event_name != 'pull_request' ||
-      startsWith(github.base_ref, 'dev-phase-')
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+      (github.event_name == 'pull_request' && github.base_ref == 'dev')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -224,7 +226,18 @@ jobs:
 
       - name: forge coverage
         # See the unit job for why `--no-match-test "^testFail_"` is required.
-        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_"
+        # `--no-match-contract VaultCodeSizeGuard`: that guard asserts each vault's
+        # deployed bytecode is under the EIP-170 24576-byte limit (issue #865), but
+        # `forge coverage` instruments bytecode, inflating every contract well past
+        # the limit (RobotMoneyVault ~34KB) — the assertion is meaningless under
+        # coverage. The guard still runs in the unit job above; only coverage skips it.
+        # `test_getPastVotes_returnsHistoricalPower` is excluded too: it relies on
+        # `vm.roll` to create a historical voting-power checkpoint, but under
+        # `forge coverage --ir-minimum` the roll does not take effect, so
+        # getPastVotes returns the latest value instead of the historical one and
+        # the assertion fails (1e18 != ALICE_POWER). It passes in the forge test
+        # (unit) job; only the coverage pass is affected.
+        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_returnsHistoricalPower" --no-match-contract "VaultCodeSizeGuard"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

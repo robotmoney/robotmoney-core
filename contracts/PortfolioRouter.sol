@@ -8,7 +8,7 @@
 //            state instead of a per-environment code variant.)
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
@@ -36,7 +36,7 @@ import {VaultRegistry} from "./VaultRegistry.sol";
 /// `docs/development/single-production-codebase.md` for the principle.
 ///
 /// Canonical: docs/architecture.md §4.2
-contract PortfolioRouter is AccessControl, ReentrancyGuard {
+contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ─── Roles ───────────────────────────────────────────────────────────────
@@ -157,8 +157,15 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     /// @notice `minSharesPerLeg` length does not match the number of active legs.
     error MinSharesLengthMismatch();
 
-    /// @notice A vault returned fewer shares than the depositor's minimum.
+    /// @notice `minAssetsPerLeg` length does not match the number of active legs.
+    error MinAssetsLengthMismatch();
+
+    /// @notice A vault returned fewer shares (deposit) or assets (redeem) than the
+    ///         caller-supplied per-leg minimum.
     error SlippageExceeded();
+
+    /// @notice The supplied `deadline` has passed (`block.timestamp > deadline`).
+    error DeadlineExpired();
 
     /// @notice Total deposit amount exceeds the global router cap.
     error RouterCapExceeded();
@@ -491,12 +498,23 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
     ///                          vector). Length must match the effective vault list.
     ///                          Zero-share legs are accepted (and skipped) so the
     ///                          caller can specify partial positions.
+    /// @param minAssetsPerLeg   Per-leg minimum USDC out (slippage floor), parallel to
+    ///                          `sharesPerLeg`. Mirrors the deposit path's
+    ///                          `minSharesPerLeg`: each non-zero leg reverts with
+    ///                          `SlippageExceeded` if realized proceeds fall below the
+    ///                          floor. Length must match `sharesPerLeg`. A floor of 0
+    ///                          disables the check for that leg.
+    /// @param deadline          Unix timestamp after which the call reverts with
+    ///                          `DeadlineExpired`. Pass `type(uint256).max` to disable.
     /// @return assetsPerLeg     USDC received per leg (parallel to `sharesPerLeg`).
-    function redeemFor(address shareHolder, address assetRecipient, uint256[] calldata sharesPerLeg)
-        external
-        nonReentrant
-        returns (uint256[] memory assetsPerLeg)
-    {
+    function redeemFor(
+        address shareHolder,
+        address assetRecipient,
+        uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
+        uint256 deadline
+    ) external nonReentrant returns (uint256[] memory assetsPerLeg) {
+        if (block.timestamp > deadline) revert DeadlineExpired();
         if (shareHolder == address(0)) revert ZeroAddress();
         if (assetRecipient == address(0)) revert ZeroAddress();
 
@@ -504,38 +522,59 @@ contract PortfolioRouter is AccessControl, ReentrancyGuard {
         uint256 n = vaultList.length;
         if (n == 0) revert NoWeightsSet();
         if (sharesPerLeg.length != n) revert LengthMismatch();
+        if (minAssetsPerLeg.length != n) revert MinAssetsLengthMismatch();
 
         assetsPerLeg = new uint256[](n);
 
         for (uint256 i = 0; i < n; i++) {
             uint256 shares = sharesPerLeg[i];
             if (shares == 0) continue;
-
-            address vault = vaultList[i];
-
-            // Registry status: must be Active to redeem.
-            (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
-            if (vaultStatus != VaultRegistry.VaultStatus.Active) {
-                revert VaultNotActive(vault, vaultStatus);
-            }
-
-            // Confused-deputy guard (issue #751): caller must be shareHolder or
-            // have ERC-20 allowance on the vault share token. Without this check
-            // any address can front-run a shareHolder's approval tx and call
-            // redeemFor, burning shares at a caller-specified share count.
-            if (
-                msg.sender != shareHolder
-                    && IERC20(vault).allowance(shareHolder, msg.sender) < shares
-            ) {
-                revert UnauthorizedRedeemer(shareHolder, msg.sender);
-            }
-
-            // Redeem: shareHolder must have approved msg.sender (the gateway) to
-            // spend their vault shares; the gateway is the `owner` caller here.
-            // vault.redeem sends USDC directly to assetRecipient.
-            uint256 assetsOut = IERC4626(vault).redeem(shares, assetRecipient, shareHolder);
-            assetsPerLeg[i] = assetsOut;
+            // Per-leg work is in a helper to keep this frame off the stack limit.
+            assetsPerLeg[i] =
+                _redeemLeg(vaultList[i], shareHolder, assetRecipient, shares, minAssetsPerLeg[i]);
         }
+    }
+
+    /// @dev Redeem a single leg: validate registry status and the confused-deputy
+    ///      guard, call `vault.redeem`, then enforce the per-leg slippage floor
+    ///      (finding L-8). Extracted from `redeemFor` to bound stack depth.
+    /// @param vault       Vault whose shares are redeemed.
+    /// @param shareHolder Owner of the shares (the `owner` passed to `vault.redeem`).
+    /// @param assetRecipient Address that receives the leg's USDC.
+    /// @param shares      Shares to redeem on this leg (caller guarantees > 0).
+    /// @param minAssets   Per-leg minimum USDC out; reverts `SlippageExceeded` below it.
+    /// @return assetsOut  Realized USDC for this leg.
+    function _redeemLeg(
+        address vault,
+        address shareHolder,
+        address assetRecipient,
+        uint256 shares,
+        uint256 minAssets
+    ) private returns (uint256 assetsOut) {
+        // Registry status: must be Active to redeem.
+        (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
+        if (vaultStatus != VaultRegistry.VaultStatus.Active) {
+            revert VaultNotActive(vault, vaultStatus);
+        }
+
+        // Confused-deputy guard (issue #751): caller must be shareHolder or
+        // have ERC-20 allowance on the vault share token. Without this check
+        // any address can front-run a shareHolder's approval tx and call
+        // redeemFor, burning shares at a caller-specified share count.
+        if (msg.sender != shareHolder && IERC20(vault).allowance(shareHolder, msg.sender) < shares)
+        {
+            revert UnauthorizedRedeemer(shareHolder, msg.sender);
+        }
+
+        // Redeem: shareHolder must have approved msg.sender (the gateway) to
+        // spend their vault shares; the gateway is the `owner` caller here.
+        // vault.redeem sends USDC directly to assetRecipient.
+        assetsOut = IERC4626(vault).redeem(shares, assetRecipient, shareHolder);
+
+        // Per-leg slippage floor (finding L-8): reject settlement below the
+        // caller-supplied minimum so a redeem cannot silently realize less
+        // than expected. Parallel to the deposit path's `minSharesPerLeg`.
+        if (assetsOut < minAssets) revert SlippageExceeded();
     }
 
     /// @dev Internal allocation logic shared by `deposit` and `depositFor`.

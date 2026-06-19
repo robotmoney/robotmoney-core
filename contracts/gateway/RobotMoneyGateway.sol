@@ -1134,7 +1134,20 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 12. Call router.redeemFor — router calls vault.redeem per leg with
         //     the gateway as `owner`. USDC goes directly to assetRecipient.
-        assetsPerLeg = routerContract.redeemFor(address(this), args.assetRecipient, sharesPerLeg);
+        //     The agent's `deadline` is already enforced upstream in
+        //     `withdrawFromRouter` (step 3) before any state effects, so the
+        //     router's own deadline guard is disabled here (max). Per-leg
+        //     slippage floors are zeroed: the gateway's withdrawal ABI does not
+        //     carry a per-leg minimum, so it opts out of the router floor (the
+        //     router still enforces any floor a direct, non-gateway caller
+        //     supplies). Both new params exist for finding L-8.
+        assetsPerLeg = routerContract.redeemFor(
+            address(this),
+            args.assetRecipient,
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            type(uint256).max
+        );
 
         // 13. Clear residual vault share approvals (defense-in-depth).
         for (uint256 i = 0; i < sharesPerLeg.length; i++) {

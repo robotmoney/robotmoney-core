@@ -19,11 +19,24 @@ Accepted. Authored 2026-05-15 against `docs/architecture.md` §2.3, §4.2, §10
 and `docs/prd.md` §"Allocation Governance"; `docs/development/open-questions.md` §3.9 on branch
 `chore/305-dev-scout-map-router-weight-governance-contract-`.
 
+> **Reconciliation note.** §3 (Decisions) has been reconciled with the deployed
+> `contracts/RouterGovernance.sol` and `docs/technical/smart-contracts.md` §9:
+> the shipped MVP uses **admin-configurable** `quorumThreshold` /
+> `votingPeriod` / `executionDelay` storage with `setQuorumThreshold` /
+> `setVotingPeriod` / `setExecutionDelay` setters, bounded only by the constant
+> floors `MIN_QUORUM_THRESHOLD = 1`, `MIN_VOTING_PERIOD = 1 hour`, and
+> `MIN_EXECUTION_DELAY = 1 hour`, with `DeployRouterGovernance.s.sol` defaulting
+> to 1 h / 1 h / quorum 1. The original 5 %-of-`RM.totalSupply()` quorum, 7-day
+> cadence, 5-day voting period, and 48 h execution delay were **ADR-recommended
+> targets that were never hard-coded**; they remain deferred token-holder-
+> governance goals. §4 onward describes that deferred RM-token-snapshot design,
+> not shipped contract behaviour.
+
 ---
 
 ## 2. Context
 
-`docs/architecture.md` §2.3 fixes the governance boundary: `$ROBOTMONEY`
+`docs/architecture.md` §2.3 fixes the governance boundary: `$RM`
 governance controls Portfolio Router target weights across active vaults and
 nothing else. It cannot govern vault onboarding, vault retirement, per-vault
 asset selection, per-vault strategy internals, adapter selection, adapter caps,
@@ -66,48 +79,62 @@ issue begins:
 
 ### 3.1 Quorum threshold
 
-**Decision: 5 % of `RM.totalSupply()` at proposal snapshot block.**
+**Shipped (MVP): admin-configurable absolute voting-power threshold,
+`quorumThreshold`, bounded below by `MIN_QUORUM_THRESHOLD = 1`.**
 
-A proposal reaches quorum when the total voting power (RM balance sum across
-all "yes" + "no" votes) meets or exceeds 5 % of `RM.totalSupply()` measured at
-the proposal's snapshot block.
+As deployed in `contracts/RouterGovernance.sol`, quorum is an absolute amount of
+FOR voting power — the `quorumThreshold` storage variable — **not** a 5 %-of-
+`RM.totalSupply()` denominator. A proposal reaches quorum when its `votesFor`
+meets or exceeds the threshold captured at `propose()` time (`snapshotQuorum`),
+so a later `setQuorumThreshold` call does not retroactively defeat or pass an
+in-flight proposal.
 
-The quorum is a participation floor, not a supermajority: a proposal that
-reaches 5 % participation passes if "yes" votes exceed "no" votes. A proposal
-that reaches 5 % with more "no" than "yes" votes is Rejected.
+`ADMIN_ROLE` adjusts the live value via `setQuorumThreshold(uint256)`, which
+reverts (`QuorumBelowMinimum`) for any value below the constant floor
+`MIN_QUORUM_THRESHOLD = 1`; at least one vote must always be required so a
+proposal cannot pass with zero votes cast. `contracts/script/DeployRouterGovernance.s.sol`
+deploys with `quorumThreshold = 1` (`DEFAULT_QUORUM_THRESHOLD`). This matches the
+admin-assigned voting-power model of the MVP (voting power is assigned by
+`ADMIN_ROLE` via `setVotingPower`, not derived from RM balances).
 
-**Rationale.** `docs/development/open-questions.md` §3.9 references the "5 % quorum" as the
-whitepaper's parameter. No other threshold is specified in any canonical doc.
-The 5 % figure is chosen as the closest resolved number in the product record.
-The cliff problem (`docs/development/open-questions.md` §3.9) is noted in §5 below.
+**Deferred target (not shipped).** The whitepaper's "5 % quorum" parameter
+(`docs/development/open-questions.md` §3.9) is a future *token-holder*-governance
+target — a participation floor expressed as 5 % of `RM.totalSupply()` at a
+snapshot block — that is **not** hard-coded in the current contract and only
+becomes relevant once RM-balance snapshot voting (§3.3, §6.1) lands. The cliff
+problem (`docs/development/open-questions.md` §3.9) is noted in §5 below.
 
-**Fallback.** If no proposal reaches quorum and the current weights become stale
-(no proposal executed in more than `cadenceWindow * 3` blocks), the protocol
-admin retains `ADMIN_ROLE` as an emergency override for the first deployment
-cycle. A future phase must specify an on-chain fallback-weights mechanism before
-the admin role is fully renounced.
+**Fallback.** If no proposal reaches quorum and the current weights become stale,
+the protocol admin retains `ADMIN_ROLE` as an emergency override for the first
+deployment cycle. A future phase must specify an on-chain fallback-weights
+mechanism before the admin role is fully renounced.
 
 ### 3.2 Voting cadence
 
-**Decision: minimum 7-day (604 800-second) gap between proposal creation
-timestamps.**
+**Shipped (MVP): single-active-proposal cadence; no fixed inter-proposal
+window.**
 
-Only one proposal may be in the Open state at a time. A new proposal cannot be
-submitted until the current proposal is resolved (Executed, Rejected, or
-Expired) and at least 7 days have elapsed since the previous proposal's
-creation timestamp. The 7-day window is stored as a `cadenceWindow` immutable
-in `RouterGovernance.sol`.
+Only one proposal may be Active or Queued at a time. A new proposal cannot be
+submitted until the current proposal is resolved (Executed, Defeated, or
+Cancelled). The deployed `contracts/RouterGovernance.sol` has **no**
+`cadenceWindow` variable and does **not** enforce a 7-day gap between proposal
+creation timestamps; the only cadence constraint is the single-active-proposal
+rule.
 
-**Rationale.** `docs/development/open-questions.md` §1.4 references "weekly allocation"; the
-whitepaper (referenced in `docs/development/open-questions.md` §1.4) describes "monthly votes." A 7-day minimum
-cadence allows weekly weight updates if the community participates actively,
-while preventing spam proposals. The cadence is enforced by the contract, not by
-a keeper, so no off-chain oracle is required.
+**Deferred target (not shipped).** The "weekly allocation" /
+"monthly votes" references (`docs/development/open-questions.md` §1.4) describe a
+minimum inter-proposal cadence — e.g. a 7-day window — that is a future
+token-holder-governance target, not a current contract constant.
 
-**Voting period.** Each proposal is Open for voting for exactly 5 days (432 000
-seconds) after creation. The proposal transitions to Passed (if quorum + yes
-majority) or Rejected at the end of the voting period. Voting period is a
-`votingPeriod` immutable.
+**Voting period.** Each proposal's voting window is the `votingPeriod` storage
+variable, **not** an immutable. `ADMIN_ROLE` adjusts it via
+`setVotingPeriod(uint64 seconds)`, which reverts (`VotingPeriodBelowMinimum`)
+for any value below the constant floor `MIN_VOTING_PERIOD = 1 hour`.
+`contracts/script/DeployRouterGovernance.s.sol` deploys with a 1-hour voting
+period (`DEFAULT_VOTING_PERIOD = 3600` seconds). A 5-day (432 000-second) voting
+period is a deferred token-holder-governance target, not the shipped default.
+When the period elapses the proposal transitions to `Queued` (quorum reached) or
+`Defeated`.
 
 ### 3.3 Voting power model
 
@@ -126,8 +153,11 @@ gate, no delegation mechanism is specified for this phase.
   > `RouterGovernance.sol` must snapshot balances at proposal creation or use
   > an on-chain snapshot mechanism. See §5.1 for the snapshot integration risk.
 
-- `RM.totalSupply()` — ERC-20 standard; must return the total supply at the
-  snapshot block to calculate the 5 % quorum denominator.
+- `RM.totalSupply()` — ERC-20 standard; would return the total supply at the
+  snapshot block to calculate a percentage-of-supply quorum denominator. This is
+  only relevant to the deferred token-holder-governance target (§3.1); the
+  shipped MVP uses an absolute `quorumThreshold` and admin-assigned voting power,
+  so it does not read `RM.totalSupply()`.
 
 **No tiers.** `docs/development/open-questions.md` §1.5 records the open status of
 Observer/Participant/Analyst/Strategist tiers. No tier system or CFO Feed
@@ -138,24 +168,26 @@ scope in `Plan tracking issue #109` §"Phase: Router-weight governance").
 
 ### 3.4 Execution delay
 
-**Decision: 48-hour (172 800-second) delay between a proposal reaching Passed
-and the governance contract calling `PortfolioRouter.setWeights`.**
+**Shipped (MVP): admin-configurable `executionDelay` storage, bounded below by
+`MIN_EXECUTION_DELAY = 1 hour`.**
 
-A proposal in Passed state may be executed by any caller after the execution
-delay expires. A `execute(proposalId)` function on `RouterGovernance.sol`
-confirms the proposal is in Passed state and the delay has elapsed, then calls
-`PortfolioRouter.setWeights(vaults, bps)`.
+A `Queued` proposal may be executed by any caller after its execution delay
+elapses. `execute(proposalId)` confirms the proposal is `Queued` and the delay
+has passed, then calls `PortfolioRouter.setWeights(vaults, bps)`.
 
-**Proposal Expiry.** A Passed proposal that is not executed within 14 days of
-reaching Passed state transitions to Expired. This prevents stale weight vectors
-from being applied long after the vote concludes.
+The delay is the `executionDelay` storage variable, **not** an immutable.
+`ADMIN_ROLE` adjusts it via `setExecutionDelay(uint64 seconds)`, which reverts
+(`ExecutionDelayBelowMinimum`) for any value below the constant floor
+`MIN_EXECUTION_DELAY = 1 hour`. `contracts/script/DeployRouterGovernance.s.sol`
+deploys with a 1-hour execution delay (`DEFAULT_EXECUTION_DELAY = 3600`
+seconds). A 48-hour (172 800-second) execution delay is a deferred
+token-holder-governance target, not the shipped default.
 
-**Rationale.** A 48-hour execution delay is the shortest window that allows
-token holders, auditors, or the protocol admin to react to a governance attack
-(malicious weight vector) before it takes effect. No canonical doc specifies a
-shorter window; the 48-hour figure matches typical minimal governance delays in
-comparable on-chain governance systems. It is stored as `executionDelay`
-immutable in `RouterGovernance.sol`.
+**Rationale.** Enforcing a non-zero minimum delay (1 hour) prevents a proposal
+from being executed in the same block its voting deadline passes, giving token
+holders, auditors, or the protocol admin time to react to a malicious weight
+vector before it takes effect. The exact production value is an admin policy
+choice within `[MIN_EXECUTION_DELAY, ∞)`, not a contract constant.
 
 ### 3.5 Proposal lifecycle states
 

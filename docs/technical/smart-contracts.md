@@ -141,13 +141,13 @@ RobotMoneyVault
 
 | Variable | Initial | Setter | Notes |
 |---|---|---|---|
-| `tvlCap` | constructor arg | `setTvlCap` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0 |
+| `tvlCap` | constructor arg | `setTvlCap` (ADMIN), `restoreVault` (ADMIN) | Hard cap on `totalAssets`; `shutdownVault` sets to 0, `restoreVault(newTvlCap)` sets a fresh cap |
 | `perDepositCap` | constructor arg | `setPerDepositCap` (ADMIN) | Per-call `deposit` ceiling |
 | `exitFeeBps` | constructor arg (≤ 100) | `setExitFeeBps` (ADMIN) | Charged on redeem/withdraw; max 1% |
 | `feeRecipient` | constructor arg | `setFeeRecipient` (ADMIN) | Receives exit fees |
 | `adapterAllowed` | false for every address | `setAdapterAllowed` (ADMIN) | Exact adapter instances the Safe-governed admin process has approved for onboarding and future allocation |
 | `adapterCodeHashAllowed` | false for every hash | `setAdapterCodeHashAllowed` (ADMIN) | Runtime bytecode hashes approved for adapter implementation identity checks |
-| `shutdown` | `false` | `shutdownVault` (EMERGENCY) | **Irreversible** — once true, `deposit` always reverts |
+| `shutdown` | `false` | `shutdownVault` (EMERGENCY), `restoreVault` (ADMIN) | While true, `deposit` reverts; recoverable — `restoreVault(newTvlCap)` (ADMIN) clears it and re-opens deposits |
 | `maxRebalanceBpsPerCall` | 2500 (25%) | `setMaxRebalanceBpsPerCall` (ADMIN) | Throttle per `rebalance()` call |
 | `minRebalanceInterval` | 12 hours | `setMinRebalanceInterval` (ADMIN) | Minimum time between rebalances |
 
@@ -198,7 +198,17 @@ Dust from integer division is swept from `lastActiveIdx`. If total adapter balan
 | `emergencyWithdraw()` | EMERGENCY | Pauses vault, then tries `withdraw(balance)` on every active adapter with a `try/catch` — failures are logged but do not revert |
 | `emergencyWithdrawAdapter(i)` | EMERGENCY | Same for a single adapter index |
 | `forceRemoveAdapter(i)` | EMERGENCY | Marks adapter inactive regardless of balance (accepts loss) — emits `AdapterForceRemoved(i, addr, lossAmount)` |
-| `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Irreversible. Deposits revert with `VaultShutdown()`. Withdrawals continue. |
+| `shutdownVault()` | EMERGENCY | Sets `shutdown = true`, `tvlCap = 0`. Deposits revert with `VaultShutdown()`; withdrawals continue. Recoverable by ADMIN via `restoreVault` (see below). |
+
+`shutdownVault()` is not permanent. It is reversed by `restoreVault(uint256 newTvlCap)`,
+an **ADMIN**-only recovery path. The asymmetry mirrors `pause`/`unpause`: a
+compromised emergency hot key can DoS deposits, but only the higher-trust admin
+role can re-open the vault. Because `shutdownVault` zeroes `tvlCap`, the admin
+must supply a fresh cap rather than silently reusing a stale value:
+
+| Function | Role | Effect |
+|---|---|---|
+| `restoreVault(uint256 newTvlCap)` | ADMIN | Reverts with `NotShutdown()` unless `shutdown == true`. Requires `newTvlCap > 0` (else `InvalidCap()`) and `perDepositCap <= newTvlCap` (else `InvalidParam()`). Clears `shutdown`, sets `tvlCap = newTvlCap`, emits `VaultRestored(newTvlCap)` and `TvlCapUpdated(old, newTvlCap)`. Deposits resume under the new cap. |
 
 ### 3.9 Rebalance
 
@@ -321,7 +331,8 @@ These exist in the source but were never called by the deprecated TypeScript CLI
 | `emergencyWithdraw()` | EMERGENCY | Pull all adapters |
 | `emergencyWithdrawAdapter(uint256)` | EMERGENCY | Pull one adapter |
 | `forceRemoveAdapter(uint256)` | EMERGENCY | Write off a broken adapter |
-| `shutdownVault()` | EMERGENCY | Irreversible deposit kill |
+| `shutdownVault()` | EMERGENCY | Halt deposits, zero `tvlCap` (recoverable by ADMIN via `restoreVault`) |
+| `restoreVault(uint256)` | ADMIN | Reverse a shutdown and re-open deposits under a fresh TVL cap |
 | `rescueTokens(address, address)` | ADMIN | Sweep non-USDC tokens |
 | `getAdapterDrift()` | view | Returns current/target/drift per adapter |
 | `isRebalanceAvailable()` | view | Check rebalance cooldown |
@@ -485,10 +496,10 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 
 ### 9.2.2 Proposal lifecycle
 
-1. **Propose** (ADMIN_ROLE): `createProposal(vaults[], bps[])` creates a new proposal. Voting starts immediately. The proposal's snapshot block captures voting power; votes cast mid-proposal use checkpointed power at that block.
+1. **Propose** (ADMIN_ROLE): `propose(vaults[], bps[])` creates a new proposal and returns its `proposalId`. Voting starts immediately. The proposal's snapshot block captures voting power; votes cast mid-proposal use checkpointed power at that block.
 2. **Vote** (assigned voter): Voters with non-zero voting power call `vote(proposalId)` during the voting window. One vote per voter per proposal (no vote changing).
 3. **Defeated** or **Queued**: After the voting period (admin-set duration) expires, the proposal is either `Defeated` (did not reach quorum) or `Queued` (quorum reached, awaiting execution delay).
-4. **Execute** (anyone): After the execution delay elapses, anyone calls `executeProposal(proposalId)`, which calls `router.setWeights(...)` with the proposal's vaults and bps.
+4. **Execute** (anyone): After the execution delay elapses, anyone calls `execute(proposalId)`, which calls `router.setWeights(...)` with the proposal's vaults and bps.
 5. **Executed** or **Cancelled**: The proposal is marked executed, or ADMIN_ROLE can cancel before execution.
 
 ### 9.2.3 Voting power and checkpoints
@@ -496,26 +507,26 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 - ADMIN_ROLE assigns voting power to addresses via `setVotingPower(address, uint256)`.
 - Voting power is stored as a history of checkpoints `(block, power)`, enabling `getPastVotes(address, blockNumber)` to read power as of the proposal's snapshot block.
 - Total voting power is the sum of all assigned powers (`totalVotingPower`).
-- Quorum is a fixed threshold: `createProposal` snapshots the current `quorumThreshold` at proposal time, preventing retroactive defeats or passages if the threshold changes.
+- Quorum is a fixed threshold: `propose` snapshots the current `quorumThreshold` at proposal time, preventing retroactive defeats or passages if the threshold changes.
 
 ### 9.2.4 Key functions
 
 | Function | Role | Effect |
 |---|---|---|
-| `createProposal(address[] vaults, uint256[] bps)` | ADMIN | Create a new proposal (only one active at a time). Snapshot quorum and voting power block. Start voting period. |
+| `propose(address[] vaults, uint256[] bps)` | ADMIN | Create a new proposal (only one active/queued at a time) and return its `proposalId`. Validates the weight sum and per-vault router eligibility. Snapshot quorum and voting power block. Start voting period. |
 | `vote(uint256 proposalId)` | voting power holder | Cast one vote FOR the proposal. Uses checkpointed power at proposal's snapshot block. |
-| `executeProposal(uint256 proposalId)` | anyone | If quorum reached and voting period + execution delay have elapsed, execute via `router.setWeights(...)`. |
-| `cancelProposal(uint256 proposalId)` | ADMIN | Cancel a proposal before execution. Emit `ProposalCancelled`. |
+| `execute(uint256 proposalId)` | anyone | If quorum reached and voting period + execution delay have elapsed, execute via `router.setWeights(...)`. `nonReentrant`. |
+| `cancel(uint256 proposalId)` | ADMIN | Cancel any non-executed proposal before execution. Emit `ProposalCancelled`. |
 | `setVotingPower(address voter, uint256 power)` | ADMIN | Assign voting power to a voter. Pushes a checkpoint if power changes. |
 | `setQuorumThreshold(uint256)` | ADMIN | Set minimum voting power needed for quorum. New proposals use the updated threshold. |
 | `setVotingPeriod(uint64 seconds)` | ADMIN | Set voting window duration. Minimum `MIN_VOTING_PERIOD` (1 hour). |
 | `setExecutionDelay(uint64 seconds)` | ADMIN | Set delay from voting deadline to earliest execution. Minimum `MIN_EXECUTION_DELAY` (1 hour). |
-| `getProposal(uint256 proposalId)` | view | Return full proposal state, vote tally, deadlines, and status. |
-| `getProposalState(uint256 proposalId)` | view | Return proposal enum state (Active, Defeated, Queued, Executed, Cancelled). |
+| `activeProposal()` | view | Return the single active/queued proposal's full state: id, proposer, vaults, bps, deadlines, vote tally, snapshot quorum, and executed/cancelled flags. Reverts if no proposal exists. |
+| `proposalState(uint256 proposalId)` | view | Return the proposal's `ProposalState` enum (Active, Defeated, Queued, Executed, Cancelled). |
 
 ### 9.2.5 Key invariants
 
-- **One active proposal at a time**: `createProposal` reverts if a proposal is already active (not yet executed or cancelled).
+- **One active proposal at a time**: `propose` reverts if a proposal is already active or queued (not yet executed or cancelled).
 - **Voting power snapshot immutability**: A proposal's quorum threshold and vote snapshot block are set at proposal time and never change, even if governance parameters are updated later.
 - **No vote changing**: A voter can vote once per proposal; `vote` reverts if the voter has already voted.
 - **Execution delay enforcement**: A proposal cannot execute until the voting period ends and the execution delay elapses.
