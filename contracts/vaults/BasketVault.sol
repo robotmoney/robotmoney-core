@@ -134,6 +134,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 public perDepositCap;
     uint256 public exitFeeBps;
     address public feeRecipient;
+    /// @notice Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+    ///         Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+    ///         the TimelockController (ADMIN_ROLE, INV-3).
+    address public quarantineAddress;
     uint256 public maxSlippageBps;
     bool public shutdown;
     bool public depositsPaused;
@@ -165,6 +169,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     event FeeRecipientUpdated(address oldRecipient, address newRecipient);
+    /// @notice Emitted when the quarantine address for foreign-token sweeps is updated.
+    event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
     event DepositsPausedSet(bool paused);
     event Shutdown();
@@ -297,6 +303,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         exitFeeBps = exitFeeBps_;
         maxSlippageBps = initialSlippageBps_;
         feeRecipient = feeRecipient_;
+        quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
@@ -978,7 +985,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             if (token == assets[i].token) protected_ = true;
         }
         if (protected_) revert ForeignTokenQuarantine.TokenIsProtected(token);
-        ForeignTokenQuarantine.sweep(token, msg.sender);
+        ForeignTokenQuarantine.sweep(token, quarantineAddress, msg.sender);
     }
 
     // ─── Param setters ────────────────────────────────────────────────
@@ -1003,6 +1010,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (newRecipient == address(0)) revert ZeroAddress();
         emit FeeRecipientUpdated(feeRecipient, newRecipient);
         feeRecipient = newRecipient;
+    }
+
+    /// @notice Update the quarantine address for foreign-token sweeps. Restricted
+    ///         to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+    /// @param newAddr New quarantine address. Must not be address(0).
+    function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE) {
+        if (newAddr == address(0)) revert ZeroAddress();
+        address old = quarantineAddress;
+        quarantineAddress = newAddr;
+        emit QuarantineAddressUpdated(old, newAddr);
     }
 
     /// @notice Update the worst-case slippage bound used for swap floors and previews.

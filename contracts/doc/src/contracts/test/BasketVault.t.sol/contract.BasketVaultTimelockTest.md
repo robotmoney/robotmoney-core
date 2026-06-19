@@ -1,0 +1,149 @@
+# BasketVaultTimelockTest
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/test/BasketVault.t.sol)
+
+**Inherits:**
+Test
+
+
+## Constants
+### ONE_USDC
+
+```solidity
+uint256 internal constant ONE_USDC = 1e6
+```
+
+
+### MIN_DELAY
+
+```solidity
+uint256 internal constant MIN_DELAY = 2 days
+```
+
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
+```
+
+
+## State Variables
+### usdc
+
+```solidity
+TestERC20 internal usdc
+```
+
+
+### swapRouter
+
+```solidity
+MockSwapRouter internal swapRouter
+```
+
+
+### vault
+
+```solidity
+BasketVaultHarness internal vault
+```
+
+
+### timelock
+
+```solidity
+TimelockController internal timelock
+```
+
+
+### admin
+
+```solidity
+address internal admin = makeAddr("bvTimelockAdmin")
+```
+
+
+### emergencyResponder
+
+```solidity
+address internal emergencyResponder = makeAddr("bvTimelockEmergency")
+```
+
+
+### safe
+
+```solidity
+address internal safe
+```
+
+
+### hotKey
+
+```solidity
+address internal hotKey = makeAddr("hotKey")
+```
+
+
+## Functions
+### setUp
+
+
+```solidity
+function setUp() public;
+```
+
+### test_AC3_basket_setQuarantineAddress_directCallReverts
+
+AC3: direct setQuarantineAddress from any hot key reverts.
+
+
+```solidity
+function test_AC3_basket_setQuarantineAddress_directCallReverts() public;
+```
+
+### test_AC3_basket_setQuarantineAddress_succeedsViaTimelock
+
+AC3: setQuarantineAddress succeeds only via TimelockController.
+After the change, sweeps go to the new address.
+
+
+```solidity
+function test_AC3_basket_setQuarantineAddress_succeedsViaTimelock() public;
+```
+
+### test_AC7_basket_setFeeRecipient_directCallReverts
+
+AC7: direct setFeeRecipient from a hot key reverts.
+
+
+```solidity
+function test_AC7_basket_setFeeRecipient_directCallReverts() public;
+```
+
+### test_AC7_basket_setExitFeeBps_directCallReverts
+
+AC7: direct setExitFeeBps from a hot key reverts.
+
+
+```solidity
+function test_AC7_basket_setExitFeeBps_directCallReverts() public;
+```
+
+### test_AC7_basket_setFeeRecipient_succeedsViaTimelock
+
+AC7: setFeeRecipient succeeds ONLY via TimelockController.
+
+
+```solidity
+function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public;
+```
+
+### test_AC7_basket_setExitFeeBps_succeedsViaTimelock
+
+AC7: setExitFeeBps succeeds ONLY via TimelockController.
+
+
+```solidity
+function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public;
+```
+

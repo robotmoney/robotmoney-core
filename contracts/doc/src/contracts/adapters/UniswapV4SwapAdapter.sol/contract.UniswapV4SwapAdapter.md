@@ -1,5 +1,5 @@
 # UniswapV4SwapAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/adapters/UniswapV4SwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/adapters/UniswapV4SwapAdapter.sol)
 
 **Inherits:**
 [IBasketSwapAdapter](/contracts/interfaces/IBasketSwapAdapter.sol/interface.IBasketSwapAdapter.md)

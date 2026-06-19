@@ -65,6 +65,11 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     ///         `deposit()` call. 0 means no cap enforced.
     uint256 public routerCap;
 
+    /// @notice Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+    ///         Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+    ///         the TimelockController (ADMIN_ROLE, INV-3).
+    address public quarantineAddress;
+
     /// @notice Per-vault USDC ceiling for a single `deposit()` leg.
     ///         0 means no cap enforced for that vault.
     mapping(address => uint256) public vaultCap;
@@ -136,6 +141,11 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param oldCap Previous cap (0 = uncapped).
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
+
+    /// @notice Emitted when the quarantine address for foreign-token sweeps is updated.
+    /// @param oldAddr Previous quarantine address.
+    /// @param newAddr New quarantine address.
+    event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -227,6 +237,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         }
         usdc = IERC20(_usdc);
         registry = VaultRegistry(_registry);
+        quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
@@ -342,23 +353,32 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         vaultCap[vault] = cap;
     }
 
+    /// @notice Update the quarantine address for foreign-token sweeps. Restricted
+    ///         to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+    /// @param newAddr New quarantine address. Must not be address(0).
+    function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE) {
+        if (newAddr == address(0)) revert ZeroAddress();
+        address old = quarantineAddress;
+        quarantineAddress = newAddr;
+        emit QuarantineAddressUpdated(old, newAddr);
+    }
+
     /// @notice Permissionlessly sweep a NON-protected foreign token held by the
-    ///         router to the fixed quarantine address (custody invariants
+    ///         router to the governed quarantine address (custody invariants
     ///         INV-1/INV-2).
     ///
     ///         The router moves zero USDC out via any admin path: under the
     ///         all-or-revert deposit/redeem semantics it never holds USDC across
     ///         transactions, and the old arbitrary-recipient `rescueUsdc` —
     ///         which forwarded USDC to a caller-supplied address — is DELETED
-    ///         (INV-1: no admin/role function may route a protocol or depositor
-    ///         asset to a caller-supplied recipient). The only asset movement
-    ///         that remains is this permissionless sweep of foreign (non-USDC)
-    ///         tokens to a single hardcoded quarantine address; the destination
-    ///         can never be chosen by the caller. Reverts when `token` is USDC.
+    ///         (INV-1). The only asset movement that remains is this permissionless
+    ///         sweep of foreign (non-USDC) tokens to the timelock-gated
+    ///         `quarantineAddress`; the destination is never caller-supplied.
+    ///         Reverts when `token` is USDC.
     /// @param token Foreign ERC-20 to quarantine. Must not be the router's USDC.
     function sweepForeignToken(address token) external nonReentrant {
         if (token == address(usdc)) revert ForeignTokenQuarantine.TokenIsProtected(token);
-        ForeignTokenQuarantine.sweep(token, msg.sender);
+        ForeignTokenQuarantine.sweep(token, quarantineAddress, msg.sender);
     }
 
     // ─── Preview ─────────────────────────────────────────────────────────────

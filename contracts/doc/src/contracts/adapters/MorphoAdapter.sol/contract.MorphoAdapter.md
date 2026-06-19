@@ -1,5 +1,5 @@
 # MorphoAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/adapters/MorphoAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/adapters/MorphoAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -119,6 +119,23 @@ function sweepForeignToken(address token) external;
 |----|----|-----------|
 |`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+Morpho Gauntlet USDC Prime yield accrues automatically into the
+ERC-4626 share price — there are no discrete claimable reward tokens
+on this venue. This function is a no-op and always succeeds.
+
+
+```solidity
+function harvestRewards() external;
+```
 
 ## Errors
 ### OnlyVault

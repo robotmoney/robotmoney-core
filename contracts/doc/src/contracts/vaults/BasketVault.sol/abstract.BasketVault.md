@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -166,6 +166,17 @@ uint256 public exitFeeBps
 
 ```solidity
 address public feeRecipient
+```
+
+
+### quarantineAddress
+Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+the TimelockController (ADMIN_ROLE, INV-3).
+
+
+```solidity
+address public quarantineAddress
 ```
 
 
@@ -740,6 +751,22 @@ function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 ```
 
+### setQuarantineAddress
+
+Update the quarantine address for foreign-token sweeps. Restricted
+to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+
+
+```solidity
+function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newAddr`|`address`|New quarantine address. Must not be address(0).|
+
+
 ### setMaxSlippageBps
 
 Update the worst-case slippage bound used for swap floors and previews.
@@ -999,6 +1026,14 @@ event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
 
 ```solidity
 event FeeRecipientUpdated(address oldRecipient, address newRecipient);
+```
+
+### QuarantineAddressUpdated
+Emitted when the quarantine address for foreign-token sweeps is updated.
+
+
+```solidity
+event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
 ```
 
 ### MaxSlippageUpdated

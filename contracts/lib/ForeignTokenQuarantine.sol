@@ -21,24 +21,31 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///         tokens that land on a contract via a raw ERC-20 transfer cannot be
 ///         rejected on receipt nor returned-to-sender (the sender is not knowable
 ///         on-chain), and are inert (uncounted, un-redeemable). For storage
-///         hygiene they get a *deterministic, permissionless* sweep to a single
-///         fixed quarantine ("trash") address. Anyone may trigger the sweep; no
-///         one can choose the destination. An offline multisig governance process
-///         can later empty the trash address (the reverse-mistakes safety valve).
+///         hygiene they get a *deterministic, permissionless* sweep to a governed
+///         quarantine ("trash") address. Anyone may trigger the sweep; no caller
+///         can choose the destination (INV-1). An offline multisig governance
+///         process can later empty the trash address (the reverse-mistakes safety
+///         valve).
 ///
-/// @dev The quarantine destination is a compile-time constant so that the sweep
-///      destination can never be steered by a caller or by any on-chain role —
-///      this is the structural property that keeps the sweep from becoming a
-///      re-skin of the deleted arbitrary-recipient rescue functions.
+/// @dev Two sweep overloads are provided:
+///
+///      `sweep(token, triggeredBy)` — uses the hardcoded `QUARANTINE` constant.
+///      Used by adapters that have no on-chain admin (immutable contracts).
+///
+///      `sweep(token, destination, triggeredBy)` — uses a caller-supplied
+///      `destination` that must be the per-contract governance-controlled
+///      quarantine address (see `quarantineAddress` on RobotMoneyVault,
+///      BasketVault, and PortfolioRouter). The destination is never the raw
+///      `msg.sender`; it is set only through the TimelockController (INV-3)
+///      and therefore cannot be steered by a calling-time argument.
 library ForeignTokenQuarantine {
     using SafeERC20 for IERC20;
 
-    /// @notice The fixed, protocol-wide quarantine ("trash") address. All
-    ///         permissionless foreign-token sweeps deposit here. This address is
-    ///         a hardcoded constant: no role and no caller can change it, so the
-    ///         sweep can never route value to an arbitrary recipient (INV-1).
-    ///         An offline multisig governance process empties it if a genuine
-    ///         mistake needs reversing (INV-2 safety valve).
+    /// @notice The protocol-wide default quarantine ("trash") address used by
+    ///         adapters that have no on-chain governance (immutable contracts).
+    ///         Main protocol contracts (RobotMoneyVault, BasketVault,
+    ///         PortfolioRouter) store a timelock-settable `quarantineAddress`
+    ///         state variable and call the three-argument `sweep` overload.
     address internal constant QUARANTINE = 0x0000000000000000000000000000000000deaD11;
 
     /// @notice Emitted when a foreign token is swept to the quarantine address.
@@ -51,13 +58,14 @@ library ForeignTokenQuarantine {
     /// @param token The protected token that may not be swept.
     error TokenIsProtected(address token);
 
+    /// @notice Quarantine address must not be the zero address.
+    error ZeroQuarantineAddress();
+
     /// @notice Move the caller contract's full balance of `token` to the fixed
-    ///         quarantine address. The caller MUST have already verified that
-    ///         `token` is non-protected (not the vault asset, a basket asset, the
-    ///         share token, or an adapter strategy token).
+    ///         `QUARANTINE` constant address. Used by adapters that are
+    ///         immutable and have no on-chain access control.
     /// @param token Foreign ERC-20 to sweep. Must not be protected.
-    /// @param triggeredBy The unprivileged account that triggered the sweep
-    ///        (forwarded for event attribution).
+    /// @param triggeredBy The unprivileged account that triggered the sweep.
     /// @return amount The amount swept to quarantine.
     /// @dev `internal` (inlined), NOT an external delegatecall-linked library:
     ///      strategy adapters are forbidden from containing the `DELEGATECALL`
@@ -69,6 +77,26 @@ library ForeignTokenQuarantine {
         // A zero balance is a harmless no-op transfer; no dedicated revert keeps
         // the inlined body small in every balance-holding caller.
         IERC20(token).safeTransfer(QUARANTINE, amount);
+        emit ForeignTokenQuarantined(token, amount, triggeredBy);
+    }
+
+    /// @notice Move the caller contract's full balance of `token` to a
+    ///         governance-controlled `destination`. Use this overload when the
+    ///         quarantine address is stored as a timelock-settable state variable
+    ///         on the calling contract (RobotMoneyVault, BasketVault,
+    ///         PortfolioRouter). The `destination` MUST NOT be a caller-supplied
+    ///         argument; it must be read from the contract's governed storage.
+    /// @param token       Foreign ERC-20 to sweep. Must not be protected.
+    /// @param destination Governed quarantine address. Must not be address(0).
+    /// @param triggeredBy The unprivileged account that triggered the sweep.
+    /// @return amount The amount swept to `destination`.
+    function sweep(address token, address destination, address triggeredBy)
+        internal
+        returns (uint256 amount)
+    {
+        if (destination == address(0)) revert ZeroQuarantineAddress();
+        amount = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransfer(destination, amount);
         emit ForeignTokenQuarantined(token, amount, triggeredBy);
     }
 }

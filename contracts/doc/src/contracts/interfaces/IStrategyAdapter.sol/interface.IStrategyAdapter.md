@@ -1,5 +1,5 @@
 # IStrategyAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/interfaces/IStrategyAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/interfaces/IStrategyAdapter.sol)
 
 Minimal interface every Robot Money strategy adapter must implement.
 
@@ -69,4 +69,23 @@ function sweepForeignToken(address token) external;
 |----|----|-----------|
 |`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+Adapters that have no on-chain claimable rewards (e.g. Aave
+interest accrues automatically in the aToken balance) implement
+this as a no-op. Adapters with discrete reward tokens claim them
+here, swap to USDC, and credit the vault. This function MUST NOT
+revert when there are no rewards to claim.
+
+
+```solidity
+function harvestRewards() external;
+```
 

@@ -1,5 +1,5 @@
 # MorphoAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -146,5 +146,18 @@ function test_sweepForeignToken_zeroBalanceIsNoop() public;
 
 ```solidity
 function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+### test_harvestRewards_isPermissionlessNoopForMorpho
+
+AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
+Morpho Gauntlet USDC Prime yield accrues automatically in the
+ERC-4626 share price — there are no discrete claimable rewards.
+Anyone may call; it must not revert and the vault asset is
+never moved (no value leakage through harvest).
+
+
+```solidity
+function test_harvestRewards_isPermissionlessNoopForMorpho() public;
 ```
 

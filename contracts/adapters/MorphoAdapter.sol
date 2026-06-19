@@ -89,4 +89,10 @@ contract MorphoAdapter is IStrategyAdapter {
         }
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
+
+    /// @inheritdoc IStrategyAdapter
+    /// @dev Morpho Gauntlet USDC Prime yield accrues automatically into the
+    ///      ERC-4626 share price — there are no discrete claimable reward tokens
+    ///      on this venue. This function is a no-op and always succeeds.
+    function harvestRewards() external {}
 }

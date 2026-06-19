@@ -1,5 +1,5 @@
 # DemoRwaBatchDeployer
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Batch deployer #2a — the real `RwaVault` (PRD §11.4, deSPXA) alone.
 Split from `DemoAgentBatchDeployer` to keep each batch deployer's

@@ -28,6 +28,7 @@ import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRout
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @dev Minimal mock supporting both slot0 (legacy spot read) and observe()
 ///      (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -3124,5 +3125,169 @@ contract BasketVaultVenueSelectorTest is Test {
             0,
             "mixed: aeroToken received via Aerodrome"
         );
+    }
+}
+
+// ─── AC3 / AC7 timelock-gated quarantine + fee setter tests (issue #929) ────
+//
+// AC3: quarantine address is settable ONLY via TimelockController (INV-3).
+// AC7: fee setters are gated to ADMIN_ROLE, which in production is held ONLY
+//      by the TimelockController, so fee changes require governance.
+//
+// These tests spin up a minimal TimelockController, transfer ADMIN_ROLE to it,
+// and prove:
+//   - direct (non-timelock) calls revert with AccessControlUnauthorizedAccount
+//   - timelock-routed calls (schedule → warp → execute) succeed.
+
+/// @dev A minimal mock Safe with threshold >= 2 (satisfies DeployTimelock guards).
+contract MockSafe929 {
+    function getThreshold() external pure returns (uint256) {
+        return 2;
+    }
+}
+
+contract BasketVaultTimelockTest is Test {
+    uint256 internal constant ONE_USDC = 1e6;
+    uint256 internal constant MIN_DELAY = 2 days;
+
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    TestERC20 internal usdc;
+    MockSwapRouter internal swapRouter;
+    BasketVaultHarness internal vault;
+    TimelockController internal timelock;
+
+    address internal admin = makeAddr("bvTimelockAdmin");
+    address internal emergencyResponder = makeAddr("bvTimelockEmergency");
+    address internal safe;
+    address internal hotKey = makeAddr("hotKey"); // simulates a non-admin caller
+
+    function setUp() public {
+        usdc = new TestERC20();
+        swapRouter = new MockSwapRouter();
+        vault = new BasketVaultHarness(
+            IERC20(address(usdc)), ISwapRouter(address(swapRouter)), admin, emergencyResponder
+        );
+        safe = address(new MockSafe929());
+
+        // Deploy a TimelockController with `safe` as proposer + executor.
+        address[] memory proposers = new address[](1);
+        proposers[0] = safe;
+        address[] memory executors = new address[](1);
+        executors[0] = safe;
+        timelock = new TimelockController(MIN_DELAY, proposers, executors, address(0));
+
+        // Transfer ADMIN_ROLE from admin EOA to TimelockController.
+        vm.startPrank(admin);
+        vault.grantRole(ADMIN_ROLE, address(timelock));
+        vault.revokeRole(ADMIN_ROLE, admin);
+        vm.stopPrank();
+    }
+
+    // ─── AC3: quarantine address is timelock-gated ───────────────────────────
+
+    /// @notice AC3: direct setQuarantineAddress from any hot key reverts.
+    function test_AC3_basket_setQuarantineAddress_directCallReverts() public {
+        vm.prank(hotKey);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
+            )
+        );
+        vault.setQuarantineAddress(makeAddr("newQ"));
+    }
+
+    /// @notice AC3: setQuarantineAddress succeeds only via TimelockController.
+    ///         After the change, sweeps go to the new address.
+    function test_AC3_basket_setQuarantineAddress_succeedsViaTimelock() public {
+        address newQ = makeAddr("newQuarantineBasket");
+        bytes memory callData = abi.encodeCall(BasketVault.setQuarantineAddress, (newQ));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac3-basket-quarantine");
+
+        vm.prank(safe);
+        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+
+        // Pre-delay revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.quarantineAddress(), newQ, "quarantine address must update via timelock");
+
+        // Sweep should now land at newQ, not the old constant.
+        TestERC20 stray = new TestERC20();
+        stray.mint(address(vault), 7 * ONE_USDC);
+        vault.sweepForeignToken(address(stray));
+        assertEq(stray.balanceOf(newQ), 7 * ONE_USDC, "sweep lands at updated quarantine");
+        assertEq(
+            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "old quarantine stays empty"
+        );
+    }
+
+    // ─── AC7: fee setters are timelock-gated on BasketVault ─────────────────
+
+    /// @notice AC7: direct setFeeRecipient from a hot key reverts.
+    function test_AC7_basket_setFeeRecipient_directCallReverts() public {
+        vm.prank(hotKey);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
+            )
+        );
+        vault.setFeeRecipient(makeAddr("newFeeRecipient"));
+    }
+
+    /// @notice AC7: direct setExitFeeBps from a hot key reverts.
+    function test_AC7_basket_setExitFeeBps_directCallReverts() public {
+        vm.prank(hotKey);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
+            )
+        );
+        vault.setExitFeeBps(50);
+    }
+
+    /// @notice AC7: setFeeRecipient succeeds ONLY via TimelockController.
+    function test_AC7_basket_setFeeRecipient_succeedsViaTimelock() public {
+        address newRecipient = makeAddr("newFeeRecipient");
+        bytes memory callData = abi.encodeCall(BasketVault.setFeeRecipient, (newRecipient));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac7-basket-fee-recipient");
+
+        vm.prank(safe);
+        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+
+        // Pre-delay revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.feeRecipient(), newRecipient, "fee recipient must update via timelock");
+    }
+
+    /// @notice AC7: setExitFeeBps succeeds ONLY via TimelockController.
+    function test_AC7_basket_setExitFeeBps_succeedsViaTimelock() public {
+        uint256 newFee = 50;
+        bytes memory callData = abi.encodeCall(BasketVault.setExitFeeBps, (newFee));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac7-basket-exit-fee");
+
+        vm.prank(safe);
+        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
 }

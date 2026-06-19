@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -156,6 +156,19 @@ Recipient of collected exit fees.
 
 ```solidity
 address public feeRecipient
+```
+
+
+### quarantineAddress
+Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+the TimelockController (ADMIN_ROLE, INV-3). The timelock-settable
+model (vs. a pure compile-time constant) allows governance to
+redirect sweeps to an on-chain multisig that can empty the trash.
+
+
+```solidity
+address public quarantineAddress
 ```
 
 
@@ -750,21 +763,36 @@ function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 |`newRecipient`|`address`|New address to receive collected exit fees.|
 
 
+### setQuarantineAddress
+
+Update the quarantine address for foreign-token sweeps. Restricted
+to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+
+
+```solidity
+function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newAddr`|`address`|New quarantine address. Must not be address(0).|
+
+
 ### sweepForeignToken
 
 Permissionlessly sweep a NON-protected foreign token held by the
-vault to the fixed quarantine address (custody invariants
+vault to the governed quarantine address (custody invariants
 INV-1/INV-2).
-Anyone may call; the destination is a hardcoded constant, never
-caller-supplied. This replaces the deleted arbitrary-recipient
-`rescueTokens(token,to)` admin function (INV-1: no admin/role
-function may route a protocol or depositor asset to a
-caller-supplied recipient). The vault asset (USDC, already counted
-in `totalAssets` and redeemable) and the vault share token cannot
-be swept; protocol-asset donations therefore stay in NAV and accrue
-pro-rata to all holders (INV-2). Adapter strategy tokens live on
-the adapters, each of which exposes its own guarded
-`sweepForeignToken`.
+Anyone may call; the destination is the timelock-gated
+`quarantineAddress` storage variable — never a caller-supplied
+address (INV-1). This replaces the deleted arbitrary-recipient
+`rescueTokens(token,to)` admin function. The vault asset (USDC,
+already counted in `totalAssets` and redeemable) and the vault
+share token cannot be swept; protocol-asset donations therefore
+stay in NAV and accrue pro-rata to all holders (INV-2). Adapter
+strategy tokens live on the adapters, each of which exposes its
+own guarded `sweepForeignToken`.
 
 
 ```solidity
@@ -1209,6 +1237,21 @@ event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecip
 |----|----|-----------|
 |`oldRecipient`|`address`|Previous fee recipient address.|
 |`newRecipient`|`address`|New fee recipient address.|
+
+### QuarantineAddressUpdated
+Emitted when the quarantine address for foreign-token sweeps is updated.
+
+
+```solidity
+event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`oldAddr`|`address`|Previous quarantine address.|
+|`newAddr`|`address`|New quarantine address.|
 
 ### EmergencyWithdrawCalled
 Emitted when the emergency withdrawal flow is triggered (all adapters).

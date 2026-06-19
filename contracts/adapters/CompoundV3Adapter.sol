@@ -95,4 +95,10 @@ contract CompoundV3Adapter is IStrategyAdapter {
         }
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
+
+    /// @inheritdoc IStrategyAdapter
+    /// @dev Compound V3 (Comet) interest accrues continuously in the principal
+    ///      balance — there are no discrete claimable reward tokens on the USDC
+    ///      supply market. This function is a no-op and always succeeds.
+    function harvestRewards() external {}
 }

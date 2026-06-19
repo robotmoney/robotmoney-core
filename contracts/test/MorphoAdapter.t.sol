@@ -276,4 +276,35 @@ contract MorphoAdapterTest is Test {
         assertEq(other.balanceOf(ForeignTokenQuarantine.QUARANTINE), 5 * ONE_USDC);
         assertEq(other.balanceOf(address(adapter)), 0);
     }
+
+    // -----------------------------------------------------------------------
+    // harvestRewards — AC5 (INV-2: emissions reach the vault, never stranded)
+    // -----------------------------------------------------------------------
+
+    /// @notice AC5: harvestRewards() is a permissionless no-op for MorphoAdapter.
+    ///         Morpho Gauntlet USDC Prime yield accrues automatically in the
+    ///         ERC-4626 share price — there are no discrete claimable rewards.
+    ///         Anyone may call; it must not revert and the vault asset is
+    ///         never moved (no value leakage through harvest).
+    function test_harvestRewards_isPermissionlessNoopForMorpho() public {
+        // Fund the adapter with a real Morpho position.
+        uint256 amount = 50 * ONE_USDC;
+        usdc.mint(vault, amount);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), amount);
+        vm.prank(vault);
+        adapter.deploy(amount);
+
+        uint256 totalBefore = adapter.totalAssets();
+        uint256 vaultBefore = usdc.balanceOf(vault);
+
+        // Anyone can call — no role required.
+        address stranger = makeAddr("strangerHarvest");
+        vm.prank(stranger);
+        adapter.harvestRewards(); // must not revert
+
+        // No USDC leaked from the adapter or vault.
+        assertEq(adapter.totalAssets(), totalBefore, "harvest must not move Morpho position");
+        assertEq(usdc.balanceOf(vault), vaultBefore, "harvest must not credit vault for no-op");
+    }
 }

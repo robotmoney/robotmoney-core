@@ -82,4 +82,9 @@ contract NoYieldTestAdapter is IStrategyAdapter {
         if (token == address(USDC)) revert ForeignTokenQuarantine.TokenIsProtected(token);
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
+
+    /// @inheritdoc IStrategyAdapter
+    /// @dev No-yield test adapter holds only raw USDC with no reward tokens —
+    ///      harvest is a no-op and always succeeds.
+    function harvestRewards() external {}
 }

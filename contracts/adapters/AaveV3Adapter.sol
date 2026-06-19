@@ -85,4 +85,10 @@ contract AaveV3Adapter is IStrategyAdapter {
         }
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
+
+    /// @inheritdoc IStrategyAdapter
+    /// @dev Aave V3 interest accrues continuously in the rebasing aToken balance —
+    ///      there are no discrete claimable reward tokens on the USDC supply venue.
+    ///      This function is a no-op and always succeeds.
+    function harvestRewards() external {}
 }

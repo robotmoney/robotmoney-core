@@ -1,5 +1,5 @@
 # AaveV3Adapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/adapters/AaveV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/adapters/AaveV3Adapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -129,6 +129,23 @@ function sweepForeignToken(address token) external;
 |----|----|-----------|
 |`token`|`address`|Address of the foreign ERC-20 to quarantine.|
 
+
+### harvestRewards
+
+Claim any underlying-protocol reward tokens and forward them as
+USDC to the owning vault (custody invariant INV-2 — no emissions
+stranded on the adapter or router). Permissionless: anyone may
+trigger the harvest; the destination is always the vault, never a
+caller-supplied address (INV-1).
+
+Aave V3 interest accrues continuously in the rebasing aToken balance —
+there are no discrete claimable reward tokens on the USDC supply venue.
+This function is a no-op and always succeeds.
+
+
+```solidity
+function harvestRewards() external;
+```
 
 ## Errors
 ### OnlyVault

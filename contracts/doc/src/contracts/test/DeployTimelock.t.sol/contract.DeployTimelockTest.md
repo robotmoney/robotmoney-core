@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -300,6 +300,29 @@ TimelockController.
 
 ```solidity
 function test_INV3_setExitFeeBps_succeedsViaTimelock() public;
+```
+
+### test_AC3_setQuarantineAddress_directHotKeyCallReverts
+
+AC3: a direct (non-timelock) setQuarantineAddress call from the
+Safe hot key reverts — the Safe holds only PROPOSER/EXECUTOR on
+the timelock, not ADMIN_ROLE on the vault.
+
+
+```solidity
+function test_AC3_setQuarantineAddress_directHotKeyCallReverts() public;
+```
+
+### test_AC3_setQuarantineAddress_succeedsViaTimelock
+
+AC3: setQuarantineAddress succeeds ONLY when routed through the
+TimelockController (schedule → delay → execute). After the update,
+foreign-token sweeps on the vault go to the new address, not the
+old constant — proving the governed quarantine model is end-to-end.
+
+
+```solidity
+function test_AC3_setQuarantineAddress_succeedsViaTimelock() public;
 ```
 
 ### test_deploy_revertsOnZeroSafe

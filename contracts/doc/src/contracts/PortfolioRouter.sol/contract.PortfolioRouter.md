@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b26f69ebc017ed65ec1995613224744c7754ee26/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -72,6 +72,17 @@ Global ceiling on the total USDC that may flow through a single
 
 ```solidity
 uint256 public routerCap
+```
+
+
+### quarantineAddress
+Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+the TimelockController (ADMIN_ROLE, INV-3).
+
+
+```solidity
+address public quarantineAddress
 ```
 
 
@@ -237,20 +248,35 @@ Restricted to `ADMIN_ROLE`.
 function setVaultCap(address vault, uint256 cap) external onlyRole(ADMIN_ROLE);
 ```
 
+### setQuarantineAddress
+
+Update the quarantine address for foreign-token sweeps. Restricted
+to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+
+
+```solidity
+function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newAddr`|`address`|New quarantine address. Must not be address(0).|
+
+
 ### sweepForeignToken
 
 Permissionlessly sweep a NON-protected foreign token held by the
-router to the fixed quarantine address (custody invariants
+router to the governed quarantine address (custody invariants
 INV-1/INV-2).
 The router moves zero USDC out via any admin path: under the
 all-or-revert deposit/redeem semantics it never holds USDC across
 transactions, and the old arbitrary-recipient `rescueUsdc` —
 which forwarded USDC to a caller-supplied address — is DELETED
-(INV-1: no admin/role function may route a protocol or depositor
-asset to a caller-supplied recipient). The only asset movement
-that remains is this permissionless sweep of foreign (non-USDC)
-tokens to a single hardcoded quarantine address; the destination
-can never be chosen by the caller. Reverts when `token` is USDC.
+(INV-1). The only asset movement that remains is this permissionless
+sweep of foreign (non-USDC) tokens to the timelock-gated
+`quarantineAddress`; the destination is never caller-supplied.
+Reverts when `token` is USDC.
 
 
 ```solidity
@@ -673,6 +699,21 @@ event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 |`vault`|`address`| Vault address.|
 |`oldCap`|`uint256`|Previous cap (0 = uncapped).|
 |`newCap`|`uint256`|New cap (0 = uncapped).|
+
+### QuarantineAddressUpdated
+Emitted when the quarantine address for foreign-token sweeps is updated.
+
+
+```solidity
+event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`oldAddr`|`address`|Previous quarantine address.|
+|`newAddr`|`address`|New quarantine address.|
 
 ## Errors
 ### ZeroAddress

@@ -91,6 +91,8 @@
     - [MockUniswapV4Pool](contracts/test/BasketVault.t.sol/contract.MockUniswapV4Pool.md)
     - [BasketVaultUniswapV4Test](contracts/test/BasketVault.t.sol/contract.BasketVaultUniswapV4Test.md)
     - [BasketVaultVenueSelectorTest](contracts/test/BasketVault.t.sol/contract.BasketVaultVenueSelectorTest.md)
+    - [MockSafe929](contracts/test/BasketVault.t.sol/contract.MockSafe929.md)
+    - [BasketVaultTimelockTest](contracts/test/BasketVault.t.sol/contract.BasketVaultTimelockTest.md)
     - [BpsMathTest](contracts/test/BpsMath.t.sol/contract.BpsMathTest.md)
     - [MockPoolForGuards](contracts/test/ConfusedDeputyGuards.t.sol/contract.MockPoolForGuards.md)
     - [MockSwapRouterForGuards](contracts/test/ConfusedDeputyGuards.t.sol/contract.MockSwapRouterForGuards.md)

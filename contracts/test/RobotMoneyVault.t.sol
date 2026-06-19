@@ -90,6 +90,9 @@ contract MockAdapter is IStrategyAdapter {
     /// @inheritdoc IStrategyAdapter
     function sweepForeignToken(address) external {}
 
+    /// @inheritdoc IStrategyAdapter
+    function harvestRewards() external {}
+
     /// @notice Simulate a protocol-level donation: credits USDC directly to the adapter
     ///         without going through the vault (models Aave `supply(onBehalfOf=adapter)`,
     ///         Morpho `deposit(receiver=adapter)`, or Compound `supply` to adapter).
@@ -143,6 +146,9 @@ contract ShortfallAdapter is IStrategyAdapter {
 
     /// @inheritdoc IStrategyAdapter
     function sweepForeignToken(address) external {}
+
+    /// @inheritdoc IStrategyAdapter
+    function harvestRewards() external {}
 }
 
 // ─── Vault harness ───────────────────────────────────────────────────────────

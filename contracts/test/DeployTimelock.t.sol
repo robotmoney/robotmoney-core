@@ -404,6 +404,54 @@ contract DeployTimelockTest is Test {
         assertEq(vault.exitFeeBps(), newFee, "exit fee must update via timelock");
     }
 
+    // ─── AC3: quarantine address is timelock-gated (issue #929) ──────────────
+    //
+    // After DeployTimelock, ADMIN_ROLE on RobotMoneyVault is held only by the
+    // TimelockController. The quarantine address for foreign-token sweeps may
+    // only change via the timelock; a direct hot-key call must revert.
+
+    /// @notice AC3: a direct (non-timelock) setQuarantineAddress call from the
+    ///         Safe hot key reverts — the Safe holds only PROPOSER/EXECUTOR on
+    ///         the timelock, not ADMIN_ROLE on the vault.
+    function test_AC3_setQuarantineAddress_directHotKeyCallReverts() public {
+        address newQuarantine = makeAddr("newQuarantine");
+        vm.prank(safe);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
+            )
+        );
+        vault.setQuarantineAddress(newQuarantine);
+    }
+
+    /// @notice AC3: setQuarantineAddress succeeds ONLY when routed through the
+    ///         TimelockController (schedule → delay → execute). After the update,
+    ///         foreign-token sweeps on the vault go to the new address, not the
+    ///         old constant — proving the governed quarantine model is end-to-end.
+    function test_AC3_setQuarantineAddress_succeedsViaTimelock() public {
+        address newQuarantine = makeAddr("newQuarantine");
+        bytes memory callData =
+            abi.encodeCall(RobotMoneyVault.setQuarantineAddress, (newQuarantine));
+        bytes32 predecessor = bytes32(0);
+        bytes32 salt = keccak256("ac3-quarantine-addr");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
+
+        // Pre-delay execution must revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(vault), 0, callData, predecessor, salt);
+
+        assertEq(
+            vault.quarantineAddress(), newQuarantine, "quarantine address must update via timelock"
+        );
+    }
+
     // ─── Revert cases — script validation ────────────────────────────────────
 
     function test_deploy_revertsOnZeroSafe() public {
