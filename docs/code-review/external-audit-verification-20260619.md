@@ -13,6 +13,11 @@ external report raised 1 High, 9 Medium, 5 Low, and 4 Info findings (F-01 … F-
 [`smart-contract-vulnerability-audit-20260609.md`](./smart-contract-vulnerability-audit-20260609.md),
 [`confused-deputy-access-control-audit-20260602.md`](./confused-deputy-access-control-audit-20260602.md).
 
+**Companion spec:** the findings and Layer 2 categories below are mapped to
+named, FV-targetable invariants in
+[`docs/technical/smart-contract-invariants.md`](../technical/smart-contract-invariants.md)
+(each 🔴 invariant there links back to the finding here that violates it).
+
 **Method:** Every substantive finding (F-01 … F-18) was independently re-checked
 against HEAD source. For each, the cited file was read at the named symbol (line
 numbers in the external report were treated as advisory and re-derived from the
