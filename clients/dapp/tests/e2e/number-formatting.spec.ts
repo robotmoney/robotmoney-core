@@ -27,8 +27,9 @@ import { injectWallet, connectInjectedWallet, dismissOnboardingIfPresent } from 
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** USDC trailing-zeros pattern: amount should NOT end with ".000000 USDC". */
-const USDC_STRIPPED_RE = /^\d+(\.\d{1,6})? USDC$/;
+/** USDC trailing-zeros pattern: amount should NOT end with ".000000 USDC".
+ * The integer part may contain thousands-separator commas (e.g. "10,300.001003 USDC"). */
+const USDC_STRIPPED_RE = /^\d{1,3}(,\d{3})*(\.\d{1,6})? USDC$/;
 
 let eps: DevnetEndpoints;
 
