@@ -43,39 +43,41 @@ export function ProportionPreview({ legs }: ProportionPreviewProps) {
   }
 
   return (
-    <table data-testid="proportion-preview-table">
-      <thead>
-        <tr>
-          <th>Vault</th>
-          <th>Weight</th>
-          <th>USDC leg</th>
-          <th>Est. shares</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {legs.map((leg, i) => (
-          <tr
-            key={leg.vault}
-            data-testid={`proportion-preview-row-${i}`}
-            style={leg.unavailable ? { color: "red" } : undefined}
-          >
-            <td className="font-mono" data-testid={`proportion-preview-vault-${i}`}>
-              <code>
-                {leg.vault.slice(0, 8)}…{leg.vault.slice(-4)}
-              </code>
-            </td>
-            <td data-testid={`proportion-preview-weight-${i}`}>{formatPercent(leg.weightBps)}</td>
-            <td data-testid={`proportion-preview-usdc-${i}`}>{formatUsdc(leg.legAmount)}</td>
-            <td data-testid={`proportion-preview-shares-${i}`}>
-              {leg.unavailable ? "—" : formatShares(leg.estShares)}
-            </td>
-            <td data-testid={`proportion-preview-status-${i}`}>
-              {leg.unavailable ? "⚠ UNAVAILABLE" : "Active"}
-            </td>
+    <div className="table-scroll">
+      <table data-testid="proportion-preview-table">
+        <thead>
+          <tr>
+            <th>Vault</th>
+            <th>Weight</th>
+            <th>USDC leg</th>
+            <th>Est. shares</th>
+            <th>Status</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {legs.map((leg, i) => (
+            <tr
+              key={leg.vault}
+              data-testid={`proportion-preview-row-${i}`}
+              style={leg.unavailable ? { color: "red" } : undefined}
+            >
+              <td className="font-mono" data-testid={`proportion-preview-vault-${i}`}>
+                <code>
+                  {leg.vault.slice(0, 8)}…{leg.vault.slice(-4)}
+                </code>
+              </td>
+              <td data-testid={`proportion-preview-weight-${i}`}>{formatPercent(leg.weightBps)}</td>
+              <td data-testid={`proportion-preview-usdc-${i}`}>{formatUsdc(leg.legAmount)}</td>
+              <td data-testid={`proportion-preview-shares-${i}`}>
+                {leg.unavailable ? "—" : formatShares(leg.estShares)}
+              </td>
+              <td data-testid={`proportion-preview-status-${i}`}>
+                {leg.unavailable ? "⚠ UNAVAILABLE" : "Active"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

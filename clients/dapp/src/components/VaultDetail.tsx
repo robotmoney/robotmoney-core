@@ -102,24 +102,26 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
       {vault.tvl_history.length === 0 ? (
         <p data-testid="vault-detail-tvl-empty">No TVL data yet.</p>
       ) : (
-        <table data-testid="vault-detail-tvl-table">
-          <thead>
-            <tr>
-              <th>Block</th>
-              <th>Total Assets</th>
-              <th>Total Supply</th>
-            </tr>
-          </thead>
-          <tbody>
-            {vault.tvl_history.map((pt) => (
-              <tr key={pt.block_number} data-testid="vault-detail-tvl-row">
-                <td data-testid="vault-detail-tvl-block">{pt.block_number}</td>
-                <td data-testid="vault-detail-tvl-assets">{pt.total_assets}</td>
-                <td data-testid="vault-detail-tvl-supply">{pt.total_supply}</td>
+        <div className="table-scroll">
+          <table data-testid="vault-detail-tvl-table">
+            <thead>
+              <tr>
+                <th>Block</th>
+                <th>Total Assets</th>
+                <th>Total Supply</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {vault.tvl_history.map((pt) => (
+                <tr key={pt.block_number} data-testid="vault-detail-tvl-row">
+                  <td data-testid="vault-detail-tvl-block">{pt.block_number}</td>
+                  <td data-testid="vault-detail-tvl-assets">{pt.total_assets}</td>
+                  <td data-testid="vault-detail-tvl-supply">{pt.total_supply}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {vault.risk_label === "SPECULATIVE" && (

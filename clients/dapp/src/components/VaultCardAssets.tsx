@@ -115,7 +115,11 @@ export function VaultCardAssets({ vaultAddress, riskLabel, status }: VaultCardAs
   const isStableYield = riskLabel === "STABLE_YIELD";
 
   return (
-    <div className="vault-card-assets">
+    <div
+      className="vault-card-assets"
+      data-testid="vault-card-assets-risk-label"
+      data-risk-label={riskLabel}
+    >
       <button
         data-testid="landing-vault-card-assets-toggle"
         onClick={() => setExpanded((v) => !v)}
