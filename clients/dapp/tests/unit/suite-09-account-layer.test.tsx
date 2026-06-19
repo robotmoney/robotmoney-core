@@ -196,8 +196,8 @@ describe("PortfolioPosition", () => {
     await waitFor(() => {
       expect(getByTestId("portfolio-position-total")).toBeTruthy();
     });
-    // 500000 + 250000 = 750000
-    expect(getByTestId("portfolio-position-total").textContent).toContain("750000");
+    // 500000 + 250000 = 750000 raw units = 0.75 USDC (6 decimals)
+    expect(getByTestId("portfolio-position-total").textContent).toContain("0.75 USDC");
   });
 
   it("shows dash for USDC values when usdcValues is not provided", async () => {

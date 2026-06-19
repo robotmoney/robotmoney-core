@@ -26,6 +26,7 @@ import type {
   VaultsResponse,
 } from "../lib/explorerApi";
 import { fetchRouterWeights, fetchProposals, fetchVaults } from "../lib/explorerApi";
+import { formatPercentFromNumber } from "../lib/format";
 
 interface RouterViewProps {
   apiUrl: string;
@@ -102,14 +103,6 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
   }
 
   /**
-   * Convert a bps value to a display percentage string (e.g. "33.34%").
-   * bps are in units of 0.01% (10 000 bps = 100%).
-   */
-  function bpsToPercent(bps: number): string {
-    return (bps / 100).toFixed(2) + "%";
-  }
-
-  /**
    * Weight source label: "Effective (voted)" when a governance proposal
    * is active (status == "open"); "Effective (default)" otherwise.
    */
@@ -142,7 +135,9 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                   <td data-testid="router-view-weight-bps">
                     <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
                     {" bps ("}
-                    <span data-testid="router-view-weight-bps-pct">{bpsToPercent(w.bps)}</span>
+                    <span data-testid="router-view-weight-bps-pct">
+                      {formatPercentFromNumber(w.bps)}
+                    </span>
                     {")"}
                   </td>
                   <td data-testid="router-view-weight-bar-cell">
@@ -150,13 +145,13 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                       data-testid="router-view-weight-bar"
                       className="weight-bar"
                       style={{
-                        width: bpsToPercent(w.bps),
+                        width: formatPercentFromNumber(w.bps),
                         background: "var(--accent, #4f8ef7)",
                         height: "0.75em",
                         borderRadius: "2px",
                         minWidth: "2px",
                       }}
-                      title={`${bpsToPercent(w.bps)}`}
+                      title={`${formatPercentFromNumber(w.bps)}`}
                     />
                   </td>
                 </tr>
@@ -206,7 +201,8 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                 <td>
                   {entry.weights
                     .map(
-                      (w) => `${resolveVaultName(w.vault)}: ${w.bps}bps (${bpsToPercent(w.bps)})`,
+                      (w) =>
+                        `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
                     )
                     .join(", ")}
                 </td>
