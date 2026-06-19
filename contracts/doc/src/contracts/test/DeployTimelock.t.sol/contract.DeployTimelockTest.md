@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b7fa96c6c8d887cec6b173daad309b3d73d93d31/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -16,6 +16,16 @@ mines and executes the operation successfully.
 AC4  Pre-delay execute reverts.
 AC5  TimelockController.getMinDelay() is verifiable on-chain.
 AC6  ADMIN_ROLE grant routed through Timelock succeeds.
+SCOUT SEAM (issue #951 → #942): the planned unified governance `retire()`
+(DI-2, decision #925; docs/architecture.md §4.7) is a governance-tier action
+gated by this same TimelockController (the timelock already holds ADMIN_ROLE
+on VaultRegistry and RobotMoneyVault — asserted by the AC1 tests below). When
+#942 implements `retire()`, add an AC3-style coverage test here proving the
+retire action is reachable ONLY via the schedule → mine delay → execute path
+and reverts on a direct ADMIN_ROLE EOA call (mirror `_scheduleAndExecute` /
+the AC2 direct-call-reverts pattern). No new test is added in this dev-scout
+pass — `retire()` does not exist yet; this note marks the entrypoint #942 must
+exercise so the timelock gate on the new lifecycle action is not left untested.
 
 
 ## Constants
