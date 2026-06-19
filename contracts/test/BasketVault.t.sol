@@ -3128,9 +3128,8 @@ contract BasketVaultVenueSelectorTest is Test {
     }
 }
 
-// ─── AC3 / AC7 timelock-gated quarantine + fee setter tests (issue #929) ────
+// ─── AC7 timelock-gated fee setter tests (issue #929) ────────────────────
 //
-// AC3: quarantine address is settable ONLY via TimelockController (INV-3).
 // AC7: fee setters are gated to ADMIN_ROLE, which in production is held ONLY
 //      by the TimelockController, so fee changes require governance.
 //
@@ -3138,6 +3137,10 @@ contract BasketVaultVenueSelectorTest is Test {
 // and prove:
 //   - direct (non-timelock) calls revert with AccessControlUnauthorizedAccount
 //   - timelock-routed calls (schedule → warp → execute) succeed.
+//
+// Note: BasketVault uses the hardcoded ForeignTokenQuarantine.QUARANTINE constant
+// for sweeps (not a settable address) — the quarantine-address setter is only on
+// RobotMoneyVault and PortfolioRouter. AC3 quarantine tests are in DeployTimelock.t.sol.
 
 /// @dev A minimal mock Safe with threshold >= 2 (satisfies DeployTimelock guards).
 contract MockSafe929 {
@@ -3182,51 +3185,6 @@ contract BasketVaultTimelockTest is Test {
         vault.grantRole(ADMIN_ROLE, address(timelock));
         vault.revokeRole(ADMIN_ROLE, admin);
         vm.stopPrank();
-    }
-
-    // ─── AC3: quarantine address is timelock-gated ───────────────────────────
-
-    /// @notice AC3: direct setQuarantineAddress from any hot key reverts.
-    function test_AC3_basket_setQuarantineAddress_directCallReverts() public {
-        vm.prank(hotKey);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, hotKey, ADMIN_ROLE
-            )
-        );
-        vault.setQuarantineAddress(makeAddr("newQ"));
-    }
-
-    /// @notice AC3: setQuarantineAddress succeeds only via TimelockController.
-    ///         After the change, sweeps go to the new address.
-    function test_AC3_basket_setQuarantineAddress_succeedsViaTimelock() public {
-        address newQ = makeAddr("newQuarantineBasket");
-        bytes memory callData = abi.encodeCall(BasketVault.setQuarantineAddress, (newQ));
-        bytes32 predecessor = bytes32(0);
-        bytes32 salt = keccak256("ac3-basket-quarantine");
-
-        vm.prank(safe);
-        timelock.schedule(address(vault), 0, callData, predecessor, salt, MIN_DELAY);
-
-        // Pre-delay revert.
-        vm.expectRevert();
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
-
-        vm.warp(block.timestamp + MIN_DELAY + 1);
-        vm.prank(safe);
-        timelock.execute(address(vault), 0, callData, predecessor, salt);
-
-        assertEq(vault.quarantineAddress(), newQ, "quarantine address must update via timelock");
-
-        // Sweep should now land at newQ, not the old constant.
-        TestERC20 stray = new TestERC20();
-        stray.mint(address(vault), 7 * ONE_USDC);
-        vault.sweepForeignToken(address(stray));
-        assertEq(stray.balanceOf(newQ), 7 * ONE_USDC, "sweep lands at updated quarantine");
-        assertEq(
-            stray.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "old quarantine stays empty"
-        );
     }
 
     // ─── AC7: fee setters are timelock-gated on BasketVault ─────────────────

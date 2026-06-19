@@ -3553,6 +3553,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "quarantineAddress",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "rebalance",
     inputs: [],
     outputs: [],
@@ -3763,6 +3776,19 @@ export const robotMoneyVaultAbiGenerated = [
         name: "newCap",
         type: "uint256",
         internalType: "uint256",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "setQuarantineAddress",
+    inputs: [
+      {
+        name: "newAddr",
+        type: "address",
+        internalType: "address",
       },
     ],
     outputs: [],
@@ -4434,6 +4460,25 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "QuarantineAddressUpdated",
+    inputs: [
+      {
+        name: "oldAddr",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "newAddr",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "Rebalanced",
     inputs: [
       {
@@ -5075,6 +5120,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "ZeroAddress",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "ZeroQuarantineAddress",
     inputs: [],
   },
 ] as const;
@@ -6076,6 +6126,19 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "quarantineAddress",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "redeemFor",
     inputs: [
       {
@@ -6188,6 +6251,19 @@ export const routerAbiGenerated = [
         name: "bps",
         type: "uint256[]",
         internalType: "uint256[]",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "setQuarantineAddress",
+    inputs: [
+      {
+        name: "newAddr",
+        type: "address",
+        internalType: "address",
       },
     ],
     outputs: [],
@@ -6356,6 +6432,25 @@ export const routerAbiGenerated = [
       },
       {
         name: "caller",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "QuarantineAddressUpdated",
+    inputs: [
+      {
+        name: "oldAddr",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "newAddr",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -6752,6 +6847,11 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "ZeroAddress",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "ZeroQuarantineAddress",
     inputs: [],
   },
 ] as const;
