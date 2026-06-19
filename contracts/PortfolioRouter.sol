@@ -14,6 +14,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {VaultRegistry} from "./VaultRegistry.sol";
+import {BpsMath} from "./lib/BpsMath.sol";
+import {ForeignTokenQuarantine} from "./lib/ForeignTokenQuarantine.sol";
 
 /// @title PortfolioRouter
 /// @notice Outer allocation contract that accepts USDC and splits deposits
@@ -46,8 +48,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
-    /// @notice Basis-points denominator (10 000 = 100%).
-    uint256 public constant BPS_DENOMINATOR = 10_000;
+    /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
+    ///         shared `BpsMath.BPS_DENOMINATOR` so fee/weight math cannot drift.
+    uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
@@ -61,6 +64,11 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @notice Global ceiling on the total USDC that may flow through a single
     ///         `deposit()` call. 0 means no cap enforced.
     uint256 public routerCap;
+
+    /// @notice Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+    ///         Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+    ///         the TimelockController (ADMIN_ROLE, INV-3).
+    address public quarantineAddress;
 
     /// @notice Per-vault USDC ceiling for a single `deposit()` leg.
     ///         0 means no cap enforced for that vault.
@@ -134,11 +142,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param newCap New cap (0 = uncapped).
     event VaultCapSet(address indexed vault, uint256 oldCap, uint256 newCap);
 
-    /// @notice Emitted when stranded USDC is recovered from the router by an
-    ///         ADMIN_ROLE holder via `rescueUsdc`.
-    /// @param to     Recipient of the recovered USDC.
-    /// @param amount Amount of USDC transferred.
-    event RescuedUsdc(address indexed to, uint256 amount);
+    /// @notice Emitted when the quarantine address for foreign-token sweeps is updated.
+    /// @param oldAddr Previous quarantine address.
+    /// @param newAddr New quarantine address.
+    event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
 
     // ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -230,6 +237,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         }
         usdc = IERC20(_usdc);
         registry = VaultRegistry(_registry);
+        quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, _admin);
@@ -345,26 +353,33 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         vaultCap[vault] = cap;
     }
 
-    /// @notice Transfer the entire USDC balance held by this contract to `to`.
-    ///         Intended as an emergency recovery path for USDC that becomes
-    ///         stranded in the router through edge cases not covered by the
-    ///         `UsdcCustodyInvariantViolated` deposit guard (e.g. direct
-    ///         transfers, or USDC approved but not pulled by a vault that
-    ///         reverted silently in a legacy path). Restricted to `ADMIN_ROLE`.
-    /// @param to  Recipient of all stranded USDC held by the router.
-    // slither-disable-start reentrancy-events
-    // The router is already `nonReentrant` on its state-mutating entrypoints;
-    // this recovery path only emits after the guarded token transfer and the
-    // event ordering is intentional.
-    function rescueUsdc(address to) external nonReentrant onlyRole(ADMIN_ROLE) {
-        if (to == address(0)) revert ZeroAddress();
-        uint256 amount = usdc.balanceOf(address(this));
-        if (amount == 0) return;
-        usdc.safeTransfer(to, amount);
-        emit RescuedUsdc(to, amount);
+    /// @notice Update the quarantine address for foreign-token sweeps. Restricted
+    ///         to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
+    /// @param newAddr New quarantine address. Must not be address(0).
+    function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE) {
+        if (newAddr == address(0)) revert ZeroAddress();
+        address old = quarantineAddress;
+        quarantineAddress = newAddr;
+        emit QuarantineAddressUpdated(old, newAddr);
     }
 
-    // slither-disable-end reentrancy-events
+    /// @notice Permissionlessly sweep a NON-protected foreign token held by the
+    ///         router to the governed quarantine address (custody invariants
+    ///         INV-1/INV-2).
+    ///
+    ///         The router moves zero USDC out via any admin path: under the
+    ///         all-or-revert deposit/redeem semantics it never holds USDC across
+    ///         transactions, and the old arbitrary-recipient `rescueUsdc` —
+    ///         which forwarded USDC to a caller-supplied address — is DELETED
+    ///         (INV-1). The only asset movement that remains is this permissionless
+    ///         sweep of foreign (non-USDC) tokens to the timelock-gated
+    ///         `quarantineAddress`; the destination is never caller-supplied.
+    ///         Reverts when `token` is USDC.
+    /// @param token Foreign ERC-20 to quarantine. Must not be the router's USDC.
+    function sweepForeignToken(address token) external nonReentrant {
+        if (token == address(usdc)) revert ForeignTokenQuarantine.TokenIsProtected(token);
+        ForeignTokenQuarantine.sweep(token, quarantineAddress, msg.sender);
+    }
 
     // ─── Preview ─────────────────────────────────────────────────────────────
 

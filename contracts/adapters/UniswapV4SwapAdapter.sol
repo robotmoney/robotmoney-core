@@ -19,12 +19,10 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
-import {IUniswapV4Pool} from "../interfaces/IUniswapV4Pool.sol";
 import {IUniswapV4SwapRouter} from "../interfaces/IUniswapV4SwapRouter.sol";
-import {TickMath} from "../lib/TickMath.sol";
+import {TwapTickMath} from "../lib/TwapTickMath.sol";
 
 /// @title UniswapV4SwapAdapter
 /// @notice BasketVault swap adapter for Uniswap V4 pools.
@@ -43,7 +41,6 @@ import {TickMath} from "../lib/TickMath.sol";
 ///         hook address into the PoolKey.
 contract UniswapV4SwapAdapter is IBasketSwapAdapter {
     using SafeERC20 for IERC20;
-    using Math for uint256;
 
     // ─── Immutables ───────────────────────────────────────────────────
 
@@ -153,57 +150,13 @@ contract UniswapV4SwapAdapter is IBasketSwapAdapter {
         if (window == 0) revert ZeroWindow();
         if (baseAmount == 0) return 0;
 
-        _checkPoolPair(pool, baseToken, quoteToken);
+        TwapTickMath.checkPoolPair(pool, baseToken, quoteToken);
 
-        int24 meanTick = _meanTick(pool, window);
-        quoteAmount = _priceFromTick(meanTick, baseToken, quoteToken, baseAmount);
+        int24 meanTick = TwapTickMath.meanTick(pool, window);
+        quoteAmount = TwapTickMath.priceFromTick(meanTick, baseToken, quoteToken, baseAmount);
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────
-
-    /// @dev Validates that `pool` pairs exactly `baseToken` and `quoteToken`.
-    function _checkPoolPair(address pool, address baseToken, address quoteToken) internal view {
-        address t0 = IUniswapV4Pool(pool).token0();
-        address t1 = IUniswapV4Pool(pool).token1();
-        bool validPair =
-            (t0 == baseToken && t1 == quoteToken) || (t1 == baseToken && t0 == quoteToken);
-        if (!validPair) revert PoolTokenMismatch();
-    }
-
-    /// @dev Compute arithmetic-mean tick over `[window, 0]` seconds via `observe()`.
-    function _meanTick(address pool, uint32 window) internal view returns (int24) {
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = window;
-        secondsAgos[1] = 0;
-        (int56[] memory tickCumulatives,) = IUniswapV4Pool(pool).observe(secondsAgos);
-        int56 delta = tickCumulatives[1] - tickCumulatives[0];
-        int24 tick = int24(delta / int56(uint56(window)));
-        // Match Uniswap OracleLibrary rounding: negative-and-not-exact rounds toward -∞.
-        if (delta < 0 && (delta % int56(uint56(window)) != 0)) tick--;
-        return tick;
-    }
-
-    /// @dev Convert a TWAP mean tick to an output amount using sqrtPriceX96 math.
-    function _priceFromTick(
-        int24 meanTick,
-        address baseToken,
-        address quoteToken,
-        uint256 baseAmount
-    ) internal pure returns (uint256 quoteAmount) {
-        uint256 sqrtP = uint256(TickMath.getSqrtRatioAtTick(meanTick));
-        bool zeroForOne = baseToken < quoteToken;
-        if (sqrtP <= type(uint128).max) {
-            uint256 ratioX192 = sqrtP * sqrtP;
-            quoteAmount = zeroForOne
-                ? baseAmount.mulDiv(ratioX192, 1 << 192)
-                : baseAmount.mulDiv(1 << 192, ratioX192);
-        } else {
-            uint256 ratioX128 = Math.mulDiv(sqrtP, sqrtP, 1 << 64);
-            quoteAmount = zeroForOne
-                ? baseAmount.mulDiv(ratioX128, 1 << 128)
-                : baseAmount.mulDiv(1 << 128, ratioX128);
-        }
-    }
 
     /// @dev Maps standard Uniswap V4 fee tiers to their canonical tick spacings.
     ///      Reverts with `UnsupportedFeeTier` for non-standard fee tiers.
