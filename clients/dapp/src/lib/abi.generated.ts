@@ -3620,24 +3620,6 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
-    name: "rescueTokens",
-    inputs: [
-      {
-        name: "token",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "to",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "restoreVault",
     inputs: [
       {
@@ -3837,6 +3819,19 @@ export const robotMoneyVaultAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "sweepForeignToken",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -4332,6 +4327,31 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "ForeignTokenQuarantined",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "amount",
+        type: "uint256",
+        indexed: false,
+        internalType: "uint256",
+      },
+      {
+        name: "caller",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "MaxRebalanceBpsUpdated",
     inputs: [
       {
@@ -4761,11 +4781,6 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
-    name: "CannotRescueAsset",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "DepositsPaused",
     inputs: [],
   },
@@ -5030,6 +5045,17 @@ export const robotMoneyVaultAbiGenerated = [
     type: "error",
     name: "TVLCapExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "TokenIsProtected",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",
@@ -6120,19 +6146,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
-    name: "rescueUsdc",
-    inputs: [
-      {
-        name: "to",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
     name: "revokeRole",
     inputs: [
       {
@@ -6250,6 +6263,19 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "sweepForeignToken",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "usdc",
     inputs: [],
     outputs: [
@@ -6314,10 +6340,10 @@ export const routerAbiGenerated = [
   },
   {
     type: "event",
-    name: "RescuedUsdc",
+    name: "ForeignTokenQuarantined",
     inputs: [
       {
-        name: "to",
+        name: "token",
         type: "address",
         indexed: true,
         internalType: "address",
@@ -6327,6 +6353,12 @@ export const routerAbiGenerated = [
         type: "uint256",
         indexed: false,
         internalType: "uint256",
+      },
+      {
+        name: "caller",
+        type: "address",
+        indexed: true,
+        internalType: "address",
       },
     ],
     anonymous: false,
@@ -6620,6 +6652,17 @@ export const routerAbiGenerated = [
     type: "error",
     name: "SlippageExceeded",
     inputs: [],
+  },
+  {
+    type: "error",
+    name: "TokenIsProtected",
+    inputs: [
+      {
+        name: "token",
+        type: "address",
+        internalType: "address",
+      },
+    ],
   },
   {
     type: "error",

@@ -1,5 +1,5 @@
 # IObservablePool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a850937c469fed3e92eb9f004e12f595cf9f2447/contracts/interfaces/IObservablePool.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/interfaces/IObservablePool.sol)
 
 **Title:**
 IObservablePool

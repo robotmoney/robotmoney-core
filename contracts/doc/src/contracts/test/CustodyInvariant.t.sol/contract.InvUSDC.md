@@ -1,10 +1,8 @@
-# MockUSDC
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/test/PortfolioRouter.t.sol)
+# InvUSDC
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/test/CustodyInvariant.t.sol)
 
 **Inherits:**
 ERC20
-
-Minimal ERC-20 USDC mock (6 decimals).
 
 
 ## Functions

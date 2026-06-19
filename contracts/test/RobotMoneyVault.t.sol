@@ -1221,9 +1221,7 @@ contract RobotMoneyVaultTest is Test {
         usdc.mint(address(vault), donation);
 
         assertEq(vault.totalAssets(), totalBefore + donation, "donation must raise totalAssets");
-        assertGt(
-            vault.convertToAssets(vault.balanceOf(alice)), aliceBefore, "alice NAV must rise"
-        );
+        assertGt(vault.convertToAssets(vault.balanceOf(alice)), aliceBefore, "alice NAV must rise");
         assertGt(vault.convertToAssets(vault.balanceOf(bob)), bobBefore, "bob NAV must rise");
         // Equal holders gain equally (pro-rata), within rounding.
         assertApproxEqAbs(

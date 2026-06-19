@@ -1,5 +1,5 @@
 # MockVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/gateway/MockVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/gateway/MockVault.sol)
 
 **Inherits:**
 ERC20, ReentrancyGuard

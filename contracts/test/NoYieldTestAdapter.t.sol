@@ -102,9 +102,7 @@ contract NoYieldTestAdapterTest is Test {
         adapter.sweepForeignToken(address(other));
         assertEq(other.balanceOf(address(adapter)), 0, "adapter not swept");
         assertEq(
-            other.balanceOf(ForeignTokenQuarantine.QUARANTINE),
-            7e18,
-            "tokens not in quarantine"
+            other.balanceOf(ForeignTokenQuarantine.QUARANTINE), 7e18, "tokens not in quarantine"
         );
     }
 

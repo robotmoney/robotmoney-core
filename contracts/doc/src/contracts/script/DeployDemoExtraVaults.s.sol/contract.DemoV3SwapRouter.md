@@ -1,5 +1,5 @@
 # DemoV3SwapRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Uniswap V3 router stub for demo purposes. Swaps USDC ↔ token
 at a 1:1 rate by minting the output token (DemoBasketToken) to the

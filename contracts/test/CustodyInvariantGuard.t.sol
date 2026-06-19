@@ -45,11 +45,7 @@ contract CustodyInvariantGuardTest is Test {
     }
 
     /// @dev True if `haystack` contains `needle` (naive substring scan).
-    function _contains(string memory haystack, string memory needle)
-        internal
-        pure
-        returns (bool)
-    {
+    function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
         bytes memory h = bytes(haystack);
         bytes memory n = bytes(needle);
         if (n.length == 0 || n.length > h.length) return false;
@@ -136,7 +132,9 @@ contract CustodyInvariantGuardTest is Test {
     /// @notice The PRD documents the three invariants (docs-first gate).
     function test_prdDocumentsSecurityInvariants() public view {
         string memory prd = vm.readFile("docs/prd.md");
-        assertTrue(_contains(prd, "Security invariants"), "PRD missing 'Security invariants' section");
+        assertTrue(
+            _contains(prd, "Security invariants"), "PRD missing 'Security invariants' section"
+        );
         assertTrue(_contains(prd, "INV-1"), "PRD missing INV-1 statement");
         assertTrue(_contains(prd, "INV-2"), "PRD missing INV-2 statement");
         assertTrue(_contains(prd, "INV-3"), "PRD missing INV-3 statement");

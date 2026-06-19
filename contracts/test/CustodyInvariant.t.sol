@@ -164,9 +164,7 @@ contract CustodyInvariantTest is StdInvariant, Test {
     ///         the foreign-token sweep.
     function invariant_quarantineHoldsNoUsdc() public view {
         assertEq(
-            usdc.balanceOf(ForeignTokenQuarantine.QUARANTINE),
-            0,
-            "USDC must never reach quarantine"
+            usdc.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "USDC must never reach quarantine"
         );
     }
 

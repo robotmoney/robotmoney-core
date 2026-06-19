@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e87e3c25f878d584d0de1f966dcf456f62dad87a/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0323a6a1933c28f78d86d11fe930ae7c01c96ef8/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -45,9 +45,13 @@ uint256 public constant MAX_SLIPPAGE_BPS = 500
 
 
 ### MAX_BPS
+Basis-points denominator (10 000 = 100%). Sourced from the
+shared `BpsMath.BPS_DENOMINATOR` so fee/slippage/weight math
+cannot drift.
+
 
 ```solidity
-uint256 public constant MAX_BPS = 10_000
+uint256 public constant MAX_BPS = BpsMath.BPS_DENOMINATOR
 ```
 
 

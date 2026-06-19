@@ -375,7 +375,9 @@ contract BasketVaultTest is Test {
             "re-absorbed asset must NOT be quarantined"
         );
         assertEq(
-            vault.totalAssets(), navBefore + usdcOut, "NAV rises by re-absorbed USDC for all holders"
+            vault.totalAssets(),
+            navBefore + usdcOut,
+            "NAV rises by re-absorbed USDC for all holders"
         );
     }
 
