@@ -29,6 +29,7 @@ import {
   type FetchLike,
 } from "../lib/explorerApi";
 import { VaultPositionCard } from "./shared";
+import { formatUsdc } from "../lib/format";
 
 export interface PortfolioPositionProps {
   /** Address to inspect (watched-address or connected wallet). */
@@ -87,8 +88,8 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
   const usdcValues = props.usdcValues ?? {};
 
   /** Compute composite total when all vaults have a USDC value. */
-  function compositeTotal(positions: readonly AccountPosition[]): string | null {
-    if (positions.length === 0) return "0";
+  function compositeTotal(positions: readonly AccountPosition[]): bigint | null {
+    if (positions.length === 0) return 0n;
     let total = 0n;
     for (const p of positions) {
       const v = usdcValues[p.vault_address.toLowerCase()];
@@ -99,7 +100,7 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
         return null;
       }
     }
-    return total.toString();
+    return total;
   }
 
   return (
@@ -156,7 +157,10 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
               <p data-testid="portfolio-position-total">
                 Composite total (USDC):{" "}
                 <strong>
-                  {compositeTotal(state.positions) !== null ? compositeTotal(state.positions) : "—"}
+                  {(() => {
+                    const total = compositeTotal(state.positions);
+                    return total !== null ? formatUsdc(total) : "—";
+                  })()}
                 </strong>
               </p>
 

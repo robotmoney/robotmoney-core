@@ -31,6 +31,7 @@ import { useAccount, useReadContract, useWriteContract, useSimulateContract } fr
 import type { Address } from "viem";
 import type { FetchLike } from "../lib/explorerApi";
 import { fetchProposals, type ProposalSummary, type ProposalsResponse } from "../lib/governanceApi";
+import { PLACEHOLDER } from "../lib/format";
 
 // ─── RouterGovernance ABI (vote + votingPower) ───────────────────────────────
 
@@ -232,7 +233,7 @@ export function GovernancePanel(props: GovernancePanelProps) {
             <p data-testid="governance-voting-power">
               Your voting power:{" "}
               <strong data-testid="governance-voting-power-value">
-                {typeof votingPower === "bigint" ? votingPower.toString() : "—"}
+                {typeof votingPower === "bigint" ? votingPower.toLocaleString("en-US") : PLACEHOLDER}
               </strong>
             </p>
           )}

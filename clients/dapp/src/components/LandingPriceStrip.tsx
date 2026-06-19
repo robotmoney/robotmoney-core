@@ -30,6 +30,7 @@ import {
 } from "../lib/dexPools";
 import { UNISWAP_V3_POOL_SLOT0_ABI, sqrtPriceX96ToPrice } from "../lib/uniswapV3";
 import { useExplorer } from "../lib/ExplorerContext";
+import { formatPrice as canonicalFormatPrice } from "../lib/format";
 
 /** One cell's resolved state for the pure view. */
 export interface PriceCellState {
@@ -49,14 +50,16 @@ export function cellTestId(pairId: string): string {
   return `landing-price-cell-${pairId}`;
 }
 
-/** Locale-aware price formatting; sub-$10 prices keep more precision. */
+/**
+ * Locale-aware price formatting; delegates to canonical formatPrice from
+ * format.ts (issue #939). Non-USD/USDC quote symbols strip the leading "$".
+ */
 function formatPrice(price: number, quoteSymbol: string): string {
-  const fractionDigits = price >= 10 ? 2 : price >= 0.01 ? 4 : 6;
-  const formatted = price.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: fractionDigits,
-  });
-  return quoteSymbol === "USD" || quoteSymbol === "USDC" ? `$${formatted}` : formatted;
+  const formatted = canonicalFormatPrice(price);
+  // canonicalFormatPrice always prepends "$". Strip it for non-USD pairs.
+  return quoteSymbol === "USD" || quoteSymbol === "USDC"
+    ? formatted
+    : formatted.replace(/^\$/, "");
 }
 
 interface LandingPriceStripViewProps {

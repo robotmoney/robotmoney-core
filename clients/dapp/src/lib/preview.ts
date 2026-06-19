@@ -26,6 +26,7 @@ import { gatewayAbi, ROLE_HASH } from "./abi";
 import type { AdminActionName, RoleName, VaultActionName } from "./abi";
 import type { ProductReasonCode } from "./productReasonCode";
 export type { ProductReasonCode } from "./productReasonCode";
+import { formatUsdc, formatShares } from "./format";
 
 /**
  * Union of every function name that may appear in a structured Preview.
@@ -396,20 +397,3 @@ function shorten(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-import { formatUsdc as _formatUsdc } from "./format";
-
-function formatUsdc(raw: bigint): string {
-  return _formatUsdc(raw);
-}
-
-/**
- * Format an ERC-4626 share amount for display. Shares are reported in
- * the vault's smallest unit (18 decimals for OZ defaults, but the
- * gateway never inspects decimals — we render the raw integer so the
- * value matches what the on-chain calldata carries). Issue #429: used
- * in withdrawal-cap glosses where unit precision matters less than the
- * order of magnitude.
- */
-function formatShares(raw: bigint): string {
-  return `${raw.toString()} shares`;
-}

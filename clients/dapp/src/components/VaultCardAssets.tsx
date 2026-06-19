@@ -18,15 +18,11 @@
 import { useState } from "react";
 import { useReadContract } from "wagmi";
 import { BASKET_VAULT_SHORTLIST_ABI, type ShortlistEntry } from "../lib/abi";
+import { formatTokenBalance } from "../lib/format";
 
 /** Render the last 6 hex chars of an address as 0x...XXXXXX. */
 function shortAddr(addr: string): string {
   return `0x...${addr.slice(-6).toUpperCase()}`;
-}
-
-/** Format a raw uint256 balance as a decimal string (no unit conversion). */
-function formatBalance(balance: bigint): string {
-  return balance.toString();
 }
 
 interface AssetRowProps {
@@ -45,7 +41,7 @@ function AssetRow({ token, active, balance, label }: AssetRowProps) {
         <span data-testid="vault-card-asset-active">{active ? "active" : "inactive"}</span>
       )}
       {balance != null && (
-        <span data-testid="vault-card-asset-balance">{formatBalance(balance)}</span>
+        <span data-testid="vault-card-asset-balance">{formatTokenBalance(balance, 6)}</span>
       )}
     </li>
   );
