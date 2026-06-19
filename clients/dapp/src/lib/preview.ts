@@ -396,4 +396,3 @@ function roleEffectRevoke(role: RoleName, account: Address): string {
 function shorten(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
-

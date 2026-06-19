@@ -57,9 +57,7 @@ export function cellTestId(pairId: string): string {
 function formatPrice(price: number, quoteSymbol: string): string {
   const formatted = canonicalFormatPrice(price);
   // canonicalFormatPrice always prepends "$". Strip it for non-USD pairs.
-  return quoteSymbol === "USD" || quoteSymbol === "USDC"
-    ? formatted
-    : formatted.replace(/^\$/, "");
+  return quoteSymbol === "USD" || quoteSymbol === "USDC" ? formatted : formatted.replace(/^\$/, "");
 }
 
 interface LandingPriceStripViewProps {

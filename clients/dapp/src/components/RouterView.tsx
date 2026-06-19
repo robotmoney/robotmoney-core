@@ -135,7 +135,9 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                   <td data-testid="router-view-weight-bps">
                     <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
                     {" bps ("}
-                    <span data-testid="router-view-weight-bps-pct">{formatPercentFromNumber(w.bps)}</span>
+                    <span data-testid="router-view-weight-bps-pct">
+                      {formatPercentFromNumber(w.bps)}
+                    </span>
                     {")"}
                   </td>
                   <td data-testid="router-view-weight-bar-cell">
@@ -199,7 +201,8 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
                 <td>
                   {entry.weights
                     .map(
-                      (w) => `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
+                      (w) =>
+                        `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
                     )
                     .join(", ")}
                 </td>

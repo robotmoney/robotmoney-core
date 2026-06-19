@@ -233,7 +233,9 @@ export function GovernancePanel(props: GovernancePanelProps) {
             <p data-testid="governance-voting-power">
               Your voting power:{" "}
               <strong data-testid="governance-voting-power-value">
-                {typeof votingPower === "bigint" ? votingPower.toLocaleString("en-US") : PLACEHOLDER}
+                {typeof votingPower === "bigint"
+                  ? votingPower.toLocaleString("en-US")
+                  : PLACEHOLDER}
               </strong>
             </p>
           )}
