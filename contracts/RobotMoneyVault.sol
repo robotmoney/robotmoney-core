@@ -90,6 +90,27 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Whether the vault has been permanently shut down. Irreversible.
     bool public shutdown;
 
+    /// @notice Whether the vault has been retired by the unified governance
+    ///         `retire()` lifecycle action (DI-2; docs/architecture.md §4.7).
+    ///         When true, direct deposits/mints are hard-stopped at the vault.
+    ///         Distinct from the emergency `shutdown` flag so the two
+    ///         enforcement paths never alias: `shutdown` is an EMERGENCY_ROLE
+    ///         vault-only overlay that makes no lifecycle decision, whereas
+    ///         `retired` is set only by the governance retire action flipping
+    ///         the registry to `Retired` in the same call. Recovery is the
+    ///         deliberate governance abort `VaultRegistry.setVaultStatus(vault,
+    ///         Active)` reflected back via `unretire()`.
+    bool public retired;
+
+    /// @notice Linked `VaultRegistry`. Set once by `ADMIN_ROLE` after both
+    ///         contracts are deployed. The registry is the only address allowed
+    ///         to drive the vault's `retire()` / `unretire()` deposit-halt legs,
+    ///         so the unified governance retire action (registry status flip +
+    ///         vault deposit halt) lands atomically in a single timelock call to
+    ///         `VaultRegistry.retire(vault)` without granting the registry full
+    ///         `ADMIN_ROLE` over the vault.
+    address public registry;
+
     // ─── Split pause semantics ─────────────────────────────────────────
     // Deposits and withdrawals are gated independently so that emergencyWithdraw()
     // can block new capital inflows while preserving user exit rights.
@@ -215,6 +236,14 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Emitted when a deposit cannot be fully routed into adapters (e.g. all caps are full).
     /// @param amount USDC that remains idle in the vault after both routing passes.
     event UnroutedDeposit(uint256 amount);
+    /// @notice Emitted when the linked `VaultRegistry` reference is set.
+    /// @param oldRegistry Previous registry address (0 = unset).
+    /// @param newRegistry New registry address.
+    event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
+    /// @notice Emitted when the vault is retired by the governance `retire` action.
+    event Retired();
+    /// @notice Emitted when a retired vault is reactivated (governance abort).
+    event Unretired();
 
     // ─── Errors ────────────────────────────────────────────────────────
 
@@ -226,6 +255,12 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     error ZeroAddress();
     /// @notice Operation rejected because the vault has been shut down.
     error VaultShutdown();
+    /// @notice Deposit/mint rejected because the vault has been retired.
+    error VaultRetired();
+    /// @notice `retire()` / `unretire()` caller is not the linked registry.
+    error OnlyRegistry();
+    /// @notice `setRegistry` called more than once (registry is set-once).
+    error RegistryAlreadySet();
     /// @notice `restoreVault` called while the vault is not in a shut-down state.
     error NotShutdown();
     /// @notice Exit-fee bps argument exceeds `MAX_EXIT_FEE_BPS` (1%).
@@ -385,6 +420,7 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     {
         if (depositsPaused) revert DepositsPaused();
         if (shutdown) revert VaultShutdown();
+        if (retired) revert VaultRetired();
         if (assets > perDepositCap) revert PerDepositCapExceeded();
         if (totalAssets() + assets > tvlCap) revert TVLCapExceeded();
         if (_activeAdapterCount() == 0) revert NoActiveAdapters();
@@ -502,10 +538,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     /// @notice Maximum assets that can be deposited for `receiver` given current vault state.
-    ///         Returns 0 when deposits are paused, the vault is shutdown, no adapters are active,
-    ///         or the TVL cap has been reached.
+    ///         Returns 0 when deposits are paused, the vault is shutdown, retired,
+    ///         no adapters are active, or the TVL cap has been reached.
     function maxDeposit(address) public view override returns (uint256) {
-        if (depositsPaused || shutdown) return 0;
+        if (depositsPaused || shutdown || retired) return 0;
         if (_activeAdapterCount() == 0) return 0;
         if (tvlCap == type(uint256).max && perDepositCap == type(uint256).max) {
             return type(uint256).max;
@@ -888,30 +924,59 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         emit AdapterForceRemoved(index, address(adapter), lossAmount);
     }
 
-    // ─── SCOUT SEAM (issue #951 → #942): how vault deposit-halt relates to ────
-    //     the planned unified governance `retire()` (DI-2).
+    // ─── Unified governance retire (DI-2) ─────────────────────────────────
     //
     // Canonical: docs/architecture.md §4.7 (decided target, decision #925) and
-    // §4.5 authority tiers; docs/prd.md §12 INV-3.
+    // §4.5 authority tiers; docs/prd.md §6 lifecycle + §12 INV-3.
     //
-    // `shutdownVault` below is the EMERGENCY-tier, vault-only deposit hard-stop
-    // (hot key). It is deliberately NOT a lifecycle decision: it makes no change
-    // in the registry. The planned governance `retire()` (tracked in #942) needs
-    // a deliberate, governance-tier (multisig + TimelockController) way to halt
-    // deposits that is distinct from this emergency overlay, so a registry
-    // `Retired` flip and the vault deposit-halt land atomically.
-    //
-    // Seam options for #942 (do NOT implement here — dev-scout maps only):
-    //   (a) Reuse `setTvlCap(0)` (already ADMIN_ROLE = governance) as the
-    //       governance deposit-halt leg, leaving `shutdown`/`restoreVault` as the
-    //       emergency path untouched, OR
-    //   (b) Add a new ADMIN_ROLE-gated `retireDeposits()` entrypoint that sets a
-    //       lifecycle-retired flag distinct from the emergency `shutdown` flag so
-    //       the two paths never alias.
-    // Recovery/abort of a governance retire is the deliberate governance action
-    // `VaultRegistry.setVaultStatus(vault, Active)` (+ re-open via the chosen
-    // deposit path), mirroring the `restoreVault` asymmetry below. The emergency
-    // `shutdown`/`restoreVault` pair stays exactly as-is.
+    // The vault deposit-halt leg of the unified governance `retire()` action.
+    // `shutdownVault` (below) is the EMERGENCY-tier, vault-only deposit
+    // hard-stop (hot key) and is deliberately NOT a lifecycle decision — it
+    // makes no registry change. The governance `retire()` is the opposite: it
+    // is the deliberate, governance-tier (multisig + TimelockController)
+    // lifecycle decision. To keep the registry `Retired` flip and the vault
+    // deposit-halt from drifting, the registry's `retire(vault)` drives this
+    // `retire()` in the same transaction. The `retired` flag is distinct from
+    // the emergency `shutdown` flag so the two paths never alias.
+
+    /// @notice Set the linked `VaultRegistry` once. Restricted to `ADMIN_ROLE`
+    ///         (TimelockController in production — INV-3). The registry is the
+    ///         only address permitted to call `retire()` / `unretire()`; this
+    ///         dedicated link keeps the registry's authority over the vault
+    ///         narrow (deposit-halt only, not full admin) while letting the
+    ///         unified governance retire action land atomically.
+    /// @param newRegistry Address of the `VaultRegistry` (must not be zero).
+    function setRegistry(address newRegistry) external onlyRole(ADMIN_ROLE) {
+        if (newRegistry == address(0)) revert ZeroAddress();
+        if (registry != address(0)) revert RegistryAlreadySet();
+        registry = newRegistry;
+        emit RegistrySet(address(0), newRegistry);
+    }
+
+    /// @notice Retire the vault: hard-stop direct deposits/mints. Callable ONLY
+    ///         by the linked registry, which sets registry status to `Retired`
+    ///         in the same call (atomic unified governance retire, DI-2). Not an
+    ///         emergency control: it makes the deliberate lifecycle decision the
+    ///         registry status flip records. Idempotent — re-retiring a retired
+    ///         vault is a no-op event. Withdrawals/redemptions stay open
+    ///         (ERC-4626 `redeem` is never revoked; ADR-0009).
+    function retire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        if (retired) return;
+        retired = true;
+        emit Retired();
+    }
+
+    /// @notice Reactivate a retired vault and re-open direct deposits. Callable
+    ///         ONLY by the linked registry, which flips registry status back to
+    ///         `Active` in the same call (governance abort path, mirroring the
+    ///         `Retired → Active` transition in docs/architecture.md §4.7).
+    function unretire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        if (!retired) return;
+        retired = false;
+        emit Unretired();
+    }
 
     /// @notice Shut down the vault: set `shutdown = true` and zero the TVL cap.
     ///         Restricted to `EMERGENCY_ROLE`. Recoverable only by `ADMIN_ROLE`

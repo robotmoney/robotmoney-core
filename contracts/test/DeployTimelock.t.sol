@@ -30,16 +30,14 @@ import {TestERC20} from "./helpers/TestERC20.sol";
 ///      AC5  TimelockController.getMinDelay() is verifiable on-chain.
 ///      AC6  ADMIN_ROLE grant routed through Timelock succeeds.
 ///
-/// SCOUT SEAM (issue #951 → #942): the planned unified governance `retire()`
-/// (DI-2, decision #925; docs/architecture.md §4.7) is a governance-tier action
-/// gated by this same TimelockController (the timelock already holds ADMIN_ROLE
-/// on VaultRegistry and RobotMoneyVault — asserted by the AC1 tests below). When
-/// #942 implements `retire()`, add an AC3-style coverage test here proving the
-/// retire action is reachable ONLY via the schedule → mine delay → execute path
-/// and reverts on a direct ADMIN_ROLE EOA call (mirror `_scheduleAndExecute` /
-/// the AC2 direct-call-reverts pattern). No new test is added in this dev-scout
-/// pass — `retire()` does not exist yet; this note marks the entrypoint #942 must
-/// exercise so the timelock gate on the new lifecycle action is not left untested.
+/// Unified governance `retire()` (DI-2, decision #925; docs/architecture.md §4.7)
+/// is a governance-tier action gated by this same TimelockController (the timelock
+/// holds ADMIN_ROLE on VaultRegistry and RobotMoneyVault — asserted by the AC1
+/// tests below). The `test_retire_*` / `test_shutdownVault_unchanged_*` tests in
+/// the "#942" section prove the retire action is reachable ONLY via the
+/// schedule → mine delay → execute path, reverts on a direct ADMIN_ROLE EOA call,
+/// atomically flips registry status `Retired` + the vault deposit-halt in one
+/// executed call, and leaves the emergency `shutdownVault` overlay unchanged.
 contract DeployTimelockTest is Test {
     // ─── Roles ────────────────────────────────────────────────────────────────
 
@@ -460,6 +458,119 @@ contract DeployTimelockTest is Test {
 
         assertEq(
             vault.quarantineAddress(), newQuarantine, "quarantine address must update via timelock"
+        );
+    }
+
+    // ─── #942: unified governance retire() is timelock-gated (DI-2) ───────────
+    //
+    // After DeployTimelock, ADMIN_ROLE on VaultRegistry is held only by the
+    // TimelockController, and the registry is linked to the vault (setRegistry in
+    // the deploy script). The unified governance retire() must therefore be
+    // reachable ONLY via schedule → mine delay → execute; a direct ADMIN_ROLE
+    // EOA call must revert.
+
+    /// @dev Register a vault through the timelock so later retire() tests have a
+    ///      registered target. Returns nothing — registers `address(vault)`.
+    function _registerVaultViaTimelock() internal {
+        VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
+            name: "Retire Target", asset: address(usdc), registeredAt: block.timestamp
+        });
+        bytes memory callData =
+            abi.encodeCall(VaultRegistry.registerVault, (address(vault), meta));
+        bytes32 salt = keccak256("retire-register");
+        vm.prank(safe);
+        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+    }
+
+    /// @notice #942 AC2: a direct (non-timelock) retire() call from the Safe hot
+    ///         key reverts — the Safe holds PROPOSER/EXECUTOR on the timelock, not
+    ///         ADMIN_ROLE on the registry.
+    function test_retire_directHotKeyCallReverts() public {
+        _registerVaultViaTimelock();
+        vm.prank(safe);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
+            )
+        );
+        registry.retire(address(vault));
+    }
+
+    /// @notice #942 AC2: a stranger EOA likewise cannot call retire().
+    function test_retire_directStrangerCallReverts() public {
+        _registerVaultViaTimelock();
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, ADMIN_ROLE
+            )
+        );
+        registry.retire(address(vault));
+    }
+
+    /// @notice #942 AC3: retire() routed through the TimelockController (schedule →
+    ///         delay → execute) atomically sets registry status to `Retired` AND
+    ///         halts vault deposits in one transaction. Pre-delay execution must
+    ///         revert, proving the action is reachable only after the delay.
+    function test_retire_succeedsViaTimelock_atomicallyHaltsDeposits() public {
+        _registerVaultViaTimelock();
+
+        // Pre-condition: registry status Active, vault not retired.
+        (, VaultRegistry.VaultStatus pre) = registry.getVault(address(vault));
+        assertEq(uint256(pre), uint256(VaultRegistry.VaultStatus.Active), "Active pre-retire");
+        assertFalse(vault.retired(), "vault not retired pre-retire");
+
+        bytes memory callData = abi.encodeCall(VaultRegistry.retire, (address(vault)));
+        bytes32 salt = keccak256("retire-exec");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(registry), 0, callData, bytes32(0), salt, MIN_DELAY);
+
+        // Pre-delay execution must revert.
+        vm.expectRevert();
+        vm.prank(safe);
+        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(registry), 0, callData, bytes32(0), salt);
+
+        // Both layers flipped atomically in the one executed call: registry
+        // status Retired AND the vault deposit-halt flag set.
+        (, VaultRegistry.VaultStatus post) = registry.getVault(address(vault));
+        assertEq(
+            uint256(post),
+            uint256(VaultRegistry.VaultStatus.Retired),
+            "registry status must be Retired after timelock retire"
+        );
+        assertTrue(vault.retired(), "vault deposit-halt leg must be set after timelock retire");
+        // maxDeposit() is 0 regardless of adapters once retired; assert the
+        // retired branch holds.
+        assertEq(vault.maxDeposit(address(this)), 0, "deposits halted after timelock retire");
+    }
+
+    /// @notice #942: `shutdownVault` is unchanged — still EMERGENCY-tier,
+    ///         vault-only, with NO registry state change. The deployed vault's
+    ///         EMERGENCY_ROLE is held by the deploy script (set at construction
+    ///         and not transferred to the timelock); exercising it directly proves
+    ///         the emergency overlay still works and touches no registry state.
+    function test_shutdownVault_unchanged_makesNoRegistryChange() public {
+        _registerVaultViaTimelock();
+
+        // EMERGENCY_ROLE holder (the script) can shut the vault down directly.
+        vm.prank(address(script));
+        vault.shutdownVault();
+
+        assertTrue(vault.shutdown(), "shutdownVault must set the emergency flag");
+        assertFalse(vault.retired(), "shutdownVault must NOT set the lifecycle retired flag");
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(vault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "shutdownVault must make no registry/lifecycle change"
         );
     }
 
