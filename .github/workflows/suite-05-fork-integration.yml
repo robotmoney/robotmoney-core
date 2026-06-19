@@ -45,10 +45,16 @@
 name: fork-protocol-adapter-integration
 
 on:
-  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
+  # HEAVY tier: boots 4 isolated Geth/Anvil devnets (20-25 min wall-clock) and is
+  # the merge gate for `dev` — it runs on every pull_request targeting dev (no path
+  # filter, so the gate always reports for any branch merging to dev) and on push to
+  # dev for merged-commit coverage. Feature PRs into phase branches skip this suite
+  # and rely on suite-06 (rmpc-unit) for fast feedback.
+  # See docs/development/ci-suites.md (CI velocity tiers).
   push:
-    branches: [dev, "dev-phase-*"]
+    branches: [dev]
   pull_request:
+    branches: [dev]
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
