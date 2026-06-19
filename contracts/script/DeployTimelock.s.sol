@@ -21,6 +21,14 @@ interface ISafeMinimal {
     function getThreshold() external view returns (uint256);
 }
 
+/// @dev Minimal vault interface used to link the registry into the vault so the
+///      unified governance `retire()` action (DI-2) can drive the vault's
+///      deposit-halt leg. `setRegistry` is set-once and ADMIN_ROLE-gated.
+interface IRetirableVaultLink {
+    function setRegistry(address newRegistry) external;
+    function registry() external view returns (address);
+}
+
 /// @title DeployTimelock
 /// @notice Deploy an OZ TimelockController and transfer ADMIN_ROLE on all five
 ///         Robot Money contracts (RobotMoneyVault, RobotMoneyGateway,
@@ -148,6 +156,16 @@ contract DeployTimelock is Script {
         // 2. Grant ADMIN_ROLE to the timelock on all five contracts, then
         //    revoke ADMIN_ROLE from msg.sender (the deployer).
         //    Order: grant → verify → revoke to ensure we never lose admin.
+
+        // Link the registry to the vault so the unified governance retire action
+        // (VaultRegistry.retire) can drive the vault's deposit-halt leg. This is
+        // the set-once ADMIN_ROLE-gated `setRegistry`, so it must run while the
+        // deployer still holds ADMIN_ROLE on the vault (i.e. before the revoke
+        // below). The vault gates `retire()`/`unretire()` to this registry only.
+        IRetirableVaultLink(d.vault).setRegistry(d.registry);
+        require(
+            IRetirableVaultLink(d.vault).registry() == d.registry, "Vault registry link not set"
+        );
 
         // RobotMoneyVault
         IAccessControl(d.vault).grantRole(ADMIN_ROLE, address(timelock));

@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -193,6 +193,48 @@ function test_setVaultStatus_revertsForNotRegistered() public;
 
 ```solidity
 function test_setVaultStatus_revertsForUnauthorizedCaller() public;
+```
+
+### test_retire_setsRetiredStatusAndHaltsVaultDeposits
+
+
+```solidity
+function test_retire_setsRetiredStatusAndHaltsVaultDeposits() public;
+```
+
+### test_retire_emitsVaultStatusChanged
+
+
+```solidity
+function test_retire_emitsVaultStatusChanged() public;
+```
+
+### test_retire_revertsForNotRegistered
+
+
+```solidity
+function test_retire_revertsForNotRegistered() public;
+```
+
+### test_retire_revertsForUnauthorizedCaller
+
+
+```solidity
+function test_retire_revertsForUnauthorizedCaller() public;
+```
+
+### test_reactivate_setsActiveStatusAndReopensVaultDeposits
+
+
+```solidity
+function test_reactivate_setsActiveStatusAndReopensVaultDeposits() public;
+```
+
+### test_reactivate_revertsForUnauthorizedCaller
+
+
+```solidity
+function test_reactivate_revertsForUnauthorizedCaller() public;
 ```
 
 ### test_getVault_revertsForNotRegistered

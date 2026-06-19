@@ -19,6 +19,23 @@ contract MockDefaultWeightsRouter {
     }
 }
 
+/// @notice Minimal stand-in for `RobotMoneyVault` exposing the deposit-halt legs
+///         (`retire`/`unretire`) the registry's unified governance `retire`
+///         action drives. Records whether each was called so the registry test
+///         can assert the cross-contract call landed.
+contract MockRetirableVault {
+    bool public retiredCalled;
+    bool public unretiredCalled;
+
+    function retire() external {
+        retiredCalled = true;
+    }
+
+    function unretire() external {
+        unretiredCalled = true;
+    }
+}
+
 contract VaultRegistryTest is Test {
     VaultRegistry internal registry;
 
@@ -201,6 +218,90 @@ contract VaultRegistryTest is Test {
         );
         vm.prank(stranger);
         registry.setVaultStatus(vault1, VaultRegistry.VaultStatus.Paused);
+    }
+
+    // ─── retire (unified governance action, DI-2) ─────────────────────────────
+
+    function test_retire_setsRetiredStatusAndHaltsVaultDeposits() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.retire(address(mockVault));
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Retired),
+            "registry status must be Retired"
+        );
+        assertTrue(mockVault.retiredCalled(), "vault deposit-halt leg must be called");
+    }
+
+    function test_retire_emitsVaultStatusChanged() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        vm.expectEmit(true, true, false, false);
+        emit VaultRegistry.VaultStatusChanged(
+            address(mockVault), VaultRegistry.VaultStatus.Retired, block.timestamp
+        );
+        registry.retire(address(mockVault));
+        vm.stopPrank();
+    }
+
+    function test_retire_revertsForNotRegistered() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.prank(admin);
+        vm.expectRevert(VaultRegistry.NotRegistered.selector);
+        registry.retire(address(mockVault));
+    }
+
+    function test_retire_revertsForUnauthorizedCaller() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.prank(admin);
+        registry.registerVault(address(mockVault), meta1);
+
+        bytes32 role = registry.ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+            )
+        );
+        vm.prank(stranger);
+        registry.retire(address(mockVault));
+    }
+
+    function test_reactivate_setsActiveStatusAndReopensVaultDeposits() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.retire(address(mockVault));
+        registry.reactivate(address(mockVault));
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "registry status must be Active after reactivate"
+        );
+        assertTrue(mockVault.unretiredCalled(), "vault deposit-reopen leg must be called");
+    }
+
+    function test_reactivate_revertsForUnauthorizedCaller() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.prank(admin);
+        registry.registerVault(address(mockVault), meta1);
+
+        bytes32 role = registry.ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, role
+            )
+        );
+        vm.prank(stranger);
+        registry.reactivate(address(mockVault));
     }
 
     // ─── getVault ────────────────────────────────────────────────────────────

@@ -3602,6 +3602,19 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "registry",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "removeAdapter",
     inputs: [
       {
@@ -3643,6 +3656,26 @@ export const robotMoneyVaultAbiGenerated = [
     ],
     outputs: [],
     stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "retire",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "retired",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
   },
   {
     type: "function",
@@ -3787,6 +3820,19 @@ export const robotMoneyVaultAbiGenerated = [
     inputs: [
       {
         name: "newAddr",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "setRegistry",
+    inputs: [
+      {
+        name: "newRegistry",
         type: "address",
         internalType: "address",
       },
@@ -3967,6 +4013,13 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "function",
     name: "unpause",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "unretire",
     inputs: [],
     outputs: [],
     stateMutability: "nonpayable",
@@ -4492,6 +4545,31 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "event",
+    name: "RegistrySet",
+    inputs: [
+      {
+        name: "oldRegistry",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "newRegistry",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Retired",
+    inputs: [],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "RoleAdminChanged",
     inputs: [
       {
@@ -4613,6 +4691,12 @@ export const robotMoneyVaultAbiGenerated = [
         internalType: "uint256",
       },
     ],
+    anonymous: false,
+  },
+  {
+    type: "event",
+    name: "Unretired",
+    inputs: [],
     anonymous: false,
   },
   {
@@ -5062,6 +5146,11 @@ export const robotMoneyVaultAbiGenerated = [
   },
   {
     type: "error",
+    name: "OnlyRegistry",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "PerDepositCapExceeded",
     inputs: [],
   },
@@ -5073,6 +5162,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "ReentrancyGuardReentrantCall",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "RegistryAlreadySet",
     inputs: [],
   },
   {
@@ -5105,6 +5199,11 @@ export const robotMoneyVaultAbiGenerated = [
   {
     type: "error",
     name: "UnauthorizedRebalancer",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "VaultRetired",
     inputs: [],
   },
   {
@@ -5349,6 +5448,19 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "reactivate",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "registerVault",
     inputs: [
       {
@@ -5393,6 +5505,19 @@ export const registryAbiGenerated = [
       },
       {
         name: "callerConfirmation",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "retire",
+    inputs: [
+      {
+        name: "vault",
         type: "address",
         internalType: "address",
       },

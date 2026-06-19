@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -178,6 +178,39 @@ Whether the vault has been permanently shut down. Irreversible.
 
 ```solidity
 bool public shutdown
+```
+
+
+### retired
+Whether the vault has been retired by the unified governance
+`retire()` lifecycle action (DI-2; docs/architecture.md §4.7).
+When true, direct deposits/mints are hard-stopped at the vault.
+Distinct from the emergency `shutdown` flag so the two
+enforcement paths never alias: `shutdown` is an EMERGENCY_ROLE
+vault-only overlay that makes no lifecycle decision, whereas
+`retired` is set only by the governance retire action flipping
+the registry to `Retired` in the same call. Recovery is the
+deliberate governance abort `VaultRegistry.setVaultStatus(vault,
+Active)` reflected back via `unretire()`.
+
+
+```solidity
+bool public retired
+```
+
+
+### registry
+Linked `VaultRegistry`. Set once by `ADMIN_ROLE` after both
+contracts are deployed. The registry is the only address allowed
+to drive the vault's `retire()` / `unretire()` deposit-halt legs,
+so the unified governance retire action (registry status flip +
+vault deposit halt) lands atomically in a single timelock call to
+`VaultRegistry.retire(vault)` without granting the registry full
+`ADMIN_ROLE` over the vault.
+
+
+```solidity
+address public registry
 ```
 
 
@@ -399,8 +432,8 @@ function maxRedeem(address owner) public view override returns (uint256);
 ### maxDeposit
 
 Maximum assets that can be deposited for `receiver` given current vault state.
-Returns 0 when deposits are paused, the vault is shutdown, no adapters are active,
-or the TVL cap has been reached.
+Returns 0 when deposits are paused, the vault is shutdown, retired,
+no adapters are active, or the TVL cap has been reached.
 
 
 ```solidity
@@ -668,6 +701,53 @@ function forceRemoveAdapter(uint256 index) external onlyRole(EMERGENCY_ROLE);
 |----|----|-----------|
 |`index`|`uint256`|Registry index of the adapter to force-remove.|
 
+
+### setRegistry
+
+Set the linked `VaultRegistry` once. Restricted to `ADMIN_ROLE`
+(TimelockController in production — INV-3). The registry is the
+only address permitted to call `retire()` / `unretire()`; this
+dedicated link keeps the registry's authority over the vault
+narrow (deposit-halt only, not full admin) while letting the
+unified governance retire action land atomically.
+
+
+```solidity
+function setRegistry(address newRegistry) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newRegistry`|`address`|Address of the `VaultRegistry` (must not be zero).|
+
+
+### retire
+
+Retire the vault: hard-stop direct deposits/mints. Callable ONLY
+by the linked registry, which sets registry status to `Retired`
+in the same call (atomic unified governance retire, DI-2). Not an
+emergency control: it makes the deliberate lifecycle decision the
+registry status flip records. Idempotent — re-retiring a retired
+vault is a no-op event. Withdrawals/redemptions stay open
+(ERC-4626 `redeem` is never revoked; ADR-0009).
+
+
+```solidity
+function retire() external;
+```
+
+### unretire
+
+Reactivate a retired vault and re-open direct deposits. Callable
+ONLY by the linked registry, which flips registry status back to
+`Active` in the same call (governance abort path, mirroring the
+`Retired → Active` transition in docs/architecture.md §4.7).
+
+
+```solidity
+function unretire() external;
+```
 
 ### shutdownVault
 
@@ -1344,6 +1424,37 @@ event UnroutedDeposit(uint256 amount);
 |----|----|-----------|
 |`amount`|`uint256`|USDC that remains idle in the vault after both routing passes.|
 
+### RegistrySet
+Emitted when the linked `VaultRegistry` reference is set.
+
+
+```solidity
+event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`oldRegistry`|`address`|Previous registry address (0 = unset).|
+|`newRegistry`|`address`|New registry address.|
+
+### Retired
+Emitted when the vault is retired by the governance `retire` action.
+
+
+```solidity
+event Retired();
+```
+
+### Unretired
+Emitted when a retired vault is reactivated (governance abort).
+
+
+```solidity
+event Unretired();
+```
+
 ## Errors
 ### TVLCapExceeded
 Deposit would push total managed assets above `tvlCap`.
@@ -1375,6 +1486,30 @@ Operation rejected because the vault has been shut down.
 
 ```solidity
 error VaultShutdown();
+```
+
+### VaultRetired
+Deposit/mint rejected because the vault has been retired.
+
+
+```solidity
+error VaultRetired();
+```
+
+### OnlyRegistry
+`retire()` / `unretire()` caller is not the linked registry.
+
+
+```solidity
+error OnlyRegistry();
+```
+
+### RegistryAlreadySet
+`setRegistry` called more than once (registry is set-once).
+
+
+```solidity
+error RegistryAlreadySet();
 ```
 
 ### NotShutdown

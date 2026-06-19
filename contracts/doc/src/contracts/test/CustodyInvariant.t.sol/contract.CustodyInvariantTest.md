@@ -1,5 +1,5 @@
 # CustodyInvariantTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/CustodyInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/271183ff0750d8d86b43d3f447e02f6eb9f2e265/contracts/test/CustodyInvariant.t.sol)
 
 **Inherits:**
 StdInvariant, Test
@@ -34,6 +34,13 @@ NoYieldTestAdapter internal adapter
 ```
 
 
+### adapter2
+
+```solidity
+NoYieldTestAdapter internal adapter2
+```
+
+
 ### handler
 
 ```solidity
@@ -54,6 +61,24 @@ address internal admin = makeAddr("invAdmin")
 
 ```solidity
 function setUp() public;
+```
+
+### invariant_routerHoldsZeroUsdc
+
+INV-1/INV-2 (router custody): the vault never strands USDC outside
+its accounted custody. `totalAssets()` is exactly the vault's idle
+USDC plus the USDC held by active adapters; every USDC the vault or
+its active adapters hold is therefore part of NAV (none is lost in
+a "router" limbo). Inactive adapters must hold no USDC — a graceful
+remove only deactivates an already-drained adapter, so a positive
+balance on an inactive adapter would be stranded, unredeemable
+custody. handler_rebalance additionally asserts the stronger
+post-condition that idle "router" USDC is fully routed out after a
+rebalance.
+
+
+```solidity
+function invariant_routerHoldsZeroUsdc() public view;
 ```
 
 ### invariant_holdersNeverExceedTotalAssets

@@ -368,35 +368,44 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 |---|---|---|---|---|
 | **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
 | **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible halt. Router stops routing; vault `pause()` halts deposits and withdrawals. `unpause()` is governance. |
-| **Active → Retired** | registry | `setVaultStatus(vault, Retired)` | governance (`ADMIN_ROLE`) | Withdraw-only at the router layer: `PortfolioRouter` routes **no** new deposits; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged`. |
+| **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. |
 | **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
 | **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
-| **Retired → Active** (abort) | registry | `setVaultStatus(vault, Active)` | governance (`ADMIN_ROLE`) | Aborts a deprecation; the vault returns to normal routing. |
+| **Retired → Active** (abort) | registry + vault | `VaultRegistry.reactivate(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic abort: sets registry status `Active` **and** re-opens direct vault deposits (`IRetirableVault.unretire()`). The vault returns to normal routing. Emits `VaultStatusChanged` + `Unretired`. |
 | **Retired → empty** | — | depositors `redeem` | depositor only | Holders drain at their own pace; no protocol action moves their funds (ADR-0009). |
 | **empty → deregistered** | registry | eventual removal from the registry vault set | governance (`ADMIN_ROLE`) | Conceptual terminal state once TVL has fully drained. No deregistration function exists at HEAD; this is the planned end of the lifecycle, not a shipped mechanism. |
 
-**How the two layers relate.** The registry `Retired` status and the
-vault `shutdown` flag are two independent enforcement points today:
-`Retired` stops the **router** from sending new deposits, while
-`shutdownVault` stops **direct** deposits on the vault contract itself.
-A vault can therefore be `Retired` in the registry yet still accept
-direct deposits, or be `shut-down` at the vault while still `Active` in
-the registry. `shutdownVault` is the *vault-level enforcement step* of a
-deprecation — the half that closes the direct-deposit door — but on its
-own it is an emergency control that makes no lifecycle decision.
+**How the two layers relate.** Two enforcement layers exist: the
+registry `Retired` status (stops the **router** from sending new
+deposits) and the vault deposit-halt (stops **direct** deposits on the
+vault contract itself). Setting them piecemeal can drift — e.g. the bare
+`setVaultStatus(vault, Retired)` flips only the router layer, leaving the
+vault still directly depositable, and the emergency `shutdownVault` flips
+only the vault layer while the registry still reads `Active`. The unified
+`VaultRegistry.retire(vault)` action (below) flips **both** layers in one
+governance call so they cannot drift; `shutdownVault` remains the
+emergency-only overlay that makes no lifecycle decision.
 
-**Decided target (per decision #925, graduated-authority model).** The
+**Unified retire (per decision #925, graduated-authority model).** The
 graduated-authority decision closes the "`Retired` in the registry but
-still directly depositable" gap by adding a single deliberate
-governance `retire` action that sets registry `Retired` **and** halts
-vault deposits in one timelock-gated call, so the two layers cannot
-drift. Emergency `shutdownVault` stays `EMERGENCY_ROLE`, vault-only,
-with no registry/lifecycle change — the hot key never makes a lifecycle
-decision. This `retire` action is decided but **not yet implemented**;
-the contract work is tracked in the custody-invariants phase (issue
-#929). Until it ships, deprecation is the two-step
-`setVaultStatus(Retired)` (governance) + optional `shutdownVault`
-(emergency) sequence described in the table above.
+still directly depositable" gap with a single deliberate governance
+`retire` action that sets registry `Retired` **and** halts vault
+deposits in one timelock-gated call, so the two layers cannot drift.
+This is implemented as `VaultRegistry.retire(vault)` (gated to
+`ADMIN_ROLE`, held by the `TimelockController` in production): it flips
+`_status[vault]` to `Retired` and, in the same transaction, calls the
+vault's deposit-halt leg `IRetirableVault.retire()`, which sets the
+vault's `retired` flag (distinct from the emergency `shutdown` flag so
+the two paths never alias). The vault gates `retire()`/`unretire()` to
+its linked registry only (set once via `setRegistry`), so the registry's
+authority over the vault is narrow (deposit-halt only, not full
+`ADMIN_ROLE`). The abort path is `VaultRegistry.reactivate(vault)`
+(status → `Active` + `IRetirableVault.unretire()`). Emergency
+`shutdownVault` stays `EMERGENCY_ROLE`, vault-only, with no
+registry/lifecycle change — the hot key never makes a lifecycle decision.
+A direct hot-key `ADMIN_ROLE` EOA call to `retire()` reverts; it is
+reachable only via the timelock schedule → delay → execute path
+(`contracts/test/DeployTimelock.t.sol`).
 
 **Authority tier.** Transitions follow the graduated-authority model
 (see §4.5 and the authority tier below): permissionless actions need no
@@ -410,7 +419,7 @@ depositor principal is the depositor's own signed action alone.
 |---|---|
 | sweep foreign token, trigger harvest | permissionless |
 | `pause`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
-| `unpause`, `restoreVault`, `retire` (planned), `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
+| `unpause`, `restoreVault`, `retire`, `reactivate`, `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
 | `redeem` / move depositor principal | depositor only |
 
 **No assisted migration.** At no point does the protocol move a

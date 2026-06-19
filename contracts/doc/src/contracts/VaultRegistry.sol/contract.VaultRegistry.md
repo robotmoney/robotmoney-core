@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -143,6 +143,48 @@ function registerVault(address vault, VaultMetadata calldata metadata)
 |----|----|-----------|
 |`vault`|`address`|   Address of the vault contract to register (must not be zero or already registered).|
 |`metadata`|`VaultMetadata`|Human-readable name and asset address for the vault.|
+
+
+### retire
+
+Unified governance retire: atomically set the vault's registry
+status to `Retired` AND halt the vault's direct deposits in a
+single call. Restricted to `ADMIN_ROLE` (held by the
+TimelockController in production — DeployTimelock, INV-3), so a
+direct hot-key call reverts. This is the deliberate, governance
+lifecycle decision (decision #925); the emergency
+`RobotMoneyVault.shutdownVault` overlay is unaffected.
+Withdrawals/redemptions stay open at the vault throughout
+(ERC-4626 `redeem` is never revoked; ADR-0009).
+
+
+```solidity
+function retire(address vault) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of an already-registered vault.|
+
+
+### reactivate
+
+Abort a deprecation: atomically set the vault's registry status
+back to `Active` AND re-open the vault's direct deposits. The
+governance counterpart to `retire`, mirroring the
+`Retired → Active` abort in docs/architecture.md §4.7. Restricted
+to `ADMIN_ROLE` (TimelockController in production).
+
+
+```solidity
+function reactivate(address vault) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of an already-registered vault.|
 
 
 ### setVaultStatus
