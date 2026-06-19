@@ -570,7 +570,11 @@ explorer API plus live chain reads for vault state. It contains:
 - Vault detail view: single-vault breakdown — adapter allocations and
   their individual TVL, rebalance state, fee schedule, caps, receipt
   token address, and historical TVL and activity charts from the
-  explorer.
+  explorer. A Composition section answers "if I deposit here, what do I
+  get back?": it shows the receipt token plus the underlying basket
+  assets — live `shortlist()` entries for VOLATILE and active-SPECULATIVE
+  basket vaults, and static labels for STABLE_YIELD and inactive
+  SPECULATIVE vaults.
 - Portfolio Router view: active vaults, current target weights, pending
   governance proposal (if any), and historical weight changes.
 - Protocol stats: total TVL across all active vaults, number of unique

@@ -449,8 +449,8 @@ export type RouterActionName = "deposit";
 
 /**
  * Minimal ABI fragment for AgentTokenVault.shortlist() and
- * ProtocolAssetVault.shortlist() — called by VaultCardAssets /
- * VaultListRowAssets to enumerate the basket composition without a connected
+ * ProtocolAssetVault.shortlist() — called by VaultDetail's Composition
+ * section to enumerate the basket composition without a connected
  * wallet (wagmi useReadContract works without a signer).
  *
  * shortlist() returns an array of ShortlistEntry structs:
