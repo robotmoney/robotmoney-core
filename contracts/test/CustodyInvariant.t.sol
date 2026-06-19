@@ -52,6 +52,7 @@ contract CustodyHandler is Test {
     RobotMoneyVault public immutable vault;
     InvUSDC public immutable usdc;
     InvForeignToken public immutable foreign;
+    address public immutable admin;
 
     address[] public actors;
     address internal currentActor;
@@ -66,10 +67,11 @@ contract CustodyHandler is Test {
         vm.stopPrank();
     }
 
-    constructor(RobotMoneyVault vault_, InvUSDC usdc_, InvForeignToken foreign_) {
+    constructor(RobotMoneyVault vault_, InvUSDC usdc_, InvForeignToken foreign_, address admin_) {
         vault = vault_;
         usdc = usdc_;
         foreign = foreign_;
+        admin = admin_;
         for (uint256 i = 0; i < 4; i++) {
             address a = makeAddr(string.concat("actor", vm.toString(i)));
             actors.push(a);
@@ -113,43 +115,140 @@ contract CustodyHandler is Test {
         return actors[i];
     }
 
-    // ─── SCOUT SEAM (issue #951 → #943): expand custody-invariant harness (AC4) ──
+    // ─── Adapter-custody handlers (issue #943, AC4; seam from #951) ──────────
     //
-    // Canonical: docs/prd.md §12 INV-1/INV-2; contracts/test/CustodyInvariantGuard.t.sol;
-    // docs/code-review/smart-contract-holistic-review-20260618.md (custody/USDC
-    // invariants). The current handler drives deposit / withdraw / donate /
-    // sweep-foreign. #943 must extend it with three more fuzzed sequences so the
-    // INV-2 redeemability and NAV-monotonicity invariants below also hold across
-    // the vault's adapter-custody surface. Add these as NEW public handler
-    // methods in #943 (each new public method widens the fuzz target set, which
-    // is why they are NOT added here — a dev-scout must not change runtime fuzz
-    // behaviour). Seam shape for each:
-    //
-    //   function rebalance(uint256 seed) external { ... vault.rebalance(); ... }
-    //     - Drives the permissionless `RobotMoneyVault.rebalance()` (and/or
-    //       admin `adminRebalance(targetBalances)` under vm.prank(admin)) so
-    //       custody invariants survive idle⇄adapter reshuffles. Respect
-    //       `setMaxRebalanceBpsPerCall` / `setMinRebalanceInterval` (warp time)
-    //       to avoid all-revert no-ops.
-    //
-    //   function removeAsset(uint256 seed) external { ... vault.removeAdapter(i) ... }
-    //     - Exercises ADMIN_ROLE `removeAdapter(index)` (graceful, funds reabsorbed
-    //       to idle) and, separately, EMERGENCY `forceRemoveAdapter(index)` /
-    //       `emergencyWithdrawAdapter(index)`. INV-2 must hold after reabsorb;
-    //       force-remove treats adapter assets as lost (NAV may fall) — assert the
-    //       *redeemable ≤ totalAssets* relation, not strict NAV monotonicity, in
-    //       that branch (the existing donation-only monotonicity invariant would
-    //       need a force-remove-aware variant).
-    //
-    //   function routerZeroBalance(uint256 seed) external { ... }
-    //     - Drives the vault into a router/adapter-zero-balance state (e.g. remove
-    //       all adapters or rebalance everything to idle) and asserts deposits,
-    //       redemptions and totalAssets accounting stay correct with no adapter
-    //       custody outstanding (router-zero-balance custody invariant).
-    //
-    // Wire each new handler so `targetSelector`/`targetContract` in the test
-    // contract picks it up. Keep `try/catch` on the bounded calls so a legitimate
-    // revert (cooldown, cap, empty set) does not abort an invariant run.
+    // The four handlers above drive deposit / withdraw / donate / sweep. The
+    // three below extend coverage across the vault's adapter-custody surface so
+    // the redeemability / NAV / router-zero invariants below hold under
+    // rebalances and adapter add/remove churn. Each is a public method, so the
+    // single `targetContract(address(handler))` wiring picks it up automatically.
+    // All adapter mutations are bounded and wrapped in try/catch so a legitimate
+    // revert (cooldown, empty-adapter, NoActiveAdapters) does not abort a run.
+
+    /// @notice Equal-weight rebalance across the two active adapters, then a
+    ///         post-condition check that the vault routed every idle USDC back
+    ///         out (router/idle custody == 0 when adapters can absorb it).
+    /// @dev Warps past `minRebalanceInterval` and pranks `admin` (rebalance is
+    ///      ADMIN_ROLE/KEEPER_ROLE gated) so the throttle does not make every
+    ///      call a no-op revert. `setMaxRebalanceBpsPerCall(MAX_..._CEILING)` is
+    ///      done once in setUp so a single call can move a meaningful slice.
+    function handler_rebalance(uint256 seed) external {
+        // Warp a fuzzed amount past the cooldown so calls actually fire.
+        vm.warp(block.timestamp + vault.minRebalanceInterval() + (seed % 4 days));
+        vm.prank(admin);
+        try vault.rebalance() {
+            // Post-condition: with two full-cap adapters, a rebalance routes all
+            // idle USDC into adapters — the vault holds zero idle/"router" USDC.
+            if (vault.adapterCount() > 0 && _hasActiveAdapter() && vault.totalSupply() > 0) {
+                assertEq(
+                    usdc.balanceOf(address(vault)),
+                    0,
+                    "vault holds idle USDC after rebalance (router not zeroed)"
+                );
+            }
+        } catch {}
+    }
+
+    /// @notice Graceful adapter removal with reabsorb-to-idle: drain an adapter
+    ///         (assets flow back to idle, NAV preserved), donate USDC so NAV
+    ///         strictly rises, deactivate the now-empty adapter, then assert the
+    ///         removed adapter holds zero balance.
+    /// @dev Uses EMERGENCY `emergencyWithdrawAdapter` (graceful reabsorb to idle)
+    ///      + ADMIN `removeAdapter` — the production analogue of "remove a basket
+    ///      asset and re-absorb it". Never calls `forceRemoveAdapter` here so the
+    ///      NAV floor below is not broken by an intentional loss.
+    function handler_removeAndReabsorb(uint256 seed) external {
+        uint256 count = vault.adapterCount();
+        if (count == 0) return;
+        uint256 index = seed % count;
+        (, , bool active, , ) = vault.getAdapterInfo(index);
+        if (!active) return;
+
+        // Keep at least one active adapter so deposits/redeems still work.
+        if (_activeAdapterTally() <= 1) return;
+
+        uint256 navBefore = vault.totalAssets();
+
+        // 1. Reabsorb: drain the adapter's assets back to the vault's idle balance.
+        vm.prank(admin);
+        try vault.emergencyWithdrawAdapter(index) {} catch {
+            return;
+        }
+        // Reabsorb must not destroy value: NAV is preserved (assets moved idle).
+        assertGe(vault.totalAssets(), navBefore, "reabsorb lost NAV");
+
+        // 2. Donate USDC so NAV strictly rises before the asset is retired.
+        uint256 donation = bound(seed, ONE_USDC, 10_000 * ONE_USDC);
+        usdc.mint(address(vault), donation);
+        assertGt(vault.totalAssets(), navBefore, "donation did not raise NAV");
+
+        // 3. Re-open deposits (emergencyWithdrawAdapter pauses them) and retire
+        //    the now-empty adapter. removeAdapter requires a zero balance.
+        vm.startPrank(admin);
+        vault.unpause();
+        (, , , uint256 adapterBalance, ) = vault.getAdapterInfo(index);
+        if (adapterBalance == 0) {
+            try vault.removeAdapter(index) {} catch {}
+        }
+        vm.stopPrank();
+
+        // 4. The retired/drained adapter must hold no USDC.
+        (, , , uint256 finalBalance, ) = vault.getAdapterInfo(index);
+        assertEq(finalBalance, 0, "removed adapter still holds balance");
+    }
+
+    /// @notice Drive the vault to a router/adapter-zero-balance state by draining
+    ///         every active adapter to idle, then assert deposit / redeem /
+    ///         totalAssets accounting still holds with no adapter custody out.
+    /// @dev `emergencyWithdrawAdapter` reabsorbs to idle (no loss); after it the
+    ///      summed adapter custody is zero and totalAssets equals the vault's own
+    ///      idle USDC balance.
+    function handler_routerZeroBalance(uint256) external {
+        uint256 count = vault.adapterCount();
+        if (count == 0) return;
+        vm.startPrank(admin);
+        for (uint256 i = 0; i < count; i++) {
+            (, , bool active, , ) = vault.getAdapterInfo(i);
+            if (!active) continue;
+            try vault.emergencyWithdrawAdapter(i) {} catch {}
+        }
+        // Re-open deposits that emergencyWithdrawAdapter paused.
+        try vault.unpause() {} catch {}
+        vm.stopPrank();
+
+        // With every adapter drained, all custody is the vault's idle balance:
+        // totalAssets == idle USDC and no adapter holds anything.
+        uint256 adapterCustody;
+        for (uint256 i = 0; i < count; i++) {
+            (, , bool active, uint256 bal, ) = vault.getAdapterInfo(i);
+            if (active) adapterCustody += bal;
+        }
+        assertEq(adapterCustody, 0, "adapter custody outstanding after full drain");
+        assertEq(
+            vault.totalAssets(),
+            usdc.balanceOf(address(vault)),
+            "totalAssets diverged from idle balance with zero adapter custody"
+        );
+    }
+
+    /// @dev True if at least one registered adapter is still active.
+    function _hasActiveAdapter() internal view returns (bool) {
+        uint256 count = vault.adapterCount();
+        for (uint256 i = 0; i < count; i++) {
+            (, , bool active, , ) = vault.getAdapterInfo(i);
+            if (active) return true;
+        }
+        return false;
+    }
+
+    /// @dev Count of currently active adapters.
+    function _activeAdapterTally() internal view returns (uint256 tally) {
+        uint256 count = vault.adapterCount();
+        for (uint256 i = 0; i < count; i++) {
+            (, , bool active, , ) = vault.getAdapterInfo(i);
+            if (active) tally++;
+        }
+    }
 }
 
 contract CustodyInvariantTest is StdInvariant, Test {
@@ -157,6 +256,7 @@ contract CustodyInvariantTest is StdInvariant, Test {
     InvUSDC internal usdc;
     InvForeignToken internal foreign;
     NoYieldTestAdapter internal adapter;
+    NoYieldTestAdapter internal adapter2;
     CustodyHandler internal handler;
 
     address internal admin = makeAddr("invAdmin");
@@ -174,35 +274,75 @@ contract CustodyInvariantTest is StdInvariant, Test {
             admin // EMERGENCY_ROLE
         );
 
+        // Two full-cap adapters so the rebalance / remove-and-reabsorb handlers
+        // (#943) have something to shuffle custody between while still leaving at
+        // least one active adapter for deposits/redeems. Each cap is 10_000 bps;
+        // the equal-weight target splits 50/50, and the absolute caps let a
+        // rebalance route 100% of idle USDC into adapters (router-zero check).
         adapter = new NoYieldTestAdapter(address(usdc), address(vault));
+        adapter2 = new NoYieldTestAdapter(address(usdc), address(vault));
         vm.startPrank(admin);
         vault.setAdapterAllowed(address(adapter), true);
+        vault.setAdapterAllowed(address(adapter2), true);
         vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
         vault.addAdapter(address(adapter), 10_000);
+        vault.addAdapter(address(adapter2), 10_000);
+        // Allow a single rebalance to move the largest permitted slice (50%) so
+        // the handler's post-rebalance router-zero assertion is exercisable, and
+        // shorten the cooldown floor so warps reliably clear the throttle.
+        vault.setMaxRebalanceBpsPerCall(vault.MAX_REBALANCE_BPS_CEILING());
+        vault.setMinRebalanceInterval(vault.MIN_REBALANCE_INTERVAL_FLOOR());
         vm.stopPrank();
 
-        handler = new CustodyHandler(vault, usdc, foreign);
+        handler = new CustodyHandler(vault, usdc, foreign, admin);
         targetContract(address(handler));
-
-        // SCOUT SEAM (issue #951 → #943): when #943 adds the rebalance /
-        // remove-asset-reabsorb / router-zero-balance handler methods (see the
-        // seam block at the foot of CustodyHandler), constrain the fuzz target to
-        // the intended selectors via `targetSelector(FuzzSelector(...))` if any
-        // new view/admin helpers must be excluded. The current single
-        // `targetContract` line already auto-includes every public handler
-        // method, so newly added handler entrypoints are picked up automatically.
+        // The single targetContract line auto-includes every public handler
+        // method, including the #943 adapter-custody handlers (handler_rebalance,
+        // handler_removeAndReabsorb, handler_routerZeroBalance). The internal
+        // view helpers (_hasActiveAdapter, _activeAdapterTally) are excluded from
+        // fuzzing because they are not external/public.
     }
 
-    // SCOUT SEAM (issue #951 → #943): NEW invariants to add alongside the new
-    // handler sequences. The two existing redeemability/NAV invariants below
-    // already cover deposit/withdraw/donate/sweep; #943 must confirm they still
-    // hold under rebalance and graceful adapter-reabsorb, and add a
-    // force-remove-aware NAV invariant. Because EMERGENCY `forceRemoveAdapter`
-    // intentionally treats adapter assets as lost, NAV can fall on that branch —
-    // the donation-monotonicity assumption no longer holds globally. #943 should
-    // either (a) keep force-remove out of the handler used by a strict NAV
-    // invariant, or (b) replace strict NAV monotonicity with a redeemable ≤ NAV
-    // invariant that survives the loss. Document the choice inline when #943 lands.
+    // Force-remove caveat (issue #943, AC4): EMERGENCY `forceRemoveAdapter`
+    // intentionally treats adapter assets as lost, so NAV would fall on that
+    // branch and break a strict NAV-monotonicity invariant. Per the #951 seam,
+    // we take option (a): the #943 adapter-custody handlers
+    // (handler_rebalance / handler_removeAndReabsorb / handler_routerZeroBalance)
+    // use only the lossless graceful paths (`rebalance`, `emergencyWithdrawAdapter`
+    // reabsorb-to-idle, then `removeAdapter`). forceRemoveAdapter is deliberately
+    // kept OUT of the fuzzed handler set, so the redeemability / NAV-floor /
+    // router-zero invariants below all stay valid under adapter churn.
+
+    /// @notice INV-1/INV-2 (router custody): the vault never strands USDC outside
+    ///         its accounted custody. `totalAssets()` is exactly the vault's idle
+    ///         USDC plus the USDC held by active adapters; every USDC the vault or
+    ///         its active adapters hold is therefore part of NAV (none is lost in
+    ///         a "router" limbo). Inactive adapters must hold no USDC — a graceful
+    ///         remove only deactivates an already-drained adapter, so a positive
+    ///         balance on an inactive adapter would be stranded, unredeemable
+    ///         custody. handler_rebalance additionally asserts the stronger
+    ///         post-condition that idle "router" USDC is fully routed out after a
+    ///         rebalance.
+    function invariant_routerHoldsZeroUsdc() public view {
+        uint256 count = vault.adapterCount();
+        uint256 activeAdapterCustody;
+        for (uint256 i = 0; i < count; i++) {
+            (, , bool active, uint256 bal, ) = vault.getAdapterInfo(i);
+            if (active) {
+                activeAdapterCustody += bal;
+            } else {
+                // An inactive adapter is fully removed from custody accounting;
+                // it must not hold any USDC (would be stranded/unredeemable).
+                assertEq(bal, 0, "inactive adapter strands USDC outside NAV");
+            }
+        }
+        // No USDC escapes accounting: NAV == idle + active adapter custody.
+        assertEq(
+            vault.totalAssets(),
+            usdc.balanceOf(address(vault)) + activeAdapterCustody,
+            "totalAssets diverged from accounted custody"
+        );
+    }
 
     /// @notice INV-2: the sum of every holder's redeemable assets never exceeds
     ///         totalAssets — accounting never over-promises and every share is
