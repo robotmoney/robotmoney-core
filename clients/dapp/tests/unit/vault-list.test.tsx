@@ -6,7 +6,7 @@
  * without an Assets toggle column, and that row click navigation still works.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, waitFor, within, fireEvent } from "./helpers/render";
+import { render, within, fireEvent } from "./helpers/render";
 import { VaultList } from "../../src/components/VaultList";
 import { ExplorerProvider } from "../../src/lib/ExplorerContext";
 import type { FetchLike, VaultsResponse, StatsResponse } from "../../src/lib/explorerApi";
