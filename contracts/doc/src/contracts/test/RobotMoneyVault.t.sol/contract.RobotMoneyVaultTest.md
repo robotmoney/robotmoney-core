@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -530,5 +530,46 @@ and when the supplied cap is zero (InvalidCap).
 
 ```solidity
 function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public;
+```
+
+### test_sweepForeignToken_revertsForVaultAsset
+
+INV-1: the vault asset (USDC) can never be swept out — it is a
+protocol/depositor asset counted in NAV and redeemable by holders.
+
+
+```solidity
+function test_sweepForeignToken_revertsForVaultAsset() public;
+```
+
+### test_sweepForeignToken_revertsForShareToken
+
+INV-1: the vault share token can never be swept out.
+
+
+```solidity
+function test_sweepForeignToken_revertsForShareToken() public;
+```
+
+### test_sweepForeignToken_permissionlessToQuarantine
+
+INV-2: a genuinely foreign token is permissionlessly swept to the
+fixed quarantine address by ANY caller — no admin role, no
+caller-supplied recipient (replaces deleted `rescueTokens`).
+
+
+```solidity
+function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+### test_donatingVaultAsset_raisesNavForAllHolders
+
+INV-2: donating the vault asset (USDC) directly to the vault
+strictly increases totalAssets and credits ALL holders pro-rata —
+the donation is absorbed into NAV, not routable to any admin.
+
+
+```solidity
+function test_donatingVaultAsset_raisesNavForAllHolders() public;
 ```
 

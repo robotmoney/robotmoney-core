@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -67,11 +67,13 @@ uint256 public constant MAX_ADAPTERS = 20
 
 
 ### MAX_BPS
-Basis-points denominator (10 000 = 100%).
+Basis-points denominator (10 000 = 100%). Narrowed to `uint16`
+from the shared `BpsMath.BPS_DENOMINATOR` to preserve this
+constant's existing public type and call-site arithmetic.
 
 
 ```solidity
-uint16 public constant MAX_BPS = 10000
+uint16 public constant MAX_BPS = uint16(BpsMath.BPS_DENOMINATOR)
 ```
 
 
@@ -154,6 +156,19 @@ Recipient of collected exit fees.
 
 ```solidity
 address public feeRecipient
+```
+
+
+### quarantineAddress
+Destination for permissionless foreign-token sweeps (INV-1/INV-2).
+Defaults to `ForeignTokenQuarantine.QUARANTINE`; settable only via
+the TimelockController (ADMIN_ROLE, INV-3). The timelock-settable
+model (vs. a pure compile-time constant) allows governance to
+redirect sweeps to an on-chain multisig that can empty the trash.
+
+
+```solidity
+address public quarantineAddress
 ```
 
 
@@ -748,21 +763,46 @@ function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 |`newRecipient`|`address`|New address to receive collected exit fees.|
 
 
-### rescueTokens
+### setQuarantineAddress
 
-Rescue accidentally-sent ERC-20 tokens (cannot rescue USDC or vault shares).
-Restricted to `ADMIN_ROLE`.
+Update the quarantine address for foreign-token sweeps. Restricted
+to `ADMIN_ROLE` (held by TimelockController in production — INV-3).
 
 
 ```solidity
-function rescueTokens(address token, address to) external onlyRole(ADMIN_ROLE);
+function setQuarantineAddress(address newAddr) external onlyRole(ADMIN_ROLE);
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|ERC-20 token to rescue (must not be the vault asset or vault share token).|
-|`to`|`address`|   Recipient address for the rescued tokens.|
+|`newAddr`|`address`|New quarantine address. Must not be address(0).|
+
+
+### sweepForeignToken
+
+Permissionlessly sweep a NON-protected foreign token held by the
+vault to the governed quarantine address (custody invariants
+INV-1/INV-2).
+Anyone may call; the destination is the timelock-gated
+`quarantineAddress` storage variable — never a caller-supplied
+address (INV-1). This replaces the deleted arbitrary-recipient
+`rescueTokens(token,to)` admin function. The vault asset (USDC,
+already counted in `totalAssets` and redeemable) and the vault
+share token cannot be swept; protocol-asset donations therefore
+stay in NAV and accrue pro-rata to all holders (INV-2). Adapter
+strategy tokens live on the adapters, each of which exposes its
+own guarded `sweepForeignToken`.
+
+
+```solidity
+function sweepForeignToken(address token) external nonReentrant;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|Foreign ERC-20 to quarantine. Must not be the vault asset or the vault share token.|
 
 
 ### _setDepositsPaused
@@ -1198,6 +1238,21 @@ event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecip
 |`oldRecipient`|`address`|Previous fee recipient address.|
 |`newRecipient`|`address`|New fee recipient address.|
 
+### QuarantineAddressUpdated
+Emitted when the quarantine address for foreign-token sweeps is updated.
+
+
+```solidity
+event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`oldAddr`|`address`|Previous quarantine address.|
+|`newAddr`|`address`|New quarantine address.|
+
 ### EmergencyWithdrawCalled
 Emitted when the emergency withdrawal flow is triggered (all adapters).
 
@@ -1304,14 +1359,6 @@ A single deposit exceeds the per-deposit cap.
 
 ```solidity
 error PerDepositCapExceeded();
-```
-
-### CannotRescueAsset
-`rescueToken` refused because the token is the vault's own asset (USDC).
-
-
-```solidity
-error CannotRescueAsset();
 ```
 
 ### ZeroAddress

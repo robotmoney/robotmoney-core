@@ -17,6 +17,18 @@ import { describe, it, expect, vi } from "vitest";
 import { render, waitFor } from "./helpers/render";
 import { VaultList } from "../../src/components/VaultList";
 import { VaultDetail } from "../../src/components/VaultDetail";
+
+// Wagmi mock — VaultDetail calls useReadContract for basket vaults (issue
+// #941). render.tsx uses vi.importActual so the WagmiProvider in the tree
+// still receives the real wagmi module; only component-source imports are
+// replaced by this mock (useReadContract returns isLoading:true).
+vi.mock("wagmi", () => ({
+  useReadContract: () => ({ data: undefined, isError: false, isLoading: true }),
+  createConfig: () => ({}),
+  http: () => ({}),
+  fallback: (...args: unknown[]) => args[0],
+  unstable_connector: () => ({}),
+}));
 import { RouterView } from "../../src/components/RouterView";
 import { ProtocolStats } from "../../src/components/ProtocolStats";
 import { ExplorerProvider } from "../../src/lib/ExplorerContext";

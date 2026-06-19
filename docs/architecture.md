@@ -134,8 +134,9 @@ See `docs/technical/governance-decisions.md` for the accepted parameters.
 A Robot Money vault is an individual strategy container with a mandate,
 accepted asset, receipt token, caps, fees, risk label, and status. Each
 vault is independently observable and independently pausable. Retiring a
-vault stops new deposits while preserving redemption rights wherever
-possible.
+vault stops new deposits while preserving redemption rights — the full
+deprecation/retirement lifecycle (registry status, vault shutdown/restore,
+and the authority tier that gates each transition) is canonical in §4.7.
 
 The current production-deployed source-backed vault is
 `RobotMoneyVault`, an ERC-4626 USDC vault with rmUSDC shares,
@@ -224,17 +225,22 @@ mainnet onboarding remain planned work on the Plan tracking issue (#109).
 ### 4.3 Vault Adapters
 
 Adapters are internal to one vault. They normalize venue-specific
-deposit, withdrawal, valuation, and rescue behavior behind
-`IStrategyAdapter`:
+deposit, withdrawal, and valuation behavior behind `IStrategyAdapter`:
 
 - `deploy(uint256 amount)`;
 - `withdraw(uint256 amount) returns (uint256 actual)`;
 - `totalAssets() returns (uint256)`;
-- `rescueTokens(address token, address to)`.
+- `sweepForeignToken(address token)`.
 
-Mutating adapter functions are callable only by the owning vault. Adapter
-selection and caps are privileged vault-management operations and expand
-the audit surface of that vault.
+The value-moving functions (`deploy`, `withdraw`) are callable only by the
+owning vault. Adapter selection and caps are privileged vault-management
+operations and expand the audit surface of that vault.
+
+`sweepForeignToken` is the permissionless foreign-token quarantine sweep
+(custody invariants INV-1/INV-2, see §6 and `docs/prd.md` §12): anyone may
+call it, but it moves only NON-protected tokens to a single hardcoded
+quarantine address — never a caller-supplied recipient. There is no
+arbitrary-recipient `rescueTokens(token,to)` (deleted, INV-1).
 
 Current stable-yield adapters (for `RobotMoneyVault`):
 
@@ -335,6 +341,85 @@ Architecture requirements for deferred fee surfaces (future phase):
   contract design and a separate ADR before implementation;
 - protocol revenue and buyback-and-burn execution must have observable
   on-chain events and indexed history when implemented.
+
+### 4.7 Vault Deprecation/Retirement Lifecycle
+
+Retiring a vault is a deliberate, multi-step, multi-contract sequence,
+not a single switch. This section is the canonical model that ties
+together the two enforcement layers — the `VaultRegistry` lifecycle
+status and the `RobotMoneyVault` deposit shutdown — and the authority
+tier that gates each transition. The mechanism formerly documented per
+contract ("two separate emergency switches") is superseded by this one
+source of truth. Depositor redemption rights are never revoked at any
+stage: every Robot Money vault is ERC-4626, so `redeem` stays callable
+by share holders throughout. There is no on-chain assisted or forced
+migration — see
+[ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md).
+
+**Lifecycle states and transitions.** The lifecycle runs
+`Active → Retired (draining) → empty → deregistered`, with an
+independent emergency `shut-down` overlay and a `Paused` halt. The
+states map to real code: the registry lifecycle states are the
+`VaultRegistry.VaultStatus` enum values (`Active`, `Paused`, `Retired`,
+in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
+`RobotMoneyVault.shutdown` flag.
+
+| State / transition | Layer | Mechanism (at HEAD) | Trigger role | Effect |
+|---|---|---|---|---|
+| **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
+| **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible halt. Router stops routing; vault `pause()` halts deposits and withdrawals. `unpause()` is governance. |
+| **Active → Retired** | registry | `setVaultStatus(vault, Retired)` | governance (`ADMIN_ROLE`) | Withdraw-only at the router layer: `PortfolioRouter` routes **no** new deposits; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged`. |
+| **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
+| **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
+| **Retired → Active** (abort) | registry | `setVaultStatus(vault, Active)` | governance (`ADMIN_ROLE`) | Aborts a deprecation; the vault returns to normal routing. |
+| **Retired → empty** | — | depositors `redeem` | depositor only | Holders drain at their own pace; no protocol action moves their funds (ADR-0009). |
+| **empty → deregistered** | registry | eventual removal from the registry vault set | governance (`ADMIN_ROLE`) | Conceptual terminal state once TVL has fully drained. No deregistration function exists at HEAD; this is the planned end of the lifecycle, not a shipped mechanism. |
+
+**How the two layers relate.** The registry `Retired` status and the
+vault `shutdown` flag are two independent enforcement points today:
+`Retired` stops the **router** from sending new deposits, while
+`shutdownVault` stops **direct** deposits on the vault contract itself.
+A vault can therefore be `Retired` in the registry yet still accept
+direct deposits, or be `shut-down` at the vault while still `Active` in
+the registry. `shutdownVault` is the *vault-level enforcement step* of a
+deprecation — the half that closes the direct-deposit door — but on its
+own it is an emergency control that makes no lifecycle decision.
+
+**Decided target (per decision #925, graduated-authority model).** The
+graduated-authority decision closes the "`Retired` in the registry but
+still directly depositable" gap by adding a single deliberate
+governance `retire` action that sets registry `Retired` **and** halts
+vault deposits in one timelock-gated call, so the two layers cannot
+drift. Emergency `shutdownVault` stays `EMERGENCY_ROLE`, vault-only,
+with no registry/lifecycle change — the hot key never makes a lifecycle
+decision. This `retire` action is decided but **not yet implemented**;
+the contract work is tracked in the custody-invariants phase (issue
+#929). Until it ships, deprecation is the two-step
+`setVaultStatus(Retired)` (governance) + optional `shutdownVault`
+(emergency) sequence described in the table above.
+
+**Authority tier.** Transitions follow the graduated-authority model
+(see §4.5 and the authority tier below): permissionless actions need no
+role; reversible halts and asset de-risking sit on the `EMERGENCY_ROLE`
+hot key; every deliberate value-/lifecycle-changing action — including
+`restoreVault`, the planned `retire`, and adapter management — is gated
+behind the governance multisig + `TimelockController`; and moving
+depositor principal is the depositor's own signed action alone.
+
+| Action | Tier |
+|---|---|
+| sweep foreign token, trigger harvest | permissionless |
+| `pause`, `shutdownVault`, `emergencyWithdraw` (→ vault only), `forceRemoveAdapter` | emergency (hot key, `EMERGENCY_ROLE`) |
+| `unpause`, `restoreVault`, `retire` (planned), `setFeeRecipient`, adapter add/allowlist/caps, quarantine set + recover | governance (multisig + timelock) |
+| `redeem` / move depositor principal | depositor only |
+
+**No assisted migration.** At no point does the protocol move a
+depositor's position on her behalf. A retired vault is a *redeemable
+archive*: holders exit via standard `redeem`, and any "migration" to a
+successor vault is a user-initiated, user-signed redeem-then-deposit at
+the dapp/app layer. This is the fixed policy of
+[ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md); no
+line of this lifecycle authorises forced or admin-driven migration.
 
 ## 5. Off-Chain Architecture
 
@@ -485,7 +570,11 @@ explorer API plus live chain reads for vault state. It contains:
 - Vault detail view: single-vault breakdown — adapter allocations and
   their individual TVL, rebalance state, fee schedule, caps, receipt
   token address, and historical TVL and activity charts from the
-  explorer.
+  explorer. A Composition section answers "if I deposit here, what do I
+  get back?": it shows the receipt token plus the underlying basket
+  assets — live `shortlist()` entries for VOLATILE and active-SPECULATIVE
+  basket vaults, and static labels for STABLE_YIELD and inactive
+  SPECULATIVE vaults.
 - Portfolio Router view: active vaults, current target weights, pending
   governance proposal (if any), and historical weight changes.
 - Protocol stats: total TVL across all active vaults, number of unique
@@ -790,8 +879,19 @@ this architecture:
 - Users and agents must call vaults or the Portfolio Router, not
   adapters or raw underlying venues.
 - Adapters must restrict mutating functions to their owning vault.
-- Adapter rescue functions must not sweep USDC or protected receipt
-  tokens.
+- Custody invariants INV-1/INV-2/INV-3 (see `docs/prd.md` §12) are
+  mandatory: no admin/role/vault function may route a protocol or depositor
+  asset to a caller-supplied recipient (INV-1, the arbitrary-recipient
+  `rescueTokens`/`rescueUsdc` functions are deleted); every protocol or
+  depositor asset is redeemable or absorbed into NAV, with non-whitelisted
+  foreign tokens getting a permissionless `sweepForeignToken` to a single
+  hardcoded quarantine address (INV-2); and the fee recipient, fee
+  parameters, and quarantine address change only through the
+  `TimelockController` (INV-3).
+- The permissionless `sweepForeignToken` must move only NON-protected
+  tokens (never USDC, the share token, a basket asset, or a protected
+  receipt token) and only to the fixed `ForeignTokenQuarantine.QUARANTINE`
+  address — never a caller-supplied recipient.
 - Vaults and router legs must enforce caps before accepting deposits.
 - Any router leg with slippage, oracle, liquidity, or quote-freshness
   risk must surface bounds before signing.

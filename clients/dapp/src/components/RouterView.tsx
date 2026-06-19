@@ -26,6 +26,7 @@ import type {
   VaultsResponse,
 } from "../lib/explorerApi";
 import { fetchRouterWeights, fetchProposals, fetchVaults } from "../lib/explorerApi";
+import { formatPercentFromNumber } from "../lib/format";
 
 interface RouterViewProps {
   apiUrl: string;
@@ -102,14 +103,6 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
   }
 
   /**
-   * Convert a bps value to a display percentage string (e.g. "33.34%").
-   * bps are in units of 0.01% (10 000 bps = 100%).
-   */
-  function bpsToPercent(bps: number): string {
-    return (bps / 100).toFixed(2) + "%";
-  }
-
-  /**
    * Weight source label: "Effective (voted)" when a governance proposal
    * is active (status == "open"); "Effective (default)" otherwise.
    */
@@ -127,42 +120,46 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
           <p data-testid="router-view-weight-source" className="weight-source-label">
             {weightSourceLabel}
           </p>
-          <table data-testid="router-view-weights-table">
-            <thead>
-              <tr>
-                <th>Vault</th>
-                <th>Weight (bps)</th>
-                <th>Allocation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {weights.current_weights.map((w) => (
-                <tr key={w.vault} data-testid="router-view-weight-row">
-                  <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
-                  <td data-testid="router-view-weight-bps">
-                    <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
-                    {" bps ("}
-                    <span data-testid="router-view-weight-bps-pct">{bpsToPercent(w.bps)}</span>
-                    {")"}
-                  </td>
-                  <td data-testid="router-view-weight-bar-cell">
-                    <div
-                      data-testid="router-view-weight-bar"
-                      className="weight-bar"
-                      style={{
-                        width: bpsToPercent(w.bps),
-                        background: "var(--accent, #4f8ef7)",
-                        height: "0.75em",
-                        borderRadius: "2px",
-                        minWidth: "2px",
-                      }}
-                      title={`${bpsToPercent(w.bps)}`}
-                    />
-                  </td>
+          <div className="table-scroll">
+            <table data-testid="router-view-weights-table">
+              <thead>
+                <tr>
+                  <th>Vault</th>
+                  <th>Weight (bps)</th>
+                  <th>Allocation</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {weights.current_weights.map((w) => (
+                  <tr key={w.vault} data-testid="router-view-weight-row">
+                    <td data-testid="router-view-weight-vault">{resolveVaultName(w.vault)}</td>
+                    <td data-testid="router-view-weight-bps">
+                      <span data-testid="router-view-weight-bps-raw">{w.bps}</span>
+                      {" bps ("}
+                      <span data-testid="router-view-weight-bps-pct">
+                        {formatPercentFromNumber(w.bps)}
+                      </span>
+                      {")"}
+                    </td>
+                    <td data-testid="router-view-weight-bar-cell">
+                      <div
+                        data-testid="router-view-weight-bar"
+                        className="weight-bar"
+                        style={{
+                          width: formatPercentFromNumber(w.bps),
+                          background: "var(--accent, #4f8ef7)",
+                          height: "0.75em",
+                          borderRadius: "2px",
+                          minWidth: "2px",
+                        }}
+                        title={`${formatPercentFromNumber(w.bps)}`}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
 
@@ -188,32 +185,35 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
       {weights.history.length === 0 ? (
         <p data-testid="router-view-history-empty">No weight history.</p>
       ) : (
-        <table data-testid="router-view-history-table">
-          <thead>
-            <tr>
-              <th>Block</th>
-              <th>Tx Hash</th>
-              <th>Weights</th>
-            </tr>
-          </thead>
-          <tbody>
-            {weights.history.map((entry) => (
-              <tr key={entry.block_number} data-testid="router-view-history-row">
-                <td data-testid="router-view-history-block">{entry.block_number}</td>
-                <td data-testid="router-view-history-tx" className="font-mono">
-                  {entry.tx_hash}
-                </td>
-                <td>
-                  {entry.weights
-                    .map(
-                      (w) => `${resolveVaultName(w.vault)}: ${w.bps}bps (${bpsToPercent(w.bps)})`,
-                    )
-                    .join(", ")}
-                </td>
+        <div className="table-scroll">
+          <table data-testid="router-view-history-table">
+            <thead>
+              <tr>
+                <th>Block</th>
+                <th>Tx Hash</th>
+                <th>Weights</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {weights.history.map((entry) => (
+                <tr key={entry.block_number} data-testid="router-view-history-row">
+                  <td data-testid="router-view-history-block">{entry.block_number}</td>
+                  <td data-testid="router-view-history-tx" className="font-mono">
+                    {entry.tx_hash}
+                  </td>
+                  <td>
+                    {entry.weights
+                      .map(
+                        (w) =>
+                          `${resolveVaultName(w.vault)}: ${w.bps}bps (${formatPercentFromNumber(w.bps)})`,
+                      )
+                      .join(", ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <p data-testid="router-view-freshness">Block {weights.block_number}</p>

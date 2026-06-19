@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/81ebda9fb866d28c4df795b2e6ba65abe2af5e0b/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/RouterGovernance.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -32,11 +32,12 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
 
 
 ### BPS_DENOMINATOR
-Basis-points denominator (10 000 = 100%).
+Basis-points denominator (10 000 = 100%). Sourced from the
+shared `BpsMath.BPS_DENOMINATOR` so weight-sum math cannot drift.
 
 
 ```solidity
-uint256 public constant BPS_DENOMINATOR = 10_000
+uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR
 ```
 
 

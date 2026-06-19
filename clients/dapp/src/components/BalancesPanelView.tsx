@@ -67,46 +67,48 @@ export function BalancesPanelView(props: BalancesPanelViewProps) {
   return (
     <section className="balances-panel" data-testid="balances-panel">
       <h2>Wallet balances</h2>
-      <table data-testid="balances-panel-table">
-        <thead>
-          <tr>
-            <th>Asset</th>
-            <th>Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr data-testid="balances-panel-row-usdc">
-            <td data-testid="balances-panel-row-usdc-symbol">{props.usdcSymbol}</td>
-            <td data-testid="balances-panel-row-usdc-amount">{formatUsdc(props.usdcBalance)}</td>
-          </tr>
-          <tr data-testid="balances-panel-row-eth">
-            <td data-testid="balances-panel-row-eth-symbol">{props.ethSymbol}</td>
-            <td data-testid="balances-panel-row-eth-amount">{formatEth(props.ethBalance)}</td>
-          </tr>
-          {props.rmAvailable && (
-            <tr data-testid="balances-panel-row-rm">
-              <td data-testid="balances-panel-row-rm-symbol">{props.rmSymbol ?? "RM"}</td>
-              <td data-testid="balances-panel-row-rm-amount">
-                {formatTokenBalance(
-                  props.rmBalance,
-                  props.rmDecimals ?? 18,
-                  props.rmSymbol ?? "RM",
-                )}
-              </td>
+      <div className="table-scroll">
+        <table data-testid="balances-panel-table">
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Balance</th>
             </tr>
-          )}
-          {props.receipts.map((r) => (
-            <tr key={r.vaultAddress} data-testid={`balances-panel-row-receipt-${r.vaultAddress}`}>
-              <td data-testid={`balances-panel-row-receipt-${r.vaultAddress}-symbol`}>
-                {r.symbol}
-              </td>
-              <td data-testid={`balances-panel-row-receipt-${r.vaultAddress}-amount`}>
-                {formatTokenBalance(r.balance, r.decimals, r.symbol)}
-              </td>
+          </thead>
+          <tbody>
+            <tr data-testid="balances-panel-row-usdc">
+              <td data-testid="balances-panel-row-usdc-symbol">{props.usdcSymbol}</td>
+              <td data-testid="balances-panel-row-usdc-amount">{formatUsdc(props.usdcBalance)}</td>
             </tr>
-          ))}
-        </tbody>
-      </table>
+            <tr data-testid="balances-panel-row-eth">
+              <td data-testid="balances-panel-row-eth-symbol">{props.ethSymbol}</td>
+              <td data-testid="balances-panel-row-eth-amount">{formatEth(props.ethBalance)}</td>
+            </tr>
+            {props.rmAvailable && (
+              <tr data-testid="balances-panel-row-rm">
+                <td data-testid="balances-panel-row-rm-symbol">{props.rmSymbol ?? "RM"}</td>
+                <td data-testid="balances-panel-row-rm-amount">
+                  {formatTokenBalance(
+                    props.rmBalance,
+                    props.rmDecimals ?? 18,
+                    props.rmSymbol ?? "RM",
+                  )}
+                </td>
+              </tr>
+            )}
+            {props.receipts.map((r) => (
+              <tr key={r.vaultAddress} data-testid={`balances-panel-row-receipt-${r.vaultAddress}`}>
+                <td data-testid={`balances-panel-row-receipt-${r.vaultAddress}-symbol`}>
+                  {r.symbol}
+                </td>
+                <td data-testid={`balances-panel-row-receipt-${r.vaultAddress}-amount`}>
+                  {formatTokenBalance(r.balance, r.decimals, r.symbol)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

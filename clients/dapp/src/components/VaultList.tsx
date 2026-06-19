@@ -15,7 +15,6 @@
  */
 import type { VaultRow } from "../lib/explorerApi";
 import { useExplorer } from "../lib/ExplorerContext";
-import { VaultListRowAssets } from "./VaultListRowAssets";
 
 const STATUS_LABEL: Record<number, string> = {
   0: "Active",
@@ -63,46 +62,40 @@ export function VaultList({ onSelectVault }: VaultListProps) {
       {vaults.length === 0 ? (
         <p data-testid="vault-list-empty">No vaults registered yet.</p>
       ) : (
-        <table data-testid="vault-list-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Risk</th>
-              <th>Status</th>
-              <th>TVL</th>
-              <th>Exit Fee (bps)</th>
-              <th>Headroom</th>
-              <th>Assets</th>
-            </tr>
-          </thead>
-          <tbody>
-            {vaults.map((v) => (
-              <tr
-                key={v.address}
-                data-testid={`vault-list-row-${v.address.toLowerCase()}`}
-                data-vault-addr={v.address.toLowerCase()}
-                onClick={() => onSelectVault?.(v.address)}
-                style={onSelectVault ? { cursor: "pointer" } : undefined}
-              >
-                <td data-testid="vault-list-row-name">{v.name}</td>
-                <td data-testid="vault-list-row-risk">{v.risk_label}</td>
-                <td data-testid="vault-list-row-status">
-                  {STATUS_LABEL[v.status] ?? String(v.status)}
-                </td>
-                <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
-                <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
-                <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
-                <td>
-                  <VaultListRowAssets
-                    vaultAddress={v.address}
-                    riskLabel={v.risk_label}
-                    status={v.status}
-                  />
-                </td>
+        <div className="table-scroll">
+          <table data-testid="vault-list-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Risk</th>
+                <th>Status</th>
+                <th>TVL</th>
+                <th>Exit Fee (bps)</th>
+                <th>Headroom</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {vaults.map((v) => (
+                <tr
+                  key={v.address}
+                  data-testid={`vault-list-row-${v.address.toLowerCase()}`}
+                  data-vault-addr={v.address.toLowerCase()}
+                  onClick={() => onSelectVault?.(v.address)}
+                  style={onSelectVault ? { cursor: "pointer" } : undefined}
+                >
+                  <td data-testid="vault-list-row-name">{v.name}</td>
+                  <td data-testid="vault-list-row-risk">{v.risk_label}</td>
+                  <td data-testid="vault-list-row-status">
+                    {STATUS_LABEL[v.status] ?? String(v.status)}
+                  </td>
+                  <td data-testid="vault-list-row-tvl">{v.total_assets ?? "—"}</td>
+                  <td data-testid="vault-list-row-fee">{v.exit_fee_bps ?? "—"}</td>
+                  <td data-testid="vault-list-row-headroom">{headroom(v) ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {blockNumber != null && <p data-testid="vault-list-freshness">Block {blockNumber}</p>}
     </section>

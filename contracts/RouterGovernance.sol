@@ -7,6 +7,7 @@ pragma solidity ^0.8.24;
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PortfolioRouter} from "./PortfolioRouter.sol";
+import {BpsMath} from "./lib/BpsMath.sol";
 
 /// @title RouterGovernance
 /// @notice Admin-weighted MVP governance module that controls Portfolio Router
@@ -31,8 +32,9 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
 
     // ─── Constants ───────────────────────────────────────────────────────────
 
-    /// @notice Basis-points denominator (10 000 = 100%).
-    uint256 public constant BPS_DENOMINATOR = 10_000;
+    /// @notice Basis-points denominator (10 000 = 100%). Sourced from the
+    ///         shared `BpsMath.BPS_DENOMINATOR` so weight-sum math cannot drift.
+    uint256 public constant BPS_DENOMINATOR = BpsMath.BPS_DENOMINATOR;
 
     /// @notice Minimum quorum threshold. At least 1 vote must be required for
     ///         quorum so that proposals cannot pass with zero votes cast.

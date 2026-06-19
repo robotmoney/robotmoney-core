@@ -96,32 +96,34 @@ export function TransactionHistory(props: TransactionHistoryProps) {
           {state.events.length === 0 ? (
             <p data-testid="transaction-history-empty">No events indexed for this address.</p>
           ) : (
-            <table data-testid="transaction-history-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Block</th>
-                  <th>Tx hash</th>
-                  <th>Vault</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.events.map((ev, i) => (
-                  <tr
-                    // eslint-disable-next-line react/no-array-index-key -- events have no stable unique id
-                    key={`${ev.tx_hash}-${i}`}
-                    data-testid="transaction-history-row"
-                  >
-                    <td data-testid="transaction-history-row-type">{ev.event_type}</td>
-                    <td data-testid="transaction-history-row-block">{ev.block_number}</td>
-                    <td data-testid="transaction-history-row-tx">{ev.tx_hash}</td>
-                    <td data-testid="transaction-history-row-vault">{ev.vault_address ?? "—"}</td>
-                    <td data-testid="transaction-history-row-amount">{ev.amount ?? "—"}</td>
+            <div className="table-scroll">
+              <table data-testid="transaction-history-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Block</th>
+                    <th>Tx hash</th>
+                    <th>Vault</th>
+                    <th>Amount</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {state.events.map((ev, i) => (
+                    <tr
+                      // eslint-disable-next-line react/no-array-index-key -- events have no stable unique id
+                      key={`${ev.tx_hash}-${i}`}
+                      data-testid="transaction-history-row"
+                    >
+                      <td data-testid="transaction-history-row-type">{ev.event_type}</td>
+                      <td data-testid="transaction-history-row-block">{ev.block_number}</td>
+                      <td data-testid="transaction-history-row-tx">{ev.tx_hash}</td>
+                      <td data-testid="transaction-history-row-vault">{ev.vault_address ?? "—"}</td>
+                      <td data-testid="transaction-history-row-amount">{ev.amount ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}

@@ -86,6 +86,7 @@ function App() {
     expectedCodeHash,
   );
   const [selectedVault, setSelectedVault] = useState<string | null>(null);
+  const [activeTabId, setActiveTabId] = useState("my-account");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const { address: connectedAddress } = useAccount();
@@ -142,13 +143,17 @@ function App() {
         <div className="landing-overview">
           <ProtocolStats />
           <LandingPriceStrip />
-          <VaultCards />
+          <VaultCards
+            onSelectVault={setSelectedVault}
+            onSwitchToExplorer={() => setActiveTabId("portfolio-explorer")}
+          />
           <BalancesPanel gatewayAddress={gateway} rmTokenAddress={rmToken} />
         </div>
 
         <Tabs
           testId="dapp-surface-tabs"
-          defaultTabId="my-account"
+          activeTabId={activeTabId}
+          onTabChange={setActiveTabId}
           tabs={[
             {
               id: "my-account",
