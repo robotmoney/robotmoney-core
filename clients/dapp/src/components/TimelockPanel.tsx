@@ -397,6 +397,7 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
           No pending operations.
         </p>
       ) : (
+        <div className="table-scroll">
         <table data-testid="timelock-pending-ops">
           <thead>
             <tr>
@@ -421,6 +422,7 @@ export function TimelockPanel({ timelockAddress, now }: TimelockPanelProps) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </section>
   );

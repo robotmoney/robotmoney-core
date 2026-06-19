@@ -87,6 +87,7 @@ export function HistoryPane(props: HistoryPaneProps) {
           {state.rows.length === 0 ? (
             <p data-testid="history-pane-empty">No deposits indexed for this agent.</p>
           ) : (
+            <div className="table-scroll">
             <table data-testid="history-pane-table">
               <thead>
                 <tr>
@@ -109,6 +110,7 @@ export function HistoryPane(props: HistoryPaneProps) {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </>
       )}

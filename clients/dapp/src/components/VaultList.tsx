@@ -63,6 +63,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
       {vaults.length === 0 ? (
         <p data-testid="vault-list-empty">No vaults registered yet.</p>
       ) : (
+        <div className="table-scroll">
         <table data-testid="vault-list-table">
           <thead>
             <tr>
@@ -103,6 +104,7 @@ export function VaultList({ onSelectVault }: VaultListProps) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
       {blockNumber != null && <p data-testid="vault-list-freshness">Block {blockNumber}</p>}
     </section>

@@ -67,6 +67,7 @@ export function BalancesPanelView(props: BalancesPanelViewProps) {
   return (
     <section className="balances-panel" data-testid="balances-panel">
       <h2>Wallet balances</h2>
+      <div className="table-scroll">
       <table data-testid="balances-panel-table">
         <thead>
           <tr>
@@ -107,6 +108,7 @@ export function BalancesPanelView(props: BalancesPanelViewProps) {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }

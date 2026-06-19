@@ -128,6 +128,7 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
             <p data-testid="portfolio-position-empty">No positions indexed for this address.</p>
           ) : (
             <>
+              <div className="table-scroll">
               <table data-testid="portfolio-position-table">
                 <thead>
                   <tr>
@@ -153,6 +154,7 @@ export function PortfolioPosition(props: PortfolioPositionProps) {
                   })}
                 </tbody>
               </table>
+              </div>
 
               <p data-testid="portfolio-position-total">
                 Composite total (USDC):{" "}

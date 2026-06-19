@@ -102,6 +102,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
       {vault.tvl_history.length === 0 ? (
         <p data-testid="vault-detail-tvl-empty">No TVL data yet.</p>
       ) : (
+        <div className="table-scroll">
         <table data-testid="vault-detail-tvl-table">
           <thead>
             <tr>
@@ -120,6 +121,7 @@ export function VaultDetail({ apiUrl, address, fetchImpl, onBack }: VaultDetailP
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {vault.risk_label === "SPECULATIVE" && (

@@ -927,6 +927,13 @@ main.agents-gate {
  * to left-align. Apply class="num" to <td> / <th> in numeric columns.
  * ------------------------------------------------------------------------- */
 
+/* Table scroll container (issue #940) — wraps any <table> whose content
+ * may exceed the viewport width on narrow screens. Apply to the parent
+ * element of <table> so the table scrolls rather than overflows. */
+.table-scroll {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

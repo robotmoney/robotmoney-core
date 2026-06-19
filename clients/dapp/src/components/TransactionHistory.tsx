@@ -96,6 +96,7 @@ export function TransactionHistory(props: TransactionHistoryProps) {
           {state.events.length === 0 ? (
             <p data-testid="transaction-history-empty">No events indexed for this address.</p>
           ) : (
+            <div className="table-scroll">
             <table data-testid="transaction-history-table">
               <thead>
                 <tr>
@@ -122,6 +123,7 @@ export function TransactionHistory(props: TransactionHistoryProps) {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </>
       )}

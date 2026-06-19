@@ -43,6 +43,7 @@ export function ProportionPreview({ legs }: ProportionPreviewProps) {
   }
 
   return (
+    <div className="table-scroll">
     <table data-testid="proportion-preview-table">
       <thead>
         <tr>
@@ -77,5 +78,6 @@ export function ProportionPreview({ legs }: ProportionPreviewProps) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }

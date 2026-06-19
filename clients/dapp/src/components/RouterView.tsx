@@ -120,6 +120,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
           <p data-testid="router-view-weight-source" className="weight-source-label">
             {weightSourceLabel}
           </p>
+          <div className="table-scroll">
           <table data-testid="router-view-weights-table">
             <thead>
               <tr>
@@ -158,6 +159,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
               ))}
             </tbody>
           </table>
+          </div>
         </>
       )}
 
@@ -183,6 +185,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
       {weights.history.length === 0 ? (
         <p data-testid="router-view-history-empty">No weight history.</p>
       ) : (
+        <div className="table-scroll">
         <table data-testid="router-view-history-table">
           <thead>
             <tr>
@@ -210,6 +213,7 @@ export function RouterView({ apiUrl, fetchImpl }: RouterViewProps) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <p data-testid="router-view-freshness">Block {weights.block_number}</p>
