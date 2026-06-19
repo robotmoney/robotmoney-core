@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b7fa96c6c8d887cec6b173daad309b3d73d93d31/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/RouterGovernance.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -18,18 +18,18 @@ agent permissions, or protocol admin operations.
 - Exposes proposal state, vote tallies, cadence metadata, and
 resulting weights for rmpc and dapp reads.
 - One active proposal at a time (simple linear cadence).
-SCOUT SEAM (issue #951 → #942): the planned unified governance `retire()`
-(DI-2, decision #925; docs/architecture.md §4.7) does NOT belong here.
+Boundary note (issue #942): the unified governance `retire()` (DI-2,
+decision #925; docs/architecture.md §4.7) does NOT belong here.
 RouterGovernance controls router target weights only (constraint above) and
 cannot govern vault internals or registry lifecycle. `retire()` is a
-TimelockController-gated registry/vault action (the timelock holds ADMIN_ROLE
-on VaultRegistry and RobotMoneyVault — see DeployTimelock.t.sol), not a
-router-weight proposal. The only adjacent concern for #942 is that retiring a
-vault should be followed by a router-weight proposal that drops the retired
-vault to 0 bps so no new deposits route to it — but that re-weight is an
-ordinary `propose()`/`execute()` flow here, requiring NO new code in this
-contract. This seam exists to prevent a future implementer from wrongly
-modelling `retire()` as a RouterGovernance proposal type.
+TimelockController-gated registry/vault action (`VaultRegistry.retire`, which
+flips registry status to `Retired` and halts vault deposits atomically — the
+timelock holds ADMIN_ROLE on VaultRegistry and RobotMoneyVault, see
+DeployTimelock.t.sol), not a router-weight proposal. The only adjacent concern
+is that retiring a vault may be followed by a router-weight proposal that drops
+the retired vault to 0 bps so no new deposits route to it — but that re-weight
+is an ordinary `propose()`/`execute()` flow here, requiring NO new code in this
+contract.
 Emits: `ProposalCreated`, `VoteCast`, `ProposalExecuted`, `WeightsApplied`, `ProposalCancelled`.
 
 

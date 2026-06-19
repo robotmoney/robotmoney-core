@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -530,6 +530,48 @@ and when the supplied cap is zero (InvalidCap).
 
 ```solidity
 function test_restoreVault_revertsWhenNotShutdownOrZeroCap() public;
+```
+
+### test_retire_haltsDirectDepositsButKeepsRedeemOpen
+
+After the registry drives `retire()`, direct deposits/mints are
+hard-stopped at the vault (maxDeposit == 0, deposit reverts), but
+withdrawals/redemptions stay open. `retire()` is callable only by
+the linked registry; a stranger (even ADMIN_ROLE) call reverts.
+
+
+```solidity
+function test_retire_haltsDirectDepositsButKeepsRedeemOpen() public;
+```
+
+### test_retire_isIndependentFromEmergencyShutdown
+
+The vault `retire`/`unretire` lifecycle flag is distinct from the
+emergency `shutdown` overlay: retiring does not set `shutdown`, and
+`shutdownVault` continues to work independently after a retire.
+
+
+```solidity
+function test_retire_isIndependentFromEmergencyShutdown() public;
+```
+
+### test_unretire_reopensDirectDeposits
+
+The registry can abort a deprecation via `unretire()`, re-opening
+direct deposits. Only the linked registry may call it.
+
+
+```solidity
+function test_unretire_reopensDirectDeposits() public;
+```
+
+### test_setRegistry_isSetOnceAndAdminGated
+
+`setRegistry` is set-once and ADMIN_ROLE-gated.
+
+
+```solidity
+function test_setRegistry_isSetOnceAndAdminGated() public;
 ```
 
 ### test_sweepForeignToken_revertsForVaultAsset
