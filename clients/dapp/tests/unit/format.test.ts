@@ -19,6 +19,7 @@ import {
   formatPercent,
   formatBps,
   formatPrice,
+  formatPercentFromNumber,
 } from "../../src/lib/format";
 
 // ---------------------------------------------------------------------------
@@ -48,7 +49,7 @@ describe("formatUsdc", () => {
 
   it("formats very large values (> 1e9 USDC)", () => {
     // 1 billion USDC = 1_000_000_000 * 1_000_000 base units
-    expect(formatUsdc(1_000_000_000_000_000n)).toBe("1000000000 USDC");
+    expect(formatUsdc(1_000_000_000_000_000n)).toBe("1,000,000,000 USDC");
   });
 
   it("formats negative amounts", () => {
@@ -83,7 +84,7 @@ describe("formatShares", () => {
   });
 
   it("formats very large shares", () => {
-    expect(formatShares(1_000_000_000_000_000n, "rmUSDC")).toBe("1000000000 rmUSDC");
+    expect(formatShares(1_000_000_000_000_000n, "rmUSDC")).toBe("1,000,000,000 rmUSDC");
   });
 
   it("formats negative shares", () => {
@@ -125,7 +126,7 @@ describe("formatEth", () => {
 
   it("formats very large ETH (> 1e9)", () => {
     // 1 billion ETH
-    expect(formatEth(1_000_000_000n * 1_000_000_000_000_000_000n)).toBe("1000000000 ETH");
+    expect(formatEth(1_000_000_000n * 1_000_000_000_000_000_000n)).toBe("1,000,000,000 ETH");
   });
 
   it("formats negative ETH", () => {
@@ -214,9 +215,10 @@ describe("formatBps", () => {
 // formatPrice
 // ---------------------------------------------------------------------------
 describe("formatPrice", () => {
-  it("formats a typical price to 4 decimal places", () => {
+  it("formats a typical price below $10 to 4 decimal places", () => {
     expect(formatPrice(1.5)).toBe("$1.5000");
-    expect(formatPrice(1234.5678)).toBe("$1234.5678");
+    // 1234.5678 >= $10, so 2 decimal places with thousands separator
+    expect(formatPrice(1234.5678)).toBe("$1,234.57");
   });
 
   it("formats zero", () => {
@@ -228,8 +230,8 @@ describe("formatPrice", () => {
     expect(formatPrice(0.000099)).toBe("$0.0001");
   });
 
-  it("formats very large prices (> 1e9)", () => {
-    expect(formatPrice(1_000_000_000)).toBe("$1000000000.0000");
+  it("formats very large prices (> 1e9) with thousands separators", () => {
+    expect(formatPrice(1_000_000_000)).toBe("$1,000,000,000.00");
   });
 
   it("formats negative prices", () => {
@@ -238,5 +240,35 @@ describe("formatPrice", () => {
 
   it("returns placeholder for undefined", () => {
     expect(formatPrice(undefined)).toBe(PLACEHOLDER);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatPercentFromNumber
+// ---------------------------------------------------------------------------
+describe("formatPercentFromNumber", () => {
+  it("formats 100% (10000 bps)", () => {
+    expect(formatPercentFromNumber(10_000)).toBe("100.00%");
+  });
+
+  it("formats 50% (5000 bps)", () => {
+    expect(formatPercentFromNumber(5_000)).toBe("50.00%");
+  });
+
+  it("formats fractional percentages", () => {
+    expect(formatPercentFromNumber(25)).toBe("0.25%");
+    expect(formatPercentFromNumber(1)).toBe("0.01%");
+  });
+
+  it("formats zero", () => {
+    expect(formatPercentFromNumber(0)).toBe("0.00%");
+  });
+
+  it("formats a typical router weight bps value", () => {
+    expect(formatPercentFromNumber(3334)).toBe("33.34%");
+  });
+
+  it("returns placeholder for undefined", () => {
+    expect(formatPercentFromNumber(undefined)).toBe(PLACEHOLDER);
   });
 });

@@ -52,7 +52,7 @@ import { RouterDepositTab } from "./RouterDepositTab";
 import type { RouterPreviewContext } from "../lib/routerPreview";
 import { PositionSelector } from "./PositionSelector";
 import { VaultPositionCard, ReceiptValueDisplay } from "./shared";
-import { formatUsdc } from "../lib/format";
+import { formatUsdc, formatShares } from "../lib/format";
 
 type Props = Readonly<{
   vaultAddress: Address;
@@ -369,7 +369,7 @@ export function DepositWithdrawTab(props: Props) {
             Sign deposit with wallet
           </button>
           <ReceiptValueDisplay
-            shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+            shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
             label="rmUSDC balance"
           />
           {approveSimError && (
@@ -415,17 +415,19 @@ export function DepositWithdrawTab(props: Props) {
           <VaultPositionCard
             vaultAddress={selectedVault}
             vaultName={selectedVault}
-            shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+            shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
           />
         )}
         <ReceiptValueDisplay
-          shares={typeof shareBalance === "bigint" ? shareBalance.toString() : "0"}
+          shares={typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"}
           label="rmUSDC balance"
         />
         {hasInsufficientBalance && (
           <p className="hint" data-testid="withdraw-insufficient-balance">
-            Insufficient balance: you hold {shareBalance?.toString() ?? "0"} shares but entered{" "}
-            {withdrawShares?.toString() ?? "0"}. Reduce the amount before signing.
+            Insufficient balance: you hold{" "}
+            {typeof shareBalance === "bigint" ? formatShares(shareBalance, "rmUSDC") : "0"} but
+            entered {withdrawShares !== null ? formatShares(withdrawShares, "rmUSDC") : "0"}. Reduce
+            the amount before signing.
           </p>
         )}
         {typeof previewRedeemAssets === "bigint" && withdrawShares !== null && (

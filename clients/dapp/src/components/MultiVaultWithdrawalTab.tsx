@@ -35,7 +35,7 @@ import { useVaultRegistry } from "../lib/VaultRegistryContext";
 import { buildVaultPreview, type VaultPreviewContext } from "../lib/vaultPreview";
 import { TxPreview } from "./TxPreview";
 import { parseUsdcAmount } from "./DepositWithdrawTab";
-import { formatUsdc, formatShares } from "../lib/format";
+import { formatUsdc, formatShares, formatBps, formatPercentFromNumber } from "../lib/format";
 
 type Props = Readonly<{
   ctx: VaultPreviewContext;
@@ -264,8 +264,8 @@ export function MultiVaultWithdrawalTab({ ctx }: Props) {
           </p>
           {typeof exitFeeBpsValue === "bigint" && exitFeeBpsValue > 0n && (
             <p className="hint" data-testid="multi-vault-preview-exit-fee">
-              Exit fee: {Number(exitFeeBpsValue as bigint) / 100}% ({exitFeeBpsValue.toString()}{" "}
-              bps)
+              Exit fee: {formatPercentFromNumber(Number(exitFeeBpsValue as bigint))} (
+              {formatBps(Number(exitFeeBpsValue as bigint))})
             </p>
           )}
         </div>
