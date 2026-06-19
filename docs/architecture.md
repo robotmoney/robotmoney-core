@@ -411,7 +411,7 @@ reachable only via the timelock schedule → delay → execute path
 (see §4.5 and the authority tier below): permissionless actions need no
 role; reversible halts and asset de-risking sit on the `EMERGENCY_ROLE`
 hot key; every deliberate value-/lifecycle-changing action — including
-`restoreVault`, the planned `retire`, and adapter management — is gated
+`restoreVault`, `retire`/`reactivate`, and adapter management — is gated
 behind the governance multisig + `TimelockController`; and moving
 depositor principal is the depositor's own signed action alone.
 
