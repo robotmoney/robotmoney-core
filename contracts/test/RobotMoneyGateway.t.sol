@@ -229,6 +229,41 @@ contract RobotMoneyGatewayTest is Test {
         assertTrue(gateway.hasRole(0x00, admin)); // DEFAULT_ADMIN_ROLE
     }
 
+    /// @notice ACL-3 / F-06: revoking the sole ADMIN_ROLE holder reverts
+    ///         (last-admin floor) — gateway governance can never be bricked.
+    function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.revokeRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
+    ///         gateway uses as a privileged tier (it gates authorizeAgent).
+    function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.revokeRole(0x00, admin); // DEFAULT_ADMIN_ROLE
+    }
+
+    /// @notice ACL-3 / F-06: renouncing the sole DEFAULT_ADMIN_ROLE holder reverts.
+    function test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.renounceRole(0x00, admin);
+    }
+
+    /// @notice ACL-3 / F-06: with a second DEFAULT_ADMIN granted, the original may
+    ///         be revoked — the floor only blocks dropping the final holder.
+    function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public {
+        address admin2 = makeAddr("gwAdmin2");
+        vm.startPrank(admin);
+        gateway.grantRole(0x00, admin2);
+        gateway.revokeRole(0x00, admin); // not the last DEFAULT_ADMIN → allowed
+        vm.stopPrank();
+        assertFalse(gateway.hasRole(0x00, admin), "original default-admin revoked");
+        assertTrue(gateway.hasRole(0x00, admin2), "second default-admin retains role");
+    }
+
     function test_constructor_revertsOnZeroAddresses() public {
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
         new RobotMoneyGateway(
@@ -285,21 +320,23 @@ contract RobotMoneyGatewayTest is Test {
         assertEq(recv, shareReceiver);
     }
 
-    /// @dev AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
-    ///      revert (issue #753 — commit/reveal is now the only permissionless
-    ///      first-time authorization path).
+    /// @dev AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
+    ///      (issue #753 — commit/reveal is the only permissionless first-time
+    ///      authorization path; #965/F-01 moved the admin gate from
+    ///      DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
+    ///      authority after the deploy handover revokes the deployer's
+    ///      DEFAULT_ADMIN_ROLE).
     function test_authorizeAgent_permissionless() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address eoa = makeAddr("random-depositor-eoa");
         assertFalse(gateway.hasRole(adminRole, eoa), "EOA must not hold ADMIN_ROLE");
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
         vm.prank(eoa);
         vm.expectRevert(
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 eoa,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);
@@ -328,13 +365,13 @@ contract RobotMoneyGatewayTest is Test {
 
     /// @dev Front-run regression: an attacker observing a victim's
     ///      `revealAuthorization` cannot pre-empt it via the direct
-    ///      `authorizeAgent` because that function now requires
-    ///      DEFAULT_ADMIN_ROLE (issue #753).
+    ///      `authorizeAgent` because that function requires `ADMIN_ROLE`
+    ///      (issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
+    ///      #965/F-01).
     function test_authorizeAgent_frontRunProtection() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address victim = makeAddr("victim");
         address attacker = makeAddr("attacker");
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
         // Victim commits
         bytes32 salt = bytes32(uint256(456));
@@ -350,7 +387,7 @@ contract RobotMoneyGatewayTest is Test {
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 attacker,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);
@@ -413,9 +450,9 @@ contract RobotMoneyGatewayTest is Test {
     ///      must `setPolicy` (or `revokeAgent` first).
     function test_authorizeAgent_revertsWhenAlreadyOwned() public {
         _authorize(agent, _defaultPolicy());
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
-        // Non-admin callers revert with access control error.
+        // Non-admin callers revert with access control error (authorizeAgent is
+        // ADMIN_ROLE-gated since #965/F-01).
         address otherDepositor = makeAddr("other-depositor");
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(otherDepositor);
@@ -423,7 +460,7 @@ contract RobotMoneyGatewayTest is Test {
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 otherDepositor,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);
@@ -1354,6 +1391,116 @@ contract GatewayRollingDepositWindowTest is Test {
                     "rolling deposit gross must not exceed maxPerWindow"
                 );
             }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // effectiveDepositWindowGross prunes only the entries that have aged
+    // past the rolling window, leaving newer entries live (#970, NC-7).
+    //
+    // Drives the `_effectiveWindowTotal` eviction loop through a PARTIAL
+    // drain: an old entry expires and is notionally pruned while a recent
+    // entry stays live, so the loop runs its body once and then exits with
+    // a non-zero remaining total. This exercises the loop body and the
+    // post-loop return with live entries still present.
+    // -------------------------------------------------------------------
+
+    function test_effectiveDepositWindowGross_prunesOnlyExpiredEntries() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.maxPerPayment = MAX_PER_WINDOW / 4;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+        uint256 leg = MAX_PER_WINDOW / 4;
+
+        // First entry at the anchor second.
+        _fundAndApprove(leg);
+        _deposit(keccak256("p-old"), leg, keccak256("p-old-i"));
+
+        // Advance most of the window, then add a second (still-live) entry.
+        vm.warp(block.timestamp + windowSeconds - 10);
+        _fundAndApprove(leg);
+        _deposit(keccak256("p-new"), leg, keccak256("p-new-i"));
+
+        // Both entries are still within the rolling window — full gross.
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            2 * leg,
+            "both entries live before the first expires"
+        );
+
+        // Advance just past the first entry's expiry but not the second's.
+        // The eviction loop must drop exactly the old entry (loop body runs
+        // once) and then return the remaining live total (post-loop return).
+        vm.warp(block.timestamp + 20);
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            leg,
+            "only the expired entry is pruned; newer entry stays live"
+        );
+
+        // Advance past the second entry too — the loop drains fully to zero.
+        vm.warp(block.timestamp + windowSeconds);
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            0,
+            "both entries expired; window fully drained"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // The rolling-window ring buffer is bounded by MAX_WINDOW_ENTRIES, and
+    // _oldestTimestamp returns 0 on an empty window (#970, NC-7).
+    //
+    // Both of those guards are defensive and unreachable through the public
+    // deposit/withdraw API:
+    //
+    //   * WindowBufferFull (RobotMoneyGateway.sol ~466): the live entry count
+    //     can never reach MAX_WINDOW_ENTRIES (== WINDOW_SECONDS). Entries in
+    //     the same second COALESCE into one slot, so each live slot occupies a
+    //     distinct second inside the WINDOW_SECONDS-wide window. Filling all
+    //     WINDOW_SECONDS distinct seconds reaches count == MAX_WINDOW_ENTRIES,
+    //     but adding one more *distinct* second necessarily advances past the
+    //     oldest entry's expiry, so `_pruneWindow` evicts it first and the
+    //     append never sees a full buffer. No external call sequence trips the
+    //     `count >= MAX_WINDOW_ENTRIES` revert; it is marked coverage:unreachable.
+    //
+    //   * _oldestTimestamp empty-window branch (RobotMoneyGateway.sol ~510):
+    //     `_oldestTimestamp` is only ever invoked in `_accrueRollingWithdraw`
+    //     and `_accrueRollingDeposit`, immediately AFTER `_appendWindowEntry`
+    //     has added an entry — so `w.count` is always >= 1 at the call site.
+    //     The `count == 0` early-return is dead through the public API and is
+    //     marked coverage:unreachable.
+    //
+    // This test documents the invariant that keeps the live count strictly
+    // below the cap (every entry stays live for its full window and the total
+    // never collapses) by depositing across many distinct consecutive seconds.
+    // -------------------------------------------------------------------
+
+    function test_rollingWindow_liveCountBoundedAcrossDistinctSeconds() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // Tiny per-payment cap so many distinct-second deposits fit the window.
+        p.maxPerPayment = ONE_USDC;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        // Deposit across many distinct consecutive seconds. Each lands in its
+        // own ring slot (distinct second => no coalescing) and stays live for
+        // WINDOW_SECONDS, so the live count grows by one per deposit while all
+        // remain inside the window — never approaching MAX_WINDOW_ENTRIES here.
+        uint256 n = 32;
+        for (uint256 i = 0; i < n; i++) {
+            _fundAndApprove(ONE_USDC);
+            _deposit(
+                keccak256(abi.encode("bound", i)), ONE_USDC, keccak256(abi.encode("bound-i", i))
+            );
+            assertEq(
+                gateway.effectiveDepositWindowGross(agent),
+                (i + 1) * ONE_USDC,
+                "every distinct-second entry stays live within the window"
+            );
+            vm.warp(block.timestamp + 1);
         }
     }
 }

@@ -397,18 +397,35 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
 
     // ─── totalAssets ──────────────────────────────────────────────────
 
-    /// @notice Sum of USDC held directly in the vault (idle) plus all active adapter balances.
+    /// @notice Sum of USDC held directly in the vault (idle) plus all eligible-and-active
+    ///         adapter balances.
     /// @dev Idle USDC can accumulate via direct transfers or when `_routeDeposit` cannot place
     ///      all assets (e.g. all adapter caps are exhausted). Including it here prevents NAV
     ///      understatement and the associated TVL-cap bypass / share-price dilution described
     ///      in docs/code-reviews/code-review-codex-20260508-1522.md — Finding 2.
+    ///
+    ///      ADP-2 (F-14): an adapter whose eligibility was revoked while still registered as
+    ///      `active` (allowlist withdrawn or codehash de-listed) is EXCLUDED from NAV. A
+    ///      revoked adapter is no longer trusted to price its holdings, so continuing to count
+    ///      its self-reported balance would let a compromised/lying adapter inflate the share
+    ///      price (and, on the withdrawal side, drain honest holders' idle USDC). Eligibility
+    ///      is restorable via `setAdapterAllowed`, and the funds remain drainable by EMERGENCY
+    ///      via `emergencyWithdrawAdapter`, so this is an exclusion-not-confiscation.
     function totalAssets() public view override returns (uint256) {
         uint256 sum = IERC20(asset()).balanceOf(address(this)); // include idle vault balance
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            if (adapters[i].active) sum += adapters[i].adapter.totalAssets();
+            if (_isAdapterCounted(i)) sum += adapters[i].adapter.totalAssets();
         }
         return sum;
+    }
+
+    /// @dev An adapter contributes to NAV / receives proportional withdrawals only when it is
+    ///      both registered-active AND currently eligible (allowlisted + codehash-pinned +
+    ///      identity-bound). Centralises the ADP-2 NAV-side check so `totalAssets` and
+    ///      `_pullProportional` can never drift apart.
+    function _isAdapterCounted(uint256 i) internal view returns (bool) {
+        return adapters[i].active && _isAdapterEligible(address(adapters[i].adapter));
     }
 
     // ─── Deposit (atomic deposit-to-yield) ────────────────────────────
@@ -584,13 +601,25 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
         uint256 fee = grossAssets - assets;
 
-        _pullProportional(grossAssets);
+        // FEE-2 / NC-11: the exit fee is only ever paid out of proceeds this withdrawal
+        // ACTUALLY realises, never from a share-implied gross that an over-reporting adapter
+        // could otherwise have other holders' idle USDC silently cover. `_pullProportional`
+        // returns the realised USDC (idle applied + genuinely pulled) and reverts via
+        // `InsufficientAdapterLiquidity` if it cannot source the full `grossAssets`, so a
+        // withdrawal can never disburse `assets + fee` it did not source. (NAV — and hence
+        // `grossAssets` — already excludes revoked adapters, ADP-2 / F-14.) The realised
+        // figure must cover `grossAssets == assets + fee`; the require pins that the fee was
+        // funded by realised proceeds, not socialized.
+        uint256 realizedGross = _pullProportional(grossAssets);
+        require(realizedGross >= grossAssets, "fee not covered by realised proceeds");
 
         // slither-disable-next-line reentrancy-no-eth
         // Justification: `_withdraw` is `nonReentrant`; the `_burn` after
         // external adapter calls is safe because reentry is blocked by the OZ guard.
         _burn(owner, shares);
 
+        // ERC-4626 parity: the receiver gets exactly `assets`; the fee (charged on the
+        // realised gross, since `grossAssets` was fully realised above) goes to the recipient.
         if (fee > 0) {
             IERC20(asset()).safeTransfer(feeRecipient, fee);
             emit ExitFeeCharged(owner, receiver, grossAssets, fee, assets);
@@ -604,24 +633,35 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     // The public entrypoints that reach this helper are `nonReentrant`; the
     // pre-call balance reads are therefore protected and the stale-balance
     // warning is a false positive.
-    function _pullProportional(uint256 assetsNeeded) internal {
-        if (assetsNeeded == 0) return;
+    /// @dev Source `assetsNeeded` USDC into the vault, returning the amount ACTUALLY realised
+    ///      (idle USDC applied + USDC genuinely withdrawn from adapters). Under honest adapters
+    ///      the return equals `assetsNeeded`; `_withdraw` asserts the realised figure covers the
+    ///      full share-implied gross before paying the exit fee (FEE-2 / NC-11), so an adapter
+    ///      that over-reports its balance can never have its shortfall funded from other holders'
+    ///      idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity`).
+    ///
+    ///      Only eligible-and-active adapters (`_isAdapterCounted`) are pulled from: a revoked
+    ///      adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —
+    ///      otherwise the proportional denominator would not match NAV and a revoked adapter
+    ///      could still receive/return withdrawal flow (ADP-2 / F-14).
+    function _pullProportional(uint256 assetsNeeded) internal returns (uint256) {
+        if (assetsNeeded == 0) return 0;
 
         // First satisfy from idle USDC already sitting in the vault (e.g. after emergencyWithdraw).
         uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
         if (idleBalance >= assetsNeeded) {
             // Idle balance covers the full withdrawal — no adapter pull needed.
-            return;
+            return assetsNeeded;
         }
 
         uint256 totalInAdapters;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
-            if (adapters[i].active) totalInAdapters += adapters[i].adapter.totalAssets();
+            if (_isAdapterCounted(i)) totalInAdapters += adapters[i].adapter.totalAssets();
         }
 
         // Remaining amount that must come from adapters (after idle covers part of it).
-        // Fail fast with a dedicated error when the active adapters cannot deliver the
+        // Fail fast with a dedicated error when the eligible adapters cannot deliver the
         // requested amount — clamping here only converts the shortfall into an opaque
         // downstream ERC-20 transfer revert (audit 2026-06-09, L-2).
         uint256 remainingNeeded = assetsNeeded - idleBalance;
@@ -630,10 +670,11 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         }
 
         uint256 remaining = remainingNeeded;
+        uint256 pulled;
 
         // Pass 1: proportional pulls, each capped at the adapter's reported balance.
         for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!adapters[i].active) continue;
+            if (!_isAdapterCounted(i)) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
@@ -641,21 +682,23 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
             if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;
             uint256 actual = adpt.withdraw(pull);
+            pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
             emit Pulled(i, address(adpt), actual);
         }
 
-        // Pass 2: sweep rounding leftovers across all active adapters, capping each
+        // Pass 2: sweep rounding leftovers across all eligible adapters, capping each
         // pull at min(remaining, balance). Replaces the old behaviour of dumping the
         // full leftover on the last active adapter regardless of its balance, which
         // could DoS a withdrawal other adapters could cover (audit 2026-06-09, L-2).
         for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!adapters[i].active) continue;
+            if (!_isAdapterCounted(i)) continue;
             IStrategyAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
             if (pull == 0) continue;
             uint256 actual = adpt.withdraw(pull);
+            pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
             emit Pulled(i, address(adpt), actual);
         }
@@ -666,6 +709,14 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         if (remaining > 0) {
             revert InsufficientAdapterLiquidity(remainingNeeded, remainingNeeded - remaining);
         }
+
+        // Realised = idle consumed by this withdrawal + USDC genuinely pulled from adapters.
+        // Clamp to `assetsNeeded`: an adapter that returns MORE than requested leaves the
+        // surplus idle for ALL holders rather than over-paying this one position. The fee and
+        // payout are therefore bounded by the share-implied gross from above and by realised
+        // proceeds from below — never socializing one holder's shortfall onto the others.
+        uint256 realized = idleBalance + pulled;
+        return realized < assetsNeeded ? realized : assetsNeeded;
     }
 
     // slither-disable-end reentrancy-balance

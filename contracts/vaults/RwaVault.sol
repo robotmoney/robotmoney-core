@@ -189,16 +189,41 @@ contract RwaVault is BasketVault {
         return _MAX_ASSETS;
     }
 
-    /// @notice USDC value of all held assets. Reverts if the Chronicle feed is stale.
+    /// @notice USDC value of all held assets. Reverts if the Chronicle feed is
+    ///         stale AND the vault still holds a priced RWA token.
     /// @dev Overrides BasketVault.totalAssets() to enforce the staleness check
     ///      before any TWAP/oracle read. BasketVault.totalAssets() delegates
     ///      pricing to the per-asset adapter (ChronicleOracleAdapter), which reads
     ///      Chronicle. We check freshness here, at the vault level, so callers
     ///      get a typed `StalePriceFeed` error rather than an opaque revert from
     ///      deep in the adapter.
+    ///
+    ///      NC-1 / SUP-5 short-circuit: the freshness gate only applies when the
+    ///      vault actually holds a priced RWA balance. After an emergency unwind
+    ///      to idle USDC the basket holds zero RWA, so NAV is exactly the idle USDC
+    ///      and no oracle read is required. Gating the check on `_holdsPricedRwa()`
+    ///      keeps ORA-2 (fail-closed) intact for every priced read while letting a
+    ///      holder redeem already-safe idle USDC even when the feed is stale —
+    ///      otherwise the unconditional revert traps safe funds with no
+    ///      permissionless exit (audit 2026-06-19 NC-1).
     function totalAssets() public view override returns (uint256) {
-        _checkOracleFreshness();
+        if (_holdsPricedRwa()) {
+            _checkOracleFreshness();
+        }
         return super.totalAssets();
+    }
+
+    /// @dev True when the vault holds a non-zero balance of any active basket
+    ///      asset (the priced RWA token). When false, `totalAssets()` is exactly
+    ///      the idle USDC balance and needs no oracle read, so freshness is
+    ///      short-circuited for the idle-USDC redemption path (SUP-5).
+    function _holdsPricedRwa() internal view returns (bool) {
+        uint256 len = assets.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (!assets[i].active) continue;
+            if (IERC20(assets[i].token).balanceOf(address(this)) > 0) return true;
+        }
+        return false;
     }
 
     // ─── Oracle freshness ─────────────────────────────────────────────
@@ -229,8 +254,14 @@ contract RwaVault is BasketVault {
     event EmergencyUnwindStaleOverrideUpdated(bool allowed);
 
     /// @notice Allow (true) or forbid (false, default) emergency unwind when the
-    ///         Chronicle feed is stale. Restricted to EMERGENCY_ROLE.
-    function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(EMERGENCY_ROLE) {
+    ///         Chronicle feed is stale.
+    /// @dev ACL-5 / F-08: gated to `ADMIN_ROLE` — a strictly higher-trust tier than
+    ///      the `EMERGENCY_ROLE` that executes `emergencyUnwind`. Selling RWA at an
+    ///      unverifiable (stale) NAV requires two distinct authorities: ADMIN_ROLE
+    ///      arms the stale-override, EMERGENCY_ROLE runs the unwind. A single
+    ///      compromised emergency hot key can no longer both authorise stale pricing
+    ///      and dump the basket against it (audit 2026-06-19 F-08).
+    function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(ADMIN_ROLE) {
         emergencyUnwindStaleOverride = allowed_;
         emit EmergencyUnwindStaleOverrideUpdated(allowed_);
     }

@@ -234,6 +234,10 @@ contract RwaVaultTest is Test {
             emergencyResponder
         );
 
+        // ADP-2 / NC-2: approve the Chronicle adapter's codehash before onboarding.
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(adapter).codehash, true);
+
         // Register deSPXA as the single basket asset.
         vm.prank(admin);
         vault.addAsset(
@@ -352,9 +356,13 @@ contract RwaVaultTest is Test {
 
     // ─── AC-2: Stale oracle halts operations ──────────────────────────────────
 
-    /// @notice totalAssets() reverts with StalePriceFeed when oracle is stale.
-    ///         AC-2: pricing uses Chronicle NAV oracle; stale feed halts operations.
+    /// @notice totalAssets() reverts with StalePriceFeed when the oracle is stale
+    ///         AND the vault holds a priced RWA balance (ORA-2 fail-closed).
+    ///         SUP-5: freshness only gates when priced RWA is actually held — see
+    ///         `test_staleFeed_idleUsdcTotalAssetsSurvives` for the idle-USDC case.
     function test_staleFeed_totalAssetsReverts() public {
+        // Seed a priced RWA balance so the freshness gate applies (SUP-5 negative).
+        despxa.mint(address(vault), 100 * ONE_DESPXA);
         // Read oracle timestamp directly from the mock — avoids a viaIR/coverage
         // optimisation that can evaluate `block.timestamp` after vm.warp when it
         // is only used in a vm.expectRevert selector argument (compiler re-ordering
@@ -369,7 +377,13 @@ contract RwaVaultTest is Test {
     }
 
     /// @notice Deposits revert when the oracle is stale (totalAssets is on the hot path).
+    ///         A deposit always brings the vault into a priced state, so the
+    ///         freshness gate applies even from an idle start.
     function test_staleFeed_depositReverts() public {
+        // Seed a priced RWA balance so the pre-swap totalAssets() prices a stale
+        // feed (without it the idle-USDC short-circuit would let totalAssets pass,
+        // and the revert would instead surface from the swap leg).
+        despxa.mint(address(vault), 100 * ONE_DESPXA);
         // Read oracle timestamp directly from the mock — same viaIR guard as above.
         uint256 oracleTs = chronicle.latestTimestamp();
         vm.warp(block.timestamp + 25 hours);
@@ -402,6 +416,58 @@ contract RwaVaultTest is Test {
         vm.stopPrank();
 
         assertGt(shares, 0, "deposit succeeds after oracle refresh");
+    }
+
+    /// @notice SUP-5 / NC-1: totalAssets() does NOT revert on a stale feed when the
+    ///         vault holds zero priced RWA (only idle USDC) — NAV is exactly the
+    ///         idle USDC and needs no oracle read.
+    function test_staleFeed_idleUsdcTotalAssetsSurvives() public {
+        // Only idle USDC held (no deSPXA).
+        usdc.mint(address(vault), 500 * ONE_USDC);
+        vm.warp(block.timestamp + 25 hours); // feed now stale
+
+        // No revert; NAV == idle USDC.
+        assertEq(vault.totalAssets(), 500 * ONE_USDC, "idle USDC NAV survives stale feed");
+    }
+
+    /// @notice SUP-5 / NC-1: a holder can redeem already-safe idle USDC even while
+    ///         the Chronicle feed is stale, after the vault has been emergency-
+    ///         unwound to idle USDC. The unconditional freshness gate previously
+    ///         trapped these funds (NC-1); the short-circuit lets them exit.
+    function test_staleFeed_idleUsdcRedeemSurvives() public {
+        // 1. Deposit while the feed is fresh → vault holds deSPXA + mints shares.
+        uint256 depositAmount = 1_000 * ONE_USDC;
+        uint256 despxaOut = 200 * ONE_DESPXA;
+        despxa.mint(address(aeroRouter), despxaOut);
+        aeroRouter.setAmountOut(despxaOut);
+        usdc.mint(user, depositAmount);
+        vm.startPrank(user);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, user);
+        vm.stopPrank();
+        assertGt(shares, 0, "shares minted on fresh deposit");
+
+        // 2. ADMIN arms the stale-override (ACL-5), EMERGENCY unwinds to idle USDC.
+        //    Router must clear the Chronicle-derived slippage floor (NAV 1000 USDC,
+        //    50bps floor → 995); return the full NAV so the unwind succeeds.
+        uint256 unwindUsdc = 1_000 * ONE_USDC;
+        usdc.mint(address(aeroRouter), unwindUsdc);
+        aeroRouter.setAmountOut(unwindUsdc);
+        vm.prank(admin);
+        vault.setEmergencyUnwindStaleOverride(true);
+        vm.prank(emergencyResponder);
+        vault.emergencyUnwind();
+        assertEq(despxa.balanceOf(address(vault)), 0, "vault unwound to zero deSPXA");
+
+        // 3. Feed goes stale. Redeem must still succeed against idle USDC (SUP-5).
+        vm.warp(block.timestamp + 25 hours);
+        uint256 balBefore = usdc.balanceOf(user);
+        vm.prank(user);
+        // The critical SUP-5 assertion: this call does NOT revert StalePriceFeed.
+        uint256 assetsOut = vault.redeem(shares, user, user);
+        assertGt(assetsOut, 0, "idle-USDC redeem returns proceeds under a stale feed");
+        assertGt(usdc.balanceOf(user) - balBefore, 0, "holder receives the idle USDC");
+        assertEq(vault.balanceOf(user), 0, "all shares burned");
     }
 
     // ─── AC-3: Caps ───────────────────────────────────────────────────────────
@@ -641,9 +707,10 @@ contract RwaVaultTest is Test {
     /// @notice emergencyUnwind succeeds when the override flag is set, even
     ///         when the Chronicle feed is stale.
     function test_emergencyUnwind_succeedsWithStaleOverride() public {
-        vm.startPrank(emergencyResponder);
+        // ACL-5 / F-08: ADMIN_ROLE arms the stale-override (a higher tier than the
+        // EMERGENCY_ROLE that runs the unwind).
+        vm.prank(admin);
         vault.setEmergencyUnwindStaleOverride(true);
-        vm.stopPrank();
 
         vm.warp(block.timestamp + 25 hours);
 
@@ -656,7 +723,7 @@ contract RwaVaultTest is Test {
     /// @notice emergencyUnwindWithOverride succeeds when the override flag is
     ///         set, even when the Chronicle feed is stale.
     function test_emergencyUnwindWithOverride_succeedsWithStaleOverride() public {
-        vm.prank(emergencyResponder);
+        vm.prank(admin);
         vault.setEmergencyUnwindStaleOverride(true);
 
         vm.warp(block.timestamp + 25 hours);
@@ -668,17 +735,30 @@ contract RwaVaultTest is Test {
         assertFalse(vault.paused(), "redemption remains available");
     }
 
-    /// @notice Only EMERGENCY_ROLE can set the stale override flag.
-    function test_emergencyUnwindStaleOverride_onlyEmergencyRole() public {
+    /// @notice ACL-5 / F-08: the stale-override setter requires ADMIN_ROLE — a
+    ///         strictly higher tier than the EMERGENCY_ROLE unwind executor. A
+    ///         stranger, and the EMERGENCY_ROLE responder, are both rejected; only
+    ///         ADMIN_ROLE may arm the override.
+    function test_emergencyUnwindStaleOverride_requiresAdminNotEmergency() public {
         address stranger = makeAddr("stranger");
         vm.prank(stranger);
         vm.expectRevert();
         vault.setEmergencyUnwindStaleOverride(true);
+
+        // The EMERGENCY_ROLE unwind executor cannot also arm the override.
+        vm.prank(emergencyResponder);
+        vm.expectRevert();
+        vault.setEmergencyUnwindStaleOverride(true);
+
+        // Only ADMIN_ROLE succeeds.
+        vm.prank(admin);
+        vault.setEmergencyUnwindStaleOverride(true);
+        assertTrue(vault.emergencyUnwindStaleOverride(), "ADMIN_ROLE arms the override");
     }
 
     /// @notice Setting the stale override flag emits the expected event.
     function test_emergencyUnwindStaleOverride_emitsEvent() public {
-        vm.prank(emergencyResponder);
+        vm.prank(admin);
         vm.expectEmit(true, true, true, true);
         emit RwaVault.EmergencyUnwindStaleOverrideUpdated(true);
         vault.setEmergencyUnwindStaleOverride(true);

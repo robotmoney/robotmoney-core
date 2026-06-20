@@ -280,15 +280,37 @@ interface IGateway {
     ///      the sum of `sharesPerLeg` and is checked against
     ///      `maxWithdrawPerPayment` and the rolling window cap.
     /// @param orderId          Caller-supplied order identifier (echoed in event).
-    /// @param sharesPerLeg     Vault shares to redeem per router leg (parallel to
-    ///                         the router's effective weight vector).
-    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
+    /// @param vaults           Explicit list of vault addresses to redeem from
+    ///                         (issue #967, F-03). Drives the redeem legs directly
+    ///                         instead of the router's live weight vector, so a
+    ///                         holder can exit a reweighted-out or Retired position.
+    ///                         `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the
+    ///                         array is committed to `paymentId`.
+    /// @param sharesPerLeg     Vault shares to redeem per leg (parallel to `vaults`).
+    /// @param minAssetsPerLeg  Per-leg minimum USDC out (slippage floor), parallel
+    ///                         to `vaults`/`sharesPerLeg`. The gateway forwards this
+    ///                         floor straight to `PortfolioRouter.redeemFor`, which
+    ///                         reverts each leg whose realized proceeds fall below it
+    ///                         (GW-5 / F-11). A floor of 0 disables the check for
+    ///                         that leg, but the caller is expected to pass a real,
+    ///                         off-chain-computed minimum — the gateway no longer
+    ///                         hardcodes an all-zero vector. Length must equal
+    ///                         `sharesPerLeg`. The floor vector is folded into
+    ///                         `paymentId` so a replay cannot re-execute the same
+    ///                         order under a weaker floor.
+    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`. The
+    ///                         gateway forwards this same deadline to the router
+    ///                         (no longer `type(uint256).max`), so the router's own
+    ///                         deadline guard also bites (F-11).
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/key.
+    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/
+    ///                         vaults/sharesPerLeg/minAssetsPerLeg/key.
     /// @return assetsPerLeg    USDC received per leg.
     function withdrawFromRouter(
         bytes32 orderId,
+        address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
         uint64 deadline,
         bytes32 idempotencyKey
     ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
@@ -318,7 +340,9 @@ interface IGateway {
     function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
     /// @notice First-time authorization for `agent`. Admin-only — only callable
-    ///         by `DEFAULT_ADMIN_ROLE`. Regular users must use
+    ///         by `ADMIN_ROLE` (so the TimelockController retains agent-onboarding
+    ///         authority after the deploy handover revokes the deployer's
+    ///         `DEFAULT_ADMIN_ROLE`; see F-01 / ACL-1). Regular users must use
     ///         `commitAuthorization` + `revealAuthorization` instead.
     ///         `msg.sender` is recorded as the agent's owner. Reverts if
     ///         `agent` already has a recorded owner; that owner must call
