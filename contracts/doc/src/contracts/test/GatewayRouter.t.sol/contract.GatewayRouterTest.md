@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -233,6 +233,34 @@ route to either the pinned vault or the router.
 
 ```solidity
 function test_depositTo_openDestinations_allowsVaultAndRouter() public;
+```
+
+### test_GW2_depositTo_paymentIdBindsDestination
+
+GW-2 / NC-9 (FLIPPED GREEN by #970): a single paymentId/idempotency
+key never authorizes two MATERIALLY DIFFERENT execution intents. The
+depositTo paymentId now folds the routing `destination` and the
+per-leg `minSharesPerLeg` vector into its preimage, so two depositTo
+calls sharing the same (orderId, amount, idempotencyKey) but routing
+to a DIFFERENT destination produce DIFFERENT paymentIds — neither is
+silently swallowed as a replay of the other. Deep proof referenced by
+FvInvariants.t.sol::test_GW2_*.
+
+
+```solidity
+function test_GW2_depositTo_paymentIdBindsDestination() public;
+```
+
+### test_GW2_depositTo_paymentIdBindsMinSharesPerLeg
+
+GW-2 / NC-9: the per-leg slippage vector `minSharesPerLeg` is also
+bound into the paymentId, so two router deposits sharing the same
+(orderId, amount, idem) but carrying a DIFFERENT per-leg floor are
+distinct intents and never collide.
+
+
+```solidity
+function test_GW2_depositTo_paymentIdBindsMinSharesPerLeg() public;
 ```
 
 ### test_depositTo_revertsOnArbitraryDestination

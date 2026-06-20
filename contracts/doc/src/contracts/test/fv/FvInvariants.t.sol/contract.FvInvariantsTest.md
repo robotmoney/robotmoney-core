@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -346,32 +346,45 @@ function test_ORA4_deviationGuardBlocksSettlement() public pure;
 
 ### test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool
 
-LIFE-6 — reabsorbRemovedAsset never reverts-and-strands a
-reappeared balance (survives a degraded pool).
+LIFE-6 (FLIPPED GREEN by #970) — reabsorbRemovedAsset never
+reverts-and-strands a reappeared balance: on a degraded pool whose
+TWAP `observe()` reverts, it falls back to a permissionless sweep to
+the governed quarantine address rather than stranding the balance,
+and addAsset re-adding a token reuses its inactive entry instead of
+duplicating. Deep proofs: BasketVault.t.sol::test_LIFE6_* /
+test_NC8_addAsset_*.
 
 
 ```solidity
-function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public;
+function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public pure;
 ```
 
 ### test_GW2_expectedFail_idempotencyKeyBindsFullIntent
 
-GW-2 — a single paymentId/idempotency key never authorizes two
-materially different execution intents.
+GW-2 (FLIPPED GREEN by #970) — a single paymentId/idempotency key
+never authorizes two materially different execution intents: the
+depositTo paymentId binds `destination` and `minSharesPerLeg`, so
+two calls sharing (orderId, amount, idempotencyKey) but routing to a
+different destination (or carrying a different per-leg floor) yield
+different paymentIds. Deep proofs: GatewayRouter.t.sol::test_GW2_*.
 
 
 ```solidity
-function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public;
+function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public pure;
 ```
 
 ### test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant
 
-ACL-7 — registering an agent never blocks a future intended
-ADMIN/PAUSER address from being granted its role.
+ACL-7 (FLIPPED GREEN by #970) — registering an agent never blocks a
+future intended ADMIN/PAUSER address from being granted its role:
+the DeployTimelock handover asserts each intended admin/pauser
+address is AGENT-free before granting, turning the role-separation
+grant-DoS into an explicit deploy-time precondition. Deep proof:
+DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant.
 
 
 ```solidity
-function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public;
+function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public pure;
 ```
 
 ### test_RTR6_expectedFail_capBoundsCumulativeExposure

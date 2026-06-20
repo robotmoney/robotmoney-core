@@ -1,5 +1,5 @@
 # BasketAssetConfigGuard
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/lib/BasketAssetConfigGuard.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/lib/BasketAssetConfigGuard.sol)
 
 **Title:**
 BasketAssetConfigGuard
@@ -14,6 +14,54 @@ already-EIP-170-tight basket family.
 
 
 ## Functions
+### requirePoolUsable
+
+Assert `pool` is usable as an `addAsset` venue: it pairs `token`
+with `usdc`, has enough observation cardinality and history to serve
+a `twapWindow`-second TWAP, and has at least `minLiquidity` in-range
+liquidity. Extracted from `BasketVault.addAsset` into this
+delegatecall-linked guard to keep the EIP-170-tight basket-vault
+bytecode small. Behaviour-identical to the prior inline checks.
+
+
+```solidity
+function requirePoolUsable(
+    address pool,
+    address token,
+    address usdc,
+    uint32 twapWindow,
+    uint16 minCardinality,
+    uint128 minLiquidity
+) public view;
+```
+
+### reuseOrRejectDuplicate
+
+NC-8 (no duplicate AssetInfo): if `token` already has an entry in
+`assets`, reuse it instead of letting the caller append a second
+one. An ACTIVE duplicate is rejected; an INACTIVE (removed) entry is
+refreshed to the new config and re-activated in place. Lives in this
+delegatecall-linked library so the scan/write logic stays out of the
+EIP-170-tight basket-vault bytecode.
+
+
+```solidity
+function reuseOrRejectDuplicate(
+    AssetInfo[] storage assets,
+    address token,
+    address pool,
+    uint24 swapFee,
+    address adapter,
+    Venue venue
+) public returns (uint256 reusedIndex);
+```
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`reusedIndex`|`uint256`|The registry index of the inactive entry that was reactivated in place (the caller must NOT push); or `type(uint256).max` when the token is new and the caller must push.|
+
+
 ### requireAllowedAdapter
 
 Vet a non-zero adapter's codehash against the allowlist (ADP-2 / NC-2).
@@ -53,6 +101,64 @@ Execution pool (resolved from swapFee) != registered TWAP pool (ORA-3).
 
 ```solidity
 error ExecutionPoolMismatch();
+```
+
+### AssetAlreadyActive
+`addAsset` re-add of a token that already has an ACTIVE entry (NC-8).
+
+
+```solidity
+error AssetAlreadyActive();
+```
+
+### PoolTokenMismatch
+Pool does not pair `token` with USDC.
+
+
+```solidity
+error PoolTokenMismatch();
+```
+
+### InsufficientPoolCardinality
+Pool observation cardinality below the minimum required for TWAP.
+
+
+```solidity
+error InsufficientPoolCardinality(address pool, uint16 required, uint16 actual);
+```
+
+### InsufficientObservationHistory
+Pool lacks the observation history to service a full TWAP window.
+
+
+```solidity
+error InsufficientObservationHistory(address pool, uint32 requiredWindow);
+```
+
+### InsufficientPoolLiquidity
+Pool in-range liquidity below the synchronous-redemption minimum.
+
+
+```solidity
+error InsufficientPoolLiquidity(address pool, uint128 required, uint128 actual);
+```
+
+## Structs
+### AssetInfo
+Layout-compatible mirror of `BasketVault.AssetInfo`. Field order and
+types MUST match exactly so the delegatecall-linked dedup scan below
+reads/writes the vault's `assets` storage correctly.
+
+
+```solidity
+struct AssetInfo {
+    address token;
+    address pool;
+    uint24 swapFee;
+    bool active;
+    address adapter;
+    Venue venue;
+}
 ```
 
 ## Enums

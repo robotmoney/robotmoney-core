@@ -1,5 +1,5 @@
 # DeployAssertionsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/fv/DeployAssertions.t.sol)
 
 **Inherits:**
 Test
@@ -24,6 +24,13 @@ bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE")
 
 ```solidity
 bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
+```
+
+
+### AGENT_ROLE
+
+```solidity
+bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE")
 ```
 
 
@@ -107,6 +114,38 @@ enumerates every privileged role against the deployer EOA.
 
 ```solidity
 function test_ACL1_eoaHoldsNoPrivilegedRoleAfterHandover() public;
+```
+
+### test_ACL7_agentRegistrationCannotBlockRoleGrant
+
+ACL-7 / NC-10 (FLIPPED GREEN by #970): permissionless agent
+registration can never block a future intended ADMIN/PAUSER address
+from being granted its role during handover. Two layers prove this:
+1. The Gateway's role-separation invariant means that if an intended
+admin address were already an AGENT, `grantRole(ADMIN_ROLE, …)`
+would revert `RoleSeparationViolated` — a confusing, late-stage
+handover brick (the grant-DoS vector).
+2. The DeployTimelock handover now ASSERTS up front (before any
+gateway grant) that every address about to receive an
+ADMIN/PAUSER-tier role is AGENT-free, turning the griefing vector
+into an explicit, typed deploy-time precondition.
+This test pins layer 1 (the brick exists without the guard) and
+layer 2 (a normal handover, where no intended admin is pre-bound,
+passes the guard and completes). Deep proof referenced by
+FvInvariants.t.sol::test_ACL7_*.
+
+
+```solidity
+function test_ACL7_agentRegistrationCannotBlockRoleGrant() public;
+```
+
+### _acl7Policy
+
+Minimal valid agent policy for the ACL-7 grant-DoS fixture.
+
+
+```solidity
+function _acl7Policy() internal returns (IGateway.AgentPolicy memory p);
 ```
 
 ### _deployAclFixtureAndHandover

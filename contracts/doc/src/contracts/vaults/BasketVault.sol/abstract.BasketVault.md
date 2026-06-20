@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -324,6 +324,18 @@ Subclasses declare the maximum number of assets in the basket.
 
 ```solidity
 function maxAssets() public view virtual returns (uint256);
+```
+
+### _guardAssets
+
+Reinterpret the `assets` storage array as the layout-identical
+`BasketAssetConfigGuard.AssetInfo[]` so the delegatecall-linked dedup
+scan can read/write it. The two structs share an exact field layout;
+only the nominal type differs, so the storage-pointer cast is sound.
+
+
+```solidity
+function _guardAssets() internal view returns (BasketAssetConfigGuard.AssetInfo[] storage g);
 ```
 
 ### decimals
@@ -847,6 +859,20 @@ function sweepForeignToken(address token) external;
 |----|----|-----------|
 |`token`|`address`|Foreign ERC-20 to quarantine. Must not be USDC, the share token, or any active/configured basket asset.|
 
+
+### _sweepToQuarantine
+
+Single inlining site for the permissionless quarantine sweep so the
+`ForeignTokenQuarantine.sweep` body is emitted into the
+EIP-170-tight basket-vault bytecode only once, shared by
+`sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
+fallback. Moves the caller's full balance of `token` to the fixed
+quarantine address; no caller-supplied recipient (INV-1).
+
+
+```solidity
+function _sweepToQuarantine(address token) private;
+```
 
 ### setTvlCap
 

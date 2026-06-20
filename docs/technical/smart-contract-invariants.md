@@ -134,7 +134,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · every gateway flow pulls USDC from `msg.sender`; this is why F-01 is governance-capture, not theft · stateful-invariant (already implied by GW-1/GW-3).
 
 > **`ACL-7` — Registering an agent never blocks a future intended ADMIN/PAUSER address from being granted its role.**
-> 🔴 VIOLATED (handover window) · permissionless `commitAuthorization` + the ACL-2 separation override lets a griefer pre-bind a known multisig address as AGENT — see **NC-10** · deploy-assertion (assert role-target addresses are AGENT-free before granting).
+> ✅ PROVEN · the DeployTimelock handover asserts every intended ADMIN/PAUSER address is AGENT-free **before** any gateway grant, so the permissionless-registration grant-DoS becomes an explicit, typed deploy-time precondition rather than a late-stage `RoleSeparationViolated` brick — fixed by **NC-10 (#970)** · `DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant` · deploy-assertion.
 
 ---
 
@@ -156,7 +156,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ HOLDS (fixed #967, F-03) · `redeemFor` (and `gateway.withdrawFromRouter`) drive redeem legs from an explicit caller-supplied `vaults[]`, not the live weight vector, and `_redeemLeg` permits Active OR Retired (only Paused blocks) — a reweighted-out or Retired position stays redeemable through the router · stateful-invariant — `FvInvariants.t.sol::test_LIFE5_expectedFail_reweightKeepsPositionRedeemable`.
 
 > **`LIFE-6` — `reabsorbRemovedAsset` never reverts-and-strands a reappeared balance (INV-2 must survive a degraded pool).**
-> 🔴 VIOLATED (risk) · reuses `assetInfo.pool` TWAP with no staleness/liquidity recheck; `observe()` can revert and brick reabsorption — see **F-17 / NC-8** · fuzz (degraded-pool handler).
+> ✅ PROVEN · `reabsorbRemovedAsset` now wraps the TWAP floor read in a try/catch: on a degraded pool whose `observe()` reverts, the reappeared balance is permissionlessly swept to the governed quarantine safety valve instead of being stranded, so the call can never revert-and-strand; `addAsset` also reuses an inactive entry on re-add (no duplicate `AssetInfo`) — fixed by **NC-8 (#970)** · `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` / `test_NC8_addAsset_*` · fuzz/behavioural.
 
 ---
 
@@ -188,7 +188,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `ShareCustodyInvariantViolated` post-call checks in `depositTo`/`_executeRouterDeposit`; `GatewayRouter.t.sol` · stateful-invariant.
 
 > **`GW-2` — A single `paymentId`/idempotency key never authorizes two materially different execution intents.**
-> 🔴 VIOLATED · `depositTo` paymentId omits `destination`+`minSharesPerLeg`; `withdrawFromRouter` uses summed `totalShares`, not the per-leg vector — see **F-15 / NC-9** · symbolic (two distinct intents → same id).
+> ✅ PROVEN · the `depositTo` paymentId now folds in `destination` and the per-leg `minSharesPerLeg` vector, so two calls sharing `(orderId, amount, idempotencyKey)` but routing to a different destination — or carrying a different per-leg floor — yield distinct ids and never collide — fixed by **NC-9 (#970)** · `GatewayRouter.t.sol::test_GW2_depositTo_paymentIdBindsDestination` / `test_GW2_depositTo_paymentIdBindsMinSharesPerLeg` · symbolic/behavioural. *Residual (out of scope, low cluster):* `withdrawFromRouter` still keys on summed `totalShares`, not the per-leg vector — see **F-15**.
 
 > **`GW-3` — An agent can only move funds its owner approved, only to its owner's registered receiver, within policy caps.**
 > 🟢 HOLDS · `agents[agent]` policy + `safeTransferFrom(msg.sender,…)` · stateful-invariant.

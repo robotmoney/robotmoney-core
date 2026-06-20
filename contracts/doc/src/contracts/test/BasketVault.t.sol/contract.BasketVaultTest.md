@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -242,6 +242,65 @@ withdrawal, not swept).
 
 ```solidity
 function test_reabsorbRemovedAsset_revertsForActiveAsset() public;
+```
+
+### test_LIFE6_reabsorbSurvivesDegradedPool
+
+LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
+whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
+reverts-and-strands. Pre-fix, the swap-floor read reverted and the
+reappeared balance was stuck on the vault forever; post-fix the
+quarantine fallback sweeps it to the governed quarantine address, so
+the balance is always actionable (the reversible safety valve).
+Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
+
+
+```solidity
+function test_LIFE6_reabsorbSurvivesDegradedPool() public;
+```
+
+### test_LIFE6_reabsorbZeroBalanceIsNoOp
+
+LIFE-6 / NC-8: a zero reappeared balance is an idempotent no-op,
+never a revert, even on a degraded pool.
+
+
+```solidity
+function test_LIFE6_reabsorbZeroBalanceIsNoOp() public;
+```
+
+### test_NC8_addAsset_rejectsActiveDuplicate
+
+NC-8: re-adding a token that already has an ACTIVE registry entry
+reverts rather than creating a duplicate AssetInfo (which would
+double-count it in NAV and corrupt the equal-weight split).
+
+
+```solidity
+function test_NC8_addAsset_rejectsActiveDuplicate() public;
+```
+
+### test_NC8_addAsset_reusesInactiveSlotOnReAdd
+
+NC-8: re-adding a previously REMOVED token reuses its inactive
+registry slot in place (refreshing config + re-activating) instead
+of appending a second AssetInfo, so `assets` never holds two entries
+for one token.
+
+
+```solidity
+function test_NC8_addAsset_reusesInactiveSlotOnReAdd() public;
+```
+
+### _assetsLen
+
+Count the BasketVault `assets` registry by probing the public getter
+until it reverts (no dedicated length getter on-chain — kept off the
+EIP-170-tight basket bytecode).
+
+
+```solidity
+function _assetsLen() internal view returns (uint256 n);
 ```
 
 ### test_INV3_setFeeRecipient_revertsForHotEmergencyKey

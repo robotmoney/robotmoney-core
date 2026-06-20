@@ -72,6 +72,8 @@ interface IRetirableVaultLink {
 contract DeployTimelock is Script {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
     /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
@@ -176,6 +178,29 @@ contract DeployTimelock is Script {
         executors[0] = d.safe;
 
         timelock = new TimelockController(d.minDelay, proposers, executors, address(0));
+
+        // ACL-7 / NC-10: GATE THE GRANT-DoS. The Gateway's agent registration is
+        // permissionless (anyone may `commitAuthorization`/`revealAuthorization`),
+        // and the role-separation invariant forbids one account from holding both
+        // AGENT_ROLE and an ADMIN/PAUSER-tier role. An attacker who front-runs the
+        // handover by pre-binding an INTENDED admin/pauser address as an AGENT
+        // would make the subsequent `grantRole(ADMIN_ROLE, …)` revert with
+        // `RoleSeparationViolated`, bricking the handover with a confusing,
+        // late-stage failure.
+        //
+        // Assert UP FRONT — before any gateway grant — that every address about to
+        // receive an ADMIN/PAUSER-tier role on the Gateway is AGENT-free. The
+        // freshly-deployed `timelock` cannot have been pre-bound, but we assert it
+        // anyway (defence in depth and a clear, typed early failure). This turns a
+        // griefing vector into an explicit deploy-time precondition.
+        require(
+            !IAccessControl(d.gateway).hasRole(AGENT_ROLE, address(timelock)),
+            "ACL-7: timelock pre-bound as gateway AGENT - handover would brick"
+        );
+        require(
+            !IAccessControl(d.gateway).hasRole(AGENT_ROLE, d.safe),
+            "ACL-7: safe pre-bound as gateway AGENT - handover would brick"
+        );
 
         // 2. Grant ADMIN_ROLE to the timelock on all five contracts, then
         //    revoke ADMIN_ROLE from msg.sender (the deployer).

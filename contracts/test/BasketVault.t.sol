@@ -509,6 +509,106 @@ contract BasketVaultTest is Test {
         vault.reabsorbRemovedAsset(0);
     }
 
+    /// @notice LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
+    ///         whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
+    ///         reverts-and-strands. Pre-fix, the swap-floor read reverted and the
+    ///         reappeared balance was stuck on the vault forever; post-fix the
+    ///         quarantine fallback sweeps it to the governed quarantine address, so
+    ///         the balance is always actionable (the reversible safety valve).
+    ///         Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
+    function test_LIFE6_reabsorbSurvivesDegradedPool() public {
+        vm.prank(admin);
+        vault.removeAsset(0); // vault holds zero basketToken, removal allowed
+
+        // A balance reappears after removal.
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // The removed asset's pool degrades: its TWAP observation history is gone,
+        // so observe() reverts "OLD". The happy-path swap floor cannot be priced.
+        pool.setRevertObserve(true);
+
+        // Re-absorption must NOT revert-and-strand. The quarantine fallback fires
+        // and `sweep` emits ForeignTokenQuarantined(token, amount, caller).
+        address stranger = makeAddr("stranger");
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit ForeignTokenQuarantine.ForeignTokenQuarantined(
+            address(basketToken), reappeared, stranger
+        );
+        vm.prank(stranger);
+        vault.reabsorbRemovedAsset(0); // does not revert (LIFE-6)
+
+        // The reappeared balance left the vault for quarantine — never stranded.
+        assertEq(basketToken.balanceOf(address(vault)), 0, "LIFE-6: balance not stranded on vault");
+        assertEq(
+            basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            reappeared,
+            "LIFE-6: degraded-pool balance swept to quarantine safety valve"
+        );
+    }
+
+    /// @notice LIFE-6 / NC-8: a zero reappeared balance is an idempotent no-op,
+    ///         never a revert, even on a degraded pool.
+    function test_LIFE6_reabsorbZeroBalanceIsNoOp() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        pool.setRevertObserve(true);
+        // No balance reappeared; the call returns without reverting or sweeping.
+        vault.reabsorbRemovedAsset(0);
+        assertEq(basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "nothing swept");
+    }
+
+    /// @notice NC-8: re-adding a token that already has an ACTIVE registry entry
+    ///         reverts rather than creating a duplicate AssetInfo (which would
+    ///         double-count it in NAV and corrupt the equal-weight split).
+    function test_NC8_addAsset_rejectsActiveDuplicate() public {
+        // basketToken is already active at index 0 (added in setUp).
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.AssetAlreadyActive.selector);
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
+    }
+
+    /// @notice NC-8: re-adding a previously REMOVED token reuses its inactive
+    ///         registry slot in place (refreshing config + re-activating) instead
+    ///         of appending a second AssetInfo, so `assets` never holds two entries
+    ///         for one token.
+    function test_NC8_addAsset_reusesInactiveSlotOnReAdd() public {
+        uint256 lenBefore = _assetsLen();
+        vm.prank(admin);
+        vault.removeAsset(0); // deactivate basketToken at index 0
+
+        // Re-add the same token with a fresh (still-valid) pool config.
+        MockPool freshPool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
+        vm.prank(admin);
+        vault.addAsset(
+            address(basketToken), address(freshPool), 500, address(0), BasketVault.Venue.V3
+        );
+
+        // No new slot appended: the inactive entry was reused in place.
+        assertEq(_assetsLen(), lenBefore, "NC-8: re-add must not append a duplicate AssetInfo");
+
+        // Index 0 is active again and points at the refreshed pool.
+        (address token0, address poolAddr0,, bool active0,,) = vault.assets(0);
+        assertEq(token0, address(basketToken), "reused slot keeps the token");
+        assertTrue(active0, "reused slot re-activated");
+        assertEq(poolAddr0, address(freshPool), "reused slot refreshed to new pool");
+    }
+
+    /// @dev Count the BasketVault `assets` registry by probing the public getter
+    ///      until it reverts (no dedicated length getter on-chain — kept off the
+    ///      EIP-170-tight basket bytecode).
+    function _assetsLen() internal view returns (uint256 n) {
+        while (true) {
+            try vault.assets(n) returns (
+                address, address, uint24, bool, address, BasketVault.Venue
+            ) {
+                n++;
+            } catch {
+                return n;
+            }
+        }
+    }
+
     // ─── INV-3: fee setters are governance-gated (issue #929) ─────────────────
     //
     // Fee setters are `onlyRole(ADMIN_ROLE)`. In production ADMIN_ROLE is held by

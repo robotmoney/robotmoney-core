@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -109,6 +109,21 @@ IPortfolioRouter public immutable routerContract
 ```
 
 
+### MAX_WINDOW_ENTRIES
+Hard cap on the number of distinct live ring-buffer entries per
+agent per side. Because same-second operations coalesce, the live
+count can never exceed the number of distinct seconds in the
+rolling window; this constant pins the storage footprint regardless
+and makes the bound explicit. `WINDOW_SECONDS` distinct seconds is
+the theoretical ceiling, but no real agent approaches it — the cap
+exists purely so the worst case is provably O(1) in storage.
+
+
+```solidity
+uint256 public constant MAX_WINDOW_ENTRIES = WINDOW_SECONDS
+```
+
+
 ## State Variables
 ### commitments
 Pending commitments keyed by
@@ -174,45 +189,17 @@ mapping(address => WithdrawWindow) public agentWithdrawWindow
 ```
 
 
-### _depositWindowEntries
+### _depositWindow
 
 ```solidity
-mapping(address => WindowEntry[]) private _depositWindowEntries
+mapping(address => RollingWindow) private _depositWindow
 ```
 
 
-### _depositWindowHead
+### _withdrawWindow
 
 ```solidity
-mapping(address => uint256) private _depositWindowHead
-```
-
-
-### _depositWindowTotal
-
-```solidity
-mapping(address => uint256) private _depositWindowTotal
-```
-
-
-### _withdrawWindowEntries
-
-```solidity
-mapping(address => WindowEntry[]) private _withdrawWindowEntries
-```
-
-
-### _withdrawWindowHead
-
-```solidity
-mapping(address => uint256) private _withdrawWindowHead
-```
-
-
-### _withdrawWindowTotal
-
-```solidity
-mapping(address => uint256) private _withdrawWindowTotal
+mapping(address => RollingWindow) private _withdrawWindow
 ```
 
 
@@ -409,22 +396,70 @@ function _accrueRollingDeposit(address agent, uint256 amount, uint256 cap) inter
 
 ### _pruneWindow
 
+Drop every live entry whose timestamp has aged past the rolling
+window `(t-WINDOW_SECONDS, t]`, reclaiming its ring slot and
+decrementing `total`. Strictly bounded: it scans at most `count`
+entries, which can never exceed `MAX_WINDOW_ENTRIES` (NC-7).
+
 
 ```solidity
-function _pruneWindow(WindowEntry[] storage entries, uint256 head, uint256 total)
-    internal
-    view
-    returns (uint256 newHead, uint256 newTotal);
+function _pruneWindow(RollingWindow storage w) internal;
+```
+
+### _appendWindowEntry
+
+Record `amount` at the current `block.timestamp` in the ring buffer.
+Operations within the same second COALESCE into the newest live entry
+(no new slot), which is what bounds the live entry count. Otherwise a
+freed slot is reused (ring wrap) or, only while the buffer has not yet
+reached its high-water mark, a new slot is `push`ed — capped at
+`MAX_WINDOW_ENTRIES`. `total` always tracks the live sum.
+
+
+```solidity
+function _appendWindowEntry(RollingWindow storage w, uint256 amount) internal;
+```
+
+### _relinearize
+
+Rotate the full ring buffer so the oldest live entry sits at index 0.
+Precondition: the buffer is completely full (`count == slots.length`),
+so every slot is live and a simple rotation by `head` re-linearizes
+the live region. Used only on the rare grow path. Implemented as a
+sequence of in-place reversals (reverse[0,head), reverse[head,len),
+reverse[0,len)) so it needs no scratch array.
+
+
+```solidity
+function _relinearize(RollingWindow storage w) internal;
+```
+
+### _reverseRange
+
+Reverse `slots[lo:hi)` in place.
+
+
+```solidity
+function _reverseRange(RollingWindow storage w, uint256 lo, uint256 hi) internal;
+```
+
+### _oldestTimestamp
+
+Timestamp of the oldest live entry, or 0 when the window is empty.
+
+
+```solidity
+function _oldestTimestamp(RollingWindow storage w) internal view returns (uint64);
 ```
 
 ### _effectiveWindowTotal
 
+View-only effective live total after notionally pruning expired
+entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
+
 
 ```solidity
-function _effectiveWindowTotal(WindowEntry[] storage entries, uint256 head, uint256 total)
-    internal
-    view
-    returns (uint256);
+function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256);
 ```
 
 ### _commitmentKey
@@ -1112,6 +1147,17 @@ indicating a malicious or fee-on-transfer vault.
 error UnexpectedAssetsReceived();
 ```
 
+### WindowBufferFull
+Raised when an agent's live window-entry count would exceed
+`MAX_WINDOW_ENTRIES`. Unreachable in practice (same-second
+coalescing keeps the live count far below the cap) but guarantees
+the ring buffer can never silently overflow its bound.
+
+
+```solidity
+error WindowBufferFull();
+```
+
 ### LastAdminFloor
 Revoking/renouncing the sole holder of an admin tier is forbidden.
 
@@ -1214,6 +1260,37 @@ struct WithdrawWindow {
 struct WindowEntry {
     uint64 timestamp;
     uint256 amount;
+}
+```
+
+### RollingWindow
+Bounded ring buffer backing one agent's rolling-window accounting
+(NC-7 / GW-4). The previous design `.push`ed a fresh `WindowEntry`
+for every operation and only advanced a `head` cursor on prune, so
+the underlying dynamic array grew without bound for the life of the
+agent — eventually making every windowed op (and the linear prune
+scan) cost so much gas that the agent gas-bricks itself out of the
+gateway permanently.
+The ring buffer fixes this in two ways:
+1. SAME-SECOND COALESCING — operations sharing a `block.timestamp`
+merge into the single newest entry instead of appending. The
+count of distinct live entries can therefore never exceed the
+number of distinct seconds in the rolling window, which is
+hard-capped at `MAX_WINDOW_ENTRIES`.
+2. SLOT REUSE — pruned (expired) slots are reclaimed by wrapping
+`head`/`count` around the fixed-capacity `slots` array, so the
+array's storage footprint plateaus at the high-water mark of
+concurrently-live entries and never grows monotonically.
+Exact rolling-window semantics (strict `(t-WINDOW_SECONDS, t]`
+expiry) are preserved per-entry; only the storage shape changed.
+
+
+```solidity
+struct RollingWindow {
+    WindowEntry[] slots; // ring storage; length == live capacity (≤ MAX_WINDOW_ENTRIES)
+    uint256 head; // index of the oldest live entry
+    uint256 count; // number of live entries
+    uint256 total; // cumulative amount across the live entries
 }
 ```
 

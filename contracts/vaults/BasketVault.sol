@@ -294,6 +294,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
     error AssetInBasket();
+    // NC-8 (AssetAlreadyActive) — re-adding a token that already has an ACTIVE
+    // entry would create a duplicate `AssetInfo` that double-counts the token in
+    // NAV and corrupts the equal-weight split. Enforced (and the inactive-reuse
+    // path handled) in `addAsset` via the externally-linked
+    // `BasketAssetConfigGuard.reuseOrRejectDuplicate`, which declares and reverts
+    // `AssetAlreadyActive`.
     // ADP-2 / NC-2 (AdapterCodeHashNotAllowed) and ORA-3 / F-09
     // (ExecutionPoolMismatch) are enforced in `addAsset` via the externally-linked
     // `BasketAssetConfigGuard` library, which declares and reverts those errors.
@@ -388,6 +394,18 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     /// @notice Subclasses declare the maximum number of assets in the basket.
     function maxAssets() public view virtual returns (uint256);
+
+    /// @dev Reinterpret the `assets` storage array as the layout-identical
+    ///      `BasketAssetConfigGuard.AssetInfo[]` so the delegatecall-linked dedup
+    ///      scan can read/write it. The two structs share an exact field layout;
+    ///      only the nominal type differs, so the storage-pointer cast is sound.
+    function _guardAssets() internal view returns (BasketAssetConfigGuard.AssetInfo[] storage g) {
+        AssetInfo[] storage a = assets;
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            g.slot := a.slot
+        }
+    }
 
     // ─── Production-readiness gate ────────────────────────────────────
     //
@@ -926,35 +944,40 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         BasketAssetConfigGuard.requireExecutionPoolMatchesTwap(
             pool_, swapFee_, BasketAssetConfigGuard.Venue(uint8(venue_))
         );
-        // Verify pool actually pairs this token with USDC.
-        // For Uniswap V3 pools and Aerodrome CL pools, token0/token1 are standard.
-        address t0 = IUniswapV3Pool(pool_).token0();
-        address t1 = IUniswapV3Pool(pool_).token1();
-        if (!((t0 == token_ && t1 == address(_USDC)) || (t1 == token_ && t0 == address(_USDC)))) {
-            revert PoolTokenMismatch();
+        // Pool usability: pairs token/USDC, enough TWAP cardinality + history, and
+        // enough in-range liquidity for synchronous redemption. Extracted to the
+        // delegatecall-linked guard to keep the EIP-170-tight vault bytecode small.
+        BasketAssetConfigGuard.requirePoolUsable(
+            pool_,
+            token_,
+            address(_USDC),
+            DEFAULT_TWAP_WINDOW,
+            MIN_POOL_CARDINALITY,
+            MIN_POOL_LIQUIDITY
+        );
+
+        // NC-8 (no duplicate AssetInfo): an ACTIVE re-add is rejected; an INACTIVE
+        // (previously removed) entry is reused/re-activated in place rather than
+        // appending a second AssetInfo for the same token. Without this, `assets`
+        // could hold two entries for one token, double-counting it in NAV
+        // (`totalAssets` sums every active entry) and corrupting the equal-weight
+        // split. The scan/write lives in the delegatecall-linked guard to keep the
+        // EIP-170-tight basket-vault bytecode small. `assets` and the guard's
+        // mirror `AssetInfo` share an identical storage layout.
+        uint256 reusedIndex = BasketAssetConfigGuard.reuseOrRejectDuplicate(
+            _guardAssets(),
+            token_,
+            pool_,
+            swapFee_,
+            adapter_,
+            BasketAssetConfigGuard.Venue(uint8(venue_))
+        );
+        if (reusedIndex != type(uint256).max) {
+            // The guard refreshed an inactive entry in place; emit and return.
+            emit AssetAdded(reusedIndex, token_, pool_, swapFee_, adapter_, venue_);
+            return;
         }
-        // Verify that the pool has sufficient observation cardinality to service
-        // TWAP reads. Cardinality=1 causes observe() to revert with "OLD" for
-        // any non-zero secondsAgo, which would lock ALL vault withdrawals.
-        // slot0 returns observationCardinality as the fourth value.
-        (,,, uint16 observationCardinality,,,) = IUniswapV3Pool(pool_).slot0();
-        if (observationCardinality < MIN_POOL_CARDINALITY) {
-            revert InsufficientPoolCardinality(pool_, MIN_POOL_CARDINALITY, observationCardinality);
-        }
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = DEFAULT_TWAP_WINDOW;
-        secondsAgos[1] = 0;
-        try IUniswapV3Pool(pool_).observe(secondsAgos) returns (int56[] memory, uint160[] memory) {}
-        catch {
-            revert InsufficientObservationHistory(pool_, DEFAULT_TWAP_WINDOW);
-        }
-        // Verify that the pool has sufficient in-range liquidity to absorb
-        // vault-sized trades within the configured slippage bound. Thin pools
-        // break the synchronous-redemption guarantee (gap-report §1).
-        uint128 poolLiquidity = IUniswapV3Pool(pool_).liquidity();
-        if (poolLiquidity < MIN_POOL_LIQUIDITY) {
-            revert InsufficientPoolLiquidity(pool_, MIN_POOL_LIQUIDITY, poolLiquidity);
-        }
+
         assets.push(
             AssetInfo({
                 token: token_,
@@ -999,14 +1022,31 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // counted in NAV and are sold proportionally on withdrawal.
         if (assetInfo.active) revert AssetInBasket();
 
-        // TWAP-derived, slippage-bounded floor (same construction as the
-        // proportional-withdraw sell leg). `_emergencyUnwindAsset` re-reads the
-        // balance, no-ops on a zero balance, otherwise swaps to USDC into this
-        // vault and emits `Swapped`; the proceeds land in NAV and are counted by
-        // `totalAssets`, crediting all holders pro-rata with no caller-supplied
-        // recipient.
         uint256 bal = IERC20(assetInfo.token).balanceOf(address(this));
-        _emergencyUnwindAsset(assetInfo, _slippageFloor(assetInfo, bal));
+
+        // LIFE-6 / NC-8: the happy path is a TWAP-derived, slippage-bounded swap
+        // back to USDC into NAV (same construction as the proportional-withdraw
+        // sell leg), crediting all holders pro-rata with no caller-supplied
+        // recipient. But a removed asset's pool can be DEGRADED (e.g. its TWAP
+        // observation history is gone, so `observe()` reverts "OLD") — in which
+        // case the swap floor cannot be priced and a naive call would
+        // revert-and-strand the reappeared balance on the vault forever.
+        //
+        // The quarantine fallback removes that liveness cliff: when the TWAP read
+        // reverts, the balance is permissionlessly swept to the governed
+        // quarantine address instead of being stranded. Quarantine is the
+        // reversible safety valve (an offline multisig can later recover it), so
+        // the reappeared balance is always actionable — `reabsorbRemovedAsset`
+        // can never revert-and-strand (LIFE-6). The floor read reuses the existing
+        // self-only `emergencyTwapUsdcValue` so its revert is catchable.
+        try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
+            // Pool healthy: swap to USDC into NAV under the slippage-bounded floor.
+            _emergencyUnwindAsset(assetInfo, _applySlippage(twapValue));
+        } catch {
+            // Pool degraded: TWAP unavailable. Sweep rather than strand (INV-1);
+            // `sweep` emits ForeignTokenQuarantined(token, amount, caller).
+            _sweepToQuarantine(assetInfo.token);
+        }
     }
 
     /// @dev TWAP-derived, slippage-bounded USDC floor for selling `amount` of a
@@ -1145,6 +1185,16 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             if (token == assets[i].token) protected_ = true;
         }
         if (protected_) revert ForeignTokenQuarantine.TokenIsProtected(token);
+        _sweepToQuarantine(token);
+    }
+
+    /// @dev Single inlining site for the permissionless quarantine sweep so the
+    ///      `ForeignTokenQuarantine.sweep` body is emitted into the
+    ///      EIP-170-tight basket-vault bytecode only once, shared by
+    ///      `sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
+    ///      fallback. Moves the caller's full balance of `token` to the fixed
+    ///      quarantine address; no caller-supplied recipient (INV-1).
+    function _sweepToQuarantine(address token) private {
         ForeignTokenQuarantine.sweep(token, msg.sender);
     }
 
