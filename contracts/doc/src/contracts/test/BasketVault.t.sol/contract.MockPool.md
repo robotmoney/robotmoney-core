@@ -1,5 +1,5 @@
 # MockPool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/BasketVault.t.sol)
 
 Minimal mock supporting both slot0 (legacy spot read) and observe()
 (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -31,6 +31,13 @@ uint160 public sqrtPriceX96Spot
 ```
 
 
+### spotTick
+
+```solidity
+int24 public spotTick
+```
+
+
 ### tickCumulativeRate
 
 ```solidity
@@ -59,6 +66,13 @@ bool public revertObserve
 ```
 
 
+### feeTier
+
+```solidity
+uint24 public feeTier
+```
+
+
 ## Functions
 ### constructor
 
@@ -67,11 +81,38 @@ bool public revertObserve
 constructor(address token0_, address token1_, uint160 sqrtPriceX96_) ;
 ```
 
+### fee
+
+ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+
+
+```solidity
+function fee() external view returns (uint24);
+```
+
+### setFee
+
+
+```solidity
+function setFee(uint24 fee_) external;
+```
+
 ### setSpot
 
 
 ```solidity
 function setSpot(uint160 sqrtPriceX96_) external;
+```
+
+### setSpotTick
+
+Set the slot0 spot tick the ORA-4 deviation guard reads. The TWAP
+mean tick is governed separately by `tickCumulativeRate`, so a test
+can drive spot ≠ TWAP to exercise the deviation guard.
+
+
+```solidity
+function setSpotTick(int24 tick_) external;
 ```
 
 ### setTickCumulativeRate

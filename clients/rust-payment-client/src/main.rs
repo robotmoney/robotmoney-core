@@ -188,6 +188,8 @@ fn main() {
         Command::WithdrawRouter {
             config,
             shares_per_leg,
+            vaults,
+            min_assets_per_leg,
             order_id,
             idempotency_key,
             deadline_secs,
@@ -199,6 +201,8 @@ fn main() {
         } => commands::withdraw_router::run(commands::withdraw_router::Args {
             config_path: config,
             shares_per_leg,
+            vaults,
+            min_assets_per_leg,
             order_id,
             idempotency_key,
             deadline_secs,

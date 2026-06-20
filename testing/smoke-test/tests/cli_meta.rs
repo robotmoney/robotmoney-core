@@ -21,7 +21,13 @@ use std::time::{Duration, Instant};
 use smoke_test::{locate_repo_root, prerequisites_available};
 use test_utils::pick_free_port;
 
-const BOOT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+// CI devnet chain-container readiness is reproducibly ~13 min (vs the 60–120s the
+// boot message claims). Adding the dapp stack build (~3.5 min) and 4-depositor
+// seeding (~3 min) pushes total boot to ~19.5–20 min, which made the old 20-min
+// budget too tight right as seeding finished — the boot completes, the budget was
+// the limiter. 30 min matches the larger budgets the sibling full-stack jobs
+// already use. The deeper "why is chain readiness so slow" fix is tracked in #988.
+const BOOT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[test]

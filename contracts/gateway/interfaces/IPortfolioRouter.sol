@@ -17,26 +17,34 @@ interface IPortfolioRouter {
         external
         returns (uint256[] memory sharesPerLeg);
 
-    /// @notice Redeem vault shares proportionally across all vaults in the
-    ///         current weight vector. Pulls shares from `shareHolder` via ERC-20
-    ///         `transferFrom` (shareHolder must approve the router for each vault
-    ///         share token), calls `vault.redeem` on each leg, and forwards
-    ///         USDC only to `assetRecipient`.
+    /// @notice Redeem vault shares from an explicit, caller-supplied set of
+    ///         vaults. Pulls shares from `shareHolder` via ERC-20 `transferFrom`
+    ///         (shareHolder must approve the router for each vault share token),
+    ///         calls `vault.redeem` on each leg, and forwards USDC only to
+    ///         `assetRecipient`. Legs are driven by the `vaults[]` argument, not
+    ///         the live weight vector (issue #967, F-03), so a reweighted-out or
+    ///         Retired position stays redeemable; `sharesPerLeg[i]` is identity-
+    ///         bound to `vaults[i]` (NC-5). Redemption permits Active OR Retired
+    ///         status; only Paused blocks a leg (F-02).
     /// @param shareHolder       Address whose vault shares are redeemed (must have
     ///                          approved the router to spend shares per vault).
     /// @param assetRecipient    Address that receives the redeemed USDC per leg.
-    /// @param sharesPerLeg      Vault shares to redeem per leg (parallel to weight list).
-    ///                          Length must match the current weight vector.
-    /// @param minAssetsPerLeg   Per-leg USDC slippage floor (parallel to `sharesPerLeg`).
+    /// @param vaults            Explicit list of vault addresses to redeem from.
+    ///                          Each must be registered. Drives the redeem legs;
+    ///                          `sharesPerLeg`/`minAssetsPerLeg` are parallel to it.
+    /// @param sharesPerLeg      Vault shares to redeem per leg (parallel to `vaults`).
+    ///                          Length must match `vaults`.
+    /// @param minAssetsPerLeg   Per-leg USDC slippage floor (parallel to `vaults`).
     ///                          Reverts `SlippageExceeded` if realized proceeds fall
     ///                          below the floor. A floor of 0 disables the check for
-    ///                          that leg; length must match `sharesPerLeg`.
+    ///                          that leg; length must match `vaults`.
     /// @param deadline          Unix timestamp after which the call reverts
     ///                          `DeadlineExpired`. Pass `type(uint256).max` to disable.
-    /// @return assetsPerLeg     USDC received per leg (parallel to `sharesPerLeg`).
+    /// @return assetsPerLeg     USDC received per leg (parallel to `vaults`).
     function redeemFor(
         address shareHolder,
         address assetRecipient,
+        address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
         uint256[] calldata minAssetsPerLeg,
         uint256 deadline

@@ -19,6 +19,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
@@ -39,10 +40,12 @@ contract MockPool {
     address public immutable token0;
     address public immutable token1;
     uint160 public sqrtPriceX96Spot; // mutable so tests can simulate manipulation
+    int24 public spotTick; // slot0 spot tick (ORA-4 deviation probe); default 0 = 1:1
     int56 public tickCumulativeRate; // ticks per second contributed to TWAP
     uint16 public cardinality;
     uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
     bool public revertObserve;
+    uint24 public feeTier; // fee() value asserted against swapFee_ by addAsset (ORA-3)
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
         token0 = token0_;
@@ -53,10 +56,27 @@ contract MockPool {
         tickCumulativeRate = 0;
         cardinality = 100;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
+        feeTier = 500; // matches the swapFee_ tests pass to addAsset by default
+    }
+
+    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+    function fee() external view returns (uint24) {
+        return feeTier;
+    }
+
+    function setFee(uint24 fee_) external {
+        feeTier = fee_;
     }
 
     function setSpot(uint160 sqrtPriceX96_) external {
         sqrtPriceX96Spot = sqrtPriceX96_;
+    }
+
+    /// @dev Set the slot0 spot tick the ORA-4 deviation guard reads. The TWAP
+    ///      mean tick is governed separately by `tickCumulativeRate`, so a test
+    ///      can drive spot ≠ TWAP to exercise the deviation guard.
+    function setSpotTick(int24 tick_) external {
+        spotTick = tick_;
     }
 
     function setTickCumulativeRate(int56 rate) external {
@@ -80,7 +100,7 @@ contract MockPool {
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96Spot, 0, 0, cardinality, cardinality, 0, true);
+        return (sqrtPriceX96Spot, spotTick, 0, cardinality, cardinality, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
@@ -286,6 +306,105 @@ contract BasketVaultTest is Test {
         vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
     }
 
+    /// @notice ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
+    ///         not on the ADMIN-approved allowlist.
+    function test_addAsset_revertsForUnvettedAdapter() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        // Any non-allowlisted contract address with code serves as the unvetted adapter.
+        address unvetted = address(new MockSwapRouter());
+
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.AdapterCodeHashNotAllowed.selector);
+        vault.addAsset(address(newAsset), address(newPool), 500, unvetted, BasketVault.Venue.V3);
+    }
+
+    /// @notice ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
+    ///         accepts it.
+    function test_addAsset_acceptsVettedAdapterAfterApproval() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        address vetted = address(new MockSwapRouter());
+
+        vm.startPrank(admin);
+        vault.setAdapterCodeHashAllowed(vetted.codehash, true);
+        vault.addAsset(address(newAsset), address(newPool), 500, vetted, BasketVault.Venue.V3);
+        vm.stopPrank();
+        assertTrue(vault.adapterCodeHashAllowed(vetted.codehash), "codehash approved");
+    }
+
+    /// @notice ORA-3 / F-09: addAsset reverts when the registered pool's fee tier
+    ///         (the execution pool resolved from swapFee_) does not match swapFee_.
+    function test_addAsset_revertsOnExecutionPoolMismatch() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        newPool.setFee(3000); // pool is a 0.30% pool...
+
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
+        // ...but addAsset is told swapFee_ = 500 → mismatch.
+        vault.addAsset(address(newAsset), address(newPool), 500, address(0), BasketVault.Venue.V3);
+    }
+
+    /// @notice ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
+    ///         (last-admin floor), so vault governance can never be bricked.
+    function test_lastAdminFloor_revokeRevertsForSoleAdmin() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AdminFloorAccessControl.LastAdminFloor
+        vault.revokeRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: renouncing the last ADMIN_ROLE holder reverts.
+    function test_lastAdminFloor_renounceRevertsForSoleAdmin() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AdminFloorAccessControl.LastAdminFloor
+        vault.renounceRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: with a second admin granted, the original may be
+    ///         revoked — the floor only blocks dropping the FINAL admin.
+    function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        address admin2 = makeAddr("admin2");
+        vm.startPrank(admin);
+        vault.grantRole(adminRole, admin2);
+        vault.revokeRole(adminRole, admin); // not the last admin → allowed
+        vm.stopPrank();
+        assertFalse(vault.hasRole(adminRole, admin), "original admin revoked");
+        assertTrue(vault.hasRole(adminRole, admin2), "second admin retains role");
+    }
+
+    /// @notice LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+    ///         a holder can still redeem while the vault is paused.
+    function test_pause_doesNotFreezeWithdrawals() public {
+        // Seed a position via a direct deposit on the default V3 path. The deposit
+        // swaps USDC→basketToken, so the router yields basketToken.
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        basketToken.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 1_000 * ONE_USDC);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "deposit minted shares");
+
+        // EMERGENCY pauses (deposits-only freeze).
+        vm.prank(emergencyResponder);
+        vault.pause();
+        assertTrue(vault.paused(), "vault paused");
+
+        // Redeem must still succeed under pause (withdrawals are never frozen). The
+        // redeem swaps basketToken→USDC, so the router now yields USDC. Output must
+        // clear the TWAP slippage floor (1:1 TWAP, 1% slippage → ~990 USDC).
+        usdc.mint(address(router), 995 * ONE_USDC);
+        router.setAmountOut(995 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares, stranger, stranger);
+        assertGt(out, 0, "redeem succeeds while paused");
+    }
+
     /// @notice INV-1: an ACTIVE basket asset may never be swept to quarantine —
     ///         it is a protocol/depositor asset counted in NAV.
     function test_sweepForeignToken_revertsForActiveBasketAsset() public {
@@ -390,6 +509,106 @@ contract BasketVaultTest is Test {
         vault.reabsorbRemovedAsset(0);
     }
 
+    /// @notice LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
+    ///         whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
+    ///         reverts-and-strands. Pre-fix, the swap-floor read reverted and the
+    ///         reappeared balance was stuck on the vault forever; post-fix the
+    ///         quarantine fallback sweeps it to the governed quarantine address, so
+    ///         the balance is always actionable (the reversible safety valve).
+    ///         Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
+    function test_LIFE6_reabsorbSurvivesDegradedPool() public {
+        vm.prank(admin);
+        vault.removeAsset(0); // vault holds zero basketToken, removal allowed
+
+        // A balance reappears after removal.
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // The removed asset's pool degrades: its TWAP observation history is gone,
+        // so observe() reverts "OLD". The happy-path swap floor cannot be priced.
+        pool.setRevertObserve(true);
+
+        // Re-absorption must NOT revert-and-strand. The quarantine fallback fires
+        // and `sweep` emits ForeignTokenQuarantined(token, amount, caller).
+        address stranger = makeAddr("stranger");
+        vm.expectEmit(true, true, false, true, address(vault));
+        emit ForeignTokenQuarantine.ForeignTokenQuarantined(
+            address(basketToken), reappeared, stranger
+        );
+        vm.prank(stranger);
+        vault.reabsorbRemovedAsset(0); // does not revert (LIFE-6)
+
+        // The reappeared balance left the vault for quarantine — never stranded.
+        assertEq(basketToken.balanceOf(address(vault)), 0, "LIFE-6: balance not stranded on vault");
+        assertEq(
+            basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE),
+            reappeared,
+            "LIFE-6: degraded-pool balance swept to quarantine safety valve"
+        );
+    }
+
+    /// @notice LIFE-6 / NC-8: a zero reappeared balance is an idempotent no-op,
+    ///         never a revert, even on a degraded pool.
+    function test_LIFE6_reabsorbZeroBalanceIsNoOp() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+        pool.setRevertObserve(true);
+        // No balance reappeared; the call returns without reverting or sweeping.
+        vault.reabsorbRemovedAsset(0);
+        assertEq(basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "nothing swept");
+    }
+
+    /// @notice NC-8: re-adding a token that already has an ACTIVE registry entry
+    ///         reverts rather than creating a duplicate AssetInfo (which would
+    ///         double-count it in NAV and corrupt the equal-weight split).
+    function test_NC8_addAsset_rejectsActiveDuplicate() public {
+        // basketToken is already active at index 0 (added in setUp).
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.AssetAlreadyActive.selector);
+        vault.addAsset(address(basketToken), address(pool), 500, address(0), BasketVault.Venue.V3);
+    }
+
+    /// @notice NC-8: re-adding a previously REMOVED token reuses its inactive
+    ///         registry slot in place (refreshing config + re-activating) instead
+    ///         of appending a second AssetInfo, so `assets` never holds two entries
+    ///         for one token.
+    function test_NC8_addAsset_reusesInactiveSlotOnReAdd() public {
+        uint256 lenBefore = _assetsLen();
+        vm.prank(admin);
+        vault.removeAsset(0); // deactivate basketToken at index 0
+
+        // Re-add the same token with a fresh (still-valid) pool config.
+        MockPool freshPool = new MockPool(address(basketToken), address(usdc), uint160(1 << 96));
+        vm.prank(admin);
+        vault.addAsset(
+            address(basketToken), address(freshPool), 500, address(0), BasketVault.Venue.V3
+        );
+
+        // No new slot appended: the inactive entry was reused in place.
+        assertEq(_assetsLen(), lenBefore, "NC-8: re-add must not append a duplicate AssetInfo");
+
+        // Index 0 is active again and points at the refreshed pool.
+        (address token0, address poolAddr0,, bool active0,,) = vault.assets(0);
+        assertEq(token0, address(basketToken), "reused slot keeps the token");
+        assertTrue(active0, "reused slot re-activated");
+        assertEq(poolAddr0, address(freshPool), "reused slot refreshed to new pool");
+    }
+
+    /// @dev Count the BasketVault `assets` registry by probing the public getter
+    ///      until it reverts (no dedicated length getter on-chain — kept off the
+    ///      EIP-170-tight basket bytecode).
+    function _assetsLen() internal view returns (uint256 n) {
+        while (true) {
+            try vault.assets(n) returns (
+                address, address, uint24, bool, address, BasketVault.Venue
+            ) {
+                n++;
+            } catch {
+                return n;
+            }
+        }
+    }
+
     // ─── INV-3: fee setters are governance-gated (issue #929) ─────────────────
     //
     // Fee setters are `onlyRole(ADMIN_ROLE)`. In production ADMIN_ROLE is held by
@@ -462,6 +681,93 @@ contract BasketVaultTest is Test {
         vault.shutdownVault();
         assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 after shutdown");
         assertEq(vault.maxMint(stranger), 0, "maxMint 0 after shutdown");
+    }
+
+    /// @notice LIFE-4 / F-07: an EMERGENCY-triggered `shutdownVault` permanently
+    ///         blocks deposits with no reverse path UNLESS the higher-trust
+    ///         ADMIN_ROLE can `restoreVault`. Proof: shutdown blocks deposits;
+    ///         ADMIN restore with a fresh cap re-opens them; a redeem in between
+    ///         confirms withdrawals were never frozen (LIFE-3).
+    function test_F07_restoreVaultReopensDeposits() public {
+        // Seed a position so we can confirm redemption stays open across shutdown.
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        basketToken.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "seed deposit minted shares");
+
+        // EMERGENCY shuts the vault down: deposits blocked, cap zeroed.
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        assertTrue(vault.shutdown(), "vault shut down");
+        assertEq(vault.tvlCap(), 0, "shutdown zeroed the cap");
+
+        // While shut down, `maxDeposit` is 0, so the OZ ERC-4626 wrapper rejects the
+        // deposit before the internal shutdown guard — either way deposits are blocked.
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while shut down");
+        vm.startPrank(stranger);
+        vm.expectRevert();
+        vault.deposit(100 * ONE_USDC, stranger);
+        vm.stopPrank();
+
+        // Withdrawals were never frozen by shutdown (LIFE-3): a partial redeem works.
+        usdc.mint(address(router), 500 * ONE_USDC);
+        router.setAmountOut(500 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares / 2, stranger, stranger);
+        assertGt(out, 0, "redeem succeeds while shut down");
+
+        // ADMIN restores with a fresh cap (>= perDepositCap of 100k) — deposits re-open.
+        uint256 newCap = 1_000_000 * ONE_USDC;
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit BasketVault.Restored(newCap);
+        vm.prank(admin);
+        vault.restoreVault(newCap);
+        assertFalse(vault.shutdown(), "restore cleared shutdown");
+        assertEq(vault.tvlCap(), newCap, "restore applied the new cap");
+
+        basketToken.mint(address(router), 200 * ONE_USDC);
+        router.setAmountOut(200 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 reopened = vault.deposit(200 * ONE_USDC, stranger);
+        assertGt(reopened, 0, "deposits re-opened after restore");
+    }
+
+    /// @notice F-07: only ADMIN_ROLE may restore; the EMERGENCY hot key that can
+    ///         shut the vault down cannot reverse it (trust asymmetry, like unpause).
+    function test_F07_restoreVault_emergencyCannotRestore() public {
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+
+        vm.prank(emergencyResponder);
+        vm.expectRevert(); // AccessControl: EMERGENCY lacks ADMIN_ROLE
+        vault.restoreVault(50_000 * ONE_USDC);
+    }
+
+    /// @notice F-07: `restoreVault` rejects incoherent inputs — not-shut-down,
+    ///         zero cap, or a cap below `perDepositCap`.
+    function test_F07_restoreVault_revertsOnInvalidInputs() public {
+        // Not shut down yet.
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.NotShutdown.selector);
+        vault.restoreVault(50_000 * ONE_USDC);
+
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+
+        // Zero cap.
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.InvalidParam.selector);
+        vault.restoreVault(0);
+
+        // Cap below the configured per-deposit cap.
+        uint256 perDep = vault.perDepositCap();
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.InvalidParam.selector);
+        vault.restoreVault(perDep - 1);
     }
 
     function test_maxDeposit_zeroWhenNoActiveAssets() public {
@@ -1567,6 +1873,121 @@ contract BasketVaultTest is Test {
 
         assertGt(usdc.balanceOf(stranger), 0, "redeem still works");
     }
+
+    // ─── SUP-3 / NC-6 / F-16: round trip never profits (#969) ─────────────────
+
+    /// @dev Deposit `amount` USDC into `vault`, executing the swap at 1:1
+    ///      (spot == TWAP) so the basket token received equals the USDC in.
+    function _depositAt1to1(address who, uint256 amount) internal returns (uint256 shares) {
+        basketToken.mint(address(router), amount);
+        router.setAmountOut(amount);
+        usdc.mint(who, amount);
+        vm.startPrank(who);
+        usdc.approve(address(vault), amount);
+        shares = vault.deposit(amount, who);
+        vm.stopPrank();
+    }
+
+    /// @notice SUP-3 (pure-view floor): `previewRedeem(previewDeposit(x)) <= x`
+    ///         holds across fuzzed slippage params and deposit sizes. The two
+    ///         floor-discounted previews compose to strictly below the deposit,
+    ///         so a round trip can never preview a profit.
+    function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public {
+        slip = uint16(bound(slip, 5, 500)); // [pool-fee floor, MAX_SLIPPAGE_BPS]
+        x = bound(x, 1e6, 100_000e6);
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(slip);
+
+        // Seed so totalSupply > 0 (1:1 execution).
+        _depositAt1to1(address(this), 50_000e6);
+
+        uint256 shares = vault.previewDeposit(x);
+        assertLe(vault.previewRedeem(shares), x, "SUP-3: round-trip preview must not profit");
+    }
+
+    /// @notice SUP-3 (stateful): a real deposit → immediate redeem within the
+    ///         deviation band returns no more than was deposited. Exercises the
+    ///         mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
+    ///         on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+    function test_SUP3_statefulDepositRedeemNeverProfits() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100);
+
+        // Seed pool (1:1).
+        _depositAt1to1(address(this), 10_000e6);
+
+        // User deposits at 1:1.
+        uint256 x = 1_000e6;
+        uint256 shares = _depositAt1to1(stranger, x);
+
+        // Redeem immediately. Mock returns 1:1 USDC for the sold basket tokens.
+        // The vault holds basketToken; sell proceeds come back as USDC.
+        uint256 sellProceeds = (10_000e6 + x); // 1:1 token→USDC across the basket
+        usdc.mint(address(router), sellProceeds);
+        router.setAmountOut(sellProceeds); // generous: still bounded by share fraction
+
+        vm.prank(stranger);
+        uint256 got = vault.redeem(shares, stranger, stranger);
+
+        assertLe(got, x, "SUP-3: stateful round trip must not return more than deposited");
+    }
+
+    // ─── ORA-4 / F-10: NAV-vs-market deviation guard (#969) ───────────────────
+
+    /// @notice ORA-4: when the executable market (slot0 spot) price diverges from
+    ///         the NAV-pricing TWAP beyond `navDeviationGuardBps`, a deposit
+    ///         reverts `NavMarketDeviationExceeded` rather than minting at the
+    ///         stale/manipulated mark. With the guard disabled (0) the same
+    ///         deposit succeeds — proving the guard, not some other check, blocks.
+    function test_ORA4_deviationGuardBlocksSettlement() public {
+        // Arm the guard at 1% and drive spot far from the (tick=0) TWAP.
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100); // 1%
+
+        // TWAP mean tick stays 0 (tickCumulativeRate default 0 ⇒ 1:1). Push the
+        // slot0 spot tick well away: ~+200 ticks ≈ +2% price, beyond the 1% band.
+        pool.setSpotTick(200);
+
+        usdc.mint(stranger, 1_000e6);
+        vm.prank(stranger);
+        usdc.approve(address(vault), 1_000e6);
+        // The exact on-chain deviationBps is data-dependent; assert the typed
+        // selector fires (NavMarketDeviationExceeded) via a low-level call.
+        vm.prank(stranger);
+        (bool ok, bytes memory ret) =
+            address(vault).call(abi.encodeCall(vault.deposit, (1_000e6, stranger)));
+        assertFalse(ok, "ORA-4: deposit must revert on deviation");
+        assertEq(
+            bytes4(ret),
+            BasketVault.NavMarketDeviationExceeded.selector,
+            "ORA-4: revert must be NavMarketDeviationExceeded"
+        );
+
+        // Disable the guard: the same deposit now settles (1:1 swap fixture).
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(0);
+        basketToken.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 1_000e6);
+        uint256 shares = vault.deposit(1_000e6, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
+    }
+
+    /// @notice ORA-4: a deposit within the deviation band settles normally — the
+    ///         guard does not block ordinary, market-consistent settlement.
+    function test_ORA4_withinBandSettles() public {
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(300); // 3%
+
+        // Small spot drift (~+50 ticks ≈ +0.5%), inside the 3% band.
+        pool.setSpotTick(50);
+
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        assertGt(shares, 0, "ORA-4: in-band deposit settles");
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────
@@ -1912,6 +2333,10 @@ contract BasketVaultAerodromeTest is Test {
         aeroRouter.setPool(address(aeroToken), address(usdc), 100, address(aeroPool));
         aeroAdapter = new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter));
 
+        // ADP-2 / NC-2: approve the adapter's codehash before it can be onboarded.
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(aeroAdapter).codehash, true);
+
         // Register aeroToken with the Aerodrome adapter.
         vm.prank(admin);
         vault.addAsset(
@@ -2248,6 +2673,13 @@ contract MockUniswapV4Pool {
         return poolLiquidity;
     }
 
+    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`
+    ///      (V4 resolves the execution pool from the fee tier). The V4 tests
+    ///      register with `swapFee_ == 3000`.
+    function fee() external pure returns (uint24) {
+        return 3000;
+    }
+
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
         return (uint160(1 << 96), 0, 0, cardinality, cardinality, 0, true);
     }
@@ -2308,6 +2740,10 @@ contract BasketVaultUniswapV4Test is Test {
 
         // Deploy Uniswap V4 adapter.
         v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        // ADP-2 / NC-2: approve the adapter's codehash before it can be onboarded.
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
 
         // Register v4Token with the V4 adapter, fee tier 3000 (standard 0.3% pool).
         vm.prank(admin);
@@ -2728,6 +3164,17 @@ contract BasketVaultVenueSelectorTest is Test {
         vault = new BasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
+
+        // ADP-2 / NC-2: every UniswapV4SwapAdapter / AerodromeSwapAdapter instance
+        // shares the same runtime codehash, so approving one representative codehash
+        // per type covers all per-test adapter deployments below.
+        bytes32 v4CodeHash = address(new UniswapV4SwapAdapter(address(v4Router))).codehash;
+        bytes32 aeroCodeHash =
+            address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter))).codehash;
+        vm.startPrank(admin);
+        vault.setAdapterCodeHashAllowed(v4CodeHash, true);
+        vault.setAdapterCodeHashAllowed(aeroCodeHash, true);
+        vm.stopPrank();
     }
 
     // ─── AC1: venue stored on AssetInfo ──────────────────────────────────────
@@ -3070,6 +3517,9 @@ contract BasketVaultVenueSelectorTest is Test {
             new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter));
 
         vm.startPrank(admin);
+        // ADP-2 / NC-2: approve the external adapters' codehashes on this fresh vault.
+        freshVault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
+        freshVault.setAdapterCodeHashAllowed(address(aeroAdapter).codehash, true);
         freshVault.addAsset(
             address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3
         );

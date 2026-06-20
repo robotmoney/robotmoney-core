@@ -1,0 +1,109 @@
+# Canonical: docs/technical/smart-contract-invariants.md (invariant spec)
+#            docs/code-review/external-audit-verification-20260619.md (findings)
+#            docs/development/ci-suites.md §22
+#
+# CI_CLASS: feature-correctness
+#
+# WHY THIS SUITE EXISTS
+# docs/technical/smart-contract-invariants.md is the textual source of truth for
+# every property the on-chain system must never violate. This suite runs the
+# formal-verification (FV) harness that turns that spec into executable tests:
+#   - CoverageMap.t.sol enforces a 1:1 mapping between every invariant ID in the
+#     spec and an entry in the executable InvariantRegistry — CI fails if a new
+#     invariant is documented without a corresponding FV test, or vice versa.
+#   - FvInvariants.t.sol drives one named test per invariant ID. Holding
+#     invariants pass; currently-violated (🔴) invariants are skipped-with-reason,
+#     each naming the contract-security-remediation-2 issue (#965–#971) that must
+#     remove the skip and flip it green.
+#   - The dedicated harnesses (CustodyMultiVault, StaleOracleRedemption,
+#     TwapManipulation, DeployAssertions) carry the family-wide custody,
+#     stale-oracle, TWAP-manipulation and post-deploy assertion scaffolding.
+#
+# This is the phase scout gate for contract-security-remediation-2: it pins the
+# spec BEFORE any remediation lands, so every later fix is anchored by the
+# invariant it restores.
+#
+# TIER / TRIGGERS
+# feature-correctness (LIGHT): the FV suite is forge unit + static-guard + bounded
+# fuzz/invariant tests that finish in well under a minute. It runs on every
+# pull_request (any base branch — so it gates PRs into phase/* staging branches as
+# well as into dev) and on push to dev/dev-phase-*. Skipped 🔴 invariants keep the
+# suite green; an un-skipped red test (a landed remediation) must pass.
+#
+# GOTCHAS
+# - The coverage-map test reads docs/technical/smart-contract-invariants.md from
+#   the working tree (fs_permissions in foundry.toml already grants read on docs/).
+#   Adding an invariant ID to the spec without a registry entry is a deliberate
+#   build break — add the InvariantRegistry entry in the same PR.
+# - Red invariants use vm.skip(true, "...remediation #NNN"); removing a skip
+#   before the linked fix lands will fail the suite (that is the point — the test
+#   pins the bug). Downstream issues remove the skip in the same PR as the fix.
+
+name: contracts-formal-verification
+
+# CI taxonomy: every job in this workflow is feature-correctness — scoped Foundry
+# tests (coverage-map gate, per-invariant unit tests, bounded custody/fuzz
+# harnesses, static guards) asserting the contracts under change. Runs at draft
+# and r4r; sweep-warn on push to the default branch.
+env:
+  CI_CLASS: feature-correctness
+
+on:
+  # LIGHT tier (feature-correctness): runs on pull_requests to any branch
+  # (including PRs into phase/* staging branches) and on push to dev/dev-phase-*.
+  push:
+    branches: [dev, "dev-phase-*"]
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - "docs/technical/smart-contract-invariants.md"
+      - ".github/workflows/suite-22-formal-verification.yml"
+  workflow_dispatch:
+
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does not
+# pile up duplicate suites. push:dev runs keep a distinct concurrency lane per ref
+# and never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fv-suite:
+    name: forge-formal-verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test (formal-verification harness)
+        # The full FV suite: coverage-map gate + per-invariant tests + the four
+        # dedicated harnesses. Red invariants are skipped (suite stays green); an
+        # un-skipped red test (landed remediation) must pass.
+        run: forge test --match-path 'contracts/test/fv/**' -vvv
+
+      - name: forge test (custody invariant + guards — anchoring proofs)
+        # The deep behavioural proofs the FV per-ID layer points at. Kept in the
+        # same gate so a regression in the proven invariants surfaces here too.
+        run: |
+          forge test --match-contract 'CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles' -vvv

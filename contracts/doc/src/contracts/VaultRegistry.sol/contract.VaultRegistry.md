@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -189,7 +189,23 @@ function reactivate(address vault) external onlyRole(ADMIN_ROLE);
 
 ### setVaultStatus
 
-Update a vault's lifecycle status. Restricted to `ADMIN_ROLE`.
+Update a vault's lifecycle status, driving the vault's own
+deposit-halt flag in the same call so registry status and the vault
+flag never drift (LIFE-1; finding F-04 residual). Restricted to
+`ADMIN_ROLE`.
+Closing the back-door: previously this set only registry `_status`,
+leaving the vault's `retired` deposit-halt flag untouched — so
+`setVaultStatus(_, Retired)` recorded "Retired" in the registry
+while the vault still accepted direct deposits, and
+`setVaultStatus(_, Paused)` halted nothing on the vault. Now any
+non-`Active` status drives `IRetirableVault.retire()` (hard-stop
+direct deposits) and `Active` drives `unretire()`, mirroring the
+atomic `retire()` / `reactivate()` paths. Both vault legs are
+idempotent and registry-gated.
+The vault calls are wrapped so a registered address that does not
+implement the deposit-halt leg, or is not linked to this registry,
+does not brick the status change — there is no vault flag to sync in
+that case. A vault linked to this registry always stays in sync.
 
 
 ```solidity

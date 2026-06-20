@@ -257,6 +257,7 @@ contract SafeIntegrationTest is Test {
             address(router),
             address(governance),
             address(safe),
+            makeAddr("emergency"), // independent emergency hot key (ACL-1 / F-01)
             MIN_DELAY
         );
 

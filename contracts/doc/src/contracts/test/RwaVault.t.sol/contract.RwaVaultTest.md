@@ -1,5 +1,5 @@
 # RwaVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RwaVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/RwaVault.t.sol)
 
 **Inherits:**
 Test
@@ -208,8 +208,10 @@ function test_chronicle_revertsOnUnknownPair() public;
 
 ### test_staleFeed_totalAssetsReverts
 
-totalAssets() reverts with StalePriceFeed when oracle is stale.
-AC-2: pricing uses Chronicle NAV oracle; stale feed halts operations.
+totalAssets() reverts with StalePriceFeed when the oracle is stale
+AND the vault holds a priced RWA balance (ORA-2 fail-closed).
+SUP-5: freshness only gates when priced RWA is actually held — see
+`test_staleFeed_idleUsdcTotalAssetsSurvives` for the idle-USDC case.
 
 
 ```solidity
@@ -219,6 +221,8 @@ function test_staleFeed_totalAssetsReverts() public;
 ### test_staleFeed_depositReverts
 
 Deposits revert when the oracle is stale (totalAssets is on the hot path).
+A deposit always brings the vault into a priced state, so the
+freshness gate applies even from an idle start.
 
 
 ```solidity
@@ -232,6 +236,29 @@ Operations resume after the oracle is refreshed.
 
 ```solidity
 function test_staleFeed_resumesAfterOracleRefresh() public;
+```
+
+### test_staleFeed_idleUsdcTotalAssetsSurvives
+
+SUP-5 / NC-1: totalAssets() does NOT revert on a stale feed when the
+vault holds zero priced RWA (only idle USDC) — NAV is exactly the
+idle USDC and needs no oracle read.
+
+
+```solidity
+function test_staleFeed_idleUsdcTotalAssetsSurvives() public;
+```
+
+### test_staleFeed_idleUsdcRedeemSurvives
+
+SUP-5 / NC-1: a holder can redeem already-safe idle USDC even while
+the Chronicle feed is stale, after the vault has been emergency-
+unwound to idle USDC. The unconditional freshness gate previously
+trapped these funds (NC-1); the short-circuit lets them exit.
+
+
+```solidity
+function test_staleFeed_idleUsdcRedeemSurvives() public;
 ```
 
 ### test_caps_perDepositCapEnforced
@@ -412,13 +439,16 @@ set, even when the Chronicle feed is stale.
 function test_emergencyUnwindWithOverride_succeedsWithStaleOverride() public;
 ```
 
-### test_emergencyUnwindStaleOverride_onlyEmergencyRole
+### test_emergencyUnwindStaleOverride_requiresAdminNotEmergency
 
-Only EMERGENCY_ROLE can set the stale override flag.
+ACL-5 / F-08: the stale-override setter requires ADMIN_ROLE — a
+strictly higher tier than the EMERGENCY_ROLE unwind executor. A
+stranger, and the EMERGENCY_ROLE responder, are both rejected; only
+ADMIN_ROLE may arm the override.
 
 
 ```solidity
-function test_emergencyUnwindStaleOverride_onlyEmergencyRole() public;
+function test_emergencyUnwindStaleOverride_requiresAdminNotEmergency() public;
 ```
 
 ### test_emergencyUnwindStaleOverride_emitsEvent

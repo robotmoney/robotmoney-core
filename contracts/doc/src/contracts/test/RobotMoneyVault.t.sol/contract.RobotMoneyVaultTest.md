@@ -1,5 +1,5 @@
 # RobotMoneyVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/test/RobotMoneyVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/test/RobotMoneyVault.t.sol)
 
 **Inherits:**
 Test
@@ -191,6 +191,43 @@ under-delivers (audit 2026-06-09, L-2).
 
 ```solidity
 function test_withdraw_sweepCoversLastAdapterShortfall() public;
+```
+
+### test_ADP2_revokedAdapterExcludedFromNavAndPulls
+
+ADP-2 / F-14: an adapter whose eligibility is revoked while still
+registered-active no longer contributes to `totalAssets` nor
+receives/returns withdrawal flow. Two adapters are funded 50/50;
+revoking the second drops NAV by its balance, and a subsequent
+withdrawal is sourced entirely from the still-eligible adapter.
+
+
+```solidity
+function test_ADP2_revokedAdapterExcludedFromNavAndPulls() public;
+```
+
+### test_FEE2_exitFeeOnRealizedProceeds
+
+FEE-2 / NC-11: the exit fee equals the configured bps of the
+proceeds ACTUALLY realised. With an honest adapter, realised gross
+equals the share-implied gross, so the fee and net payout match
+`previewRedeem`.
+
+
+```solidity
+function test_FEE2_exitFeeOnRealizedProceeds() public;
+```
+
+### test_FEE2_overReportingAdapterCannotSocializeLoss
+
+FEE-2 / NC-11: an over-reporting adapter cannot socialise its
+shortfall. When the adapter reports more NAV than it can deliver,
+the withdrawal reverts (`InsufficientAdapterLiquidity`) rather than
+silently paying the inflated gross from another holder's idle USDC.
+
+
+```solidity
+function test_FEE2_overReportingAdapterCannotSocializeLoss() public;
 ```
 
 ### test_rebalance_skipsAdapterAfterApprovalRevoked

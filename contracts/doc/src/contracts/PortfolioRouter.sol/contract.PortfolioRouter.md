@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -69,6 +69,15 @@ VaultRegistry public immutable registry
 Global ceiling on the total USDC that may flow through a single
 `deposit()` call. 0 means no cap enforced.
 
+RTR-6 / F-12 — SEMANTICS DECISION: `routerCap` is a PER-TRANSACTION sanity
+bound, NOT a cumulative/windowed exposure limit. It bounds the size of any one
+`deposit()` call (fat-finger / single-tx blast-radius protection); it does NOT
+track or limit aggregate inflow across multiple calls, so a depositor can exceed
+it over several transactions by design. Cumulative inflow throttling is the
+gateway's responsibility via its rolling-window accounting (GW-4); the router cap
+deliberately does not duplicate that state. Treat this value as a per-call upper
+bound only when configuring it.
+
 
 ```solidity
 uint256 public routerCap
@@ -89,6 +98,10 @@ address public quarantineAddress
 ### vaultCap
 Per-vault USDC ceiling for a single `deposit()` leg.
 0 means no cap enforced for that vault.
+
+RTR-6 / F-12 — like `routerCap`, this is a PER-TRANSACTION per-leg sanity bound,
+not a cumulative per-vault exposure limit (see `routerCap`). It bounds a single
+deposit leg's size; aggregate per-vault exposure across calls is not tracked here.
 
 
 ```solidity
@@ -292,8 +305,14 @@ function sweepForeignToken(address token) external nonReentrant;
 ### previewDeposit
 
 Return per-vault estimated receipts for `amount` USDC without
-executing any state changes. Paused or retired vaults are marked
-`unavailable = true` and return `estShares = 0`.
+executing any state changes. Non-depositable legs (paused/retired,
+unregistered, router-ineligible, or over their per-vault cap) are
+marked `unavailable = true` and return `estShares = 0`; the deposit
+path skips exactly these legs and renormalises `amount` across the
+remaining available legs. `legAmount` therefore reflects the
+**renormalised** amount the leg would actually receive on execute,
+so `previewDeposit` and the executed deposit never disagree on which
+legs are available (RTR-5; findings F-13/NC-4).
 
 
 ```solidity
@@ -311,6 +330,46 @@ function previewDeposit(uint256 amount) external view returns (LegPreview[] memo
 |----|----|-----------|
 |`legs`|`LegPreview[]`|  One entry per vault in the current weight vector.|
 
+
+### _availabilityAndAmounts
+
+Compute, for the given weight vector and total `amount`, which legs
+are depositable and the renormalised USDC each available leg receives.
+A leg is available iff its registry status is `Active` and it is
+router-eligible (asset == USDC + eligibility flag) — exactly the
+availability dimension `previewDeposit` reports. The amount is split
+across ONLY the available legs in proportion to their bps, with the
+rounding remainder assigned to the last available leg so the router
+holds zero USDC after a successful deposit. Unavailable legs get
+amount 0. This single predicate is shared by `previewDeposit` and
+`_executeLegs` so the two can never diverge on availability (RTR-5).
+Per-vault caps are intentionally NOT an availability factor: a cap is a
+hard per-tx operator bound (see F-12), not a "this vault is down"
+signal, and silently redistributing a capped leg's allocation onto
+other vaults would breach operator intent. A renormalised leg over its
+cap therefore still reverts `VaultCapExceeded` at execute time rather
+than being skipped.
+
+
+```solidity
+function _availabilityAndAmounts(
+    address[] memory vaultList,
+    uint256[] memory bpsList,
+    uint256 amount
+) internal view returns (bool[] memory available, uint256[] memory legAmounts);
+```
+
+### _isDepositable
+
+Non-reverting predicate: is `vault` depositable right now (registry
+status Active AND router-eligible)? Mirrors the reverting checks in
+`_executeLeg`/`_requireRouterEligible` without reverting, so it can be
+used to compute the shared availability set.
+
+
+```solidity
+function _isDepositable(address vault) internal view returns (bool);
+```
 
 ### deposit
 
@@ -359,15 +418,28 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 
 ### redeemFor
 
-Redeem vault shares proportionally from multiple vaults. For each
-leg the router calls `vault.redeem(sharesPerLeg[i], assetRecipient,
-shareHolder)`, routing USDC directly to `assetRecipient`. The caller
-(typically the gateway) must either be `shareHolder` itself — the
-gateway pulls the user's shares into its own custody for the call
-frame and passes itself as `shareHolder` — or hold an ERC-20
-allowance from `shareHolder` on each vault's share token covering
-that leg's share count; otherwise the call reverts with
-`UnauthorizedRedeemer` (confused-deputy guard, audit finding M-5).
+Redeem vault shares from an explicit, caller-supplied set of
+vaults. For each leg the router calls
+`vaults[i].redeem(sharesPerLeg[i], assetRecipient, shareHolder)`,
+routing USDC directly to `assetRecipient`. The caller (typically
+the gateway) must either be `shareHolder` itself — the gateway
+pulls the user's shares into its own custody for the call frame
+and passes itself as `shareHolder` — or hold an ERC-20 allowance
+from `shareHolder` on each vault's share token covering that leg's
+share count; otherwise the call reverts with `UnauthorizedRedeemer`
+(confused-deputy guard, audit finding M-5).
+EXIT SEMANTICS (issue #967, F-02/F-03/NC-5):
+- Legs are driven by the explicit `vaults[]` argument, NOT the
+live weight vector. A holder can therefore always redeem a
+position the router has since reweighted away from (F-03);
+the router never silently skips or reorders a named vault.
+- `sharesPerLeg[i]` is identity-bound to `vaults[i]`: the redeem
+targets exactly the address the caller named, so a reweight
+between sign and execution can never redirect a leg to a vault
+the caller did not name (NC-5).
+- Redemption succeeds when a leg's registry status is Active OR
+Retired; only Paused blocks the exit (F-02). Retired vaults are
+withdraw-only, never deposit targets — see ADR-0009.
 SECURITY: users must NEVER grant a share-token approval directly to
 this router. The router calls `vault.redeem` with itself as the
 vault-level spender, so a standing user→router approval would let
@@ -384,6 +456,7 @@ is created in the router — each vault sends USDC directly to
 function redeemFor(
     address shareHolder,
     address assetRecipient,
+    address[] calldata vaults,
     uint256[] calldata sharesPerLeg,
     uint256[] calldata minAssetsPerLeg,
     uint256 deadline
@@ -395,15 +468,16 @@ function redeemFor(
 |----|----|-----------|
 |`shareHolder`|`address`|      Address whose vault shares are redeemed (the `owner` passed to `vault.redeem`). Either equals the caller (gateway self-custody flow: shares pulled from the user and held only during the call frame), or must have approved the caller on each vault's share token for at least that leg's share count. Direct user approvals to this router are forbidden (see SECURITY note above).|
 |`assetRecipient`|`address`|   Address that receives redeemed USDC. The router forwards each leg's USDC here; it never custodies USDC.|
-|`sharesPerLeg`|`uint256[]`|     Shares to redeem per leg (parallel to effective weight vector). Length must match the effective vault list. Zero-share legs are accepted (and skipped) so the caller can specify partial positions.|
-|`minAssetsPerLeg`|`uint256[]`|  Per-leg minimum USDC out (slippage floor), parallel to `sharesPerLeg`. Mirrors the deposit path's `minSharesPerLeg`: each non-zero leg reverts with `SlippageExceeded` if realized proceeds fall below the floor. Length must match `sharesPerLeg`. A floor of 0 disables the check for that leg.|
+|`vaults`|`address[]`|           Explicit, caller-supplied list of vault addresses to redeem from. Each must be registered in the VaultRegistry. Drives the redeem legs directly, so a reweighted-out or retired position remains reachable (F-03). `sharesPerLeg[i]`/`minAssetsPerLeg[i]` bind to `vaults[i]` (identity binding, NC-5).|
+|`sharesPerLeg`|`uint256[]`|     Shares to redeem per leg (parallel to `vaults`). Length must match `vaults`. Zero-share legs are accepted (and skipped) so the caller can specify partial positions.|
+|`minAssetsPerLeg`|`uint256[]`|  Per-leg minimum USDC out (slippage floor), parallel to `vaults`. Mirrors the deposit path's `minSharesPerLeg`: each non-zero leg reverts with `SlippageExceeded` if realized proceeds fall below the floor. Length must match `vaults`. A floor of 0 disables the check for that leg.|
 |`deadline`|`uint256`|         Unix timestamp after which the call reverts with `DeadlineExpired`. Pass `type(uint256).max` to disable.|
 
 **Returns**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`assetsPerLeg`|`uint256[]`|    USDC received per leg (parallel to `sharesPerLeg`).|
+|`assetsPerLeg`|`uint256[]`|    USDC received per leg (parallel to `vaults`).|
 
 
 ### _redeemLeg
@@ -452,10 +526,13 @@ function _depositTo(address receiver, uint256 amount, uint256[] calldata minShar
 
 ### _executeLegs
 
-Execute one vault leg per entry: enforce Active status, per-vault
-cap, runtime router-eligibility, approve and deposit, then check
-the slippage floor. All-or-revert. Writes minted shares into
-`sharesPerLeg`.
+Execute one available vault leg per entry: approve and deposit, then
+check the slippage floor. Unavailable legs (per the shared
+`_availabilityAndAmounts` pass) are skipped — matching
+`previewDeposit` (RTR-5). Available legs are guaranteed depositable by
+that pass; `_executeLeg` re-asserts eligibility as defence in depth.
+All available legs must succeed (all-or-revert across the surviving
+set). Writes minted shares into `sharesPerLeg`.
 
 
 ```solidity
@@ -464,10 +541,41 @@ function _executeLegs(
     address[] memory vaultList,
     uint256[] memory bpsList,
     uint256[] memory legAmounts,
+    bool[] memory available,
     uint256[] calldata minSharesPerLeg,
     uint256[] memory sharesPerLeg
 ) internal;
 ```
+
+### _executeLeg
+
+Execute a single available leg: re-assert Active status + per-vault
+cap + runtime router-eligibility (defence in depth — the leg was
+already vetted by `_availabilityAndAmounts`, but a vault could change
+state between the read and here), approve, deposit, and emit. Extracted
+from `_executeLegs` to bound stack depth.
+
+
+```solidity
+function _executeLeg(address receiver, address vault, uint256 legAmount, uint256 weightBps)
+    private
+    returns (uint256 sharesReceived);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receiver`|`address`| Address that receives the minted shares.|
+|`vault`|`address`|    Vault to deposit into (guaranteed available by the caller).|
+|`legAmount`|`uint256`|Renormalised USDC for this leg.|
+|`weightBps`|`uint256`|This leg's weight (event field only).|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`sharesReceived`|`uint256`|Shares minted to `receiver`.|
+
 
 ### getWeights
 
@@ -592,12 +700,57 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 |`eligible`|`bool`|True iff the vault's ERC-4626 asset equals the router's USDC and the registry eligibility flag is set.|
 
 
+### isRouterEligibleAndActive
+
+Return true iff `vault` is router-eligible AND its registry
+lifecycle status is `Active` — i.e. it can be written into a
+weight vector and accept a routed deposit right now. This is the
+exact predicate `setWeights`/`setDefaultWeights` enforce; governance
+(`RouterGovernance.propose`) reads it so a proposal that would
+render router deposits non-executable can never enter the voting
+pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+zero address, an EOA, an asset mismatch, an unregistered vault, or
+any non-Active status.
+
+
+```solidity
+function isRouterEligibleAndActive(address vault) external view returns (bool ok);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of the vault to check.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`ok`|`bool`|True iff the vault is eligible AND Active.|
+
+
+### _requireActiveAndEligible
+
+Revert unless `vault` is registered, its registry status is `Active`,
+AND it is router-eligible (asset == USDC + eligibility flag). This is
+the single guard that a weight vector is only ever written when every
+leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
+eligibility and lifecycle status are independent signals, so checking
+eligibility alone would let an eligible-but-Paused/Retired vault enter
+the vector and brick `deposit()` later. Used by `setWeights` and
+`setDefaultWeights` at configuration time.
+
+
+```solidity
+function _requireActiveAndEligible(address vault) internal view;
+```
+
 ### _requireRouterEligible
 
 Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
 `usdc` AND the VaultRegistry has marked the vault as
-router-eligible. Used by `setWeights` and `_depositTo` to enforce
-router-eligibility at both configuration and runtime.
+router-eligible. Used by `_executeLegs` to enforce
+router-eligibility at runtime.
 
 
 ```solidity
@@ -821,6 +974,50 @@ error VaultNotActive(address vault, VaultRegistry.VaultStatus status);
 |----|----|-----------|
 |`vault`|`address`| The vault address that is not Active.|
 |`status`|`VaultRegistry.VaultStatus`|The current non-Active status of the vault.|
+
+### VaultPausedForRedeem
+A redeem leg targets a Paused vault. Redemption permits Active OR
+Retired status (withdraw-only after retirement, F-02); only Paused
+blocks the exit path.
+
+
+```solidity
+error VaultPausedForRedeem(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`| The vault address whose status is Paused.|
+
+### RedeemVaultsLengthMismatch
+The explicit `vaults[]` array supplied to `redeemFor` does not
+match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
+redeem leg names exactly one vault address (NC-5 identity binding),
+so the three arrays are strictly parallel.
+
+
+```solidity
+error RedeemVaultsLengthMismatch();
+```
+
+### RedeemVaultNotRegistered
+A vault named in `redeemFor`'s explicit `vaults[]` is not
+registered in the VaultRegistry. The redeem path drives legs from
+the caller-supplied vault set (F-03), so each named vault must be
+a registered vault whose lifecycle status the router can read.
+
+
+```solidity
+error RedeemVaultNotRegistered(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|The unregistered vault address named in a redeem leg.|
 
 ### VaultAssetMismatch
 A vault's ERC-4626 `asset()` does not match the router's USDC.

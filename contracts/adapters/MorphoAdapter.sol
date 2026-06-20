@@ -49,12 +49,13 @@ contract MorphoAdapter is IStrategyAdapter {
 
     /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
-        USDC.safeIncreaseAllowance(address(MORPHO_VAULT), amount);
+        // ADP-5 / NC-12: set the exact allowance with `forceApprove` (which zeroes first for
+        // non-standard ERC-20s) rather than the additive, non-zeroing `safeIncreaseAllowance`,
+        // then unconditionally reset to zero after the call so no residual allowance can ever
+        // linger across deploys.
+        USDC.forceApprove(address(MORPHO_VAULT), amount);
         MORPHO_VAULT.deposit(amount, address(this));
-        uint256 remaining = USDC.allowance(address(this), address(MORPHO_VAULT));
-        if (remaining > 0) {
-            USDC.forceApprove(address(MORPHO_VAULT), 0);
-        }
+        USDC.forceApprove(address(MORPHO_VAULT), 0);
     }
 
     /// @inheritdoc IStrategyAdapter

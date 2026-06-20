@@ -1,5 +1,5 @@
 # MockPoolForGuards
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/ConfusedDeputyGuards.t.sol)
 
 Uniswap V3 pool stub. token0/token1 are set at construction.
 observe() returns linear tick cumulative (tick rate 0 → 1:1 price).
@@ -42,6 +42,16 @@ uint128 public poolLiquidity
 
 ```solidity
 constructor(address token0_, address token1_) ;
+```
+
+### fee
+
+ORA-3 / F-09: `addAsset` asserts `fee()` equals `swapFee_`. Every
+addAsset call in this suite uses swapFee_ = 500.
+
+
+```solidity
+function fee() external pure returns (uint24);
 ```
 
 ### setCardinality

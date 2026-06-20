@@ -1,5 +1,5 @@
 # DemoUsdcPool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Uniswap V3 pool stub exposing `token0()`/`token1()` and
 `slot0()`. `BasketVault.addAsset` verifies that the pool pairs the
@@ -22,10 +22,22 @@ address public immutable token1
 ```
 
 
+### feeTier
+ORA-3 / F-09: `BasketVault.addAsset` asserts the registered pool's
+`fee()` (V3/V4) or `tickSpacing()` (Aerodrome) equals the configured
+`swapFee_`. For Aerodrome assets, `swapFee_` IS the tickSpacing, so the
+two are wired to the same value here. Demo-only stubs.
+
+
+```solidity
+uint24 public immutable feeTier
+```
+
+
 ### tickSpacing
 
 ```solidity
-int24 public constant tickSpacing = 10_000
+int24 public immutable tickSpacing
 ```
 
 
@@ -34,7 +46,16 @@ int24 public constant tickSpacing = 10_000
 
 
 ```solidity
-constructor(address tokenA, address tokenB) ;
+constructor(address tokenA, address tokenB, uint24 fee_) ;
+```
+
+### fee
+
+Stub fee tier read by `addAsset`'s ORA-3 execution-pool equality check.
+
+
+```solidity
+function fee() external view returns (uint24);
 ```
 
 ### slot0

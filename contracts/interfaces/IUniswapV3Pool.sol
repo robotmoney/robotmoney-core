@@ -8,6 +8,13 @@ interface IUniswapV3Pool {
     function token0() external view returns (address);
     function token1() external view returns (address);
 
+    /// @notice The pool's fee tier in hundredths of a bip (e.g. 3000 = 0.30%).
+    /// @dev Used by `BasketVault.addAsset` to assert that the execution pool
+    ///      resolved from the configured `swapFee` is the SAME pool the NAV TWAP
+    ///      is read from (invariant ORA-3 / finding F-09). Uniswap V3 and
+    ///      observe-compatible Uniswap V4 pools both expose this accessor.
+    function fee() external view returns (uint24);
+
     /// @notice The in-range liquidity available to the pool.
     /// @dev This value does not include out-of-range concentrated liquidity
     ///      positions. Used by `BasketVault.addAsset` to enforce a minimum-

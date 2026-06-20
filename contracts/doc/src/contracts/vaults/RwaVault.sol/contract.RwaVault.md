@@ -1,5 +1,5 @@
 # RwaVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/vaults/RwaVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/vaults/RwaVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -190,7 +190,8 @@ function maxAssets() public pure override returns (uint256);
 
 ### totalAssets
 
-USDC value of all held assets. Reverts if the Chronicle feed is stale.
+USDC value of all held assets. Reverts if the Chronicle feed is
+stale AND the vault still holds a priced RWA token.
 
 Overrides BasketVault.totalAssets() to enforce the staleness check
 before any TWAP/oracle read. BasketVault.totalAssets() delegates
@@ -198,10 +199,30 @@ pricing to the per-asset adapter (ChronicleOracleAdapter), which reads
 Chronicle. We check freshness here, at the vault level, so callers
 get a typed `StalePriceFeed` error rather than an opaque revert from
 deep in the adapter.
+NC-1 / SUP-5 short-circuit: the freshness gate only applies when the
+vault actually holds a priced RWA balance. After an emergency unwind
+to idle USDC the basket holds zero RWA, so NAV is exactly the idle USDC
+and no oracle read is required. Gating the check on `_holdsPricedRwa()`
+keeps ORA-2 (fail-closed) intact for every priced read while letting a
+holder redeem already-safe idle USDC even when the feed is stale —
+otherwise the unconditional revert traps safe funds with no
+permissionless exit (audit 2026-06-19 NC-1).
 
 
 ```solidity
 function totalAssets() public view override returns (uint256);
+```
+
+### _holdsPricedRwa
+
+True when the vault holds a non-zero balance of any active basket
+asset (the priced RWA token). When false, `totalAssets()` is exactly
+the idle USDC balance and needs no oracle read, so freshness is
+short-circuited for the idle-USDC redemption path (SUP-5).
+
+
+```solidity
+function _holdsPricedRwa() internal view returns (bool);
 ```
 
 ### _checkOracleFreshness
@@ -221,11 +242,18 @@ function _checkOracleFreshness() internal view;
 ### setEmergencyUnwindStaleOverride
 
 Allow (true) or forbid (false, default) emergency unwind when the
-Chronicle feed is stale. Restricted to EMERGENCY_ROLE.
+Chronicle feed is stale.
+
+ACL-5 / F-08: gated to `ADMIN_ROLE` — a strictly higher-trust tier than
+the `EMERGENCY_ROLE` that executes `emergencyUnwind`. Selling RWA at an
+unverifiable (stale) NAV requires two distinct authorities: ADMIN_ROLE
+arms the stale-override, EMERGENCY_ROLE runs the unwind. A single
+compromised emergency hot key can no longer both authorise stale pricing
+and dump the basket against it (audit 2026-06-19 F-08).
 
 
 ```solidity
-function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(EMERGENCY_ROLE);
+function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(ADMIN_ROLE);
 ```
 
 ### emergencyUnwind

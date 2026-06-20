@@ -251,12 +251,48 @@ contract VaultRegistry is AdminFloorAccessControl {
         emit VaultStatusChanged(vault, VaultStatus.Active, block.timestamp);
     }
 
-    /// @notice Update a vault's lifecycle status. Restricted to `ADMIN_ROLE`.
+    /// @notice Update a vault's lifecycle status, driving the vault's own
+    ///         deposit-halt flag in the same call so registry status and the vault
+    ///         flag never drift (LIFE-1; finding F-04 residual). Restricted to
+    ///         `ADMIN_ROLE`.
+    ///
+    ///         Closing the back-door: previously this set only registry `_status`,
+    ///         leaving the vault's `retired` deposit-halt flag untouched — so
+    ///         `setVaultStatus(_, Retired)` recorded "Retired" in the registry
+    ///         while the vault still accepted direct deposits, and
+    ///         `setVaultStatus(_, Paused)` halted nothing on the vault. Now any
+    ///         non-`Active` status drives `IRetirableVault.retire()` (hard-stop
+    ///         direct deposits) and `Active` drives `unretire()`, mirroring the
+    ///         atomic `retire()` / `reactivate()` paths. Both vault legs are
+    ///         idempotent and registry-gated.
+    ///
+    ///         The vault calls are wrapped so a registered address that does not
+    ///         implement the deposit-halt leg, or is not linked to this registry,
+    ///         does not brick the status change — there is no vault flag to sync in
+    ///         that case. A vault linked to this registry always stays in sync.
     /// @param vault      Address of an already-registered vault.
     /// @param newStatus  New lifecycle status (Active, Paused, or Retired).
     function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(ADMIN_ROLE) {
         if (!_registered[vault]) revert NotRegistered();
         _status[vault] = newStatus;
+
+        // Drive the vault's deposit-halt flag so it can never disagree with the
+        // registry status (LIFE-1 / F-04). Active re-opens direct deposits; any
+        // non-Active status (Paused or Retired) hard-stops them. The empty-code
+        // guard skips addresses with no contract code (an EVM call to such an
+        // address would revert the EXTCODESIZE check before the try frame); the
+        // try/catch then tolerates a registered vault that does not implement the
+        // deposit-halt leg, or is not linked to this registry — there is no vault
+        // flag to sync in either case. A vault linked to this registry always
+        // syncs.
+        if (vault.code.length > 0) {
+            if (newStatus == VaultStatus.Active) {
+                try IRetirableVault(vault).unretire() {} catch {}
+            } else {
+                try IRetirableVault(vault).retire() {} catch {}
+            }
+        }
+
         emit VaultStatusChanged(vault, newStatus, block.timestamp);
     }
 

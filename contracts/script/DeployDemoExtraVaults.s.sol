@@ -48,12 +48,24 @@ contract DemoBasketToken is ERC20 {
 contract DemoUsdcPool {
     address public immutable token0;
     address public immutable token1;
-    int24 public constant tickSpacing = 10_000;
+    /// @dev ORA-3 / F-09: `BasketVault.addAsset` asserts the registered pool's
+    ///      `fee()` (V3/V4) or `tickSpacing()` (Aerodrome) equals the configured
+    ///      `swapFee_`. For Aerodrome assets, `swapFee_` IS the tickSpacing, so the
+    ///      two are wired to the same value here. Demo-only stubs.
+    uint24 public immutable feeTier;
+    int24 public immutable tickSpacing;
 
-    constructor(address tokenA, address tokenB) {
+    constructor(address tokenA, address tokenB, uint24 fee_) {
         // Order is irrelevant to addAsset's check; store as given.
         token0 = tokenA;
         token1 = tokenB;
+        feeTier = fee_;
+        tickSpacing = int24(fee_);
+    }
+
+    /// @notice Stub fee tier read by `addAsset`'s ORA-3 execution-pool equality check.
+    function fee() external view returns (uint24) {
+        return feeTier;
     }
 
     /// @notice Stub slot0 — returns observationCardinality = 2 so that
@@ -267,7 +279,9 @@ contract DemoRwaStubDeployer {
 
     constructor(address usdc) {
         despxaToken = new DemoBasketToken("Demo deSPXA", "deSPXA");
-        pool = new DemoUsdcPool(address(despxaToken), usdc);
+        // swapFee_ for the RWA asset is 0 (Chronicle prices off-chain; ORA-3 check
+        // is skipped for the pool-independent sentinel), so fee/tickSpacing are 0.
+        pool = new DemoUsdcPool(address(despxaToken), usdc, 0);
         chronicle = new DemoChronicleOracle();
         // Deploy the price-aware RWA router stub. Uses DemoRwaAerodromeRouter
         // instead of DemoAerodromeRouter so that USDC→deSPXA swaps apply the
@@ -328,7 +342,9 @@ contract AgentBasketStubDeployer {
                 string.concat("Demo Agent ", AGENT_SYMBOLS_3[i]), AGENT_SYMBOLS_3[i]
             );
             tokens[i] = token;
-            pools[i] = new DemoUsdcPool(address(token), usdc);
+            // All three agent assets use a 10_000 fee tier (BNKR V3, JUNO V4 fee;
+            // RM Aerodrome tickSpacing). Matches DEMO_AGENT_*_FEE.
+            pools[i] = new DemoUsdcPool(address(token), usdc, 10_000);
         }
         aeroRouter.setPool(address(tokens[2]), usdc, 10_000, address(pools[2]));
     }
@@ -347,7 +363,8 @@ contract ProtocolBasketStubDeployer {
             DemoBasketToken token =
                 new DemoBasketToken(string.concat("Demo Protocol ", symbols[i]), symbols[i]);
             tokens[i] = token;
-            pools[i] = new DemoUsdcPool(address(token), usdc);
+            // Protocol vault assets use the V3 default path at DEMO_PROTOCOL_SWAP_FEE.
+            pools[i] = new DemoUsdcPool(address(token), usdc, 500);
         }
     }
 }
@@ -847,6 +864,10 @@ contract DeployDemoExtraVaults is Script {
     ) internal returns (address[] memory tokens) {
         tokens = new address[](3);
 
+        // ADP-2 / NC-2: approve the external adapters' codehashes before onboarding.
+        vault.setAdapterCodeHashAllowed(v4AdapterAddr.codehash, true);
+        vault.setAdapterCodeHashAllowed(aeroAdapterAddr.codehash, true);
+
         // BNKR — Venue.V3, no per-asset adapter (uses built-in SWAP_ROUTER).
         tokens[0] = address(seeder.tokens(0));
         vault.addAsset(
@@ -886,6 +907,8 @@ contract DeployDemoExtraVaults is Script {
     ///      adapter. The pool stub satisfies cardinality + liquidity gates.
     ///      Per ADR-0006 §1, the vault is seeded once (maxAssets = 1).
     function _seedRwaVault(RwaVault vault, DemoRwaStubDeployer seeder) internal {
+        // ADP-2 / NC-2: approve the Chronicle adapter's codehash before onboarding.
+        vault.setAdapterCodeHashAllowed(address(seeder.chronicleAdapter()).codehash, true);
         vault.addAsset(
             address(seeder.despxaToken()),
             address(seeder.pool()),

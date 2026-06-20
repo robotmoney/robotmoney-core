@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/522a29d8cd2294646d674548ad500b03a648e774/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -325,16 +325,36 @@ function _decimalsOffset() internal pure override returns (uint8);
 
 ### totalAssets
 
-Sum of USDC held directly in the vault (idle) plus all active adapter balances.
+Sum of USDC held directly in the vault (idle) plus all eligible-and-active
+adapter balances.
 
 Idle USDC can accumulate via direct transfers or when `_routeDeposit` cannot place
 all assets (e.g. all adapter caps are exhausted). Including it here prevents NAV
 understatement and the associated TVL-cap bypass / share-price dilution described
 in docs/code-reviews/code-review-codex-20260508-1522.md — Finding 2.
+ADP-2 (F-14): an adapter whose eligibility was revoked while still registered as
+`active` (allowlist withdrawn or codehash de-listed) is EXCLUDED from NAV. A
+revoked adapter is no longer trusted to price its holdings, so continuing to count
+its self-reported balance would let a compromised/lying adapter inflate the share
+price (and, on the withdrawal side, drain honest holders' idle USDC). Eligibility
+is restorable via `setAdapterAllowed`, and the funds remain drainable by EMERGENCY
+via `emergencyWithdrawAdapter`, so this is an exclusion-not-confiscation.
 
 
 ```solidity
 function totalAssets() public view override returns (uint256);
+```
+
+### _isAdapterCounted
+
+An adapter contributes to NAV / receives proportional withdrawals only when it is
+both registered-active AND currently eligible (allowlisted + codehash-pinned +
+identity-bound). Centralises the ADP-2 NAV-side check so `totalAssets` and
+`_pullProportional` can never drift apart.
+
+
+```solidity
+function _isAdapterCounted(uint256 i) internal view returns (bool);
 ```
 
 ### _deposit
@@ -484,9 +504,20 @@ function _withdraw(
 
 ### _pullProportional
 
+Source `assetsNeeded` USDC into the vault, returning the amount ACTUALLY realised
+(idle USDC applied + USDC genuinely withdrawn from adapters). Under honest adapters
+the return equals `assetsNeeded`; `_withdraw` asserts the realised figure covers the
+full share-implied gross before paying the exit fee (FEE-2 / NC-11), so an adapter
+that over-reports its balance can never have its shortfall funded from other holders'
+idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity`).
+Only eligible-and-active adapters (`_isAdapterCounted`) are pulled from: a revoked
+adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —
+otherwise the proportional denominator would not match NAV and a revoked adapter
+could still receive/return withdrawal flow (ADP-2 / F-14).
+
 
 ```solidity
-function _pullProportional(uint256 assetsNeeded) internal;
+function _pullProportional(uint256 assetsNeeded) internal returns (uint256);
 ```
 
 ### addAdapter

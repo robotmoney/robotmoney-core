@@ -106,6 +106,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "MAX_WINDOW_ENTRIES",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "PAUSER_ROLE",
     inputs: [],
     outputs: [
@@ -955,7 +968,17 @@ export const gatewayAbiGenerated = [
         internalType: "bytes32",
       },
       {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
         name: "sharesPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+      {
+        name: "minAssetsPerLeg",
         type: "uint256[]",
         internalType: "uint256[]",
       },
@@ -1562,6 +1585,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "NotAgentOwner",
     inputs: [],
   },
@@ -1624,6 +1652,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "UnexpectedAssetsReceived",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "WindowBufferFull",
     inputs: [],
   },
   {
@@ -6205,6 +6238,25 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "isRouterEligibleAndActive",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "ok",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
@@ -6275,6 +6327,11 @@ export const routerAbiGenerated = [
         name: "assetRecipient",
         type: "address",
         internalType: "address",
+      },
+      {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
       },
       {
         name: "sharesPerLeg",
@@ -6849,6 +6906,22 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "RedeemVaultNotRegistered",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RedeemVaultsLengthMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "ReentrancyGuardReentrantCall",
     inputs: [],
   },
@@ -6961,6 +7034,17 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "VaultNotRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "VaultPausedForRedeem",
     inputs: [
       {
         name: "vault",

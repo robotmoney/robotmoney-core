@@ -1,5 +1,5 @@
 # PortfolioRouterRuntimeEligibilityTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/ConfusedDeputyGuards.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/ConfusedDeputyGuards.t.sol)
 
 **Inherits:**
 Test
@@ -71,16 +71,19 @@ address internal depositor = makeAddr("depositor")
 function setUp() public;
 ```
 
-### test_invariant11_deposit_revertsIfVaultLosesEligibilityAfterWeighting
+### test_invariant11_deposit_skipsVaultThatLosesEligibilityAfterWeighting
 
 A vault that loses router-eligibility after being weighted must
-not receive USDC at deposit time. _requireRouterEligible is called
-inside _executeLegs on every leg, blocking ineligible vaults even
-when they are still in the weight vector.
+never receive USDC at deposit time. With skip-and-renormalise
+(RTR-5 / F-13) the ineligible leg is skipped; here it is the ONLY
+weighted vault, so the basket is consistently unavailable —
+previewDeposit reports the single leg unavailable and deposit
+reverts `NoWeightsSet` rather than routing USDC into the ineligible
+vault. Either way the ineligible vault is never funded (invariant 11).
 
 
 ```solidity
-function test_invariant11_deposit_revertsIfVaultLosesEligibilityAfterWeighting() public;
+function test_invariant11_deposit_skipsVaultThatLosesEligibilityAfterWeighting() public;
 ```
 
 ### test_invariant11b_setWeights_rejectsIneligibleVault

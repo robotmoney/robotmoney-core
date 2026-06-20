@@ -17,7 +17,11 @@
 //! 4. Preview: read router effective weights and display per-leg shares out.
 //! 5. Require explicit `--confirm` flag before signing.
 //! 6. Compute fees from `eth_feeHistory`.
-//! 7. Build the EIP-1559 envelope for `gateway.withdrawFromRouter(...)`.
+//! 7. Build the EIP-1559 envelope for
+//!    `gateway.withdrawFromRouter(orderId, vaults, sharesPerLeg, deadline,
+//!    idempotencyKey)`. The redeem legs are driven by the caller-supplied
+//!    `vaults[]`: `vaults[i]` is identity-bound to `sharesPerLeg[i]`
+//!    (issue #967), not the router's live weight vector.
 //! 8. Sign, broadcast, wait for receipt.
 //! 9. Decode `AgentWithdrawalRouted` event log → emit stable JSON on stdout.
 //!
@@ -59,8 +63,18 @@ const EXIT_STARTUP_FAIL: i32 = 3;
 pub struct Args {
     pub config_path: PathBuf,
     /// Comma-separated vault shares per router leg (decimal strings).
-    /// Must match the router's effective weight vector length.
+    /// Must match the `vaults` length (one share amount per vault).
     pub shares_per_leg: Vec<String>,
+    /// Vault addresses to redeem from (0x-prefixed hex), one per leg,
+    /// parallel to `shares_per_leg`. Identity-bound: `shares_per_leg[i]` is
+    /// redeemed from `vaults[i]` (issue #967). Drives the redeem legs
+    /// directly instead of the router's live weight vector.
+    pub vaults: Vec<String>,
+    /// Per-leg minimum USDC out (slippage floor), decimal strings, parallel to
+    /// `shares_per_leg` (GW-5 / F-11). Empty ⇒ an all-zero floor of the same
+    /// length is sent (back-compat). Otherwise the length must equal
+    /// `shares_per_leg`.
+    pub min_assets_per_leg: Vec<String>,
     /// 32-byte order id, 0x-prefixed hex.
     pub order_id: String,
     /// 32-byte idempotency key. Defaults to order_id when omitted.
@@ -141,6 +155,66 @@ pub fn run(args: Args) -> i32 {
         log::error!("rmpc withdraw-router: --shares-per-leg must have at least one non-zero entry");
         return EXIT_STARTUP_FAIL;
     }
+
+    // Parse --vaults. The redeem legs are driven by the caller-supplied
+    // vaults[] (issue #967): vaults[i] is identity-bound to
+    // sharesPerLeg[i], so the two arrays must be the same non-empty length.
+    let vaults: Vec<Address> = {
+        let mut out = Vec::with_capacity(args.vaults.len());
+        for v in &args.vaults {
+            match Address::from_str(v) {
+                Ok(a) => out.push(a),
+                Err(e) => {
+                    log::error!(
+                        "rmpc withdraw-router: --vaults entry {v:?} is not a valid 0x address: {e}"
+                    );
+                    return EXIT_REFUSAL;
+                }
+            }
+        }
+        out
+    };
+    if vaults.is_empty() {
+        log::error!(
+            "rmpc withdraw-router: --vaults must list at least one vault address, one per leg"
+        );
+        return EXIT_REFUSAL;
+    }
+    if vaults.len() != shares_per_leg.len() {
+        log::error!(
+            "rmpc withdraw-router: --vaults length ({}) must equal --shares-per-leg length ({}); \
+             vaults[i] is identity-bound to shares_per_leg[i] (issue #967)",
+            vaults.len(),
+            shares_per_leg.len()
+        );
+        return EXIT_REFUSAL;
+    }
+
+    // Parse the per-leg slippage floor (GW-5 / F-11). Empty ⇒ all-zero of the
+    // same length (back-compat); otherwise the length must equal shares_per_leg.
+    let min_assets_per_leg: Vec<U256> = if args.min_assets_per_leg.is_empty() {
+        vec![U256::ZERO; shares_per_leg.len()]
+    } else {
+        if args.min_assets_per_leg.len() != shares_per_leg.len() {
+            log::error!(
+                "rmpc withdraw-router: --min-assets-per-leg length ({}) must equal --shares-per-leg length ({})",
+                args.min_assets_per_leg.len(),
+                shares_per_leg.len()
+            );
+            return EXIT_STARTUP_FAIL;
+        }
+        let mut out = Vec::with_capacity(args.min_assets_per_leg.len());
+        for s in &args.min_assets_per_leg {
+            match U256::from_str(s) {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    log::error!("rmpc withdraw-router: --min-assets-per-leg entry {s:?} is not a valid decimal U256: {e}");
+                    return EXIT_STARTUP_FAIL;
+                }
+            }
+        }
+        out
+    };
 
     let order_id = match B256::from_str(&args.order_id) {
         Ok(b) => b,
@@ -439,7 +513,9 @@ pub fn run(args: Args) -> i32 {
     // -- Build + sign envelope -------------------------------------------
     let calldata = RobotMoneyGateway::withdrawFromRouterCall {
         orderId: order_id,
+        vaults: vaults.clone(),
         sharesPerLeg: shares_per_leg.clone(),
+        minAssetsPerLeg: min_assets_per_leg.clone(),
         deadline,
         idempotencyKey: idempotency_key,
     }
@@ -657,7 +733,7 @@ mod tests {
 
     #[test]
     fn withdraw_from_router_selector_matches_canonical_signature() {
-        let canonical = "withdrawFromRouter(bytes32,uint256[],uint64,bytes32)";
+        let canonical = "withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32)";
         let expected = &keccak256(canonical.as_bytes())[..4];
         let actual = RobotMoneyGateway::withdrawFromRouterCall::SELECTOR;
         assert_eq!(&actual, expected, "withdrawFromRouter selector drift");
@@ -676,9 +752,16 @@ mod tests {
     fn shares_per_leg_encodes_correctly() {
         // Verify the ABI encoding is stable for a two-leg call.
         let legs = vec![U256::from(60_000_000u64), U256::from(40_000_000u64)];
+        let vaults = vec![
+            alloy_primitives::Address::repeat_byte(1),
+            alloy_primitives::Address::repeat_byte(2),
+        ];
+        let floors = vec![U256::from(59_700_000u64), U256::from(39_800_000u64)];
         let call = RobotMoneyGateway::withdrawFromRouterCall {
             orderId: alloy_primitives::B256::ZERO,
+            vaults,
             sharesPerLeg: legs,
+            minAssetsPerLeg: floors,
             deadline: 0u64,
             idempotencyKey: alloy_primitives::B256::ZERO,
         };

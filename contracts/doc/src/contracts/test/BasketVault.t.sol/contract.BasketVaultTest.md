@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -113,6 +113,75 @@ function test_emergencyUnwindWithOverride_requiresEmergencyRole() public;
 function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public;
 ```
 
+### test_addAsset_revertsForUnvettedAdapter
+
+ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
+not on the ADMIN-approved allowlist.
+
+
+```solidity
+function test_addAsset_revertsForUnvettedAdapter() public;
+```
+
+### test_addAsset_acceptsVettedAdapterAfterApproval
+
+ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
+accepts it.
+
+
+```solidity
+function test_addAsset_acceptsVettedAdapterAfterApproval() public;
+```
+
+### test_addAsset_revertsOnExecutionPoolMismatch
+
+ORA-3 / F-09: addAsset reverts when the registered pool's fee tier
+(the execution pool resolved from swapFee_) does not match swapFee_.
+
+
+```solidity
+function test_addAsset_revertsOnExecutionPoolMismatch() public;
+```
+
+### test_lastAdminFloor_revokeRevertsForSoleAdmin
+
+ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
+(last-admin floor), so vault governance can never be bricked.
+
+
+```solidity
+function test_lastAdminFloor_revokeRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_renounceRevertsForSoleAdmin
+
+ACL-3 / F-06: renouncing the last ADMIN_ROLE holder reverts.
+
+
+```solidity
+function test_lastAdminFloor_renounceRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_revokeSucceedsWithTwoAdmins
+
+ACL-3 / F-06: with a second admin granted, the original may be
+revoked — the floor only blocks dropping the FINAL admin.
+
+
+```solidity
+function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public;
+```
+
+### test_pause_doesNotFreezeWithdrawals
+
+LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+a holder can still redeem while the vault is paused.
+
+
+```solidity
+function test_pause_doesNotFreezeWithdrawals() public;
+```
+
 ### test_sweepForeignToken_revertsForActiveBasketAsset
 
 INV-1: an ACTIVE basket asset may never be swept to quarantine —
@@ -175,6 +244,65 @@ withdrawal, not swept).
 function test_reabsorbRemovedAsset_revertsForActiveAsset() public;
 ```
 
+### test_LIFE6_reabsorbSurvivesDegradedPool
+
+LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
+whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
+reverts-and-strands. Pre-fix, the swap-floor read reverted and the
+reappeared balance was stuck on the vault forever; post-fix the
+quarantine fallback sweeps it to the governed quarantine address, so
+the balance is always actionable (the reversible safety valve).
+Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
+
+
+```solidity
+function test_LIFE6_reabsorbSurvivesDegradedPool() public;
+```
+
+### test_LIFE6_reabsorbZeroBalanceIsNoOp
+
+LIFE-6 / NC-8: a zero reappeared balance is an idempotent no-op,
+never a revert, even on a degraded pool.
+
+
+```solidity
+function test_LIFE6_reabsorbZeroBalanceIsNoOp() public;
+```
+
+### test_NC8_addAsset_rejectsActiveDuplicate
+
+NC-8: re-adding a token that already has an ACTIVE registry entry
+reverts rather than creating a duplicate AssetInfo (which would
+double-count it in NAV and corrupt the equal-weight split).
+
+
+```solidity
+function test_NC8_addAsset_rejectsActiveDuplicate() public;
+```
+
+### test_NC8_addAsset_reusesInactiveSlotOnReAdd
+
+NC-8: re-adding a previously REMOVED token reuses its inactive
+registry slot in place (refreshing config + re-activating) instead
+of appending a second AssetInfo, so `assets` never holds two entries
+for one token.
+
+
+```solidity
+function test_NC8_addAsset_reusesInactiveSlotOnReAdd() public;
+```
+
+### _assetsLen
+
+Count the BasketVault `assets` registry by probing the public getter
+until it reverts (no dedicated length getter on-chain — kept off the
+EIP-170-tight basket bytecode).
+
+
+```solidity
+function _assetsLen() internal view returns (uint256 n);
+```
+
 ### test_INV3_setFeeRecipient_revertsForHotEmergencyKey
 
 
@@ -215,6 +343,39 @@ function test_maxDeposit_zeroWhenPaused() public;
 
 ```solidity
 function test_maxDeposit_zeroWhenShutdown() public;
+```
+
+### test_F07_restoreVaultReopensDeposits
+
+LIFE-4 / F-07: an EMERGENCY-triggered `shutdownVault` permanently
+blocks deposits with no reverse path UNLESS the higher-trust
+ADMIN_ROLE can `restoreVault`. Proof: shutdown blocks deposits;
+ADMIN restore with a fresh cap re-opens them; a redeem in between
+confirms withdrawals were never frozen (LIFE-3).
+
+
+```solidity
+function test_F07_restoreVaultReopensDeposits() public;
+```
+
+### test_F07_restoreVault_emergencyCannotRestore
+
+F-07: only ADMIN_ROLE may restore; the EMERGENCY hot key that can
+shut the vault down cannot reverse it (trust asymmetry, like unpause).
+
+
+```solidity
+function test_F07_restoreVault_emergencyCannotRestore() public;
+```
+
+### test_F07_restoreVault_revertsOnInvalidInputs
+
+F-07: `restoreVault` rejects incoherent inputs — not-shut-down,
+zero cap, or a cap below `perDepositCap`.
+
+
+```solidity
+function test_F07_restoreVault_revertsOnInvalidInputs() public;
 ```
 
 ### test_maxDeposit_zeroWhenNoActiveAssets
@@ -675,6 +836,63 @@ exactness guarantee. Users must use redeem() instead.
 
 ```solidity
 function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public;
+```
+
+### _depositAt1to1
+
+Deposit `amount` USDC into `vault`, executing the swap at 1:1
+(spot == TWAP) so the basket token received equals the USDC in.
+
+
+```solidity
+function _depositAt1to1(address who, uint256 amount) internal returns (uint256 shares);
+```
+
+### test_SUP3_roundTripNeverProfits_fuzz
+
+SUP-3 (pure-view floor): `previewRedeem(previewDeposit(x)) <= x`
+holds across fuzzed slippage params and deposit sizes. The two
+floor-discounted previews compose to strictly below the deposit,
+so a round trip can never preview a profit.
+
+
+```solidity
+function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public;
+```
+
+### test_SUP3_statefulDepositRedeemNeverProfits
+
+SUP-3 (stateful): a real deposit → immediate redeem within the
+deviation band returns no more than was deposited. Exercises the
+mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
+on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+
+
+```solidity
+function test_SUP3_statefulDepositRedeemNeverProfits() public;
+```
+
+### test_ORA4_deviationGuardBlocksSettlement
+
+ORA-4: when the executable market (slot0 spot) price diverges from
+the NAV-pricing TWAP beyond `navDeviationGuardBps`, a deposit
+reverts `NavMarketDeviationExceeded` rather than minting at the
+stale/manipulated mark. With the guard disabled (0) the same
+deposit succeeds — proving the guard, not some other check, blocks.
+
+
+```solidity
+function test_ORA4_deviationGuardBlocksSettlement() public;
+```
+
+### test_ORA4_withinBandSettles
+
+ORA-4: a deposit within the deviation band settles normally — the
+guard does not block ordinary, market-consistent settlement.
+
+
+```solidity
+function test_ORA4_withinBandSettles() public;
 ```
 
 ## Events

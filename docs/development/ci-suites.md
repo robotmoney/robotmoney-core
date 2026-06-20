@@ -634,6 +634,51 @@ signal regardless of whether that day's commits touch each suite's path filters.
 
 ---
 
+### 22. Contracts formal-verification harness (contracts-formal-verification)
+**File:** `.github/workflows/suite-22-formal-verification.yml`
+**CI class / tier:** `feature-correctness` — LIGHT
+**Environment:** `none` (Foundry only)
+**Trigger:** `pull_request` (any base branch — incl. PRs into `phase/*` staging
+branches) scoped to `contracts/**`, `foundry.toml`,
+`docs/technical/smart-contract-invariants.md`, and the workflow itself; `push` to
+`dev`/`dev-phase-*`; `workflow_dispatch`.
+
+Runs the formal-verification (FV) harness that makes
+[`docs/technical/smart-contract-invariants.md`](../technical/smart-contract-invariants.md)
+executable. Stood up by the `contract-security-remediation-2` phase scout
+(issue #964) BEFORE any remediation, so every later fix is pinned by the
+invariant it restores.
+
+**Design rationale:**
+- **Coverage-map gate (1:1 spec↔test).** `contracts/test/fv/CoverageMap.t.sol`
+  parses every invariant ID out of the spec markdown and asserts each maps to
+  exactly one entry in `contracts/test/fv/InvariantRegistry.sol` (and vice
+  versa). Adding an invariant to the spec without a corresponding FV test, or a
+  stray registry entry, fails the build. The invariants-spec path is in the PR
+  trigger allowlist (and `foundry.toml` already grants read on `docs/`), so a
+  spec-only PR still runs this gate — which is why this code suite deliberately
+  does **not** carry a `**.md` docs path-ignore.
+- **Per-invariant tests.** `contracts/test/fv/FvInvariants.t.sol` drives one
+  named test per ID. Holding invariants pass; currently-violated (🔴) invariants
+  are `vm.skip`-ped with a reason naming the remediation issue (#965–#971) that
+  must remove the skip and flip them green. The suite stays green today (red
+  invariants skipped, not failing); an un-skipped red test (a landed remediation)
+  must pass.
+- **Dedicated harnesses.** `CustodyMultiVault` (SUP-1/CUST family-wide custody),
+  `StaleOracleRedemption` (SUP-5/ORA-2), `TwapManipulation` (ORA-7), and
+  `DeployAssertions` (ACL-1/ORA-3/ORA-6) carry the cross-family / stale-oracle /
+  TWAP-manipulation / post-deploy scaffolding the remediation issues fill in.
+- LIGHT tier because the suite is forge unit + static-guard + bounded fuzz and
+  finishes in well under a minute; running it on every PR (no base-branch filter)
+  is what gates PRs into the phase staging branch.
+
+**Jobs:**
+- `forge-formal-verification` — `forge build`; `forge test --match-path
+  'contracts/test/fv/**'`; then the anchoring proofs
+  (`CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles`).
+
+---
+
 ## CI velocity tiers
 
 CI is split into two tiers so a routine PR gets fast, cheap feedback while the
@@ -730,3 +775,4 @@ Every workflow's `name:` and its tier.
 | 19 | `suite-19-erc4626-demo-tvl-matrix.yml` | `erc4626-precondition` (matrix) \| `demo-tvl` | `anvil` / `devnet` |
 | 20 | `suite-20-watchdog.yml` | `watchdog-unit` \| `watchdog-integration` | `none` / `postgres-testcontainer` |
 | 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |
+| 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |

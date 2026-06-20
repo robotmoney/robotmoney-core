@@ -1,5 +1,5 @@
 # GatewayRollingDepositWindowTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/341bacb97baf93981a3ae7d301f2467ef5f2ae47/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -192,5 +192,19 @@ function testFuzz_deposit_rollingWindow_neverExceedsCapInAnyInterval(
     uint64[8] memory timeOffsets,
     uint32[8] memory rawAmounts
 ) public;
+```
+
+### test_effectiveDepositWindowGross_prunesOnlyExpiredEntries
+
+
+```solidity
+function test_effectiveDepositWindowGross_prunesOnlyExpiredEntries() public;
+```
+
+### test_rollingWindow_liveCountBoundedAcrossDistinctSeconds
+
+
+```solidity
+function test_rollingWindow_liveCountBoundedAcrossDistinctSeconds() public;
 ```
 

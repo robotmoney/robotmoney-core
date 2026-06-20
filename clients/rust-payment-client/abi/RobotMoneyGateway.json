@@ -97,6 +97,19 @@
   },
   {
     "type": "function",
+    "name": "MAX_WINDOW_ENTRIES",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "PAUSER_ROLE",
     "inputs": [],
     "outputs": [
@@ -946,7 +959,17 @@
         "internalType": "bytes32"
       },
       {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
         "name": "sharesPerLeg",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "minAssetsPerLeg",
         "type": "uint256[]",
         "internalType": "uint256[]"
       },
@@ -1553,6 +1576,11 @@
   },
   {
     "type": "error",
+    "name": "LastAdminFloor",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotAgentOwner",
     "inputs": []
   },
@@ -1615,6 +1643,11 @@
   {
     "type": "error",
     "name": "UnexpectedAssetsReceived",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "WindowBufferFull",
     "inputs": []
   },
   {

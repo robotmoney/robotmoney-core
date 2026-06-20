@@ -1,5 +1,5 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -166,6 +166,45 @@ function _fundAndApprove(address who, uint256 amt) internal;
 function test_constructor_wiresImmutablesAndRoles() public view;
 ```
 
+### test_lastAdminFloor_revokeAdminRevertsForSoleHolder
+
+ACL-3 / F-06: revoking the sole ADMIN_ROLE holder reverts
+(last-admin floor) — gateway governance can never be bricked.
+
+
+```solidity
+function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
+gateway uses as a privileged tier (it gates authorizeAgent).
+
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: renouncing the sole DEFAULT_ADMIN_ROLE holder reverts.
+
+
+```solidity
+function test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders
+
+ACL-3 / F-06: with a second DEFAULT_ADMIN granted, the original may
+be revoked — the floor only blocks dropping the final holder.
+
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public;
+```
+
 ### test_constructor_revertsOnZeroAddresses
 
 
@@ -189,9 +228,12 @@ function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
 
 ### test_authorizeAgent_permissionless
 
-AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
-revert (issue #753 — commit/reveal is now the only permissionless
-first-time authorization path).
+AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
+(issue #753 — commit/reveal is the only permissionless first-time
+authorization path; #965/F-01 moved the admin gate from
+DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
+authority after the deploy handover revokes the deployer's
+DEFAULT_ADMIN_ROLE).
 
 
 ```solidity
@@ -212,8 +254,9 @@ function test_authorizeAgent_no_longer_requires_admin_role() public;
 
 Front-run regression: an attacker observing a victim's
 `revealAuthorization` cannot pre-empt it via the direct
-`authorizeAgent` because that function now requires
-DEFAULT_ADMIN_ROLE (issue #753).
+`authorizeAgent` because that function requires `ADMIN_ROLE`
+(issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
+#965/F-01).
 
 
 ```solidity
