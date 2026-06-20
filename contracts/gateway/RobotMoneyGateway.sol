@@ -233,6 +233,50 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice Stop-the-world flag.
     bool private _paused;
 
+    // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
+    //
+    // Appended at the END of storage so the layout of every preceding slot
+    // (notably `agents` at slot 3 and `commitments` at slot 2) is unchanged —
+    // a plain manual counter, not AccessControlEnumerable, to avoid both a
+    // storage-layout shift and the extra bytecode. The two privileged admin
+    // tiers (`ADMIN_ROLE`, `DEFAULT_ADMIN_ROLE`) each get a counter; revoking
+    // or renouncing the sole holder of either is forbidden, so governance can
+    // never be permanently bricked.
+
+    /// @notice Number of accounts currently holding `ADMIN_ROLE`.
+    uint256 private _adminCount;
+    /// @notice Number of accounts currently holding `DEFAULT_ADMIN_ROLE`.
+    uint256 private _defaultAdminCount;
+
+    /// @notice Revoking/renouncing the sole holder of an admin tier is forbidden.
+    error LastAdminFloor();
+
+    /// @dev Maintain the admin-tier counters and enforce the floor. `AccessRoles`
+    ///      keeps its role-separation override; we route through `super` so both
+    ///      invariants compose (separation on grant, last-admin floor on revoke).
+    function _grantRole(bytes32 role, address account) internal override returns (bool granted) {
+        granted = super._grantRole(role, account);
+        if (granted) {
+            if (role == ADMIN_ROLE) _adminCount++;
+            else if (role == DEFAULT_ADMIN_ROLE) _defaultAdminCount++;
+        }
+    }
+
+    /// @dev ACL-3 / F-06: block dropping the final `ADMIN_ROLE` or
+    ///      `DEFAULT_ADMIN_ROLE` holder. Both `revokeRole` and `renounceRole`
+    ///      route through this hook.
+    function _revokeRole(bytes32 role, address account) internal override returns (bool revoked) {
+        if (hasRole(role, account)) {
+            if (role == ADMIN_ROLE && _adminCount == 1) revert LastAdminFloor();
+            if (role == DEFAULT_ADMIN_ROLE && _defaultAdminCount == 1) revert LastAdminFloor();
+        }
+        revoked = super._revokeRole(role, account);
+        if (revoked) {
+            if (role == ADMIN_ROLE) _adminCount--;
+            else if (role == DEFAULT_ADMIN_ROLE) _defaultAdminCount--;
+        }
+    }
+
     // -------------------------------------------------------------------
     // Constructor
     // -------------------------------------------------------------------

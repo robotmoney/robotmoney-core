@@ -27,8 +27,11 @@ import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {TickMath} from "../lib/TickMath.sol";
+import {TwapTickMath} from "../lib/TwapTickMath.sol";
 import {BpsMath} from "../lib/BpsMath.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
+import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 
 /// @title BasketVault
 /// @notice Abstract ERC-4626 USDC vault that holds a basket of ERC-20 assets.
@@ -46,6 +49,45 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+
+    // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
+    //
+    // The vault uses a single self-administered `ADMIN_ROLE` as its own role
+    // admin. OZ's `revokeRole`/`renounceRole` are public, so dropping the sole
+    // admin would brick all configuration forever. We forbid that one transition
+    // with a lightweight manual counter (no AccessControlEnumerable — that base
+    // pushes the vault family past the EIP-170 24_576-byte code-size limit). The
+    // counter is maintained by overriding the internal `_grantRole`/`_revokeRole`
+    // hooks both OZ public setters route through.
+
+    /// @notice Number of accounts currently holding `ADMIN_ROLE`.
+    uint256 public adminCount;
+
+    /// @notice Revoking the sole `ADMIN_ROLE` holder is forbidden (would leave the
+    ///         vault with zero admins and brick every admin path).
+    error LastAdminFloor();
+
+    /// @inheritdoc AccessControl
+    /// @dev Track `ADMIN_ROLE` membership so the last-admin floor can be enforced
+    ///      without enumeration. Only increments on a real (new) grant.
+    function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
+        bool granted = super._grantRole(role, account);
+        if (granted && role == ADMIN_ROLE) adminCount++;
+        return granted;
+    }
+
+    /// @inheritdoc AccessControl
+    /// @dev Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
+    ///      both public setters route through here. Decrements only on a real
+    ///      (effective) revoke.
+    function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {
+        if (role == ADMIN_ROLE && hasRole(role, account) && adminCount == 1) {
+            revert LastAdminFloor();
+        }
+        bool revoked = super._revokeRole(role, account);
+        if (revoked && role == ADMIN_ROLE) adminCount--;
+        return revoked;
+    }
 
     // ─── Immutable constants ──────────────────────────────────────────
 
@@ -144,6 +186,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         window per asset within `[MIN_TWAP_WINDOW, MAX_TWAP_WINDOW]`.
     mapping(address => uint32) public twapWindow;
 
+    /// @notice Runtime-bytecode hashes ADMIN_ROLE has approved for use as a basket
+    ///         swap+TWAP adapter. `addAsset` rejects any non-zero adapter whose
+    ///         codehash is not in this set (ADP-2 / NC-2). The default Uniswap V3
+    ///         path (`adapter == address(0)`) needs no entry — it routes through the
+    ///         immutable, audited `SWAP_ROUTER`, not an external adapter.
+    mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed;
+
     // ─── Events ───────────────────────────────────────────────────────
 
     event AssetAdded(
@@ -190,6 +239,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      Off-chain monitors can use the delta between `oldWindow` and
     ///      `newWindow` to detect governance shortening the oracle window.
     event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
+    /// @dev Emitted when ADMIN_ROLE approves or revokes an adapter runtime-code
+    ///      hash for use in `addAsset` (ADP-2 / NC-2).
+    event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
     /// @dev Emitted on every deposit, recording the equal-weight allocation applied
     ///      to the depositor's inflow. Satisfies the event-stream cost-disclosure
     ///      requirement from docs/architecture.md §8 and ADR-0003.
@@ -215,6 +267,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error EmergencyFloorUnavailable(address token);
     error PoolTokenMismatch();
     error AssetInBasket();
+    // ADP-2 / NC-2 (AdapterCodeHashNotAllowed) and ORA-3 / F-09
+    // (ExecutionPoolMismatch) are enforced in `addAsset` via the externally-linked
+    // `BasketAssetConfigGuard` library, which declares and reverts those errors.
     /// @dev Raised when a router swap on the override path returns less USDC than
     ///      the upper-loss cap permits. The cap is configured per-token via
     ///      `setEmergencyUnwindGuard` and bounds the realized loss versus the
@@ -534,6 +589,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      is intentionally unused because the actual USDC received depends on
     ///      swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
     ///      Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
+    /// @dev LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
+    ///      `pause()` is a deposits-only freeze (see `_deposit`, which is
+    ///      `whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
+    ///      same low-trust EMERGENCY_ROLE pause would let a hot key freeze
+    ///      already-deposited funds — and, combined with last-ADMIN renounce, freeze
+    ///      them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
+    ///      and the deposits-only pause together keep withdrawals always reachable,
+    ///      matching RobotMoneyVault's separate `withdrawalsPaused` model.
     function _withdraw(
         address caller,
         address receiver,
@@ -543,7 +606,6 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     )
         internal
         override
-        whenNotPaused
         nonReentrant
     {
         if (caller != owner) _spendAllowance(owner, caller, shares);
@@ -672,37 +734,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         if (amountIn == 0) return 0;
         address basketAsset = tokenIn == address(_USDC) ? tokenOut : tokenIn;
         uint32 window = effectiveTwapWindow(basketAsset);
-
-        // Two observations: `window` seconds ago and now. The arithmetic-mean
-        // tick over the window is `(tickCumulatives[1] - tickCumulatives[0]) / window`.
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = window;
-        secondsAgos[1] = 0;
-        (int56[] memory tickCumulatives,) = IUniswapV3Pool(pool).observe(secondsAgos);
-        int56 delta = tickCumulatives[1] - tickCumulatives[0];
-        int24 arithmeticMeanTick = int24(delta / int56(uint56(window)));
-        // Match Uniswap OracleLibrary rounding: when delta is negative and not
-        // exactly divisible by the window, round toward negative infinity so
-        // the mean tick does not bias upward.
-        if (delta < 0 && (delta % int56(uint56(window)) != 0)) {
-            arithmeticMeanTick--;
-        }
-        uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(arithmeticMeanTick);
-
-        bool zeroForOne = tokenIn < tokenOut;
-        uint256 sqrtP = uint256(sqrtPriceX96);
-
-        if (sqrtP <= type(uint128).max) {
-            uint256 ratioX192 = sqrtP * sqrtP;
-            amountOut = zeroForOne
-                ? amountIn.mulDiv(ratioX192, 1 << 192)
-                : amountIn.mulDiv(1 << 192, ratioX192);
-        } else {
-            uint256 ratioX128 = Math.mulDiv(sqrtP, sqrtP, 1 << 64);
-            amountOut = zeroForOne
-                ? amountIn.mulDiv(ratioX128, 1 << 128)
-                : amountIn.mulDiv(1 << 128, ratioX128);
-        }
+        // Mean-tick + sqrtPrice→amount math is delegated to the shared, externally
+        // linked `TwapTickMath` library (one deployed copy, DELEGATECALL-linked)
+        // so it is NOT inlined into this already-EIP-170-tight vault. Arithmetic is
+        // identical to the prior inline path (Uniswap OracleLibrary rounding).
+        int24 meanTick = TwapTickMath.meanTick(pool, window);
+        amountOut = TwapTickMath.priceFromTick(meanTick, tokenIn, tokenOut, amountIn);
     }
 
     // ─── Asset registry management ────────────────────────────────────
@@ -728,6 +765,23 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         to satisfy with a small seed. Production operators are expected
     ///         to seed pools well above this floor before activating assets.
     uint128 public constant MIN_POOL_LIQUIDITY = 1e6;
+
+    /// @notice Approve or revoke an adapter runtime-bytecode hash for use as a
+    ///         basket swap+TWAP adapter in `addAsset`. Restricted to ADMIN_ROLE.
+    /// @dev ADP-2 / NC-2: `addAsset` rejects any non-zero adapter whose codehash
+    ///      is not approved here. Revoking a codehash does NOT retroactively touch
+    ///      assets already registered with that adapter — it only blocks future
+    ///      `addAsset` calls. Mirrors `RobotMoneyVault.setAdapterCodeHashAllowed`.
+    /// @param codeHash_ Runtime-bytecode hash (`adapter.codehash`) to approve/revoke.
+    /// @param allowed_  True to approve, false to revoke.
+    function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (codeHash_ == bytes32(0)) revert InvalidParam();
+        adapterCodeHashAllowed[codeHash_] = allowed_;
+        emit AdapterCodeHashAllowedSet(codeHash_, allowed_);
+    }
 
     /// @notice Register a new basket asset. Restricted to ADMIN_ROLE.
     /// @param token_    ERC-20 token address.
@@ -759,6 +813,32 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ) external onlyRole(ADMIN_ROLE) {
         if (token_ == address(0) || pool_ == address(0)) revert ZeroAddress();
         if (assets.length >= maxAssets()) revert MaxAssetsReached();
+        // ADP-2 / NC-2: vet any external adapter before it can both price NAV and
+        // receive token approvals. The on-chain control is the codehash allowlist —
+        // ADMIN_ROLE must have pre-approved the exact runtime bytecode, which pins
+        // every address baked into the adapter (including its linked TickMath
+        // library), so an attacker-controlled or hot-swappable adapter is rejected.
+        //
+        // The default Uniswap V3 path (adapter == 0) routes through the immutable
+        // audited SWAP_ROUTER and needs no vetting.
+        //
+        // NOTE: unlike RobotMoneyVault's delegatecall-free strategy adapters, the
+        // basket swap adapters (UniswapV4/Aerodrome) legitimately DELEGATECALL the
+        // shared, linked `TickMath` library on the TWAP path, so a blanket runtime
+        // DELEGATECALL scan is inapplicable here; codehash pinning subsumes the
+        // no-hot-swap-proxy guarantee. The no-proxy bytecode scan remains a
+        // deploy-time invariant (`AdapterBytecodeGuard` in `Deploy.s.sol`).
+        BasketAssetConfigGuard.requireAllowedAdapter(
+            adapter_, adapter_ == address(0) || adapterCodeHashAllowed[adapter_.codehash]
+        );
+        // ORA-3 / F-09: the pool the NAV TWAP is read from must be the SAME pool
+        // trades execute against. The guard asserts the execution pool resolved
+        // from `swapFee_` matches the registered TWAP `pool_` (fee tier for V3/V4,
+        // tickSpacing for Aerodrome). Without this a deep-honest TWAP pool can
+        // coexist with a thin execution pool (mint-cheap/redeem-dear).
+        BasketAssetConfigGuard.requireExecutionPoolMatchesTwap(
+            pool_, swapFee_, BasketAssetConfigGuard.Venue(uint8(venue_))
+        );
         // Verify pool actually pairs this token with USDC.
         // For Uniswap V3 pools and Aerodrome CL pools, token0/token1 are standard.
         address t0 = IUniswapV3Pool(pool_).token0();
@@ -1101,27 +1181,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         view
         returns (address[] memory activeAssets, uint256[] memory amountsOut)
     {
-        uint256 n = _activeAssetCount();
-        activeAssets = new address[](n);
-        amountsOut = new uint256[](n);
-        if (n == 0 || usdcAmount == 0) return (activeAssets, amountsOut);
-
-        uint256 perAsset = usdcAmount / n;
-        uint256 remainder = usdcAmount - perAsset * n;
-        uint256 len = assets.length;
-        uint256 idx = 0;
-        bool firstActive = true;
-
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            uint256 swapIn = firstActive ? perAsset + remainder : perAsset;
-            firstActive = false;
-            activeAssets[idx] = assets[i].token;
-            amountsOut[idx] = swapIn > 0
-                ? _twapTokenValue(assets[i].pool, assets[i].token, assets[i].adapter, swapIn)
-                : 0;
-            idx++;
-        }
+        // Array-building loop is delegated to the externally-linked `BasketViews`
+        // library (off-chain view; one deployed copy) to keep this EIP-170-tight
+        // vault family under the 24_576-byte limit.
+        return BasketViews.previewDepositWeights(IBasketVaultViews(address(this)), usdcAmount);
     }
 
     /// @notice Per-depositor realized weight vector.
@@ -1134,40 +1197,24 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         view
         returns (address[] memory activeAssets, uint256[] memory bpsWeights)
     {
-        uint256 n = _activeAssetCount();
-        activeAssets = new address[](n);
-        bpsWeights = new uint256[](n);
-        if (n == 0) return (activeAssets, bpsWeights);
+        return BasketViews.realizedWeights(IBasketVaultViews(address(this)), depositor);
+    }
 
-        uint256 depositorShares = balanceOf(depositor);
-        uint256 supply = totalSupply();
-        if (depositorShares == 0 || supply == 0) return (activeAssets, bpsWeights);
+    // ─── Public pricing accessors (consumed by BasketViews) ────────────
 
-        // Compute the depositor's pro-rata USDC value for each active asset.
-        uint256 len = assets.length;
-        uint256 idx = 0;
-        uint256 totalValue = 0;
-        uint256[] memory values = new uint256[](n);
+    /// @notice USDC value of `amount` of the active asset at registry `index`,
+    ///         priced via its TWAP adapter (or the built-in V3 path). Used by the
+    ///         externally-linked `BasketViews` weight-preview library.
+    function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256) {
+        AssetInfo memory a = assets[index];
+        return _twapUsdcValue(a.pool, a.token, a.adapter, amount);
+    }
 
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
-            uint256 depositorBal = bal.mulDiv(depositorShares, supply);
-            uint256 val = depositorBal > 0
-                ? _twapUsdcValue(assets[i].pool, assets[i].token, assets[i].adapter, depositorBal)
-                : 0;
-            activeAssets[idx] = assets[i].token;
-            values[idx] = val;
-            totalValue += val;
-            idx++;
-        }
-
-        // Convert to basis points.
-        if (totalValue > 0) {
-            for (uint256 j = 0; j < n; j++) {
-                bpsWeights[j] = values[j].mulDiv(MAX_BPS, totalValue);
-            }
-        }
+    /// @notice Estimated token amount for `usdcAmount` of the active asset at
+    ///         registry `index`. Used by the `BasketViews` weight-preview library.
+    function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256) {
+        AssetInfo memory a = assets[index];
+        return _twapTokenValue(a.pool, a.token, a.adapter, usdcAmount);
     }
 
     // ─── Views ────────────────────────────────────────────────────────
