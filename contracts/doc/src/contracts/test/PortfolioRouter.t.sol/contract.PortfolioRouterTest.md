@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -737,6 +737,17 @@ function _depositAndApproveForRedeem(uint256 amount)
     returns (uint256[] memory sharesToRedeem);
 ```
 
+### _redeemVaults
+
+The explicit redeem vault set [vaultA, vaultB], parallel to the
+equal-weight deposit legs. `redeemFor` now drives legs from this
+caller-supplied array, not the live weight vector (issue #967).
+
+
+```solidity
+function _redeemVaults() internal view returns (address[] memory vaults);
+```
+
 ### test_redeemFor_revertsWhenBelowMinAssetsFloor
 
 redeemFor reverts SlippageExceeded when realized per-leg proceeds
@@ -760,12 +771,63 @@ function test_redeemFor_revertsWhenDeadlineExpired_succeedsBeforeDeadline() publ
 
 ### test_redeemFor_revertsOnMinAssetsLengthMismatch
 
-redeemFor reverts MinAssetsLengthMismatch when the floor array
-length does not match the effective leg count.
+redeemFor reverts RedeemVaultsLengthMismatch when the floor array
+length does not match the explicit `vaults[]` leg count.
 
 
 ```solidity
 function test_redeemFor_revertsOnMinAssetsLengthMismatch() public;
+```
+
+### test_redeemFor_drivesLegsFromExplicitVaults_notWeightVector
+
+redeemFor drives legs from the explicit `vaults[]` argument, not
+the live weight vector (F-03). After a full reweight onto vaultC,
+the holder still exits vaultA/vaultB by naming them.
+
+
+```solidity
+function test_redeemFor_drivesLegsFromExplicitVaults_notWeightVector() public;
+```
+
+### test_redeemFor_redeemsFromRetiredVault
+
+redeemFor permits redeeming from a Retired vault (F-02): Retired
+is withdraw-only, so the exit path must still succeed.
+
+
+```solidity
+function test_redeemFor_redeemsFromRetiredVault() public;
+```
+
+### test_redeemFor_revertsWhenLegPaused
+
+redeemFor reverts VaultPausedForRedeem when a named leg is Paused
+(F-02): only Paused blocks the exit path.
+
+
+```solidity
+function test_redeemFor_revertsWhenLegPaused() public;
+```
+
+### test_redeemFor_revertsOnUnregisteredVault
+
+redeemFor reverts RedeemVaultNotRegistered when a named vault is
+not registered in the VaultRegistry.
+
+
+```solidity
+function test_redeemFor_revertsOnUnregisteredVault() public;
+```
+
+### test_redeemFor_revertsOnSharesLengthMismatch
+
+redeemFor reverts RedeemVaultsLengthMismatch when the shares array
+length does not match the explicit `vaults[]`.
+
+
+```solidity
+function test_redeemFor_revertsOnSharesLengthMismatch() public;
 ```
 
 ### test_lastAdminFloor_router_cannotDropSoleAdmin

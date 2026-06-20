@@ -280,14 +280,21 @@ interface IGateway {
     ///      the sum of `sharesPerLeg` and is checked against
     ///      `maxWithdrawPerPayment` and the rolling window cap.
     /// @param orderId          Caller-supplied order identifier (echoed in event).
-    /// @param sharesPerLeg     Vault shares to redeem per router leg (parallel to
-    ///                         the router's effective weight vector).
+    /// @param vaults           Explicit list of vault addresses to redeem from
+    ///                         (issue #967, F-03). Drives the redeem legs directly
+    ///                         instead of the router's live weight vector, so a
+    ///                         holder can exit a reweighted-out or Retired position.
+    ///                         `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the
+    ///                         array is committed to `paymentId`.
+    /// @param sharesPerLeg     Vault shares to redeem per leg (parallel to `vaults`).
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
-    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/key.
+    /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/
+    ///                         vaults/sharesPerLeg/key.
     /// @return assetsPerLeg    USDC received per leg.
     function withdrawFromRouter(
         bytes32 orderId,
+        address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
         uint64 deadline,
         bytes32 idempotencyKey

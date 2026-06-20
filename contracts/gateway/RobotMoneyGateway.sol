@@ -1046,6 +1046,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     ///      `nonReentrant` provides defense-in-depth.
     function withdrawFromRouter(
         bytes32 orderId,
+        address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
         uint64 deadline,
         bytes32 idempotencyKey
@@ -1063,6 +1064,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // Build args struct early to collapse locals onto the heap.
         RouterWithdrawArgs memory args;
         args.orderId = orderId;
+        // F-03/NC-5 (issue #967): redeem legs are driven by the caller-supplied
+        // explicit `vaults[]`, not the router's live weight vector, so a holder
+        // can exit a reweighted-out or retired position. The array is identity-
+        // bound to `sharesPerLeg` and committed to the intent hash (paymentId).
+        args.vaultList = vaults;
 
         {
             AgentPolicy memory p = agents[msg.sender];
@@ -1079,8 +1085,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             if (!p.active) revert AgentNotAuthorized();
             if (p.validUntil < block.timestamp) revert AgentPolicyExpired();
 
-            // 5. Validate leg array against router's effective weight vector.
-            (args.vaultList,) = routerContract.getEffectiveWeights();
+            // 5. Validate the leg arrays are parallel. The vault set is the
+            //    caller-supplied `vaults[]` (issue #967, F-03) — NOT the router's
+            //    live weight vector — so a holder can redeem a position the router
+            //    has reweighted away from. The router re-validates each named vault
+            //    against the registry (registered + not Paused) in `redeemFor`.
+            if (args.vaultList.length == 0) revert RouterLegLengthMismatch();
             if (sharesPerLeg.length != args.vaultList.length) revert RouterLegLengthMismatch();
 
             // 5a. allowedSourceVaults check: every vault with non-zero shares
@@ -1122,6 +1132,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
         //    OP_WITHDRAW_ROUTER prefix namespaces router-withdrawal ids away
         //    from the three sibling op kinds (audit 2026-06-09, L-12).
+        //    The explicit `vaults[]` and `sharesPerLeg` are committed to the
+        //    intent hash (issue #967, NC-5): the redeemed leg set is part of the
+        //    signed intent, so two withdrawals that name different vaults or
+        //    per-leg shares can never collide on the same paymentId.
         args.paymentId = keccak256(
             abi.encode(
                 OP_WITHDRAW_ROUTER,
@@ -1130,6 +1144,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
                 msg.sender,
                 orderId,
                 args.totalShares,
+                vaults,
+                sharesPerLeg,
                 idempotencyKey
             )
         );
@@ -1195,6 +1211,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         assetsPerLeg = routerContract.redeemFor(
             address(this),
             args.assetRecipient,
+            args.vaultList,
             sharesPerLeg,
             new uint256[](sharesPerLeg.length),
             type(uint256).max

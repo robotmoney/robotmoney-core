@@ -946,6 +946,11 @@
         "internalType": "bytes32"
       },
       {
+        "name": "vaults",
+        "type": "address[]",
+        "internalType": "address[]"
+      },
+      {
         "name": "sharesPerLeg",
         "type": "uint256[]",
         "internalType": "uint256[]"

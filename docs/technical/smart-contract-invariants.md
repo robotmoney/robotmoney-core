@@ -153,7 +153,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ HOLDS (fixed #966, F-06 + NC-3) · withdrawals are never paused (LIFE-3) and the last-admin floor (ACL-3) guarantees a still-available `ADMIN_ROLE` authority, so no reachable state freezes withdrawals forever · symbolic. *(`restoreVault`/F-07 is a separate `shutdownVault` reversibility concern, out of this issue's scope.)*
 
 > **`LIFE-5` — A reweight/removal of a vault never makes an existing holder's position unredeemable through the protocol.**
-> 🔴 VIOLATED (router path) · `redeemFor` iterates the live weight vector, not balances — see **F-03** (mitigated by direct `vault.redeem`, but the router-mediated path breaks) · stateful-invariant.
+> ✅ HOLDS (fixed #967, F-03) · `redeemFor` (and `gateway.withdrawFromRouter`) drive redeem legs from an explicit caller-supplied `vaults[]`, not the live weight vector, and `_redeemLeg` permits Active OR Retired (only Paused blocks) — a reweighted-out or Retired position stays redeemable through the router · stateful-invariant — `FvInvariants.t.sol::test_LIFE5_expectedFail_reweightKeepsPositionRedeemable`.
 
 > **`LIFE-6` — `reabsorbRemovedAsset` never reverts-and-strands a reappeared balance (INV-2 must survive a degraded pool).**
 > 🔴 VIOLATED (risk) · reuses `assetInfo.pool` TWAP with no staleness/liquidity recheck; `observe()` can revert and brick reabsorption — see **F-17 / NC-8** · fuzz (degraded-pool handler).
@@ -166,10 +166,10 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `PortfolioRouter.t.sol` (INV-2) · stateful-invariant.
 
 > **`RTR-2` — A multi-leg redemption always targets the holder's actual positions, not merely the current weight vector.**
-> 🔴 VIOLATED · see **F-03** (`LIFE-5`) · stateful-invariant.
+> ✅ HOLDS (fixed #967, F-03) · `redeemFor` takes an explicit `vaults[]` argument and redeems each leg from the named vault, so the redemption targets the caller's actual positions regardless of the current weight vector · stateful-invariant — `FvInvariants.t.sol::test_RTR2_expectedFail_redeemTargetsActualPositions`.
 
 > **`RTR-3` — Each `sharesPerLeg[i]` is always applied to the vault the caller intended (identity-bound), never to whichever vault occupies index `i` after a reweight.**
-> 🔴 VIOLATED · `redeemFor` binds legs positionally to `_effectiveWeightsMemory()`; a between-sign reweight redeems the wrong receipt token — see **NC-5** · symbolic (reorder weights between sign and execute).
+> ✅ HOLDS (fixed #967, NC-5) · `sharesPerLeg[i]` binds to `vaults[i]` (the caller-named address, committed to the gateway intent hash), never to `_effectiveWeightsMemory()` — a between-sign reweight can never redirect a leg to an unnamed vault · symbolic (reorder weights between sign and execute) — `FvInvariants.t.sol::test_RTR3_expectedFail_legsAreIdentityBound`.
 
 > **`RTR-4` — A weight vector is never executable unless every weighted vault is simultaneously router-eligible AND `Active` (deposit-able) and the bps sum equals `MAX_BPS`.**
 > ✅ HOLDS · `setWeights`/`setDefaultWeights`/`propose` now require `VaultStatus==Active` per weighted vault — a non-depositable vector can never be written (F-05 fixed, #968) · symbolic — `FvInvariants.t.sol::test_RTR4_weightsRequireActiveStatus`.

@@ -90,13 +90,13 @@ library InvariantRegistry {
         e[i++] = Entry("LIFE-2", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("LIFE-3", Status.HOLDS, "stateful-invariant", 0); // F-06/NC-3 fixed (#966)
         e[i++] = Entry("LIFE-4", Status.HOLDS, "symbolic", 0); // F-06 + NC-3 fixed (#966)
-        e[i++] = Entry("LIFE-5", Status.RED, "stateful-invariant", 967); // F-03
+        e[i++] = Entry("LIFE-5", Status.HOLDS, "stateful-invariant", 0); // F-03 fixed (#967)
         e[i++] = Entry("LIFE-6", Status.RED, "fuzz", 970); // NC-8
 
         // ── 6. Router / portfolio (RTR) ──────────────────────────────────────
         e[i++] = Entry("RTR-1", Status.HOLDS, "stateful-invariant", 0);
-        e[i++] = Entry("RTR-2", Status.RED, "stateful-invariant", 967); // F-03
-        e[i++] = Entry("RTR-3", Status.RED, "symbolic", 967); // NC-5
+        e[i++] = Entry("RTR-2", Status.HOLDS, "stateful-invariant", 0); // F-03 fixed (#967)
+        e[i++] = Entry("RTR-3", Status.HOLDS, "symbolic", 0); // NC-5 fixed (#967)
         e[i++] = Entry("RTR-4", Status.HOLDS, "symbolic", 0); // F-05 fixed (#968)
         e[i++] = Entry("RTR-5", Status.HOLDS, "fuzz", 0); // F-13 / NC-4 fixed (#968)
         e[i++] = Entry("RTR-6", Status.RED, "fuzz", 971); // F-12
