@@ -77,7 +77,7 @@ library InvariantRegistry {
         e[i++] = Entry("ORA-7", Status.RED, "fuzz", 966); // F-09/F-11/F-16 cluster
 
         // ── 4. Access control & roles (ACL) ──────────────────────────────────
-        e[i++] = Entry("ACL-1", Status.RED, "deploy-assertion", 965); // F-01
+        e[i++] = Entry("ACL-1", Status.HOLDS, "deploy-assertion", 0); // F-01 remediated (#965)
         e[i++] = Entry("ACL-2", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("ACL-3", Status.RED, "symbolic", 966); // F-06
         e[i++] = Entry("ACL-4", Status.HOLDS, "symbolic", 0);

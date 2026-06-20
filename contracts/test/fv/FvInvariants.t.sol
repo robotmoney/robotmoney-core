@@ -72,12 +72,16 @@ contract FvInvariantsTest is Test {
     // ── #965 (F-01): complete the Timelock role handover ──────────────────────
 
     /// @notice ACL-1 — no EOA holds any privileged role after handover.
-    ///         Deep harness: DeployAssertions.t.sol::test_ACL1_*.
-    function test_ACL1_expectedFail_eoaHoldsNoRoleAfterHandover() public {
-        _skipRed(
-            "ACL-1", "deployer EOA retains Gateway DEFAULT_ADMIN_ROLE + vault EMERGENCY_ROLE (F-01)"
-        );
-        fail();
+    ///         REMEDIATED by #965 (F-01): the DeployTimelock handover now also
+    ///         hands the Gateway DEFAULT_ADMIN_ROLE to the Timelock and moves
+    ///         every vault EMERGENCY_ROLE to an independent hot key, so the
+    ///         deployer EOA retains nothing. Registry flipped RED→HOLDS; the deep
+    ///         proofs live in DeployAssertions.t.sol::test_ACL1_* and
+    ///         DeployTimelock.t.sol::test_ACL1_*.
+    function test_ACL1_eoaHoldsNoRoleAfterHandover() public pure {
+        InvariantRegistry.Entry memory e = InvariantRegistry.get("ACL-1");
+        require(e.status == InvariantRegistry.Status.HOLDS, "ACL-1 must be remediated (HOLDS)");
+        require(e.remediationIssue == 0, "ACL-1 HOLDS must carry no remediation issue");
     }
 
     // ── #966 (NC-1, NC-2, F-06, F-08, F-09): high-sev vault & oracle hardening ─

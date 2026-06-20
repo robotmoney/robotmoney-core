@@ -318,7 +318,9 @@ interface IGateway {
     function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p) external;
 
     /// @notice First-time authorization for `agent`. Admin-only — only callable
-    ///         by `DEFAULT_ADMIN_ROLE`. Regular users must use
+    ///         by `ADMIN_ROLE` (so the TimelockController retains agent-onboarding
+    ///         authority after the deploy handover revokes the deployer's
+    ///         `DEFAULT_ADMIN_ROLE`; see F-01 / ACL-1). Regular users must use
     ///         `commitAuthorization` + `revealAuthorization` instead.
     ///         `msg.sender` is recorded as the agent's owner. Reverts if
     ///         `agent` already has a recorded owner; that owner must call
