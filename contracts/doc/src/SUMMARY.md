@@ -95,6 +95,8 @@
     - [❱ helpers](contracts/test/helpers/README.md)
       - [NoYieldTestAdapter](contracts/test/helpers/NoYieldTestAdapter.sol/contract.NoYieldTestAdapter.md)
       - [TestERC20](contracts/test/helpers/TestERC20.sol/contract.TestERC20.md)
+    - [MockAavePool](contracts/test/AaveV3Adapter.t.sol/contract.MockAavePool.md)
+    - [AaveV3AdapterTest](contracts/test/AaveV3Adapter.t.sol/contract.AaveV3AdapterTest.md)
     - [AccessRolesHarness](contracts/test/AccessRoles.t.sol/contract.AccessRolesHarness.md)
     - [AccessRolesTest](contracts/test/AccessRoles.t.sol/contract.AccessRolesTest.md)
     - [ActivateBasketVaultEligibilityTest](contracts/test/ActivateBasketVaultEligibility.t.sol/contract.ActivateBasketVaultEligibilityTest.md)

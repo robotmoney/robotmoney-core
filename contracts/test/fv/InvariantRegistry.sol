@@ -99,7 +99,7 @@ library InvariantRegistry {
         e[i++] = Entry("RTR-3", Status.HOLDS, "symbolic", 0); // NC-5 fixed (#967)
         e[i++] = Entry("RTR-4", Status.HOLDS, "symbolic", 0); // F-05 fixed (#968)
         e[i++] = Entry("RTR-5", Status.HOLDS, "fuzz", 0); // F-13 / NC-4 fixed (#968)
-        e[i++] = Entry("RTR-6", Status.RED, "fuzz", 971); // F-12
+        e[i++] = Entry("RTR-6", Status.HOLDS, "fuzz", 0); // F-12: caps documented as per-tx sanity bounds (#971)
 
         // ── 7. Gateway / agent / idempotency (GW) ────────────────────────────
         e[i++] = Entry("GW-1", Status.HOLDS, "stateful-invariant", 0);
@@ -118,14 +118,14 @@ library InvariantRegistry {
 
         // ── 9. Adapters (ADP) ────────────────────────────────────────────────
         e[i++] = Entry("ADP-1", Status.HOLDS, "static-guard", 0);
-        e[i++] = Entry("ADP-2", Status.HOLDS, "static-guard", 0); // NC-2 fixed (#966); F-14 residual
+        e[i++] = Entry("ADP-2", Status.HOLDS, "static-guard", 0); // NC-2 fixed (#966); F-14 NAV side fixed (#971)
         e[i++] = Entry("ADP-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ADP-4", Status.HOLDS, "static-guard", 0);
-        e[i++] = Entry("ADP-5", Status.HOLDS, "static-guard", 0); // 🟡 partial
+        e[i++] = Entry("ADP-5", Status.HOLDS, "static-guard", 0); // NC-12 fixed (#971): Aave/Morpho forceApprove(_,0)
 
         // ── 10. Fees (FEE) ───────────────────────────────────────────────────
         e[i++] = Entry("FEE-1", Status.HOLDS, "fuzz", 0);
-        e[i++] = Entry("FEE-2", Status.RED, "fuzz", 971); // NC-11
+        e[i++] = Entry("FEE-2", Status.HOLDS, "fuzz", 0); // NC-11 fixed (#971): fee on realised proceeds
         e[i++] = Entry("FEE-3", Status.HOLDS, "static-guard", 0);
 
         require(i == e.length, "InvariantRegistry: length mismatch");

@@ -129,6 +129,25 @@ contract MorphoAdapterTest is Test {
         assertEq(usdc.balanceOf(address(adapter)), 0);
     }
 
+    /// @notice ADP-5 / NC-12: `deploy` uses `forceApprove(_, amount)` then
+    ///         `forceApprove(_, 0)`, so the adapter's USDC allowance to the Morpho
+    ///         vault is exactly zero after the call — no residual approval lingers.
+    function test_ADP5_deployZeroesAllowance() public {
+        uint256 amount = 100 * ONE_USDC;
+        usdc.mint(vault, amount);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), amount);
+
+        vm.prank(vault);
+        adapter.deploy(amount);
+
+        assertEq(
+            usdc.allowance(address(adapter), address(morphoVault)),
+            0,
+            "ADP-5: residual allowance must be zero after deploy"
+        );
+    }
+
     function test_deploy_revertsForNonVault() public {
         vm.prank(stranger);
         vm.expectRevert(MorphoAdapter.OnlyVault.selector);

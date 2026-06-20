@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -343,6 +343,39 @@ function test_maxDeposit_zeroWhenPaused() public;
 
 ```solidity
 function test_maxDeposit_zeroWhenShutdown() public;
+```
+
+### test_F07_restoreVaultReopensDeposits
+
+LIFE-4 / F-07: an EMERGENCY-triggered `shutdownVault` permanently
+blocks deposits with no reverse path UNLESS the higher-trust
+ADMIN_ROLE can `restoreVault`. Proof: shutdown blocks deposits;
+ADMIN restore with a fresh cap re-opens them; a redeem in between
+confirms withdrawals were never frozen (LIFE-3).
+
+
+```solidity
+function test_F07_restoreVaultReopensDeposits() public;
+```
+
+### test_F07_restoreVault_emergencyCannotRestore
+
+F-07: only ADMIN_ROLE may restore; the EMERGENCY hot key that can
+shut the vault down cannot reverse it (trust asymmetry, like unpause).
+
+
+```solidity
+function test_F07_restoreVault_emergencyCannotRestore() public;
+```
+
+### test_F07_restoreVault_revertsOnInvalidInputs
+
+F-07: `restoreVault` rejects incoherent inputs — not-shut-down,
+zero cap, or a cap below `perDepositCap`.
+
+
+```solidity
+function test_F07_restoreVault_revertsOnInvalidInputs() public;
 ```
 
 ### test_maxDeposit_zeroWhenNoActiveAssets
