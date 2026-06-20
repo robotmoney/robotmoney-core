@@ -269,6 +269,31 @@ Sub-invariants that decompose the above and are individually worth proving:
 5. **Promote the 🔴 invariants into failing tests first** (red), then fix the code,
    so each remediation is pinned by the invariant it restores.
 
+### Symbolic-tool recommendation (issue #964)
+
+Many entries above carry a `symbolic` strategy (ACL-2/3/4, SUP-2/4, ORA-1/7,
+RTR-3/4, GW-2/6, GOV-2/4, CUST-5). Those are exhaustive-over-inputs properties
+that Foundry fuzzing only samples. The scout pass (issue #964) lands the
+executable spec + 1:1 coverage gate + handler/static scaffolding entirely in
+**Foundry** (no new toolchain), so the gate works in CI today.
+
+**Recommendation: adopt [Halmos](https://github.com/a16z/halmos) for the
+`symbolic` invariants, deferred to the remediation that first needs an exhaustive
+proof (the ORA-7 floor decoupling in #966 is the natural first target).**
+Rationale:
+- Halmos reuses Foundry test syntax (`check_*` / `test_*` functions, same
+  `forge-std` cheatcodes), so a symbolic property sits next to its fuzz sibling in
+  `contracts/test/fv/**` with no rewrite — lowest adoption cost of the three.
+- Kontrol (KEVM) and Certora are heavier (separate spec language / proof harness,
+  longer run times) and are better reserved for a dedicated audit engagement than
+  a per-PR CI gate.
+- CI placement: run Halmos in the **nightly** sweep (suite-21), not on every PR —
+  symbolic runs are minutes-to-hours and would blow the LIGHT-tier budget of
+  suite-22. Per-PR keeps the fast fuzz/invariant/coverage gate; nightly adds the
+  exhaustive pass.
+
+This is a recommendation only; no symbolic tool is wired in the scout PR.
+
 ## Maintenance
 
 - IDs are append-only and stable; never renumber. To retire one, leave a tombstone
