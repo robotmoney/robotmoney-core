@@ -1,8 +1,87 @@
 # DeployAssertionsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9912e66cc064941cf391031069c85d740fd52944/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/fv/DeployAssertions.t.sol)
 
 **Inherits:**
 Test
+
+
+## Constants
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
+```
+
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE")
+```
+
+
+### PAUSER_ROLE
+
+```solidity
+bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
+```
+
+
+### DEFAULT_ADMIN_ROLE
+
+```solidity
+bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00
+```
+
+
+## State Variables
+### _aclVault
+
+```solidity
+RobotMoneyVault internal _aclVault
+```
+
+
+### _aclGateway
+
+```solidity
+RobotMoneyGateway internal _aclGateway
+```
+
+
+### _aclRegistry
+
+```solidity
+VaultRegistry internal _aclRegistry
+```
+
+
+### _aclRouter
+
+```solidity
+PortfolioRouter internal _aclRouter
+```
+
+
+### _aclGovernance
+
+```solidity
+RouterGovernance internal _aclGovernance
+```
+
+
+### _aclDeployer
+
+```solidity
+address internal _aclDeployer
+```
+
+
+### _aclEmergency
+
+```solidity
+address internal _aclEmergency
+```
 
 
 ## Functions
@@ -17,17 +96,29 @@ function _contains(string memory haystack, string memory needle) internal pure r
 
 ### test_ACL1_eoaHoldsNoPrivilegedRoleAfterHandover
 
-ACL-1 (RED, F-01): after deployment handover, no EOA holds any
-privileged role. On current HEAD the deployer EOA keeps Gateway
-DEFAULT_ADMIN_ROLE + every vault EMERGENCY_ROLE, and the deploy
-script only revokes ADMIN_ROLE. When #965 completes the handover,
-remove the skip and assert the EOA holds none of
-{DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on
-the gateway and every vault.
+ACL-1 (REMEDIATED by #965, F-01): after the DeployTimelock
+handover the deployer EOA holds NONE of {DEFAULT_ADMIN_ROLE,
+ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the Gateway or the
+vault. The Timelock receives the Gateway root (ADMIN + DEFAULT),
+and an independent hot key receives the vault EMERGENCY_ROLE. This
+is the deep deploy-assertion: it actually runs the handover and
+enumerates every privileged role against the deployer EOA.
 
 
 ```solidity
 function test_ACL1_eoaHoldsNoPrivilegedRoleAfterHandover() public;
+```
+
+### _deployAclFixtureAndHandover
+
+Build the five-contract fixture (deployer = harness), delegate the
+role-granting authority to the script, run the handover, and store the
+handles in storage. Split out of the test body to stay under the EVM
+stack-depth limit. Returns the deployed TimelockController address.
+
+
+```solidity
+function _deployAclFixtureAndHandover() internal returns (address timelock);
 ```
 
 ### test_ORA3_addAssetRevertsOnPoolMismatch

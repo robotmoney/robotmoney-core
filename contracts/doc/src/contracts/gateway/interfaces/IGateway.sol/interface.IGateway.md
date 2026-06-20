@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -231,7 +231,9 @@ function revealAuthorization(address agent, bytes32 salt, AgentPolicy calldata p
 ### authorizeAgent
 
 First-time authorization for `agent`. Admin-only — only callable
-by `DEFAULT_ADMIN_ROLE`. Regular users must use
+by `ADMIN_ROLE` (so the TimelockController retains agent-onboarding
+authority after the deploy handover revokes the deployer's
+`DEFAULT_ADMIN_ROLE`; see F-01 / ACL-1). Regular users must use
 `commitAuthorization` + `revealAuthorization` instead.
 `msg.sender` is recorded as the agent's owner. Reverts if
 `agent` already has a recorded owner; that owner must call

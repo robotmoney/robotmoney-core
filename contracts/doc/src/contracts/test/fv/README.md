@@ -3,6 +3,8 @@
 # Contents
 - [CoverageMapTest](CoverageMap.t.sol/contract.CoverageMapTest.md)
 - [CustodyMultiVaultTest](CustodyMultiVault.t.sol/contract.CustodyMultiVaultTest.md)
+- [_FvSafeStub](DeployAssertions.t.sol/contract._FvSafeStub.md)
+- [_FvDeployerHarness](DeployAssertions.t.sol/contract._FvDeployerHarness.md)
 - [DeployAssertionsTest](DeployAssertions.t.sol/contract.DeployAssertionsTest.md)
 - [FvInvariantsTest](FvInvariants.t.sol/contract.FvInvariantsTest.md)
 - [InvariantRegistry](InvariantRegistry.sol/library.InvariantRegistry.md)

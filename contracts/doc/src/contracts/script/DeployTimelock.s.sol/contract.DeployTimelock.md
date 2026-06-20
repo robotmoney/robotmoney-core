@@ -1,5 +1,5 @@
 # DeployTimelock
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:**
 Script
@@ -7,12 +7,19 @@ Script
 **Title:**
 DeployTimelock
 
-Deploy an OZ TimelockController and transfer ADMIN_ROLE on all five
-Robot Money contracts (RobotMoneyVault, RobotMoneyGateway,
-VaultRegistry, PortfolioRouter, RouterGovernance) from the current
-admin EOA to the TimelockController.
-After this script runs:
-- TimelockController holds ADMIN_ROLE on all five contracts.
+Deploy an OZ TimelockController and complete the privileged-role
+handover on all five Robot Money contracts (RobotMoneyVault,
+RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
+from the deployer EOA to the TimelockController + an independent
+emergency hot key.
+After this script runs (ACL-1 / F-01):
+- TimelockController holds ADMIN_ROLE on all five contracts AND the
+Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
+- The deployer EOA holds NO privileged role of any kind:
+no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
+no vault EMERGENCY_ROLE.
+- The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
+hot key, not the deployer.
 - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
 EXECUTOR_ROLE on the TimelockController.
 - Direct ADMIN_ROLE calls from any EOA revert with
@@ -26,6 +33,9 @@ REGISTRY_ADDRESS       — VaultRegistry
 ROUTER_ADDRESS         — PortfolioRouter
 GOVERNANCE_ADDRESS     — RouterGovernance
 SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
+EMERGENCY_ADDRESS      — independent hot key that receives the vault
+EMERGENCY_ROLE (must differ from the deployer
+EOA; ACL-1 / F-01)
 TIMELOCK_MIN_DELAY     — minimum delay in seconds (e.g. 172800 = 2 days)
 Optional env vars:
 DEPLOYMENT_OUT         — output JSON path; default artifacts/timelock.json
@@ -40,6 +50,22 @@ cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelo
 
 ```solidity
 bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
+```
+
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE")
+```
+
+
+### DEFAULT_ADMIN_ROLE
+OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
+
+
+```solidity
+bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00
 ```
 
 
@@ -68,6 +94,7 @@ function runInProcess(
     address router_,
     address governance_,
     address safe_,
+    address emergency_,
     uint256 minDelay_
 ) external returns (Deployed memory d);
 ```
@@ -112,6 +139,7 @@ struct Deployed {
     address router;
     address governance;
     address safe;
+    address emergency;
     uint256 minDelay;
 }
 ```
