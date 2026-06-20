@@ -1492,7 +1492,9 @@ contract GatewayRollingDepositWindowTest is Test {
         uint256 n = 32;
         for (uint256 i = 0; i < n; i++) {
             _fundAndApprove(ONE_USDC);
-            _deposit(keccak256(abi.encode("bound", i)), ONE_USDC, keccak256(abi.encode("bound-i", i)));
+            _deposit(
+                keccak256(abi.encode("bound", i)), ONE_USDC, keccak256(abi.encode("bound-i", i))
+            );
             assertEq(
                 gateway.effectiveDepositWindowGross(agent),
                 (i + 1) * ONE_USDC,

@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/341bacb97baf93981a3ae7d301f2467ef5f2ae47/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -685,6 +685,18 @@ router: reverts when sharesPerLeg length mismatches router leg count.
 
 ```solidity
 function test_withdrawFromRouter_revertsOnLegLengthMismatch() public;
+```
+
+### test_withdrawFromRouter_revertsOnEmptyVaults
+
+router: reverts when the explicit `vaults[]` array is empty. A
+router withdrawal must name at least one source vault (issue #967,
+F-03). Empty `vaults[]`/`sharesPerLeg`/`minAssetsPerLeg` clears the
+parallel-length guard (0 == 0) and trips the empty-vault-set check.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnEmptyVaults() public;
 ```
 
 ### test_withdrawFromRouter_revertsWhenPaused

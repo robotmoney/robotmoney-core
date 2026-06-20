@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/341bacb97baf93981a3ae7d301f2467ef5f2ae47/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -459,7 +459,7 @@ entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
 
 
 ```solidity
-function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256);
+function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256 total);
 ```
 
 ### _commitmentKey
