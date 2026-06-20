@@ -16,6 +16,19 @@ interface IRouterDefaultWeights {
     function defaultWeightsLength() external view returns (uint256);
 }
 
+/// @dev Minimal view the registry needs to drive the vault deposit-halt leg of
+///      the unified governance `retire()` action (DI-2). Declared as an
+///      interface (not an import) to avoid a circular compile-time dependency
+///      between the registry and the vault. The vault gates both calls to its
+///      linked registry, so the registry's authority over the vault is narrow
+///      (deposit-halt only, not full `ADMIN_ROLE`).
+interface IRetirableVault {
+    /// @notice Hard-stop direct deposits on the vault.
+    function retire() external;
+    /// @notice Re-open direct deposits on the vault (governance abort).
+    function unretire() external;
+}
+
 /// @title VaultRegistry
 /// @notice On-chain registry of authorised Robot Money vaults.
 ///
@@ -192,6 +205,50 @@ contract VaultRegistry is AdminFloorAccessControl {
         _status[vault] = VaultStatus.Active;
 
         emit VaultRegistered(vault, metadata.name, metadata.asset);
+    }
+
+    // ─── Unified governance retire (DI-2) ─────────────────────────────────────
+    //
+    // Canonical design: docs/architecture.md §4.7 "Decided target (per decision
+    // #925, graduated-authority model)" and docs/prd.md §6 Vault lifecycle +
+    // §12 INV-3.
+    //
+    // `setVaultStatus(vault, Retired)` alone stops only the *router* from sending
+    // new deposits; the vault still accepts *direct* deposits until its own
+    // deposit-halt is flipped. `retire(vault)` closes that drift by doing both in
+    // one timelock-gated call: it sets registry status to `Retired` AND calls the
+    // vault deposit-halt leg (`IRetirableVault.retire()`). Emergency
+    // `RobotMoneyVault.shutdownVault` stays `EMERGENCY_ROLE`, vault-only, with no
+    // registry/lifecycle change — the hot key never makes a lifecycle decision.
+
+    /// @notice Unified governance retire: atomically set the vault's registry
+    ///         status to `Retired` AND halt the vault's direct deposits in a
+    ///         single call. Restricted to `ADMIN_ROLE` (held by the
+    ///         TimelockController in production — DeployTimelock, INV-3), so a
+    ///         direct hot-key call reverts. This is the deliberate, governance
+    ///         lifecycle decision (decision #925); the emergency
+    ///         `RobotMoneyVault.shutdownVault` overlay is unaffected.
+    ///         Withdrawals/redemptions stay open at the vault throughout
+    ///         (ERC-4626 `redeem` is never revoked; ADR-0009).
+    /// @param vault Address of an already-registered vault.
+    function retire(address vault) external onlyRole(ADMIN_ROLE) {
+        if (!_registered[vault]) revert NotRegistered();
+        _status[vault] = VaultStatus.Retired;
+        IRetirableVault(vault).retire();
+        emit VaultStatusChanged(vault, VaultStatus.Retired, block.timestamp);
+    }
+
+    /// @notice Abort a deprecation: atomically set the vault's registry status
+    ///         back to `Active` AND re-open the vault's direct deposits. The
+    ///         governance counterpart to `retire`, mirroring the
+    ///         `Retired → Active` abort in docs/architecture.md §4.7. Restricted
+    ///         to `ADMIN_ROLE` (TimelockController in production).
+    /// @param vault Address of an already-registered vault.
+    function reactivate(address vault) external onlyRole(ADMIN_ROLE) {
+        if (!_registered[vault]) revert NotRegistered();
+        _status[vault] = VaultStatus.Active;
+        IRetirableVault(vault).unretire();
+        emit VaultStatusChanged(vault, VaultStatus.Active, block.timestamp);
     }
 
     /// @notice Update a vault's lifecycle status. Restricted to `ADMIN_ROLE`.
