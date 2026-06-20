@@ -86,7 +86,7 @@ library InvariantRegistry {
         e[i++] = Entry("ACL-7", Status.RED, "deploy-assertion", 970); // NC-10
 
         // ── 5. Lifecycle & state machine (LIFE) ──────────────────────────────
-        e[i++] = Entry("LIFE-1", Status.RED, "stateful-invariant", 968); // F-04 residual
+        e[i++] = Entry("LIFE-1", Status.HOLDS, "stateful-invariant", 0); // F-04 fixed (#968)
         e[i++] = Entry("LIFE-2", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("LIFE-3", Status.HOLDS, "stateful-invariant", 0); // F-06/NC-3 fixed (#966)
         e[i++] = Entry("LIFE-4", Status.HOLDS, "symbolic", 0); // F-06 + NC-3 fixed (#966)
@@ -97,8 +97,8 @@ library InvariantRegistry {
         e[i++] = Entry("RTR-1", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("RTR-2", Status.RED, "stateful-invariant", 967); // F-03
         e[i++] = Entry("RTR-3", Status.RED, "symbolic", 967); // NC-5
-        e[i++] = Entry("RTR-4", Status.RED, "symbolic", 968); // F-05
-        e[i++] = Entry("RTR-5", Status.RED, "fuzz", 968); // F-13 / NC-4
+        e[i++] = Entry("RTR-4", Status.HOLDS, "symbolic", 0); // F-05 fixed (#968)
+        e[i++] = Entry("RTR-5", Status.HOLDS, "fuzz", 0); // F-13 / NC-4 fixed (#968)
         e[i++] = Entry("RTR-6", Status.RED, "fuzz", 971); // F-12
 
         // ── 7. Gateway / agent / idempotency (GW) ────────────────────────────
@@ -113,7 +113,7 @@ library InvariantRegistry {
         e[i++] = Entry("GOV-1", Status.HOLDS, "deploy-assertion", 0);
         e[i++] = Entry("GOV-2", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("GOV-3", Status.HOLDS, "stateful-invariant", 0);
-        e[i++] = Entry("GOV-4", Status.RED, "symbolic", 968); // F-05 / RTR-4
+        e[i++] = Entry("GOV-4", Status.HOLDS, "symbolic", 0); // F-05 / RTR-4 fixed (#968)
         e[i++] = Entry("GOV-5", Status.HOLDS, "static-guard", 0); // 🟡 trusted / operational
 
         // ── 9. Adapters (ADP) ────────────────────────────────────────────────

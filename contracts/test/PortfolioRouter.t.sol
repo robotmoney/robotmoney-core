@@ -558,10 +558,12 @@ contract PortfolioRouterTest is Test {
 
     // ─── deposit: registry status enforcement ────────────────────────────────
 
-    /// @notice Deposit reverts when a vault in the weight list is Paused in the
-    ///         registry, even if the vault contract itself would still accept
-    ///         deposits.
-    function test_deposit_revertsIfRegistryVaultIsPaused() public {
+    /// @notice Skip-and-renormalise (RTR-5 / F-13): a vault Paused in the registry
+    ///         after weighting is skipped, NOT reverted; the deposit routes the
+    ///         full amount to the surviving Active leg. Preview reports the Paused
+    ///         leg unavailable, and execute deposits exactly the available legs —
+    ///         a single Paused vault never bricks the whole router deposit (NC-4).
+    function test_deposit_skipsRegistryPausedVault() public {
         _setEqualWeights();
 
         // Pause vaultA in the registry; the vault contract still accepts deposits.
@@ -569,23 +571,27 @@ contract PortfolioRouterTest is Test {
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
 
         uint256 amount = 1000 * ONE_USDC;
-        _fundAndApprove(depositor, amount);
 
+        // Preview must agree with execute on availability.
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "paused leg must preview unavailable");
+        assertFalse(legs[1].unavailable, "active leg must preview available");
+        assertEq(legs[0].legAmount, 0, "skipped leg gets no amount");
+        assertEq(legs[1].legAmount, amount, "active leg absorbs renormalised amount");
+
+        _fundAndApprove(depositor, amount);
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultNotActive.selector,
-                address(vaultA),
-                VaultRegistry.VaultStatus.Paused
-            )
-        );
-        router.deposit(amount, new uint256[](0));
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        assertEq(shares[0], 0, "skipped paused leg mints nothing");
+        assertEq(shares[1], amount, "surviving leg receives full renormalised amount");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
     }
 
-    /// @notice Deposit reverts when a vault in the weight list is Retired in the
-    ///         registry, even if the vault contract itself would still accept
-    ///         deposits.
-    function test_deposit_revertsIfRegistryVaultIsRetired() public {
+    /// @notice Skip-and-renormalise (RTR-5 / F-13): a vault Retired in the
+    ///         registry after weighting is skipped, NOT reverted; the deposit
+    ///         routes the full amount to the surviving Active leg, matching preview.
+    function test_deposit_skipsRegistryRetiredVault() public {
         _setEqualWeights();
 
         // Retire vaultB in the registry; the vault contract still accepts deposits.
@@ -593,16 +599,41 @@ contract PortfolioRouterTest is Test {
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
 
         uint256 amount = 1000 * ONE_USDC;
-        _fundAndApprove(depositor, amount);
 
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertFalse(legs[0].unavailable, "active leg must preview available");
+        assertTrue(legs[1].unavailable, "retired leg must preview unavailable");
+        assertEq(legs[0].legAmount, amount, "active leg absorbs renormalised amount");
+        assertEq(legs[1].legAmount, 0, "skipped leg gets no amount");
+
+        _fundAndApprove(depositor, amount);
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultNotActive.selector,
-                address(vaultB),
-                VaultRegistry.VaultStatus.Retired
-            )
-        );
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        assertEq(shares[0], amount, "surviving leg receives full renormalised amount");
+        assertEq(shares[1], 0, "skipped retired leg mints nothing");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
+    }
+
+    /// @notice When EVERY weighted vault is non-Active the basket is consistently
+    ///         unavailable: preview reports all legs unavailable and the deposit
+    ///         reverts (NoWeightsSet) rather than stranding the caller's USDC.
+    ///         Preview and execute never disagree (RTR-5).
+    function test_deposit_revertsWhenAllLegsUnavailable() public {
+        _setEqualWeights();
+
+        vm.startPrank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
+
+        uint256 amount = 1000 * ONE_USDC;
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable && legs[1].unavailable, "all legs unavailable in preview");
+
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.NoWeightsSet.selector);
         router.deposit(amount, new uint256[](0));
     }
 
@@ -665,11 +696,13 @@ contract PortfolioRouterTest is Test {
     ///         bad vault via direct storage manipulation (foundry `store`) on
     ///         a fresh router so we can prove the deposit-time check rejects
     ///         it as defence in depth.
-    function test_deposit_revertsIfVaultAssetMismatchAtRuntime() public {
+    function test_deposit_skipsRuntimeAssetMismatchVault() public {
         // Construct an eligible-at-config-time vault, then swap it for an
         // ineligible one between setWeights and deposit by replacing its
         // bytecode. We use `vm.etch` to overwrite the eligible vault's code
-        // with a vault that returns a different asset().
+        // with a vault that returns a different asset(). Skip-and-renormalise
+        // (RTR-5) means the now-ineligible leg is skipped — it never receives
+        // USDC — and the surviving eligible leg absorbs the amount.
         _setEqualWeights();
 
         // Build a non-USDC-backed vault and copy its bytecode over vaultA.
@@ -683,19 +716,24 @@ contract PortfolioRouterTest is Test {
         assertEq(MockRouterVault(address(vaultA)).asset(), address(otherAsset));
 
         uint256 amount = 1000 * ONE_USDC;
-        _fundAndApprove(depositor, amount);
 
+        // Preview agrees: vaultA now ineligible (asset mismatch) ⇒ unavailable.
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "asset-mismatch leg must preview unavailable");
+        assertFalse(legs[1].unavailable, "eligible leg must preview available");
+
+        _fundAndApprove(depositor, amount);
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultAssetMismatch.selector, address(vaultA), address(otherAsset)
-            )
-        );
-        router.deposit(amount, new uint256[](0));
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        assertEq(shares[0], 0, "ineligible (asset-mismatch) leg receives nothing");
+        assertEq(shares[1], amount, "eligible leg absorbs full renormalised amount");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
     }
 
-    /// @notice `depositFor` also enforces router eligibility at runtime.
-    function test_depositFor_revertsIfVaultAssetMismatch() public {
+    /// @notice `depositFor` also skip-and-renormalises a leg that becomes
+    ///         router-ineligible (asset mismatch) at runtime (RTR-5).
+    function test_depositFor_skipsRuntimeAssetMismatchVault() public {
         _setEqualWeights();
 
         MockUSDC otherAsset = new MockUSDC();
@@ -706,12 +744,11 @@ contract PortfolioRouterTest is Test {
         _fundAndApprove(depositor, amount);
 
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.VaultAssetMismatch.selector, address(vaultB), address(otherAsset)
-            )
-        );
-        router.depositFor(depositor, amount, new uint256[](0));
+        uint256[] memory shares = router.depositFor(depositor, amount, new uint256[](0));
+
+        assertEq(shares[0], amount, "eligible leg absorbs full renormalised amount");
+        assertEq(shares[1], 0, "ineligible (asset-mismatch) leg receives nothing");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
     }
 
     /// @notice Eligible vaults retain their normal deposit behaviour — the
@@ -963,10 +1000,12 @@ contract PortfolioRouterTest is Test {
         assertEq(usdc.balanceOf(address(router)), 0, "router holds dust");
     }
 
-    /// @notice Defence-in-depth: revoking the registry eligibility flag after
-    ///         a vault has been weighted prevents subsequent deposits from
-    ///         routing through it.
-    function test_deposit_revertsIfRegistryEligibilityRevoked() public {
+    /// @notice Skip-and-renormalise (RTR-5 / F-13): revoking the registry
+    ///         eligibility flag after a vault has been weighted makes that leg
+    ///         unavailable — it is skipped (matching preview), and the surviving
+    ///         eligible leg absorbs the renormalised amount. The ineligible vault
+    ///         never receives USDC.
+    function test_deposit_skipsRegistryEligibilityRevokedVault() public {
         // vaultA is marked eligible in setUp; weight it then revoke.
         _setEqualWeights();
 
@@ -974,12 +1013,18 @@ contract PortfolioRouterTest is Test {
         registry.setRouterEligible(address(vaultA), false);
 
         uint256 amount = 100 * ONE_USDC;
+
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "ineligible leg must preview unavailable");
+        assertFalse(legs[1].unavailable, "eligible leg must preview available");
+
         _fundAndApprove(depositor, amount);
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultNotRouterEligible.selector, address(vaultA))
-        );
-        router.deposit(amount, new uint256[](0));
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        assertEq(shares[0], 0, "ineligible leg receives nothing");
+        assertEq(shares[1], amount, "eligible leg absorbs full renormalised amount");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
     }
 
     /// @notice `VaultRegistry.setRouterEligible` is admin-gated.
