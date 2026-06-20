@@ -30,6 +30,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import {DeployTimelock} from "../../script/DeployTimelock.s.sol";
 import {RobotMoneyVault} from "../../RobotMoneyVault.sol";
@@ -37,7 +39,74 @@ import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
+import {BasketVault} from "../../vaults/BasketVault.sol";
+import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
+import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
 import {TestERC20} from "../helpers/TestERC20.sol";
+
+/// @dev Minimal 18-dec basket token for the ORA-3 addAsset rig.
+contract Ora3Token is ERC20 {
+    constructor() ERC20("ORA3 Token", "ORA3T") {}
+}
+
+/// @dev Minimal pool mock exposing the surface `BasketVault.addAsset` reads:
+///      token0/token1, slot0 cardinality, observe, liquidity, and the `fee()`
+///      accessor the ORA-3 equality check asserts against `swapFee_`.
+contract Ora3Pool {
+    address public immutable token0;
+    address public immutable token1;
+    uint24 public immutable poolFee;
+
+    constructor(address token0_, address token1_, uint24 fee_) {
+        token0 = token0_;
+        token1 = token1_;
+        poolFee = fee_;
+    }
+
+    function fee() external view returns (uint24) {
+        return poolFee;
+    }
+
+    function liquidity() external pure returns (uint128) {
+        return 1e18;
+    }
+
+    function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (uint160(1 << 96), 0, 0, 100, 100, 0, true);
+    }
+
+    function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiq)
+    {
+        tickCumulatives = new int56[](secondsAgos.length);
+        secondsPerLiq = new uint160[](secondsAgos.length);
+    }
+}
+
+/// @dev Concrete BasketVault to exercise `addAsset` (BasketVault is abstract).
+contract Ora3BasketVault is BasketVault {
+    constructor(IERC20 usdc_, ISwapRouter router_, address admin_)
+        BasketVault(
+            "ORA3 Basket",
+            "bORA3",
+            usdc_,
+            router_,
+            type(uint256).max,
+            type(uint256).max,
+            0,
+            30,
+            admin_,
+            admin_,
+            admin_
+        )
+    {}
+
+    function maxAssets() public pure override returns (uint256) {
+        return 8;
+    }
+}
 
 /// @dev Minimal 2-of-N Safe stub (code + threshold>=2) so DeployTimelock's
 ///      SAFE_ADDRESS guards are satisfied without a real Safe.
@@ -238,17 +307,34 @@ contract DeployAssertionsTest is Test {
         return address(d.timelock);
     }
 
-    /// @notice ORA-3 (RED, F-09): BasketVault.addAsset reverts when the configured
-    ///         execution pool (derived from swapFee) does not equal the TWAP
-    ///         pricing pool. On current HEAD addAsset performs NO such equality
-    ///         check. When #966 adds it, remove the skip and assert addAsset
-    ///         reverts on a pool/fee mismatch.
+    /// @notice ORA-3 (FLIPPED GREEN by #966, F-09): BasketVault.addAsset reverts
+    ///         when the execution pool resolved from `swapFee_` does not equal the
+    ///         registered TWAP pool (here: the pool's own `fee()`), and SUCCEEDS
+    ///         when they match. Pins the equality check the fix added.
     function test_ORA3_addAssetRevertsOnPoolMismatch() public {
-        vm.skip(
-            true,
-            "BasketVault.addAsset stores pool and swapFee independently, never asserts equality (F-09) - remediation #966"
+        TestERC20 usdc = new TestERC20(); // 6-dec USDC stand-in
+        address admin = makeAddr("ora3Admin");
+        Ora3BasketVault vault =
+            new Ora3BasketVault(IERC20(address(usdc)), ISwapRouter(address(this)), admin);
+
+        Ora3Token token = new Ora3Token();
+        (address t0, address t1) = address(token) < address(usdc)
+            ? (address(token), address(usdc))
+            : (address(usdc), address(token));
+
+        // Mismatch: pool's fee() is 3000 but addAsset is told swapFee_ = 500.
+        Ora3Pool mismatchedPool = new Ora3Pool(t0, t1, 3000);
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
+        vault.addAsset(
+            address(token), address(mismatchedPool), 500, address(0), BasketVault.Venue.V3
         );
-        fail();
+
+        // Match: pool's fee() equals swapFee_ → addAsset succeeds.
+        Ora3Pool matchedPool = new Ora3Pool(t0, t1, 500);
+        vm.prank(admin);
+        vault.addAsset(address(token), address(matchedPool), 500, address(0), BasketVault.Venue.V3);
+        assertEq(vault.assetCount(), 1, "matched pool/fee registers the asset");
     }
 
     /// @notice ORA-6 (HOLDS — 🟡 TRUSTED, F-17): documents the current decimals
