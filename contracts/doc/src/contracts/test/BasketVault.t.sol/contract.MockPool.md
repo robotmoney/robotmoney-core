@@ -1,5 +1,5 @@
 # MockPool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/BasketVault.t.sol)
 
 Minimal mock supporting both slot0 (legacy spot read) and observe()
 (TWAP read). `setTickCumulativeRate` controls the per-second tick
@@ -59,12 +59,35 @@ bool public revertObserve
 ```
 
 
+### feeTier
+
+```solidity
+uint24 public feeTier
+```
+
+
 ## Functions
 ### constructor
 
 
 ```solidity
 constructor(address token0_, address token1_, uint160 sqrtPriceX96_) ;
+```
+
+### fee
+
+ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+
+
+```solidity
+function fee() external view returns (uint24);
+```
+
+### setFee
+
+
+```solidity
+function setFee(uint24 fee_) external;
 ```
 
 ### setSpot

@@ -1,5 +1,5 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -164,6 +164,45 @@ function _fundAndApprove(address who, uint256 amt) internal;
 
 ```solidity
 function test_constructor_wiresImmutablesAndRoles() public view;
+```
+
+### test_lastAdminFloor_revokeAdminRevertsForSoleHolder
+
+ACL-3 / F-06: revoking the sole ADMIN_ROLE holder reverts
+(last-admin floor) — gateway governance can never be bricked.
+
+
+```solidity
+function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
+gateway uses as a privileged tier (it gates authorizeAgent).
+
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder
+
+ACL-3 / F-06: renouncing the sole DEFAULT_ADMIN_ROLE holder reverts.
+
+
+```solidity
+function test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder() public;
+```
+
+### test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders
+
+ACL-3 / F-06: with a second DEFAULT_ADMIN granted, the original may
+be revoked — the floor only blocks dropping the final holder.
+
+
+```solidity
+function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public;
 ```
 
 ### test_constructor_revertsOnZeroAddresses

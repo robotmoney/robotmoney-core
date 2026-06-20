@@ -1,5 +1,5 @@
 # TwapManipulationTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9912e66cc064941cf391031069c85d740fd52944/contracts/test/fv/TwapManipulation.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/TwapManipulation.t.sol)
 
 **Inherits:**
 Test
@@ -45,6 +45,19 @@ across a fuzzed manipulation magnitude.
 
 
 ```solidity
-function test_ORA7_independentFloorBoundsLossUnderManipulation() public;
+function test_ORA7_independentFloorBoundsLossUnderManipulation(uint16 manipBps) public;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`manipBps`|`uint16`|  The manipulation magnitude applied to the observed TWAP between sign and execute, in basis points of the honest quote (0..MAX_BPS-1, i.e. up to a ~100% downward skew).|
+
+
+### Math_min
+
+
+```solidity
+function Math_min(uint256 a, uint256 b) internal pure returns (uint256);
 ```
 

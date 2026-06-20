@@ -1,5 +1,5 @@
 # StaleOracleRedemptionTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9912e66cc064941cf391031069c85d740fd52944/contracts/test/fv/StaleOracleRedemption.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/StaleOracleRedemption.t.sol)
 
 **Inherits:**
 Test
@@ -18,6 +18,69 @@ uint256 internal constant HEARTBEAT = 1 hours
 
 ```solidity
 MockChronicleFeed internal feed
+```
+
+
+### sup5Vault
+SUP-5 (RED, NC-1): a user `redeem` succeeds when the vault holds
+zero priced RWA tokens (already unwound to idle USDC), even while
+the Chronicle feed is stale. On current HEAD redeem reverts
+StalePriceFeed unconditionally, trapping safe funds. When #966 lands
+the freshness short-circuit, remove the skip and assert the redeem
+returns the holder's idle USDC.
+
+
+```solidity
+RwaVault internal sup5Vault
+```
+
+
+### sup5Usdc_
+
+```solidity
+Sup5Usdc internal sup5Usdc_
+```
+
+
+### sup5Despxa
+
+```solidity
+Sup5Token internal sup5Despxa
+```
+
+
+### sup5Chronicle
+
+```solidity
+Sup5Chronicle internal sup5Chronicle
+```
+
+
+### sup5Aero
+
+```solidity
+Sup5AeroRouter internal sup5Aero
+```
+
+
+### sup5Admin
+
+```solidity
+address internal sup5Admin = makeAddr("sup5Admin")
+```
+
+
+### sup5Emergency
+
+```solidity
+address internal sup5Emergency = makeAddr("sup5Emergency")
+```
+
+
+### sup5Holder
+
+```solidity
+address internal sup5Holder = makeAddr("sup5Holder")
 ```
 
 
@@ -42,14 +105,17 @@ lives in RwaVault.t.sol (deposit halts on stale feed).
 function test_ORA2_feedOlderThanHeartbeatIsStale() public;
 ```
 
-### test_SUP5_idleUsdcRedeemSurvivesStaleFeed
+### _deploySup5Rig
 
-SUP-5 (RED, NC-1): a user `redeem` succeeds when the vault holds
-zero priced RWA tokens (already unwound to idle USDC), even while
-the Chronicle feed is stale. On current HEAD redeem reverts
-StalePriceFeed unconditionally, trapping safe funds. When #966 lands
-the freshness short-circuit, remove the skip and assert the redeem
-returns the holder's idle USDC.
+Deploy + wire the RwaVault rig into storage (keeps the test body small
+enough to avoid stack-too-deep without viaIR).
+
+
+```solidity
+function _deploySup5Rig() internal;
+```
+
+### test_SUP5_idleUsdcRedeemSurvivesStaleFeed
 
 
 ```solidity

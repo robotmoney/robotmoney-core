@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -111,6 +111,75 @@ function test_emergencyUnwindWithOverride_requiresEmergencyRole() public;
 
 ```solidity
 function test_addAsset_revertsWhenPoolDoesNotPairTokenWithUsdc() public;
+```
+
+### test_addAsset_revertsForUnvettedAdapter
+
+ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
+not on the ADMIN-approved allowlist.
+
+
+```solidity
+function test_addAsset_revertsForUnvettedAdapter() public;
+```
+
+### test_addAsset_acceptsVettedAdapterAfterApproval
+
+ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
+accepts it.
+
+
+```solidity
+function test_addAsset_acceptsVettedAdapterAfterApproval() public;
+```
+
+### test_addAsset_revertsOnExecutionPoolMismatch
+
+ORA-3 / F-09: addAsset reverts when the registered pool's fee tier
+(the execution pool resolved from swapFee_) does not match swapFee_.
+
+
+```solidity
+function test_addAsset_revertsOnExecutionPoolMismatch() public;
+```
+
+### test_lastAdminFloor_revokeRevertsForSoleAdmin
+
+ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
+(last-admin floor), so vault governance can never be bricked.
+
+
+```solidity
+function test_lastAdminFloor_revokeRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_renounceRevertsForSoleAdmin
+
+ACL-3 / F-06: renouncing the last ADMIN_ROLE holder reverts.
+
+
+```solidity
+function test_lastAdminFloor_renounceRevertsForSoleAdmin() public;
+```
+
+### test_lastAdminFloor_revokeSucceedsWithTwoAdmins
+
+ACL-3 / F-06: with a second admin granted, the original may be
+revoked — the floor only blocks dropping the FINAL admin.
+
+
+```solidity
+function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public;
+```
+
+### test_pause_doesNotFreezeWithdrawals
+
+LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+a holder can still redeem while the vault is paused.
+
+
+```solidity
+function test_pause_doesNotFreezeWithdrawals() public;
 ```
 
 ### test_sweepForeignToken_revertsForActiveBasketAsset

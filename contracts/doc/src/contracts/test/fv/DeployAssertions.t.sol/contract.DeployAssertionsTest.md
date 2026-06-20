@@ -1,5 +1,5 @@
 # DeployAssertionsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/DeployAssertions.t.sol)
 
 **Inherits:**
 Test
@@ -123,11 +123,10 @@ function _deployAclFixtureAndHandover() internal returns (address timelock);
 
 ### test_ORA3_addAssetRevertsOnPoolMismatch
 
-ORA-3 (RED, F-09): BasketVault.addAsset reverts when the configured
-execution pool (derived from swapFee) does not equal the TWAP
-pricing pool. On current HEAD addAsset performs NO such equality
-check. When #966 adds it, remove the skip and assert addAsset
-reverts on a pool/fee mismatch.
+ORA-3 (FLIPPED GREEN by #966, F-09): BasketVault.addAsset reverts
+when the execution pool resolved from `swapFee_` does not equal the
+registered TWAP pool (here: the pool's own `fee()`), and SUCCEEDS
+when they match. Pins the equality check the fix added.
 
 
 ```solidity

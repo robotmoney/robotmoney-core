@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -234,7 +234,47 @@ bool private _paused
 ```
 
 
+### _adminCount
+Number of accounts currently holding `ADMIN_ROLE`.
+
+
+```solidity
+uint256 private _adminCount
+```
+
+
+### _defaultAdminCount
+Number of accounts currently holding `DEFAULT_ADMIN_ROLE`.
+
+
+```solidity
+uint256 private _defaultAdminCount
+```
+
+
 ## Functions
+### _grantRole
+
+Maintain the admin-tier counters and enforce the floor. `AccessRoles`
+keeps its role-separation override; we route through `super` so both
+invariants compose (separation on grant, last-admin floor on revoke).
+
+
+```solidity
+function _grantRole(bytes32 role, address account) internal override returns (bool granted);
+```
+
+### _revokeRole
+
+ACL-3 / F-06: block dropping the final `ADMIN_ROLE` or
+`DEFAULT_ADMIN_ROLE` holder. Both `revokeRole` and `renounceRole`
+route through this hook.
+
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal override returns (bool revoked);
+```
+
 ### constructor
 
 
@@ -1040,6 +1080,14 @@ indicating a malicious or fee-on-transfer vault.
 
 ```solidity
 error UnexpectedAssetsReceived();
+```
+
+### LastAdminFloor
+Revoking/renouncing the sole holder of an admin tier is forbidden.
+
+
+```solidity
+error LastAdminFloor();
 ```
 
 ### RouterNotConfigured
