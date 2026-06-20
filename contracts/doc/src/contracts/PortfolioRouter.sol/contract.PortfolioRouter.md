@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -292,8 +292,14 @@ function sweepForeignToken(address token) external nonReentrant;
 ### previewDeposit
 
 Return per-vault estimated receipts for `amount` USDC without
-executing any state changes. Paused or retired vaults are marked
-`unavailable = true` and return `estShares = 0`.
+executing any state changes. Non-depositable legs (paused/retired,
+unregistered, router-ineligible, or over their per-vault cap) are
+marked `unavailable = true` and return `estShares = 0`; the deposit
+path skips exactly these legs and renormalises `amount` across the
+remaining available legs. `legAmount` therefore reflects the
+**renormalised** amount the leg would actually receive on execute,
+so `previewDeposit` and the executed deposit never disagree on which
+legs are available (RTR-5; findings F-13/NC-4).
 
 
 ```solidity
@@ -311,6 +317,46 @@ function previewDeposit(uint256 amount) external view returns (LegPreview[] memo
 |----|----|-----------|
 |`legs`|`LegPreview[]`|  One entry per vault in the current weight vector.|
 
+
+### _availabilityAndAmounts
+
+Compute, for the given weight vector and total `amount`, which legs
+are depositable and the renormalised USDC each available leg receives.
+A leg is available iff its registry status is `Active` and it is
+router-eligible (asset == USDC + eligibility flag) — exactly the
+availability dimension `previewDeposit` reports. The amount is split
+across ONLY the available legs in proportion to their bps, with the
+rounding remainder assigned to the last available leg so the router
+holds zero USDC after a successful deposit. Unavailable legs get
+amount 0. This single predicate is shared by `previewDeposit` and
+`_executeLegs` so the two can never diverge on availability (RTR-5).
+Per-vault caps are intentionally NOT an availability factor: a cap is a
+hard per-tx operator bound (see F-12), not a "this vault is down"
+signal, and silently redistributing a capped leg's allocation onto
+other vaults would breach operator intent. A renormalised leg over its
+cap therefore still reverts `VaultCapExceeded` at execute time rather
+than being skipped.
+
+
+```solidity
+function _availabilityAndAmounts(
+    address[] memory vaultList,
+    uint256[] memory bpsList,
+    uint256 amount
+) internal view returns (bool[] memory available, uint256[] memory legAmounts);
+```
+
+### _isDepositable
+
+Non-reverting predicate: is `vault` depositable right now (registry
+status Active AND router-eligible)? Mirrors the reverting checks in
+`_executeLeg`/`_requireRouterEligible` without reverting, so it can be
+used to compute the shared availability set.
+
+
+```solidity
+function _isDepositable(address vault) internal view returns (bool);
+```
 
 ### deposit
 
@@ -452,10 +498,13 @@ function _depositTo(address receiver, uint256 amount, uint256[] calldata minShar
 
 ### _executeLegs
 
-Execute one vault leg per entry: enforce Active status, per-vault
-cap, runtime router-eligibility, approve and deposit, then check
-the slippage floor. All-or-revert. Writes minted shares into
-`sharesPerLeg`.
+Execute one available vault leg per entry: approve and deposit, then
+check the slippage floor. Unavailable legs (per the shared
+`_availabilityAndAmounts` pass) are skipped — matching
+`previewDeposit` (RTR-5). Available legs are guaranteed depositable by
+that pass; `_executeLeg` re-asserts eligibility as defence in depth.
+All available legs must succeed (all-or-revert across the surviving
+set). Writes minted shares into `sharesPerLeg`.
 
 
 ```solidity
@@ -464,10 +513,41 @@ function _executeLegs(
     address[] memory vaultList,
     uint256[] memory bpsList,
     uint256[] memory legAmounts,
+    bool[] memory available,
     uint256[] calldata minSharesPerLeg,
     uint256[] memory sharesPerLeg
 ) internal;
 ```
+
+### _executeLeg
+
+Execute a single available leg: re-assert Active status + per-vault
+cap + runtime router-eligibility (defence in depth — the leg was
+already vetted by `_availabilityAndAmounts`, but a vault could change
+state between the read and here), approve, deposit, and emit. Extracted
+from `_executeLegs` to bound stack depth.
+
+
+```solidity
+function _executeLeg(address receiver, address vault, uint256 legAmount, uint256 weightBps)
+    private
+    returns (uint256 sharesReceived);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receiver`|`address`| Address that receives the minted shares.|
+|`vault`|`address`|    Vault to deposit into (guaranteed available by the caller).|
+|`legAmount`|`uint256`|Renormalised USDC for this leg.|
+|`weightBps`|`uint256`|This leg's weight (event field only).|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`sharesReceived`|`uint256`|Shares minted to `receiver`.|
+
 
 ### getWeights
 
@@ -592,12 +672,57 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 |`eligible`|`bool`|True iff the vault's ERC-4626 asset equals the router's USDC and the registry eligibility flag is set.|
 
 
+### isRouterEligibleAndActive
+
+Return true iff `vault` is router-eligible AND its registry
+lifecycle status is `Active` — i.e. it can be written into a
+weight vector and accept a routed deposit right now. This is the
+exact predicate `setWeights`/`setDefaultWeights` enforce; governance
+(`RouterGovernance.propose`) reads it so a proposal that would
+render router deposits non-executable can never enter the voting
+pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+zero address, an EOA, an asset mismatch, an unregistered vault, or
+any non-Active status.
+
+
+```solidity
+function isRouterEligibleAndActive(address vault) external view returns (bool ok);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of the vault to check.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`ok`|`bool`|True iff the vault is eligible AND Active.|
+
+
+### _requireActiveAndEligible
+
+Revert unless `vault` is registered, its registry status is `Active`,
+AND it is router-eligible (asset == USDC + eligibility flag). This is
+the single guard that a weight vector is only ever written when every
+leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
+eligibility and lifecycle status are independent signals, so checking
+eligibility alone would let an eligible-but-Paused/Retired vault enter
+the vector and brick `deposit()` later. Used by `setWeights` and
+`setDefaultWeights` at configuration time.
+
+
+```solidity
+function _requireActiveAndEligible(address vault) internal view;
+```
+
 ### _requireRouterEligible
 
 Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
 `usdc` AND the VaultRegistry has marked the vault as
-router-eligible. Used by `setWeights` and `_depositTo` to enforce
-router-eligibility at both configuration and runtime.
+router-eligible. Used by `_executeLegs` to enforce
+router-eligibility at runtime.
 
 
 ```solidity

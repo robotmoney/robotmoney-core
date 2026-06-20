@@ -6210,6 +6210,25 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
+    name: "isRouterEligibleAndActive",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "ok",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "previewDeposit",
     inputs: [
       {
