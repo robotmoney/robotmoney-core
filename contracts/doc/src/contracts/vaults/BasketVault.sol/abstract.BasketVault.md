@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -833,6 +833,33 @@ function emergencyUnwindWithOverride(address[] calldata tokens)
 function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 ```
 
+### restoreVault
+
+Reverse a `shutdownVault`, re-opening deposits with a fresh TVL cap.
+
+LIFE-4 / F-07: `shutdownVault` (an `EMERGENCY_ROLE` hot-key lever) sets
+`shutdown = true` and `tvlCap = 0`, which permanently blocks deposits with no
+reverse path — a low-trust key could otherwise freeze the deposit side forever.
+Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
+this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
+`ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+required because shutdown zeroed it; pass `type(uint256).max` for no cap.
+Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
+(`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
+is below the configured `perDepositCap` (`InvalidParam`), so deposits resume under
+a coherent, explicit limit rather than a stale or self-contradictory one.
+
+
+```solidity
+function restoreVault(uint256 newTvlCap) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newTvlCap`|`uint256`|New maximum total assets in 6-decimal USDC units (must be > 0).|
+
+
 ### sweepForeignToken
 
 Permissionlessly sweep a NON-protected foreign token held by the
@@ -1225,6 +1252,14 @@ event DepositsPausedSet(bool paused);
 event Shutdown();
 ```
 
+### Restored
+Emitted when ADMIN_ROLE reverses a `shutdownVault`, re-opening deposits.
+
+
+```solidity
+event Restored(uint256 newTvlCap);
+```
+
 ### EmergencyUnwindGuardSet
 
 ```solidity
@@ -1328,6 +1363,14 @@ error ZeroAddress();
 
 ```solidity
 error VaultShutdown();
+```
+
+### NotShutdown
+`restoreVault` called while the vault is not in a shut-down state.
+
+
+```solidity
+error NotShutdown();
 ```
 
 ### InvalidFee

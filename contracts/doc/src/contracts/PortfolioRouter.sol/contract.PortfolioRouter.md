@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -69,6 +69,15 @@ VaultRegistry public immutable registry
 Global ceiling on the total USDC that may flow through a single
 `deposit()` call. 0 means no cap enforced.
 
+RTR-6 / F-12 — SEMANTICS DECISION: `routerCap` is a PER-TRANSACTION sanity
+bound, NOT a cumulative/windowed exposure limit. It bounds the size of any one
+`deposit()` call (fat-finger / single-tx blast-radius protection); it does NOT
+track or limit aggregate inflow across multiple calls, so a depositor can exceed
+it over several transactions by design. Cumulative inflow throttling is the
+gateway's responsibility via its rolling-window accounting (GW-4); the router cap
+deliberately does not duplicate that state. Treat this value as a per-call upper
+bound only when configuring it.
+
 
 ```solidity
 uint256 public routerCap
@@ -89,6 +98,10 @@ address public quarantineAddress
 ### vaultCap
 Per-vault USDC ceiling for a single `deposit()` leg.
 0 means no cap enforced for that vault.
+
+RTR-6 / F-12 — like `routerCap`, this is a PER-TRANSACTION per-leg sanity bound,
+not a cumulative per-vault exposure limit (see `routerCap`). It bounds a single
+deposit leg's size; aggregate per-vault exposure across calls is not tracked here.
 
 
 ```solidity

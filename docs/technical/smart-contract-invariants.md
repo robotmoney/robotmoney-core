@@ -150,7 +150,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ HOLDS (fixed #966, NC-3/F-06) · `BasketVault._withdraw` is no longer `whenNotPaused`; `pause()` is a deposits-only freeze (matching `RobotMoneyVault`'s separate flag), so a low-trust `EMERGENCY_ROLE` key can never freeze withdrawals · stateful-invariant (BasketVault.t.sol::test_pause_doesNotFreezeWithdrawals).
 
 > **`LIFE-4` — Depositor funds are never *permanently* frozen: any state that blocks withdrawal is always reversible by a still-available authority.**
-> ✅ HOLDS (fixed #966, F-06 + NC-3) · withdrawals are never paused (LIFE-3) and the last-admin floor (ACL-3) guarantees a still-available `ADMIN_ROLE` authority, so no reachable state freezes withdrawals forever · symbolic. *(`restoreVault`/F-07 is a separate `shutdownVault` reversibility concern, out of this issue's scope.)*
+> ✅ HOLDS (fixed #966, F-06 + NC-3) · withdrawals are never paused (LIFE-3) and the last-admin floor (ACL-3) guarantees a still-available `ADMIN_ROLE` authority, so no reachable state freezes withdrawals forever · symbolic. *(`shutdownVault` reversibility, F-07: `BasketVault.restoreVault(newTvlCap)` — ADMIN_ROLE only, the strictly higher-trust tier than the EMERGENCY hot key that can `shutdownVault` — clears `shutdown` and re-opens deposits, fixed #971; RwaVault inherits it. BasketVault.t.sol::test_F07_restoreVaultReopensDeposits.)*
 
 > **`LIFE-5` — A reweight/removal of a vault never makes an existing holder's position unredeemable through the protocol.**
 > ✅ HOLDS (fixed #967, F-03) · `redeemFor` (and `gateway.withdrawFromRouter`) drive redeem legs from an explicit caller-supplied `vaults[]`, not the live weight vector, and `_redeemLeg` permits Active OR Retired (only Paused blocks) — a reweighted-out or Retired position stays redeemable through the router · stateful-invariant — `FvInvariants.t.sol::test_LIFE5_expectedFail_reweightKeepsPositionRedeemable`.
@@ -177,8 +177,8 @@ Sub-invariants that decompose the above and are individually worth proving:
 > **`RTR-5` — `previewDeposit` and the executed deposit never disagree on which legs are available (no preview/execute divergence).**
 > ✅ HOLDS · `_executeLegs` skip-and-renormalises exactly the legs `previewDeposit` reports `unavailable` (or both report the whole basket unavailable) — preview-available ⇒ execute-deposits, preview-unavailable ⇒ execute-skips. A single `setVaultStatus(_, Paused)` no longer bricks *every* router deposit (F-13 / NC-4 fixed, #968) · fuzz (assert preview-available ⇒ execute-succeeds, or both fail) — `FvInvariants.t.sol::test_RTR5_previewMatchesExecute`.
 
-> **`RTR-6` — A configured cap always bounds cumulative exposure, not just a single transaction.**
-> 🔴 VIOLATED (if intended as exposure limit) · `routerCap`/`vaultCap` are per-tx only; splittable — see **F-12** · fuzz. *(Downgrade to "documented as per-tx sanity bound" closes this instead.)*
+> **`RTR-6` — A configured cap always bounds the size of a single transaction (per-tx sanity bound), not cumulative exposure.**
+> ✅ HOLDS (resolved #971, F-12) · DECISION: `routerCap`/`vaultCap` are DOCUMENTED as per-transaction sanity bounds, not cumulative/windowed exposure limits — a single over-cap `deposit()`/leg reverts, but deposits that *sum* over the cap across calls are allowed by design. Cumulative inflow throttling is the gateway's rolling-window job (GW-4); the router cap deliberately does not duplicate that state (see the `routerCap`/`vaultCap` NatSpec) · fuzz — `FvInvariants.t.sol::test_RTR6_expectedFail_capBoundsCumulativeExposure` (single over-cap reverts; two under-cap deposits summing over the cap both land).
 
 ---
 
@@ -188,7 +188,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `ShareCustodyInvariantViolated` post-call checks in `depositTo`/`_executeRouterDeposit`; `GatewayRouter.t.sol` · stateful-invariant.
 
 > **`GW-2` — A single `paymentId`/idempotency key never authorizes two materially different execution intents.**
-> ✅ PROVEN · the `depositTo` paymentId now folds in `destination` and the per-leg `minSharesPerLeg` vector, so two calls sharing `(orderId, amount, idempotencyKey)` but routing to a different destination — or carrying a different per-leg floor — yield distinct ids and never collide — fixed by **NC-9 (#970)** · `GatewayRouter.t.sol::test_GW2_depositTo_paymentIdBindsDestination` / `test_GW2_depositTo_paymentIdBindsMinSharesPerLeg` · symbolic/behavioural. *Residual (out of scope, low cluster):* `withdrawFromRouter` still keys on summed `totalShares`, not the per-leg vector — see **F-15**.
+> ✅ PROVEN · the `depositTo` paymentId now folds in `destination` and the per-leg `minSharesPerLeg` vector, so two calls sharing `(orderId, amount, idempotencyKey)` but routing to a different destination — or carrying a different per-leg floor — yield distinct ids and never collide — fixed by **NC-9 (#970)** · `GatewayRouter.t.sol::test_GW2_depositTo_paymentIdBindsDestination` / `test_GW2_depositTo_paymentIdBindsMinSharesPerLeg` · symbolic/behavioural. *Withdraw side (F-15, verified #971):* `withdrawFromRouter`'s `_routerWithdrawPaymentId` binds the full per-leg `sharesPerLeg` vector (plus `vaults`, `totalShares`, and `keccak256(minAssetsPerLeg)`) into the hash, so two withdrawals with equal `totalShares` but different per-leg vectors yield distinct paymentIds — `FvInvariants.t.sol::test_GW2_expectedFail_idempotencyKeyBindsFullIntent`.
 
 > **`GW-3` — An agent can only move funds its owner approved, only to its owner's registered receiver, within policy caps.**
 > 🟢 HOLDS · `agents[agent]` policy + `safeTransferFrom(msg.sender,…)` · stateful-invariant.
@@ -229,7 +229,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `AdapterDelegatecallGuard.t.sol` / `AdapterBytecodeGuard` · static-guard (bytecode scan).
 
 > **`ADP-2` — Only an eligible adapter (allowlisted + codehash-pinned) ever contributes to `totalAssets` or receives/returns funds.**
-> ✅ HOLDS (fixed #966, NC-2) · `BasketVault.addAsset` → `BasketAssetConfigGuard.requireAllowedAdapter` rejects any non-zero adapter whose runtime codehash is not on the ADMIN-approved allowlist (codehash pinning subsumes the no-hot-swap-proxy guarantee; the basket swap adapters legitimately DELEGATECALL the linked `TickMath`, so the deploy-time no-proxy scan stays in `AdapterBytecodeGuard`) · static-guard (BasketVault.t.sol::test_addAsset_revertsForUnvettedAdapter). *(The `RobotMoneyVault` revoked-but-active F-14 strand is tracked separately.)*
+> ✅ HOLDS (fixed #966, NC-2; NAV side fixed #971, F-14) · onboarding: `BasketVault.addAsset` → `BasketAssetConfigGuard.requireAllowedAdapter` rejects any non-zero adapter whose runtime codehash is not on the ADMIN-approved allowlist (codehash pinning subsumes the no-hot-swap-proxy guarantee; the basket swap adapters legitimately DELEGATECALL the linked `TickMath`, so the deploy-time no-proxy scan stays in `AdapterBytecodeGuard`). NAV/withdrawal side (F-14): `RobotMoneyVault.totalAssets` and `_pullProportional` now gate on `_isAdapterCounted` (active AND currently eligible), so an adapter whose allowlist/codehash eligibility was revoked while still registered-active no longer contributes to NAV nor receives/returns withdrawal flow — the funds stay drainable by EMERGENCY (`emergencyWithdrawAdapter`) and eligibility is restorable, so this is exclusion-not-confiscation · static-guard (BasketVault.t.sol::test_addAsset_revertsForUnvettedAdapter) + behavioural (RobotMoneyVault.t.sol::test_ADP2_revokedAdapterExcludedFromNavAndPulls).
 
 > **`ADP-3` — Adapter emissions/yield always reach the vault and are never stranded on the adapter or routed to an admin.**
 > 🟢 HOLDS · `IStrategyAdapter` INV-2; `MorphoAdapter.t.sol` · stateful-invariant.
@@ -238,7 +238,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `CustodyInvariantGuard.t.sol` (adapter `rescueTokens` deleted) · static-guard.
 
 > **`ADP-5` — Any ERC-20 approval granted to an adapter/router for a swap is always reset to zero after the call.**
-> 🟡 PARTIAL · BasketVault/gateway/router zero approvals; `AaveV3Adapter`/`MorphoAdapter` use non-zeroing `safeIncreaseAllowance` — see **NC-12** · static-guard (assert `forceApprove(_,0)` convention) + fuzz (post-call allowance == 0).
+> ✅ HOLDS (fixed #971, NC-12) · BasketVault/gateway/router zero approvals; `AaveV3Adapter`/`MorphoAdapter`/`CompoundV3Adapter` now use `forceApprove(_, amount)` (exact, zeroing) followed by an unconditional `forceApprove(_, 0)` rather than the additive, non-zeroing `safeIncreaseAllowance` — no residual allowance can linger across deploys · static-guard (assert `forceApprove(_,0)` convention) + fuzz (post-call allowance == 0) — AaveV3Adapter.t.sol / MorphoAdapter.t.sol post-deploy allowance assertions.
 
 ---
 
@@ -248,7 +248,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS · per-vault `MAX_*_BPS` clamps · fuzz.
 
 > **`FEE-2` — A fee is always charged on realized proceeds, never on a share-implied gross that can socialize loss to remaining holders.**
-> 🔴 VIOLATED (risk) · `RobotMoneyVault._withdraw` computes fee on share-implied gross; an over-reporting adapter makes the fee come from others' idle USDC — see **NC-11** · fuzz (over-reporting-adapter handler).
+> ✅ HOLDS (fixed #971, NC-11) · `RobotMoneyVault._withdraw` only disburses the exit fee out of proceeds the withdrawal ACTUALLY realises: `_pullProportional` returns the realised USDC (idle applied + genuinely pulled) and reverts (`InsufficientAdapterLiquidity`) if it cannot source the full share-implied gross, and `_withdraw` requires `realised >= grossAssets` before paying the fee — so the fee can never be funded from other holders' idle USDC by an over-reporting adapter. NAV (hence `grossAssets`) already excludes revoked adapters (ADP-2 / F-14), closing the inflated-share-count vector; ERC-4626 payout parity (`receiver` gets exactly `assets`) is preserved · fuzz (over-reporting-adapter handler) — `FvInvariants.t.sol::test_FEE2_expectedFail_feeChargedOnRealizedProceeds`; deep proofs `RobotMoneyVault.t.sol::test_FEE2_exitFeeOnRealizedProceeds` / `test_FEE2_overReportingAdapterCannotSocializeLoss`.
 
 > **`FEE-3` — Fees never reach any address other than the configured `feeRecipient` (INV-1/INV-3).**
 > 🟢 HOLDS · single recipient, timelock-gated · static-guard.

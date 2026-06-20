@@ -56,12 +56,13 @@ contract AaveV3Adapter is IStrategyAdapter {
 
     /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
-        USDC.safeIncreaseAllowance(address(POOL), amount);
+        // ADP-5 / NC-12: set the exact allowance with `forceApprove` (which zeroes first for
+        // non-standard ERC-20s) rather than the additive, non-zeroing `safeIncreaseAllowance`,
+        // then unconditionally reset to zero after the call so no residual allowance can ever
+        // linger across deploys.
+        USDC.forceApprove(address(POOL), amount);
         POOL.supply(address(USDC), amount, address(this), 0);
-        uint256 remaining = USDC.allowance(address(this), address(POOL));
-        if (remaining > 0) {
-            USDC.forceApprove(address(POOL), 0);
-        }
+        USDC.forceApprove(address(POOL), 0);
     }
 
     /// @inheritdoc IStrategyAdapter

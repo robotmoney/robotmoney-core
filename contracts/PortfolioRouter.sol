@@ -63,6 +63,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     /// @notice Global ceiling on the total USDC that may flow through a single
     ///         `deposit()` call. 0 means no cap enforced.
+    /// @dev RTR-6 / F-12 — SEMANTICS DECISION: `routerCap` is a PER-TRANSACTION sanity
+    ///      bound, NOT a cumulative/windowed exposure limit. It bounds the size of any one
+    ///      `deposit()` call (fat-finger / single-tx blast-radius protection); it does NOT
+    ///      track or limit aggregate inflow across multiple calls, so a depositor can exceed
+    ///      it over several transactions by design. Cumulative inflow throttling is the
+    ///      gateway's responsibility via its rolling-window accounting (GW-4); the router cap
+    ///      deliberately does not duplicate that state. Treat this value as a per-call upper
+    ///      bound only when configuring it.
     uint256 public routerCap;
 
     /// @notice Destination for permissionless foreign-token sweeps (INV-1/INV-2).
@@ -72,6 +80,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
 
     /// @notice Per-vault USDC ceiling for a single `deposit()` leg.
     ///         0 means no cap enforced for that vault.
+    /// @dev RTR-6 / F-12 — like `routerCap`, this is a PER-TRANSACTION per-leg sanity bound,
+    ///      not a cumulative per-vault exposure limit (see `routerCap`). It bounds a single
+    ///      deposit leg's size; aggregate per-vault exposure across calls is not tracked here.
     mapping(address => uint256) public vaultCap;
 
     /// @notice Ordered list of vaults included in the voted (active) weight

@@ -234,6 +234,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
     event DepositsPausedSet(bool paused);
     event Shutdown();
+    /// @dev Emitted when ADMIN_ROLE reverses a `shutdownVault`, re-opening deposits.
+    event Restored(uint256 newTvlCap);
     event EmergencyUnwindGuardSet(
         address indexed token,
         uint256 oldMinUsdcOut,
@@ -277,6 +279,8 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error PerDepositCapExceeded();
     error ZeroAddress();
     error VaultShutdown();
+    /// @notice `restoreVault` called while the vault is not in a shut-down state.
+    error NotShutdown();
     error InvalidFee();
     error InvalidParam();
     error MaxAssetsReached();
@@ -1154,6 +1158,28 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         shutdown = true;
         tvlCap = 0;
         emit Shutdown();
+    }
+
+    /// @notice Reverse a `shutdownVault`, re-opening deposits with a fresh TVL cap.
+    /// @dev LIFE-4 / F-07: `shutdownVault` (an `EMERGENCY_ROLE` hot-key lever) sets
+    ///      `shutdown = true` and `tvlCap = 0`, which permanently blocks deposits with no
+    ///      reverse path — a low-trust key could otherwise freeze the deposit side forever.
+    ///      Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
+    ///      this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
+    ///      `ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+    ///      required because shutdown zeroed it; pass `type(uint256).max` for no cap.
+    ///      Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
+    ///      (`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
+    ///      is below the configured `perDepositCap` (`InvalidParam`), so deposits resume under
+    ///      a coherent, explicit limit rather than a stale or self-contradictory one.
+    /// @param newTvlCap New maximum total assets in 6-decimal USDC units (must be > 0).
+    function restoreVault(uint256 newTvlCap) external onlyRole(ADMIN_ROLE) {
+        if (!shutdown) revert NotShutdown();
+        if (newTvlCap == 0) revert InvalidParam();
+        if (perDepositCap > newTvlCap) revert InvalidParam();
+        shutdown = false;
+        tvlCap = newTvlCap;
+        emit Restored(newTvlCap);
     }
 
     /// @notice Permissionlessly sweep a NON-protected foreign token held by the

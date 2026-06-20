@@ -683,6 +683,93 @@ contract BasketVaultTest is Test {
         assertEq(vault.maxMint(stranger), 0, "maxMint 0 after shutdown");
     }
 
+    /// @notice LIFE-4 / F-07: an EMERGENCY-triggered `shutdownVault` permanently
+    ///         blocks deposits with no reverse path UNLESS the higher-trust
+    ///         ADMIN_ROLE can `restoreVault`. Proof: shutdown blocks deposits;
+    ///         ADMIN restore with a fresh cap re-opens them; a redeem in between
+    ///         confirms withdrawals were never frozen (LIFE-3).
+    function test_F07_restoreVaultReopensDeposits() public {
+        // Seed a position so we can confirm redemption stays open across shutdown.
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        basketToken.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "seed deposit minted shares");
+
+        // EMERGENCY shuts the vault down: deposits blocked, cap zeroed.
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+        assertTrue(vault.shutdown(), "vault shut down");
+        assertEq(vault.tvlCap(), 0, "shutdown zeroed the cap");
+
+        // While shut down, `maxDeposit` is 0, so the OZ ERC-4626 wrapper rejects the
+        // deposit before the internal shutdown guard — either way deposits are blocked.
+        assertEq(vault.maxDeposit(stranger), 0, "maxDeposit 0 while shut down");
+        vm.startPrank(stranger);
+        vm.expectRevert();
+        vault.deposit(100 * ONE_USDC, stranger);
+        vm.stopPrank();
+
+        // Withdrawals were never frozen by shutdown (LIFE-3): a partial redeem works.
+        usdc.mint(address(router), 500 * ONE_USDC);
+        router.setAmountOut(500 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares / 2, stranger, stranger);
+        assertGt(out, 0, "redeem succeeds while shut down");
+
+        // ADMIN restores with a fresh cap (>= perDepositCap of 100k) — deposits re-open.
+        uint256 newCap = 1_000_000 * ONE_USDC;
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit BasketVault.Restored(newCap);
+        vm.prank(admin);
+        vault.restoreVault(newCap);
+        assertFalse(vault.shutdown(), "restore cleared shutdown");
+        assertEq(vault.tvlCap(), newCap, "restore applied the new cap");
+
+        basketToken.mint(address(router), 200 * ONE_USDC);
+        router.setAmountOut(200 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 reopened = vault.deposit(200 * ONE_USDC, stranger);
+        assertGt(reopened, 0, "deposits re-opened after restore");
+    }
+
+    /// @notice F-07: only ADMIN_ROLE may restore; the EMERGENCY hot key that can
+    ///         shut the vault down cannot reverse it (trust asymmetry, like unpause).
+    function test_F07_restoreVault_emergencyCannotRestore() public {
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+
+        vm.prank(emergencyResponder);
+        vm.expectRevert(); // AccessControl: EMERGENCY lacks ADMIN_ROLE
+        vault.restoreVault(50_000 * ONE_USDC);
+    }
+
+    /// @notice F-07: `restoreVault` rejects incoherent inputs — not-shut-down,
+    ///         zero cap, or a cap below `perDepositCap`.
+    function test_F07_restoreVault_revertsOnInvalidInputs() public {
+        // Not shut down yet.
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.NotShutdown.selector);
+        vault.restoreVault(50_000 * ONE_USDC);
+
+        vm.prank(emergencyResponder);
+        vault.shutdownVault();
+
+        // Zero cap.
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.InvalidParam.selector);
+        vault.restoreVault(0);
+
+        // Cap below the configured per-deposit cap.
+        uint256 perDep = vault.perDepositCap();
+        vm.prank(admin);
+        vm.expectRevert(BasketVault.InvalidParam.selector);
+        vault.restoreVault(perDep - 1);
+    }
+
     function test_maxDeposit_zeroWhenNoActiveAssets() public {
         vm.prank(admin);
         vault.removeAsset(0);

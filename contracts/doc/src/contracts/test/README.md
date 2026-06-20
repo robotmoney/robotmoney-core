@@ -3,6 +3,8 @@
 # Contents
 - [fv](/contracts/test/fv)
 - [helpers](/contracts/test/helpers)
+- [MockAavePool](AaveV3Adapter.t.sol/contract.MockAavePool.md)
+- [AaveV3AdapterTest](AaveV3Adapter.t.sol/contract.AaveV3AdapterTest.md)
 - [AccessRolesHarness](AccessRoles.t.sol/contract.AccessRolesHarness.md)
 - [AccessRolesTest](AccessRoles.t.sol/contract.AccessRolesTest.md)
 - [ActivateBasketVaultEligibilityTest](ActivateBasketVaultEligibility.t.sol/contract.ActivateBasketVaultEligibilityTest.md)

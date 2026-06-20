@@ -1,5 +1,5 @@
 # MorphoAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -76,6 +76,17 @@ function test_constructor_revertsOnZeroAddress() public;
 
 ```solidity
 function test_deploy_movesUsdcIntoMorphoVault() public;
+```
+
+### test_ADP5_deployZeroesAllowance
+
+ADP-5 / NC-12: `deploy` uses `forceApprove(_, amount)` then
+`forceApprove(_, 0)`, so the adapter's USDC allowance to the Morpho
+vault is exactly zero after the call — no residual approval lingers.
+
+
+```solidity
+function test_ADP5_deployZeroesAllowance() public;
 ```
 
 ### test_deploy_revertsForNonVault

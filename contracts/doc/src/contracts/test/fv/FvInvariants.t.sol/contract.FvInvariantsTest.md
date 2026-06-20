@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/522a29d8cd2294646d674548ad500b03a648e774/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -389,8 +389,14 @@ function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public p
 
 ### test_RTR6_expectedFail_capBoundsCumulativeExposure
 
-RTR-6 — a configured cap bounds cumulative exposure, not just a
-single transaction.
+RTR-6 (RESOLVED by #971, F-12) — `routerCap`/`vaultCap` are
+DOCUMENTED as per-transaction sanity bounds, NOT cumulative
+exposure limits. The original RED finding treated them as
+splittable cumulative caps; #971 records the decision (cumulative
+throttling is the gateway's rolling-window job, GW-4) and pins the
+per-tx semantics here: a single over-cap deposit reverts, while two
+under-cap deposits that SUM over the cap both succeed (the cap is
+intentionally not cumulative). Registry flipped RED→HOLDS.
 
 
 ```solidity
@@ -399,11 +405,20 @@ function test_RTR6_expectedFail_capBoundsCumulativeExposure() public;
 
 ### test_FEE2_expectedFail_feeChargedOnRealizedProceeds
 
-FEE-2 — a fee is always charged on realized proceeds, never on a
-share-implied gross that socializes loss to remaining holders.
+FEE-2 (RESOLVED by #971, NC-11) — the exit fee is only ever paid
+out of proceeds a withdrawal ACTUALLY realises, never from a
+share-implied gross that an over-reporting adapter could have other
+holders' idle USDC silently cover. `RobotMoneyVault._withdraw`
+requires `_pullProportional`'s realised return to cover the full
+`grossAssets` (which already excludes revoked adapters, F-14) before
+disbursing the fee; an adapter that under-delivers reverts
+(InsufficientAdapterLiquidity). ERC-4626 payout parity is preserved.
+Registry flipped RED→HOLDS; behavioural proofs live in
+RobotMoneyVault.t.sol::test_FEE2_exitFeeOnRealizedProceeds and
+test_FEE2_overReportingAdapterCannotSocializeLoss.
 
 
 ```solidity
-function test_FEE2_expectedFail_feeChargedOnRealizedProceeds() public;
+function test_FEE2_expectedFail_feeChargedOnRealizedProceeds() public pure;
 ```
 
