@@ -106,6 +106,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "MAX_WINDOW_ENTRIES",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "PAUSER_ROLE",
     inputs: [],
     outputs: [
@@ -1639,6 +1652,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "UnexpectedAssetsReceived",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "WindowBufferFull",
     inputs: [],
   },
   {

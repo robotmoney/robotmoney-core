@@ -1,5 +1,5 @@
 # DeployTimelock
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/script/DeployTimelock.s.sol)
 
 **Inherits:**
 Script
@@ -57,6 +57,20 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
 
 ```solidity
 bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE")
+```
+
+
+### PAUSER_ROLE
+
+```solidity
+bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
+```
+
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE")
 ```
 
 

@@ -309,8 +309,20 @@ contract GatewayRouterTest is Test {
         bytes32 idem = keccak256("idem-r1");
         uint64 deadline = uint64(block.timestamp + 60);
 
+        // GW-2/NC-9: the depositTo paymentId binds the full intent — the routing
+        // destination and the per-leg slippage vector are part of the preimage.
         bytes32 expectedPaymentId = keccak256(
-            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
+            abi.encode(
+                uint8(3),
+                block.chainid,
+                address(gateway),
+                agent,
+                orderId,
+                amount,
+                idem,
+                address(router),
+                minShares
+            )
         );
         uint64 expectedWindowId = uint64(block.timestamp / gateway.WINDOW_SECONDS());
 
@@ -427,6 +439,76 @@ contract GatewayRouterTest is Test {
         assertEq(vault.balanceOf(shareReceiver), amount, "pinned vault shares");
     }
 
+    // ─── GW-2 / NC-9: idempotency key binds the FULL intent ───────────────────
+
+    /// @dev GW-2 / NC-9 (FLIPPED GREEN by #970): a single paymentId/idempotency
+    ///      key never authorizes two MATERIALLY DIFFERENT execution intents. The
+    ///      depositTo paymentId now folds the routing `destination` and the
+    ///      per-leg `minSharesPerLeg` vector into its preimage, so two depositTo
+    ///      calls sharing the same (orderId, amount, idempotencyKey) but routing
+    ///      to a DIFFERENT destination produce DIFFERENT paymentIds — neither is
+    ///      silently swallowed as a replay of the other. Deep proof referenced by
+    ///      FvInvariants.t.sol::test_GW2_*.
+    function test_GW2_depositTo_paymentIdBindsDestination() public {
+        _authorize(agent, _policyOpenDestinations());
+        uint256 amount = 25 * ONE_USDC;
+        _fundAndApprove(agent, 2 * amount);
+
+        bytes32 orderId = keccak256("gw2-order");
+        bytes32 idem = keccak256("gw2-idem");
+        uint64 deadline = uint64(block.timestamp + 60);
+        uint256[] memory empty = new uint256[](0);
+
+        // Same (orderId, amount, idem) routed to the ROUTER.
+        vm.prank(agent);
+        bytes32 idRouter =
+            gateway.depositTo(orderId, amount, deadline, idem, address(router), empty);
+
+        // Identical (orderId, amount, idem) routed to the VAULT must NOT collide.
+        // Pre-fix, both share the same paymentId and the second reverts
+        // PaymentIdAlreadyUsed even though it is a different intent; post-fix the
+        // destination is part of the preimage, so the second call succeeds with a
+        // distinct paymentId.
+        vm.prank(agent);
+        bytes32 idVault = gateway.depositTo(orderId, amount, deadline, idem, address(vault), empty);
+
+        assertTrue(
+            idRouter != idVault, "GW-2: differing destinations must yield differing paymentIds"
+        );
+        assertTrue(gateway.usedPaymentIds(idRouter), "router paymentId consumed");
+        assertTrue(gateway.usedPaymentIds(idVault), "vault paymentId consumed");
+    }
+
+    /// @dev GW-2 / NC-9: the per-leg slippage vector `minSharesPerLeg` is also
+    ///      bound into the paymentId, so two router deposits sharing the same
+    ///      (orderId, amount, idem) but carrying a DIFFERENT per-leg floor are
+    ///      distinct intents and never collide.
+    function test_GW2_depositTo_paymentIdBindsMinSharesPerLeg() public {
+        _authorize(agent, _policyWithRouter());
+        uint256 amount = 30 * ONE_USDC;
+        _fundAndApprove(agent, 2 * amount);
+
+        bytes32 orderId = keccak256("gw2-leg-order");
+        bytes32 idem = keccak256("gw2-leg-idem");
+        uint64 deadline = uint64(block.timestamp + 60);
+
+        // 60/40 router split → two legs. Distinct per-leg floors below the
+        // proportional receipts both execute, but must produce distinct paymentIds.
+        uint256[] memory legsA = new uint256[](2);
+        legsA[0] = 1;
+        legsA[1] = 1;
+        uint256[] memory legsB = new uint256[](2);
+        legsB[0] = 2;
+        legsB[1] = 2;
+
+        vm.prank(agent);
+        bytes32 idA = gateway.depositTo(orderId, amount, deadline, idem, address(router), legsA);
+        vm.prank(agent);
+        bytes32 idB = gateway.depositTo(orderId, amount, deadline, idem, address(router), legsB);
+
+        assertTrue(idA != idB, "GW-2: differing per-leg floors must yield differing paymentIds");
+    }
+
     // ─── AC3: invalid destination revert ─────────────────────────────────────
 
     /// @dev AC3: Destination that is neither a registered vault nor the router
@@ -518,8 +600,19 @@ contract GatewayRouterTest is Test {
         bytes32 idem = keccak256("idem-evt");
         uint256[] memory emptyMin = new uint256[](0);
 
+        // GW-2/NC-9: full-intent binding — destination + per-leg vector in preimage.
         bytes32 expectedPaymentId = keccak256(
-            abi.encode(uint8(3), block.chainid, address(gateway), agent, orderId, amount, idem)
+            abi.encode(
+                uint8(3),
+                block.chainid,
+                address(gateway),
+                agent,
+                orderId,
+                amount,
+                idem,
+                address(router),
+                emptyMin
+            )
         );
 
         vm.recordLogs();

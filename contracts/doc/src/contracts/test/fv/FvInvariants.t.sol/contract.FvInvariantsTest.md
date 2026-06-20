@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -288,90 +288,67 @@ Set the router's voted weight vector to a single vault at 100%.
 function _setSingleWeight(PortfolioRouter router, address vault) internal;
 ```
 
-### test_SUP3_roundTripNeverProfits
+### test_SUP3_expectedFail_roundTripNeverProfits
 
-SUP-3 (FLIPPED GREEN by #969) — a deposit-then-immediate-redeem
-round trip never returns more than was put in:
-`previewRedeem(previewDeposit(x)) <= x` for every basket vault
-across fuzzed slippage params. Fix (F-16 / NC-6):
-`BasketVault.deposit`/`mint` now mint shares on the REALIZED
-post-swap NAV delta (capped at the slippage-discounted deposit
-floor), not a pre-swap TWAP mark, so the mint-vs-haircut asymmetry
-that let a round trip farm value back out is closed. The NAV-vs-
-market deviation guard (ORA-4) keeps execution inside the band the
-proof assumes. Deep proofs:
-BasketVault.t.sol::test_SUP3_roundTripNeverProfits_fuzz (pure-view
-floor across fuzzed slippage) and
-BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits
-(real deposit → redeem within the deviation band).
+SUP-3 — a deposit-then-redeem round trip never returns more than
+was put in: previewRedeem(previewDeposit(x)) <= x.
 
 
 ```solidity
-function test_SUP3_roundTripNeverProfits() public pure;
+function test_SUP3_expectedFail_roundTripNeverProfits() public;
 ```
 
-### test_GW5_agentRedeemCarriesRealFloor
+### test_GW5_expectedFail_agentRedeemCarriesRealFloor
 
-GW-5 (FLIPPED GREEN by #969) — every agent redemption through the
-gateway carries a real, caller-meaningful per-leg slippage floor.
-Fix (F-11): `RobotMoneyGateway.withdrawFromRouter` takes a
-`minAssetsPerLeg` vector and forwards it verbatim to
-`PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero
-literal) AND forwards the real agent deadline (no more
-`type(uint256).max`); the floor vector is folded into `paymentId`
-so a replay cannot weaken it. Deep proofs:
-GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum,
-::test_withdrawFromRouter_floorIsBoundIntoPaymentId.
+GW-5 — every agent redemption carries a real, caller-meaningful
+per-leg slippage floor.
 
 
 ```solidity
-function test_GW5_agentRedeemCarriesRealFloor() public pure;
-```
-
-### test_ORA4_deviationGuardBlocksSettlement
-
-ORA-4 (FLIPPED GREEN by #969) — deposits/redemptions never settle
-when the oracle NAV (Chronicle / TWAP) deviates from the
-executable market price (Aerodrome spot) beyond a timelock-
-configured threshold. Fix (F-10): `BasketVault` carries a
-`navDeviationGuardBps` threshold and reverts
-`NavMarketDeviationExceeded` on the deposit/redeem hot path when
-|spot − TWAP| / TWAP exceeds it. Deep proof:
-BasketVault.t.sol::test_ORA4_deviationGuardBlocksSettlement.
-
-
-```solidity
-function test_ORA4_deviationGuardBlocksSettlement() public pure;
+function test_GW5_expectedFail_agentRedeemCarriesRealFloor() public;
 ```
 
 ### test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool
 
-LIFE-6 — reabsorbRemovedAsset never reverts-and-strands a
-reappeared balance (survives a degraded pool).
+LIFE-6 (FLIPPED GREEN by #970) — reabsorbRemovedAsset never
+reverts-and-strands a reappeared balance: on a degraded pool whose
+TWAP `observe()` reverts, it falls back to a permissionless sweep to
+the governed quarantine address rather than stranding the balance,
+and addAsset re-adding a token reuses its inactive entry instead of
+duplicating. Deep proofs: BasketVault.t.sol::test_LIFE6_* /
+test_NC8_addAsset_*.
 
 
 ```solidity
-function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public;
+function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public pure;
 ```
 
 ### test_GW2_expectedFail_idempotencyKeyBindsFullIntent
 
-GW-2 — a single paymentId/idempotency key never authorizes two
-materially different execution intents.
+GW-2 (FLIPPED GREEN by #970) — a single paymentId/idempotency key
+never authorizes two materially different execution intents: the
+depositTo paymentId binds `destination` and `minSharesPerLeg`, so
+two calls sharing (orderId, amount, idempotencyKey) but routing to a
+different destination (or carrying a different per-leg floor) yield
+different paymentIds. Deep proofs: GatewayRouter.t.sol::test_GW2_*.
 
 
 ```solidity
-function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public;
+function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public pure;
 ```
 
 ### test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant
 
-ACL-7 — registering an agent never blocks a future intended
-ADMIN/PAUSER address from being granted its role.
+ACL-7 (FLIPPED GREEN by #970) — registering an agent never blocks a
+future intended ADMIN/PAUSER address from being granted its role:
+the DeployTimelock handover asserts each intended admin/pauser
+address is AGENT-free before granting, turning the role-separation
+grant-DoS into an explicit deploy-time precondition. Deep proof:
+DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant.
 
 
 ```solidity
-function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public;
+function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public pure;
 ```
 
 ### test_RTR6_expectedFail_capBoundsCumulativeExposure

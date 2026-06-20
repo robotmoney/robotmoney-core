@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -233,6 +233,34 @@ route to either the pinned vault or the router.
 
 ```solidity
 function test_depositTo_openDestinations_allowsVaultAndRouter() public;
+```
+
+### test_GW2_depositTo_paymentIdBindsDestination
+
+GW-2 / NC-9 (FLIPPED GREEN by #970): a single paymentId/idempotency
+key never authorizes two MATERIALLY DIFFERENT execution intents. The
+depositTo paymentId now folds the routing `destination` and the
+per-leg `minSharesPerLeg` vector into its preimage, so two depositTo
+calls sharing the same (orderId, amount, idempotencyKey) but routing
+to a DIFFERENT destination produce DIFFERENT paymentIds — neither is
+silently swallowed as a replay of the other. Deep proof referenced by
+FvInvariants.t.sol::test_GW2_*.
+
+
+```solidity
+function test_GW2_depositTo_paymentIdBindsDestination() public;
+```
+
+### test_GW2_depositTo_paymentIdBindsMinSharesPerLeg
+
+GW-2 / NC-9: the per-leg slippage vector `minSharesPerLeg` is also
+bound into the paymentId, so two router deposits sharing the same
+(orderId, amount, idem) but carrying a DIFFERENT per-leg floor are
+distinct intents and never collide.
+
+
+```solidity
+function test_GW2_depositTo_paymentIdBindsMinSharesPerLeg() public;
 ```
 
 ### test_depositTo_revertsOnArbitraryDestination
@@ -539,50 +567,6 @@ router: happy path — deposit via router, withdraw via router, USDC lands at as
 
 ```solidity
 function test_withdrawFromRouter_happyPath() public;
-```
-
-### test_withdrawFromRouter_realFloor_revertsBelowMinimum
-
-GW-5 / F-11: a router redemption carrying a real, non-trivial
-`minAssetsPerLeg` reverts when realized assets fall below the floor.
-The gateway forwards the caller-supplied floor verbatim to the
-router (it no longer hardcodes an all-zero vector), so the router's
-per-leg `SlippageExceeded` guard bites.
-
-
-```solidity
-function test_withdrawFromRouter_realFloor_revertsBelowMinimum() public;
-```
-
-### test_withdrawFromRouter_realFloor_passesWhenMet
-
-GW-5 / F-11: a satisfiable real floor passes through and the
-redemption settles normally (the floor is meaningful, not a no-op).
-
-
-```solidity
-function test_withdrawFromRouter_realFloor_passesWhenMet() public;
-```
-
-### test_withdrawFromRouter_revertsOnMinAssetsLengthMismatch
-
-GW-5 / F-11: the per-leg floor vector must be parallel to the share
-vector — a length mismatch reverts before any state effect.
-
-
-```solidity
-function test_withdrawFromRouter_revertsOnMinAssetsLengthMismatch() public;
-```
-
-### test_withdrawFromRouter_floorIsBoundIntoPaymentId
-
-GW-5 / F-11: the floor vector is bound into `paymentId`, so two
-otherwise-identical orders that differ only in their floor produce
-distinct ids — a replay cannot re-run an order under a weaker floor.
-
-
-```solidity
-function test_withdrawFromRouter_floorIsBoundIntoPaymentId() public;
 ```
 
 ### test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix

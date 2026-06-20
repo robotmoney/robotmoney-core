@@ -687,34 +687,52 @@ contract FvInvariantsTest is Test {
     }
 
     // ── #970 (NC-3, NC-7, NC-8, NC-9, NC-10): control-plane hardening ─────────
+    //
+    // NC-3 (basket pause is a withdrawal freeze) was folded into LIFE-3/LIFE-4,
+    // already flipped HOLDS by #966 — verified above. The remaining flips:
+    //   - LIFE-6 / NC-8: reabsorbRemovedAsset gains a quarantine fallback on a
+    //     degraded pool, and addAsset reuses an inactive entry instead of
+    //     duplicating. Deep proofs: BasketVault.t.sol::test_LIFE6_* / test_NC8_*.
+    //   - GW-2 / NC-9: depositTo's paymentId folds in `destination` and the
+    //     per-leg `minSharesPerLeg` vector, so the idempotency key binds the full
+    //     intent. Deep proofs: GatewayRouter.t.sol::test_GW2_*.
+    //   - ACL-7 / NC-10: the DeployTimelock handover asserts every intended
+    //     ADMIN/PAUSER address is AGENT-free, so permissionless agent
+    //     registration cannot grant-DoS the handover. Deep proof:
+    //     DeployAssertions.t.sol::test_ACL7_*.
+    // NC-7 (unbounded gateway window arrays) has no dedicated RED invariant; the
+    // ring-buffer bound is pinned by RobotMoneyGateway.t.sol's rolling-window
+    // suite (GW-4 stays HOLDS).
 
-    /// @notice LIFE-6 — reabsorbRemovedAsset never reverts-and-strands a
-    ///         reappeared balance (survives a degraded pool).
-    function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public {
-        _skipRed(
-            "LIFE-6",
-            "reabsorb reuses assetInfo.pool TWAP; observe() can revert and brick reabsorption (NC-8)"
-        );
-        fail();
+    /// @notice LIFE-6 (FLIPPED GREEN by #970) — reabsorbRemovedAsset never
+    ///         reverts-and-strands a reappeared balance: on a degraded pool whose
+    ///         TWAP `observe()` reverts, it falls back to a permissionless sweep to
+    ///         the governed quarantine address rather than stranding the balance,
+    ///         and addAsset re-adding a token reuses its inactive entry instead of
+    ///         duplicating. Deep proofs: BasketVault.t.sol::test_LIFE6_* /
+    ///         test_NC8_addAsset_*.
+    function test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool() public pure {
+        _assertHolds("LIFE-6");
     }
 
-    /// @notice GW-2 — a single paymentId/idempotency key never authorizes two
-    ///         materially different execution intents.
-    function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public {
-        _skipRed(
-            "GW-2", "paymentId omits destination/minSharesPerLeg and the per-leg vector (NC-9/F-15)"
-        );
-        fail();
+    /// @notice GW-2 (FLIPPED GREEN by #970) — a single paymentId/idempotency key
+    ///         never authorizes two materially different execution intents: the
+    ///         depositTo paymentId binds `destination` and `minSharesPerLeg`, so
+    ///         two calls sharing (orderId, amount, idempotencyKey) but routing to a
+    ///         different destination (or carrying a different per-leg floor) yield
+    ///         different paymentIds. Deep proofs: GatewayRouter.t.sol::test_GW2_*.
+    function test_GW2_expectedFail_idempotencyKeyBindsFullIntent() public pure {
+        _assertHolds("GW-2");
     }
 
-    /// @notice ACL-7 — registering an agent never blocks a future intended
-    ///         ADMIN/PAUSER address from being granted its role.
-    function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public {
-        _skipRed(
-            "ACL-7",
-            "permissionless commitAuthorization + ACL-2 separation pre-binds a multisig as AGENT (NC-10)"
-        );
-        fail();
+    /// @notice ACL-7 (FLIPPED GREEN by #970) — registering an agent never blocks a
+    ///         future intended ADMIN/PAUSER address from being granted its role:
+    ///         the DeployTimelock handover asserts each intended admin/pauser
+    ///         address is AGENT-free before granting, turning the role-separation
+    ///         grant-DoS into an explicit deploy-time precondition. Deep proof:
+    ///         DeployAssertions.t.sol::test_ACL7_agentRegistrationCannotBlockRoleGrant.
+    function test_ACL7_expectedFail_agentRegistrationCannotBlockRoleGrant() public pure {
+        _assertHolds("ACL-7");
     }
 
     // ── #971 (F-07, F-12, F-14, F-15, NC-11, NC-12): low-severity cleanup ─────

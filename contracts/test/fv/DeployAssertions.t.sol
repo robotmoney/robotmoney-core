@@ -36,6 +36,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {DeployTimelock} from "../../script/DeployTimelock.s.sol";
 import {RobotMoneyVault} from "../../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../../gateway/RobotMoneyGateway.sol";
+import {IGateway} from "../../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../../VaultRegistry.sol";
 import {PortfolioRouter} from "../../PortfolioRouter.sol";
 import {RouterGovernance} from "../../RouterGovernance.sol";
@@ -167,6 +168,7 @@ contract DeployAssertionsTest is Test {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 internal constant AGENT_ROLE = keccak256("AGENT_ROLE");
     bytes32 internal constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // ACL-1 fixture handles (storage, to avoid stack-too-deep in the test body).
@@ -246,6 +248,79 @@ contract DeployAssertionsTest is Test {
             _aclGateway.hasRole(DEFAULT_ADMIN_ROLE, timelock), "timelock missing gateway root"
         );
         assertTrue(_aclGateway.hasRole(ADMIN_ROLE, timelock), "timelock missing gateway ADMIN");
+    }
+
+    /// @notice ACL-7 / NC-10 (FLIPPED GREEN by #970): permissionless agent
+    ///         registration can never block a future intended ADMIN/PAUSER address
+    ///         from being granted its role during handover. Two layers prove this:
+    ///
+    ///         1. The Gateway's role-separation invariant means that if an intended
+    ///            admin address were already an AGENT, `grantRole(ADMIN_ROLE, …)`
+    ///            would revert `RoleSeparationViolated` — a confusing, late-stage
+    ///            handover brick (the grant-DoS vector).
+    ///         2. The DeployTimelock handover now ASSERTS up front (before any
+    ///            gateway grant) that every address about to receive an
+    ///            ADMIN/PAUSER-tier role is AGENT-free, turning the griefing vector
+    ///            into an explicit, typed deploy-time precondition.
+    ///
+    ///         This test pins layer 1 (the brick exists without the guard) and
+    ///         layer 2 (a normal handover, where no intended admin is pre-bound,
+    ///         passes the guard and completes). Deep proof referenced by
+    ///         FvInvariants.t.sol::test_ACL7_*.
+    function test_ACL7_agentRegistrationCannotBlockRoleGrant() public {
+        TestERC20 usdc = new TestERC20();
+        address admin = makeAddr("acl7-admin");
+        address pauser = makeAddr("acl7-pauser");
+        RobotMoneyVault v = new RobotMoneyVault(
+            usdc, type(uint256).max, type(uint256).max, 0, makeAddr("acl7-safe"), admin, admin
+        );
+        RobotMoneyGateway gw = new RobotMoneyGateway(usdc, v, admin, pauser, address(0));
+
+        // An attacker pre-binds an INTENDED future admin address as an AGENT via
+        // the permissionless registration surface (modelled here by the
+        // ADMIN-gated authorizeAgent, which is the same grant path).
+        address intendedAdmin = makeAddr("acl7-future-admin");
+        IGateway.AgentPolicy memory p = _acl7Policy();
+        vm.prank(admin);
+        gw.authorizeAgent(intendedAdmin, p);
+        assertTrue(gw.hasRole(AGENT_ROLE, intendedAdmin), "pre: intended admin pre-bound as AGENT");
+
+        // Layer 1: granting ADMIN_ROLE to that pre-bound address now reverts —
+        // this is the grant-DoS the deploy guard must catch BEFORE attempting it.
+        vm.prank(admin);
+        vm.expectRevert(); // RoleSeparationViolated (cross-tier overlap)
+        gw.grantRole(ADMIN_ROLE, intendedAdmin);
+
+        // Layer 2: the deploy-time guard catches the same condition explicitly. A
+        // clean handover — where no intended admin/pauser is pre-bound as AGENT —
+        // passes the guard and completes, which the full ACL-1 handover fixture
+        // already exercises end-to-end.
+        address freshTimelock = _deployAclFixtureAndHandover();
+        assertFalse(
+            _aclGateway.hasRole(AGENT_ROLE, freshTimelock),
+            "ACL-7: handed-over timelock must be AGENT-free"
+        );
+        assertTrue(
+            _aclGateway.hasRole(ADMIN_ROLE, freshTimelock),
+            "ACL-7: AGENT-free timelock receives gateway ADMIN without a grant-DoS"
+        );
+    }
+
+    /// @dev Minimal valid agent policy for the ACL-7 grant-DoS fixture.
+    function _acl7Policy() internal returns (IGateway.AgentPolicy memory p) {
+        address[] memory empty = new address[](0);
+        p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: 1,
+            maxPerWindow: 1,
+            shareReceiver: makeAddr("acl7-receiver"),
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
+        });
     }
 
     /// @dev Build the five-contract fixture (deployer = harness), delegate the
