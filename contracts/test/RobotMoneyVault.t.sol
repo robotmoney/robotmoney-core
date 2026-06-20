@@ -1170,6 +1170,128 @@ contract RobotMoneyVaultTest is Test {
         vault.restoreVault(0);
     }
 
+    // ─── Unified governance retire (DI-2, #942) ───────────────────────────────
+
+    /// @notice After the registry drives `retire()`, direct deposits/mints are
+    ///         hard-stopped at the vault (maxDeposit == 0, deposit reverts), but
+    ///         withdrawals/redemptions stay open. `retire()` is callable only by
+    ///         the linked registry; a stranger (even ADMIN_ROLE) call reverts.
+    function test_retire_haltsDirectDepositsButKeepsRedeemOpen() public {
+        // A registry stand-in is the only caller allowed to drive retire().
+        address registry = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(registry);
+
+        // Seed a position so we can prove redeem stays open after retire.
+        vm.prank(alice);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, alice);
+        assertGt(shares, 0, "seed deposit should mint shares");
+        assertGt(vault.maxDeposit(alice), 0, "deposits open pre-retire");
+
+        // A direct (non-registry) retire() call reverts — even from ADMIN.
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.OnlyRegistry.selector);
+        vault.retire();
+
+        // The registry retires the vault.
+        vm.prank(registry);
+        vault.retire();
+        assertTrue(vault.retired(), "vault should be retired");
+        assertEq(vault.maxDeposit(alice), 0, "maxDeposit must be 0 after retire");
+
+        // Direct deposits now revert with VaultRetired (ERC-4626 max-deposit guard
+        // fires first because maxDeposit() == 0).
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "ERC4626ExceededMaxDeposit(address,uint256,uint256)", alice, 100 * ONE_USDC, 0
+            )
+        );
+        vault.deposit(100 * ONE_USDC, alice);
+
+        // Redemptions stay open: the seeded holder can still exit.
+        vm.prank(alice);
+        uint256 assets = vault.redeem(shares, alice, alice);
+        assertGt(assets, 0, "redeem must stay open on a retired vault");
+    }
+
+    /// @notice The vault `retire`/`unretire` lifecycle flag is distinct from the
+    ///         emergency `shutdown` overlay: retiring does not set `shutdown`, and
+    ///         `shutdownVault` continues to work independently after a retire.
+    function test_retire_isIndependentFromEmergencyShutdown() public {
+        address registry = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(registry);
+
+        // Retire: lifecycle flag set, emergency shutdown untouched.
+        vm.prank(registry);
+        vault.retire();
+        assertTrue(vault.retired(), "retired flag set");
+        assertFalse(vault.isShutdown(), "retire must not set the emergency shutdown flag");
+
+        // Emergency shutdown still works while retired (EMERGENCY_ROLE, vault-only).
+        vm.prank(admin); // admin also holds EMERGENCY_ROLE in this fixture
+        vault.shutdownVault();
+        assertTrue(vault.isShutdown(), "shutdownVault must still work after retire");
+        assertTrue(vault.retired(), "retire flag stays set independently of shutdown");
+    }
+
+    /// @notice The registry can abort a deprecation via `unretire()`, re-opening
+    ///         direct deposits. Only the linked registry may call it.
+    function test_unretire_reopensDirectDeposits() public {
+        address registry = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(registry);
+
+        vm.prank(registry);
+        vault.retire();
+        assertEq(vault.maxDeposit(alice), 0, "deposits halted after retire");
+
+        // Direct (non-registry) unretire reverts.
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.OnlyRegistry.selector);
+        vault.unretire();
+
+        // Registry aborts the deprecation.
+        vm.prank(registry);
+        vault.unretire();
+        assertFalse(vault.retired(), "vault should be active again");
+        assertGt(vault.maxDeposit(alice), 0, "deposits re-open after unretire");
+
+        // A direct deposit now succeeds.
+        vm.prank(alice);
+        uint256 shares = vault.deposit(100 * ONE_USDC, alice);
+        assertGt(shares, 0, "deposit after unretire must mint shares");
+    }
+
+    /// @notice `setRegistry` is set-once and ADMIN_ROLE-gated.
+    function test_setRegistry_isSetOnceAndAdminGated() public {
+        address registry = makeAddr("registry");
+
+        // Non-admin cannot set the registry.
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "AccessControlUnauthorizedAccount(address,bytes32)", alice, adminRole
+            )
+        );
+        vault.setRegistry(registry);
+
+        // Zero address rejected.
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.ZeroAddress.selector);
+        vault.setRegistry(address(0));
+
+        // First set succeeds; second reverts (set-once).
+        vm.prank(admin);
+        vault.setRegistry(registry);
+        assertEq(vault.registry(), registry, "registry link must be set");
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyVault.RegistryAlreadySet.selector);
+        vault.setRegistry(makeAddr("otherRegistry"));
+    }
+
     // ─── Custody invariants: foreign-token quarantine & NAV donation (#929) ────
 
     /// @notice INV-1: the vault asset (USDC) can never be swept out — it is a

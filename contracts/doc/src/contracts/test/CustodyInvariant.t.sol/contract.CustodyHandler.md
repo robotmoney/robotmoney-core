@@ -1,5 +1,5 @@
 # CustodyHandler
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/CustodyInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/271183ff0750d8d86b43d3f447e02f6eb9f2e265/contracts/test/CustodyInvariant.t.sol)
 
 **Inherits:**
 Test
@@ -26,6 +26,13 @@ InvUSDC public immutable usdc
 
 ```solidity
 InvForeignToken public immutable foreign
+```
+
+
+### admin
+
+```solidity
+address public immutable admin
 ```
 
 
@@ -70,7 +77,7 @@ modifier useActor(uint256 seed) ;
 
 
 ```solidity
-constructor(RobotMoneyVault vault_, InvUSDC usdc_, InvForeignToken foreign_) ;
+constructor(RobotMoneyVault vault_, InvUSDC usdc_, InvForeignToken foreign_, address admin_) ;
 ```
 
 ### deposit
@@ -117,5 +124,71 @@ function actorCount() external view returns (uint256);
 
 ```solidity
 function actorAt(uint256 i) external view returns (address);
+```
+
+### handler_rebalance
+
+Equal-weight rebalance across the two active adapters, then a
+post-condition check that the vault routed every idle USDC back
+out (router/idle custody == 0 when adapters can absorb it).
+
+Warps past `minRebalanceInterval` and pranks `admin` (rebalance is
+ADMIN_ROLE/KEEPER_ROLE gated) so the throttle does not make every
+call a no-op revert. `setMaxRebalanceBpsPerCall(MAX_..._CEILING)` is
+done once in setUp so a single call can move a meaningful slice.
+
+
+```solidity
+function handler_rebalance(uint256 seed) external;
+```
+
+### handler_removeAndReabsorb
+
+Graceful adapter removal with reabsorb-to-idle: drain an adapter
+(assets flow back to idle, NAV preserved), donate USDC so NAV
+strictly rises, deactivate the now-empty adapter, then assert the
+removed adapter holds zero balance.
+
+Uses EMERGENCY `emergencyWithdrawAdapter` (graceful reabsorb to idle)
++ ADMIN `removeAdapter` — the production analogue of "remove a basket
+asset and re-absorb it". Never calls `forceRemoveAdapter` here so the
+NAV floor below is not broken by an intentional loss.
+
+
+```solidity
+function handler_removeAndReabsorb(uint256 seed) external;
+```
+
+### handler_routerZeroBalance
+
+Drive the vault to a router/adapter-zero-balance state by draining
+every active adapter to idle, then assert deposit / redeem /
+totalAssets accounting still holds with no adapter custody out.
+
+`emergencyWithdrawAdapter` reabsorbs to idle (no loss); after it the
+summed adapter custody is zero and totalAssets equals the vault's own
+idle USDC balance.
+
+
+```solidity
+function handler_routerZeroBalance(uint256) external;
+```
+
+### _hasActiveAdapter
+
+True if at least one registered adapter is still active.
+
+
+```solidity
+function _hasActiveAdapter() internal view returns (bool);
+```
+
+### _activeAdapterTally
+
+Count of currently active adapters.
+
+
+```solidity
+function _activeAdapterTally() internal view returns (uint256 tally);
 ```
 
