@@ -1730,7 +1730,11 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.PausedError.selector);
         gateway.withdrawFromRouter(
-            keccak256("o"), _routerVaults(), sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+            keccak256("o"),
+            _routerVaults(),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("i")
         );
     }
 
@@ -1743,7 +1747,11 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.InvalidAmount.selector);
         gateway.withdrawFromRouter(
-            keccak256("o"), _routerVaults(), sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+            keccak256("o"),
+            _routerVaults(),
+            sharesPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("i")
         );
     }
 

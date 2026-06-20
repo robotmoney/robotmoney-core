@@ -1310,7 +1310,12 @@ contract PortfolioRouterTest is Test {
             )
         );
         router.redeemFor(
-            depositor, stranger, _redeemVaults(), sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            stranger,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
     }
 
@@ -1339,7 +1344,12 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         uint256[] memory assetsOut = router.redeemFor(
-            depositor, depositor, _redeemVaults(), sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
 
         assertEq(assetsOut[0], shares[0]);
@@ -1426,10 +1436,9 @@ contract PortfolioRouterTest is Test {
         minAssets[0] = sharesToRedeem[0];
         minAssets[1] = sharesToRedeem[1];
         vm.prank(depositor);
-        uint256[] memory assetsOut =
-            router.redeemFor(
-                depositor, depositor, _redeemVaults(), sharesToRedeem, minAssets, block.timestamp + 60
-            );
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor, depositor, _redeemVaults(), sharesToRedeem, minAssets, block.timestamp + 60
+        );
         assertEq(assetsOut[0], sharesToRedeem[0], "leg 0 proceeds at floor");
         assertEq(assetsOut[1], sharesToRedeem[1], "leg 1 proceeds at floor");
         assertEq(usdc.balanceOf(depositor), amount, "depositor received full USDC");
@@ -1474,7 +1483,12 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         uint256[] memory assetsOut = router.redeemFor(
-            depositor, depositor, _redeemVaults(), sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
         assertEq(assetsOut[0], sharesToRedeem[0], "vaultA leg redeemed by name");
         assertEq(assetsOut[1], sharesToRedeem[1], "vaultB leg redeemed by name");
@@ -1494,7 +1508,12 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         uint256[] memory assetsOut = router.redeemFor(
-            depositor, depositor, _redeemVaults(), sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
         assertEq(assetsOut[0], sharesToRedeem[0], "Retired vaultA still redeemable");
         assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
@@ -1514,7 +1533,12 @@ contract PortfolioRouterTest is Test {
             abi.encodeWithSelector(PortfolioRouter.VaultPausedForRedeem.selector, address(vaultA))
         );
         router.redeemFor(
-            depositor, depositor, _redeemVaults(), sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
     }
 
