@@ -5,6 +5,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {TwapTickMath} from "./TwapTickMath.sol";
 
 /// @dev Minimal read surface of `BasketVault` consumed by the weight-preview
 ///      views. Declared here (not imported from BasketVault) to avoid a cyclic
@@ -27,6 +28,7 @@ interface IBasketVaultViews {
     function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
     function balanceOf(address account) external view returns (uint256);
     function totalSupply() external view returns (uint256);
+    function effectiveTwapWindow(address token) external view returns (uint32);
 }
 
 /// @title BasketViews
@@ -38,6 +40,61 @@ library BasketViews {
     using Math for uint256;
 
     uint256 internal constant MAX_BPS = 10_000;
+
+    /// @notice Build the per-asset shortlist (token, pool, fee, active, balance)
+    ///         for off-chain/rmpc display. Externally linked so the array-building
+    ///         loop is not inlined into the EIP-170-tight `AgentTokenVault`.
+    function shortlist(IBasketVaultViews vault)
+        public
+        view
+        returns (
+            address[] memory tokens,
+            address[] memory pools,
+            uint24[] memory fees,
+            bool[] memory active,
+            uint256[] memory balances
+        )
+    {
+        uint256 len = vault.assetCount();
+        tokens = new address[](len);
+        pools = new address[](len);
+        fees = new uint24[](len);
+        active = new bool[](len);
+        balances = new uint256[](len);
+        for (uint256 i = 0; i < len; i++) {
+            (address token, address pool, uint24 fee, bool act,,) = vault.assets(i);
+            tokens[i] = token;
+            pools[i] = pool;
+            fees[i] = fee;
+            active[i] = act;
+            balances[i] = IERC20(token).balanceOf(address(vault));
+        }
+    }
+
+    /// @notice ORA-4 / F-10 — revert if any active basket asset's executable
+    ///         market (slot0 spot) price diverges from its NAV-pricing TWAP
+    ///         beyond `thresholdBps`. No-op when `thresholdBps` is 0. Externally
+    ///         linked so the per-asset loop is not inlined into the EIP-170-tight
+    ///         vault family.
+    /// @param vault       The basket vault (read surface).
+    /// @param usdc        The quote token (USDC).
+    /// @param thresholdBps Max permitted spot-vs-TWAP divergence in bps.
+    function checkNavDeviation(IBasketVaultViews vault, address usdc, uint256 thresholdBps)
+        public
+        view
+    {
+        if (thresholdBps == 0) return;
+        uint256 len = vault.assetCount();
+        for (uint256 i = 0; i < len; i++) {
+            (address token, address pool,, bool active,,) = vault.assets(i);
+            if (!active) continue;
+            // Probe a TWAP-priced token notional for ~1 USDC so decimals cancel.
+            uint256 probe = vault.assetTokenValue(i, 1e6);
+            TwapTickMath.requireWithinDeviation(
+                pool, token, usdc, vault.effectiveTwapWindow(token), probe, thresholdBps
+            );
+        }
+    }
 
     /// @notice Equal-weight cost preview: how `usdcAmount` would be allocated
     ///         across active assets at current TWAP prices.

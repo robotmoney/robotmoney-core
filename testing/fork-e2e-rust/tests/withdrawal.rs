@@ -138,6 +138,7 @@ sol! {
         function withdrawFromRouter(
             bytes32 orderId,
             uint256[] calldata sharesPerLeg,
+            uint256[] calldata minAssetsPerLeg,
             uint64 deadline,
             bytes32 idempotencyKey
         ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
@@ -966,12 +967,17 @@ fn router_withdrawal() {
     // ── Call withdrawFromRouter ──────────────────────────────────────────────
     let withdraw_deadline = now_secs + 300;
     let shares_per_leg = vec![shares_a, shares_b];
+    // GW-5 / F-11: forward a real per-leg slippage floor. On this 1:1 fork
+    // fixture a zero floor is sufficient to exercise the happy path, but the
+    // vector must be parallel to sharesPerLeg.
+    let min_assets_per_leg = vec![U256::ZERO, U256::ZERO];
     let withdraw_receipt = agent
         .send(
             gateway,
             &IGateway::withdrawFromRouterCall {
                 orderId: alloy_primitives::B256::from([60u8; 32]),
                 sharesPerLeg: shares_per_leg,
+                minAssetsPerLeg: min_assets_per_leg,
                 deadline: withdraw_deadline,
                 idempotencyKey: alloy_primitives::B256::from([61u8; 32]),
             },

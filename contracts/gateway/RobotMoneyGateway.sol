@@ -1032,6 +1032,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         address assetRecipient;
         uint256 totalShares;
         uint64 windowId;
+        uint64 deadline;
         address[] vaultList;
         uint256[] shareBalancesBefore;
     }
@@ -1048,6 +1049,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         bytes32 orderId,
         address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
         uint64 deadline,
         bytes32 idempotencyKey
     )
@@ -1061,6 +1063,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // 1. Router must be configured.
         if (address(routerContract) == address(0)) revert RouterNotConfigured();
 
+        // 1a. The caller-supplied per-leg slippage floor must be parallel to the
+        //     share vector (GW-5 / F-11). The gateway forwards this floor verbatim
+        //     to the router; it no longer fabricates an all-zero vector.
+        if (minAssetsPerLeg.length != sharesPerLeg.length) revert RouterLegLengthMismatch();
+
         // Build args struct early to collapse locals onto the heap.
         RouterWithdrawArgs memory args;
         args.orderId = orderId;
@@ -1069,6 +1076,8 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // can exit a reweighted-out or retired position. The array is identity-
         // bound to `sharesPerLeg` and committed to the intent hash (paymentId).
         args.vaultList = vaults;
+        // F-11 (issue #969): forward the real agent deadline to the router too.
+        args.deadline = deadline;
 
         {
             AgentPolicy memory p = agents[msg.sender];
@@ -1129,25 +1138,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         // 8. windowId — informational only.
         args.windowId = uint64(block.timestamp / WINDOW_SECONDS);
 
-        // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED.
+        // 9. paymentId — DEADLINE INTENTIONALLY EXCLUDED (a deadline is liveness,
+        //    not intent). `minAssetsPerLeg` IS bound (GW-5 / F-11): the per-leg
+        //    slippage floor is part of the redemption intent, so a replay can
+        //    never re-execute the same order under a weaker (e.g. zeroed) floor.
         //    OP_WITHDRAW_ROUTER prefix namespaces router-withdrawal ids away
         //    from the three sibling op kinds (audit 2026-06-09, L-12).
         //    The explicit `vaults[]` and `sharesPerLeg` are committed to the
         //    intent hash (issue #967, NC-5): the redeemed leg set is part of the
         //    signed intent, so two withdrawals that name different vaults or
         //    per-leg shares can never collide on the same paymentId.
-        args.paymentId = keccak256(
-            abi.encode(
-                OP_WITHDRAW_ROUTER,
-                block.chainid,
-                address(this),
-                msg.sender,
-                orderId,
-                args.totalShares,
-                vaults,
-                sharesPerLeg,
-                idempotencyKey
-            )
+        args.paymentId = _routerWithdrawPaymentId(
+            orderId, args.totalShares, vaults, sharesPerLeg, minAssetsPerLeg, idempotencyKey
         );
         if (usedPaymentIds[args.paymentId]) revert PaymentIdAlreadyUsed();
 
@@ -1156,7 +1158,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 11–14. Execute the multi-leg redemption in a separate frame to
         //        stay within EVM stack-depth limits.
-        assetsPerLeg = _executeRouterWithdraw(args, sharesPerLeg);
+        assetsPerLeg = _executeRouterWithdraw(args, sharesPerLeg, minAssetsPerLeg);
 
         paymentId = args.paymentId;
 
@@ -1174,13 +1176,47 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         );
     }
 
+    /// @dev Compute the router-withdrawal paymentId. DEADLINE INTENTIONALLY
+    ///      EXCLUDED (a deadline is liveness, not intent). `OP_WITHDRAW_ROUTER`
+    ///      prefix namespaces these ids from the three sibling op kinds (L-12).
+    ///      The explicit `vaults`/`sharesPerLeg` are committed so two withdrawals
+    ///      that name different vaults or per-leg shares can never collide (#967,
+    ///      NC-5), and `minAssetsPerLeg` is bound so a replay can never re-execute
+    ///      the same order under a weaker (e.g. zeroed) slippage floor (GW-5 /
+    ///      F-11). Extracted to a helper to keep `withdrawFromRouter` under the
+    ///      EVM stack-depth limit.
+    function _routerWithdrawPaymentId(
+        bytes32 orderId,
+        uint256 totalShares,
+        address[] calldata vaults,
+        uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
+        bytes32 idempotencyKey
+    ) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                OP_WITHDRAW_ROUTER,
+                block.chainid,
+                address(this),
+                msg.sender,
+                orderId,
+                totalShares,
+                vaults,
+                sharesPerLeg,
+                keccak256(abi.encode(minAssetsPerLeg)),
+                idempotencyKey
+            )
+        );
+    }
+
     /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,
     ///      approve router, call redeemFor, clear allowances, verify custody.
     ///      Separated to avoid stack-too-deep in `withdrawFromRouter`.
-    function _executeRouterWithdraw(RouterWithdrawArgs memory args, uint256[] calldata sharesPerLeg)
-        internal
-        returns (uint256[] memory assetsPerLeg)
-    {
+    function _executeRouterWithdraw(
+        RouterWithdrawArgs memory args,
+        uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg
+    ) internal returns (uint256[] memory assetsPerLeg) {
         // slither-disable-start reentrancy-balance
         // Justification: all state effects (paymentId, rolling window) are written
         // in the calling frame before this function is called (CEI). `nonReentrant`
@@ -1201,20 +1237,20 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
         // 12. Call router.redeemFor — router calls vault.redeem per leg with
         //     the gateway as `owner`. USDC goes directly to assetRecipient.
-        //     The agent's `deadline` is already enforced upstream in
-        //     `withdrawFromRouter` (step 3) before any state effects, so the
-        //     router's own deadline guard is disabled here (max). Per-leg
-        //     slippage floors are zeroed: the gateway's withdrawal ABI does not
-        //     carry a per-leg minimum, so it opts out of the router floor (the
-        //     router still enforces any floor a direct, non-gateway caller
-        //     supplies). Both new params exist for finding L-8.
+        //     The agent's `deadline` is enforced upstream in `withdrawFromRouter`
+        //     (step 3) before any state effects AND forwarded here so the router's
+        //     own deadline guard also bites (no `type(uint256).max` bypass — F-11).
+        //     The caller-supplied per-leg slippage floor (`minAssetsPerLeg`) is
+        //     forwarded verbatim: each non-zero leg reverts `SlippageExceeded`
+        //     when realized USDC proceeds fall below the floor. The gateway no
+        //     longer fabricates an all-zero floor vector (GW-5 / F-11).
         assetsPerLeg = routerContract.redeemFor(
             address(this),
             args.assetRecipient,
             args.vaultList,
             sharesPerLeg,
-            new uint256[](sharesPerLeg.length),
-            type(uint256).max
+            minAssetsPerLeg,
+            uint256(args.deadline)
         );
 
         // 13. Clear residual vault share approvals (defense-in-depth).

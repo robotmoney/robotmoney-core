@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -97,6 +97,18 @@ ISwapRouter public immutable SWAP_ROUTER
 
 ```solidity
 IERC20 internal immutable _USDC
+```
+
+
+### MAX_NAV_DEVIATION_BPS
+Hard ceiling for `navDeviationGuardBps`. A threshold above this would
+make the guard a no-op (any realistic divergence passes), so the
+setter rejects it. `internal` (no public getter) to save bytecode on
+the EIP-170-tight vault family — the value is documented here.
+
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000
 ```
 
 
@@ -231,6 +243,23 @@ mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed
 ```
 
 
+### navDeviationGuardBps
+ORA-4 / F-10 — maximum permitted divergence (in bps) between the
+NAV-pricing TWAP and the executable market (spot) price before
+deposits/redemptions are halted on the deposit/redeem hot path.
+A stale or manipulated mark whose spot has moved beyond this band
+reverts `NavMarketDeviationExceeded` rather than settling at a
+price the market no longer offers. `0` DISABLES the guard (used
+by fixtures and any vault that opts out); production deployments
+set a non-zero, timelock-governed threshold. Bounded above by
+`MAX_NAV_DEVIATION_BPS`.
+
+
+```solidity
+uint256 public navDeviationGuardBps
+```
+
+
 ## Functions
 ### _grantRole
 
@@ -325,9 +354,41 @@ function totalAssets() public view virtual override returns (uint256);
 
 ### _deposit
 
+Deposit `assets` USDC and mint shares on the REALIZED swap
+proceeds (post-swap NAV delta), not a pre-swap TWAP mark.
+
+SUP-3 / F-16 / NC-6: the OZ default mints `previewDeposit(assets)`
+shares BEFORE the deposit USDC is swapped into basket tokens. When
+the realized spot proceeds diverge from the TWAP mark, the minted
+share count no longer matches the value the vault actually captured:
+if spot beats TWAP the depositor's own swap surplus inflates their
+share value so `previewRedeem(previewDeposit(x)) > x` becomes
+reachable (a farmable round-trip leak). We override `deposit` to
+swap FIRST, measure the realized TWAP-valued NAV delta the vault
+gained, and mint against that — capped at the slippage-discounted
+deposit floor so the depositor is never credited more than the
+worst-case `previewDeposit` floor. This makes the round trip
+`previewRedeem(previewDeposit(x)) <= x` hold for every realized
+execution price (SUP-3), and removes the mint-vs-haircut asymmetry
+that transferred value to incumbents (NC-6).
+
+Deposit core (the OZ `deposit`/`mint` entrypoints route here). The
+`shares` arg OZ pre-computed from `previewDeposit`/`previewMint` is
+DISCARDED: we mint on the REALIZED post-swap NAV delta instead, so
+the minted count reflects the value the vault actually captured —
+not a pre-swap TWAP mark — closing the SUP-3/F-16/NC-6 round-trip
+leak. The realized credit is capped at the slippage-discounted
+deposit floor, which equals the OZ preview floor in the normal
+(capped) case, so `deposit`/`mint` return values stay consistent.
+
 
 ```solidity
-function _deposit(address caller, address receiver, uint256 usdcAmount, uint256 shares)
+function _deposit(
+    address caller,
+    address receiver,
+    uint256 usdcAmount,
+    uint256 /*shares*/
+)
     internal
     override
     whenNotPaused
@@ -815,6 +876,29 @@ function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 ```
 
+### setNavDeviationGuardBps
+
+Set the NAV-vs-market deviation guard threshold (ORA-4 / F-10).
+
+ADMIN_ROLE only (timelock in production). `0` disables the guard;
+any non-zero value must be `<= MAX_NAV_DEVIATION_BPS`. When set,
+deposits revert `NavMarketDeviationExceeded` if any active asset's
+executable market (spot) price diverges from its NAV-pricing TWAP
+beyond `newBps`. Independent of `maxSlippageBps` (the swap floor),
+which stays TWAP/pool-fee-derived (ORA-7) — the two bounds never
+share a source.
+
+
+```solidity
+function setNavDeviationGuardBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newBps`|`uint256`|New deviation threshold in basis points.|
+
+
 ### setMaxSlippageBps
 
 Update the worst-case slippage bound used for swap floors and previews.
@@ -1163,6 +1247,15 @@ hash for use in `addAsset` (ADP-2 / NC-2).
 event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
 ```
 
+### NavDeviationGuardUpdated
+Emitted when ADMIN_ROLE (timelock) updates the NAV-vs-market
+deviation guard threshold (ORA-4 / F-10).
+
+
+```solidity
+event NavDeviationGuardUpdated(uint256 oldBps, uint256 newBps);
+```
+
 ### WeightSnapshot
 Emitted on every deposit, recording the equal-weight allocation applied
 to the depositor's inflow. Satisfies the event-stream cost-disclosure
@@ -1245,6 +1338,18 @@ error AssetStillHeld();
 
 ```solidity
 error NoActiveAssets();
+```
+
+### NavMarketDeviationExceeded
+ORA-4 / F-10: the executable market (spot) price for a basket asset
+has diverged from the NAV-pricing TWAP beyond `navDeviationGuardBps`.
+Deposits/redemptions revert rather than settle on a stale/manipulated
+mark. `deviationBps` is the observed divergence; `thresholdBps` is the
+configured guard.
+
+
+```solidity
+error NavMarketDeviationExceeded(address token, uint256 deviationBps, uint256 thresholdBps);
 ```
 
 ### EmergencyUnwindOverrideDisabled

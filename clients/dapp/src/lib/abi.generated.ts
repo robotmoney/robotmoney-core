@@ -965,6 +965,11 @@ export const gatewayAbiGenerated = [
         internalType: "uint256[]",
       },
       {
+        name: "minAssetsPerLeg",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+      {
         name: "deadline",
         type: "uint64",
         internalType: "uint64",

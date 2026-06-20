@@ -40,6 +40,7 @@ contract MockPool {
     address public immutable token0;
     address public immutable token1;
     uint160 public sqrtPriceX96Spot; // mutable so tests can simulate manipulation
+    int24 public spotTick; // slot0 spot tick (ORA-4 deviation probe); default 0 = 1:1
     int56 public tickCumulativeRate; // ticks per second contributed to TWAP
     uint16 public cardinality;
     uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
@@ -71,6 +72,13 @@ contract MockPool {
         sqrtPriceX96Spot = sqrtPriceX96_;
     }
 
+    /// @dev Set the slot0 spot tick the ORA-4 deviation guard reads. The TWAP
+    ///      mean tick is governed separately by `tickCumulativeRate`, so a test
+    ///      can drive spot ≠ TWAP to exercise the deviation guard.
+    function setSpotTick(int24 tick_) external {
+        spotTick = tick_;
+    }
+
     function setTickCumulativeRate(int56 rate) external {
         tickCumulativeRate = rate;
     }
@@ -92,7 +100,7 @@ contract MockPool {
     }
 
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (sqrtPriceX96Spot, 0, 0, cardinality, cardinality, 0, true);
+        return (sqrtPriceX96Spot, spotTick, 0, cardinality, cardinality, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
@@ -1677,6 +1685,121 @@ contract BasketVaultTest is Test {
         vault.redeem(shares, stranger, stranger);
 
         assertGt(usdc.balanceOf(stranger), 0, "redeem still works");
+    }
+
+    // ─── SUP-3 / NC-6 / F-16: round trip never profits (#969) ─────────────────
+
+    /// @dev Deposit `amount` USDC into `vault`, executing the swap at 1:1
+    ///      (spot == TWAP) so the basket token received equals the USDC in.
+    function _depositAt1to1(address who, uint256 amount) internal returns (uint256 shares) {
+        basketToken.mint(address(router), amount);
+        router.setAmountOut(amount);
+        usdc.mint(who, amount);
+        vm.startPrank(who);
+        usdc.approve(address(vault), amount);
+        shares = vault.deposit(amount, who);
+        vm.stopPrank();
+    }
+
+    /// @notice SUP-3 (pure-view floor): `previewRedeem(previewDeposit(x)) <= x`
+    ///         holds across fuzzed slippage params and deposit sizes. The two
+    ///         floor-discounted previews compose to strictly below the deposit,
+    ///         so a round trip can never preview a profit.
+    function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public {
+        slip = uint16(bound(slip, 5, 500)); // [pool-fee floor, MAX_SLIPPAGE_BPS]
+        x = bound(x, 1e6, 100_000e6);
+
+        vm.prank(admin);
+        vault.setMaxSlippageBps(slip);
+
+        // Seed so totalSupply > 0 (1:1 execution).
+        _depositAt1to1(address(this), 50_000e6);
+
+        uint256 shares = vault.previewDeposit(x);
+        assertLe(vault.previewRedeem(shares), x, "SUP-3: round-trip preview must not profit");
+    }
+
+    /// @notice SUP-3 (stateful): a real deposit → immediate redeem within the
+    ///         deviation band returns no more than was deposited. Exercises the
+    ///         mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
+    ///         on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+    function test_SUP3_statefulDepositRedeemNeverProfits() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100);
+
+        // Seed pool (1:1).
+        _depositAt1to1(address(this), 10_000e6);
+
+        // User deposits at 1:1.
+        uint256 x = 1_000e6;
+        uint256 shares = _depositAt1to1(stranger, x);
+
+        // Redeem immediately. Mock returns 1:1 USDC for the sold basket tokens.
+        // The vault holds basketToken; sell proceeds come back as USDC.
+        uint256 sellProceeds = (10_000e6 + x); // 1:1 token→USDC across the basket
+        usdc.mint(address(router), sellProceeds);
+        router.setAmountOut(sellProceeds); // generous: still bounded by share fraction
+
+        vm.prank(stranger);
+        uint256 got = vault.redeem(shares, stranger, stranger);
+
+        assertLe(got, x, "SUP-3: stateful round trip must not return more than deposited");
+    }
+
+    // ─── ORA-4 / F-10: NAV-vs-market deviation guard (#969) ───────────────────
+
+    /// @notice ORA-4: when the executable market (slot0 spot) price diverges from
+    ///         the NAV-pricing TWAP beyond `navDeviationGuardBps`, a deposit
+    ///         reverts `NavMarketDeviationExceeded` rather than minting at the
+    ///         stale/manipulated mark. With the guard disabled (0) the same
+    ///         deposit succeeds — proving the guard, not some other check, blocks.
+    function test_ORA4_deviationGuardBlocksSettlement() public {
+        // Arm the guard at 1% and drive spot far from the (tick=0) TWAP.
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(100); // 1%
+
+        // TWAP mean tick stays 0 (tickCumulativeRate default 0 ⇒ 1:1). Push the
+        // slot0 spot tick well away: ~+200 ticks ≈ +2% price, beyond the 1% band.
+        pool.setSpotTick(200);
+
+        usdc.mint(stranger, 1_000e6);
+        vm.prank(stranger);
+        usdc.approve(address(vault), 1_000e6);
+        // The exact on-chain deviationBps is data-dependent; assert the typed
+        // selector fires (NavMarketDeviationExceeded) via a low-level call.
+        vm.prank(stranger);
+        (bool ok, bytes memory ret) =
+            address(vault).call(abi.encodeCall(vault.deposit, (1_000e6, stranger)));
+        assertFalse(ok, "ORA-4: deposit must revert on deviation");
+        assertEq(
+            bytes4(ret),
+            BasketVault.NavMarketDeviationExceeded.selector,
+            "ORA-4: revert must be NavMarketDeviationExceeded"
+        );
+
+        // Disable the guard: the same deposit now settles (1:1 swap fixture).
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(0);
+        basketToken.mint(address(router), 1_000e6);
+        router.setAmountOut(1_000e6);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 1_000e6);
+        uint256 shares = vault.deposit(1_000e6, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "ORA-4: deposit succeeds once the guard is disabled");
+    }
+
+    /// @notice ORA-4: a deposit within the deviation band settles normally — the
+    ///         guard does not block ordinary, market-consistent settlement.
+    function test_ORA4_withinBandSettles() public {
+        vm.prank(admin);
+        vault.setNavDeviationGuardBps(300); // 3%
+
+        // Small spot drift (~+50 ticks ≈ +0.5%), inside the 3% band.
+        pool.setSpotTick(50);
+
+        uint256 shares = _depositAt1to1(stranger, 1_000e6);
+        assertGt(shares, 0, "ORA-4: in-band deposit settles");
     }
 }
 

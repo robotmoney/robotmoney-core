@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -160,6 +160,7 @@ function withdrawFromRouter(
     bytes32 orderId,
     address[] calldata vaults,
     uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg,
     uint64 deadline,
     bytes32 idempotencyKey
 ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);
@@ -171,14 +172,15 @@ function withdrawFromRouter(
 |`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
 |`vaults`|`address[]`|          Explicit list of vault addresses to redeem from (issue #967, F-03). Drives the redeem legs directly instead of the router's live weight vector, so a holder can exit a reweighted-out or Retired position. `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the array is committed to `paymentId`.|
 |`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per leg (parallel to `vaults`).|
-|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`minAssetsPerLeg`|`uint256[]`| Per-leg minimum USDC out (slippage floor), parallel to `vaults`/`sharesPerLeg`. The gateway forwards this floor straight to `PortfolioRouter.redeemFor`, which reverts each leg whose realized proceeds fall below it (GW-5 / F-11). A floor of 0 disables the check for that leg, but the caller is expected to pass a real, off-chain-computed minimum — the gateway no longer hardcodes an all-zero vector. Length must equal `sharesPerLeg`. The floor vector is folded into `paymentId` so a replay cannot re-execute the same order under a weaker floor.|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`. The gateway forwards this same deadline to the router (no longer `type(uint256).max`), so the router's own deadline guard also bites (F-11).|
 |`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
 
 **Returns**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/ vaults/sharesPerLeg/key.|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/ vaults/sharesPerLeg/minAssetsPerLeg/key.|
 |`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
 
 

@@ -1,5 +1,5 @@
 # IBasketVaultViews
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/lib/BasketViews.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/lib/BasketViews.sol)
 
 Minimal read surface of `BasketVault` consumed by the weight-preview
 views. Declared here (not imported from BasketVault) to avoid a cyclic
@@ -64,5 +64,12 @@ function balanceOf(address account) external view returns (uint256);
 
 ```solidity
 function totalSupply() external view returns (uint256);
+```
+
+### effectiveTwapWindow
+
+
+```solidity
+function effectiveTwapWindow(address token) external view returns (uint32);
 ```
 

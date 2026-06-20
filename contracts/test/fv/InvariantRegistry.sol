@@ -62,7 +62,7 @@ library InvariantRegistry {
         // ── 2. Share & supply accounting (SUP) ───────────────────────────────
         e[i++] = Entry("SUP-1", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("SUP-2", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("SUP-3", Status.RED, "fuzz", 969); // NC-6 / F-16
+        e[i++] = Entry("SUP-3", Status.HOLDS, "fuzz", 0); // NC-6 / F-16 fixed (#969)
         e[i++] = Entry("SUP-4", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("SUP-5", Status.HOLDS, "stateful-invariant", 0); // NC-1 fixed (#966)
         e[i++] = Entry("SUP-6", Status.HOLDS, "static-guard", 0);
@@ -71,7 +71,7 @@ library InvariantRegistry {
         e[i++] = Entry("ORA-1", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("ORA-2", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ORA-3", Status.HOLDS, "deploy-assertion", 0); // F-09 fixed (#966)
-        e[i++] = Entry("ORA-4", Status.HOLDS, "stateful-invariant", 0); // ⚪ aspirational
+        e[i++] = Entry("ORA-4", Status.HOLDS, "stateful-invariant", 0); // F-10 deviation guard (#969)
         e[i++] = Entry("ORA-5", Status.HOLDS, "fuzz", 0);
         e[i++] = Entry("ORA-6", Status.HOLDS, "deploy-assertion", 0); // 🟡 trusted
         e[i++] = Entry("ORA-7", Status.HOLDS, "fuzz", 0); // F-09/F-11/F-16 — independent floor (#966)
@@ -106,7 +106,7 @@ library InvariantRegistry {
         e[i++] = Entry("GW-2", Status.RED, "symbolic", 970); // NC-9 / F-15
         e[i++] = Entry("GW-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("GW-4", Status.HOLDS, "stateful-invariant", 0); // 🟡 partial
-        e[i++] = Entry("GW-5", Status.RED, "static-guard", 969); // F-11
+        e[i++] = Entry("GW-5", Status.HOLDS, "static-guard", 0); // F-11 fixed (#969)
         e[i++] = Entry("GW-6", Status.HOLDS, "symbolic", 0);
 
         // ── 8. Governance / timelock (GOV) ───────────────────────────────────

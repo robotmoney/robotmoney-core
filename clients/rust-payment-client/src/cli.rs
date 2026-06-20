@@ -366,6 +366,16 @@ pub enum Command {
         /// instead of the router's live weight vector.
         #[arg(long = "vaults", value_delimiter = ',')]
         vaults: Vec<String>,
+        /// Per-leg minimum USDC out (slippage floor), decimal, parallel to
+        /// `--shares-per-leg`. The gateway forwards this floor to the router,
+        /// which reverts a leg whose realized proceeds fall below it (GW-5 /
+        /// F-11). Length must equal `--shares-per-leg`; a leg value of 0
+        /// disables the floor for that leg. When omitted entirely the client
+        /// sends an all-zero floor of the same length (back-compat), but a real
+        /// off-chain-computed minimum is strongly recommended.
+        /// Example: `--min-assets-per-leg 59700000,39800000`
+        #[arg(long = "min-assets-per-leg", value_delimiter = ',', num_args = 0..)]
+        min_assets_per_leg: Vec<String>,
         /// 32-byte order id, 0x-prefixed hex.
         #[arg(long = "order-id")]
         order_id: String,
