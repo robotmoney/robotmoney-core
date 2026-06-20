@@ -116,7 +116,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 ## 4. Access control & roles (ACL)
 
 > **`ACL-1` — In production, no EOA ever holds any privileged role (`DEFAULT_ADMIN_ROLE`, `ADMIN_ROLE`, `EMERGENCY_ROLE`, `PAUSER_ROLE`) after deployment handover.**
-> 🔴 VIOLATED · deployer EOA retains Gateway `DEFAULT_ADMIN_ROLE` + every vault `EMERGENCY_ROLE`; handover moves only `ADMIN_ROLE` — see **F-01** · deploy-assertion (extend `DeployTimelock.t.sol` to assert EOA holds *no* role).
+> ✅ PROVEN · REMEDIATED (#965, **F-01**): `DeployTimelock` now hands the Gateway `DEFAULT_ADMIN_ROLE` (alongside `ADMIN_ROLE`) to the Timelock and moves every vault `EMERGENCY_ROLE` to an independent hot key, revoking all four privileged roles from the deployer EOA; the Gateway constructor redirects `AGENT_ROLE`'s admin to `ADMIN_ROLE` and `authorizeAgent` is now `ADMIN_ROLE`-gated, so the revoke does not brick agent onboarding (fix-interaction warning) · deploy-assertion (`DeployAssertions.t.sol::test_ACL1_*`, `DeployTimelock.t.sol::test_ACL1_*` — EOA holds *no* role; negative test pins the naked-revoke regression).
 
 > **`ACL-2` — No single address ever simultaneously holds two of {ADMIN-tier, PAUSER, AGENT}.**
 > ✅ PROVEN · `AccessRoles._grantRole` separation override; `AccessRoles.t.sol` · symbolic recommended. *Watch:* this same override enables a grant-DoS during handover — see **NC-10** (`ACL-7`).

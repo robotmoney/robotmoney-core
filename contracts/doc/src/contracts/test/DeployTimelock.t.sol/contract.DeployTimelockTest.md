@@ -1,5 +1,5 @@
 # DeployTimelockTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/DeployTimelock.t.sol)
 
 **Inherits:**
 Test
@@ -34,6 +34,27 @@ bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE")
 ```
 
 
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE")
+```
+
+
+### AGENT_ROLE
+
+```solidity
+bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE")
+```
+
+
+### DEFAULT_ADMIN_ROLE
+
+```solidity
+bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00
+```
+
+
 ### MIN_DELAY
 
 ```solidity
@@ -53,6 +74,13 @@ address internal admin = makeAddr("admin")
 
 ```solidity
 address internal safe
+```
+
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency")
 ```
 
 
@@ -378,14 +406,94 @@ function test_retire_succeedsViaTimelock_atomicallyHaltsDeposits() public;
 ### test_shutdownVault_unchanged_makesNoRegistryChange
 
 #942: `shutdownVault` is unchanged — still EMERGENCY-tier,
-vault-only, with NO registry state change. The deployed vault's
-EMERGENCY_ROLE is held by the deploy script (set at construction
-and not transferred to the timelock); exercising it directly proves
-the emergency overlay still works and touches no registry state.
+vault-only, with NO registry state change. After the #965/F-01
+handover the vault's EMERGENCY_ROLE is held by the independent
+`emergency` hot key (NOT the deployer/script and NOT the timelock);
+exercising it directly proves the emergency overlay still works and
+touches no registry state.
 
 
 ```solidity
 function test_shutdownVault_unchanged_makesNoRegistryChange() public;
+```
+
+### test_ACL1_timelockHoldsGatewayRootAfterHandover
+
+ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
+on the Gateway (so it can rotate roles / authorizeAgent), and holds
+ADMIN_ROLE on the vault.
+
+
+```solidity
+function test_ACL1_timelockHoldsGatewayRootAfterHandover() public view;
+```
+
+### test_ACL1_vaultEmergencyRoleHeldByIndependentHotKey
+
+AC: the vault EMERGENCY_ROLE is held by the independent hot key
+(not the timelock — emergency response stays a fast hot-key path).
+
+
+```solidity
+function test_ACL1_vaultEmergencyRoleHeldByIndependentHotKey() public view;
+```
+
+### test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke
+
+Fix-interaction (F-01): AGENT_ROLE's admin is ADMIN_ROLE, so after
+the DEFAULT_ADMIN_ROLE revoke the Timelock (ADMIN_ROLE) can still
+grant AGENT_ROLE directly. Proves the revoke did not brick agent
+onboarding.
+
+
+```solidity
+function test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke() public;
+```
+
+### test_ACL1_timelockCanAuthorizeAgentAfterHandover
+
+AC: the Timelock can `authorizeAgent` on the Gateway post-handover
+(the gateway-native onboarding path, now ADMIN_ROLE-gated).
+
+
+```solidity
+function test_ACL1_timelockCanAuthorizeAgentAfterHandover() public;
+```
+
+### test_ACL1_directAuthorizeAgentFromHotKeyReverts
+
+AC: a hot key (the Safe) that holds neither DEFAULT_ADMIN_ROLE nor
+ADMIN_ROLE on the Gateway cannot directly authorizeAgent — only the
+timelock-routed path works. Guards the role gate post-handover.
+
+
+```solidity
+function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public;
+```
+
+### test_ACL1_nakedDefaultAdminRevoke_bricksAgentRoleWithoutReadmin
+
+Negative regression for the fix-interaction warning: a NAKED
+DEFAULT_ADMIN_ROLE revoke that did NOT redirect AGENT_ROLE's admin
+to ADMIN_ROLE would leave AGENT_ROLE ungrantable forever. We build
+a throwaway gateway whose AGENT_ROLE admin is the default
+(DEFAULT_ADMIN_ROLE), revoke that root from the only holder, and
+assert AGENT_ROLE can no longer be granted — proving the
+constructor's `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` is what keeps
+the real gateway safe.
+
+
+```solidity
+function test_ACL1_nakedDefaultAdminRevoke_bricksAgentRoleWithoutReadmin() public;
+```
+
+### _agentPolicy
+
+Minimal active AgentPolicy used by the authorize tests.
+
+
+```solidity
+function _agentPolicy() internal returns (IGateway.AgentPolicy memory p);
 ```
 
 ### test_deploy_revertsOnZeroSafe

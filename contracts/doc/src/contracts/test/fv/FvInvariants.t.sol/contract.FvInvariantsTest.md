@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9912e66cc064941cf391031069c85d740fd52944/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -30,14 +30,19 @@ are covered by their named expected-fail tests below.)
 function test_holdingInvariants_areAllNonRed() public pure;
 ```
 
-### test_ACL1_expectedFail_eoaHoldsNoRoleAfterHandover
+### test_ACL1_eoaHoldsNoRoleAfterHandover
 
 ACL-1 — no EOA holds any privileged role after handover.
-Deep harness: DeployAssertions.t.sol::test_ACL1_*.
+REMEDIATED by #965 (F-01): the DeployTimelock handover now also
+hands the Gateway DEFAULT_ADMIN_ROLE to the Timelock and moves
+every vault EMERGENCY_ROLE to an independent hot key, so the
+deployer EOA retains nothing. Registry flipped RED→HOLDS; the deep
+proofs live in DeployAssertions.t.sol::test_ACL1_* and
+DeployTimelock.t.sol::test_ACL1_*.
 
 
 ```solidity
-function test_ACL1_expectedFail_eoaHoldsNoRoleAfterHandover() public;
+function test_ACL1_eoaHoldsNoRoleAfterHandover() public pure;
 ```
 
 ### test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed

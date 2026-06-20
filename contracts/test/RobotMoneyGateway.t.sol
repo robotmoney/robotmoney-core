@@ -285,21 +285,23 @@ contract RobotMoneyGatewayTest is Test {
         assertEq(recv, shareReceiver);
     }
 
-    /// @dev AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
-    ///      revert (issue #753 — commit/reveal is now the only permissionless
-    ///      first-time authorization path).
+    /// @dev AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
+    ///      (issue #753 — commit/reveal is the only permissionless first-time
+    ///      authorization path; #965/F-01 moved the admin gate from
+    ///      DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
+    ///      authority after the deploy handover revokes the deployer's
+    ///      DEFAULT_ADMIN_ROLE).
     function test_authorizeAgent_permissionless() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address eoa = makeAddr("random-depositor-eoa");
         assertFalse(gateway.hasRole(adminRole, eoa), "EOA must not hold ADMIN_ROLE");
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
         vm.prank(eoa);
         vm.expectRevert(
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 eoa,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);
@@ -328,13 +330,13 @@ contract RobotMoneyGatewayTest is Test {
 
     /// @dev Front-run regression: an attacker observing a victim's
     ///      `revealAuthorization` cannot pre-empt it via the direct
-    ///      `authorizeAgent` because that function now requires
-    ///      DEFAULT_ADMIN_ROLE (issue #753).
+    ///      `authorizeAgent` because that function requires `ADMIN_ROLE`
+    ///      (issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
+    ///      #965/F-01).
     function test_authorizeAgent_frontRunProtection() public {
         IGateway.AgentPolicy memory p = _defaultPolicy();
         address victim = makeAddr("victim");
         address attacker = makeAddr("attacker");
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
         // Victim commits
         bytes32 salt = bytes32(uint256(456));
@@ -350,7 +352,7 @@ contract RobotMoneyGatewayTest is Test {
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 attacker,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);
@@ -413,9 +415,9 @@ contract RobotMoneyGatewayTest is Test {
     ///      must `setPolicy` (or `revokeAgent` first).
     function test_authorizeAgent_revertsWhenAlreadyOwned() public {
         _authorize(agent, _defaultPolicy());
-        bytes32 defaultAdminRole = gateway.DEFAULT_ADMIN_ROLE();
 
-        // Non-admin callers revert with access control error.
+        // Non-admin callers revert with access control error (authorizeAgent is
+        // ADMIN_ROLE-gated since #965/F-01).
         address otherDepositor = makeAddr("other-depositor");
         IGateway.AgentPolicy memory p = _defaultPolicy();
         vm.prank(otherDepositor);
@@ -423,7 +425,7 @@ contract RobotMoneyGatewayTest is Test {
             abi.encodeWithSelector(
                 bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
                 otherDepositor,
-                defaultAdminRole
+                adminRole
             )
         );
         gateway.authorizeAgent(agent, p);

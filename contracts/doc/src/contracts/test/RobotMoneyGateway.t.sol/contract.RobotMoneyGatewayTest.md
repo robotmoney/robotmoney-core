@@ -1,5 +1,5 @@
 # RobotMoneyGatewayTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -189,9 +189,12 @@ function test_authorizeAgent_grantsRoleAndStoresPolicy() public;
 
 ### test_authorizeAgent_permissionless
 
-AC: a non-`DEFAULT_ADMIN_ROLE` EOA calling `authorizeAgent` must
-revert (issue #753 — commit/reveal is now the only permissionless
-first-time authorization path).
+AC: a non-`ADMIN_ROLE` EOA calling `authorizeAgent` must revert
+(issue #753 — commit/reveal is the only permissionless first-time
+authorization path; #965/F-01 moved the admin gate from
+DEFAULT_ADMIN_ROLE to ADMIN_ROLE so the Timelock keeps onboarding
+authority after the deploy handover revokes the deployer's
+DEFAULT_ADMIN_ROLE).
 
 
 ```solidity
@@ -212,8 +215,9 @@ function test_authorizeAgent_no_longer_requires_admin_role() public;
 
 Front-run regression: an attacker observing a victim's
 `revealAuthorization` cannot pre-empt it via the direct
-`authorizeAgent` because that function now requires
-DEFAULT_ADMIN_ROLE (issue #753).
+`authorizeAgent` because that function requires `ADMIN_ROLE`
+(issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
+#965/F-01).
 
 
 ```solidity

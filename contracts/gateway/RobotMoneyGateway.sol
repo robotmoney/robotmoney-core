@@ -254,6 +254,16 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
         vaultContract = vault_;
         routerContract = IPortfolioRouter(router_);
 
+        // Redirect AGENT_ROLE administration to ADMIN_ROLE (F-01 fix-interaction
+        // warning). Without this, AGENT_ROLE's admin defaults to
+        // DEFAULT_ADMIN_ROLE; once the deploy handover revokes the deployer's
+        // Gateway DEFAULT_ADMIN_ROLE (ACL-1), any account holding only ADMIN_ROLE
+        // — i.e. the TimelockController after handover — could no longer authorize
+        // agents, permanently bricking agent onboarding. Pinning AGENT_ROLE's
+        // admin to ADMIN_ROLE (and gating `authorizeAgent` on ADMIN_ROLE) keeps
+        // agents grantable by whoever holds ADMIN_ROLE post-handover.
+        _setRoleAdmin(AGENT_ROLE, ADMIN_ROLE);
+
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _grantRole(ADMIN_ROLE, admin_);
         _grantRole(PAUSER_ROLE, pauser_);
@@ -423,10 +433,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     }
 
     /// @inheritdoc IGateway
-    function authorizeAgent(address agent, AgentPolicy calldata p)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
+    function authorizeAgent(address agent, AgentPolicy calldata p) external onlyRole(ADMIN_ROLE) {
         _authorizeAgentInternal(agent, p);
     }
 

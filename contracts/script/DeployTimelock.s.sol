@@ -30,13 +30,20 @@ interface IRetirableVaultLink {
 }
 
 /// @title DeployTimelock
-/// @notice Deploy an OZ TimelockController and transfer ADMIN_ROLE on all five
-///         Robot Money contracts (RobotMoneyVault, RobotMoneyGateway,
-///         VaultRegistry, PortfolioRouter, RouterGovernance) from the current
-///         admin EOA to the TimelockController.
+/// @notice Deploy an OZ TimelockController and complete the privileged-role
+///         handover on all five Robot Money contracts (RobotMoneyVault,
+///         RobotMoneyGateway, VaultRegistry, PortfolioRouter, RouterGovernance)
+///         from the deployer EOA to the TimelockController + an independent
+///         emergency hot key.
 ///
-///         After this script runs:
-///         - TimelockController holds ADMIN_ROLE on all five contracts.
+///         After this script runs (ACL-1 / F-01):
+///         - TimelockController holds ADMIN_ROLE on all five contracts AND the
+///           Gateway DEFAULT_ADMIN_ROLE (so it can rotate roles / authorizeAgent).
+///         - The deployer EOA holds NO privileged role of any kind:
+///           no ADMIN_ROLE on any contract, no Gateway DEFAULT_ADMIN_ROLE, and
+///           no vault EMERGENCY_ROLE.
+///         - The vault EMERGENCY_ROLE is held by the independent EMERGENCY_ADDRESS
+///           hot key, not the deployer.
 ///         - The Safe multisig (SAFE_ADDRESS) holds PROPOSER_ROLE and
 ///           EXECUTOR_ROLE on the TimelockController.
 ///         - Direct ADMIN_ROLE calls from any EOA revert with
@@ -51,6 +58,9 @@ interface IRetirableVaultLink {
 ///           ROUTER_ADDRESS         — PortfolioRouter
 ///           GOVERNANCE_ADDRESS     — RouterGovernance
 ///           SAFE_ADDRESS           — Safe multisig (becomes PROPOSER + EXECUTOR)
+///           EMERGENCY_ADDRESS      — independent hot key that receives the vault
+///                                    EMERGENCY_ROLE (must differ from the deployer
+///                                    EOA; ACL-1 / F-01)
 ///           TIMELOCK_MIN_DELAY     — minimum delay in seconds (e.g. 172800 = 2 days)
 ///
 ///         Optional env vars:
@@ -61,6 +71,9 @@ interface IRetirableVaultLink {
 ///        cast call <vault> "hasRole(bytes32,address)" $(cast keccak "ADMIN_ROLE") <timelock>
 contract DeployTimelock is Script {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    /// @dev OZ `AccessControl.DEFAULT_ADMIN_ROLE` is `bytes32(0)`.
+    bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     struct Deployed {
         TimelockController timelock;
@@ -70,6 +83,7 @@ contract DeployTimelock is Script {
         address router;
         address governance;
         address safe;
+        address emergency;
         uint256 minDelay;
     }
 
@@ -82,6 +96,7 @@ contract DeployTimelock is Script {
         d.router = vm.envAddress("ROUTER_ADDRESS");
         d.governance = vm.envAddress("GOVERNANCE_ADDRESS");
         d.safe = vm.envAddress("SAFE_ADDRESS");
+        d.emergency = vm.envAddress("EMERGENCY_ADDRESS");
         d.minDelay = vm.envUint("TIMELOCK_MIN_DELAY");
 
         _validate(d);
@@ -103,6 +118,7 @@ contract DeployTimelock is Script {
         address router_,
         address governance_,
         address safe_,
+        address emergency_,
         uint256 minDelay_
     ) external returns (Deployed memory d) {
         d.vault = vault_;
@@ -111,6 +127,7 @@ contract DeployTimelock is Script {
         d.router = router_;
         d.governance = governance_;
         d.safe = safe_;
+        d.emergency = emergency_;
         d.minDelay = minDelay_;
 
         _validate(d);
@@ -126,7 +143,14 @@ contract DeployTimelock is Script {
         require(d.router != address(0), "ROUTER_ADDRESS=0");
         require(d.governance != address(0), "GOVERNANCE_ADDRESS=0");
         require(d.safe != address(0), "SAFE_ADDRESS=0");
+        require(d.emergency != address(0), "EMERGENCY_ADDRESS=0");
         require(d.minDelay > 0, "TIMELOCK_MIN_DELAY=0");
+
+        // ACL-1 / F-01: the emergency hot key must be independent of the deployer
+        // EOA. After handover the deployer holds NO privileged role; routing the
+        // vault EMERGENCY_ROLE back to the deployer would re-create the very
+        // EOA-retains-a-privileged-role gap this script closes.
+        require(d.emergency != msg.sender, "EMERGENCY_ADDRESS == deployer EOA");
 
         // AC: SAFE_ADDRESS must have deployed bytecode (not an EOA).
         // An EOA at SAFE_ADDRESS would let a single private key control all
@@ -168,6 +192,25 @@ contract DeployTimelock is Script {
         );
 
         // RobotMoneyVault
+        //
+        // ACL-1 / F-01: the deployer EOA also holds the vault EMERGENCY_ROLE
+        // (granted as `_emergencyResponder` at construction). Move it to the
+        // independent emergency hot key, then revoke it from the deployer, BEFORE
+        // revoking the deployer's ADMIN_ROLE — EMERGENCY_ROLE's admin is
+        // ADMIN_ROLE (see RobotMoneyVault `_setRoleAdmin`), so the deployer must
+        // still hold ADMIN_ROLE to perform the grant/revoke. After this block no
+        // EOA except the dedicated emergency hot key holds any vault role.
+        IAccessControl(d.vault).grantRole(EMERGENCY_ROLE, d.emergency);
+        require(
+            IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, d.emergency),
+            "Emergency key missing EMERGENCY_ROLE on vault"
+        );
+        IAccessControl(d.vault).revokeRole(EMERGENCY_ROLE, msg.sender);
+        require(
+            !IAccessControl(d.vault).hasRole(EMERGENCY_ROLE, msg.sender),
+            "Deployer still has EMERGENCY_ROLE on vault"
+        );
+
         IAccessControl(d.vault).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.vault).hasRole(ADMIN_ROLE, address(timelock)),
@@ -180,15 +223,40 @@ contract DeployTimelock is Script {
         );
 
         // RobotMoneyGateway
+        //
+        // ACL-1 / F-01: unlike the other four contracts (whose roles are all
+        // administered by ADMIN_ROLE), the Gateway grants the deployer
+        // DEFAULT_ADMIN_ROLE at construction, and every Gateway role's admin —
+        // except AGENT_ROLE, redirected to ADMIN_ROLE in the constructor — is
+        // DEFAULT_ADMIN_ROLE. A naked ADMIN_ROLE-only handover would leave the
+        // deployer EOA holding the Gateway root (re-grant ADMIN, mint rogue
+        // agents, block the Timelock from rotating roles). So hand over BOTH
+        // ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the Timelock and revoke both from
+        // the deployer.
+        //
+        // Fix-interaction (audit F-01): the AGENT_ROLE re-admin to ADMIN_ROLE is
+        // performed in the Gateway constructor, so revoking DEFAULT_ADMIN_ROLE
+        // here does NOT brick agent onboarding — the Timelock (ADMIN_ROLE) can
+        // still `authorizeAgent` / grant AGENT_ROLE.
         IAccessControl(d.gateway).grantRole(ADMIN_ROLE, address(timelock));
         require(
             IAccessControl(d.gateway).hasRole(ADMIN_ROLE, address(timelock)),
             "Timelock missing ADMIN_ROLE on gateway"
         );
+        IAccessControl(d.gateway).grantRole(DEFAULT_ADMIN_ROLE, address(timelock));
+        require(
+            IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, address(timelock)),
+            "Timelock missing DEFAULT_ADMIN_ROLE on gateway"
+        );
         IAccessControl(d.gateway).revokeRole(ADMIN_ROLE, msg.sender);
         require(
             !IAccessControl(d.gateway).hasRole(ADMIN_ROLE, msg.sender),
             "Deployer still has ADMIN_ROLE on gateway"
+        );
+        IAccessControl(d.gateway).revokeRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        require(
+            !IAccessControl(d.gateway).hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+            "Deployer still has DEFAULT_ADMIN_ROLE on gateway"
         );
 
         // VaultRegistry
@@ -232,6 +300,7 @@ contract DeployTimelock is Script {
         console2.log("TimelockController deployed and ADMIN_ROLE transferred on all five contracts");
         console2.log("  timelock    :", address(d.timelock));
         console2.log("  safe        :", d.safe);
+        console2.log("  emergency   :", d.emergency);
         console2.log("  min_delay   :", d.minDelay);
         console2.log("  vault       :", d.vault);
         console2.log("  gateway     :", d.gateway);
@@ -252,6 +321,7 @@ contract DeployTimelock is Script {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "timelock", address(d.timelock));
         vm.serializeAddress(obj, "safe", d.safe);
+        vm.serializeAddress(obj, "emergency", d.emergency);
         vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeAddress(obj, "vault", d.vault);
         vm.serializeAddress(obj, "gateway", d.gateway);
