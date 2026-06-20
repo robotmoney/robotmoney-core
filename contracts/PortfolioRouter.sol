@@ -260,11 +260,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 total;
         for (uint256 i = 0; i < vaults.length; i++) {
             if (vaults[i] == address(0)) revert ZeroAddress();
-            // Verify vault is registered — getVault reverts with NotRegistered if not.
-            registry.getVault(vaults[i]);
-            // Router-eligibility guard: asset compatibility AND the registry
-            // eligibility flag must be set. See _requireRouterEligible.
-            _requireRouterEligible(vaults[i]);
+            // Active-status guard (F-05/RTR-4/GOV-4): a weight vector is only ever
+            // executable if every weighted vault is simultaneously router-eligible
+            // AND Active. `getVault` reverts NotRegistered if unknown; this also
+            // reverts VaultNotActive for any Paused/Retired vault so a
+            // non-depositable vector can never be written and self-DoS deposits.
+            _requireActiveAndEligible(vaults[i]);
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
@@ -310,8 +311,10 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256 total;
         for (uint256 i = 0; i < vaults.length; i++) {
             if (vaults[i] == address(0)) revert ZeroAddress();
-            registry.getVault(vaults[i]);
-            _requireRouterEligible(vaults[i]);
+            // Active-status guard (F-05/RTR-4): the default vector is also a
+            // routed vector, so it must hold the same "eligible AND Active"
+            // invariant. Reverts VaultNotActive for any Paused/Retired vault.
+            _requireActiveAndEligible(vaults[i]);
             total += bps[i];
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
@@ -398,43 +401,115 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     }
 
     /// @notice Return per-vault estimated receipts for `amount` USDC without
-    ///         executing any state changes. Paused or retired vaults are marked
-    ///         `unavailable = true` and return `estShares = 0`.
+    ///         executing any state changes. Non-depositable legs (paused/retired,
+    ///         unregistered, router-ineligible, or over their per-vault cap) are
+    ///         marked `unavailable = true` and return `estShares = 0`; the deposit
+    ///         path skips exactly these legs and renormalises `amount` across the
+    ///         remaining available legs. `legAmount` therefore reflects the
+    ///         **renormalised** amount the leg would actually receive on execute,
+    ///         so `previewDeposit` and the executed deposit never disagree on which
+    ///         legs are available (RTR-5; findings F-13/NC-4).
     /// @param amount  Total USDC to preview.
     /// @return legs   One entry per vault in the current weight vector.
     function previewDeposit(uint256 amount) external view returns (LegPreview[] memory legs) {
-        (address[] storage vaultList, uint256[] storage bpsList) = _effectiveWeights();
+        (address[] memory vaultList, uint256[] memory bpsList) = _effectiveWeightsMemory();
         uint256 n = vaultList.length;
         legs = new LegPreview[](n);
 
+        // Identical availability + renormalisation pass to the deposit path, so a
+        // leg preview reports `unavailable` for exactly the legs `_executeLegs`
+        // skips, and `legAmount` for exactly the amount it would deposit.
+        (bool[] memory available, uint256[] memory legAmounts) =
+            _availabilityAndAmounts(vaultList, bpsList, amount);
+
         for (uint256 i = 0; i < n; i++) {
-            address vault = vaultList[i];
-            uint256 legAmount = (amount * bpsList[i]) / BPS_DENOMINATOR;
-
-            legs[i].vault = vault;
+            legs[i].vault = vaultList[i];
             legs[i].weightBps = bpsList[i];
-            legs[i].legAmount = legAmount;
+            legs[i].legAmount = legAmounts[i];
 
-            // Check vault status from registry.
-            try registry.getVault(vault) returns (
-                VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
-            ) {
-                if (status != VaultRegistry.VaultStatus.Active) {
-                    legs[i].unavailable = true;
-                    continue;
-                }
-            } catch {
+            if (!available[i]) {
                 legs[i].unavailable = true;
                 continue;
             }
 
-            // Attempt to get previewDeposit from the vault.
-            try IERC4626(vault).previewDeposit(legAmount) returns (uint256 estShares) {
+            // Available legs quote against the renormalised legAmount. A revert
+            // in the vault's own previewDeposit downgrades the leg to unavailable
+            // (the runtime deposit would likewise fail this vault) — but note the
+            // skip-set was already fixed above, so this only zeroes estShares.
+            try IERC4626(vaultList[i]).previewDeposit(legAmounts[i]) returns (uint256 estShares) {
                 legs[i].estShares = estShares;
             } catch {
                 legs[i].unavailable = true;
             }
         }
+    }
+
+    /// @dev Compute, for the given weight vector and total `amount`, which legs
+    ///      are depositable and the renormalised USDC each available leg receives.
+    ///      A leg is available iff its registry status is `Active` and it is
+    ///      router-eligible (asset == USDC + eligibility flag) — exactly the
+    ///      availability dimension `previewDeposit` reports. The amount is split
+    ///      across ONLY the available legs in proportion to their bps, with the
+    ///      rounding remainder assigned to the last available leg so the router
+    ///      holds zero USDC after a successful deposit. Unavailable legs get
+    ///      amount 0. This single predicate is shared by `previewDeposit` and
+    ///      `_executeLegs` so the two can never diverge on availability (RTR-5).
+    ///
+    ///      Per-vault caps are intentionally NOT an availability factor: a cap is a
+    ///      hard per-tx operator bound (see F-12), not a "this vault is down"
+    ///      signal, and silently redistributing a capped leg's allocation onto
+    ///      other vaults would breach operator intent. A renormalised leg over its
+    ///      cap therefore still reverts `VaultCapExceeded` at execute time rather
+    ///      than being skipped.
+    function _availabilityAndAmounts(
+        address[] memory vaultList,
+        uint256[] memory bpsList,
+        uint256 amount
+    ) internal view returns (bool[] memory available, uint256[] memory legAmounts) {
+        uint256 n = vaultList.length;
+        available = new bool[](n);
+        legAmounts = new uint256[](n);
+
+        // First pass: availability (status + eligibility) and the sum of the bps
+        // of the available legs, which becomes the renormalisation denominator.
+        uint256 availableBps;
+        for (uint256 i = 0; i < n; i++) {
+            if (_isDepositable(vaultList[i])) {
+                available[i] = true;
+                availableBps += bpsList[i];
+            }
+        }
+        if (availableBps == 0) return (available, legAmounts);
+
+        // Second pass: split `amount` across the available legs by their bps share
+        // of `availableBps` (NOT BPS_DENOMINATOR), and find the last available leg
+        // so the rounding remainder lands somewhere the router actually deposits.
+        uint256 allocated;
+        uint256 lastAvailable;
+        for (uint256 i = 0; i < n; i++) {
+            if (!available[i]) continue;
+            legAmounts[i] = (amount * bpsList[i]) / availableBps;
+            allocated += legAmounts[i];
+            lastAvailable = i;
+        }
+        if (allocated < amount) {
+            legAmounts[lastAvailable] += amount - allocated;
+        }
+    }
+
+    /// @dev Non-reverting predicate: is `vault` depositable right now (registry
+    ///      status Active AND router-eligible)? Mirrors the reverting checks in
+    ///      `_executeLeg`/`_requireRouterEligible` without reverting, so it can be
+    ///      used to compute the shared availability set.
+    function _isDepositable(address vault) internal view returns (bool) {
+        try registry.getVault(vault) returns (
+            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
+        ) {
+            if (status != VaultRegistry.VaultStatus.Active) return false;
+        } catch {
+            return false;
+        }
+        return this.isRouterEligible(vault);
     }
 
     // ─── Deposit ─────────────────────────────────────────────────────────────
@@ -618,70 +693,60 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             revert MinSharesLengthMismatch();
         }
 
-        // Pre-compute all leg amounts so the remainder can be assigned to the
-        // final leg before any vault interaction begins.
-        uint256[] memory legAmounts = new uint256[](n);
-        uint256 allocated;
+        // Skip-and-renormalise: compute which legs are depositable and the
+        // renormalised USDC each available leg receives. This is the SAME shared
+        // pass `previewDeposit` runs, so preview-available ⇒ execute-deposits and
+        // preview-unavailable ⇒ execute-skips — preview and execute never disagree
+        // (RTR-5; findings F-13/NC-4). A single non-Active leg no longer reverts
+        // the whole router deposit; the basket deposits the remaining legs.
+        (bool[] memory available, uint256[] memory legAmounts) =
+            _availabilityAndAmounts(vaultList, bpsList, amount);
+
+        // When NO leg is depositable the basket is consistently unavailable: there
+        // is nothing to route and `previewDeposit` reports every leg unavailable,
+        // so the deposit reverts rather than stranding the caller's USDC.
+        bool anyAvailable;
         for (uint256 i = 0; i < n; i++) {
-            legAmounts[i] = (amount * bpsList[i]) / BPS_DENOMINATOR;
-            allocated += legAmounts[i];
+            if (available[i]) {
+                anyAvailable = true;
+                break;
+            }
         }
-        // Assign rounding remainder to the final leg so the router holds zero
-        // USDC after a successful deposit (pass-through invariant).
-        if (allocated < amount) {
-            legAmounts[n - 1] += amount - allocated;
-        }
+        if (!anyAvailable) revert NoWeightsSet();
 
         // Execute legs in a separate frame so its locals do not pile onto this
         // function's stack (Solidity stack-too-deep guard).
-        _executeLegs(receiver, vaultList, bpsList, legAmounts, minSharesPerLeg, sharesPerLeg);
+        _executeLegs(
+            receiver, vaultList, bpsList, legAmounts, available, minSharesPerLeg, sharesPerLeg
+        );
     }
 
-    /// @dev Execute one vault leg per entry: enforce Active status, per-vault
-    ///      cap, runtime router-eligibility, approve and deposit, then check
-    ///      the slippage floor. All-or-revert. Writes minted shares into
-    ///      `sharesPerLeg`.
+    /// @dev Execute one available vault leg per entry: approve and deposit, then
+    ///      check the slippage floor. Unavailable legs (per the shared
+    ///      `_availabilityAndAmounts` pass) are skipped — matching
+    ///      `previewDeposit` (RTR-5). Available legs are guaranteed depositable by
+    ///      that pass; `_executeLeg` re-asserts eligibility as defence in depth.
+    ///      All available legs must succeed (all-or-revert across the surviving
+    ///      set). Writes minted shares into `sharesPerLeg`.
     function _executeLegs(
         address receiver,
         address[] memory vaultList,
         uint256[] memory bpsList,
         uint256[] memory legAmounts,
+        bool[] memory available,
         uint256[] calldata minSharesPerLeg,
         uint256[] memory sharesPerLeg
     ) internal {
         for (uint256 i = 0; i < vaultList.length; i++) {
-            address vault = vaultList[i];
-            uint256 legAmount = legAmounts[i];
+            if (!available[i]) continue; // skip non-depositable legs (RTR-5)
 
-            // Registry status check — revert unless this vault is Active.
-            (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
-            if (vaultStatus != VaultRegistry.VaultStatus.Active) {
-                revert VaultNotActive(vault, vaultStatus);
-            }
-
-            // Per-vault cap check.
-            if (vaultCap[vault] != 0 && legAmount > vaultCap[vault]) revert VaultCapExceeded();
-
-            // Defence in depth: re-validate router eligibility at deposit time
-            // so a vault that became ineligible after weighting (e.g. registry
-            // flag revoked or upgrade changing its `asset()`) cannot receive
-            // USDC. setWeights enforces this at configuration time; this
-            // re-check guards the runtime path.
-            _requireRouterEligible(vault);
-
-            // Approve vault to pull legAmount USDC.
-            usdc.forceApprove(vault, legAmount);
-
-            // deposit() returns shares minted to receiver.
-            uint256 sharesReceived = IERC4626(vault).deposit(legAmount, receiver);
+            uint256 sharesReceived = _executeLeg(receiver, vaultList[i], legAmounts[i], bpsList[i]);
             sharesPerLeg[i] = sharesReceived;
 
             // Slippage guard.
             if (minSharesPerLeg.length != 0 && sharesReceived < minSharesPerLeg[i]) {
                 revert SlippageExceeded();
             }
-
-            emit RouterDeposit(receiver, vault, legAmount, sharesReceived, bpsList[i]);
         }
 
         // Post-loop custody invariant: the router must hold zero USDC after all
@@ -691,6 +756,43 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         if (usdc.balanceOf(address(this)) != 0) {
             revert UsdcCustodyInvariantViolated();
         }
+    }
+
+    /// @dev Execute a single available leg: re-assert Active status + per-vault
+    ///      cap + runtime router-eligibility (defence in depth — the leg was
+    ///      already vetted by `_availabilityAndAmounts`, but a vault could change
+    ///      state between the read and here), approve, deposit, and emit. Extracted
+    ///      from `_executeLegs` to bound stack depth.
+    /// @param receiver  Address that receives the minted shares.
+    /// @param vault     Vault to deposit into (guaranteed available by the caller).
+    /// @param legAmount Renormalised USDC for this leg.
+    /// @param weightBps This leg's weight (event field only).
+    /// @return sharesReceived Shares minted to `receiver`.
+    function _executeLeg(address receiver, address vault, uint256 legAmount, uint256 weightBps)
+        private
+        returns (uint256 sharesReceived)
+    {
+        // Registry status check — revert unless this vault is Active.
+        (, VaultRegistry.VaultStatus vaultStatus) = registry.getVault(vault);
+        if (vaultStatus != VaultRegistry.VaultStatus.Active) {
+            revert VaultNotActive(vault, vaultStatus);
+        }
+
+        // Per-vault cap check (against the renormalised amount).
+        if (vaultCap[vault] != 0 && legAmount > vaultCap[vault]) revert VaultCapExceeded();
+
+        // Defence in depth: re-validate router eligibility at deposit time so a
+        // vault that became ineligible after weighting (e.g. registry flag revoked
+        // or upgrade changing its `asset()`) cannot receive USDC.
+        _requireRouterEligible(vault);
+
+        // Approve vault to pull legAmount USDC.
+        usdc.forceApprove(vault, legAmount);
+
+        // deposit() returns shares minted to receiver.
+        sharesReceived = IERC4626(vault).deposit(legAmount, receiver);
+
+        emit RouterDeposit(receiver, vault, legAmount, sharesReceived, weightBps);
     }
 
     // ─── Read surface ────────────────────────────────────────────────────────
@@ -790,10 +892,49 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         return registry.isRouterEligible(vault);
     }
 
+    /// @notice Return true iff `vault` is router-eligible AND its registry
+    ///         lifecycle status is `Active` — i.e. it can be written into a
+    ///         weight vector and accept a routed deposit right now. This is the
+    ///         exact predicate `setWeights`/`setDefaultWeights` enforce; governance
+    ///         (`RouterGovernance.propose`) reads it so a proposal that would
+    ///         render router deposits non-executable can never enter the voting
+    ///         pipeline (GOV-4, no self-DoS). Never reverts: returns false for a
+    ///         zero address, an EOA, an asset mismatch, an unregistered vault, or
+    ///         any non-Active status.
+    /// @param vault Address of the vault to check.
+    /// @return ok True iff the vault is eligible AND Active.
+    function isRouterEligibleAndActive(address vault) external view returns (bool ok) {
+        if (!this.isRouterEligible(vault)) return false;
+        try registry.getVault(vault) returns (
+            VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
+        ) {
+            return status == VaultRegistry.VaultStatus.Active;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev Revert unless `vault` is registered, its registry status is `Active`,
+    ///      AND it is router-eligible (asset == USDC + eligibility flag). This is
+    ///      the single guard that a weight vector is only ever written when every
+    ///      leg is simultaneously eligible AND depositable (F-05/RTR-4/GOV-4):
+    ///      eligibility and lifecycle status are independent signals, so checking
+    ///      eligibility alone would let an eligible-but-Paused/Retired vault enter
+    ///      the vector and brick `deposit()` later. Used by `setWeights` and
+    ///      `setDefaultWeights` at configuration time.
+    function _requireActiveAndEligible(address vault) internal view {
+        // Reverts NotRegistered for unknown vaults.
+        (, VaultRegistry.VaultStatus status) = registry.getVault(vault);
+        if (status != VaultRegistry.VaultStatus.Active) {
+            revert VaultNotActive(vault, status);
+        }
+        _requireRouterEligible(vault);
+    }
+
     /// @dev Revert unless `vault` exposes an ERC-4626 `asset()` view equal to
     ///      `usdc` AND the VaultRegistry has marked the vault as
-    ///      router-eligible. Used by `setWeights` and `_depositTo` to enforce
-    ///      router-eligibility at both configuration and runtime.
+    ///      router-eligible. Used by `_executeLegs` to enforce
+    ///      router-eligibility at runtime.
     function _requireRouterEligible(address vault) internal view {
         // No code at the target — the asset() call would revert without data
         // and bypass the try/catch ABI-decode path on some configurations.

@@ -35,7 +35,83 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
 import {InvariantRegistry} from "./InvariantRegistry.sol";
+import {VaultRegistry} from "../../VaultRegistry.sol";
+import {PortfolioRouter} from "../../PortfolioRouter.sol";
+import {RouterGovernance} from "../../RouterGovernance.sol";
+
+/// @dev Minimal USDC for the router-deposit FV harness.
+contract FvUSDC is ERC20 {
+    constructor() ERC20("FV USDC", "fvUSDC") {}
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+/// @dev Minimal USDC-backed ERC-4626-shaped vault for the router-deposit FV
+///      harness, with the registry-driven `retire()`/`unretire()` deposit-halt
+///      legs so `VaultRegistry.setVaultStatus` can keep the vault flag in sync
+///      (LIFE-1). 1:1 share accounting. `retire()`/`unretire()` are restricted to
+///      the linked registry, mirroring `RobotMoneyVault`'s narrow authority.
+contract FvRetirableVault is ERC20 {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable assetToken;
+    address public immutable registry;
+    bool public retired;
+
+    error OnlyRegistry();
+    error VaultRetired();
+
+    constructor(address asset_, address registry_) ERC20("FV Vault Shares", "FVVS") {
+        assetToken = IERC20(asset_);
+        registry = registry_;
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function asset() external view returns (address) {
+        return address(assetToken);
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return assetToken.balanceOf(address(this));
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets; // 1:1
+    }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        if (retired) revert VaultRetired();
+        assetToken.safeTransferFrom(msg.sender, address(this), assets);
+        shares = assets;
+        _mint(receiver, shares);
+    }
+
+    /// @notice Deposit-halt leg driven by the registry (LIFE-1). Idempotent.
+    function retire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        retired = true;
+    }
+
+    /// @notice Re-open deposits, driven by the registry. Idempotent.
+    function unretire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        retired = false;
+    }
+}
 
 contract FvInvariantsTest is Test {
     /// @dev Helper: skip with a uniform "<reason> - remediation #<issue>" message,
@@ -194,38 +270,228 @@ contract FvInvariantsTest is Test {
     }
 
     // ── #968 (F-04, F-05, F-13, NC-4): router deposit integrity ───────────────
+    //
+    // These four invariants were flipped RED → HOLDS when the router
+    // deposit-integrity remediation (#968) landed. The bodies below are the real
+    // proofs that replaced the scout's expected-fail stubs:
+    //   - F-05/RTR-4/GOV-4: setWeights/setDefaultWeights/propose now require
+    //     VaultStatus == Active per weighted vault.
+    //   - F-13/NC-4/RTR-5: deposit skip-and-renormalises exactly the legs
+    //     previewDeposit reports unavailable (or both report the basket
+    //     unavailable), so preview and execute never disagree.
+    //   - F-04/LIFE-1: setVaultStatus drives the vault's deposit-halt flag so
+    //     registry status and the vault flag can never drift.
 
-    /// @notice LIFE-1 — a retired vault never accepts new deposits on any path,
-    ///         with registry status and vault flag always in sync.
-    function test_LIFE1_expectedFail_retireSyncsRegistryAndVaultFlag() public {
-        _skipRed(
-            "LIFE-1",
-            "setVaultStatus(_, Retired/Paused) is a back-door that sets only registry status (F-04)"
+    /// @notice LIFE-1 (F-04) — a retired/paused vault never accepts new deposits
+    ///         on any path, with registry status and the vault flag always in
+    ///         sync. Proves the `setVaultStatus` back-door is closed: it now drives
+    ///         the vault's `retired` deposit-halt flag, and the atomic
+    ///         `retire()`/`reactivate()` paths still sync both.
+    function test_LIFE1_retireSyncsRegistryAndVaultFlag() public {
+        (VaultRegistry registry,, FvUSDC usdc, FvRetirableVault vault) = _deployRouterStack();
+
+        // Direct deposit works while Active and the flag is clear.
+        assertFalse(vault.retired(), "vault starts un-retired");
+
+        // Back-door #1: setVaultStatus(_, Retired) must flip the vault flag too.
+        vm.prank(address(this));
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Retired);
+        (, VaultRegistry.VaultStatus s) = registry.getVault(address(vault));
+        assertEq(uint256(s), uint256(VaultRegistry.VaultStatus.Retired), "registry Retired");
+        assertTrue(vault.retired(), "LIFE-1: setVaultStatus(Retired) must halt vault deposits");
+
+        // Direct deposit into the retired vault now reverts (no new money in).
+        usdc.mint(address(this), 1_000e6);
+        usdc.approve(address(vault), type(uint256).max);
+        vm.expectRevert(FvRetirableVault.VaultRetired.selector);
+        vault.deposit(1e6, address(this));
+
+        // Active again: both registry status and the vault flag clear together.
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Active);
+        (, s) = registry.getVault(address(vault));
+        assertEq(uint256(s), uint256(VaultRegistry.VaultStatus.Active), "registry Active");
+        assertFalse(vault.retired(), "LIFE-1: setVaultStatus(Active) must re-open deposits");
+
+        // Back-door #2: setVaultStatus(_, Paused) also halts the vault.
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        assertTrue(vault.retired(), "LIFE-1: setVaultStatus(Paused) must halt vault deposits");
+
+        // The atomic governance path stays in sync as well.
+        registry.reactivate(address(vault));
+        assertFalse(vault.retired(), "LIFE-1: reactivate must re-open deposits");
+        registry.retire(address(vault));
+        assertTrue(vault.retired(), "LIFE-1: retire must halt deposits");
+        (, s) = registry.getVault(address(vault));
+        assertEq(
+            uint256(s), uint256(VaultRegistry.VaultStatus.Retired), "registry Retired (atomic)"
         );
-        fail();
     }
 
-    /// @notice RTR-4 — a weight vector is never executable unless every weighted
-    ///         vault is router-eligible AND Active and bps sum to MAX_BPS.
-    function test_RTR4_expectedFail_weightsRequireActiveStatus() public {
-        _skipRed("RTR-4", "setWeights/propose check eligibility but not VaultStatus==Active (F-05)");
-        fail();
-    }
+    /// @notice RTR-4 (F-05) — a weight vector is never executable unless every
+    ///         weighted vault is router-eligible AND Active. setWeights and
+    ///         setDefaultWeights revert when any weighted vault is Paused/Retired.
+    function test_RTR4_weightsRequireActiveStatus() public {
+        (VaultRegistry registry, PortfolioRouter router,, FvRetirableVault vault) =
+            _deployRouterStack();
 
-    /// @notice RTR-5 — previewDeposit and the executed deposit never disagree on
-    ///         which legs are available.
-    function test_RTR5_expectedFail_previewMatchesExecute() public {
-        _skipRed(
-            "RTR-5", "preview marks legs unavailable; _executeLegs reverts the whole tx (F-13/NC-4)"
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(vault);
+        bps[0] = 10_000;
+
+        // Eligible AND Active: setWeights succeeds.
+        router.setWeights(vaults, bps);
+
+        // Pause via the registry: the vault is still eligible but not Active.
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        assertTrue(router.isRouterEligible(address(vault)), "still eligible");
+
+        // setWeights must now revert VaultNotActive — a non-depositable vector can
+        // never be written (RTR-4). Eligibility alone is not enough.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vault),
+                VaultRegistry.VaultStatus.Paused
+            )
         );
-        fail();
+        router.setWeights(vaults, bps);
+
+        // setDefaultWeights enforces the same invariant.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.VaultNotActive.selector,
+                address(vault),
+                VaultRegistry.VaultStatus.Paused
+            )
+        );
+        router.setDefaultWeights(vaults, bps);
     }
 
-    /// @notice GOV-4 — a governance action that would render router deposits
-    ///         non-executable can never be executed.
-    function test_GOV4_expectedFail_proposalCannotSelfDosRouter() public {
-        _skipRed("GOV-4", "propose/execute don't validate VaultStatus==Active (F-05/RTR-4)");
-        fail();
+    /// @notice RTR-5 (F-13/NC-4) — previewDeposit and the executed deposit never
+    ///         disagree on which legs are available. A single non-Active leg is
+    ///         skipped (not reverted), exactly as preview reports; the surviving
+    ///         leg absorbs the renormalised amount — one paused vault never bricks
+    ///         the whole router deposit (NC-4).
+    function test_RTR5_previewMatchesExecute() public {
+        (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vaultA) =
+            _deployRouterStack();
+        FvRetirableVault vaultB = _addEligibleVault(registry, router, usdc);
+
+        // Two-leg 50/50 vector.
+        address[] memory vaults = new address[](2);
+        uint256[] memory bps = new uint256[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        bps[0] = 5_000;
+        bps[1] = 5_000;
+        router.setWeights(vaults, bps);
+
+        // Pause vaultA AFTER weighting (allowed; the vector was valid when written).
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+
+        uint256 amount = 1_000e6;
+
+        // Preview: vaultA unavailable, vaultB available and absorbing the amount.
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "RTR-5: paused leg previews unavailable");
+        assertFalse(legs[1].unavailable, "RTR-5: active leg previews available");
+        assertEq(legs[0].legAmount, 0, "skipped leg amount 0");
+        assertEq(legs[1].legAmount, amount, "active leg absorbs renormalised amount");
+
+        // Execute: agrees with preview — vaultA skipped, vaultB funded fully.
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+        assertEq(shares[0], 0, "RTR-5: preview-unavailable leg deposits nothing");
+        assertEq(shares[1], amount, "RTR-5: preview-available leg deposits exactly the amount");
+        assertEq(usdc.balanceOf(address(router)), 0, "router holds no dust");
+
+        // Whole-basket-unavailable case: both paused ⇒ preview all-unavailable AND
+        // execute reverts (consistent), never a preview-healthy / execute-revert
+        // divergence.
+        registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Paused);
+        legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable && legs[1].unavailable, "RTR-5: all legs unavailable");
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+        vm.expectRevert(PortfolioRouter.NoWeightsSet.selector);
+        router.deposit(amount, new uint256[](0));
+    }
+
+    /// @notice GOV-4 (F-05/RTR-4) — a governance proposal that would render router
+    ///         deposits non-executable can never be executed. propose() rejects a
+    ///         weight vector containing a Paused/Retired vault up front, so a
+    ///         self-DoS proposal never enters the voting pipeline.
+    function test_GOV4_proposalCannotSelfDosRouter() public {
+        (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vault) =
+            _deployRouterStack();
+
+        // Stand up governance and hand it ADMIN_ROLE on the router so propose →
+        // execute → setWeights is the only weight-setting path.
+        RouterGovernance gov =
+            new RouterGovernance(address(router), address(this), 1 hours, 1 hours, 1);
+        router.grantRole(router.ADMIN_ROLE(), address(gov));
+
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = address(vault);
+        bps[0] = 10_000;
+
+        // While Active, propose succeeds.
+        uint256 pid = gov.propose(vaults, bps);
+        assertGt(pid, 0, "proposal created while Active");
+        gov.cancel(pid);
+
+        // Pause the vault: a proposal that would route deposits to it must be
+        // rejected at propose() time (GOV-4) — it can never become executable.
+        registry.setVaultStatus(address(vault), VaultRegistry.VaultStatus.Paused);
+        assertTrue(router.isRouterEligible(address(vault)), "still eligible");
+        assertFalse(
+            router.isRouterEligibleAndActive(address(vault)),
+            "eligible but not Active means not routable"
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vault))
+        );
+        gov.propose(vaults, bps);
+
+        // Silence unused-var warnings.
+        usdc;
+    }
+
+    // ── #968 FV harness helpers ───────────────────────────────────────────────
+
+    /// @dev Deploy a registry + router + one eligible, Active, registry-linked
+    ///      vault. This test contract is the ADMIN_ROLE on both registry and
+    ///      router and the registry is the vault's link, so `setVaultStatus` can
+    ///      drive the vault's retire/unretire legs.
+    function _deployRouterStack()
+        internal
+        returns (
+            VaultRegistry registry,
+            PortfolioRouter router,
+            FvUSDC usdc,
+            FvRetirableVault vault
+        )
+    {
+        usdc = new FvUSDC();
+        registry = new VaultRegistry(address(this));
+        router = new PortfolioRouter(address(usdc), address(registry), address(this));
+        vault = _addEligibleVault(registry, router, usdc);
+    }
+
+    /// @dev Register a fresh registry-linked vault, mark it Active + eligible.
+    function _addEligibleVault(VaultRegistry registry, PortfolioRouter, FvUSDC usdc)
+        internal
+        returns (FvRetirableVault vault)
+    {
+        vault = new FvRetirableVault(address(usdc), address(registry));
+        registry.registerVault(
+            address(vault),
+            VaultRegistry.VaultMetadata({name: "FV Vault", asset: address(usdc), registeredAt: 0})
+        );
+        registry.setRouterEligible(address(vault), true);
     }
 
     // ── #969 (F-10, F-11, F-16, NC-6): oracle/pricing integrity ───────────────

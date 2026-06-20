@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -188,44 +188,83 @@ never to whichever vault occupies index i after a reweight.
 function test_RTR3_expectedFail_legsAreIdentityBound() public;
 ```
 
-### test_LIFE1_expectedFail_retireSyncsRegistryAndVaultFlag
+### test_LIFE1_retireSyncsRegistryAndVaultFlag
 
-LIFE-1 — a retired vault never accepts new deposits on any path,
-with registry status and vault flag always in sync.
+LIFE-1 (F-04) — a retired/paused vault never accepts new deposits
+on any path, with registry status and the vault flag always in
+sync. Proves the `setVaultStatus` back-door is closed: it now drives
+the vault's `retired` deposit-halt flag, and the atomic
+`retire()`/`reactivate()` paths still sync both.
 
 
 ```solidity
-function test_LIFE1_expectedFail_retireSyncsRegistryAndVaultFlag() public;
+function test_LIFE1_retireSyncsRegistryAndVaultFlag() public;
 ```
 
-### test_RTR4_expectedFail_weightsRequireActiveStatus
+### test_RTR4_weightsRequireActiveStatus
 
-RTR-4 — a weight vector is never executable unless every weighted
-vault is router-eligible AND Active and bps sum to MAX_BPS.
+RTR-4 (F-05) — a weight vector is never executable unless every
+weighted vault is router-eligible AND Active. setWeights and
+setDefaultWeights revert when any weighted vault is Paused/Retired.
 
 
 ```solidity
-function test_RTR4_expectedFail_weightsRequireActiveStatus() public;
+function test_RTR4_weightsRequireActiveStatus() public;
 ```
 
-### test_RTR5_expectedFail_previewMatchesExecute
+### test_RTR5_previewMatchesExecute
 
-RTR-5 — previewDeposit and the executed deposit never disagree on
-which legs are available.
+RTR-5 (F-13/NC-4) — previewDeposit and the executed deposit never
+disagree on which legs are available. A single non-Active leg is
+skipped (not reverted), exactly as preview reports; the surviving
+leg absorbs the renormalised amount — one paused vault never bricks
+the whole router deposit (NC-4).
 
 
 ```solidity
-function test_RTR5_expectedFail_previewMatchesExecute() public;
+function test_RTR5_previewMatchesExecute() public;
 ```
 
-### test_GOV4_expectedFail_proposalCannotSelfDosRouter
+### test_GOV4_proposalCannotSelfDosRouter
 
-GOV-4 — a governance action that would render router deposits
-non-executable can never be executed.
+GOV-4 (F-05/RTR-4) — a governance proposal that would render router
+deposits non-executable can never be executed. propose() rejects a
+weight vector containing a Paused/Retired vault up front, so a
+self-DoS proposal never enters the voting pipeline.
 
 
 ```solidity
-function test_GOV4_expectedFail_proposalCannotSelfDosRouter() public;
+function test_GOV4_proposalCannotSelfDosRouter() public;
+```
+
+### _deployRouterStack
+
+Deploy a registry + router + one eligible, Active, registry-linked
+vault. This test contract is the ADMIN_ROLE on both registry and
+router and the registry is the vault's link, so `setVaultStatus` can
+drive the vault's retire/unretire legs.
+
+
+```solidity
+function _deployRouterStack()
+    internal
+    returns (
+        VaultRegistry registry,
+        PortfolioRouter router,
+        FvUSDC usdc,
+        FvRetirableVault vault
+    );
+```
+
+### _addEligibleVault
+
+Register a fresh registry-linked vault, mark it Active + eligible.
+
+
+```solidity
+function _addEligibleVault(VaultRegistry registry, PortfolioRouter, FvUSDC usdc)
+    internal
+    returns (FvRetirableVault vault);
 ```
 
 ### test_SUP3_expectedFail_roundTripNeverProfits

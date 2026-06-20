@@ -78,6 +78,8 @@
       - [_FvSafeStub](contracts/test/fv/DeployAssertions.t.sol/contract._FvSafeStub.md)
       - [_FvDeployerHarness](contracts/test/fv/DeployAssertions.t.sol/contract._FvDeployerHarness.md)
       - [DeployAssertionsTest](contracts/test/fv/DeployAssertions.t.sol/contract.DeployAssertionsTest.md)
+      - [FvUSDC](contracts/test/fv/FvInvariants.t.sol/contract.FvUSDC.md)
+      - [FvRetirableVault](contracts/test/fv/FvInvariants.t.sol/contract.FvRetirableVault.md)
       - [FvInvariantsTest](contracts/test/fv/FvInvariants.t.sol/contract.FvInvariantsTest.md)
       - [InvariantRegistry](contracts/test/fv/InvariantRegistry.sol/library.InvariantRegistry.md)
       - [Sup5Token](contracts/test/fv/StaleOracleRedemption.t.sol/contract.Sup5Token.md)

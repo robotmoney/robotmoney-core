@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -309,26 +309,40 @@ function test_setRouterCap_revertsForUnauthorized() public;
 function test_setVaultCap_revertsOnZeroAddress() public;
 ```
 
-### test_deposit_revertsIfRegistryVaultIsPaused
+### test_deposit_skipsRegistryPausedVault
 
-Deposit reverts when a vault in the weight list is Paused in the
-registry, even if the vault contract itself would still accept
-deposits.
+Skip-and-renormalise (RTR-5 / F-13): a vault Paused in the registry
+after weighting is skipped, NOT reverted; the deposit routes the
+full amount to the surviving Active leg. Preview reports the Paused
+leg unavailable, and execute deposits exactly the available legs —
+a single Paused vault never bricks the whole router deposit (NC-4).
 
 
 ```solidity
-function test_deposit_revertsIfRegistryVaultIsPaused() public;
+function test_deposit_skipsRegistryPausedVault() public;
 ```
 
-### test_deposit_revertsIfRegistryVaultIsRetired
+### test_deposit_skipsRegistryRetiredVault
 
-Deposit reverts when a vault in the weight list is Retired in the
-registry, even if the vault contract itself would still accept
-deposits.
+Skip-and-renormalise (RTR-5 / F-13): a vault Retired in the
+registry after weighting is skipped, NOT reverted; the deposit
+routes the full amount to the surviving Active leg, matching preview.
 
 
 ```solidity
-function test_deposit_revertsIfRegistryVaultIsRetired() public;
+function test_deposit_skipsRegistryRetiredVault() public;
+```
+
+### test_deposit_revertsWhenAllLegsUnavailable
+
+When EVERY weighted vault is non-Active the basket is consistently
+unavailable: preview reports all legs unavailable and the deposit
+reverts (NoWeightsSet) rather than stranding the caller's USDC.
+Preview and execute never disagree (RTR-5).
+
+
+```solidity
+function test_deposit_revertsWhenAllLegsUnavailable() public;
 ```
 
 ### test_setWeights_revertsIfVaultAssetMismatch
@@ -353,7 +367,7 @@ and being able to weight it.
 function test_setWeights_revertsIfVaultAssetUnreadable() public;
 ```
 
-### test_deposit_revertsIfVaultAssetMismatchAtRuntime
+### test_deposit_skipsRuntimeAssetMismatchVault
 
 A malicious ERC-4626-shaped vault whose underlying asset is not
 router USDC cannot receive USDC via PortfolioRouter.deposit even
@@ -365,16 +379,17 @@ it as defence in depth.
 
 
 ```solidity
-function test_deposit_revertsIfVaultAssetMismatchAtRuntime() public;
+function test_deposit_skipsRuntimeAssetMismatchVault() public;
 ```
 
-### test_depositFor_revertsIfVaultAssetMismatch
+### test_depositFor_skipsRuntimeAssetMismatchVault
 
-`depositFor` also enforces router eligibility at runtime.
+`depositFor` also skip-and-renormalises a leg that becomes
+router-ineligible (asset mismatch) at runtime (RTR-5).
 
 
 ```solidity
-function test_depositFor_revertsIfVaultAssetMismatch() public;
+function test_depositFor_skipsRuntimeAssetMismatchVault() public;
 ```
 
 ### test_deposit_eligibleVaults_succeed
@@ -512,15 +527,17 @@ that test, demo, and mainnet all share.
 function test_setWeights_succeedsAfterRegistryOptIn() public;
 ```
 
-### test_deposit_revertsIfRegistryEligibilityRevoked
+### test_deposit_skipsRegistryEligibilityRevokedVault
 
-Defence-in-depth: revoking the registry eligibility flag after
-a vault has been weighted prevents subsequent deposits from
-routing through it.
+Skip-and-renormalise (RTR-5 / F-13): revoking the registry
+eligibility flag after a vault has been weighted makes that leg
+unavailable — it is skipped (matching preview), and the surviving
+eligible leg absorbs the renormalised amount. The ineligible vault
+never receives USDC.
 
 
 ```solidity
-function test_deposit_revertsIfRegistryEligibilityRevoked() public;
+function test_deposit_skipsRegistryEligibilityRevokedVault() public;
 ```
 
 ### test_setRouterEligible_revertsForUnauthorized

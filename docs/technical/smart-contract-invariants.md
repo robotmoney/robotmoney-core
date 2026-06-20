@@ -141,7 +141,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 ## 5. Lifecycle & state machine (LIFE)
 
 > **`LIFE-1` — A retired vault never accepts new deposits, on every entry path (direct and router), with the registry status and the vault flag always in sync.**
-> 🔴 PARTIAL · atomic `VaultRegistry.retire()` syncs both and `_deposit` reverts on `retired`, but `setVaultStatus(_, Retired/Paused)` is a back-door that sets only registry status — see **F-04** · stateful-invariant (drive both setters, assert no drift).
+> ✅ HOLDS · atomic `VaultRegistry.retire()`/`reactivate()` sync both, `_deposit` reverts on `retired`, and `setVaultStatus(_, Retired/Paused/Active)` now drives the vault deposit-halt flag too — the back-door is closed (F-04 fixed, #968) · stateful-invariant (drive both setters, assert no drift) — `FvInvariants.t.sol::test_LIFE1_retireSyncsRegistryAndVaultFlag`.
 
 > **`LIFE-2` — A registered vault is never removed from `listVaults()`, so existing positions are always re-discoverable and re-redeemable.**
 > 🟢 HOLDS · `VaultRegistry._vaults` is append-only (no deregister) · static-guard + stateful-invariant.
@@ -172,10 +172,10 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🔴 VIOLATED · `redeemFor` binds legs positionally to `_effectiveWeightsMemory()`; a between-sign reweight redeems the wrong receipt token — see **NC-5** · symbolic (reorder weights between sign and execute).
 
 > **`RTR-4` — A weight vector is never executable unless every weighted vault is simultaneously router-eligible AND `Active` (deposit-able) and the bps sum equals `MAX_BPS`.**
-> 🔴 VIOLATED · `setWeights`/`propose` check eligibility but not `VaultStatus==Active` — see **F-05** · symbolic.
+> ✅ HOLDS · `setWeights`/`setDefaultWeights`/`propose` now require `VaultStatus==Active` per weighted vault — a non-depositable vector can never be written (F-05 fixed, #968) · symbolic — `FvInvariants.t.sol::test_RTR4_weightsRequireActiveStatus`.
 
 > **`RTR-5` — `previewDeposit` and the executed deposit never disagree on which legs are available (no preview/execute divergence).**
-> 🔴 VIOLATED · preview marks legs `unavailable`; `_executeLegs` reverts the whole tx — see **F-13**. Composes with the `setVaultStatus(_, Paused)` back-door (`LIFE-1`) so a single call bricks *every* router deposit while preview reports healthy — see **NC-4** · fuzz (assert preview-available ⇒ execute-succeeds, or both fail).
+> ✅ HOLDS · `_executeLegs` skip-and-renormalises exactly the legs `previewDeposit` reports `unavailable` (or both report the whole basket unavailable) — preview-available ⇒ execute-deposits, preview-unavailable ⇒ execute-skips. A single `setVaultStatus(_, Paused)` no longer bricks *every* router deposit (F-13 / NC-4 fixed, #968) · fuzz (assert preview-available ⇒ execute-succeeds, or both fail) — `FvInvariants.t.sol::test_RTR5_previewMatchesExecute`.
 
 > **`RTR-6` — A configured cap always bounds cumulative exposure, not just a single transaction.**
 > 🔴 VIOLATED (if intended as exposure limit) · `routerCap`/`vaultCap` are per-tx only; splittable — see **F-12** · fuzz. *(Downgrade to "documented as per-tx sanity bound" closes this instead.)*
@@ -216,7 +216,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS · snapshot voting (prior M-10 fix) · stateful-invariant.
 
 > **`GOV-4` — A governance proposal that would render router deposits non-executable can never be executed (no self-DoS).**
-> 🔴 VIOLATED · `propose`/`execute` don't validate `VaultStatus==Active` — see **F-05 / RTR-4** · symbolic.
+> ✅ HOLDS · `propose` now rejects any weight vector with a non-eligible-or-non-Active vault (via `router.isRouterEligibleAndActive`), so a self-DoS proposal never enters the voting pipeline (F-05 / RTR-4 fixed, #968) · symbolic — `FvInvariants.t.sol::test_GOV4_proposalCannotSelfDosRouter`.
 
 > **`GOV-5` — The timelock/Safe is never the *sole* unrecoverable point of liveness that the admin-floor masks.**
 > 🟡 TRUSTED · admin-floor protects the timelock's membership, not the off-chain Safe quorum — see Layer-2 note in the audit doc · documented assumption (not directly FV-able; track operationally).
