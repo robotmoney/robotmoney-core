@@ -135,8 +135,13 @@ sol! {
             uint256[] calldata minSharesPerLeg
         ) external returns (bytes32 paymentId);
 
+        /// Issue #967: redeem legs are driven by an explicit, caller-supplied
+        /// `vaults[]` (identity-bound to `sharesPerLeg`), not the router's live
+        /// weight vector. Issue #969 added the real per-leg `minAssetsPerLeg`
+        /// slippage floor (parallel to `sharesPerLeg`).
         function withdrawFromRouter(
             bytes32 orderId,
+            address[] calldata vaults,
             uint256[] calldata sharesPerLeg,
             uint256[] calldata minAssetsPerLeg,
             uint64 deadline,
@@ -722,7 +727,7 @@ fn agent_withdrawal_window_cap() {
 /// 2. Authorize an agent whose policy enables withdrawal and includes router as a destination.
 /// 3. Agent deposits USDC via gateway.depositTo(router) — shares split 60/40 to shareReceiver.
 /// 4. shareReceiver approves gateway for each vault's share token.
-/// 5. Agent calls gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey).
+/// 5. Agent calls gateway.withdrawFromRouter(orderId, vaults, sharesPerLeg, minAssetsPerLeg, deadline, idempotencyKey).
 /// 6. Assert: USDC lands at assetRecipient, gateway holds zero residual vault receipts,
 ///    AgentWithdrawalRouted event is emitted.
 #[test]
@@ -966,16 +971,21 @@ fn router_withdrawal() {
 
     // ── Call withdrawFromRouter ──────────────────────────────────────────────
     let withdraw_deadline = now_secs + 300;
+    // Issue #967: redeem legs are driven by the explicit caller-supplied
+    // `vaults[]`, identity-bound to `sharesPerLeg` (not the router's live weight
+    // vector), so a reweighted-out/retired position stays redeemable.
+    let vaults = vec![vault_a, vault_b];
     let shares_per_leg = vec![shares_a, shares_b];
-    // GW-5 / F-11: forward a real per-leg slippage floor. On this 1:1 fork
-    // fixture a zero floor is sufficient to exercise the happy path, but the
-    // vector must be parallel to sharesPerLeg.
+    // GW-5 / F-11 / issue #969: forward a real per-leg slippage floor. On this
+    // 1:1 fork fixture a zero floor is sufficient to exercise the happy path,
+    // but the vector must be parallel to sharesPerLeg.
     let min_assets_per_leg = vec![U256::ZERO, U256::ZERO];
     let withdraw_receipt = agent
         .send(
             gateway,
             &IGateway::withdrawFromRouterCall {
                 orderId: alloy_primitives::B256::from([60u8; 32]),
+                vaults,
                 sharesPerLeg: shares_per_leg,
                 minAssetsPerLeg: min_assets_per_leg,
                 deadline: withdraw_deadline,
