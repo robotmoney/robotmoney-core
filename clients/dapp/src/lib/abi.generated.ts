@@ -955,6 +955,11 @@ export const gatewayAbiGenerated = [
         internalType: "bytes32",
       },
       {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
         name: "sharesPerLeg",
         type: "uint256[]",
         internalType: "uint256[]",
@@ -6301,6 +6306,11 @@ export const routerAbiGenerated = [
         internalType: "address",
       },
       {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
         name: "sharesPerLeg",
         type: "uint256[]",
         internalType: "uint256[]",
@@ -6873,6 +6883,22 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "RedeemVaultNotRegistered",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "RedeemVaultsLengthMismatch",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "ReentrancyGuardReentrantCall",
     inputs: [],
   },
@@ -6985,6 +7011,17 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "VaultNotRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
+    name: "VaultPausedForRedeem",
     inputs: [
       {
         name: "vault",

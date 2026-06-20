@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -787,6 +787,7 @@ CEI pattern: all state effects written before external calls.
 ```solidity
 function withdrawFromRouter(
     bytes32 orderId,
+    address[] calldata vaults,
     uint256[] calldata sharesPerLeg,
     uint64 deadline,
     bytes32 idempotencyKey
@@ -801,7 +802,8 @@ function withdrawFromRouter(
 |Name|Type|Description|
 |----|----|-----------|
 |`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
-|`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per router leg (parallel to the router's effective weight vector).|
+|`vaults`|`address[]`|          Explicit list of vault addresses to redeem from (issue #967, F-03). Drives the redeem legs directly instead of the router's live weight vector, so a holder can exit a reweighted-out or Retired position. `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the array is committed to `paymentId`.|
+|`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per leg (parallel to `vaults`).|
 |`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
 |`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
 
@@ -809,7 +811,7 @@ function withdrawFromRouter(
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/key.|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/ vaults/sharesPerLeg/key.|
 |`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
 
 

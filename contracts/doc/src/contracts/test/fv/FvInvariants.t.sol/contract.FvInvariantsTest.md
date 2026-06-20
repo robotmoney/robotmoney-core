@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -160,8 +160,13 @@ function test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible() public pure
 
 ### test_LIFE5_expectedFail_reweightKeepsPositionRedeemable
 
-LIFE-5 — a reweight/removal never makes an existing holder's
-position unredeemable through the protocol (router path).
+LIFE-5 (FLIPPED GREEN by #967, F-02/F-03) — a reweight/removal
+never makes an existing holder's position unredeemable through the
+router. Proof: deposit into vaultA, then reweight the router 100%
+onto vaultB and Retire vaultA. The holder still redeems the vaultA
+position through `redeemFor` by naming it explicitly — the redeem
+path no longer iterates the live weight vector, and a Retired leg
+(only Paused is blocked) is still redeemable.
 
 
 ```solidity
@@ -170,8 +175,11 @@ function test_LIFE5_expectedFail_reweightKeepsPositionRedeemable() public;
 
 ### test_RTR2_expectedFail_redeemTargetsActualPositions
 
-RTR-2 — a multi-leg redemption targets the holder's actual
-positions, not the current weight vector.
+RTR-2 (FLIPPED GREEN by #967, F-03) — a multi-leg redemption
+targets the holder's actual positions, not the current weight
+vector. Proof: a holder with positions in vaultA AND vaultB
+redeems both by naming them explicitly, even after the router has
+been reweighted onto a third vault that the holder never held.
 
 
 ```solidity
@@ -180,8 +188,12 @@ function test_RTR2_expectedFail_redeemTargetsActualPositions() public;
 
 ### test_RTR3_expectedFail_legsAreIdentityBound
 
-RTR-3 — sharesPerLeg[i] is identity-bound to the intended vault,
-never to whichever vault occupies index i after a reweight.
+RTR-3 (FLIPPED GREEN by #967, NC-5) — `sharesPerLeg[i]` is
+identity-bound to the vault the caller named (`vaults[i]`), never
+to whichever vault occupies index i after a reweight. Proof: the
+holder names vaultA; even after the weight vector is reordered so
+index 0 points at vaultB, the redeem hits exactly vaultA — vaultB
+is untouched.
 
 
 ```solidity
@@ -265,6 +277,15 @@ Register a fresh registry-linked vault, mark it Active + eligible.
 function _addEligibleVault(VaultRegistry registry, PortfolioRouter, FvUSDC usdc)
     internal
     returns (FvRetirableVault vault);
+```
+
+### _setSingleWeight
+
+Set the router's voted weight vector to a single vault at 100%.
+
+
+```solidity
+function _setSingleWeight(PortfolioRouter router, address vault) internal;
 ```
 
 ### test_SUP3_expectedFail_roundTripNeverProfits

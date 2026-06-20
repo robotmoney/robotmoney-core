@@ -1,5 +1,5 @@
 # FvRetirableVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 ERC20
@@ -75,6 +75,21 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 
 ```solidity
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
+```
+
+### redeem
+
+ERC-4626-shaped redeem (1:1). Burns `shares` from `owner` (the
+caller must be `owner` or hold an ERC-20 allowance) and sends the
+underlying to `receiver`. Redemption is permitted in any lifecycle
+state — the deposit-halt flag never freezes withdrawals — so the
+router's status gate (#967) is the only thing that can block a leg.
+
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+    external
+    returns (uint256 assets);
 ```
 
 ### retire

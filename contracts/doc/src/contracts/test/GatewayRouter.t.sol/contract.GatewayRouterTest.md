@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b72600128d518fe283aabcd43139632a817c2a12/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -519,6 +519,17 @@ Deposit via router and return the shares minted per leg.
 function _routerDepositAndGetShares(address who, uint256 amount)
     internal
     returns (uint256 sharesA, uint256 sharesB);
+```
+
+### _routerVaults
+
+The two-leg router vault set [vaultA, vaultB] (60/40), now passed
+explicitly to withdrawFromRouter and committed to the paymentId
+intent hash (issue #967).
+
+
+```solidity
+function _routerVaults() internal view returns (address[] memory vaults);
 ```
 
 ### test_withdrawFromRouter_happyPath

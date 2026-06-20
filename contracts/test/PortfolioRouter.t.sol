@@ -1309,7 +1309,14 @@ contract PortfolioRouterTest is Test {
                 PortfolioRouter.UnauthorizedRedeemer.selector, depositor, stranger
             )
         );
-        router.redeemFor(depositor, stranger, sharesToRedeem, new uint256[](2), type(uint256).max);
+        router.redeemFor(
+            depositor,
+            stranger,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
+        );
     }
 
     /// @notice shareHolder can call redeemFor on their own shares.
@@ -1337,7 +1344,12 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         uint256[] memory assetsOut = router.redeemFor(
-            depositor, depositor, sharesToRedeem, new uint256[](2), type(uint256).max
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
         );
 
         assertEq(assetsOut[0], shares[0]);
@@ -1373,6 +1385,15 @@ contract PortfolioRouterTest is Test {
         sharesToRedeem[1] = shares[1];
     }
 
+    /// @dev The explicit redeem vault set [vaultA, vaultB], parallel to the
+    ///      equal-weight deposit legs. `redeemFor` now drives legs from this
+    ///      caller-supplied array, not the live weight vector (issue #967).
+    function _redeemVaults() internal view returns (address[] memory vaults) {
+        vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+    }
+
     /// @notice redeemFor reverts SlippageExceeded when realized per-leg proceeds
     ///         fall below the caller-supplied minAssetsPerLeg floor.
     function test_redeemFor_revertsWhenBelowMinAssetsFloor() public {
@@ -1387,7 +1408,9 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(PortfolioRouter.SlippageExceeded.selector);
-        router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, type(uint256).max);
+        router.redeemFor(
+            depositor, depositor, _redeemVaults(), sharesToRedeem, minAssets, type(uint256).max
+        );
     }
 
     /// @notice redeemFor reverts DeadlineExpired when block.timestamp exceeds the
@@ -1404,22 +1427,25 @@ contract PortfolioRouterTest is Test {
         // Expired deadline → revert before any redemption.
         vm.prank(depositor);
         vm.expectRevert(PortfolioRouter.DeadlineExpired.selector);
-        router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, block.timestamp - 1);
+        router.redeemFor(
+            depositor, depositor, _redeemVaults(), sharesToRedeem, minAssets, block.timestamp - 1
+        );
 
         // At-or-above floor, before deadline → succeeds.
         // Floor exactly equals 1:1 proceeds; deadline is in the future.
         minAssets[0] = sharesToRedeem[0];
         minAssets[1] = sharesToRedeem[1];
         vm.prank(depositor);
-        uint256[] memory assetsOut =
-            router.redeemFor(depositor, depositor, sharesToRedeem, minAssets, block.timestamp + 60);
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor, depositor, _redeemVaults(), sharesToRedeem, minAssets, block.timestamp + 60
+        );
         assertEq(assetsOut[0], sharesToRedeem[0], "leg 0 proceeds at floor");
         assertEq(assetsOut[1], sharesToRedeem[1], "leg 1 proceeds at floor");
         assertEq(usdc.balanceOf(depositor), amount, "depositor received full USDC");
     }
 
-    /// @notice redeemFor reverts MinAssetsLengthMismatch when the floor array
-    ///         length does not match the effective leg count.
+    /// @notice redeemFor reverts RedeemVaultsLengthMismatch when the floor array
+    ///         length does not match the explicit `vaults[]` leg count.
     function test_redeemFor_revertsOnMinAssetsLengthMismatch() public {
         uint256 amount = 1000 * ONE_USDC;
         uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
@@ -1427,8 +1453,127 @@ contract PortfolioRouterTest is Test {
         uint256[] memory badLenFloor = new uint256[](1); // should be length 2
 
         vm.prank(depositor);
-        vm.expectRevert(PortfolioRouter.MinAssetsLengthMismatch.selector);
-        router.redeemFor(depositor, depositor, sharesToRedeem, badLenFloor, type(uint256).max);
+        vm.expectRevert(PortfolioRouter.RedeemVaultsLengthMismatch.selector);
+        router.redeemFor(
+            depositor, depositor, _redeemVaults(), sharesToRedeem, badLenFloor, type(uint256).max
+        );
+    }
+
+    // ─── #967: explicit vaults[] exit semantics (F-02, F-03, NC-5) ─────────────
+
+    /// @notice redeemFor drives legs from the explicit `vaults[]` argument, not
+    ///         the live weight vector (F-03). After a full reweight onto vaultC,
+    ///         the holder still exits vaultA/vaultB by naming them.
+    function test_redeemFor_drivesLegsFromExplicitVaults_notWeightVector() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        // Register + make vaultC eligible, then reweight the router 100% onto it
+        // - a vault the holder never held.
+        vm.startPrank(admin);
+        registry.registerVault(address(vaultC), metaC);
+        registry.setRouterEligible(address(vaultC), true);
+        vm.stopPrank();
+        address[] memory cw = new address[](1);
+        uint256[] memory cbps = new uint256[](1);
+        cw[0] = address(vaultC);
+        cbps[0] = 10_000;
+        vm.prank(admin);
+        router.setWeights(cw, cbps);
+
+        vm.prank(depositor);
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
+        );
+        assertEq(assetsOut[0], sharesToRedeem[0], "vaultA leg redeemed by name");
+        assertEq(assetsOut[1], sharesToRedeem[1], "vaultB leg redeemed by name");
+        assertEq(vaultA.balanceOf(depositor), 0, "vaultA emptied");
+        assertEq(vaultB.balanceOf(depositor), 0, "vaultB emptied");
+    }
+
+    /// @notice redeemFor permits redeeming from a Retired vault (F-02): Retired
+    ///         is withdraw-only, so the exit path must still succeed.
+    function test_redeemFor_redeemsFromRetiredVault() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        // Retire vaultA in the registry.
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
+
+        vm.prank(depositor);
+        uint256[] memory assetsOut = router.redeemFor(
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
+        );
+        assertEq(assetsOut[0], sharesToRedeem[0], "Retired vaultA still redeemable");
+        assertEq(assetsOut[1], sharesToRedeem[1], "Active vaultB redeemable");
+    }
+
+    /// @notice redeemFor reverts VaultPausedForRedeem when a named leg is Paused
+    ///         (F-02): only Paused blocks the exit path.
+    function test_redeemFor_revertsWhenLegPaused() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        vm.prank(admin);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.VaultPausedForRedeem.selector, address(vaultA))
+        );
+        router.redeemFor(
+            depositor,
+            depositor,
+            _redeemVaults(),
+            sharesToRedeem,
+            new uint256[](2),
+            type(uint256).max
+        );
+    }
+
+    /// @notice redeemFor reverts RedeemVaultNotRegistered when a named vault is
+    ///         not registered in the VaultRegistry.
+    function test_redeemFor_revertsOnUnregisteredVault() public {
+        uint256 amount = 1000 * ONE_USDC;
+        uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
+
+        address bogus = makeAddr("unregisteredVault");
+        address[] memory vaults = new address[](2);
+        vaults[0] = bogus;
+        vaults[1] = address(vaultB);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.RedeemVaultNotRegistered.selector, bogus)
+        );
+        router.redeemFor(
+            depositor, depositor, vaults, sharesToRedeem, new uint256[](2), type(uint256).max
+        );
+    }
+
+    /// @notice redeemFor reverts RedeemVaultsLengthMismatch when the shares array
+    ///         length does not match the explicit `vaults[]`.
+    function test_redeemFor_revertsOnSharesLengthMismatch() public {
+        uint256 amount = 1000 * ONE_USDC;
+        _depositAndApproveForRedeem(amount);
+
+        uint256[] memory badShares = new uint256[](1); // should be length 2
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.RedeemVaultsLengthMismatch.selector);
+        router.redeemFor(
+            depositor, depositor, _redeemVaults(), badShares, new uint256[](2), type(uint256).max
+        );
     }
 
     // ─── L-10: last-admin floor ────────────────────────────────────────────────

@@ -344,8 +344,8 @@ pub enum Command {
     /// redemption, agent-initiated).
     ///
     /// Reads the router's effective weight vector, distributes the requested
-    /// per-leg shares across all active router vaults, and calls
-    /// `gateway.withdrawFromRouter(orderId, sharesPerLeg, deadline, idempotencyKey)`.
+    /// per-leg shares across the caller-supplied vaults, and calls
+    /// `gateway.withdrawFromRouter(orderId, vaults, sharesPerLeg, deadline, idempotencyKey)`.
     /// USDC lands at the policy-configured `assetRecipient`; no shares pass
     /// through the gateway. Re-run with `--get-router` first to preview the
     /// router's current vault order.
@@ -360,6 +360,12 @@ pub enum Command {
         /// Example: `--shares-per-leg 60000000,40000000`
         #[arg(long = "shares-per-leg", value_delimiter = ',')]
         shares_per_leg: Vec<String>,
+        /// Comma-separated vault addresses to redeem from (0x-prefixed), one per
+        /// leg, parallel to --shares-per-leg. Identity-bound: shares_per_leg[i] is
+        /// redeemed from vaults[i] (issue #967). Drives the redeem legs directly
+        /// instead of the router's live weight vector.
+        #[arg(long = "vaults", value_delimiter = ',')]
+        vaults: Vec<String>,
         /// 32-byte order id, 0x-prefixed hex.
         #[arg(long = "order-id")]
         order_id: String,

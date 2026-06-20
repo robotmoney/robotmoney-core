@@ -100,6 +100,23 @@ contract FvRetirableVault is ERC20 {
         _mint(receiver, shares);
     }
 
+    /// @notice ERC-4626-shaped redeem (1:1). Burns `shares` from `owner` (the
+    ///         caller must be `owner` or hold an ERC-20 allowance) and sends the
+    ///         underlying to `receiver`. Redemption is permitted in any lifecycle
+    ///         state — the deposit-halt flag never freezes withdrawals — so the
+    ///         router's status gate (#967) is the only thing that can block a leg.
+    function redeem(uint256 shares, address receiver, address owner)
+        external
+        returns (uint256 assets)
+    {
+        if (msg.sender != owner) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+        _burn(owner, shares);
+        assets = shares; // 1:1
+        assetToken.safeTransfer(receiver, assets);
+    }
+
     /// @notice Deposit-halt leg driven by the registry (LIFE-1). Idempotent.
     function retire() external {
         if (msg.sender != registry) revert OnlyRegistry();
@@ -248,25 +265,145 @@ contract FvInvariantsTest is Test {
 
     // ── #967 (F-02, F-03, NC-5): router exit semantics ────────────────────────
 
-    /// @notice LIFE-5 — a reweight/removal never makes an existing holder's
-    ///         position unredeemable through the protocol (router path).
+    /// @notice LIFE-5 (FLIPPED GREEN by #967, F-02/F-03) — a reweight/removal
+    ///         never makes an existing holder's position unredeemable through the
+    ///         router. Proof: deposit into vaultA, then reweight the router 100%
+    ///         onto vaultB and Retire vaultA. The holder still redeems the vaultA
+    ///         position through `redeemFor` by naming it explicitly — the redeem
+    ///         path no longer iterates the live weight vector, and a Retired leg
+    ///         (only Paused is blocked) is still redeemable.
     function test_LIFE5_expectedFail_reweightKeepsPositionRedeemable() public {
-        _skipRed("LIFE-5", "redeemFor iterates the live weight vector, not balances (F-03)");
-        fail();
+        _assertHolds("LIFE-5");
+
+        (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vaultA) =
+            _deployRouterStack();
+        FvRetirableVault vaultB = _addEligibleVault(registry, router, usdc);
+
+        // Holder deposits 100% into vaultA via the router.
+        _setSingleWeight(router, address(vaultA));
+        uint256 amount = 1_000e6;
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+        uint256[] memory minted = router.deposit(amount, new uint256[](0));
+        uint256 sharesA = minted[0];
+        assertEq(sharesA, amount, "deposited 1:1 into vaultA");
+
+        // Router reweights 100% onto vaultB and RETIRES vaultA — the holder's
+        // vaultA position is now entirely outside the live weight vector.
+        _setSingleWeight(router, address(vaultB));
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
+        (, VaultRegistry.VaultStatus sA) = registry.getVault(address(vaultA));
+        assertEq(uint256(sA), uint256(VaultRegistry.VaultStatus.Retired), "vaultA Retired");
+
+        // The holder can STILL exit vaultA via the router by naming it explicitly.
+        vaultA.approve(address(router), sharesA);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vaultA);
+        uint256[] memory shares = new uint256[](1);
+        shares[0] = sharesA;
+        uint256[] memory assetsOut = router.redeemFor(
+            address(this), address(this), vaults, shares, new uint256[](1), type(uint256).max
+        );
+        assertEq(assetsOut[0], amount, "LIFE-5: reweighted-out, Retired position still redeemable");
+        assertEq(vaultA.balanceOf(address(this)), 0, "vaultA shares fully burned");
     }
 
-    /// @notice RTR-2 — a multi-leg redemption targets the holder's actual
-    ///         positions, not the current weight vector.
+    /// @notice RTR-2 (FLIPPED GREEN by #967, F-03) — a multi-leg redemption
+    ///         targets the holder's actual positions, not the current weight
+    ///         vector. Proof: a holder with positions in vaultA AND vaultB
+    ///         redeems both by naming them explicitly, even after the router has
+    ///         been reweighted onto a third vault that the holder never held.
     function test_RTR2_expectedFail_redeemTargetsActualPositions() public {
-        _skipRed("RTR-2", "router redeem iterates weight vector, not holdings (F-03)");
-        fail();
+        _assertHolds("RTR-2");
+
+        (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vaultA) =
+            _deployRouterStack();
+        FvRetirableVault vaultB = _addEligibleVault(registry, router, usdc);
+        FvRetirableVault vaultC = _addEligibleVault(registry, router, usdc);
+
+        // Holder deposits 50/50 into vaultA and vaultB.
+        address[] memory dv = new address[](2);
+        uint256[] memory dbps = new uint256[](2);
+        dv[0] = address(vaultA);
+        dv[1] = address(vaultB);
+        dbps[0] = 5_000;
+        dbps[1] = 5_000;
+        router.setWeights(dv, dbps);
+
+        uint256 amount = 1_000e6;
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+        uint256[] memory minted = router.deposit(amount, new uint256[](0));
+
+        // Reweight the router 100% onto vaultC — a vault the holder never held.
+        _setSingleWeight(router, address(vaultC));
+
+        // Redeem targets the holder's ACTUAL positions (vaultA, vaultB), not the
+        // current weight vector (vaultC).
+        vaultA.approve(address(router), minted[0]);
+        vaultB.approve(address(router), minted[1]);
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory shares = new uint256[](2);
+        shares[0] = minted[0];
+        shares[1] = minted[1];
+        uint256[] memory assetsOut = router.redeemFor(
+            address(this), address(this), vaults, shares, new uint256[](2), type(uint256).max
+        );
+        assertEq(assetsOut[0] + assetsOut[1], amount, "RTR-2: full holdings redeemed");
+        assertEq(vaultA.balanceOf(address(this)), 0, "vaultA emptied");
+        assertEq(vaultB.balanceOf(address(this)), 0, "vaultB emptied");
+        assertEq(vaultC.balanceOf(address(this)), 0, "holder never held vaultC");
     }
 
-    /// @notice RTR-3 — sharesPerLeg[i] is identity-bound to the intended vault,
-    ///         never to whichever vault occupies index i after a reweight.
+    /// @notice RTR-3 (FLIPPED GREEN by #967, NC-5) — `sharesPerLeg[i]` is
+    ///         identity-bound to the vault the caller named (`vaults[i]`), never
+    ///         to whichever vault occupies index i after a reweight. Proof: the
+    ///         holder names vaultA; even after the weight vector is reordered so
+    ///         index 0 points at vaultB, the redeem hits exactly vaultA — vaultB
+    ///         is untouched.
     function test_RTR3_expectedFail_legsAreIdentityBound() public {
-        _skipRed("RTR-3", "redeemFor binds legs positionally to _effectiveWeightsMemory (NC-5)");
-        fail();
+        _assertHolds("RTR-3");
+
+        (VaultRegistry registry, PortfolioRouter router, FvUSDC usdc, FvRetirableVault vaultA) =
+            _deployRouterStack();
+        FvRetirableVault vaultB = _addEligibleVault(registry, router, usdc);
+
+        // Holder deposits 100% into vaultA.
+        _setSingleWeight(router, address(vaultA));
+        uint256 amount = 500e6;
+        usdc.mint(address(this), amount);
+        usdc.approve(address(router), amount);
+        uint256[] memory minted = router.deposit(amount, new uint256[](0));
+        uint256 sharesA = minted[0];
+
+        // Sign over a redeem of `sharesA` from vaultA, then the weight vector is
+        // reordered so index 0 now points at vaultB (a positional-binding redeem
+        // would hit vaultB here — the NC-5 bug).
+        address[] memory rev = new address[](2);
+        uint256[] memory revbps = new uint256[](2);
+        rev[0] = address(vaultB);
+        rev[1] = address(vaultA);
+        revbps[0] = 5_000;
+        revbps[1] = 5_000;
+        router.setWeights(rev, revbps);
+
+        // Execute the caller's intent: redeem vaultA by name. Identity binding
+        // means the leg hits vaultA, NOT index-0 vaultB.
+        vaultA.approve(address(router), sharesA);
+        address[] memory vaults = new address[](1);
+        vaults[0] = address(vaultA);
+        uint256[] memory shares = new uint256[](1);
+        shares[0] = sharesA;
+        uint256[] memory assetsOut = router.redeemFor(
+            address(this), address(this), vaults, shares, new uint256[](1), type(uint256).max
+        );
+        assertEq(assetsOut[0], amount, "RTR-3: redeem hit the named vaultA");
+        assertEq(vaultA.balanceOf(address(this)), 0, "vaultA position closed");
+        // The vault the caller did NOT name is completely untouched.
+        assertEq(vaultB.balanceOf(address(this)), 0, "RTR-3: vaultB never held and never touched");
+        assertEq(vaultB.totalSupply(), 0, "RTR-3: vaultB minted nothing - leg never redirected");
     }
 
     // ── #968 (F-04, F-05, F-13, NC-4): router deposit integrity ───────────────
@@ -492,6 +629,15 @@ contract FvInvariantsTest is Test {
             VaultRegistry.VaultMetadata({name: "FV Vault", asset: address(usdc), registeredAt: 0})
         );
         registry.setRouterEligible(address(vault), true);
+    }
+
+    /// @dev Set the router's voted weight vector to a single vault at 100%.
+    function _setSingleWeight(PortfolioRouter router, address vault) internal {
+        address[] memory vaults = new address[](1);
+        uint256[] memory bps = new uint256[](1);
+        vaults[0] = vault;
+        bps[0] = 10_000;
+        router.setWeights(vaults, bps);
     }
 
     // ── #969 (F-10, F-11, F-16, NC-6): oracle/pricing integrity ───────────────
