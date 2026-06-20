@@ -70,6 +70,11 @@ pub struct Args {
     /// redeemed from `vaults[i]` (issue #967). Drives the redeem legs
     /// directly instead of the router's live weight vector.
     pub vaults: Vec<String>,
+    /// Per-leg minimum USDC out (slippage floor), decimal strings, parallel to
+    /// `shares_per_leg` (GW-5 / F-11). Empty ⇒ an all-zero floor of the same
+    /// length is sent (back-compat). Otherwise the length must equal
+    /// `shares_per_leg`.
+    pub min_assets_per_leg: Vec<String>,
     /// 32-byte order id, 0x-prefixed hex.
     pub order_id: String,
     /// 32-byte idempotency key. Defaults to order_id when omitted.
@@ -184,6 +189,32 @@ pub fn run(args: Args) -> i32 {
         );
         return EXIT_REFUSAL;
     }
+
+    // Parse the per-leg slippage floor (GW-5 / F-11). Empty ⇒ all-zero of the
+    // same length (back-compat); otherwise the length must equal shares_per_leg.
+    let min_assets_per_leg: Vec<U256> = if args.min_assets_per_leg.is_empty() {
+        vec![U256::ZERO; shares_per_leg.len()]
+    } else {
+        if args.min_assets_per_leg.len() != shares_per_leg.len() {
+            log::error!(
+                "rmpc withdraw-router: --min-assets-per-leg length ({}) must equal --shares-per-leg length ({})",
+                args.min_assets_per_leg.len(),
+                shares_per_leg.len()
+            );
+            return EXIT_STARTUP_FAIL;
+        }
+        let mut out = Vec::with_capacity(args.min_assets_per_leg.len());
+        for s in &args.min_assets_per_leg {
+            match U256::from_str(s) {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    log::error!("rmpc withdraw-router: --min-assets-per-leg entry {s:?} is not a valid decimal U256: {e}");
+                    return EXIT_STARTUP_FAIL;
+                }
+            }
+        }
+        out
+    };
 
     let order_id = match B256::from_str(&args.order_id) {
         Ok(b) => b,
@@ -484,6 +515,7 @@ pub fn run(args: Args) -> i32 {
         orderId: order_id,
         vaults: vaults.clone(),
         sharesPerLeg: shares_per_leg.clone(),
+        minAssetsPerLeg: min_assets_per_leg.clone(),
         deadline,
         idempotencyKey: idempotency_key,
     }
@@ -701,7 +733,7 @@ mod tests {
 
     #[test]
     fn withdraw_from_router_selector_matches_canonical_signature() {
-        let canonical = "withdrawFromRouter(bytes32,address[],uint256[],uint64,bytes32)";
+        let canonical = "withdrawFromRouter(bytes32,address[],uint256[],uint256[],uint64,bytes32)";
         let expected = &keccak256(canonical.as_bytes())[..4];
         let actual = RobotMoneyGateway::withdrawFromRouterCall::SELECTOR;
         assert_eq!(&actual, expected, "withdrawFromRouter selector drift");
@@ -724,10 +756,12 @@ mod tests {
             alloy_primitives::Address::repeat_byte(1),
             alloy_primitives::Address::repeat_byte(2),
         ];
+        let floors = vec![U256::from(59_700_000u64), U256::from(39_800_000u64)];
         let call = RobotMoneyGateway::withdrawFromRouterCall {
             orderId: alloy_primitives::B256::ZERO,
             vaults,
             sharesPerLeg: legs,
+            minAssetsPerLeg: floors,
             deadline: 0u64,
             idempotencyKey: alloy_primitives::B256::ZERO,
         };

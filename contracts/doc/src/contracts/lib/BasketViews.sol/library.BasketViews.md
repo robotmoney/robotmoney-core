@@ -1,5 +1,5 @@
 # BasketViews
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/lib/BasketViews.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/917ad2fa7c99aa1876a7832ed87f60eadc688b02/contracts/lib/BasketViews.sol)
 
 **Title:**
 BasketViews
@@ -19,6 +19,49 @@ uint256 internal constant MAX_BPS = 10_000
 
 
 ## Functions
+### shortlist
+
+Build the per-asset shortlist (token, pool, fee, active, balance)
+for off-chain/rmpc display. Externally linked so the array-building
+loop is not inlined into the EIP-170-tight `AgentTokenVault`.
+
+
+```solidity
+function shortlist(IBasketVaultViews vault)
+    public
+    view
+    returns (
+        address[] memory tokens,
+        address[] memory pools,
+        uint24[] memory fees,
+        bool[] memory active,
+        uint256[] memory balances
+    );
+```
+
+### checkNavDeviation
+
+ORA-4 / F-10 — revert if any active basket asset's executable
+market (slot0 spot) price diverges from its NAV-pricing TWAP
+beyond `thresholdBps`. No-op when `thresholdBps` is 0. Externally
+linked so the per-asset loop is not inlined into the EIP-170-tight
+vault family.
+
+
+```solidity
+function checkNavDeviation(IBasketVaultViews vault, address usdc, uint256 thresholdBps)
+    public
+    view;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`IBasketVaultViews`|      The basket vault (read surface).|
+|`usdc`|`address`|       The quote token (USDC).|
+|`thresholdBps`|`uint256`|Max permitted spot-vs-TWAP divergence in bps.|
+
+
 ### previewDepositWeights
 
 Equal-weight cost preview: how `usdcAmount` would be allocated

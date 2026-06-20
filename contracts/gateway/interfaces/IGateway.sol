@@ -287,15 +287,30 @@ interface IGateway {
     ///                         `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the
     ///                         array is committed to `paymentId`.
     /// @param sharesPerLeg     Vault shares to redeem per leg (parallel to `vaults`).
-    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
+    /// @param minAssetsPerLeg  Per-leg minimum USDC out (slippage floor), parallel
+    ///                         to `vaults`/`sharesPerLeg`. The gateway forwards this
+    ///                         floor straight to `PortfolioRouter.redeemFor`, which
+    ///                         reverts each leg whose realized proceeds fall below it
+    ///                         (GW-5 / F-11). A floor of 0 disables the check for
+    ///                         that leg, but the caller is expected to pass a real,
+    ///                         off-chain-computed minimum — the gateway no longer
+    ///                         hardcodes an all-zero vector. Length must equal
+    ///                         `sharesPerLeg`. The floor vector is folded into
+    ///                         `paymentId` so a replay cannot re-execute the same
+    ///                         order under a weaker floor.
+    /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`. The
+    ///                         gateway forwards this same deadline to the router
+    ///                         (no longer `type(uint256).max`), so the router's own
+    ///                         deadline guard also bites (F-11).
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
     /// @return paymentId       Hash committing chain/contract/agent/order/totalShares/
-    ///                         vaults/sharesPerLeg/key.
+    ///                         vaults/sharesPerLeg/minAssetsPerLeg/key.
     /// @return assetsPerLeg    USDC received per leg.
     function withdrawFromRouter(
         bytes32 orderId,
         address[] calldata vaults,
         uint256[] calldata sharesPerLeg,
+        uint256[] calldata minAssetsPerLeg,
         uint64 deadline,
         bytes32 idempotencyKey
     ) external returns (bytes32 paymentId, uint256[] memory assetsPerLeg);

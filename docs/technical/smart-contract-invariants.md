@@ -75,7 +75,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS (OZ ERC-4626) · symbolic recommended (zero-asset mint, rounding-to-zero shares).
 
 > **`SUP-3` — A deposit-then-immediate-redeem round trip never returns more than was put in: `previewRedeem(previewDeposit(x)) <= x` for every vault.**
-> 🔴 VIOLATED (risk) · BasketVault marks mint at TWAP but settles at spot; haircut asymmetry — see **NC-6 / F-16** · fuzz (assert ≤ across slippage params) — this property failing is the test that catches the farmable leak.
+> ✅ HOLDS (fixed #969, NC-6/F-16) · `BasketVault.deposit`/`mint` now mint shares on the REALIZED post-swap NAV delta (capped at the slippage-discounted deposit floor), not a pre-swap TWAP mark, so the mint-vs-haircut asymmetry that let a round trip farm value back out is closed; the NAV-vs-market deviation guard (`ORA-4`) keeps execution inside the band the proof assumes · fuzz (BasketVault.t.sol::test_SUP3_roundTripNeverProfits_fuzz; stateful proof BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits; FvInvariants.t.sol::test_SUP3_roundTripNeverProfits).
 
 > **`SUP-4` — Rounding always favors the vault (remaining holders), never the transacting account.**
 > 🟢 HOLDS (OZ rounding directions) · symbolic recommended; watch the BasketVault `_sellProportional` dust path and cross-asset NAV summation bias.
@@ -100,7 +100,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ HOLDS (fixed #966, F-09) · `BasketVault.addAsset` → `BasketAssetConfigGuard.requireExecutionPoolMatchesTwap` reverts `ExecutionPoolMismatch` when the registered TWAP pool's fee tier (V3/V4) or tickSpacing (Aerodrome) does not equal `swapFee_` · deploy-assertion + static-guard (DeployAssertions.t.sol::test_ORA3_addAssetRevertsOnPoolMismatch).
 
 > **`ORA-4` — Deposits/redemptions never settle when the oracle NAV deviates from the executable market price beyond a bounded threshold.**
-> ⚪ ASPIRATIONAL · no deviation guard exists — see **F-10** · stateful-invariant once implemented.
+> ✅ HOLDS (fixed #969, F-10) · `BasketVault` carries a timelock-configured `navDeviationGuardBps` threshold and reverts `NavMarketDeviationExceeded` on the deposit/redeem hot path when the executable market (Aerodrome/Uniswap spot) price diverges from the NAV-pricing TWAP beyond it, halting settlement on a stale/manipulated mark · stateful-invariant (BasketVault.t.sol::test_ORA4_deviationGuardBlocksSettlement; FvInvariants.t.sol::test_ORA4_deviationGuardBlocksSettlement).
 
 > **`ORA-5` — A reported oracle price is always within sane absolute bounds.**
 > 🟢 HOLDS (weakly) · `ChronicleOracleAdapter` `MIN_NAV`/`MAX_NAV` (1e12…1e24 — 12 orders wide; catches zero/garbage, not economic deviation) · fuzz.
@@ -197,7 +197,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟡 PARTIAL · cap enforced (prior M-6 fixed) but `_depositWindowEntries`/`_withdrawWindowEntries` grow unbounded → eventual gas-wall self-DoS — see **NC-7** · stateful-invariant (long-horizon handler) / fuzz.
 
 > **`GW-5` — Every agent redemption through the gateway always carries a real, caller-meaningful per-leg slippage floor.**
-> 🔴 VIOLATED · gateway hardcodes `new uint256[](n)` (zero) + `type(uint256).max` deadline — see **F-11** · static-guard (no all-zero floor literal on the redeem path) + fuzz.
+> ✅ HOLDS (fixed #969, F-11) · `RobotMoneyGateway.withdrawFromRouter` takes a `minAssetsPerLeg` vector and forwards it verbatim to `PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero literal) and forwards the real agent deadline (no more `type(uint256).max`); the floor vector is folded into `paymentId` so a replay cannot weaken it · static-guard + behavioural (GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum, ::test_withdrawFromRouter_floorIsBoundIntoPaymentId; FvInvariants.t.sol::test_GW5_agentRedeemCarriesRealFloor).
 
 > **`GW-6` — A revealed authorization or executed payment is never replayable.**
 > 🟢 HOLDS · commit/reveal + `paymentId` consumption · symbolic recommended (tie to GW-2: the replay guard is only as strong as the hash coverage).

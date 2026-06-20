@@ -1395,6 +1395,7 @@ contract GatewayRouterTest is Test {
             keccak256("router-withdraw-order"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("router-withdraw-idem")
         );
@@ -1414,6 +1415,162 @@ contract GatewayRouterTest is Test {
         // shareReceiver shares must be zero.
         assertEq(vaultA.balanceOf(shareReceiver), 0, "shareReceiver vaultA zero");
         assertEq(vaultB.balanceOf(shareReceiver), 0, "shareReceiver vaultB zero");
+    }
+
+    /// @notice GW-5 / F-11: a router redemption carrying a real, non-trivial
+    ///         `minAssetsPerLeg` reverts when realized assets fall below the floor.
+    ///         The gateway forwards the caller-supplied floor verbatim to the
+    ///         router (it no longer hardcodes an all-zero vector), so the router's
+    ///         per-leg `SlippageExceeded` guard bites.
+    function test_withdrawFromRouter_realFloor_revertsBelowMinimum() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        // The MockVault redeems 1:1, so leg A realizes exactly `sharesA` USDC.
+        // Demand strictly more than that on leg A → the router must revert.
+        uint256[] memory minAssetsPerLeg = new uint256[](2);
+        minAssetsPerLeg[0] = sharesA + 1; // unsatisfiable floor
+        minAssetsPerLeg[1] = 0;
+
+        vm.prank(agent);
+        vm.expectRevert(PortfolioRouter.SlippageExceeded.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-floor-o"),
+            _routerVaults(),
+            sharesPerLeg,
+            minAssetsPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-floor-i")
+        );
+    }
+
+    /// @notice GW-5 / F-11: a satisfiable real floor passes through and the
+    ///         redemption settles normally (the floor is meaningful, not a no-op).
+    function test_withdrawFromRouter_realFloor_passesWhenMet() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        // 1:1 redemption; demand exactly the realized amount (the tight floor).
+        uint256[] memory minAssetsPerLeg = new uint256[](2);
+        minAssetsPerLeg[0] = sharesA;
+        minAssetsPerLeg[1] = sharesB;
+
+        vm.prank(agent);
+        (, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
+            keccak256("rw-floor-ok-o"),
+            _routerVaults(),
+            sharesPerLeg,
+            minAssetsPerLeg,
+            uint64(block.timestamp + 60),
+            keccak256("rw-floor-ok-i")
+        );
+        assertEq(assetsPerLeg[0], sharesA, "leg 0 met floor");
+        assertEq(assetsPerLeg[1], sharesB, "leg 1 met floor");
+    }
+
+    /// @notice GW-5 / F-11: the per-leg floor vector must be parallel to the share
+    ///         vector — a length mismatch reverts before any state effect.
+    function test_withdrawFromRouter_revertsOnMinAssetsLengthMismatch() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = ONE_USDC;
+        sharesPerLeg[1] = ONE_USDC;
+        uint256[] memory shortMin = new uint256[](1); // mismatched length
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.RouterLegLengthMismatch.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-minlen-o"),
+            _routerVaults(),
+            sharesPerLeg,
+            shortMin,
+            uint64(block.timestamp + 60),
+            keccak256("rw-minlen-i")
+        );
+    }
+
+    /// @notice GW-5 / F-11: the floor vector is bound into `paymentId`, so two
+    ///         otherwise-identical orders that differ only in their floor produce
+    ///         distinct ids — a replay cannot re-run an order under a weaker floor.
+    function test_withdrawFromRouter_floorIsBoundIntoPaymentId() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        uint256 amount = 100 * ONE_USDC;
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, amount);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        uint256[] memory sharesPerLeg = new uint256[](2);
+        sharesPerLeg[0] = sharesA;
+        sharesPerLeg[1] = sharesB;
+
+        uint256[] memory floorA = new uint256[](2);
+        floorA[0] = sharesA;
+        floorA[1] = sharesB;
+
+        address[] memory vaults = _routerVaults();
+        bytes32 orderId = keccak256("rw-floorbind-o");
+        bytes32 idem = keccak256("rw-floorbind-i");
+
+        uint256 totalShares = sharesA + sharesB;
+        bytes32 idWithFloor = keccak256(
+            abi.encode(
+                uint8(4),
+                block.chainid,
+                address(gateway),
+                agent,
+                orderId,
+                totalShares,
+                vaults,
+                sharesPerLeg,
+                keccak256(abi.encode(floorA)),
+                idem
+            )
+        );
+        bytes32 idZeroFloor = keccak256(
+            abi.encode(
+                uint8(4),
+                block.chainid,
+                address(gateway),
+                agent,
+                orderId,
+                totalShares,
+                vaults,
+                sharesPerLeg,
+                keccak256(abi.encode(new uint256[](2))),
+                idem
+            )
+        );
+        assertTrue(idWithFloor != idZeroFloor, "floor must change the paymentId");
+
+        vm.prank(agent);
+        (bytes32 paymentId,) = gateway.withdrawFromRouter(
+            orderId, vaults, sharesPerLeg, floorA, uint64(block.timestamp + 60), idem
+        );
+        assertEq(paymentId, idWithFloor, "paymentId binds the floor vector");
     }
 
     /// @dev router: the withdrawFromRouter paymentId preimage carries the
@@ -1440,10 +1597,18 @@ contract GatewayRouterTest is Test {
 
         vm.prank(agent);
         (bytes32 paymentId,) = gateway.withdrawFromRouter(
-            orderId, vaults, sharesPerLeg, uint64(block.timestamp + 60), idem
+            orderId,
+            vaults,
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            uint64(block.timestamp + 60),
+            idem
         );
 
         uint256 totalShares = sharesA + sharesB;
+        // GW-5 / F-11: the per-leg slippage floor vector is folded into the
+        // paymentId preimage so a replay cannot re-execute under a weaker floor.
+        bytes32 minHash = keccak256(abi.encode(new uint256[](sharesPerLeg.length)));
         bytes32 expected = keccak256(
             abi.encode(
                 uint8(4),
@@ -1454,6 +1619,7 @@ contract GatewayRouterTest is Test {
                 totalShares,
                 vaults,
                 sharesPerLeg,
+                minHash,
                 idem
             )
         );
@@ -1505,6 +1671,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-list-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-list-i")
         );
@@ -1534,6 +1701,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-cap-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-cap-i")
         );
@@ -1562,6 +1730,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-win-o1"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-win-i1")
         );
@@ -1578,6 +1747,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-win-o2"),
             _routerVaults(),
             zeroLeg,
+            new uint256[](zeroLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-win-i2")
         );
@@ -1618,7 +1788,12 @@ contract GatewayRouterTest is Test {
 
         vm.prank(agent);
         gateway.withdrawFromRouter(
-            orderId, _routerVaults(), sharesPerLeg, uint64(block.timestamp + 60), idem
+            orderId,
+            _routerVaults(),
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            uint64(block.timestamp + 60),
+            idem
         );
 
         // Deposit fresh shares to shareReceiver (same split → same amounts).
@@ -1648,7 +1823,12 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.PaymentIdAlreadyUsed.selector);
         gateway.withdrawFromRouter(
-            orderId, _routerVaults(), sharesPerLeg2, uint64(block.timestamp + 60), idem
+            orderId,
+            _routerVaults(),
+            sharesPerLeg2,
+            new uint256[](sharesPerLeg2.length),
+            uint64(block.timestamp + 60),
+            idem
         );
     }
 
@@ -1666,6 +1846,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-dis-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-dis-i")
         );
@@ -1697,7 +1878,12 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.RouterNotConfigured.selector);
         noRouterGateway.withdrawFromRouter(
-            keccak256("o"), noVaults, sharesPerLeg, uint64(block.timestamp + 60), keccak256("i")
+            keccak256("o"),
+            noVaults,
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            uint64(block.timestamp + 60),
+            keccak256("i")
         );
     }
 
@@ -1715,6 +1901,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-len-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-len-i")
         );
@@ -1733,6 +1920,7 @@ contract GatewayRouterTest is Test {
             keccak256("o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("i")
         );
@@ -1750,6 +1938,7 @@ contract GatewayRouterTest is Test {
             keccak256("o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("i")
         );
@@ -1777,7 +1966,12 @@ contract GatewayRouterTest is Test {
         vm.recordLogs();
         vm.prank(agent);
         gateway.withdrawFromRouter(
-            orderId, _routerVaults(), sharesPerLeg, uint64(block.timestamp + 60), idem
+            orderId,
+            _routerVaults(),
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            uint64(block.timestamp + 60),
+            idem
         );
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
@@ -1799,6 +1993,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-exp-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp - 1),
             keccak256("rw-exp-i")
         );
@@ -1815,7 +2010,12 @@ contract GatewayRouterTest is Test {
         vm.prank(agent);
         vm.expectRevert(RobotMoneyGateway.DeadlineTooFar.selector);
         gateway.withdrawFromRouter(
-            keccak256("rw-far-o"), _routerVaults(), sharesPerLeg, tooFar, keccak256("rw-far-i")
+            keccak256("rw-far-o"),
+            _routerVaults(),
+            sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
+            tooFar,
+            keccak256("rw-far-i")
         );
     }
 
@@ -1838,6 +2038,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-polexp-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-polexp-i")
         );
@@ -1884,6 +2085,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-src-skip-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-src-skip-i")
         );
@@ -1914,6 +2116,7 @@ contract GatewayRouterTest is Test {
             keccak256("rw-zero-leg-o"),
             _routerVaults(),
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("rw-zero-leg-i")
         );
@@ -2039,6 +2242,7 @@ contract GatewayRouterTest is Test {
             keccak256("leaky-withdraw"),
             leakyVaults,
             sharesPerLeg,
+            new uint256[](sharesPerLeg.length),
             uint64(block.timestamp + 60),
             keccak256("leaky-withdraw-idem")
         );
