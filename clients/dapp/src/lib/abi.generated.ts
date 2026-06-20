@@ -1562,6 +1562,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "LastAdminFloor",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "NotAgentOwner",
     inputs: [],
   },

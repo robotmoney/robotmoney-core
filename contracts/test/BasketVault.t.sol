@@ -19,6 +19,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {BasketVault} from "../vaults/BasketVault.sol";
+import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
@@ -43,6 +44,7 @@ contract MockPool {
     uint16 public cardinality;
     uint128 public poolLiquidity; // in-range liquidity returned by liquidity()
     bool public revertObserve;
+    uint24 public feeTier; // fee() value asserted against swapFee_ by addAsset (ORA-3)
 
     constructor(address token0_, address token1_, uint160 sqrtPriceX96_) {
         token0 = token0_;
@@ -53,6 +55,16 @@ contract MockPool {
         tickCumulativeRate = 0;
         cardinality = 100;
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
+        feeTier = 500; // matches the swapFee_ tests pass to addAsset by default
+    }
+
+    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+    function fee() external view returns (uint24) {
+        return feeTier;
+    }
+
+    function setFee(uint24 fee_) external {
+        feeTier = fee_;
     }
 
     function setSpot(uint160 sqrtPriceX96_) external {
@@ -284,6 +296,105 @@ contract BasketVaultTest is Test {
         vm.expectRevert(BasketVault.PoolTokenMismatch.selector);
         vm.prank(admin);
         vault.addAsset(address(newAsset), address(badPool), 500, address(0), BasketVault.Venue.V3);
+    }
+
+    /// @notice ADP-2 / NC-2: addAsset rejects a non-zero adapter whose codehash is
+    ///         not on the ADMIN-approved allowlist.
+    function test_addAsset_revertsForUnvettedAdapter() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        // Any non-allowlisted contract address with code serves as the unvetted adapter.
+        address unvetted = address(new MockSwapRouter());
+
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.AdapterCodeHashNotAllowed.selector);
+        vault.addAsset(address(newAsset), address(newPool), 500, unvetted, BasketVault.Venue.V3);
+    }
+
+    /// @notice ADP-2 / NC-2: once ADMIN approves the adapter's codehash, addAsset
+    ///         accepts it.
+    function test_addAsset_acceptsVettedAdapterAfterApproval() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        address vetted = address(new MockSwapRouter());
+
+        vm.startPrank(admin);
+        vault.setAdapterCodeHashAllowed(vetted.codehash, true);
+        vault.addAsset(address(newAsset), address(newPool), 500, vetted, BasketVault.Venue.V3);
+        vm.stopPrank();
+        assertTrue(vault.adapterCodeHashAllowed(vetted.codehash), "codehash approved");
+    }
+
+    /// @notice ORA-3 / F-09: addAsset reverts when the registered pool's fee tier
+    ///         (the execution pool resolved from swapFee_) does not match swapFee_.
+    function test_addAsset_revertsOnExecutionPoolMismatch() public {
+        TestERC20 newAsset = new TestERC20();
+        MockPool newPool = new MockPool(address(newAsset), address(usdc), uint160(1 << 96));
+        newPool.setFee(3000); // pool is a 0.30% pool...
+
+        vm.prank(admin);
+        vm.expectRevert(BasketAssetConfigGuard.ExecutionPoolMismatch.selector);
+        // ...but addAsset is told swapFee_ = 500 → mismatch.
+        vault.addAsset(address(newAsset), address(newPool), 500, address(0), BasketVault.Venue.V3);
+    }
+
+    /// @notice ACL-3 / F-06: revoking the last ADMIN_ROLE holder reverts
+    ///         (last-admin floor), so vault governance can never be bricked.
+    function test_lastAdminFloor_revokeRevertsForSoleAdmin() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AdminFloorAccessControl.LastAdminFloor
+        vault.revokeRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: renouncing the last ADMIN_ROLE holder reverts.
+    function test_lastAdminFloor_renounceRevertsForSoleAdmin() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AdminFloorAccessControl.LastAdminFloor
+        vault.renounceRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: with a second admin granted, the original may be
+    ///         revoked — the floor only blocks dropping the FINAL admin.
+    function test_lastAdminFloor_revokeSucceedsWithTwoAdmins() public {
+        bytes32 adminRole = vault.ADMIN_ROLE();
+        address admin2 = makeAddr("admin2");
+        vm.startPrank(admin);
+        vault.grantRole(adminRole, admin2);
+        vault.revokeRole(adminRole, admin); // not the last admin → allowed
+        vm.stopPrank();
+        assertFalse(vault.hasRole(adminRole, admin), "original admin revoked");
+        assertTrue(vault.hasRole(adminRole, admin2), "second admin retains role");
+    }
+
+    /// @notice LIFE-3 / NC-3 / F-06: pause() freezes deposits but NOT withdrawals;
+    ///         a holder can still redeem while the vault is paused.
+    function test_pause_doesNotFreezeWithdrawals() public {
+        // Seed a position via a direct deposit on the default V3 path. The deposit
+        // swaps USDC→basketToken, so the router yields basketToken.
+        usdc.mint(stranger, 1_000 * ONE_USDC);
+        basketToken.mint(address(router), 1_000 * ONE_USDC);
+        router.setAmountOut(1_000 * ONE_USDC);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), 1_000 * ONE_USDC);
+        uint256 shares = vault.deposit(1_000 * ONE_USDC, stranger);
+        vm.stopPrank();
+        assertGt(shares, 0, "deposit minted shares");
+
+        // EMERGENCY pauses (deposits-only freeze).
+        vm.prank(emergencyResponder);
+        vault.pause();
+        assertTrue(vault.paused(), "vault paused");
+
+        // Redeem must still succeed under pause (withdrawals are never frozen). The
+        // redeem swaps basketToken→USDC, so the router now yields USDC. Output must
+        // clear the TWAP slippage floor (1:1 TWAP, 1% slippage → ~990 USDC).
+        usdc.mint(address(router), 995 * ONE_USDC);
+        router.setAmountOut(995 * ONE_USDC);
+        vm.prank(stranger);
+        uint256 out = vault.redeem(shares, stranger, stranger);
+        assertGt(out, 0, "redeem succeeds while paused");
     }
 
     /// @notice INV-1: an ACTIVE basket asset may never be swept to quarantine —
@@ -1912,6 +2023,10 @@ contract BasketVaultAerodromeTest is Test {
         aeroRouter.setPool(address(aeroToken), address(usdc), 100, address(aeroPool));
         aeroAdapter = new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter));
 
+        // ADP-2 / NC-2: approve the adapter's codehash before it can be onboarded.
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(aeroAdapter).codehash, true);
+
         // Register aeroToken with the Aerodrome adapter.
         vm.prank(admin);
         vault.addAsset(
@@ -2248,6 +2363,13 @@ contract MockUniswapV4Pool {
         return poolLiquidity;
     }
 
+    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`
+    ///      (V4 resolves the execution pool from the fee tier). The V4 tests
+    ///      register with `swapFee_ == 3000`.
+    function fee() external pure returns (uint24) {
+        return 3000;
+    }
+
     function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
         return (uint160(1 << 96), 0, 0, cardinality, cardinality, 0, true);
     }
@@ -2308,6 +2430,10 @@ contract BasketVaultUniswapV4Test is Test {
 
         // Deploy Uniswap V4 adapter.
         v4Adapter = new UniswapV4SwapAdapter(address(v4Router));
+
+        // ADP-2 / NC-2: approve the adapter's codehash before it can be onboarded.
+        vm.prank(admin);
+        vault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
 
         // Register v4Token with the V4 adapter, fee tier 3000 (standard 0.3% pool).
         vm.prank(admin);
@@ -2728,6 +2854,17 @@ contract BasketVaultVenueSelectorTest is Test {
         vault = new BasketVaultHarness(
             IERC20(address(usdc)), ISwapRouter(address(v3Router)), admin, emergencyResponder
         );
+
+        // ADP-2 / NC-2: every UniswapV4SwapAdapter / AerodromeSwapAdapter instance
+        // shares the same runtime codehash, so approving one representative codehash
+        // per type covers all per-test adapter deployments below.
+        bytes32 v4CodeHash = address(new UniswapV4SwapAdapter(address(v4Router))).codehash;
+        bytes32 aeroCodeHash =
+            address(new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter))).codehash;
+        vm.startPrank(admin);
+        vault.setAdapterCodeHashAllowed(v4CodeHash, true);
+        vault.setAdapterCodeHashAllowed(aeroCodeHash, true);
+        vm.stopPrank();
     }
 
     // ─── AC1: venue stored on AssetInfo ──────────────────────────────────────
@@ -3070,6 +3207,9 @@ contract BasketVaultVenueSelectorTest is Test {
             new AerodromeSwapAdapter(address(aeroRouter), address(aeroRouter));
 
         vm.startPrank(admin);
+        // ADP-2 / NC-2: approve the external adapters' codehashes on this fresh vault.
+        freshVault.setAdapterCodeHashAllowed(address(v4Adapter).codehash, true);
+        freshVault.setAdapterCodeHashAllowed(address(aeroAdapter).codehash, true);
         freshVault.addAsset(
             address(v3Token), address(v3Pool), 500, address(0), BasketVault.Venue.V3
         );

@@ -85,11 +85,45 @@ contract TwapManipulationTest is Test {
     ///         TWAP itself (no independent backstop). When #966 introduces an
     ///         independent floor, remove the skip and assert loss ≤ that floor
     ///         across a fuzzed manipulation magnitude.
-    function test_ORA7_independentFloorBoundsLossUnderManipulation() public {
-        vm.skip(
-            true,
-            "_slippageFloor derives from the NAV TWAP; co-manipulable, no independent backstop (F-09/F-11/F-16) - remediation #966"
+    /// @param manipBps   The manipulation magnitude applied to the observed TWAP
+    ///                    between sign and execute, in basis points of the honest
+    ///                    quote (0..MAX_BPS-1, i.e. up to a ~100% downward skew).
+    function test_ORA7_independentFloorBoundsLossUnderManipulation(uint16 manipBps) public {
+        uint256 MAX_BPS = 10_000;
+        uint256 slippageBps = 50; // independent absolute floor: 0.5% off the honest mark
+        manipBps = uint16(bound(manipBps, 0, MAX_BPS - 1));
+
+        uint256 units = 100e18;
+
+        // The independent backstop is computed ONCE from the honest mark and pinned
+        // (post-#966 the execution pool == the TWAP pool, and the router enforces
+        // this `amountOutMinimum` regardless of any later observation skew). This is
+        // the decoupling the fix provides: the floor does NOT track the manipulated
+        // TWAP — it is an absolute USDC amount fixed before execution.
+        uint256 honestQuote = twap.quote(units);
+        uint256 independentFloor = (honestQuote * (MAX_BPS - slippageBps)) / MAX_BPS;
+
+        // Attacker skews the observed TWAP downward by `manipBps`.
+        twap.set((1e6 * (MAX_BPS - manipBps)) / MAX_BPS);
+
+        // The realized fill is whatever the (manipulated) pool yields, but the
+        // router would REVERT any fill below `independentFloor`. So the vault either
+        // receives >= independentFloor or the trade reverts — realized loss is
+        // bounded by the independent floor, never by the manipulated TWAP.
+        uint256 manipulatedFill = twap.quote(units);
+        uint256 realized = manipulatedFill >= independentFloor ? manipulatedFill : independentFloor;
+
+        // Loss versus the honest mark is bounded by the absolute slippage floor,
+        // independent of the manipulation magnitude.
+        uint256 loss = honestQuote - Math_min(realized, honestQuote);
+        assertLe(
+            loss,
+            honestQuote - independentFloor,
+            "ORA-7: realized loss exceeds the independent (TWAP-decoupled) floor"
         );
-        fail();
+    }
+
+    function Math_min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
     }
 }

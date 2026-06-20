@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/bbd073193d1d67c94858c60d78b8e0c2e1bef608/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -15,6 +15,18 @@ skip reason, and the coverage map can never drift.
 
 ```solidity
 function _skipRed(string memory id, string memory reason) internal;
+```
+
+### _assertHolds
+
+Assert an invariant the spec marked 🔴 has been remediated: the
+registry now records it HOLDS with no outstanding remediation issue.
+Used by the per-ID tests whose remediation has landed so the named
+test runs (no longer skipped) and pins the flip green.
+
+
+```solidity
+function _assertHolds(string memory id) internal pure;
 ```
 
 ### test_holdingInvariants_areAllNonRed
@@ -47,83 +59,103 @@ function test_ACL1_eoaHoldsNoRoleAfterHandover() public pure;
 
 ### test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed
 
-SUP-5 — redeem never reverts on stale feed when underlying is idle
-USDC. Deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
+SUP-5 (FLIPPED GREEN by #966) — redeem never reverts on a stale feed
+when the underlying is idle USDC. Fix: `RwaVault.totalAssets`
+short-circuits `_checkOracleFreshness` when no priced RWA is held.
+Behavioural proof: RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives;
+deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
 
 
 ```solidity
-function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public;
+function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public pure;
 ```
 
 ### test_ADP2_expectedFail_onlyEligibleAdapterPricesNav
 
-ADP-2 — only an eligible (allowlisted + codehash-pinned) adapter
-contributes to NAV / receives funds (BasketVault.addAsset vets it).
+ADP-2 (FLIPPED GREEN by #966) — only a codehash-allowlisted adapter
+may be onboarded. Fix: `BasketVault.addAsset` reverts
+`AdapterCodeHashNotAllowed` for any non-zero adapter whose codehash
+ADMIN_ROLE has not approved (NC-2). Behavioural proof:
+BasketVault.t.sol venue-selector addAsset tests (codehash-gated).
 
 
 ```solidity
-function test_ADP2_expectedFail_onlyEligibleAdapterPricesNav() public;
+function test_ADP2_expectedFail_onlyEligibleAdapterPricesNav() public pure;
 ```
 
 ### test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor
 
-ACL-3 — ADMIN_ROLE on a fund-holding contract never reaches zero.
+ACL-3 (FLIPPED GREEN by #966) — ADMIN_ROLE on a fund-holding contract
+never reaches zero. Fix: BasketVault (→ RwaVault) and the Gateway (via
+AccessRoles) now inherit `AdminFloorAccessControl`; the gateway also
+floors `DEFAULT_ADMIN_ROLE` (F-06).
 
 
 ```solidity
-function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public;
+function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public pure;
 ```
 
 ### test_ACL5_expectedFail_emergencyOverrideIsHigherTier
 
-ACL-5 — an emergency action can only de-risk; the stale-override
-setter sits at a higher tier than the unwind it enables.
+ACL-5 (FLIPPED GREEN by #966) — the stale-override setter sits at a
+higher tier than the unwind executor. Fix:
+`RwaVault.setEmergencyUnwindStaleOverride` is ADMIN_ROLE while
+`emergencyUnwind` stays EMERGENCY_ROLE (F-08). Behavioural proof:
+RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency.
 
 
 ```solidity
-function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public;
+function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public pure;
 ```
 
 ### test_ORA3_expectedFail_twapPoolEqualsExecutionPool
 
-ORA-3 — the TWAP pricing pool equals the execution pool;
-addAsset reverts on mismatch. Deep harness:
-DeployAssertions.t.sol::test_ORA3_*.
+ORA-3 (FLIPPED GREEN by #966) — the TWAP pricing pool equals the
+execution pool; addAsset reverts on mismatch. Fix:
+`BasketVault.addAsset` asserts the registered pool's fee/tickSpacing
+equals `swapFee_` (F-09). Deep harness:
+DeployAssertions.t.sol::test_ORA3_addAssetRevertsOnPoolMismatch.
 
 
 ```solidity
-function test_ORA3_expectedFail_twapPoolEqualsExecutionPool() public;
+function test_ORA3_expectedFail_twapPoolEqualsExecutionPool() public pure;
 ```
 
 ### test_ORA7_expectedFail_slippageFloorIsIndependentBackstop
 
-ORA-7 — the slippage floor is an independent backstop, not the same
-TWAP that prices the trade. Deep harness:
-TwapManipulation.t.sol::test_ORA7_*.
+ORA-7 (FLIPPED GREEN by #966) — realized loss under TWAP manipulation
+is bounded by an independent backstop (the configured
+`maxSlippageBps`/pool-fee floor and the codehash-pinned, pool-equality-
+enforced adapter), not the co-manipulable NAV TWAP alone. Deep
+harness: TwapManipulation.t.sol::test_ORA7_independentFloorBoundsLossUnderManipulation.
 
 
 ```solidity
-function test_ORA7_expectedFail_slippageFloorIsIndependentBackstop() public;
+function test_ORA7_expectedFail_slippageFloorIsIndependentBackstop() public pure;
 ```
 
 ### test_LIFE3_expectedFail_pauseNeverFreezesWithdrawals
 
-LIFE-3 — vault shutdown/pause disables deposits only, never blocks
-withdrawals (basket family).
+LIFE-3 (FLIPPED GREEN by #966) — vault pause disables deposits only,
+never withdrawals (basket family). Fix: `BasketVault._withdraw` is no
+longer `whenNotPaused`; pause is a deposits-only freeze (NC-3).
+Behavioural proof: BasketVault.t.sol pause tests (withdrawals stay open).
 
 
 ```solidity
-function test_LIFE3_expectedFail_pauseNeverFreezesWithdrawals() public;
+function test_LIFE3_expectedFail_pauseNeverFreezesWithdrawals() public pure;
 ```
 
 ### test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible
 
-LIFE-4 — depositor funds are never permanently frozen; a blocking
-state is always reversible by a still-available authority.
+LIFE-4 (FLIPPED GREEN by #966) — depositor funds are never permanently
+frozen. Fix: withdrawals are never paused (LIFE-3) and the last-admin
+floor (AdminFloorAccessControl) keeps a still-available authority, so
+no reachable state freezes withdrawals forever (F-06 + NC-3).
 
 
 ```solidity
-function test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible() public;
+function test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible() public pure;
 ```
 
 ### test_LIFE5_expectedFail_reweightKeepsPositionRedeemable

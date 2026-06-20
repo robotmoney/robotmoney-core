@@ -47,6 +47,21 @@ contract FvInvariantsTest is Test {
         vm.skip(true, string.concat(reason, " - remediation #", vm.toString(e.remediationIssue)));
     }
 
+    /// @dev Assert an invariant the spec marked 🔴 has been remediated: the
+    ///      registry now records it HOLDS with no outstanding remediation issue.
+    ///      Used by the per-ID tests whose remediation has landed so the named
+    ///      test runs (no longer skipped) and pins the flip green.
+    function _assertHolds(string memory id) internal pure {
+        InvariantRegistry.Entry memory e = InvariantRegistry.get(id);
+        require(
+            e.status == InvariantRegistry.Status.HOLDS,
+            string.concat("invariant ", id, " is not yet HOLDS")
+        );
+        require(
+            e.remediationIssue == 0, string.concat("HOLDS invariant ", id, " still names an issue")
+        );
+    }
+
     // ─────────────────────────── HOLDS aggregate ─────────────────────────────
 
     /// @notice AC2: every invariant the spec marks holding/proven has a passing
@@ -86,83 +101,73 @@ contract FvInvariantsTest is Test {
 
     // ── #966 (NC-1, NC-2, F-06, F-08, F-09): high-sev vault & oracle hardening ─
 
-    /// @notice SUP-5 — redeem never reverts on stale feed when underlying is idle
-    ///         USDC. Deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
-    function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public {
-        _skipRed(
-            "SUP-5", "RwaVault redeem reverts on stale feed even after unwind to idle USDC (NC-1)"
-        );
-        fail();
+    /// @notice SUP-5 (FLIPPED GREEN by #966) — redeem never reverts on a stale feed
+    ///         when the underlying is idle USDC. Fix: `RwaVault.totalAssets`
+    ///         short-circuits `_checkOracleFreshness` when no priced RWA is held.
+    ///         Behavioural proof: RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives;
+    ///         deep harness: StaleOracleRedemption.t.sol::test_SUP5_*.
+    function test_SUP5_expectedFail_idleUsdcRedeemSurvivesStaleFeed() public pure {
+        _assertHolds("SUP-5");
     }
 
-    /// @notice ADP-2 — only an eligible (allowlisted + codehash-pinned) adapter
-    ///         contributes to NAV / receives funds (BasketVault.addAsset vets it).
-    function test_ADP2_expectedFail_onlyEligibleAdapterPricesNav() public {
-        _skipRed(
-            "ADP-2",
-            "BasketVault.addAsset accepts unvetted adapter; revoked-but-active adapter still priced (NC-2/F-14)"
-        );
-        fail();
+    /// @notice ADP-2 (FLIPPED GREEN by #966) — only a codehash-allowlisted adapter
+    ///         may be onboarded. Fix: `BasketVault.addAsset` reverts
+    ///         `AdapterCodeHashNotAllowed` for any non-zero adapter whose codehash
+    ///         ADMIN_ROLE has not approved (NC-2). Behavioural proof:
+    ///         BasketVault.t.sol venue-selector addAsset tests (codehash-gated).
+    function test_ADP2_expectedFail_onlyEligibleAdapterPricesNav() public pure {
+        _assertHolds("ADP-2");
     }
 
-    /// @notice ACL-3 — ADMIN_ROLE on a fund-holding contract never reaches zero.
-    function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public {
-        _skipRed(
-            "ACL-3",
-            "vaults + gateway use plain AccessControl; last-admin revoke bricks governance (F-06)"
-        );
-        fail();
+    /// @notice ACL-3 (FLIPPED GREEN by #966) — ADMIN_ROLE on a fund-holding contract
+    ///         never reaches zero. Fix: BasketVault (→ RwaVault) and the Gateway (via
+    ///         AccessRoles) now inherit `AdminFloorAccessControl`; the gateway also
+    ///         floors `DEFAULT_ADMIN_ROLE` (F-06).
+    function test_ACL3_expectedFail_vaultsAndGatewayHaveAdminFloor() public pure {
+        _assertHolds("ACL-3");
     }
 
-    /// @notice ACL-5 — an emergency action can only de-risk; the stale-override
-    ///         setter sits at a higher tier than the unwind it enables.
-    function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public {
-        _skipRed(
-            "ACL-5", "one EMERGENCY_ROLE key sets stale-override and runs emergencyUnwind (F-08)"
-        );
-        fail();
+    /// @notice ACL-5 (FLIPPED GREEN by #966) — the stale-override setter sits at a
+    ///         higher tier than the unwind executor. Fix:
+    ///         `RwaVault.setEmergencyUnwindStaleOverride` is ADMIN_ROLE while
+    ///         `emergencyUnwind` stays EMERGENCY_ROLE (F-08). Behavioural proof:
+    ///         RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency.
+    function test_ACL5_expectedFail_emergencyOverrideIsHigherTier() public pure {
+        _assertHolds("ACL-5");
     }
 
-    /// @notice ORA-3 — the TWAP pricing pool equals the execution pool;
-    ///         addAsset reverts on mismatch. Deep harness:
-    ///         DeployAssertions.t.sol::test_ORA3_*.
-    function test_ORA3_expectedFail_twapPoolEqualsExecutionPool() public {
-        _skipRed(
-            "ORA-3",
-            "BasketVault.addAsset stores pool and swapFee independently, never asserts equality (F-09)"
-        );
-        fail();
+    /// @notice ORA-3 (FLIPPED GREEN by #966) — the TWAP pricing pool equals the
+    ///         execution pool; addAsset reverts on mismatch. Fix:
+    ///         `BasketVault.addAsset` asserts the registered pool's fee/tickSpacing
+    ///         equals `swapFee_` (F-09). Deep harness:
+    ///         DeployAssertions.t.sol::test_ORA3_addAssetRevertsOnPoolMismatch.
+    function test_ORA3_expectedFail_twapPoolEqualsExecutionPool() public pure {
+        _assertHolds("ORA-3");
     }
 
-    /// @notice ORA-7 — the slippage floor is an independent backstop, not the same
-    ///         TWAP that prices the trade. Deep harness:
-    ///         TwapManipulation.t.sol::test_ORA7_*.
-    function test_ORA7_expectedFail_slippageFloorIsIndependentBackstop() public {
-        _skipRed(
-            "ORA-7",
-            "BasketVault._slippageFloor derives from the NAV TWAP; co-manipulable (F-09/F-11/F-16)"
-        );
-        fail();
+    /// @notice ORA-7 (FLIPPED GREEN by #966) — realized loss under TWAP manipulation
+    ///         is bounded by an independent backstop (the configured
+    ///         `maxSlippageBps`/pool-fee floor and the codehash-pinned, pool-equality-
+    ///         enforced adapter), not the co-manipulable NAV TWAP alone. Deep
+    ///         harness: TwapManipulation.t.sol::test_ORA7_independentFloorBoundsLossUnderManipulation.
+    function test_ORA7_expectedFail_slippageFloorIsIndependentBackstop() public pure {
+        _assertHolds("ORA-7");
     }
 
-    /// @notice LIFE-3 — vault shutdown/pause disables deposits only, never blocks
-    ///         withdrawals (basket family).
-    function test_LIFE3_expectedFail_pauseNeverFreezesWithdrawals() public {
-        _skipRed(
-            "LIFE-3",
-            "BasketVault._withdraw is whenNotPaused; EMERGENCY pause freezes withdrawals (F-06/NC-3)"
-        );
-        fail();
+    /// @notice LIFE-3 (FLIPPED GREEN by #966) — vault pause disables deposits only,
+    ///         never withdrawals (basket family). Fix: `BasketVault._withdraw` is no
+    ///         longer `whenNotPaused`; pause is a deposits-only freeze (NC-3).
+    ///         Behavioural proof: BasketVault.t.sol pause tests (withdrawals stay open).
+    function test_LIFE3_expectedFail_pauseNeverFreezesWithdrawals() public pure {
+        _assertHolds("LIFE-3");
     }
 
-    /// @notice LIFE-4 — depositor funds are never permanently frozen; a blocking
-    ///         state is always reversible by a still-available authority.
-    function test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible() public {
-        _skipRed(
-            "LIFE-4",
-            "basket pause + no admin floor + no restoreVault can freeze withdrawals forever (F-06/F-07/NC-3)"
-        );
-        fail();
+    /// @notice LIFE-4 (FLIPPED GREEN by #966) — depositor funds are never permanently
+    ///         frozen. Fix: withdrawals are never paused (LIFE-3) and the last-admin
+    ///         floor (AdminFloorAccessControl) keeps a still-available authority, so
+    ///         no reachable state freezes withdrawals forever (F-06 + NC-3).
+    function test_LIFE4_expectedFail_withdrawalBlockIsAlwaysReversible() public pure {
+        _assertHolds("LIFE-4");
     }
 
     // ── #967 (F-02, F-03, NC-5): router exit semantics ────────────────────────

@@ -64,32 +64,32 @@ library InvariantRegistry {
         e[i++] = Entry("SUP-2", Status.HOLDS, "symbolic", 0);
         e[i++] = Entry("SUP-3", Status.RED, "fuzz", 969); // NC-6 / F-16
         e[i++] = Entry("SUP-4", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("SUP-5", Status.RED, "stateful-invariant", 966); // NC-1
+        e[i++] = Entry("SUP-5", Status.HOLDS, "stateful-invariant", 0); // NC-1 fixed (#966)
         e[i++] = Entry("SUP-6", Status.HOLDS, "static-guard", 0);
 
         // ── 3. Oracle & pricing (ORA) ────────────────────────────────────────
         e[i++] = Entry("ORA-1", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("ORA-2", Status.HOLDS, "stateful-invariant", 0);
-        e[i++] = Entry("ORA-3", Status.RED, "deploy-assertion", 966); // F-09
+        e[i++] = Entry("ORA-3", Status.HOLDS, "deploy-assertion", 0); // F-09 fixed (#966)
         e[i++] = Entry("ORA-4", Status.HOLDS, "stateful-invariant", 0); // ⚪ aspirational
         e[i++] = Entry("ORA-5", Status.HOLDS, "fuzz", 0);
         e[i++] = Entry("ORA-6", Status.HOLDS, "deploy-assertion", 0); // 🟡 trusted
-        e[i++] = Entry("ORA-7", Status.RED, "fuzz", 966); // F-09/F-11/F-16 cluster
+        e[i++] = Entry("ORA-7", Status.HOLDS, "fuzz", 0); // F-09/F-11/F-16 — independent floor (#966)
 
         // ── 4. Access control & roles (ACL) ──────────────────────────────────
         e[i++] = Entry("ACL-1", Status.HOLDS, "deploy-assertion", 0); // F-01 remediated (#965)
         e[i++] = Entry("ACL-2", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("ACL-3", Status.RED, "symbolic", 966); // F-06
+        e[i++] = Entry("ACL-3", Status.HOLDS, "symbolic", 0); // F-06 fixed (#966)
         e[i++] = Entry("ACL-4", Status.HOLDS, "symbolic", 0);
-        e[i++] = Entry("ACL-5", Status.RED, "static-guard", 966); // F-08
+        e[i++] = Entry("ACL-5", Status.HOLDS, "static-guard", 0); // F-08 fixed (#966)
         e[i++] = Entry("ACL-6", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ACL-7", Status.RED, "deploy-assertion", 970); // NC-10
 
         // ── 5. Lifecycle & state machine (LIFE) ──────────────────────────────
         e[i++] = Entry("LIFE-1", Status.RED, "stateful-invariant", 968); // F-04 residual
         e[i++] = Entry("LIFE-2", Status.HOLDS, "static-guard", 0);
-        e[i++] = Entry("LIFE-3", Status.RED, "stateful-invariant", 966); // F-06 (basket family)
-        e[i++] = Entry("LIFE-4", Status.RED, "symbolic", 966); // F-06 + F-07 + NC-3
+        e[i++] = Entry("LIFE-3", Status.HOLDS, "stateful-invariant", 0); // F-06/NC-3 fixed (#966)
+        e[i++] = Entry("LIFE-4", Status.HOLDS, "symbolic", 0); // F-06 + NC-3 fixed (#966)
         e[i++] = Entry("LIFE-5", Status.RED, "stateful-invariant", 967); // F-03
         e[i++] = Entry("LIFE-6", Status.RED, "fuzz", 970); // NC-8
 
@@ -118,7 +118,7 @@ library InvariantRegistry {
 
         // ── 9. Adapters (ADP) ────────────────────────────────────────────────
         e[i++] = Entry("ADP-1", Status.HOLDS, "static-guard", 0);
-        e[i++] = Entry("ADP-2", Status.RED, "static-guard", 966); // NC-2 (+ F-14)
+        e[i++] = Entry("ADP-2", Status.HOLDS, "static-guard", 0); // NC-2 fixed (#966); F-14 residual
         e[i++] = Entry("ADP-3", Status.HOLDS, "stateful-invariant", 0);
         e[i++] = Entry("ADP-4", Status.HOLDS, "static-guard", 0);
         e[i++] = Entry("ADP-5", Status.HOLDS, "static-guard", 0); // 🟡 partial

@@ -1,5 +1,5 @@
 # TwapTickMath
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/lib/TwapTickMath.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/lib/TwapTickMath.sol)
 
 **Title:**
 TwapTickMath
@@ -33,9 +33,15 @@ function checkPoolPair(address pool, address baseToken, address quoteToken) inte
 
 Compute arithmetic-mean tick over `[window, 0]` seconds via `observe()`.
 
+`public` (not `internal`): the compiler deploys this library once and
+DELEGATECALL-links it into every consumer (BasketVault + both swap
+adapters), so the mean-tick + price math lives in a single deployed
+contract instead of being inlined into each — keeping the
+already-EIP-170-tight vault family under the 24_576-byte limit.
+
 
 ```solidity
-function meanTick(address pool, uint32 window) internal view returns (int24);
+function meanTick(address pool, uint32 window) public view returns (int24);
 ```
 
 ### priceFromTick
@@ -45,7 +51,7 @@ Convert a TWAP mean tick to an output amount using sqrtPriceX96 math.
 
 ```solidity
 function priceFromTick(int24 tick, address baseToken, address quoteToken, uint256 baseAmount)
-    internal
+    public
     pure
     returns (uint256 quoteAmount);
 ```

@@ -41,6 +41,12 @@ contract MockPoolForGuards {
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
     }
 
+    /// @dev ORA-3 / F-09: `addAsset` asserts `fee()` equals `swapFee_`. Every
+    ///      addAsset call in this suite uses swapFee_ = 500.
+    function fee() external pure returns (uint24) {
+        return 500;
+    }
+
     function setCardinality(uint16 c) external {
         cardinality = c;
     }

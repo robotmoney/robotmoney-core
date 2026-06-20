@@ -1,5 +1,5 @@
 # MockUniswapV4Pool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/BasketVault.t.sol)
 
 V4-style pool mock: observe() returns tick cumulatives identical to MockPool.
 Also implements token0/token1, slot0, and liquidity for addAsset checks.
@@ -76,6 +76,17 @@ function setLiquidity(uint128 liquidity_) external;
 
 ```solidity
 function liquidity() external view returns (uint128);
+```
+
+### fee
+
+ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`
+(V4 resolves the execution pool from the fee tier). The V4 tests
+register with `swapFee_ == 3000`.
+
+
+```solidity
+function fee() external pure returns (uint24);
 ```
 
 ### slot0

@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -134,6 +134,15 @@ uint128 public constant MIN_POOL_LIQUIDITY = 1e6
 
 
 ## State Variables
+### adminCount
+Number of accounts currently holding `ADMIN_ROLE`.
+
+
+```solidity
+uint256 public adminCount
+```
+
+
 ### assets
 
 ```solidity
@@ -209,7 +218,41 @@ mapping(address => uint32) public twapWindow
 ```
 
 
+### adapterCodeHashAllowed
+Runtime-bytecode hashes ADMIN_ROLE has approved for use as a basket
+swap+TWAP adapter. `addAsset` rejects any non-zero adapter whose
+codehash is not in this set (ADP-2 / NC-2). The default Uniswap V3
+path (`adapter == address(0)`) needs no entry — it routes through the
+immutable, audited `SWAP_ROUTER`, not an external adapter.
+
+
+```solidity
+mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed
+```
+
+
 ## Functions
+### _grantRole
+
+Track `ADMIN_ROLE` membership so the last-admin floor can be enforced
+without enumeration. Only increments on a real (new) grant.
+
+
+```solidity
+function _grantRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+### _revokeRole
+
+Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
+both public setters route through here. Decrements only on a real
+(effective) revoke.
+
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
 ### constructor
 
 
@@ -413,6 +456,15 @@ is intentionally unused because the actual USDC received depends on
 swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
 Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
+LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
+`pause()` is a deposits-only freeze (see `_deposit`, which is
+`whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
+same low-trust EMERGENCY_ROLE pause would let a hot key freeze
+already-deposited funds — and, combined with last-ADMIN renounce, freeze
+them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
+and the deposits-only pause together keep withdrawals always reachable,
+matching RobotMoneyVault's separate `withdrawalsPaused` model.
+
 
 ```solidity
 function _withdraw(
@@ -424,7 +476,6 @@ function _withdraw(
 )
     internal
     override
-    whenNotPaused
     nonReentrant;
 ```
 
@@ -518,6 +569,30 @@ function _twapQuote(address pool, address tokenIn, address tokenOut, uint256 amo
     view
     returns (uint256 amountOut);
 ```
+
+### setAdapterCodeHashAllowed
+
+Approve or revoke an adapter runtime-bytecode hash for use as a
+basket swap+TWAP adapter in `addAsset`. Restricted to ADMIN_ROLE.
+
+ADP-2 / NC-2: `addAsset` rejects any non-zero adapter whose codehash
+is not approved here. Revoking a codehash does NOT retroactively touch
+assets already registered with that adapter — it only blocks future
+`addAsset` calls. Mirrors `RobotMoneyVault.setAdapterCodeHashAllowed`.
+
+
+```solidity
+function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`codeHash_`|`bytes32`|Runtime-bytecode hash (`adapter.codehash`) to approve/revoke.|
+|`allowed_`|`bool`| True to approve, false to revoke.|
+
 
 ### addAsset
 
@@ -859,6 +934,27 @@ function realizedWeights(address depositor)
     returns (address[] memory activeAssets, uint256[] memory bpsWeights);
 ```
 
+### assetUsdcValue
+
+USDC value of `amount` of the active asset at registry `index`,
+priced via its TWAP adapter (or the built-in V3 path). Used by the
+externally-linked `BasketViews` weight-preview library.
+
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+```
+
+### assetTokenValue
+
+Estimated token amount for `usdcAmount` of the active asset at
+registry `index`. Used by the `BasketViews` weight-preview library.
+
+
+```solidity
+function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
+```
+
 ### assetCount
 
 
@@ -1058,6 +1154,15 @@ Off-chain monitors can use the delta between `oldWindow` and
 event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 ```
 
+### AdapterCodeHashAllowedSet
+Emitted when ADMIN_ROLE approves or revokes an adapter runtime-code
+hash for use in `addAsset` (ADP-2 / NC-2).
+
+
+```solidity
+event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
+```
+
 ### WeightSnapshot
 Emitted on every deposit, recording the equal-weight allocation applied
 to the depositor's inflow. Satisfies the event-stream cost-disclosure
@@ -1073,6 +1178,15 @@ event WeightSnapshot(
 ```
 
 ## Errors
+### LastAdminFloor
+Revoking the sole `ADMIN_ROLE` holder is forbidden (would leave the
+vault with zero admins and brick every admin path).
+
+
+```solidity
+error LastAdminFloor();
+```
+
 ### TVLCapExceeded
 
 ```solidity
