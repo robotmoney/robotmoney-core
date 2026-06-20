@@ -34,10 +34,21 @@ contract MockPool {
     address public immutable token1;
     uint16 public cardinality = 100;
     uint128 public poolLiquidity = 1e18; // large default so all existing tests pass unmodified
+    uint24 public feeTier; // fee() read by addAsset's ORA-3 equality check
 
-    constructor(address token0_, address token1_) {
+    constructor(address token0_, address token1_, uint24 fee_) {
         token0 = token0_;
         token1 = token1_;
+        feeTier = fee_;
+    }
+
+    /// @dev ORA-3 / F-09: `addAsset` asserts the pool's `fee()` equals `swapFee_`.
+    function fee() external view returns (uint24) {
+        return feeTier;
+    }
+
+    function setFee(uint24 fee_) external {
+        feeTier = fee_;
     }
 
     function liquidity() external view returns (uint128) {
@@ -120,7 +131,7 @@ contract AgentTokenVaultTest is Test {
     function _seedSixTokenShortlist() internal {
         for (uint256 i = 0; i < N; i++) {
             tokens[i] = new TestERC20();
-            MockPool pool = new MockPool(address(tokens[i]), address(usdc));
+            MockPool pool = new MockPool(address(tokens[i]), address(usdc), 10_000);
             vm.prank(admin);
             vault.addAsset(
                 address(tokens[i]), address(pool), 10_000, address(0), BasketVault.Venue.V3
@@ -165,7 +176,7 @@ contract AgentTokenVaultTest is Test {
     function test_shortlist_mutation_admin_only() public {
         // ADMIN_ROLE may swap a shortlist entry: remove then add.
         TestERC20 replacement = new TestERC20();
-        MockPool pool = new MockPool(address(replacement), address(usdc));
+        MockPool pool = new MockPool(address(replacement), address(usdc), 10_000);
 
         vm.prank(admin);
         vault.removeAsset(0); // deactivate JUNO slot (vault holds zero)
@@ -184,7 +195,7 @@ contract AgentTokenVaultTest is Test {
 
     function test_shortlist_mutation_rejected_for_non_admin() public {
         TestERC20 newToken = new TestERC20();
-        MockPool pool = new MockPool(address(newToken), address(usdc));
+        MockPool pool = new MockPool(address(newToken), address(usdc), 10_000);
 
         bytes32 adminRole = vault.ADMIN_ROLE();
         vm.expectRevert(
@@ -366,8 +377,8 @@ contract AgentTokenVaultGovernanceTest is Test {
         // Seed two tokens so there is a basket to manipulate in governance tests.
         tokenA = new TestERC20();
         tokenB = new TestERC20();
-        poolA = new MockPool(address(tokenA), address(usdc));
-        poolB = new MockPool(address(tokenB), address(usdc));
+        poolA = new MockPool(address(tokenA), address(usdc), 3000);
+        poolB = new MockPool(address(tokenB), address(usdc), 3000);
         vault.addAsset(address(tokenA), address(poolA), 3000, address(0), BasketVault.Venue.V3);
         vault.addAsset(address(tokenB), address(poolB), 3000, address(0), BasketVault.Venue.V3);
 
@@ -447,7 +458,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     ///         executed after SHORTLIST_ADD_DELAY successfully adds the token.
     function test_governance_timelocked_addAsset_executes_after_delay() public {
         TestERC20 newToken = new TestERC20();
-        MockPool newPool = new MockPool(address(newToken), address(usdc));
+        MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
 
         bytes32 salt = keccak256("add-asset-salt-1");
         bytes32 opId = _scheduleAddAsset(address(newToken), address(newPool), 3000, salt);
@@ -519,7 +530,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     ///         After cancellation the operation cannot be executed.
     function test_governance_veto_cancels_pending_addAsset() public {
         TestERC20 newToken = new TestERC20();
-        MockPool newPool = new MockPool(address(newToken), address(usdc));
+        MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
 
         bytes32 salt = keccak256("veto-add-salt-1");
         bytes32 opId = _scheduleAddAsset(address(newToken), address(newPool), 3000, salt);
@@ -548,7 +559,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     /// @notice The Safe itself (proposer/executor) can also cancel a queued change.
     function test_governance_safe_can_cancel_own_proposal() public {
         TestERC20 newToken = new TestERC20();
-        MockPool newPool = new MockPool(address(newToken), address(usdc));
+        MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
 
         bytes32 salt = keccak256("safe-cancel-salt-1");
         bytes32 opId = _scheduleAddAsset(address(newToken), address(newPool), 3000, salt);
@@ -569,7 +580,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     ///         ADMIN_ROLE is now held by the timelock, not an EOA.
     function test_governance_direct_addAsset_rejected_for_stranger() public {
         TestERC20 newToken = new TestERC20();
-        MockPool newPool = new MockPool(address(newToken), address(usdc));
+        MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -599,7 +610,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     /// @notice A non-proposer cannot queue a shortlist change via the timelock.
     function test_governance_non_proposer_cannot_schedule_shortlist_change() public {
         TestERC20 newToken = new TestERC20();
-        MockPool newPool = new MockPool(address(newToken), address(usdc));
+        MockPool newPool = new MockPool(address(newToken), address(usdc), 3000);
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,
             (address(newToken), address(newPool), 3000, address(0), BasketVault.Venue.V3)
@@ -616,7 +627,7 @@ contract AgentTokenVaultGovernanceTest is Test {
     ///         cardinality (the on-chain component of the ADR-0004 liquidity/oracle gate).
     function test_governance_addAsset_rejects_low_cardinality_pool() public {
         TestERC20 newToken = new TestERC20();
-        MockPool lowCardPool = new MockPool(address(newToken), address(usdc));
+        MockPool lowCardPool = new MockPool(address(newToken), address(usdc), 3000);
         lowCardPool.setCardinality(1); // below MIN_POOL_CARDINALITY = 2
 
         bytes memory callData = abi.encodeCall(
@@ -649,7 +660,7 @@ contract AgentTokenVaultGovernanceTest is Test {
         TestERC20 newToken = new TestERC20();
         TestERC20 notUsdc = new TestERC20();
         // Pool pairs newToken with notUsdc, NOT with USDC.
-        MockPool wrongPool = new MockPool(address(newToken), address(notUsdc));
+        MockPool wrongPool = new MockPool(address(newToken), address(notUsdc), 3000);
 
         bytes memory callData = abi.encodeCall(
             BasketVault.addAsset,

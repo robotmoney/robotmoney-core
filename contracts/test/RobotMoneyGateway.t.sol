@@ -229,6 +229,41 @@ contract RobotMoneyGatewayTest is Test {
         assertTrue(gateway.hasRole(0x00, admin)); // DEFAULT_ADMIN_ROLE
     }
 
+    /// @notice ACL-3 / F-06: revoking the sole ADMIN_ROLE holder reverts
+    ///         (last-admin floor) — gateway governance can never be bricked.
+    function test_lastAdminFloor_revokeAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.revokeRole(adminRole, admin);
+    }
+
+    /// @notice ACL-3 / F-06: the floor also covers DEFAULT_ADMIN_ROLE, which the
+    ///         gateway uses as a privileged tier (it gates authorizeAgent).
+    function test_lastAdminFloor_revokeDefaultAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.revokeRole(0x00, admin); // DEFAULT_ADMIN_ROLE
+    }
+
+    /// @notice ACL-3 / F-06: renouncing the sole DEFAULT_ADMIN_ROLE holder reverts.
+    function test_lastAdminFloor_renounceDefaultAdminRevertsForSoleHolder() public {
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.LastAdminFloor.selector);
+        gateway.renounceRole(0x00, admin);
+    }
+
+    /// @notice ACL-3 / F-06: with a second DEFAULT_ADMIN granted, the original may
+    ///         be revoked — the floor only blocks dropping the final holder.
+    function test_lastAdminFloor_revokeDefaultAdminSucceedsWithTwoHolders() public {
+        address admin2 = makeAddr("gwAdmin2");
+        vm.startPrank(admin);
+        gateway.grantRole(0x00, admin2);
+        gateway.revokeRole(0x00, admin); // not the last DEFAULT_ADMIN → allowed
+        vm.stopPrank();
+        assertFalse(gateway.hasRole(0x00, admin), "original default-admin revoked");
+        assertTrue(gateway.hasRole(0x00, admin2), "second default-admin retains role");
+    }
+
     function test_constructor_revertsOnZeroAddresses() public {
         vm.expectRevert(RobotMoneyGateway.ZeroAddress.selector);
         new RobotMoneyGateway(
