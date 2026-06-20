@@ -774,14 +774,15 @@ contract FvInvariantsTest is Test {
         );
     }
 
-    /// @notice FEE-2 (RESOLVED by #971, NC-11) — the exit fee is charged on the
-    ///         proceeds a withdrawal ACTUALLY realises, never on the share-implied
-    ///         gross. `RobotMoneyVault._withdraw` now derives both the fee and the
-    ///         user payout from `_pullProportional`'s realised return value, so an
-    ///         over-reporting adapter can never make the fee (or the payout) come
-    ///         from other holders' idle USDC. Registry flipped RED→HOLDS; the
-    ///         behavioural proof (realised-basis fee + over-reporting adapter that
-    ///         under-delivers reverts rather than socialising) lives in
+    /// @notice FEE-2 (RESOLVED by #971, NC-11) — the exit fee is only ever paid
+    ///         out of proceeds a withdrawal ACTUALLY realises, never from a
+    ///         share-implied gross that an over-reporting adapter could have other
+    ///         holders' idle USDC silently cover. `RobotMoneyVault._withdraw`
+    ///         requires `_pullProportional`'s realised return to cover the full
+    ///         `grossAssets` (which already excludes revoked adapters, F-14) before
+    ///         disbursing the fee; an adapter that under-delivers reverts
+    ///         (InsufficientAdapterLiquidity). ERC-4626 payout parity is preserved.
+    ///         Registry flipped RED→HOLDS; behavioural proofs live in
     ///         RobotMoneyVault.t.sol::test_FEE2_exitFeeOnRealizedProceeds and
     ///         test_FEE2_overReportingAdapterCannotSocializeLoss.
     function test_FEE2_expectedFail_feeChargedOnRealizedProceeds() public pure {

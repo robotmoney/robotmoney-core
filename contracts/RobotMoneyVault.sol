@@ -599,34 +599,34 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
         }
 
         uint256 grossAssets = _convertToAssets(shares, Math.Rounding.Floor);
+        uint256 fee = grossAssets - assets;
 
-        // FEE-2 / NC-11: the exit fee must be charged on the proceeds this withdrawal
-        // ACTUALLY realises, never on the share-implied gross. With honest adapters the two
-        // are equal; with an over-reporting adapter, basing the fee (and the user payout) on
-        // the share-implied gross would let the shortfall be silently covered from other
-        // holders' idle USDC — socializing one position's loss across the pool. We therefore
-        // measure the vault's own realised USDC across the pull and derive both the fee and
-        // the user payout from that, so a withdrawal can never pay out more than it sourced.
+        // FEE-2 / NC-11: the exit fee is only ever paid out of proceeds this withdrawal
+        // ACTUALLY realises, never from a share-implied gross that an over-reporting adapter
+        // could otherwise have other holders' idle USDC silently cover. `_pullProportional`
+        // returns the realised USDC (idle applied + genuinely pulled) and reverts via
+        // `InsufficientAdapterLiquidity` if it cannot source the full `grossAssets`, so a
+        // withdrawal can never disburse `assets + fee` it did not source. (NAV — and hence
+        // `grossAssets` — already excludes revoked adapters, ADP-2 / F-14.) The realised
+        // figure must cover `grossAssets == assets + fee`; the require pins that the fee was
+        // funded by realised proceeds, not socialized.
         uint256 realizedGross = _pullProportional(grossAssets);
+        require(realizedGross >= grossAssets, "fee not covered by realised proceeds");
 
         // slither-disable-next-line reentrancy-no-eth
         // Justification: `_withdraw` is `nonReentrant`; the `_burn` after
         // external adapter calls is safe because reentry is blocked by the OZ guard.
         _burn(owner, shares);
 
-        // Fee on realised proceeds (rounded down, matching `_grossToNet`); the user receives
-        // the realised remainder. Under honest adapters realizedGross == grossAssets, so
-        // `netAssets == assets` and ERC-4626 preview parity is preserved.
-        uint256 fee = realizedGross.mulDiv(exitFeeBps, MAX_BPS, Math.Rounding.Floor);
-        uint256 netAssets = realizedGross - fee;
-
+        // ERC-4626 parity: the receiver gets exactly `assets`; the fee (charged on the
+        // realised gross, since `grossAssets` was fully realised above) goes to the recipient.
         if (fee > 0) {
             IERC20(asset()).safeTransfer(feeRecipient, fee);
-            emit ExitFeeCharged(owner, receiver, realizedGross, fee, netAssets);
+            emit ExitFeeCharged(owner, receiver, grossAssets, fee, assets);
         }
-        IERC20(asset()).safeTransfer(receiver, netAssets);
+        IERC20(asset()).safeTransfer(receiver, assets);
 
-        emit Withdraw(caller, receiver, owner, netAssets, shares);
+        emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
     // slither-disable-start reentrancy-balance
@@ -635,9 +635,10 @@ contract RobotMoneyVault is ERC4626, AccessControl, ReentrancyGuard {
     // warning is a false positive.
     /// @dev Source `assetsNeeded` USDC into the vault, returning the amount ACTUALLY realised
     ///      (idle USDC applied + USDC genuinely withdrawn from adapters). Under honest adapters
-    ///      the return equals `assetsNeeded`; the caller uses the realised figure to charge the
-    ///      exit fee and bound the payout (FEE-2 / NC-11), so an adapter that over-reports its
-    ///      balance can never cause a payout larger than the proceeds this call sourced.
+    ///      the return equals `assetsNeeded`; `_withdraw` asserts the realised figure covers the
+    ///      full share-implied gross before paying the exit fee (FEE-2 / NC-11), so an adapter
+    ///      that over-reports its balance can never have its shortfall funded from other holders'
+    ///      idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity`).
     ///
     ///      Only eligible-and-active adapters (`_isAdapterCounted`) are pulled from: a revoked
     ///      adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —

@@ -1,5 +1,5 @@
 # RobotMoneyVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/RobotMoneyVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/522a29d8cd2294646d674548ad500b03a648e774/contracts/RobotMoneyVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -506,9 +506,10 @@ function _withdraw(
 
 Source `assetsNeeded` USDC into the vault, returning the amount ACTUALLY realised
 (idle USDC applied + USDC genuinely withdrawn from adapters). Under honest adapters
-the return equals `assetsNeeded`; the caller uses the realised figure to charge the
-exit fee and bound the payout (FEE-2 / NC-11), so an adapter that over-reports its
-balance can never cause a payout larger than the proceeds this call sourced.
+the return equals `assetsNeeded`; `_withdraw` asserts the realised figure covers the
+full share-implied gross before paying the exit fee (FEE-2 / NC-11), so an adapter
+that over-reports its balance can never have its shortfall funded from other holders'
+idle USDC — an under-delivering adapter reverts (`InsufficientAdapterLiquidity`).
 Only eligible-and-active adapters (`_isAdapterCounted`) are pulled from: a revoked
 adapter is excluded from NAV (`totalAssets`), so it must likewise be excluded here —
 otherwise the proportional denominator would not match NAV and a revoked adapter
