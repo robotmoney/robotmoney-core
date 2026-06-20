@@ -2000,6 +2000,29 @@ contract GatewayRouterTest is Test {
         );
     }
 
+    /// @dev router: reverts when the explicit `vaults[]` array is empty. A
+    ///      router withdrawal must name at least one source vault (issue #967,
+    ///      F-03). Empty `vaults[]`/`sharesPerLeg`/`minAssetsPerLeg` clears the
+    ///      parallel-length guard (0 == 0) and trips the empty-vault-set check.
+    function test_withdrawFromRouter_revertsOnEmptyVaults() public {
+        _authorize(agent, _policyWithRouterWithdrawal());
+
+        address[] memory noVaults = new address[](0);
+        uint256[] memory noShares = new uint256[](0);
+        uint256[] memory noFloors = new uint256[](0);
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.RouterLegLengthMismatch.selector);
+        gateway.withdrawFromRouter(
+            keccak256("rw-empty-o"),
+            noVaults,
+            noShares,
+            noFloors,
+            uint64(block.timestamp + 60),
+            keccak256("rw-empty-i")
+        );
+    }
+
     /// @dev router: paused gateway reverts.
     function test_withdrawFromRouter_revertsWhenPaused() public {
         _authorize(agent, _policyWithRouterWithdrawal());

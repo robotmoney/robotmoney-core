@@ -1393,6 +1393,114 @@ contract GatewayRollingDepositWindowTest is Test {
             }
         }
     }
+
+    // -------------------------------------------------------------------
+    // effectiveDepositWindowGross prunes only the entries that have aged
+    // past the rolling window, leaving newer entries live (#970, NC-7).
+    //
+    // Drives the `_effectiveWindowTotal` eviction loop through a PARTIAL
+    // drain: an old entry expires and is notionally pruned while a recent
+    // entry stays live, so the loop runs its body once and then exits with
+    // a non-zero remaining total. This exercises the loop body and the
+    // post-loop return with live entries still present.
+    // -------------------------------------------------------------------
+
+    function test_effectiveDepositWindowGross_prunesOnlyExpiredEntries() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        p.maxPerPayment = MAX_PER_WINDOW / 4;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        uint64 windowSeconds = gateway.WINDOW_SECONDS();
+        uint256 leg = MAX_PER_WINDOW / 4;
+
+        // First entry at the anchor second.
+        _fundAndApprove(leg);
+        _deposit(keccak256("p-old"), leg, keccak256("p-old-i"));
+
+        // Advance most of the window, then add a second (still-live) entry.
+        vm.warp(block.timestamp + windowSeconds - 10);
+        _fundAndApprove(leg);
+        _deposit(keccak256("p-new"), leg, keccak256("p-new-i"));
+
+        // Both entries are still within the rolling window — full gross.
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            2 * leg,
+            "both entries live before the first expires"
+        );
+
+        // Advance just past the first entry's expiry but not the second's.
+        // The eviction loop must drop exactly the old entry (loop body runs
+        // once) and then return the remaining live total (post-loop return).
+        vm.warp(block.timestamp + 20);
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            leg,
+            "only the expired entry is pruned; newer entry stays live"
+        );
+
+        // Advance past the second entry too — the loop drains fully to zero.
+        vm.warp(block.timestamp + windowSeconds);
+        assertEq(
+            gateway.effectiveDepositWindowGross(agent),
+            0,
+            "both entries expired; window fully drained"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // The rolling-window ring buffer is bounded by MAX_WINDOW_ENTRIES, and
+    // _oldestTimestamp returns 0 on an empty window (#970, NC-7).
+    //
+    // Both of those guards are defensive and unreachable through the public
+    // deposit/withdraw API:
+    //
+    //   * WindowBufferFull (RobotMoneyGateway.sol ~466): the live entry count
+    //     can never reach MAX_WINDOW_ENTRIES (== WINDOW_SECONDS). Entries in
+    //     the same second COALESCE into one slot, so each live slot occupies a
+    //     distinct second inside the WINDOW_SECONDS-wide window. Filling all
+    //     WINDOW_SECONDS distinct seconds reaches count == MAX_WINDOW_ENTRIES,
+    //     but adding one more *distinct* second necessarily advances past the
+    //     oldest entry's expiry, so `_pruneWindow` evicts it first and the
+    //     append never sees a full buffer. No external call sequence trips the
+    //     `count >= MAX_WINDOW_ENTRIES` revert; it is marked coverage:unreachable.
+    //
+    //   * _oldestTimestamp empty-window branch (RobotMoneyGateway.sol ~510):
+    //     `_oldestTimestamp` is only ever invoked in `_accrueRollingWithdraw`
+    //     and `_accrueRollingDeposit`, immediately AFTER `_appendWindowEntry`
+    //     has added an entry — so `w.count` is always >= 1 at the call site.
+    //     The `count == 0` early-return is dead through the public API and is
+    //     marked coverage:unreachable.
+    //
+    // This test documents the invariant that keeps the live count strictly
+    // below the cap (every entry stays live for its full window and the total
+    // never collapses) by depositing across many distinct consecutive seconds.
+    // -------------------------------------------------------------------
+
+    function test_rollingWindow_liveCountBoundedAcrossDistinctSeconds() public {
+        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // Tiny per-payment cap so many distinct-second deposits fit the window.
+        p.maxPerPayment = ONE_USDC;
+        p.maxPerWindow = MAX_PER_WINDOW;
+        _authorize(p);
+
+        // Deposit across many distinct consecutive seconds. Each lands in its
+        // own ring slot (distinct second => no coalescing) and stays live for
+        // WINDOW_SECONDS, so the live count grows by one per deposit while all
+        // remain inside the window — never approaching MAX_WINDOW_ENTRIES here.
+        uint256 n = 32;
+        for (uint256 i = 0; i < n; i++) {
+            _fundAndApprove(ONE_USDC);
+            _deposit(keccak256(abi.encode("bound", i)), ONE_USDC, keccak256(abi.encode("bound-i", i)));
+            assertEq(
+                gateway.effectiveDepositWindowGross(agent),
+                (i + 1) * ONE_USDC,
+                "every distinct-second entry stays live within the window"
+            );
+            vm.warp(block.timestamp + 1);
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────

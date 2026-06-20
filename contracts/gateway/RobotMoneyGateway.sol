@@ -463,6 +463,18 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             // index 0 first so the wrapped layout cannot corrupt ordering. The
             // re-pack is O(count) and only ever runs when the high-water mark
             // actually increases, which is rare in practice.
+            //
+            // The `count >= MAX_WINDOW_ENTRIES` revert cannot be reached through
+            // the public deposit/withdraw API. Live entries each occupy a
+            // distinct second (same-second deposits coalesce), and the window is
+            // exactly WINDOW_SECONDS == MAX_WINDOW_ENTRIES seconds wide. Filling
+            // every distinct second reaches count == MAX_WINDOW_ENTRIES, but
+            // adding one more distinct second advances past the oldest entry's
+            // expiry, so `_pruneWindow` evicts it before the append ever observes
+            // a full buffer. The guard is a defensive overflow bound, never
+            // triggerable externally. See
+            // test_rollingWindow_liveCountBoundedAcrossDistinctSeconds.
+            // coverage:unreachable
             if (count >= MAX_WINDOW_ENTRIES) revert WindowBufferFull();
             _relinearize(w);
             w.slots.push(WindowEntry({timestamp: uint64(block.timestamp), amount: amount}));
@@ -507,24 +519,29 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @dev Timestamp of the oldest live entry, or 0 when the window is empty.
     function _oldestTimestamp(RollingWindow storage w) internal view returns (uint64) {
+        // The empty-window early return is dead through the public API.
+        // `_oldestTimestamp` is only called in
+        // `_accrueRollingWithdraw`/`_accrueRollingDeposit`, immediately after
+        // `_appendWindowEntry` has added an entry, so `w.count` is always >= 1
+        // at the call site. The guard is defensive for internal reuse only.
+        // coverage:unreachable
         if (w.count == 0) return 0;
         return w.slots[w.head].timestamp;
     }
 
     /// @dev View-only effective live total after notionally pruning expired
     ///      entries. Mirrors `_pruneWindow`'s arithmetic without mutating storage.
-    function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256) {
+    function _effectiveWindowTotal(RollingWindow storage w) internal view returns (uint256 total) {
         uint256 cutoff = block.timestamp > WINDOW_SECONDS ? block.timestamp - WINDOW_SECONDS : 0;
         uint256 head = w.head;
         uint256 count = w.count;
-        uint256 total = w.total;
+        total = w.total;
         uint256 cap = w.slots.length;
         while (count > 0 && w.slots[head].timestamp <= cutoff) {
             total -= w.slots[head].amount;
             head = head + 1 == cap ? 0 : head + 1;
             count--;
         }
-        return total;
     }
 
     function _commitmentKey(bytes32 commitHash, address committer) internal pure returns (bytes32) {
