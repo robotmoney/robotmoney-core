@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -567,6 +567,50 @@ router: happy path — deposit via router, withdraw via router, USDC lands at as
 
 ```solidity
 function test_withdrawFromRouter_happyPath() public;
+```
+
+### test_withdrawFromRouter_realFloor_revertsBelowMinimum
+
+GW-5 / F-11: a router redemption carrying a real, non-trivial
+`minAssetsPerLeg` reverts when realized assets fall below the floor.
+The gateway forwards the caller-supplied floor verbatim to the
+router (it no longer hardcodes an all-zero vector), so the router's
+per-leg `SlippageExceeded` guard bites.
+
+
+```solidity
+function test_withdrawFromRouter_realFloor_revertsBelowMinimum() public;
+```
+
+### test_withdrawFromRouter_realFloor_passesWhenMet
+
+GW-5 / F-11: a satisfiable real floor passes through and the
+redemption settles normally (the floor is meaningful, not a no-op).
+
+
+```solidity
+function test_withdrawFromRouter_realFloor_passesWhenMet() public;
+```
+
+### test_withdrawFromRouter_revertsOnMinAssetsLengthMismatch
+
+GW-5 / F-11: the per-leg floor vector must be parallel to the share
+vector — a length mismatch reverts before any state effect.
+
+
+```solidity
+function test_withdrawFromRouter_revertsOnMinAssetsLengthMismatch() public;
+```
+
+### test_withdrawFromRouter_floorIsBoundIntoPaymentId
+
+GW-5 / F-11: the floor vector is bound into `paymentId`, so two
+otherwise-identical orders that differ only in their floor produce
+distinct ids — a replay cannot re-run an order under a weaker floor.
+
+
+```solidity
+function test_withdrawFromRouter_floorIsBoundIntoPaymentId() public;
 ```
 
 ### test_withdrawFromRouter_paymentIdUsesOpWithdrawRouterPrefix

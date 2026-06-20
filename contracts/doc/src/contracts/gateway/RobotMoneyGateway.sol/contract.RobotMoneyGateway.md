@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -824,6 +824,7 @@ function withdrawFromRouter(
     bytes32 orderId,
     address[] calldata vaults,
     uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg,
     uint64 deadline,
     bytes32 idempotencyKey
 )
@@ -839,16 +840,41 @@ function withdrawFromRouter(
 |`orderId`|`bytes32`|         Caller-supplied order identifier (echoed in event).|
 |`vaults`|`address[]`|          Explicit list of vault addresses to redeem from (issue #967, F-03). Drives the redeem legs directly instead of the router's live weight vector, so a holder can exit a reweighted-out or Retired position. `sharesPerLeg[i]` binds to `vaults[i]` (NC-5) and the array is committed to `paymentId`.|
 |`sharesPerLeg`|`uint256[]`|    Vault shares to redeem per leg (parallel to `vaults`).|
-|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`.|
+|`minAssetsPerLeg`|`uint256[]`| Per-leg minimum USDC out (slippage floor), parallel to `vaults`/`sharesPerLeg`. The gateway forwards this floor straight to `PortfolioRouter.redeemFor`, which reverts each leg whose realized proceeds fall below it (GW-5 / F-11). A floor of 0 disables the check for that leg, but the caller is expected to pass a real, off-chain-computed minimum — the gateway no longer hardcodes an all-zero vector. Length must equal `sharesPerLeg`. The floor vector is folded into `paymentId` so a replay cannot re-execute the same order under a weaker floor.|
+|`deadline`|`uint64`|        Hard expiry; must be `<= block.timestamp + 600`. The gateway forwards this same deadline to the router (no longer `type(uint256).max`), so the router's own deadline guard also bites (F-11).|
 |`idempotencyKey`|`bytes32`|  Caller-side dedup salt mixed into `paymentId`.|
 
 **Returns**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/ vaults/sharesPerLeg/key.|
+|`paymentId`|`bytes32`|      Hash committing chain/contract/agent/order/totalShares/ vaults/sharesPerLeg/minAssetsPerLeg/key.|
 |`assetsPerLeg`|`uint256[]`|   USDC received per leg.|
 
+
+### _routerWithdrawPaymentId
+
+Compute the router-withdrawal paymentId. DEADLINE INTENTIONALLY
+EXCLUDED (a deadline is liveness, not intent). `OP_WITHDRAW_ROUTER`
+prefix namespaces these ids from the three sibling op kinds (L-12).
+The explicit `vaults`/`sharesPerLeg` are committed so two withdrawals
+that name different vaults or per-leg shares can never collide (#967,
+NC-5), and `minAssetsPerLeg` is bound so a replay can never re-execute
+the same order under a weaker (e.g. zeroed) slippage floor (GW-5 /
+F-11). Extracted to a helper to keep `withdrawFromRouter` under the
+EVM stack-depth limit.
+
+
+```solidity
+function _routerWithdrawPaymentId(
+    bytes32 orderId,
+    uint256 totalShares,
+    address[] calldata vaults,
+    uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg,
+    bytes32 idempotencyKey
+) internal view returns (bytes32);
+```
 
 ### _executeRouterWithdraw
 
@@ -858,9 +884,11 @@ Separated to avoid stack-too-deep in `withdrawFromRouter`.
 
 
 ```solidity
-function _executeRouterWithdraw(RouterWithdrawArgs memory args, uint256[] calldata sharesPerLeg)
-    internal
-    returns (uint256[] memory assetsPerLeg);
+function _executeRouterWithdraw(
+    RouterWithdrawArgs memory args,
+    uint256[] calldata sharesPerLeg,
+    uint256[] calldata minAssetsPerLeg
+) internal returns (uint256[] memory assetsPerLeg);
 ```
 
 ## Errors
@@ -1298,6 +1326,7 @@ struct RouterWithdrawArgs {
     address assetRecipient;
     uint256 totalShares;
     uint64 windowId;
+    uint64 deadline;
     address[] vaultList;
     uint256[] shareBalancesBefore;
 }

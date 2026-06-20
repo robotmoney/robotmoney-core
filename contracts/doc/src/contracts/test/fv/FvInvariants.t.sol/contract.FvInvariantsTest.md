@@ -1,5 +1,5 @@
 # FvInvariantsTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/fv/FvInvariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/fv/FvInvariants.t.sol)
 
 **Inherits:**
 Test
@@ -288,24 +288,60 @@ Set the router's voted weight vector to a single vault at 100%.
 function _setSingleWeight(PortfolioRouter router, address vault) internal;
 ```
 
-### test_SUP3_expectedFail_roundTripNeverProfits
+### test_SUP3_roundTripNeverProfits
 
-SUP-3 — a deposit-then-redeem round trip never returns more than
-was put in: previewRedeem(previewDeposit(x)) <= x.
+SUP-3 (FLIPPED GREEN by #969) — a deposit-then-immediate-redeem
+round trip never returns more than was put in:
+`previewRedeem(previewDeposit(x)) <= x` for every basket vault
+across fuzzed slippage params. Fix (F-16 / NC-6):
+`BasketVault.deposit`/`mint` now mint shares on the REALIZED
+post-swap NAV delta (capped at the slippage-discounted deposit
+floor), not a pre-swap TWAP mark, so the mint-vs-haircut asymmetry
+that let a round trip farm value back out is closed. The NAV-vs-
+market deviation guard (ORA-4) keeps execution inside the band the
+proof assumes. Deep proofs:
+BasketVault.t.sol::test_SUP3_roundTripNeverProfits_fuzz (pure-view
+floor across fuzzed slippage) and
+BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits
+(real deposit → redeem within the deviation band).
 
 
 ```solidity
-function test_SUP3_expectedFail_roundTripNeverProfits() public;
+function test_SUP3_roundTripNeverProfits() public pure;
 ```
 
-### test_GW5_expectedFail_agentRedeemCarriesRealFloor
+### test_GW5_agentRedeemCarriesRealFloor
 
-GW-5 — every agent redemption carries a real, caller-meaningful
-per-leg slippage floor.
+GW-5 (FLIPPED GREEN by #969) — every agent redemption through the
+gateway carries a real, caller-meaningful per-leg slippage floor.
+Fix (F-11): `RobotMoneyGateway.withdrawFromRouter` takes a
+`minAssetsPerLeg` vector and forwards it verbatim to
+`PortfolioRouter.redeemFor` (no more `new uint256[](n)` zero
+literal) AND forwards the real agent deadline (no more
+`type(uint256).max`); the floor vector is folded into `paymentId`
+so a replay cannot weaken it. Deep proofs:
+GatewayRouter.t.sol::test_withdrawFromRouter_realFloor_revertsBelowMinimum,
+::test_withdrawFromRouter_floorIsBoundIntoPaymentId.
 
 
 ```solidity
-function test_GW5_expectedFail_agentRedeemCarriesRealFloor() public;
+function test_GW5_agentRedeemCarriesRealFloor() public pure;
+```
+
+### test_ORA4_deviationGuardBlocksSettlement
+
+ORA-4 (FLIPPED GREEN by #969) — deposits/redemptions never settle
+when the oracle NAV (Chronicle / TWAP) deviates from the
+executable market price (Aerodrome spot) beyond a timelock-
+configured threshold. Fix (F-10): `BasketVault` carries a
+`navDeviationGuardBps` threshold and reverts
+`NavMarketDeviationExceeded` on the deposit/redeem hot path when
+|spot − TWAP| / TWAP exceeds it. Deep proof:
+BasketVault.t.sol::test_ORA4_deviationGuardBlocksSettlement.
+
+
+```solidity
+function test_ORA4_deviationGuardBlocksSettlement() public pure;
 ```
 
 ### test_LIFE6_expectedFail_reabsorbSurvivesDegradedPool

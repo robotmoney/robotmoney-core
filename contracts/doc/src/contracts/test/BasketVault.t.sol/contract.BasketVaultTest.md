@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9980411a0c386dea831d9088f37c8a87ba5f15b8/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e3875f0d83f55a4aa9dcc1aa7e175759df6625e1/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -803,6 +803,63 @@ exactness guarantee. Users must use redeem() instead.
 
 ```solidity
 function test_withdrawAndPreviewWithdraw_revertRedeemOnly() public;
+```
+
+### _depositAt1to1
+
+Deposit `amount` USDC into `vault`, executing the swap at 1:1
+(spot == TWAP) so the basket token received equals the USDC in.
+
+
+```solidity
+function _depositAt1to1(address who, uint256 amount) internal returns (uint256 shares);
+```
+
+### test_SUP3_roundTripNeverProfits_fuzz
+
+SUP-3 (pure-view floor): `previewRedeem(previewDeposit(x)) <= x`
+holds across fuzzed slippage params and deposit sizes. The two
+floor-discounted previews compose to strictly below the deposit,
+so a round trip can never preview a profit.
+
+
+```solidity
+function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public;
+```
+
+### test_SUP3_statefulDepositRedeemNeverProfits
+
+SUP-3 (stateful): a real deposit → immediate redeem within the
+deviation band returns no more than was deposited. Exercises the
+mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
+on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+
+
+```solidity
+function test_SUP3_statefulDepositRedeemNeverProfits() public;
+```
+
+### test_ORA4_deviationGuardBlocksSettlement
+
+ORA-4: when the executable market (slot0 spot) price diverges from
+the NAV-pricing TWAP beyond `navDeviationGuardBps`, a deposit
+reverts `NavMarketDeviationExceeded` rather than minting at the
+stale/manipulated mark. With the guard disabled (0) the same
+deposit succeeds — proving the guard, not some other check, blocks.
+
+
+```solidity
+function test_ORA4_deviationGuardBlocksSettlement() public;
+```
+
+### test_ORA4_withinBandSettles
+
+ORA-4: a deposit within the deviation band settles normally — the
+guard does not block ordinary, market-consistent settlement.
+
+
+```solidity
+function test_ORA4_withinBandSettles() public;
 ```
 
 ## Events
