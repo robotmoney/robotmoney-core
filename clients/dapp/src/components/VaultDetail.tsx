@@ -24,7 +24,7 @@ import { useEffect, useState } from "react";
 import { useReadContract } from "wagmi";
 import type { FetchLike, VaultDetailRow } from "../lib/explorerApi";
 import { fetchVaultDetail } from "../lib/explorerApi";
-import { BASKET_VAULT_SHORTLIST_ABI, type ShortlistEntry } from "../lib/abi";
+import { BASKET_VAULT_SHORTLIST_ABI, decodeShortlist } from "../lib/abi";
 import { formatTokenBalance } from "../lib/format";
 
 const STATUS_LABEL: Record<number, string> = {
@@ -87,7 +87,17 @@ function BasketShortlistPanel({ vaultAddress }: { vaultAddress: string }) {
     );
   }
 
-  const entries = data as readonly ShortlistEntry[];
+  // shortlist() returns five parallel arrays (tokens, pools, fees, active,
+  // balances); zip them by index into per-asset rows. Casting to a struct
+  // array here would throw on shortAddr(undefined) (scan finding DAPP-5).
+  const entries = decodeShortlist(data);
+  if (entries.length === 0) {
+    return (
+      <ul data-testid="vault-detail-composition-list">
+        <li data-testid="vault-detail-composition-empty">No basket assets.</li>
+      </ul>
+    );
+  }
   return (
     <ul data-testid="vault-detail-composition-list">
       {entries.map((entry) => (
