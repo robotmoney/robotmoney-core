@@ -63,13 +63,32 @@ pub const ARACHNID_FACTORY_ADDR: &str = "0x4e59b44847b379578588920cA78FbF26c0B49
 /// The 69-byte runtime is identical for every EVM chain that has the factory.
 pub const ARACHNID_FACTORY_BYTECODE: &str = "0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3";
 
-/// FiatTokenV2_1 storage slot index for the `balances` mapping. The slot
-/// holding `balances[holder]` is `keccak256(abi.encode(holder, 9))`.
+/// FiatToken storage slot index for the balances mapping. The slot holding
+/// `balances[holder]` (V2_1) / `balanceAndBlacklistStates[holder]` (V2_2) is
+/// `keccak256(abi.encode(holder, 9))` — the mapping lives at slot 9 in both
+/// minor versions.
 ///
 /// Verified empirically against Base at block 45743443 with
 /// `cast storage 0x8335… $(cast index address <holder> 9)` matching
 /// `balanceOf(<holder>)`.
 pub const FIAT_TOKEN_BALANCES_SLOT: u64 = 9;
+
+/// FiatTokenV2_2 packs the per-account blacklist flag into the **high bit**
+/// (bit 255) of the balances-mapping slot, renaming the mapping
+/// `balanceAndBlacklistStates`. The low 255 bits hold the balance; the top
+/// bit is `1` iff the account is blacklisted. See Circle's
+/// `FiatTokenV2_2._setBalance` / `_isBlacklisted`:
+/// `value = (blacklisted ? 1 << 255 : 0) | balance`.
+///
+/// V2_1 (and earlier) stored the raw balance in the full 256-bit word with no
+/// packed flag, so for V2_1 this mask is simply never set. Because Base USDC
+/// runs the V2_2 implementation (`0x2cE6311d…`, see the committed
+/// `usdc-storage-seed.json`), the genesis grant MUST treat slot 9 as the
+/// packed layout: read the existing balance with this bit masked off, add the
+/// grant, then re-pack while preserving whatever blacklist bit was present.
+/// Writing a raw `existing + grant` would (a) fold a stale blacklist bit into
+/// the balance arithmetic and (b) silently clobber the blacklist state.
+pub const FIAT_TOKEN_BLACKLIST_BIT: u8 = 255;
 
 /// FiatTokenV2_1 storage slot for `totalSupply_`.
 ///
@@ -462,14 +481,18 @@ fn build_alloc_from_anvil(
 
     let grant = U256::from(manifest.harness_usdc_grant_units);
 
-    // balances[holder] slot = keccak256(abi.encode(holder, 9))
+    // balanceAndBlacklistStates[holder] slot = keccak256(abi.encode(holder, 9)).
+    // Under FiatTokenV2_2 (Base USDC's live implementation) this slot packs the
+    // blacklist flag into bit 255 and the balance into the low 255 bits, so we
+    // mask the flag off before arithmetic and re-pack it afterwards. Under V2_1
+    // the high bit is always 0, so this path degrades to a plain add.
     let balance_slot = balances_slot(&manifest.harness_usdc_holder, FIAT_TOKEN_BALANCES_SLOT);
     let balance_slot_key = b256_hex(&balance_slot);
-    let existing_balance = read_slot_u256(&usdc_entry.storage, &balance_slot_key);
-    let new_balance = existing_balance.saturating_add(grant);
+    let existing_packed = read_slot_u256(&usdc_entry.storage, &balance_slot_key);
+    let new_packed = pack_balance_grant(existing_packed, grant);
     usdc_entry
         .storage
-        .insert(balance_slot_key, u256_hex(&new_balance));
+        .insert(balance_slot_key, u256_hex(&new_packed));
 
     // totalSupply slot = 1
     let total_supply_key = slot_index_hex(FIAT_TOKEN_TOTAL_SUPPLY_SLOT);
@@ -547,6 +570,30 @@ fn read_slot_u256(storage: &BTreeMap<String, String>, key: &str) -> U256 {
             U256::from_str_radix(trimmed, 16).ok()
         })
         .unwrap_or(U256::ZERO)
+}
+
+/// Add `grant` to the balance encoded in a FiatTokenV2_2
+/// `balanceAndBlacklistStates` slot value while preserving the packed
+/// blacklist bit (bit 255).
+///
+/// The high bit is the blacklist flag and the low 255 bits are the balance.
+/// We mask the flag off, add the grant to the balance portion only, then
+/// re-OR the original flag back in. On V2_1 layouts (flag always clear) this
+/// is identical to a plain `existing + grant`. The balance addition saturates
+/// at the 255-bit ceiling so a pathological grant can never overflow into and
+/// flip the blacklist bit. Realistic USDC grants (6 decimals) never approach
+/// 2^255, so saturation is unreachable in practice — it is purely a safety
+/// floor against corrupting the flag.
+pub fn pack_balance_grant(existing_packed: U256, grant: U256) -> U256 {
+    let blacklist_bit = U256::from(1u8) << FIAT_TOKEN_BLACKLIST_BIT;
+    let balance_mask = blacklist_bit - U256::from(1u8); // low 255 bits set
+    let flag = existing_packed & blacklist_bit;
+    let existing_balance = existing_packed & balance_mask;
+    // Saturate at the 255-bit balance ceiling so the sum can never carry into
+    // bit 255 (the blacklist flag). Truncating with `& balance_mask` would wrap
+    // and silently corrupt the balance; we want a hard ceiling instead.
+    let new_balance = existing_balance.saturating_add(grant).min(balance_mask);
+    flag | new_balance
 }
 
 // -- Tests -----------------------------------------------------------------
@@ -629,6 +676,144 @@ mod tests {
                 "0x0000000000000000000000000000000000000000000000000000000000000099"
             ),
             U256::ZERO
+        );
+    }
+
+    /// HARN-6: under a FiatTokenV2_2 packed-blacklist-bit layout the grant must
+    /// land in the low 255 bits (the balance), leaving bit 255 (blacklist flag)
+    /// untouched. A clean (un-blacklisted) slot starts at 0, so the resulting
+    /// packed value equals the grant exactly with the high bit clear.
+    #[test]
+    fn pack_balance_grant_on_clean_v2_2_slot_equals_grant() {
+        let grant = U256::from(1_000_000_000_000u128);
+        let packed = pack_balance_grant(U256::ZERO, grant);
+        assert_eq!(packed, grant, "clean slot grant must equal raw balance");
+        // High bit must be clear — the holder is not blacklisted.
+        let blacklist_bit = U256::from(1u8) << FIAT_TOKEN_BLACKLIST_BIT;
+        assert_eq!(packed & blacklist_bit, U256::ZERO, "blacklist bit set");
+    }
+
+    /// HARN-6: if the slot already carries an existing (non-zero) balance with
+    /// the blacklist bit SET, the grant must add to the balance portion only
+    /// and the blacklist bit must be preserved — not folded into the balance
+    /// and not cleared. The old code did `existing + grant` on the raw word,
+    /// which both corrupted the balance (by 2^255) and silently flipped the
+    /// flag once the carry rippled. This test pins the correct packed result.
+    #[test]
+    fn pack_balance_grant_preserves_blacklist_bit() {
+        let blacklist_bit = U256::from(1u8) << FIAT_TOKEN_BLACKLIST_BIT;
+        let existing_balance = U256::from(500_000u64);
+        let existing_packed = blacklist_bit | existing_balance; // blacklisted + balance
+        let grant = U256::from(250_000u64);
+
+        let packed = pack_balance_grant(existing_packed, grant);
+
+        // Blacklist bit preserved.
+        assert_eq!(
+            packed & blacklist_bit,
+            blacklist_bit,
+            "blacklist bit must be preserved across the grant"
+        );
+        // Balance is exactly existing + grant (no 2^255 contamination).
+        let balance_mask = blacklist_bit - U256::from(1u8);
+        assert_eq!(
+            packed & balance_mask,
+            existing_balance + grant,
+            "balance portion must be existing + grant"
+        );
+
+        // The bug bites when a grant pushes the balance past the 255-bit
+        // ceiling on a NON-blacklisted slot: the buggy raw add ripples a carry
+        // INTO bit 255 and FALSELY marks the account blacklisted, whereas the
+        // packed add saturates the balance and leaves the flag clear.
+        let near_ceiling = balance_mask - U256::from(5u8); // flag clear, balance high
+        let big_grant = U256::from(100u8);
+        let packed_big = pack_balance_grant(near_ceiling, big_grant);
+        // Flag stays clear; balance saturates at the 255-bit ceiling.
+        assert_eq!(
+            packed_big & blacklist_bit,
+            U256::ZERO,
+            "false blacklist set"
+        );
+        assert_eq!(
+            packed_big & balance_mask,
+            balance_mask,
+            "balance not saturated"
+        );
+        // The buggy raw add would have set bit 255 (a phantom blacklist).
+        let buggy = near_ceiling.saturating_add(big_grant);
+        assert_eq!(
+            buggy & blacklist_bit,
+            blacklist_bit,
+            "raw add should overflow into flag"
+        );
+        assert_ne!(
+            packed_big, buggy,
+            "packed add must differ from the buggy raw add when the grant overflows the balance"
+        );
+    }
+
+    /// HARN-6 end-to-end through `build_alloc_from_anvil`: a USDC slot 9 value
+    /// that already has the blacklist bit set (V2_2) must come out of the
+    /// builder with the balance bumped by the grant and the blacklist bit
+    /// still set. Exercises the real write path, not just the helper.
+    #[test]
+    fn build_alloc_grants_under_v2_2_packed_layout() {
+        let holder: Address = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5"
+            .parse()
+            .unwrap();
+        let grant_units: u128 = 1_000_000;
+        let bal_slot = b256_hex(&balances_slot(&holder, FIAT_TOKEN_BALANCES_SLOT));
+
+        // Seed the USDC account in the snapshot with a packed slot 9 value:
+        // blacklist bit set + a pre-existing balance of 42.
+        let blacklist_bit = U256::from(1u8) << FIAT_TOKEN_BLACKLIST_BIT;
+        let pre_existing = blacklist_bit | U256::from(42u64);
+        let mut usdc_storage = BTreeMap::new();
+        usdc_storage.insert(bal_slot.clone(), u256_hex(&pre_existing));
+
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            BASE_USDC_ADDR.to_ascii_lowercase(),
+            AnvilAccount {
+                nonce: 1,
+                balance: "0x0".into(),
+                code: "0xdeadbeef".into(),
+                storage: usdc_storage,
+            },
+        );
+        let snap = AnvilState { accounts };
+
+        let manifest = ForkManifest::from_str(&format!(
+            r#"{{
+                "chain": "base",
+                "block_number": 1,
+                "block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_uri": "file://x",
+                "ingested_addresses": ["{BASE_USDC_ADDR}"],
+                "harness_usdc_holder": "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5",
+                "harness_usdc_grant_units": "{grant_units}",
+                "pinned": false
+            }}"#
+        ))
+        .unwrap();
+
+        let alloc = build_alloc_from_anvil(&snap, &manifest, None).expect("build");
+        let usdc = alloc
+            .0
+            .get(&BASE_USDC_ADDR.to_ascii_lowercase())
+            .expect("usdc entry");
+        let stored = usdc.storage.get(&bal_slot).expect("balance slot present");
+        let packed = U256::from_str_radix(stored.trim_start_matches("0x"), 16).unwrap();
+
+        // Blacklist bit preserved.
+        assert_eq!(packed & blacklist_bit, blacklist_bit, "flag lost");
+        // Balance = 42 + grant.
+        let balance_mask = blacklist_bit - U256::from(1u8);
+        assert_eq!(
+            packed & balance_mask,
+            U256::from(42u64) + U256::from(grant_units),
+            "balance != pre-existing + grant"
         );
     }
 
