@@ -131,3 +131,51 @@ impl MockWebhookServer {
         let _ = self.shutdown.send(());
     }
 }
+
+/// A TCP server that accepts a connection and then never responds, holding the
+/// socket open until shutdown. Used to simulate a hung RPC endpoint so the
+/// watchdog's SLA timeout can be exercised: a pause RPC against this URL never
+/// completes and must be aborted by the per-action `timeout`.
+pub struct HangingServer {
+    /// Full URL (e.g. `http://127.0.0.1:12345`).
+    pub url: String,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+}
+
+impl HangingServer {
+    /// Start the hanging server on a random port.
+    pub async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        tokio::spawn(async move {
+            // Hold accepted sockets open in a vec so they are not dropped (which
+            // would close them and let the client error fast). We want the
+            // request to hang until the SLA timeout fires.
+            let mut held = Vec::new();
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accept = listener.accept() => {
+                        match accept {
+                            Ok((sock, _)) => held.push(sock),
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        Self {
+            url,
+            shutdown: shutdown_tx,
+        }
+    }
+
+    /// Shut down the server.
+    pub fn shutdown(self) {
+        let _ = self.shutdown.send(());
+    }
+}

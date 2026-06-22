@@ -47,6 +47,12 @@ gateway_address = "0x0000000000000000000000000000000000000000"
 # Required when mode includes "pause".
 pauser_private_key_hex = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
+# Gas-price bump (basis points) applied over the network eth_gasPrice when
+# submitting gateway.pause(). The pause tx uses the CONFIRMED nonce, so a retried
+# pause replaces a stuck under-priced same-nonce tx by out-bidding it (scan
+# finding WD-5). 1500 = +15%. Optional; defaults to 1500 when omitted.
+pause_fee_bump_bps = 1500
+
 [sla]
 # Maximum seconds between breach detection and pause/alert dispatch.
 # This value is the SLA recorded in the Plan for issue #658 (5 minutes).

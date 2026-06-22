@@ -15,6 +15,18 @@
 //! Gas price and nonce are fetched live from `eth_gasPrice` / `eth_getTransactionCount`
 //! immediately before submission to minimise MEV exposure and nonce conflicts.
 //!
+//! # Replacing a stuck pause tx (scan finding WD-5)
+//!
+//! The nonce is fetched at the **confirmed** (`"latest"`) height, not `"pending"`.
+//! When a prior pause tx is stuck in the mempool (under-priced), the pending nonce
+//! would have already advanced, so a retry at the pending nonce queues *behind* the
+//! stuck tx and can never replace it. Using the confirmed nonce means a retry
+//! re-broadcasts at the **same** nonce; paired with the `fee_bump_bps` gas-price
+//! bump in [`PauseParams`], the replacement out-bids the stuck tx and the pause is
+//! actually mined. A pause is a safety-critical action — replacing a stuck tx
+//! matters more than the marginal nonce-gap risk of two concurrent pauses (both
+//! are idempotent: the second simply reverts `PausedError()`).
+//!
 //! # Idempotency
 //!
 //! The gateway reverts with `PausedError()` if already paused — the watchdog treats
@@ -44,6 +56,19 @@ pub struct PauseParams {
     pub chain_id: u64,
     /// ECDSA private key for the PAUSER_ROLE account (raw 32-byte scalar).
     pub pauser_key: [u8; 32],
+    /// Gas-price bump applied over the network `eth_gasPrice`, in basis points
+    /// (e.g. `1500` = +15%). Lets a retried pause replace a stuck same-nonce tx by
+    /// out-bidding it (scan finding WD-5). `0` submits at the network gas price.
+    pub fee_bump_bps: u64,
+}
+
+/// Apply a basis-point fee bump to a gas price, saturating on overflow.
+fn bump_gas_price(gas_price: u64, fee_bump_bps: u64) -> u64 {
+    // gas_price * (10_000 + fee_bump_bps) / 10_000, in u128 to avoid overflow.
+    let bumped = (gas_price as u128)
+        .saturating_mul(10_000u128.saturating_add(fee_bump_bps as u128))
+        / 10_000u128;
+    u64::try_from(bumped).unwrap_or(u64::MAX)
 }
 
 /// Submit a `gateway.pause()` transaction and return the transaction hash hex string.
@@ -64,11 +89,16 @@ pub async fn trigger_pause(client: &Client, params: &PauseParams) -> Result<Stri
     let hash = keccak256(pubkey_slice);
     let from = Address::from_slice(&hash[12..]);
 
-    // 2. Fetch nonce.
+    // 2. Fetch the CONFIRMED nonce (not pending) so a retry replaces a stuck
+    //    same-nonce tx rather than queuing behind it (scan finding WD-5).
     let nonce = eth_get_transaction_count(client, &params.rpc_url, from).await?;
 
-    // 3. Fetch gas price.
-    let gas_price = eth_gas_price(client, &params.rpc_url).await?;
+    // 3. Fetch gas price and apply the configured fee bump so a replacement
+    //    out-bids the stuck tx.
+    let gas_price = bump_gas_price(
+        eth_gas_price(client, &params.rpc_url).await?,
+        params.fee_bump_bps,
+    );
 
     // 4. Build the call data: pause() selector, no arguments.
     let selector = pause_selector();
@@ -93,7 +123,13 @@ pub async fn trigger_pause(client: &Client, params: &PauseParams) -> Result<Stri
     Ok(tx_hash)
 }
 
-/// Fetch the current transaction count (nonce) for `address` via `eth_getTransactionCount`.
+/// Fetch the **confirmed** transaction count (nonce) for `address` via
+/// `eth_getTransactionCount` at the `"latest"` block tag.
+///
+/// Deliberately uses `"latest"` rather than `"pending"`: a stuck under-priced
+/// pause tx advances the *pending* nonce, so a retry at the pending nonce queues
+/// behind it forever. The confirmed nonce lets a fee-bumped retry re-broadcast at
+/// the same nonce and replace the stuck tx (scan finding WD-5).
 async fn eth_get_transaction_count(
     client: &Client,
     rpc_url: &str,
@@ -104,7 +140,7 @@ async fn eth_get_transaction_count(
         client,
         rpc_url,
         "eth_getTransactionCount",
-        serde_json::json!([addr_hex, "pending"]),
+        serde_json::json!([addr_hex, "latest"]),
     )
     .await?;
     parse_hex_u64(&result, "eth_getTransactionCount")
@@ -342,6 +378,21 @@ mod tests {
     #[test]
     fn rlp_uint_zero_is_empty_string() {
         assert_eq!(rlp_uint(0), vec![0x80]);
+    }
+
+    #[test]
+    fn fee_bump_applies_basis_points() {
+        // +15% over 100 gwei.
+        assert_eq!(bump_gas_price(100_000_000_000, 1500), 115_000_000_000);
+        // Zero bump is identity.
+        assert_eq!(bump_gas_price(42, 0), 42);
+        // Bump on zero gas price stays zero.
+        assert_eq!(bump_gas_price(0, 1500), 0);
+    }
+
+    #[test]
+    fn fee_bump_saturates_instead_of_overflowing() {
+        assert_eq!(bump_gas_price(u64::MAX, 10_000), u64::MAX);
     }
 
     #[test]

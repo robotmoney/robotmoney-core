@@ -238,7 +238,29 @@ async fn run_inner(
         });
     }
 
-    let watched = cfg.watched_addresses();
+    // Static watched set (gateway, pinned vault, registry, router) plus every
+    // registry-discovered active vault. Without the latter, ERC-4626
+    // `Deposit`/`Withdraw` logs emitted by vaults learned from `VaultRegistered`
+    // are never fetched, so their burn volume is invisible to the watchdog
+    // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
+    // a registered vault that emits a withdrawal in a block where the gateway is
+    // idle would otherwise be dropped entirely.
+    let mut watched = cfg.watched_addresses();
+    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
+    )
+    .bind(cfg.chain_id)
+    .fetch_all(db.pool())
+    .await
+    .map_err(DbError::from)?;
+    for vault in &registered_vaults {
+        if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
+            let address = Address::from(bytes);
+            if !watched.contains(&address) {
+                watched.push(address);
+            }
+        }
+    }
     let topic0 = topics.all_topic0();
     let logs = rpc
         .get_logs(from_block as u64, target, &watched, &topic0)
@@ -313,16 +335,10 @@ async fn run_inner(
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
     }
 
-    // Collect all registered vaults from the DB. Used in both the
-    // event-driven snapshot (router-deposit path) and the heartbeat.
+    // Reuse the registered-vault set gathered above for the watched-address
+    // union; it drives both the event-driven snapshot (router-deposit path) and
+    // the heartbeat.
     let mut heartbeat_vaults = vec![cfg.vault];
-    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
-    )
-    .bind(cfg.chain_id)
-    .fetch_all(db.pool())
-    .await
-    .map_err(DbError::from)?;
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
             let address = Address::from(bytes);
