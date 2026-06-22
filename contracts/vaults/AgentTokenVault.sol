@@ -15,6 +15,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {BasketVault} from "./BasketVault.sol";
+import {BasketViews, IBasketVaultViews} from "../lib/BasketViews.sol";
 
 /// @title AgentTokenVault
 /// @notice ERC-4626 USDC vault holding a basket of agent-economy tokens curated
@@ -134,18 +135,8 @@ contract AgentTokenVault is BasketVault {
             uint256[] memory balances
         )
     {
-        uint256 len = assets.length;
-        tokens = new address[](len);
-        pools = new address[](len);
-        fees = new uint24[](len);
-        active = new bool[](len);
-        balances = new uint256[](len);
-        for (uint256 i = 0; i < len; i++) {
-            tokens[i] = assets[i].token;
-            pools[i] = assets[i].pool;
-            fees[i] = assets[i].swapFee;
-            active[i] = assets[i].active;
-            balances[i] = IERC20(assets[i].token).balanceOf(address(this));
-        }
+        // Array-building loop is in the linked `BasketViews` library to keep this
+        // EIP-170-tight vault under the bytecode limit.
+        return BasketViews.shortlist(IBasketVaultViews(address(this)));
     }
 }

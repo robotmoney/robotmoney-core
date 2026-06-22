@@ -5,11 +5,13 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 import {DeployTimelock} from "../script/DeployTimelock.s.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
+import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {VaultRegistry} from "../VaultRegistry.sol";
 import {PortfolioRouter} from "../PortfolioRouter.sol";
 import {RouterGovernance} from "../RouterGovernance.sol";
@@ -42,6 +44,9 @@ contract DeployTimelockTest is Test {
     // ─── Roles ────────────────────────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+    bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // ─── Test addresses ───────────────────────────────────────────────────────
 
@@ -50,6 +55,9 @@ contract DeployTimelockTest is Test {
     // It cannot be a plain EOA (makeAddr) because DeployTimelock now requires
     // SAFE_ADDRESS to have deployed bytecode and getThreshold() >= 2 (issue #422).
     address internal safe;
+    // Independent emergency hot key that receives the vault EMERGENCY_ROLE at
+    // handover (ACL-1 / F-01). Distinct from the deployer (address(script)).
+    address internal emergency = makeAddr("emergency");
     address internal stranger = makeAddr("stranger");
     address internal newAdmin = makeAddr("newAdmin");
 
@@ -123,6 +131,7 @@ contract DeployTimelockTest is Test {
             address(router),
             address(governance),
             safe,
+            emergency,
             MIN_DELAY
         );
     }
@@ -552,15 +561,17 @@ contract DeployTimelockTest is Test {
     }
 
     /// @notice #942: `shutdownVault` is unchanged — still EMERGENCY-tier,
-    ///         vault-only, with NO registry state change. The deployed vault's
-    ///         EMERGENCY_ROLE is held by the deploy script (set at construction
-    ///         and not transferred to the timelock); exercising it directly proves
-    ///         the emergency overlay still works and touches no registry state.
+    ///         vault-only, with NO registry state change. After the #965/F-01
+    ///         handover the vault's EMERGENCY_ROLE is held by the independent
+    ///         `emergency` hot key (NOT the deployer/script and NOT the timelock);
+    ///         exercising it directly proves the emergency overlay still works and
+    ///         touches no registry state.
     function test_shutdownVault_unchanged_makesNoRegistryChange() public {
         _registerVaultViaTimelock();
 
-        // EMERGENCY_ROLE holder (the script) can shut the vault down directly.
-        vm.prank(address(script));
+        // EMERGENCY_ROLE holder (the independent emergency hot key) can shut the
+        // vault down directly.
+        vm.prank(emergency);
         vault.shutdownVault();
 
         assertTrue(vault.shutdown(), "shutdownVault must set the emergency flag");
@@ -571,6 +582,170 @@ contract DeployTimelockTest is Test {
             uint256(VaultRegistry.VaultStatus.Active),
             "shutdownVault must make no registry/lifecycle change"
         );
+    }
+
+    // ─── ACL-1 / F-01: deployer EOA holds NO privileged role after handover ───
+    //
+    // The handover (this script) must leave the deployer EOA with none of
+    // {DEFAULT_ADMIN_ROLE, ADMIN_ROLE, EMERGENCY_ROLE, PAUSER_ROLE} on the
+    // Gateway or any vault. The deep deploy-assertion lives in
+    // contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*; these tests pin the
+    // individual legs and the fix-interaction guarantees.
+    //
+    // In setUp the deployer EOA is `address(script)` (the broadcaster inside
+    // runInProcess). `admin` is the gateway PAUSER but never held DEFAULT_ADMIN
+    // there; `emergency` is the independent emergency hot key.
+
+    // NOTE on the in-process model: when these tests call `script.runInProcess()`
+    // directly, the script's grant calls execute as `address(script)` while
+    // `revokeRole(..., msg.sender)` targets the TEST contract (the external
+    // caller). So in this suite neither a single EOA cleanly demonstrates "holds
+    // no role" — `address(script)` is the grantor (keeps roles), and the test
+    // contract never held them. The faithful end-to-end ACL-1 "deployer EOA holds
+    // NO privileged role" proof — where one address both grants and is revoked —
+    // lives in contracts/test/fv/DeployAssertions.t.sol::test_ACL1_*. Here we pin
+    // the post-handover POSITIVE end-state: the timelock holds the gateway root +
+    // vault ADMIN, and the independent hot key holds the vault EMERGENCY_ROLE.
+
+    /// @notice ACL-1: the Timelock receives BOTH ADMIN_ROLE and DEFAULT_ADMIN_ROLE
+    ///         on the Gateway (so it can rotate roles / authorizeAgent), and holds
+    ///         ADMIN_ROLE on the vault.
+    function test_ACL1_timelockHoldsGatewayRootAfterHandover() public view {
+        assertTrue(
+            gateway.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing Gateway ADMIN_ROLE"
+        );
+        assertTrue(
+            gateway.hasRole(DEFAULT_ADMIN_ROLE, address(d.timelock)),
+            "timelock missing Gateway DEFAULT_ADMIN_ROLE"
+        );
+        assertTrue(
+            vault.hasRole(ADMIN_ROLE, address(d.timelock)), "timelock missing vault ADMIN_ROLE"
+        );
+    }
+
+    /// @notice AC: the vault EMERGENCY_ROLE is held by the independent hot key
+    ///         (not the timelock — emergency response stays a fast hot-key path).
+    function test_ACL1_vaultEmergencyRoleHeldByIndependentHotKey() public view {
+        assertTrue(
+            vault.hasRole(EMERGENCY_ROLE, emergency),
+            "independent emergency hot key missing vault EMERGENCY_ROLE"
+        );
+        assertFalse(
+            vault.hasRole(EMERGENCY_ROLE, address(d.timelock)),
+            "timelock must not hold the vault EMERGENCY_ROLE"
+        );
+    }
+
+    /// @notice Fix-interaction (F-01): AGENT_ROLE's admin is ADMIN_ROLE, so after
+    ///         the DEFAULT_ADMIN_ROLE revoke the Timelock (ADMIN_ROLE) can still
+    ///         grant AGENT_ROLE directly. Proves the revoke did not brick agent
+    ///         onboarding.
+    function test_ACL1_agentRoleRemainsGrantableByTimelockAfterRevoke() public {
+        address newAgent = makeAddr("post-handover-agent");
+        assertEq(
+            gateway.getRoleAdmin(AGENT_ROLE), ADMIN_ROLE, "AGENT_ROLE admin must be ADMIN_ROLE"
+        );
+
+        bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (AGENT_ROLE, newAgent));
+        bytes32 salt = keccak256("acl1-grant-agent-role");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+
+        assertTrue(
+            gateway.hasRole(AGENT_ROLE, newAgent),
+            "Timelock (ADMIN_ROLE) must be able to grant AGENT_ROLE after the DEFAULT_ADMIN revoke"
+        );
+    }
+
+    /// @notice AC: the Timelock can `authorizeAgent` on the Gateway post-handover
+    ///         (the gateway-native onboarding path, now ADMIN_ROLE-gated).
+    function test_ACL1_timelockCanAuthorizeAgentAfterHandover() public {
+        address newAgent = makeAddr("timelock-onboarded-agent");
+        IGateway.AgentPolicy memory p = _agentPolicy();
+
+        bytes memory callData = abi.encodeCall(IGateway.authorizeAgent, (newAgent, p));
+        bytes32 salt = keccak256("acl1-authorize-agent");
+
+        vm.prank(safe);
+        d.timelock.schedule(address(gateway), 0, callData, bytes32(0), salt, MIN_DELAY);
+        vm.warp(block.timestamp + MIN_DELAY + 1);
+        vm.prank(safe);
+        d.timelock.execute(address(gateway), 0, callData, bytes32(0), salt);
+
+        assertTrue(
+            gateway.hasRole(AGENT_ROLE, newAgent),
+            "timelock authorizeAgent did not grant AGENT_ROLE"
+        );
+        assertEq(
+            gateway.agentOwner(newAgent), address(d.timelock), "timelock must be recorded owner"
+        );
+    }
+
+    /// @notice AC: a hot key (the Safe) that holds neither DEFAULT_ADMIN_ROLE nor
+    ///         ADMIN_ROLE on the Gateway cannot directly authorizeAgent — only the
+    ///         timelock-routed path works. Guards the role gate post-handover.
+    function test_ACL1_directAuthorizeAgentFromHotKeyReverts() public {
+        IGateway.AgentPolicy memory p = _agentPolicy();
+        vm.prank(safe);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, safe, ADMIN_ROLE
+            )
+        );
+        gateway.authorizeAgent(makeAddr("rejected-agent"), p);
+    }
+
+    /// @notice Negative regression for the fix-interaction warning: a NAKED
+    ///         DEFAULT_ADMIN_ROLE revoke that did NOT redirect AGENT_ROLE's admin
+    ///         to ADMIN_ROLE would leave AGENT_ROLE ungrantable forever. We build
+    ///         a throwaway gateway whose AGENT_ROLE admin is the default
+    ///         (DEFAULT_ADMIN_ROLE), revoke that root from the only holder, and
+    ///         assert AGENT_ROLE can no longer be granted — proving the
+    ///         constructor's `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` is what keeps
+    ///         the real gateway safe.
+    function test_ACL1_nakedDefaultAdminRevoke_bricksAgentRoleWithoutReadmin() public {
+        NaiveAgentGateway naive = new NaiveAgentGateway(address(this));
+        // Sanity: AGENT_ROLE admin is the default root (the bug condition).
+        assertEq(
+            naive.getRoleAdmin(AGENT_ROLE),
+            DEFAULT_ADMIN_ROLE,
+            "pre-condition: AGENT_ROLE admin is DEFAULT_ADMIN_ROLE"
+        );
+        // Naked revoke of the root from its only holder.
+        naive.revokeRole(DEFAULT_ADMIN_ROLE, address(this));
+        assertFalse(naive.hasRole(DEFAULT_ADMIN_ROLE, address(this)), "root not revoked");
+
+        // AGENT_ROLE is now ungrantable: nobody holds its admin (DEFAULT_ADMIN).
+        address wouldBeAgent = makeAddr("bricked-agent");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(this),
+                DEFAULT_ADMIN_ROLE
+            )
+        );
+        naive.grantRole(AGENT_ROLE, wouldBeAgent);
+    }
+
+    /// @dev Minimal active AgentPolicy used by the authorize tests.
+    function _agentPolicy() internal returns (IGateway.AgentPolicy memory p) {
+        address[] memory empty = new address[](0);
+        p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: 1e6,
+            maxPerWindow: 1e6,
+            shareReceiver: makeAddr("share-receiver"),
+            allowedDestinations: empty,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: empty
+        });
     }
 
     // ─── Revert cases — script validation ────────────────────────────────────
@@ -585,6 +760,7 @@ contract DeployTimelockTest is Test {
             address(router),
             address(governance),
             address(0), // safe = zero
+            emergency,
             MIN_DELAY
         );
         vm.stopPrank();
@@ -600,6 +776,7 @@ contract DeployTimelockTest is Test {
             address(router),
             address(governance),
             safe,
+            emergency,
             0 // zero delay
         );
         vm.stopPrank();
@@ -624,6 +801,7 @@ contract DeployTimelockTest is Test {
             address(router),
             address(governance),
             eoaSafe,
+            emergency,
             MIN_DELAY
         );
     }
@@ -646,6 +824,7 @@ contract DeployTimelockTest is Test {
             address(router),
             address(governance),
             address(lowSafe),
+            emergency,
             MIN_DELAY
         );
     }
@@ -667,5 +846,21 @@ contract MockHighThresholdSafe {
 contract MockLowThresholdSafe {
     function getThreshold() external pure returns (uint256) {
         return 1;
+    }
+}
+
+/// @dev A deliberately NAIVE gateway: plain AccessControl with AGENT_ROLE whose
+///      admin is left at the default (DEFAULT_ADMIN_ROLE), i.e. WITHOUT the
+///      `_setRoleAdmin(AGENT_ROLE, ADMIN_ROLE)` redirect the real
+///      RobotMoneyGateway constructor performs. Models the pre-fix gateway so the
+///      negative test can prove that a naked DEFAULT_ADMIN_ROLE revoke would
+///      brick AGENT_ROLE (fix-interaction warning, F-01).
+contract NaiveAgentGateway is AccessControl {
+    bytes32 public constant AGENT_ROLE = keccak256("AGENT_ROLE");
+
+    constructor(address root) {
+        // Only the default root is granted; AGENT_ROLE's admin stays
+        // DEFAULT_ADMIN_ROLE (the bug condition). No _setRoleAdmin redirect.
+        _grantRole(DEFAULT_ADMIN_ROLE, root);
     }
 }
