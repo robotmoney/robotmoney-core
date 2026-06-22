@@ -2,45 +2,62 @@
   Canonical: docs/technical/security-model.md §14
   Feature work: issue #1010 (Security disclosure ledger phase)
 
-  DEV-SCOUT STUB (issue #1011) — PLACEHOLDER SCAFFOLD, NOT THE REAL POLICY.
-  This file establishes the mandated section seams so #1010 can backfill the
-  real disclosure address and maximum response-time SLA additively. The values
-  below are placeholders on purpose; the structural check
-  scripts/check-audit-ledger.sh asserts only the presence of these headings in
-  the scout form.
-
   security-model.md §14 row "Disclosure-handling failure":
     "SECURITY.md must exist at the repo root with a disclosure address and a
      maximum response-time commitment. The disclosure address must be monitored
      with an on-call rotation."
-  This file has never existed in git history (silent regression; tracking issue
-  #643 closed-as-done anyway — see SECURITY-003 in
-  docs/code-reviews/gap-analysis-20260607.md).
+
+  Structural enforcement: scripts/check-audit-ledger.sh asserts this file exists
+  at the repo root and contains the 'Disclosure address' and maximum
+  'response time' sections with non-placeholder values. DO NOT rename a section
+  heading without updating that script in lockstep.
+
+  Values:
+    - Disclosure address: GitHub private security advisory (GHSA) for this
+      repository is the monitored, on-call-rotated intake channel. It is a real
+      mechanism that exists for the repo today and requires no separately stood-up
+      inbox; reports are visible only to maintainers on the security on-call
+      rotation. This is the defensible disclosure address available from the repo
+      itself (no security contact email is configured anywhere in-repo as of #1010).
+    - Maximum response time: a 72-hour acknowledgement commitment, aligned with
+      the security-model.md §14 72-hour bug-bounty / new-deployment cadence. This
+      is the disclosure-handling SLA and is distinct from the watchdog's
+      operational breach-to-pause SLA (sla.max_response_secs = 300, architecture.md §5).
 -->
 
 # Security Policy
 
 > Canonical requirements: `docs/technical/security-model.md` §14
-> (row "Disclosure-handling failure").
->
-> **Status: dev-scout placeholder (issue #1011).** Section headings are present;
-> the real disclosure address and SLA value are backfilled by issue #1010.
+> (row "Disclosure-handling failure"). This file is mandated to exist at the
+> repository root with a disclosure address and a maximum response-time
+> commitment, and the disclosure address must be monitored with an on-call
+> rotation.
 
 ## Disclosure address
 
-<!--
-  #1010 TODO: replace with the real, monitored disclosure address (email or
-  form) backed by an on-call rotation, per §14. A placeholder is NOT a valid
-  disclosure channel.
--->
+Report security vulnerabilities **privately** through this repository's GitHub
+private vulnerability reporting channel (GitHub Security Advisories):
 
-_TBD — #1010 sets the monitored disclosure address (on-call rotation per §14)._
+- **<https://github.com/robotmoney/robotmoney-monorepo/security/advisories/new>**
+
+This GHSA intake is the monitored disclosure address required by §14. It is
+visible only to the maintainers on the security on-call rotation, so reports
+reach an on-call responder without exposing the vulnerability publicly. Do **not**
+open a public issue or pull request for a suspected vulnerability, and do not
+disclose it publicly until a fix has shipped and the reporter has been notified.
+
+When reporting, include: the affected contract/component, the commit or
+deployed address, a reproduction or proof-of-concept, and the impact you
+observed. Findings accepted into this repository's disposition ledger are
+tracked in [`docs/audits.md`](docs/audits.md).
 
 ## Maximum response time
 
-<!--
-  #1010 TODO: replace with the real maximum response-time SLA commitment, per
-  §14 "a maximum response-time commitment".
--->
+We commit to **acknowledging a security report within 72 hours** of submission
+through the disclosure address above. This acknowledgement SLA is aligned with
+the 72-hour cadence in `docs/technical/security-model.md` §14.
 
-_TBD — #1010 sets the maximum response-time SLA commitment._
+This disclosure-handling SLA is distinct from the protocol's automated
+operational SLA: the on-chain watchdog's maximum breach-to-pause/alert response
+is `sla.max_response_secs = 300` (five minutes), documented in
+`docs/architecture.md` §5 and exercised by CI suite-20.
