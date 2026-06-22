@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/09c1813279f1fa827a425df89836eb093cfa67e8/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a1b6b48f865d2de1de96090713e0f0b3ad707db7/contracts/RouterGovernance.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -709,10 +709,11 @@ error ExecutionDelayBelowMinimum();
 ### VaultNotEligible
 Thrown by propose() when a vault in the proposed weight list is
 not router-eligible (zero address, unregistered, ineligible flag
-not set, or wrong underlying asset). Identifies the offending
-vault so the proposer can correct the weight vector before
-resubmitting. Prevents governance deadlock from stuck Queued
-proposals that would revert on execute().
+not set, or wrong underlying asset) OR not Active (Paused/Retired).
+Identifies the offending vault so the proposer can correct the
+weight vector before resubmitting. Prevents governance deadlock
+and router self-DoS from stuck Queued proposals that would revert
+on execute() (GOV-4 / RTR-4, finding F-05).
 
 
 ```solidity
@@ -723,7 +724,7 @@ error VaultNotEligible(address vault);
 
 |Name|Type|Description|
 |----|----|-----------|
-|`vault`|`address`|The vault address that failed the router-eligibility check.|
+|`vault`|`address`|The vault address that failed the eligible-AND-Active check.|
 
 ### CheckpointTooOld
 Thrown by the external getPastVotes view when the queried block

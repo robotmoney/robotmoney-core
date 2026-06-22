@@ -41,6 +41,12 @@ contract MockPoolForGuards {
         poolLiquidity = 1e18; // large default so existing tests pass unmodified
     }
 
+    /// @dev ORA-3 / F-09: `addAsset` asserts `fee()` equals `swapFee_`. Every
+    ///      addAsset call in this suite uses swapFee_ = 500.
+    function fee() external pure returns (uint24) {
+        return 500;
+    }
+
     function setCardinality(uint16 c) external {
         cardinality = c;
     }
@@ -611,10 +617,13 @@ contract PortfolioRouterRuntimeEligibilityTest is Test {
     // ─── Invariant 11: runtime eligibility re-check at deposit time ───────────
 
     /// @notice A vault that loses router-eligibility after being weighted must
-    ///         not receive USDC at deposit time. _requireRouterEligible is called
-    ///         inside _executeLegs on every leg, blocking ineligible vaults even
-    ///         when they are still in the weight vector.
-    function test_invariant11_deposit_revertsIfVaultLosesEligibilityAfterWeighting() public {
+    ///         never receive USDC at deposit time. With skip-and-renormalise
+    ///         (RTR-5 / F-13) the ineligible leg is skipped; here it is the ONLY
+    ///         weighted vault, so the basket is consistently unavailable —
+    ///         previewDeposit reports the single leg unavailable and deposit
+    ///         reverts `NoWeightsSet` rather than routing USDC into the ineligible
+    ///         vault. Either way the ineligible vault is never funded (invariant 11).
+    function test_invariant11_deposit_skipsVaultThatLosesEligibilityAfterWeighting() public {
         uint256 amount = 1_000 * ONE_USDC;
         usdc.mint(depositor, amount);
 
@@ -632,15 +641,24 @@ contract PortfolioRouterRuntimeEligibilityTest is Test {
         vm.prank(admin);
         registry.setRouterEligible(address(vaultA), false);
 
-        // Subsequent deposit must revert at runtime eligibility check.
+        // Preview reports the single leg unavailable (preview/execute agree).
+        PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
+        assertTrue(legs[0].unavailable, "ineligible single leg must preview unavailable");
+
+        // Subsequent deposit reverts: every leg is unavailable, so there is
+        // nothing to route to and the ineligible vault gets no USDC.
         usdc.mint(depositor, amount);
         vm.prank(depositor);
         usdc.approve(address(router), amount);
+        uint256 vaultUsdcBefore = usdc.balanceOf(address(vaultA));
         vm.prank(depositor);
-        vm.expectRevert(
-            abi.encodeWithSelector(PortfolioRouter.VaultNotRouterEligible.selector, address(vaultA))
-        );
+        vm.expectRevert(PortfolioRouter.NoWeightsSet.selector);
         router.deposit(amount, minShares);
+        assertEq(
+            usdc.balanceOf(address(vaultA)),
+            vaultUsdcBefore,
+            "ineligible vault must receive no USDC"
+        );
     }
 
     /// @notice setWeights rejects a vault that is not router-eligible, preventing

@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fe1d7629f8414fe42378132b0f073dc3a13c4e91/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -100,6 +100,18 @@ IERC20 internal immutable _USDC
 ```
 
 
+### MAX_NAV_DEVIATION_BPS
+Hard ceiling for `navDeviationGuardBps`. A threshold above this would
+make the guard a no-op (any realistic divergence passes), so the
+setter rejects it. `internal` (no public getter) to save bytecode on
+the EIP-170-tight vault family — the value is documented here.
+
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000
+```
+
+
 ### MIN_POOL_CARDINALITY
 Minimum observation cardinality required on the Uniswap V3 pool
 when registering an asset via addAsset(). A cardinality of 1
@@ -134,6 +146,15 @@ uint128 public constant MIN_POOL_LIQUIDITY = 1e6
 
 
 ## State Variables
+### adminCount
+Number of accounts currently holding `ADMIN_ROLE`.
+
+
+```solidity
+uint256 public adminCount
+```
+
+
 ### assets
 
 ```solidity
@@ -209,7 +230,58 @@ mapping(address => uint32) public twapWindow
 ```
 
 
+### adapterCodeHashAllowed
+Runtime-bytecode hashes ADMIN_ROLE has approved for use as a basket
+swap+TWAP adapter. `addAsset` rejects any non-zero adapter whose
+codehash is not in this set (ADP-2 / NC-2). The default Uniswap V3
+path (`adapter == address(0)`) needs no entry — it routes through the
+immutable, audited `SWAP_ROUTER`, not an external adapter.
+
+
+```solidity
+mapping(bytes32 codeHash => bool allowed) public adapterCodeHashAllowed
+```
+
+
+### navDeviationGuardBps
+ORA-4 / F-10 — maximum permitted divergence (in bps) between the
+NAV-pricing TWAP and the executable market (spot) price before
+deposits/redemptions are halted on the deposit/redeem hot path.
+A stale or manipulated mark whose spot has moved beyond this band
+reverts `NavMarketDeviationExceeded` rather than settling at a
+price the market no longer offers. `0` DISABLES the guard (used
+by fixtures and any vault that opts out); production deployments
+set a non-zero, timelock-governed threshold. Bounded above by
+`MAX_NAV_DEVIATION_BPS`.
+
+
+```solidity
+uint256 public navDeviationGuardBps
+```
+
+
 ## Functions
+### _grantRole
+
+Track `ADMIN_ROLE` membership so the last-admin floor can be enforced
+without enumeration. Only increments on a real (new) grant.
+
+
+```solidity
+function _grantRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+### _revokeRole
+
+Block revoking/renouncing the final `ADMIN_ROLE` holder (ACL-3 / F-06);
+both public setters route through here. Decrements only on a real
+(effective) revoke.
+
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
 ### constructor
 
 
@@ -254,6 +326,18 @@ Subclasses declare the maximum number of assets in the basket.
 function maxAssets() public view virtual returns (uint256);
 ```
 
+### _guardAssets
+
+Reinterpret the `assets` storage array as the layout-identical
+`BasketAssetConfigGuard.AssetInfo[]` so the delegatecall-linked dedup
+scan can read/write it. The two structs share an exact field layout;
+only the nominal type differs, so the storage-pointer cast is sound.
+
+
+```solidity
+function _guardAssets() internal view returns (BasketAssetConfigGuard.AssetInfo[] storage g);
+```
+
 ### decimals
 
 
@@ -282,9 +366,41 @@ function totalAssets() public view virtual override returns (uint256);
 
 ### _deposit
 
+Deposit `assets` USDC and mint shares on the REALIZED swap
+proceeds (post-swap NAV delta), not a pre-swap TWAP mark.
+
+SUP-3 / F-16 / NC-6: the OZ default mints `previewDeposit(assets)`
+shares BEFORE the deposit USDC is swapped into basket tokens. When
+the realized spot proceeds diverge from the TWAP mark, the minted
+share count no longer matches the value the vault actually captured:
+if spot beats TWAP the depositor's own swap surplus inflates their
+share value so `previewRedeem(previewDeposit(x)) > x` becomes
+reachable (a farmable round-trip leak). We override `deposit` to
+swap FIRST, measure the realized TWAP-valued NAV delta the vault
+gained, and mint against that — capped at the slippage-discounted
+deposit floor so the depositor is never credited more than the
+worst-case `previewDeposit` floor. This makes the round trip
+`previewRedeem(previewDeposit(x)) <= x` hold for every realized
+execution price (SUP-3), and removes the mint-vs-haircut asymmetry
+that transferred value to incumbents (NC-6).
+
+Deposit core (the OZ `deposit`/`mint` entrypoints route here). The
+`shares` arg OZ pre-computed from `previewDeposit`/`previewMint` is
+DISCARDED: we mint on the REALIZED post-swap NAV delta instead, so
+the minted count reflects the value the vault actually captured —
+not a pre-swap TWAP mark — closing the SUP-3/F-16/NC-6 round-trip
+leak. The realized credit is capped at the slippage-discounted
+deposit floor, which equals the OZ preview floor in the normal
+(capped) case, so `deposit`/`mint` return values stay consistent.
+
 
 ```solidity
-function _deposit(address caller, address receiver, uint256 usdcAmount, uint256 shares)
+function _deposit(
+    address caller,
+    address receiver,
+    uint256 usdcAmount,
+    uint256 /*shares*/
+)
     internal
     override
     whenNotPaused
@@ -413,6 +529,15 @@ is intentionally unused because the actual USDC received depends on
 swap execution. Callers MUST NOT use `withdraw()` — use `redeem()` instead.
 Actual net may be lower than `previewRedeem` by up to `maxSlippageBps`.
 
+LIFE-3 / NC-3 / F-06: withdrawals are intentionally NOT `whenNotPaused`.
+`pause()` is a deposits-only freeze (see `_deposit`, which is
+`whenNotPaused` and checks `depositsPaused`). Gating withdrawals on the
+same low-trust EMERGENCY_ROLE pause would let a hot key freeze
+already-deposited funds — and, combined with last-ADMIN renounce, freeze
+them forever (LIFE-4). The last-admin floor (AdminFloorAccessControl)
+and the deposits-only pause together keep withdrawals always reachable,
+matching RobotMoneyVault's separate `withdrawalsPaused` model.
+
 
 ```solidity
 function _withdraw(
@@ -424,7 +549,6 @@ function _withdraw(
 )
     internal
     override
-    whenNotPaused
     nonReentrant;
 ```
 
@@ -518,6 +642,30 @@ function _twapQuote(address pool, address tokenIn, address tokenOut, uint256 amo
     view
     returns (uint256 amountOut);
 ```
+
+### setAdapterCodeHashAllowed
+
+Approve or revoke an adapter runtime-bytecode hash for use as a
+basket swap+TWAP adapter in `addAsset`. Restricted to ADMIN_ROLE.
+
+ADP-2 / NC-2: `addAsset` rejects any non-zero adapter whose codehash
+is not approved here. Revoking a codehash does NOT retroactively touch
+assets already registered with that adapter — it only blocks future
+`addAsset` calls. Mirrors `RobotMoneyVault.setAdapterCodeHashAllowed`.
+
+
+```solidity
+function setAdapterCodeHashAllowed(bytes32 codeHash_, bool allowed_)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`codeHash_`|`bytes32`|Runtime-bytecode hash (`adapter.codehash`) to approve/revoke.|
+|`allowed_`|`bool`| True to approve, false to revoke.|
+
 
 ### addAsset
 
@@ -685,6 +833,33 @@ function emergencyUnwindWithOverride(address[] calldata tokens)
 function shutdownVault() external onlyRole(EMERGENCY_ROLE);
 ```
 
+### restoreVault
+
+Reverse a `shutdownVault`, re-opening deposits with a fresh TVL cap.
+
+LIFE-4 / F-07: `shutdownVault` (an `EMERGENCY_ROLE` hot-key lever) sets
+`shutdown = true` and `tvlCap = 0`, which permanently blocks deposits with no
+reverse path — a low-trust key could otherwise freeze the deposit side forever.
+Withdrawals are never frozen (LIFE-3), so holder funds were always redeemable;
+this restores the DEPOSIT side and is therefore gated to the strictly higher-trust
+`ADMIN_ROLE` (timelock in production), mirroring `unpause`. A new `tvlCap` is
+required because shutdown zeroed it; pass `type(uint256).max` for no cap.
+Mirrors `RobotMoneyVault.restoreVault`: reverts when the vault is not shut down
+(`NotShutdown`), when the new cap is zero (`InvalidParam`), or when the new cap
+is below the configured `perDepositCap` (`InvalidParam`), so deposits resume under
+a coherent, explicit limit rather than a stale or self-contradictory one.
+
+
+```solidity
+function restoreVault(uint256 newTvlCap) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newTvlCap`|`uint256`|New maximum total assets in 6-decimal USDC units (must be > 0).|
+
+
 ### sweepForeignToken
 
 Permissionlessly sweep a NON-protected foreign token held by the
@@ -711,6 +886,20 @@ function sweepForeignToken(address token) external;
 |----|----|-----------|
 |`token`|`address`|Foreign ERC-20 to quarantine. Must not be USDC, the share token, or any active/configured basket asset.|
 
+
+### _sweepToQuarantine
+
+Single inlining site for the permissionless quarantine sweep so the
+`ForeignTokenQuarantine.sweep` body is emitted into the
+EIP-170-tight basket-vault bytecode only once, shared by
+`sweepForeignToken` and the `reabsorbRemovedAsset` degraded-pool
+fallback. Moves the caller's full balance of `token` to the fixed
+quarantine address; no caller-supplied recipient (INV-1).
+
+
+```solidity
+function _sweepToQuarantine(address token) private;
+```
 
 ### setTvlCap
 
@@ -739,6 +928,29 @@ function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 ```solidity
 function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
 ```
+
+### setNavDeviationGuardBps
+
+Set the NAV-vs-market deviation guard threshold (ORA-4 / F-10).
+
+ADMIN_ROLE only (timelock in production). `0` disables the guard;
+any non-zero value must be `<= MAX_NAV_DEVIATION_BPS`. When set,
+deposits revert `NavMarketDeviationExceeded` if any active asset's
+executable market (spot) price diverges from its NAV-pricing TWAP
+beyond `newBps`. Independent of `maxSlippageBps` (the swap floor),
+which stays TWAP/pool-fee-derived (ORA-7) — the two bounds never
+share a source.
+
+
+```solidity
+function setNavDeviationGuardBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newBps`|`uint256`|New deviation threshold in basis points.|
+
 
 ### setMaxSlippageBps
 
@@ -857,6 +1069,27 @@ function realizedWeights(address depositor)
     external
     view
     returns (address[] memory activeAssets, uint256[] memory bpsWeights);
+```
+
+### assetUsdcValue
+
+USDC value of `amount` of the active asset at registry `index`,
+priced via its TWAP adapter (or the built-in V3 path). Used by the
+externally-linked `BasketViews` weight-preview library.
+
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 amount) external view returns (uint256);
+```
+
+### assetTokenValue
+
+Estimated token amount for `usdcAmount` of the active asset at
+registry `index`. Used by the `BasketViews` weight-preview library.
+
+
+```solidity
+function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
 ```
 
 ### assetCount
@@ -1019,6 +1252,14 @@ event DepositsPausedSet(bool paused);
 event Shutdown();
 ```
 
+### Restored
+Emitted when ADMIN_ROLE reverses a `shutdownVault`, re-opening deposits.
+
+
+```solidity
+event Restored(uint256 newTvlCap);
+```
+
 ### EmergencyUnwindGuardSet
 
 ```solidity
@@ -1058,6 +1299,24 @@ Off-chain monitors can use the delta between `oldWindow` and
 event TwapWindowUpdated(address indexed token, uint32 oldWindow, uint32 newWindow);
 ```
 
+### AdapterCodeHashAllowedSet
+Emitted when ADMIN_ROLE approves or revokes an adapter runtime-code
+hash for use in `addAsset` (ADP-2 / NC-2).
+
+
+```solidity
+event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
+```
+
+### NavDeviationGuardUpdated
+Emitted when ADMIN_ROLE (timelock) updates the NAV-vs-market
+deviation guard threshold (ORA-4 / F-10).
+
+
+```solidity
+event NavDeviationGuardUpdated(uint256 oldBps, uint256 newBps);
+```
+
 ### WeightSnapshot
 Emitted on every deposit, recording the equal-weight allocation applied
 to the depositor's inflow. Satisfies the event-stream cost-disclosure
@@ -1073,6 +1332,15 @@ event WeightSnapshot(
 ```
 
 ## Errors
+### LastAdminFloor
+Revoking the sole `ADMIN_ROLE` holder is forbidden (would leave the
+vault with zero admins and brick every admin path).
+
+
+```solidity
+error LastAdminFloor();
+```
+
 ### TVLCapExceeded
 
 ```solidity
@@ -1095,6 +1363,14 @@ error ZeroAddress();
 
 ```solidity
 error VaultShutdown();
+```
+
+### NotShutdown
+`restoreVault` called while the vault is not in a shut-down state.
+
+
+```solidity
+error NotShutdown();
 ```
 
 ### InvalidFee
@@ -1131,6 +1407,18 @@ error AssetStillHeld();
 
 ```solidity
 error NoActiveAssets();
+```
+
+### NavMarketDeviationExceeded
+ORA-4 / F-10: the executable market (spot) price for a basket asset
+has diverged from the NAV-pricing TWAP beyond `navDeviationGuardBps`.
+Deposits/redemptions revert rather than settle on a stale/manipulated
+mark. `deviationBps` is the observed divergence; `thresholdBps` is the
+configured guard.
+
+
+```solidity
+error NavMarketDeviationExceeded(address token, uint256 deviationBps, uint256 thresholdBps);
 ```
 
 ### EmergencyUnwindOverrideDisabled

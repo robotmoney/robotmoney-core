@@ -440,6 +440,145 @@ contract RobotMoneyVaultTest is Test {
         assertEq(usdc.balanceOf(alice), aliceUsdcBefore + 700 * ONE_USDC, "alice received 700 USDC");
     }
 
+    // ─── ADP-2 NAV side (F-14): revoked-but-active adapter excluded from NAV/pulls ──
+
+    /// @notice ADP-2 / F-14: an adapter whose eligibility is revoked while still
+    ///         registered-active no longer contributes to `totalAssets` nor
+    ///         receives/returns withdrawal flow. Two adapters are funded 50/50;
+    ///         revoking the second drops NAV by its balance, and a subsequent
+    ///         withdrawal is sourced entirely from the still-eligible adapter.
+    function test_ADP2_revokedAdapterExcludedFromNavAndPulls() public {
+        MockAdapter second = new MockAdapter(address(usdc), address(vault));
+        _allowAdapter(vault, address(second));
+        vm.prank(admin);
+        vault.addAdapter(address(second), 10_000);
+
+        // Deposit 2 000: equal-weight 1 000 / 1 000 across the two adapters.
+        uint256 amount = 2_000 * ONE_USDC;
+        vm.prank(alice);
+        vault.deposit(amount, alice);
+        assertEq(usdc.balanceOf(address(adapter)), 1_000 * ONE_USDC, "adapter A funded");
+        assertEq(usdc.balanceOf(address(second)), 1_000 * ONE_USDC, "adapter B funded");
+        assertEq(vault.totalAssets(), amount, "NAV = both adapters while both eligible");
+
+        // Revoke the second adapter's eligibility (still active in the registry).
+        vm.prank(admin);
+        vault.setAdapterAllowed(address(second), false);
+
+        // F-14: the revoked adapter's balance is EXCLUDED from NAV — a lying/revoked
+        // adapter can no longer inflate (or, with honest holdings, prop up) the share price.
+        assertEq(
+            vault.totalAssets(),
+            1_000 * ONE_USDC,
+            "ADP-2: revoked adapter excluded from totalAssets"
+        );
+
+        // A withdrawal is sourced ENTIRELY from the eligible adapter; the revoked one is
+        // never pulled from (its balance is untouched). Redeem all of alice's shares —
+        // their NAV value is now just the eligible 1 000 (revoked balance excluded).
+        uint256 aliceBefore = usdc.balanceOf(alice);
+        uint256 secondBalBefore = usdc.balanceOf(address(second));
+        uint256 aliceShares = vault.balanceOf(alice);
+        vm.prank(alice);
+        vault.redeem(aliceShares, alice, alice);
+        // Payout equals the eligible NAV (1 000), within 1 wei share-rounding.
+        assertApproxEqAbs(
+            usdc.balanceOf(alice) - aliceBefore,
+            1_000 * ONE_USDC,
+            1,
+            "pulled only the eligible adapter's NAV"
+        );
+        assertEq(
+            usdc.balanceOf(address(second)), secondBalBefore, "revoked adapter never pulled from"
+        );
+    }
+
+    // ─── FEE-2 (NC-11): exit fee charged on realised proceeds ──────────────────
+
+    /// @notice FEE-2 / NC-11: the exit fee equals the configured bps of the
+    ///         proceeds ACTUALLY realised. With an honest adapter, realised gross
+    ///         equals the share-implied gross, so the fee and net payout match
+    ///         `previewRedeem`.
+    function test_FEE2_exitFeeOnRealizedProceeds() public {
+        VaultHarness feeVault = new VaultHarness(
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 100, feeRecipient, admin, admin
+        ); // 100 bps = 1% exit fee
+        MockAdapter feeAdapter = new MockAdapter(address(usdc), address(feeVault));
+        _allowAdapter(feeVault, address(feeAdapter));
+        vm.prank(admin);
+        feeVault.addAdapter(address(feeAdapter), 10_000);
+
+        vm.prank(alice);
+        usdc.approve(address(feeVault), type(uint256).max);
+        uint256 amount = 10_000 * ONE_USDC;
+        vm.prank(alice);
+        uint256 shares = feeVault.deposit(amount, alice);
+
+        uint256 grossExpected = feeVault.convertToAssets(shares);
+        uint256 feeExpected = grossExpected * 100 / 10_000; // 1%
+        uint256 netExpected = grossExpected - feeExpected;
+
+        uint256 aliceBefore = usdc.balanceOf(alice);
+        uint256 feeRecipBefore = usdc.balanceOf(feeRecipient);
+        vm.prank(alice);
+        feeVault.redeem(shares, alice, alice);
+
+        assertEq(usdc.balanceOf(alice) - aliceBefore, netExpected, "net on realised proceeds");
+        assertEq(
+            usdc.balanceOf(feeRecipient) - feeRecipBefore,
+            feeExpected,
+            "fee = bps of realised gross"
+        );
+    }
+
+    /// @notice FEE-2 / NC-11: an over-reporting adapter cannot socialise its
+    ///         shortfall. When the adapter reports more NAV than it can deliver,
+    ///         the withdrawal reverts (`InsufficientAdapterLiquidity`) rather than
+    ///         silently paying the inflated gross from another holder's idle USDC.
+    function test_FEE2_overReportingAdapterCannotSocializeLoss() public {
+        VaultHarness feeVault = new VaultHarness(
+            IERC20(address(usdc)), TVL_CAP, PER_DEPOSIT_CAP, 100, feeRecipient, admin, admin
+        );
+        ShortfallAdapter liar = new ShortfallAdapter(address(usdc), address(feeVault));
+        _allowAdapter(feeVault, address(liar));
+        vm.prank(admin);
+        feeVault.addAdapter(address(liar), 10_000);
+
+        // Alice deposits 1 000 (routed entirely into the liar).
+        vm.prank(alice);
+        usdc.approve(address(feeVault), type(uint256).max);
+        vm.prank(alice);
+        uint256 shares = feeVault.deposit(1_000 * ONE_USDC, alice);
+
+        // Bob's idle USDC is parked in the vault (e.g. unrouted) — the would-be
+        // socialisation source if the fee/payout were based on share-implied gross.
+        vm.prank(bob);
+        usdc.transfer(address(feeVault), 1_000 * ONE_USDC);
+
+        // The liar over-reports by 500 but can still only deliver its real 1 000.
+        liar.setPhantom(500 * ONE_USDC);
+
+        // Share-implied gross is now inflated by the phantom; idle (Bob's 1 000) covers
+        // part, and the adapter must supply the rest but can only deliver 1 000 real.
+        uint256 grossInflated = feeVault.convertToAssets(shares);
+        uint256 idle = usdc.balanceOf(address(feeVault));
+
+        // Redeeming all shares: realised proceeds cannot cover the inflated gross, so the
+        // withdrawal reverts (InsufficientAdapterLiquidity) instead of draining Bob's idle USDC.
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.InsufficientAdapterLiquidity.selector,
+                grossInflated - idle, // remainingNeeded after idle is applied
+                1_000 * ONE_USDC // the liar's real deliverable balance
+            )
+        );
+        feeVault.redeem(shares, alice, alice);
+
+        // Bob's idle USDC was NOT touched — no loss socialisation.
+        assertEq(usdc.balanceOf(address(feeVault)), idle, "Bob's idle USDC untouched");
+    }
+
     /// @notice Keeper `rebalance()` must NOT brick when an active adapter's allowlist
     ///         entry is revoked (audit L-4): the routing pass skips it; idle funds remain.
     function test_rebalance_skipsAdapterAfterApprovalRevoked() public {

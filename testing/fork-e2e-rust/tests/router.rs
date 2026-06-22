@@ -10,9 +10,15 @@
 //!   proportionally, vault receipts are minted to the depositor, and
 //!   `RouterDeposit` events are emitted with per-leg detail.
 //!
-//! - `router_unavailable_leg_reverts` — register two vaults, configure
-//!   one to revert on deposit (via a `FailableMockVault`), assert that the
-//!   entire `router.deposit()` call reverts (all-or-revert semantics).
+//! - `router_unavailable_leg_skipped_and_renormalised` — register two
+//!   vaults weighted 50/50, pause one in the registry, and assert that
+//!   `router.deposit()` SUCCEEDS under skip-and-renormalise semantics
+//!   (issue #968): the paused leg is skipped (receives nothing) and the
+//!   remaining Active leg absorbs the full renormalised deposit amount.
+//!
+//! - `router_all_legs_unavailable_reverts` — pause EVERY weighted vault and
+//!   assert `router.deposit()` still reverts (`NoWeightsSet`) because there
+//!   is no available leg to renormalise onto.
 //!
 //! - `router_cap_exceeded_reverts` — set a global `routerCap` lower than
 //!   the attempted deposit amount and assert the tx reverts with a stable
@@ -466,26 +472,36 @@ fn router_deposit_happy_path() {
     eprintln!("[router_deposit_happy_path] passed");
 }
 
-// ── Scenario 2: unavailable leg reverts ──────────────────────────────────────
+// ── Scenario 2: unavailable leg skipped & renormalised ────────────────────────
 
-/// router_unavailable_leg_reverts — when one leg becomes unavailable, the
-/// entire router.deposit() call reverts (all-or-revert).
+/// router_unavailable_leg_skipped_and_renormalised — when one weighted leg
+/// becomes unavailable (Paused in the registry), `router.deposit()` SUCCEEDS:
+/// the paused leg is skipped and the deposit is renormalised onto the
+/// remaining Active leg(s). This is the skip-and-renormalise semantics
+/// introduced in issue #968, replacing the old all-or-revert behaviour.
 ///
 /// Strategy: deploy two USDC-backed MockVaults, weight them 50/50, then pause
 /// vault_b in the VaultRegistry. PortfolioRouter._depositTo re-reads registry
-/// status per leg and reverts with `VaultNotActive` if any weighted vault is
-/// not Active. This proves all-or-revert under the registry-status guard.
+/// status per leg, skips the Paused vault_b, and renormalises the FULL
+/// `deposit_amount` onto vault_a (the only remaining 50% weight, which becomes
+/// 100% of the available basket). Asserted via per-vault USDC balance and
+/// minted-share reads:
+///   - vault_a (Active) holds the entire `deposit_amount` and mints 1:1 shares.
+///   - vault_b (Paused) holds nothing and mints nothing.
 ///
 /// Note: this test previously used an EOA as one leg, but issue #426 added a
 /// `_requireRouterEligible` check that rejects code-less vaults at
 /// `setWeights` (no `asset()` view). The pause-after-weighting path is the
 /// correct e2e shape now — eligibility is enforced at config time and lifecycle
-/// status is enforced at deposit time.
+/// status is enforced (skip-and-renormalise) at deposit time.
 #[test]
-fn router_unavailable_leg_reverts() {
+fn router_unavailable_leg_skipped_and_renormalised() {
     skip_if_no_fork!();
     let fx = ForkFixture::new().expect("boot fork");
-    eprintln!("[router_unavailable_leg_reverts] {}", fx.summary_line());
+    eprintln!(
+        "[router_unavailable_leg_skipped_and_renormalised] {}",
+        fx.summary_line()
+    );
 
     let usdc = rmpc_fork_e2e::addresses::USDC;
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
@@ -541,7 +557,142 @@ fn router_unavailable_leg_reverts() {
     // Approve router.
     approve_usdc(&deployer, usdc, router, deposit_amount);
 
-    // Attempt deposit — must revert because vault_b is Paused.
+    // Attempt deposit — must SUCCEED under skip-and-renormalise (issue #968):
+    // vault_b is skipped, vault_a absorbs the full renormalised amount.
+    let receipt = deployer
+        .send(
+            router,
+            &IPortfolioRouter::depositCall {
+                amount: deposit_amount,
+                minSharesPerLeg: vec![],
+            },
+            U256::ZERO,
+            1_500_000,
+        )
+        .expect(
+            "router.deposit must succeed when one weighted leg is paused (skip-and-renormalise)",
+        );
+    assert_eq!(
+        receipt.status, 1,
+        "router.deposit must succeed (skip-and-renormalise); paused leg is skipped"
+    );
+
+    // vault_a (Active) absorbs the FULL deposit after renormalisation: its 50%
+    // weight is the only available weight, so it scales to 100% of the basket.
+    let usdc_in_a = usdc_balance_of(&deployer, usdc, vault_a);
+    assert_eq!(
+        usdc_in_a, deposit_amount,
+        "vault_a must hold the full renormalised deposit (paused vault_b skipped)"
+    );
+
+    // vault_b (Paused) is skipped — it receives no USDC.
+    let usdc_in_b = usdc_balance_of(&deployer, usdc, vault_b);
+    assert_eq!(
+        usdc_in_b,
+        U256::ZERO,
+        "vault_b (Paused) must receive nothing — leg skipped"
+    );
+
+    // Receipts: MockVault mints 1:1, so vault_a shares equal the full deposit
+    // and vault_b mints nothing to the depositor.
+    let shares_a = vault_shares_of(&deployer, vault_a, deployer.address);
+    let shares_b = vault_shares_of(&deployer, vault_b, deployer.address);
+    assert_eq!(
+        shares_a, deposit_amount,
+        "depositor must hold vault_a shares equal to the full renormalised deposit"
+    );
+    assert_eq!(
+        shares_b,
+        U256::ZERO,
+        "depositor must hold no vault_b shares (paused leg skipped)"
+    );
+
+    // Exactly one RouterDeposit event — only the surviving vault_a leg executes.
+    let topic0 = router_deposit_topic0();
+    let router_deposit_logs: Vec<_> = receipt
+        .logs
+        .iter()
+        .filter(|l| l.topics.first() == Some(&topic0) && l.address == router)
+        .collect();
+    assert_eq!(
+        router_deposit_logs.len(),
+        1,
+        "expected 1 RouterDeposit event (only vault_a leg executes); got {:?}",
+        receipt.logs
+    );
+    let log_vault = Address::from_slice(&router_deposit_logs[0].topics[2].as_slice()[12..]);
+    assert_eq!(
+        log_vault, vault_a,
+        "the single RouterDeposit leg must be vault_a"
+    );
+
+    eprintln!("[router_unavailable_leg_skipped_and_renormalised] passed");
+}
+
+// ── Scenario 2b: all legs unavailable reverts ─────────────────────────────────
+
+/// router_all_legs_unavailable_reverts — when EVERY weighted leg is paused,
+/// there is no available leg to renormalise onto, so `router.deposit()` still
+/// reverts with `NoWeightsSet` (issue #968: revert only when the whole basket
+/// is unavailable). This is the boundary case of skip-and-renormalise and
+/// proves the caller's USDC is never stranded in the router.
+#[test]
+fn router_all_legs_unavailable_reverts() {
+    skip_if_no_fork!();
+    let fx = ForkFixture::new().expect("boot fork");
+    eprintln!(
+        "[router_all_legs_unavailable_reverts] {}",
+        fx.summary_line()
+    );
+
+    let usdc = rmpc_fork_e2e::addresses::USDC;
+    let one_eth = U256::from(10u64).pow(U256::from(18u64));
+    let deposit_amount = U256::from(1_000_000_000u64);
+
+    let deployer = fx
+        .ephemeral(one_eth * U256::from(5u64), deposit_amount)
+        .expect("fund deployer");
+
+    let registry = deploy_registry(&deployer, deployer.address);
+    let vault_a = deploy_mock_vault(&deployer, usdc);
+    let vault_b = deploy_mock_vault(&deployer, usdc);
+    let router = deploy_portfolio_router(&deployer, usdc, registry, deployer.address);
+
+    register_vault(&deployer, registry, vault_a, usdc, "Vault A");
+    register_vault(&deployer, registry, vault_b, usdc, "Vault B");
+    mark_router_eligible(&deployer, registry, vault_a);
+    mark_router_eligible(&deployer, registry, vault_b);
+
+    deployer
+        .send(
+            router,
+            &IPortfolioRouter::setWeightsCall {
+                vaults: vec![vault_a, vault_b],
+                bps: vec![U256::from(5000u64), U256::from(5000u64)],
+            },
+            U256::ZERO,
+            500_000,
+        )
+        .expect("setWeights");
+
+    // Pause BOTH weighted vaults — no leg is available.
+    for vault in [vault_a, vault_b] {
+        deployer
+            .send(
+                registry,
+                &IVaultRegistry::setVaultStatusCall {
+                    vault,
+                    newStatus: IVaultRegistry::VaultStatus::Paused,
+                },
+                U256::ZERO,
+                200_000,
+            )
+            .expect("setVaultStatus(Paused)");
+    }
+
+    approve_usdc(&deployer, usdc, router, deposit_amount);
+
+    // With every leg paused there is nothing to renormalise onto — must revert.
     let result = deployer.send(
         router,
         &IPortfolioRouter::depositCall {
@@ -553,24 +704,33 @@ fn router_unavailable_leg_reverts() {
     );
     assert!(
         result.is_err(),
-        "router.deposit must revert when a weighted vault is paused; got Ok"
+        "router.deposit must revert when ALL weighted vaults are paused; got Ok"
     );
     match result.unwrap_err() {
         rmpc_fork_e2e::HarnessError::Reverted(_) => {
-            eprintln!("[router_unavailable_leg_reverts] revert confirmed (all-or-revert)");
+            eprintln!("[router_all_legs_unavailable_reverts] revert confirmed (NoWeightsSet)");
         }
         e => panic!("expected Reverted error, got: {e:?}"),
     }
 
-    // Sanity: vault_a received no USDC (full revert).
-    let usdc_in_a = usdc_balance_of(&deployer, usdc, vault_a);
+    // Sanity: neither vault received USDC and none is stranded in the router.
     assert_eq!(
-        usdc_in_a,
+        usdc_balance_of(&deployer, usdc, vault_a),
         U256::ZERO,
         "vault_a must hold 0 USDC after full revert"
     );
+    assert_eq!(
+        usdc_balance_of(&deployer, usdc, vault_b),
+        U256::ZERO,
+        "vault_b must hold 0 USDC after full revert"
+    );
+    assert_eq!(
+        usdc_balance_of(&deployer, usdc, router),
+        U256::ZERO,
+        "router must hold 0 USDC — caller funds are never stranded"
+    );
 
-    eprintln!("[router_unavailable_leg_reverts] passed");
+    eprintln!("[router_all_legs_unavailable_reverts] passed");
 }
 
 // ── Scenario 3: cap exceeded reverts ─────────────────────────────────────────

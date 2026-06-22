@@ -1,5 +1,5 @@
 # IUniswapV3Pool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/9f4d89b73f3bc3e6fe6c5dd86696328d5a028502/contracts/interfaces/IUniswapV3Pool.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/interfaces/IUniswapV3Pool.sol)
 
 Minimal Uniswap V3 Pool interface used for slot0 pricing and
 TWAP reads via `observe()`.
@@ -18,6 +18,20 @@ function token0() external view returns (address);
 
 ```solidity
 function token1() external view returns (address);
+```
+
+### fee
+
+The pool's fee tier in hundredths of a bip (e.g. 3000 = 0.30%).
+
+Used by `BasketVault.addAsset` to assert that the execution pool
+resolved from the configured `swapFee` is the SAME pool the NAV TWAP
+is read from (invariant ORA-3 / finding F-09). Uniswap V3 and
+observe-compatible Uniswap V4 pools both expose this accessor.
+
+
+```solidity
+function fee() external view returns (uint24);
 ```
 
 ### liquidity

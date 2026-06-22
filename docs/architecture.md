@@ -376,15 +376,23 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 | **empty → deregistered** | registry | eventual removal from the registry vault set | governance (`ADMIN_ROLE`) | Conceptual terminal state once TVL has fully drained. No deregistration function exists at HEAD; this is the planned end of the lifecycle, not a shipped mechanism. |
 
 **How the two layers relate.** Two enforcement layers exist: the
-registry `Retired` status (stops the **router** from sending new
+registry `Retired`/`Paused` status (stops the **router** from sending new
 deposits) and the vault deposit-halt (stops **direct** deposits on the
-vault contract itself). Setting them piecemeal can drift — e.g. the bare
-`setVaultStatus(vault, Retired)` flips only the router layer, leaving the
-vault still directly depositable, and the emergency `shutdownVault` flips
-only the vault layer while the registry still reads `Active`. The unified
-`VaultRegistry.retire(vault)` action (below) flips **both** layers in one
-governance call so they cannot drift; `shutdownVault` remains the
-emergency-only overlay that makes no lifecycle decision.
+vault contract itself). `setVaultStatus(vault, …)` now drives **both**
+layers in one call (LIFE-1, #968): any non-`Active` status (`Retired` or
+`Paused`) calls the vault's `IRetirableVault.retire()` deposit-halt leg
+and `Active` calls `unretire()`, so the registry status and the vault flag
+can never drift on this path either — closing the former back-door where
+the bare `setVaultStatus(vault, Retired)` flipped only the router layer.
+The vault calls are guarded (empty-code skip + try/catch) so a registered
+address that does not implement the leg, or is not linked to this
+registry, does not brick the status change; a vault linked to this
+registry always stays in sync. The remaining drift case is the emergency
+`shutdownVault`, which deliberately flips only the vault layer while the
+registry still reads `Active` (it is an emergency overlay, not a lifecycle
+decision). The unified `VaultRegistry.retire(vault)` action (below)
+remains the atomic governance lifecycle decision that flips both layers in
+one timelock-gated call.
 
 **Unified retire (per decision #925, graduated-authority model).** The
 graduated-authority decision closes the "`Retired` in the registry but

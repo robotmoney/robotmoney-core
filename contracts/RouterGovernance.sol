@@ -226,11 +226,12 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     error ExecutionDelayBelowMinimum();
     /// @notice Thrown by propose() when a vault in the proposed weight list is
     ///         not router-eligible (zero address, unregistered, ineligible flag
-    ///         not set, or wrong underlying asset). Identifies the offending
-    ///         vault so the proposer can correct the weight vector before
-    ///         resubmitting. Prevents governance deadlock from stuck Queued
-    ///         proposals that would revert on execute().
-    /// @param vault The vault address that failed the router-eligibility check.
+    ///         not set, or wrong underlying asset) OR not Active (Paused/Retired).
+    ///         Identifies the offending vault so the proposer can correct the
+    ///         weight vector before resubmitting. Prevents governance deadlock
+    ///         and router self-DoS from stuck Queued proposals that would revert
+    ///         on execute() (GOV-4 / RTR-4, finding F-05).
+    /// @param vault The vault address that failed the eligible-AND-Active check.
     error VaultNotEligible(address vault);
     /// @notice Thrown by the external getPastVotes view when the queried block
     ///         is more than 256 blocks behind the current block — mirrors EVM
@@ -368,12 +369,15 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
         }
         if (total != BPS_DENOMINATOR) revert InvalidWeightSum();
 
-        // Validate each vault's router eligibility before entering Active state.
-        // Prevents governance deadlock from proposals that would permanently
-        // fail on execute() because router.setWeights() reverts on ineligible
-        // vaults (zero address, unregistered, or eligibility flag not set).
+        // Validate each vault's router eligibility AND Active status before
+        // entering Active state (GOV-4 / RTR-4, finding F-05). Prevents
+        // governance deadlock — and self-DoS of router deposits — from proposals
+        // that would permanently fail on execute() because router.setWeights()
+        // reverts on a vault that is ineligible (zero address, unregistered,
+        // eligibility flag not set, wrong asset) OR not Active (Paused/Retired).
+        // A non-depositable weight vector can never enter the voting pipeline.
         for (uint256 i = 0; i < vaults.length; i++) {
-            if (!router.isRouterEligible(vaults[i])) {
+            if (!router.isRouterEligibleAndActive(vaults[i])) {
                 revert VaultNotEligible(vaults[i]);
             }
         }
