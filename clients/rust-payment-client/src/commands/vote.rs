@@ -149,9 +149,7 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
-    let proposal_id_u256 = match U256::from_str_radix(args.proposal_id.trim_start_matches("0x"), 16)
-        .or_else(|_| U256::from_str(&args.proposal_id))
-    {
+    let proposal_id_u256 = match parse_proposal_id(&args.proposal_id) {
         Ok(v) => v,
         Err(e) => {
             log::error!("rmpc vote: --proposal-id is not a valid integer: {e}");
@@ -505,6 +503,27 @@ async fn call_has_voted(
     Ok(r._0)
 }
 
+/// Parse `--proposal-id` decimal-first (RPC-5).
+///
+/// The CLI contract documents `--proposal-id` as a decimal integer, so bare
+/// digits must be interpreted base-10: `"10"` → proposal 10, `"100"` → 100.
+/// A leading `0x` (case-insensitive) opts into hex: `"0x10"` → 16. The old
+/// behaviour parsed hex-first, so `"10"` silently voted proposal 16 — voting
+/// the wrong proposal with no error surfaced.
+fn parse_proposal_id(raw: &str) -> crate::errors::Result<U256> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(RmpcError::ErrConfig("proposal-id is empty".to_string()));
+    }
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        U256::from_str_radix(hex, 16)
+            .map_err(|e| RmpcError::ErrConfig(format!("proposal-id hex parse: {e}")))
+    } else {
+        U256::from_str(s)
+            .map_err(|e| RmpcError::ErrConfig(format!("proposal-id decimal parse: {e}")))
+    }
+}
+
 fn emit_output<T: serde::Serialize>(out: &T, pretty: bool) {
     let json = if pretty {
         serde_json::to_string_pretty(out)
@@ -540,6 +559,23 @@ fn error_name(err: &RmpcError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RPC-5: bare digits are decimal; only an explicit `0x` prefix is hex.
+    /// `"10"` must encode proposalId 10 (not 16); `"0x10"` must encode 16.
+    #[test]
+    fn proposal_id_is_parsed_decimal_first() {
+        assert_eq!(parse_proposal_id("10").unwrap(), U256::from(10u64));
+        assert_eq!(parse_proposal_id("0x10").unwrap(), U256::from(16u64));
+        assert_eq!(parse_proposal_id("0X10").unwrap(), U256::from(16u64));
+        assert_eq!(parse_proposal_id("100").unwrap(), U256::from(100u64));
+        assert_eq!(parse_proposal_id("0").unwrap(), U256::ZERO);
+        // Surrounding whitespace is tolerated.
+        assert_eq!(parse_proposal_id("  42  ").unwrap(), U256::from(42u64));
+        // Hex digits without the 0x prefix are NOT valid decimal → error,
+        // rather than being silently reinterpreted as hex.
+        assert!(parse_proposal_id("1a").is_err());
+        assert!(parse_proposal_id("").is_err());
+    }
 
     #[test]
     fn vote_choice_parses_all_variants() {

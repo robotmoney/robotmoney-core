@@ -205,6 +205,36 @@ impl ReplayCache {
         })
     }
 
+    /// Remove the entry for the given paymentId inputs, if present.
+    ///
+    /// RPC-2 (finalize-on-failure): the cache is populated optimistically
+    /// right after broadcast, before the receipt is known. When the receipt
+    /// later reverts or the wait times out, the deposit did NOT durably
+    /// succeed, so the optimistic entry must be removed — otherwise a
+    /// legitimate retry with the same paymentId inputs is permanently refused
+    /// by a poisoned cache entry that points at a failed/abandoned tx.
+    ///
+    /// A successful (mined, `status == 1`) deposit leaves the entry in place,
+    /// so genuine replays are still caught. Removing a non-existent entry is a
+    /// no-op success.
+    pub fn remove(
+        &self,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
+    ) -> Result<()> {
+        let payment_id =
+            compute_payment_id(chain_id, gateway, agent, order_id, amount, idempotency_key);
+        let key = format!("{payment_id:#x}");
+        self.with_locked_file(|file, mut map| {
+            map.remove(&key);
+            write_back(file, &map)
+        })
+    }
+
     fn read_locked(&self) -> Result<HashMap<String, Entry>> {
         if !self.path.exists() {
             return Ok(HashMap::new());
@@ -469,6 +499,59 @@ mod tests {
                 .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
                 .unwrap(),
             Some("0xsecond".to_string())
+        );
+    }
+
+    /// RPC-2: an optimistic insert that is later removed (because the receipt
+    /// reverted or the wait timed out) must NOT leave an entry that refuses a
+    /// subsequent retry — `remove` clears the poisoned entry so `lookup`
+    /// returns `None` and the operator can re-submit.
+    #[test]
+    fn remove_clears_entry_so_retry_is_allowed() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // Optimistic insert at broadcast time.
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        // The receipt reverted / timed out: finalize-on-failure removes it.
+        cache
+            .remove(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .unwrap();
+        // A subsequent retry must NOT be refused.
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None,
+            "a reverted/timed-out deposit must not poison the replay cache"
+        );
+    }
+
+    /// Removing an entry that was never inserted is a no-op success, and does
+    /// not disturb unrelated entries.
+    #[test]
+    fn remove_is_noop_for_absent_and_preserves_others() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        // Remove a different paymentId (different amount) — must not touch the
+        // existing entry.
+        let other_amount = U256::from(424_242u64);
+        cache
+            .remove(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, other_amount, IDEM_KEY)
+            .unwrap();
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            Some(TX_HASH.to_string()),
         );
     }
 

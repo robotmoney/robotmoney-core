@@ -98,7 +98,11 @@ pub fn run(config_path: &Path, address_hex: &str, pretty: bool) -> i32 {
             .block_number()
             .await
             .map_err(|e| format!("eth_blockNumber: {e}"))?;
-        let balance = call_balance_of(&rpc, token, holder)
+        // Pin the balance read to the same block recorded in the envelope
+        // (RPC-15): without this the `eth_call` resolves against "latest" and
+        // can observe a different block than `block_number` advertises.
+        let block_tag = format!("0x{block_number:x}");
+        let balance = call_balance_of(&rpc, token, holder, &block_tag)
             .await
             .map_err(|e| format!("balanceOf: {e}"))?;
         Ok(PartialBuilder::new(
@@ -135,6 +139,7 @@ async fn call_balance_of(
     rpc: &FailoverRpcClient,
     token: Address,
     holder: Address,
+    block_tag: &str,
 ) -> Result<U256, crate::errors::RmpcError> {
     let data = Erc20::balanceOfCall { account: holder }.abi_encode();
     let out = rpc
@@ -144,7 +149,7 @@ async fn call_balance_of(
                 from: None,
                 data: data.into(),
             },
-            None,
+            Some(block_tag),
         )
         .await?;
     let decoded = Erc20::balanceOfCall::abi_decode_returns(&out, true)
@@ -182,6 +187,46 @@ mod tests {
             "balance must be string per §9 contract"
         );
         assert_eq!(v["balance"], "123456789");
+    }
+
+    /// RPC-15: `call_balance_of` must issue its `eth_call` against the pinned
+    /// envelope block tag, not `"latest"`. We assert the second JSON-RPC param
+    /// (the block tag) is the hex block we pinned to.
+    #[tokio::test]
+    async fn balance_of_pins_eth_call_to_envelope_block_tag() {
+        use alloy_primitives::{address, hex as ahex};
+        let mut server = mockito::Server::new_async().await;
+        let mut word = [0u8; 32];
+        word[31] = 42;
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":"0x{}"}}"#,
+            ahex::encode(word)
+        );
+        // The request body must carry the pinned tag as the second eth_call
+        // param. "0x10" == block 16. A request against "latest" never matches.
+        let m = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "method": "eth_call",
+                "params": [{}, "0x10"]
+            })))
+            .with_status(200)
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
+
+        let got = call_balance_of(
+            &rpc,
+            address!("0000000000000000000000000000000000000bbb"),
+            address!("00000000000000000000000000000000000000aa"),
+            "0x10",
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, U256::from(42u64));
+        m.assert_async().await;
     }
 
     #[test]

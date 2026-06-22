@@ -173,11 +173,23 @@ pub struct WithdrawalExposure {
     /// when withdrawals are disabled — a leftover non-zero allowance
     /// is a hygiene issue that operators should revoke (issue #429
     /// scope: "stale gateway share allowances").
-    pub share_allowance: String,
-    /// `true` when `withdrawals_enabled = false` and
+    ///
+    /// `null` when the on-chain read failed (RPC-13): a failed read is
+    /// surfaced as an unavailable value plus
+    /// [`share_allowance_read_ok`](Self::share_allowance_read_ok) `= false`,
+    /// never fabricated as `"0"` — a spurious zero would hide a genuine stale
+    /// allowance from the operator scanning the compromise blast radius.
+    pub share_allowance: Option<String>,
+    /// `false` when the `vault.allowance(self, gateway)` read failed and
+    /// `share_allowance` is therefore `null`. `true` on a successful read.
+    /// Operators MUST treat `false` as "unknown", not "zero".
+    pub share_allowance_read_ok: bool,
+    /// `true` when `withdrawals_enabled = false` and a successfully-read
     /// `share_allowance > 0`. A stale allowance does nothing until
     /// withdrawals are re-enabled, but the residual approval is part
-    /// of the blast radius for any future re-authorization.
+    /// of the blast radius for any future re-authorization. Always `false`
+    /// when the allowance read failed (we cannot assert staleness on an
+    /// unknown value).
     pub stale_share_allowance: bool,
 }
 
@@ -190,7 +202,10 @@ impl WithdrawalExposure {
             asset_recipient: "0x0000000000000000000000000000000000000000".into(),
             max_withdraw_per_payment: "0".into(),
             max_withdraw_per_window: "0".into(),
-            share_allowance: "0".into(),
+            // The whole exposure block is unavailable here, so the allowance is
+            // unknown — `null` + read_ok=false, never a fabricated "0".
+            share_allowance: None,
+            share_allowance_read_ok: false,
             stale_share_allowance: false,
         }
     }
@@ -234,41 +249,65 @@ async fn read_withdrawal_exposure(
         Err(_) => return WithdrawalExposure::unknown(),
     };
 
-    let allowance_data = Erc20::allowanceCall {
-        owner: agent,
-        spender: gateway,
-    }
-    .abi_encode();
-    let share_allowance = match rpc
-        .eth_call(
-            &CallRequest {
-                to: vault,
-                from: None,
-                data: allowance_data.into(),
-            },
-            None,
-        )
-        .await
-        .and_then(|out| {
-            Erc20::allowanceCall::abi_decode_returns(&out, true)
-                .map(|r| r._0)
-                .map_err(|e| RmpcError::ErrRpcDecode(format!("allowance decode: {e}")))
-        }) {
-        Ok(v) => v,
-        Err(_) => U256::ZERO,
-    };
+    // RPC-13: a failed allowance read must be surfaced as *unavailable*, not
+    // coerced to a fabricated zero. A spurious "0" would hide a genuine stale
+    // gateway share allowance from the operator sizing the agent-key
+    // compromise blast radius (the whole point of issue #429).
+    let share_allowance: Option<U256> = read_share_allowance(rpc, vault, agent, gateway).await;
 
     let withdrawals_enabled = !agents_ret.maxWithdrawPerPayment.is_zero();
-    let stale_share_allowance = !withdrawals_enabled && !share_allowance.is_zero();
+    // Staleness is only assertable on a value we actually read. On a failed
+    // read we report `false` (unknown), not a false "not stale" claim.
+    let stale_share_allowance = match share_allowance {
+        Some(v) => !withdrawals_enabled && !v.is_zero(),
+        None => false,
+    };
 
     WithdrawalExposure {
         withdrawals_enabled,
         asset_recipient: format!("{:#x}", agents_ret.assetRecipient),
         max_withdraw_per_payment: agents_ret.maxWithdrawPerPayment.to_string(),
         max_withdraw_per_window: agents_ret.maxWithdrawPerWindow.to_string(),
-        share_allowance: share_allowance.to_string(),
+        share_allowance: share_allowance.map(|v| v.to_string()),
+        share_allowance_read_ok: share_allowance.is_some(),
         stale_share_allowance,
     }
+}
+
+/// Read `vault.allowance(agent, gateway)` and return `Some(value)` on success
+/// or `None` when the read failed (RPC-13).
+///
+/// Returning `Option` — rather than coercing an error to `U256::ZERO` — is the
+/// load-bearing behaviour: a failed read is "unknown", and the caller surfaces
+/// it as `share_allowance: null` + `share_allowance_read_ok: false`. A
+/// fabricated zero would silently hide a stale gateway share allowance from the
+/// operator scanning the agent-key compromise blast radius.
+async fn read_share_allowance(
+    rpc: &FailoverRpcClient,
+    vault: Address,
+    agent: Address,
+    gateway: Address,
+) -> Option<U256> {
+    let allowance_data = Erc20::allowanceCall {
+        owner: agent,
+        spender: gateway,
+    }
+    .abi_encode();
+    rpc.eth_call(
+        &CallRequest {
+            to: vault,
+            from: None,
+            data: allowance_data.into(),
+        },
+        None,
+    )
+    .await
+    .and_then(|out| {
+        Erc20::allowanceCall::abi_decode_returns(&out, true)
+            .map(|r| r._0)
+            .map_err(|e| RmpcError::ErrRpcDecode(format!("allowance decode: {e}")))
+    })
+    .ok()
 }
 
 /// Entry point invoked from `main.rs`. Returns the desired process exit code.
@@ -571,6 +610,86 @@ mod tests {
         };
         let v = serde_json::to_value(&out).unwrap();
         assert_eq!(v["network_env"], "production_base");
+    }
+
+    /// RPC-13: when the `vault.allowance(agent, gateway)` read fails, the
+    /// helper returns `None` (unavailable) — never a fabricated `Some(0)` — so
+    /// the exposure block can surface `share_allowance: null` +
+    /// `share_allowance_read_ok: false` instead of a spurious zero.
+    #[tokio::test]
+    async fn share_allowance_read_failure_yields_none_not_zero() {
+        use alloy_primitives::address;
+        let mut server = mockito::Server::new_async().await;
+        // Every eth_call fails (HTTP 500) → the allowance read errors out.
+        let _m = server
+            .mock("POST", "/")
+            .with_status(500)
+            .with_body("allowance node down")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
+
+        let got = read_share_allowance(
+            &rpc,
+            address!("0000000000000000000000000000000000000d00"),
+            address!("00000000000000000000000000000000000000aa"),
+            address!("0000000000000000000000000000000000000b00"),
+        )
+        .await;
+        assert!(
+            got.is_none(),
+            "a failed allowance read must surface as None (unavailable), not a fabricated zero"
+        );
+
+        // And the unavailable read maps to the documented exposure fields.
+        let exposure = WithdrawalExposure {
+            withdrawals_enabled: false,
+            asset_recipient: "0x0".into(),
+            max_withdraw_per_payment: "0".into(),
+            max_withdraw_per_window: "0".into(),
+            share_allowance: got.map(|v| v.to_string()),
+            share_allowance_read_ok: got.is_some(),
+            stale_share_allowance: match got {
+                Some(v) => !v.is_zero(),
+                None => false,
+            },
+        };
+        let v = serde_json::to_value(&exposure).unwrap();
+        assert_eq!(v["share_allowance"], serde_json::Value::Null);
+        assert_eq!(v["share_allowance_read_ok"], false);
+        assert_eq!(v["stale_share_allowance"], false);
+    }
+
+    /// A successful allowance read returns the real value, and the exposure
+    /// block reports it with `share_allowance_read_ok: true`.
+    #[tokio::test]
+    async fn share_allowance_read_success_returns_value() {
+        use alloy_primitives::{address, hex as ahex};
+        let mut server = mockito::Server::new_async().await;
+        let mut word = [0u8; 32];
+        word[31] = 7; // allowance == 7
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":"0x{}"}}"#,
+            ahex::encode(word)
+        );
+        let _m = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
+
+        let got = read_share_allowance(
+            &rpc,
+            address!("0000000000000000000000000000000000000d00"),
+            address!("00000000000000000000000000000000000000aa"),
+            address!("0000000000000000000000000000000000000b00"),
+        )
+        .await;
+        assert_eq!(got, Some(U256::from(7u64)));
     }
 
     #[test]

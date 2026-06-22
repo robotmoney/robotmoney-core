@@ -453,8 +453,17 @@ export type RouterActionName = "deposit";
  * section to enumerate the basket composition without a connected
  * wallet (wagmi useReadContract works without a signer).
  *
- * shortlist() returns an array of ShortlistEntry structs:
- *   { token: address, active: bool, vaultBalance: uint256 }
+ * The on-chain `shortlist()` (contracts/vaults/AgentTokenVault.sol, via
+ * BasketViews.sol) returns FIVE PARALLEL ARRAYS, not an array of structs:
+ *
+ *   (address[] tokens, address[] pools, uint24[] fees,
+ *    bool[] active, uint256[] balances)
+ *
+ * Declaring this as a `tuple[]` (struct array) was a hard ABI decode break
+ * (scan finding DAPP-5): viem either threw or decoded garbage, so the
+ * composition view broke for every basket vault. The fragment below matches
+ * the real return signature; callers zip the arrays by index into
+ * ShortlistEntry rows (see decodeShortlist / VaultDetail).
  *
  * Canonical: docs/prd.md §11.2, §11.3 — basket vault composition.
  */
@@ -465,15 +474,11 @@ export const BASKET_VAULT_SHORTLIST_ABI = [
     stateMutability: "view",
     inputs: [],
     outputs: [
-      {
-        name: "entries",
-        type: "tuple[]",
-        components: [
-          { name: "token", type: "address" },
-          { name: "active", type: "bool" },
-          { name: "vaultBalance", type: "uint256" },
-        ],
-      },
+      { name: "tokens", type: "address[]" },
+      { name: "pools", type: "address[]" },
+      { name: "fees", type: "uint24[]" },
+      { name: "active", type: "bool[]" },
+      { name: "balances", type: "uint256[]" },
     ],
   },
 ] as const;
@@ -483,4 +488,37 @@ export interface ShortlistEntry {
   token: `0x${string}`;
   active: boolean;
   vaultBalance: bigint;
+}
+
+/**
+ * Raw tuple returned by the five-parallel-array `shortlist()` ABI above.
+ * viem decodes the multi-return as a positional tuple of arrays.
+ */
+export type ShortlistResult = readonly [
+  readonly `0x${string}`[], // tokens
+  readonly `0x${string}`[], // pools
+  readonly number[], // fees (uint24)
+  readonly boolean[], // active
+  readonly bigint[], // balances
+];
+
+/**
+ * Zip the five parallel arrays returned by `shortlist()` into ShortlistEntry
+ * rows keyed by index. The token array drives the length; the other arrays
+ * are read positionally and default safely when a parallel array is shorter
+ * (defensive — on-chain they are always equal length).
+ */
+export function decodeShortlist(result: unknown): ShortlistEntry[] {
+  if (!Array.isArray(result)) return [];
+  const tuple = result as readonly unknown[];
+  const tokens = tuple[0];
+  const active = tuple[3];
+  const balances = tuple[4];
+  if (!Array.isArray(tokens)) return [];
+  return tokens.map((token, i) => ({
+    token: token as `0x${string}`,
+    active: Array.isArray(active) ? Boolean(active[i]) : false,
+    vaultBalance:
+      Array.isArray(balances) && typeof balances[i] === "bigint" ? (balances[i] as bigint) : 0n,
+  }));
 }

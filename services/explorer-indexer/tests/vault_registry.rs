@@ -357,6 +357,117 @@ async fn vault_status_changed_updates_status() {
     );
 }
 
+/// Issue #990 / scan finding IDX-6: a registry-discovered vault must be added to
+/// the `eth_getLogs` watched-address set on subsequent ticks, so its ERC-4626
+/// `Deposit`/`Withdraw` logs are fetched (without this, the watchdog burn alarm is
+/// blind to redemptions from registered-but-unpinned vaults).
+///
+/// Tick 1 registers the vault (writes a `vaults` row, status=Active). Tick 2 must
+/// then request logs for an address set that includes that vault address.
+#[tokio::test]
+async fn registered_vault_added_to_watched_address_set() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+
+    let registry_addr = Address::from([0xEEu8; 20]);
+    let vault_addr = Address::from([0xA9u8; 20]);
+    let asset_addr = Address::from([0xDDu8; 20]);
+    let gateway_addr = Address::from([0xBBu8; 20]);
+    let pinned_vault = Address::from([0xCCu8; 20]);
+
+    // Tick 1 — register the vault.
+    let reg_log = encode_vault_registered_log(
+        registry_addr,
+        vault_addr,
+        "Registered Extra Vault",
+        asset_addr,
+        50u64,
+        [0x11u8; 32],
+        0,
+    );
+    let stub1 = StubRpcServer::start().await;
+    stub1.set("eth_blockNumber", serde_json::Value::String("0x46".into())); // 70
+    stub1.set("eth_getLogs", serde_json::Value::Array(vec![reg_log]));
+    stub1.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub1.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+    stub1.set(
+        "eth_getTransactionReceipt",
+        serde_json::json!({ "status": "0x1" }),
+    );
+
+    let rpc1 = JsonRpc::new(&stub1.url);
+    let cfg1 = IndexerConfig {
+        chain_id: 8453,
+        chain_name: "base".into(),
+        rpc_label: "stub".into(),
+        gateway: gateway_addr,
+        vault: pinned_vault,
+        registry: Some(registry_addr),
+        router_governance: None,
+        portfolio_router: None,
+        max_blocks_per_tick: 200,
+        end_block: Some(65),
+        feature_flags: 4,
+    };
+    let o1 = run_once(&fx.db, &rpc1, &cfg1).await.unwrap();
+    assert!(o1.error.is_none(), "registration tick: {:?}", o1.error);
+    assert_eq!(
+        fx.db.count(CountTable::Vaults).await.unwrap(),
+        1,
+        "vault must be registered"
+    );
+    stub1.shutdown();
+
+    // Tick 2 — advance the cursor; capture the eth_getLogs request.
+    let stub2 = StubRpcServer::start().await;
+    stub2.set("eth_blockNumber", serde_json::Value::String("0x5e".into())); // 94
+    stub2.set("eth_getLogs", serde_json::Value::Array(Vec::new()));
+    stub2.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub2.set("eth_getBlockByNumber", stub_block(89, 0xbc, 0xab));
+
+    let rpc2 = JsonRpc::new(&stub2.url);
+    let cfg2 = IndexerConfig {
+        end_block: Some(89),
+        ..cfg1.clone()
+    };
+    let o2 = run_once(&fx.db, &rpc2, &cfg2).await.unwrap();
+    assert!(o2.error.is_none(), "second tick: {:?}", o2.error);
+
+    // Find the eth_getLogs request and assert the registered vault is in its
+    // address filter alongside the static watched addresses.
+    let requests = stub2.captured_requests();
+    let get_logs = requests
+        .iter()
+        .find(|r| r.get("method").and_then(|m| m.as_str()) == Some("eth_getLogs"))
+        .expect("indexer must issue eth_getLogs");
+    let addrs: Vec<String> = get_logs["params"][0]["address"]
+        .as_array()
+        .expect("address filter must be an array")
+        .iter()
+        .map(|a| a.as_str().unwrap().to_lowercase())
+        .collect();
+
+    let want = format!("{:#x}", vault_addr);
+    assert!(
+        addrs.contains(&want),
+        "registered vault {want} must be in the watched address set; got {addrs:?}"
+    );
+    // The static set must still be present (no regression).
+    assert!(
+        addrs.contains(&format!("{:#x}", gateway_addr)),
+        "gateway must remain watched; got {addrs:?}"
+    );
+
+    stub2.shutdown();
+}
+
 /// AC-3: Existing vault_snapshots rows are preserved after migration 0002.
 ///
 /// We directly insert a vault_snapshots row (simulating pre-existing

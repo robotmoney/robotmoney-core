@@ -100,6 +100,20 @@ pub struct ActionConfig {
     pub gateway_address: Option<String>,
     /// Hex-encoded private key for the PAUSER_ROLE account (required when `mode` contains `"pause"`).
     pub pauser_private_key_hex: Option<String>,
+    /// Gas-price bump applied over the network `eth_gasPrice` when submitting a
+    /// pause tx, in basis points (e.g. `1500` = +15%). Lets a retried pause
+    /// replace a stuck same-nonce tx by out-bidding it (scan finding WD-5).
+    /// Defaults to [`DEFAULT_PAUSE_FEE_BUMP_BPS`] when absent.
+    #[serde(default = "default_pause_fee_bump_bps")]
+    pub pause_fee_bump_bps: u64,
+}
+
+/// Default pause-tx fee bump: +15% over the network gas price, enough to replace
+/// a stuck under-priced same-nonce tx on Base under typical conditions.
+pub const DEFAULT_PAUSE_FEE_BUMP_BPS: u64 = 1500;
+
+fn default_pause_fee_bump_bps() -> u64 {
+    DEFAULT_PAUSE_FEE_BUMP_BPS
 }
 
 /// Response mode on threshold breach.

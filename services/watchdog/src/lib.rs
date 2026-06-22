@@ -21,6 +21,9 @@
 pub mod alert;
 pub mod config;
 pub mod pause;
+/// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —
+/// documentation-only, no runtime code.
+pub mod scan_remediation_seams;
 pub mod volume;
 pub mod watchdog;
 

@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::gateway::TimelockController;
 use crate::network_env::NetworkEnv;
 use crate::read_output::{Envelope, PartialBuilder};
-use crate::rpc::{CallRequest, FailoverRpcClient};
+use crate::rpc::{CallRequest, FailoverRpcClient, RawLog};
 
 const EXIT_OK: i32 = 0;
 const EXIT_STARTUP_FAIL: i32 = 3;
@@ -323,30 +323,71 @@ async fn fetch_role_members(
         .await
         .map_err(|e| format!("eth_getLogs(RoleRevoked) failed: {e}"))?;
 
-    // Parse account addresses from topic[2].
-    let mut members: std::collections::HashSet<Address> = std::collections::HashSet::new();
+    Ok(reconstruct_role_members(&granted_logs, &revoked_logs))
+}
 
-    for log in &granted_logs {
+/// Replay `RoleGranted` / `RoleRevoked` events **in chronological order** to
+/// derive the current member set (RPC-14).
+///
+/// The naive approach — insert every grant, then remove every revoke — is
+/// order-blind and corrupts a `grant → revoke → re-grant` history: the final
+/// re-grant is dropped because all revokes are applied last. AccessControl
+/// emits these events in chain order, so the correct reconstruction sorts the
+/// merged grant/revoke stream by `(block_number, log_index)` and applies each
+/// event as it occurred. The last event for an account wins, so a re-granted
+/// member is correctly shown as present.
+///
+/// `block_number`/`log_index` together give a total order over a single
+/// contract's logs. Ties on `(block_number, log_index)` cannot occur for one
+/// contract (log indices are block-unique), but we keep the merge stable so
+/// the output is deterministic regardless.
+fn reconstruct_role_members(granted_logs: &[RawLog], revoked_logs: &[RawLog]) -> Vec<Address> {
+    /// One role-membership transition, keyed for chronological sort.
+    struct Event {
+        block_number: u64,
+        log_index: u64,
+        account: Address,
+        granted: bool,
+    }
+
+    fn account_from_topic(log: &RawLog) -> Option<Address> {
         // topic[2] = keccak256-padded address: last 20 bytes.
-        if let Some(topic) = log.topics.get(2) {
+        log.topics.get(2).and_then(|topic| {
             let bytes = topic.as_slice();
-            if bytes.len() == 32 {
-                members.insert(Address::from_slice(&bytes[12..]));
+            (bytes.len() == 32).then(|| Address::from_slice(&bytes[12..]))
+        })
+    }
+
+    let mut events: Vec<Event> = Vec::with_capacity(granted_logs.len() + revoked_logs.len());
+    for (logs, granted) in [(granted_logs, true), (revoked_logs, false)] {
+        for log in logs {
+            if let Some(account) = account_from_topic(log) {
+                events.push(Event {
+                    block_number: log.block_number.to::<u64>(),
+                    log_index: log.log_index.to::<u64>(),
+                    account,
+                    granted,
+                });
             }
         }
     }
-    for log in &revoked_logs {
-        if let Some(topic) = log.topics.get(2) {
-            let bytes = topic.as_slice();
-            if bytes.len() == 32 {
-                members.remove(&Address::from_slice(&bytes[12..]));
-            }
+
+    // Chronological replay: a stable sort keeps grant-before-revoke ordering
+    // for any (vanishingly unlikely) ties so the result is deterministic.
+    events.sort_by_key(|e| (e.block_number, e.log_index));
+
+    let mut members: std::collections::HashSet<Address> = std::collections::HashSet::new();
+    for e in &events {
+        if e.granted {
+            members.insert(e.account);
+        } else {
+            members.remove(&e.account);
         }
     }
 
     let mut result: Vec<Address> = members.into_iter().collect();
     result.sort();
-    Ok(result)
+    result
 }
 
 /// Scan `CallScheduled` logs to discover operation ids, then call
@@ -438,6 +479,76 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::{Bytes, B256, U64};
+
+    /// Build a `RoleGranted`/`RoleRevoked`-shaped `RawLog`: topic[2] carries the
+    /// padded account address. `block_number`/`log_index` set the chain order.
+    fn role_log(account: Address, block_number: u64, log_index: u64) -> RawLog {
+        let mut topic2 = [0u8; 32];
+        topic2[12..].copy_from_slice(account.as_slice());
+        RawLog {
+            address: Address::ZERO,
+            // topic[0] = selector, topic[1] = role, topic[2] = account.
+            topics: vec![B256::ZERO, B256::ZERO, B256::from(topic2)],
+            data: Bytes::new(),
+            block_number: U64::from(block_number),
+            log_index: U64::from(log_index),
+            transaction_hash: B256::ZERO,
+        }
+    }
+
+    /// RPC-14: a `grant → revoke → re-grant` history for one account must
+    /// reconstruct the account as **present**. The order-blind "insert all
+    /// grants then remove all revokes" approach drops the re-grant; the
+    /// chronological replay keeps it.
+    #[test]
+    fn reconstruct_role_members_keeps_regranted_member() {
+        let member = Address::from_slice(&[0x11u8; 20]);
+        // Emission order: grant @ (1,0), revoke @ (2,0), re-grant @ (3,0).
+        // Granted and revoked logs arrive in two separate `eth_getLogs`
+        // batches, exactly as `fetch_role_members` collects them.
+        let granted = vec![role_log(member, 1, 0), role_log(member, 3, 0)];
+        let revoked = vec![role_log(member, 2, 0)];
+
+        let result = reconstruct_role_members(&granted, &revoked);
+        assert_eq!(
+            result,
+            vec![member],
+            "grant→revoke→re-grant must leave the member present"
+        );
+    }
+
+    /// A `grant → revoke` history (no re-grant) must reconstruct as absent —
+    /// the chronological replay still honours a trailing revoke.
+    #[test]
+    fn reconstruct_role_members_drops_revoked_member() {
+        let member = Address::from_slice(&[0x22u8; 20]);
+        let granted = vec![role_log(member, 1, 0)];
+        let revoked = vec![role_log(member, 2, 0)];
+
+        let result = reconstruct_role_members(&granted, &revoked);
+        assert!(
+            result.is_empty(),
+            "grant→revoke (no re-grant) must leave the member absent"
+        );
+    }
+
+    /// Ordering is by `(block_number, log_index)`, not arrival order: a revoke
+    /// and re-grant in the *same block* are disambiguated by `log_index`.
+    #[test]
+    fn reconstruct_role_members_orders_within_block_by_log_index() {
+        let member = Address::from_slice(&[0x33u8; 20]);
+        // Same block 5: grant @ index 0, revoke @ index 1, re-grant @ index 2.
+        let granted = vec![role_log(member, 5, 0), role_log(member, 5, 2)];
+        let revoked = vec![role_log(member, 5, 1)];
+
+        let result = reconstruct_role_members(&granted, &revoked);
+        assert_eq!(
+            result,
+            vec![member],
+            "within-block ordering by log_index must keep the trailing re-grant"
+        );
+    }
 
     #[test]
     fn run_fails_fast_without_timelock_address() {

@@ -232,6 +232,48 @@ fn encode_erc4626_deposit_log(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn encode_erc4626_withdraw_log(
+    vault_addr: Address,
+    caller: Address,
+    receiver: Address,
+    owner: Address,
+    assets: U256,
+    shares: U256,
+    block_number: u64,
+    tx_hash: [u8; 32],
+    log_index: u32,
+) -> serde_json::Value {
+    use alloy_primitives::LogData;
+    use alloy_sol_types::SolEvent as _;
+
+    let event = IVaultEvents::Withdraw {
+        caller,
+        receiver,
+        owner,
+        assets,
+        shares,
+    };
+    let log_data: LogData = event.encode_log_data();
+    let topics: Vec<String> = log_data
+        .topics()
+        .iter()
+        .map(|t| format!("{:#x}", t))
+        .collect();
+    let data_hex = format!("0x{}", hex::encode(log_data.data.as_ref()));
+
+    serde_json::json!({
+        "address":          format!("{:#x}", vault_addr),
+        "topics":           topics,
+        "data":             data_hex,
+        "blockNumber":      format!("0x{:x}", block_number),
+        "blockHash":        format!("0x{}", hex::encode([0xabu8; 32])),
+        "transactionHash":  format!("0x{}", hex::encode(tx_hash)),
+        "transactionIndex": "0x0",
+        "logIndex":         format!("0x{:x}", log_index),
+    })
+}
+
 fn base_config(vault: Address) -> IndexerConfig {
     IndexerConfig {
         chain_id: 8453,
@@ -522,4 +564,96 @@ async fn erc4626_deposit_rows_written() {
             .await
             .unwrap();
     assert_eq!(row.0, "deposit");
+}
+
+/// Regression for issue #989: a single ERC-4626 Withdraw log must persist BOTH a
+/// vault_transfer_events row with direction='withdrawal' (the table the watchdog
+/// burn-volume circuit breaker reads) AND the owner's account_history_events
+/// withdrawal row. Previously two `topic0 == erc4626_withdraw` branches existed;
+/// the first returned early, making the vault_transfer_events writer dead code and
+/// stranding the burn alarm. The branches are now merged into one writer.
+#[tokio::test]
+async fn erc4626_withdraw_writes_both_transfer_and_history_rows() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+
+    let vault_addr = Address::from([0xAAu8; 20]);
+    let caller = Address::from([0x33u8; 20]);
+    let receiver = Address::from([0x44u8; 20]);
+    let owner = Address::from([0x55u8; 20]);
+
+    let withdraw_log = encode_erc4626_withdraw_log(
+        vault_addr,
+        caller,
+        receiver,
+        owner,
+        U256::from(2_000_000u64),
+        U256::from(2_000_000u64),
+        50u64,
+        [0x66u8; 32],
+        0,
+    );
+
+    let stub = StubRpcServer::start().await;
+    stub.set("eth_blockNumber", serde_json::Value::String("0x46".into()));
+    stub.set("eth_getLogs", serde_json::Value::Array(vec![withdraw_log]));
+    stub.set(
+        "eth_call",
+        serde_json::Value::String(format!("0x{}", "00".repeat(32))),
+    );
+    stub.set("eth_getBlockByNumber", stub_block(65, 0xab, 0xaa));
+
+    let rpc = JsonRpc::new(&stub.url);
+    let cfg = base_config(vault_addr);
+
+    let o = run_once(&fx.db, &rpc, &cfg).await.unwrap();
+    assert!(o.error.is_none(), "tick must succeed: {:?}", o.error);
+    stub.shutdown();
+
+    // Exactly one vault_transfer_events row with direction='withdrawal'.
+    let transfer_count = fx.db.count(CountTable::VaultTransferEvents).await.unwrap();
+    assert_eq!(
+        transfer_count, 1,
+        "exactly one vault_transfer_events row expected after ERC-4626 Withdraw"
+    );
+    let transfer_row: (String,) =
+        sqlx::query_as("SELECT direction FROM vault_transfer_events WHERE chain_id = $1")
+            .bind(8453i64)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        transfer_row.0, "withdrawal",
+        "vault_transfer_events.direction must be 'withdrawal' (feeds watchdog burn alarm)"
+    );
+
+    // The owner's account_history_events withdrawal row is still written (no regression).
+    let history_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::BIGINT FROM account_history_events \
+         WHERE chain_id = $1 AND kind = 'withdrawal'",
+    )
+    .bind(8453i64)
+    .fetch_one(fx.db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        history_count, 1,
+        "owner's account_history_events withdrawal row must still be written"
+    );
+}
+
+/// Structural guard for issue #989: `handle_log` must contain exactly one branch
+/// keyed on `topics.erc4626_withdraw`. A second branch is unreachable (the first
+/// returns early), which is the defect that stranded the watchdog burn alarm.
+/// This test fails if a duplicate branch is ever reintroduced. Runs without a DB.
+#[test]
+fn handle_log_has_single_erc4626_withdraw_branch() {
+    let src = include_str!("../src/indexer.rs");
+    let matches = src.matches("topic0 == topics.erc4626_withdraw").count();
+    assert_eq!(
+        matches, 1,
+        "expected exactly one `topic0 == topics.erc4626_withdraw` branch in handle_log, \
+         found {matches}; a duplicate branch is unreachable and strands the watchdog burn alarm"
+    );
 }

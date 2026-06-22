@@ -18,7 +18,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "./helpers/render";
 import type { Address } from "viem";
-import { TimelockPanel } from "../../src/components/TimelockPanel";
+import {
+  TimelockPanel,
+  reconstructRoleMembers,
+  type RoleEventLog,
+} from "../../src/components/TimelockPanel";
 
 // ─── Mock wagmi ───────────────────────────────────────────────────────────────
 
@@ -141,6 +145,38 @@ beforeEach(() => {
   (usePublicClient as ReturnType<typeof vi.fn>).mockReturnValue(stablePublicClient);
   mockGetLogs.mockResolvedValue([]);
   mockReadContract.mockResolvedValue(null);
+});
+
+describe("reconstructRoleMembers — chronological role replay (DAPP-6 / RPC-14)", () => {
+  const MEMBER = "0x1111111111111111111111111111111111111111" as Address;
+
+  function grant(blockNumber: bigint, logIndex: number): RoleEventLog {
+    return { args: { account: MEMBER }, blockNumber, logIndex };
+  }
+  function revoke(blockNumber: bigint, logIndex: number): RoleEventLog {
+    return { args: { account: MEMBER }, blockNumber, logIndex };
+  }
+
+  it("keeps a grant→revoke→re-grant member present", () => {
+    // Emission order: grant @ (1,0), revoke @ (2,0), re-grant @ (3,0).
+    // Granted and revoked logs arrive in two separate getLogs batches.
+    const granted = [grant(1n, 0), grant(3n, 0)];
+    const revoked = [revoke(2n, 0)];
+    expect(reconstructRoleMembers(granted, revoked)).toEqual([MEMBER]);
+  });
+
+  it("drops a grant→revoke (no re-grant) member", () => {
+    const granted = [grant(1n, 0)];
+    const revoked = [revoke(2n, 0)];
+    expect(reconstructRoleMembers(granted, revoked)).toEqual([]);
+  });
+
+  it("orders within a block by logIndex", () => {
+    // Same block 5: grant @ index 0, revoke @ index 1, re-grant @ index 2.
+    const granted = [grant(5n, 0), grant(5n, 2)];
+    const revoked = [revoke(5n, 1)];
+    expect(reconstructRoleMembers(granted, revoked)).toEqual([MEMBER]);
+  });
 });
 
 describe("TimelockPanel — loading state", () => {

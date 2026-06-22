@@ -36,7 +36,7 @@ use tracing::{error, info};
 
 use watchdog::{
     config::Config,
-    watchdog::{latest_indexed_block, run_cycle, CycleResult},
+    watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
 };
 
 /// CLI arguments for the watchdog daemon.
@@ -103,19 +103,34 @@ async fn main() {
         }
     };
 
-    let client = Client::new();
+    // Bound every individual RPC/webhook call by the SLA budget so a single hung
+    // endpoint cannot stall the single-threaded poll loop (scan finding WD-1).
+    // The per-action `timeout` in `run_cycle` is the hard ceiling; this client
+    // timeout is the per-request guard underneath it.
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(config.sla.max_response_secs))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("http client build failed: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Main poll loop.
     loop {
         match latest_indexed_block(&pool, args.chain_id).await {
             Ok(Some(block_number)) => {
-                match run_cycle(&pool, &config, &client, args.chain_id, block_number).await {
+                match run_cycles_since_cursor(&pool, &config, &client, args.chain_id, block_number)
+                    .await
+                {
                     Ok(CycleResult::Ok) => {}
                     Ok(CycleResult::Breached(kinds)) => {
                         info!(?kinds, "cycle: breach actions dispatched");
                     }
                     Ok(CycleResult::NoData) => {
-                        info!("cycle: no indexed data yet, waiting…");
+                        info!("cycle: no new indexed data since cursor, waiting…");
                     }
                     Err(e) => {
                         error!("cycle error: {e}");
