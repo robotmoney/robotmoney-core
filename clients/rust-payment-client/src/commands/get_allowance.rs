@@ -103,7 +103,11 @@ pub fn run(config_path: &Path, owner_hex: &str, spender_hex: &str, pretty: bool)
             .block_number()
             .await
             .map_err(|e| format!("eth_blockNumber: {e}"))?;
-        let allowance = call_allowance(&rpc, token, owner, spender)
+        // Pin the allowance read to the envelope block (RPC-16) so the value
+        // matches the advertised `block_number` rather than drifting to
+        // "latest".
+        let block_tag = format!("0x{block_number:x}");
+        let allowance = call_allowance(&rpc, token, owner, spender, &block_tag)
             .await
             .map_err(|e| format!("allowance: {e}"))?;
         Ok(PartialBuilder::new(
@@ -142,6 +146,7 @@ async fn call_allowance(
     token: Address,
     owner: Address,
     spender: Address,
+    block_tag: &str,
 ) -> Result<U256, crate::errors::RmpcError> {
     let data = Erc20::allowanceCall { owner, spender }.abi_encode();
     let out = rpc
@@ -151,7 +156,7 @@ async fn call_allowance(
                 from: None,
                 data: data.into(),
             },
-            None,
+            Some(block_tag),
         )
         .await?;
     let decoded = Erc20::allowanceCall::abi_decode_returns(&out, true)
@@ -172,6 +177,44 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RPC-16: `call_allowance` must issue its `eth_call` against the pinned
+    /// envelope block tag, not `"latest"`.
+    #[tokio::test]
+    async fn allowance_pins_eth_call_to_envelope_block_tag() {
+        use alloy_primitives::{address, hex as ahex};
+        let mut server = mockito::Server::new_async().await;
+        let mut word = [0u8; 32];
+        word[31] = 9;
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":"0x{}"}}"#,
+            ahex::encode(word)
+        );
+        let m = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "method": "eth_call",
+                "params": [{}, "0x2a"]
+            })))
+            .with_status(200)
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+        let rpc = crate::rpc::FailoverRpcClient::new(vec![server.url()]).unwrap();
+
+        let got = call_allowance(
+            &rpc,
+            address!("0000000000000000000000000000000000000bbb"),
+            address!("00000000000000000000000000000000000000aa"),
+            address!("0000000000000000000000000000000000000ccc"),
+            "0x2a",
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, U256::from(9u64));
+        m.assert_async().await;
+    }
 
     #[test]
     fn allowance_data_serializes_with_decimal_string() {

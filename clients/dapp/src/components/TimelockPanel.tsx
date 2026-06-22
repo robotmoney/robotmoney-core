@@ -81,14 +81,67 @@ async function fetchRoleMembers(
     toBlock: "latest",
   });
 
-  const members = new Set<Address>();
-  for (const log of grantedLogs) {
-    const account = (log.args as { account?: Address }).account;
-    if (account) members.add(account);
+  return reconstructRoleMembers(grantedLogs, revokedLogs);
+}
+
+/**
+ * Replay RoleGranted/RoleRevoked events **in chronological order** to derive
+ * the current member set (DAPP-6 / RPC-14).
+ *
+ * The naive approach — add every grant, then delete every revoke — is
+ * order-blind and corrupts a `grant → revoke → re-grant` history: the final
+ * re-grant is dropped because all revokes are applied last. AccessControl emits
+ * these events in chain order, so the correct reconstruction merges the
+ * grant/revoke streams, sorts by `(blockNumber, logIndex)`, and applies each
+ * event as it occurred — the last event for an account wins, so a re-granted
+ * member is correctly shown as present.
+ *
+ * Exported for unit testing.
+ */
+export interface RoleEventLog {
+  readonly args: { readonly account?: Address };
+  readonly blockNumber?: bigint;
+  readonly logIndex?: number;
+}
+
+export function reconstructRoleMembers(
+  grantedLogs: readonly RoleEventLog[],
+  revokedLogs: readonly RoleEventLog[],
+): Address[] {
+  interface Transition {
+    blockNumber: bigint;
+    logIndex: number;
+    account: Address;
+    granted: boolean;
   }
-  for (const log of revokedLogs) {
-    const account = (log.args as { account?: Address }).account;
-    if (account) members.delete(account);
+
+  const events: Transition[] = [];
+  const collect = (logs: readonly RoleEventLog[], granted: boolean) => {
+    for (const log of logs) {
+      const account = log.args.account;
+      if (!account) continue;
+      events.push({
+        blockNumber: log.blockNumber ?? 0n,
+        logIndex: log.logIndex ?? 0,
+        account,
+        granted,
+      });
+    }
+  };
+  collect(grantedLogs, true);
+  collect(revokedLogs, false);
+
+  // Chronological replay: order by (blockNumber, logIndex). bigint comparison
+  // is exact; logIndex breaks within-block ties.
+  events.sort((a, b) => {
+    if (a.blockNumber !== b.blockNumber) return a.blockNumber < b.blockNumber ? -1 : 1;
+    return a.logIndex - b.logIndex;
+  });
+
+  const members = new Set<Address>();
+  for (const e of events) {
+    if (e.granted) members.add(e.account);
+    else members.delete(e.account);
   }
   return [...members].sort();
 }
