@@ -60,16 +60,24 @@ async fn seed_deposits(pool: &sqlx::PgPool, chain_id: i64, block_number: i64, am
     for (i, &amount) in amounts.iter().enumerate() {
         let amount_decimal = BigDecimal::from(amount);
         let log_index = i as i32;
+        // Single-vault gateway deposits carry a non-NULL `vault`. Mint volume
+        // counts agent_deposits only when vault IS NOT NULL (the NULL-vault rows
+        // are routed-deposit parents, deduped against router_deposit_legs — see
+        // volume.rs / IDX-7), so the seed must set a vault to register here.
+        // Distinct tx_hash per row so the direct-deposit dedup can't elide them.
+        let mut tx = [0u8; 32];
+        tx[0] = (block_number & 0xff) as u8;
+        tx[1] = i as u8;
         sqlx::query(
             "INSERT INTO agent_deposits \
-             (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             (chain_id, block_number, log_index, tx_hash, payment_id, order_id, agent, share_receiver, amount, shares_minted, window_id, vault) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT DO NOTHING",
         )
         .bind(chain_id)
         .bind(block_number)
         .bind(log_index)
-        .bind(&[0u8; 32][..])
+        .bind(&tx[..])
         .bind(&[0u8; 32][..])
         .bind(&[0u8; 32][..])
         .bind(&[0xBBu8; 20][..])
@@ -77,6 +85,7 @@ async fn seed_deposits(pool: &sqlx::PgPool, chain_id: i64, block_number: i64, am
         .bind(amount_decimal)
         .bind(BigDecimal::from(0u64))
         .bind(1i64)
+        .bind(&[0xCCu8; 20][..])
         .execute(pool)
         .await
         .unwrap();
@@ -113,6 +122,7 @@ fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
             gateway_rpc_url: None,
             gateway_address: None,
             pauser_private_key_hex: None,
+            pause_fee_bump_bps: 1500,
         },
         sla: SlaConfig {
             max_response_secs: 300,
@@ -227,6 +237,7 @@ fn config_missing_threshold_is_fatal() {
             gateway_rpc_url: None,
             gateway_address: None,
             pauser_private_key_hex: None,
+            pause_fee_bump_bps: 1500,
         },
         sla: SlaConfig {
             max_response_secs: 300,

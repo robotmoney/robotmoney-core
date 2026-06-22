@@ -105,6 +105,15 @@ export function DepositWithdrawTab(props: Props) {
     props.routerAddress !== "0x0000000000000000000000000000000000000000";
 
   const [destination, setDestination] = useState<Destination>(props.vaultAddress);
+
+  // The single-vault deposit target. When the DestinationSelector picks a
+  // specific vault, that address — not props.vaultAddress — must drive the
+  // allowance read, deposit simulation, and approve calls (scan finding
+  // DAPP-4). Falls back to props.vaultAddress when the router is selected
+  // (router path is rendered separately) or no selector is present, so the
+  // legacy single-vault flow is unchanged.
+  const depositVault: Address =
+    destination !== ROUTER_DESTINATION ? destination : props.vaultAddress;
   // Three independent write hooks so each action exposes its own
   // `data` (tx hash) and `isPending`. We then wait for each receipt
   // before refetching downstream reads — without this gate the
@@ -154,7 +163,7 @@ export function DepositWithdrawTab(props: Props) {
     address: props.usdcAddress,
     abi: erc20Abi,
     functionName: "allowance",
-    args: address ? [address, props.vaultAddress] : undefined,
+    args: address ? [address, depositVault] : undefined,
     query: { enabled: isConnected && Boolean(address) },
   });
 
@@ -189,14 +198,18 @@ export function DepositWithdrawTab(props: Props) {
     depositAssets !== null && address
       ? ({ kind: "vaultDeposit", assets: depositAssets, receiver: address } as const)
       : null;
-  const depositPreview = depositAction ? buildVaultPreview(depositAction, props.ctx) : null;
+  // Build the deposit preview against the selected deposit target so the
+  // decoded TxPreview reports the vault the user actually deposits into
+  // (DAPP-4) rather than the default props.vaultAddress.
+  const depositCtx: VaultPreviewContext = { ...props.ctx, vault: depositVault };
+  const depositPreview = depositAction ? buildVaultPreview(depositAction, depositCtx) : null;
 
   const allowanceOk =
     depositAssets !== null && typeof allowance === "bigint" && allowance >= depositAssets;
 
   const { data: depositSim, error: depositSimError } = useSimulateContract({
     account: address,
-    address: props.vaultAddress,
+    address: depositVault,
     abi: vaultAbi,
     functionName: "deposit",
     args: depositAction ? [depositAction.assets, depositAction.receiver] : undefined,
@@ -215,7 +228,7 @@ export function DepositWithdrawTab(props: Props) {
     address: props.usdcAddress,
     abi: erc20Abi,
     functionName: "approve",
-    args: depositAssets !== null ? [props.vaultAddress, depositAssets] : undefined,
+    args: depositAssets !== null ? [depositVault, depositAssets] : undefined,
     query: { enabled: isConnected && approveNeeded === true, retry: 5 },
   });
 

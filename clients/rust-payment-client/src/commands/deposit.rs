@@ -622,6 +622,19 @@ pub fn run(args: Args) -> i32 {
     let receipt = match receipt_res {
         Ok(r) => r,
         Err(e) => {
+            // RPC-2 (finalize-on-failure): the receipt never confirmed within
+            // the budget, so the deposit did not durably succeed. Clear the
+            // optimistic replay-cache entry so a legitimate retry is allowed
+            // instead of being permanently refused by a poisoned entry.
+            finalize_replay_on_failure(
+                &replay,
+                cfg.chain_id,
+                gateway_addr,
+                agent_address,
+                order_id,
+                amount,
+                idempotency_key,
+            );
             record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())));
             emit_refusal(
                 &DepositFailure {
@@ -640,6 +653,18 @@ pub fn run(args: Args) -> i32 {
     };
 
     if !receipt.inner.status() {
+        // RPC-2 (finalize-on-failure): the tx reverted on-chain, so no deposit
+        // was recorded. Remove the optimistic replay-cache entry so the
+        // operator can retry the same order without being refused.
+        finalize_replay_on_failure(
+            &replay,
+            cfg.chain_id,
+            gateway_addr,
+            agent_address,
+            order_id,
+            amount,
+            idempotency_key,
+        );
         let err = RmpcError::ErrTxReverted {
             tx_hash: format!("{tx_hash:#x}"),
         };
@@ -732,6 +757,26 @@ fn emit<T: Serialize>(out: &T, pretty: bool) {
 
 fn emit_refusal(out: &DepositFailure, pretty: bool) {
     emit(out, pretty);
+}
+
+/// RPC-2 finalize-on-failure: remove the optimistic replay-cache entry for a
+/// deposit whose receipt reverted or timed out, so a legitimate retry is not
+/// permanently refused. A failed removal is non-fatal (logged at warn): the
+/// cache is a defensive client-side check, and the on-chain paymentId remains
+/// the source of truth.
+#[allow(clippy::too_many_arguments)]
+fn finalize_replay_on_failure(
+    replay: &crate::replay_cache::ReplayCache,
+    chain_id: u64,
+    gateway: Address,
+    agent: Address,
+    order_id: B256,
+    amount: U256,
+    idempotency_key: B256,
+) {
+    if let Err(e) = replay.remove(chain_id, gateway, agent, order_id, amount, idempotency_key) {
+        log::warn!("rmpc deposit: replay cache finalize-on-failure remove failed (non-fatal): {e}");
+    }
 }
 
 /// Map an [`RmpcError`] to its variant name (the stable operator-visible

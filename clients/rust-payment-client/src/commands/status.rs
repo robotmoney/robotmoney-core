@@ -117,12 +117,6 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
     };
 
     let topic0 = RobotMoneyGateway::AgentDeposit::SIGNATURE_HASH;
-    let filter = json!({
-        "address": gateway_addr,
-        "fromBlock": "earliest",
-        "toBlock": "latest",
-        "topics": [topic0, payment_id],
-    });
 
     let pid_hex = format!("{payment_id:#x}");
 
@@ -141,6 +135,16 @@ pub fn run(config_path: &Path, payment_id_hex: &str, pretty: bool) -> i32 {
             .block_number()
             .await
             .map_err(|e| format!("eth_blockNumber: {e}"))?;
+        // Pin the log scan to the envelope block (RPC-9) so the deposit record
+        // is resolved against the same block `block_number` advertises, not a
+        // later "latest" tip.
+        let block_tag = format!("0x{block_number:x}");
+        let filter = json!({
+            "address": gateway_addr,
+            "fromBlock": "earliest",
+            "toBlock": block_tag,
+            "topics": [topic0, payment_id],
+        });
         let logs: Vec<RawLog> = rpc
             .get_logs(filter)
             .await

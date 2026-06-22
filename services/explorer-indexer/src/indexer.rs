@@ -238,7 +238,29 @@ async fn run_inner(
         });
     }
 
-    let watched = cfg.watched_addresses();
+    // Static watched set (gateway, pinned vault, registry, router) plus every
+    // registry-discovered active vault. Without the latter, ERC-4626
+    // `Deposit`/`Withdraw` logs emitted by vaults learned from `VaultRegistered`
+    // are never fetched, so their burn volume is invisible to the watchdog
+    // (scan finding IDX-6). `get_logs` filters server-side on the address set, so
+    // a registered vault that emits a withdrawal in a block where the gateway is
+    // idle would otherwise be dropped entirely.
+    let mut watched = cfg.watched_addresses();
+    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
+    )
+    .bind(cfg.chain_id)
+    .fetch_all(db.pool())
+    .await
+    .map_err(DbError::from)?;
+    for vault in &registered_vaults {
+        if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
+            let address = Address::from(bytes);
+            if !watched.contains(&address) {
+                watched.push(address);
+            }
+        }
+    }
     let topic0 = topics.all_topic0();
     let logs = rpc
         .get_logs(from_block as u64, target, &watched, &topic0)
@@ -313,16 +335,10 @@ async fn run_inner(
         rows_inserted += handle_log(db, cfg, &topics, log).await? as i64;
     }
 
-    // Collect all registered vaults from the DB. Used in both the
-    // event-driven snapshot (router-deposit path) and the heartbeat.
+    // Reuse the registered-vault set gathered above for the watched-address
+    // union; it drives both the event-driven snapshot (router-deposit path) and
+    // the heartbeat.
     let mut heartbeat_vaults = vec![cfg.vault];
-    let registered_vaults: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT vault_address FROM vaults WHERE chain_id = $1 AND status = 0 ORDER BY vault_address",
-    )
-    .bind(cfg.chain_id)
-    .fetch_all(db.pool())
-    .await
-    .map_err(DbError::from)?;
     for vault in &registered_vaults {
         if let Ok(bytes) = <[u8; 20]>::try_from(vault.as_slice()) {
             let address = Address::from(bytes);
@@ -661,13 +677,20 @@ async fn handle_log(
         return Ok(r);
     }
 
-    // ERC-4626 Withdraw — store as withdrawal history for the owner (issue #654).
-    // The Withdraw event carries (caller, receiver, owner, assets, shares).
-    // We attribute the history row to the `owner` address per §5.4.
+    // ERC-4626 Withdraw — Withdraw(address indexed caller, address indexed receiver,
+    //                              address indexed owner, uint256 assets, uint256 shares).
+    // A single Withdraw log must persist BOTH:
+    //   1. an account_history_events withdrawal row attributed to `owner` (issue #654, §5.4), and
+    //   2. a vault_transfer_events row with direction='withdrawal' (issue #675 AC-2),
+    //      which is the table the watchdog burn-volume circuit breaker reads.
+    // These were previously split across two branches keyed on the same Withdraw
+    // topic0; the first returned early, leaving the vault_transfer_events writer
+    // unreachable and stranding the watchdog burn alarm (issue #989). They are now
+    // merged into this single reachable branch.
     if topic0 == topics.erc4626_withdraw {
         let decoded = IVaultEvents::Withdraw::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("Withdraw: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_history_event(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -678,6 +701,20 @@ async fn handle_log(
                 Some(log.address.into_array()),
                 None,
                 Some(decoded.assets),
+            )
+            .await?;
+        r += db
+            .insert_vault_transfer_event(
+                cfg.chain_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                log.address.into_array(),
+                "withdrawal",
+                decoded.caller.into_array(),
+                decoded.receiver.into_array(),
+                decoded.assets,
+                decoded.shares,
             )
             .await?;
         return Ok(r);
@@ -1011,29 +1048,6 @@ async fn handle_log(
                 "deposit",
                 decoded.caller.into_array(),
                 decoded.owner.into_array(),
-                decoded.assets,
-                decoded.shares,
-            )
-            .await?;
-        return Ok(r);
-    }
-
-    // ERC-4626 Withdraw — Withdraw(address indexed caller, address indexed receiver,
-    //                              address indexed owner, uint256 assets, uint256 shares).
-    // Persists a vault_transfer_events row with direction='withdrawal'.
-    if topic0 == topics.erc4626_withdraw {
-        let decoded = IVaultEvents::Withdraw::decode_log(&into_alloy_log(log), true)
-            .map_err(|e| IndexerError::Decode(format!("ERC4626 Withdraw: {e}")))?;
-        let r = db
-            .insert_vault_transfer_event(
-                cfg.chain_id,
-                log.block_number as i64,
-                log.log_index as i32,
-                log.tx_hash.0,
-                log.address.into_array(),
-                "withdrawal",
-                decoded.caller.into_array(),
-                decoded.receiver.into_array(),
                 decoded.assets,
                 decoded.shares,
             )
