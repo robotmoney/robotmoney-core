@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Canonical: docs/architecture.md §14 — Audit Logging
+# Canonical: docs/technical/security-model.md §14 — Process — audit & institutional memory
 #
 # Shared logging facade used by every Rust binary and long-running service in
 # the workspace. Issue #247 unified the formatter and filter configuration

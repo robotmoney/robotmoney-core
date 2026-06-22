@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §14 — Audit Logging
+//! Canonical: docs/technical/security-model.md §14 — Process — audit & institutional memory
 //!
 //! Workspace-wide logging facade. Every Rust binary, service, and test
 //! harness initialises logging through this crate so operators see the

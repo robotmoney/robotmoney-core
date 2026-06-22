@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §14 — Audit Logging
+//! Canonical: docs/technical/security-model.md §14 — Process — audit & institutional memory
 //!
 //! Workspace-wide guard for issue #247: every Rust binary and
 //! long-running service must initialise logging through

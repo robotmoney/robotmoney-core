@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §8 — Signer Backends
+//! Canonical: docs/architecture.md §5.1 — `rmpc` (signing path); §9 — Vendor Selections (production signer class)
 //!
 //! `signer` module — `AgentSigner` trait and backends.
 //!
