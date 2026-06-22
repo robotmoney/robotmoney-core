@@ -29,6 +29,9 @@ pub mod db;
 pub mod feature_flags;
 pub mod indexer;
 pub mod rpc;
+/// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —
+/// documentation-only, no runtime code.
+pub mod scan_remediation_seams;
 /// Dev-scout seam map (issue #703) — documentation-only, no runtime code.
 pub mod schema;
 
