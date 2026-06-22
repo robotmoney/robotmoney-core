@@ -25,6 +25,41 @@
  * Out of scope (per issue #322):
  *   - Proposal creation UI.
  *   - execute() trigger from dapp.
+ *
+ * ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
+ * Canonical: docs/code-review/external-scan-verification-20260619.md (dapp
+ * subsystem table). Documentation-only pointer — no behaviour change here. The
+ * bugs below are still present at HEAD and are owned by issue #1025
+ * (fix(dapp): snapshot-power vote gating + non-zero router per-leg floors).
+ * NEITHER this scout (#1027) NOR this comment implements the fixes.
+ *
+ * DAPP-1 (Med) — vote gating uses CURRENT power, not SNAPSHOT power.
+ *   The "Vote" button is gated on `votingPower` read live from
+ *   `RouterGovernance.votingPower(connectedAddress)` (this file, ~line 159, the
+ *   `useReadContract` whose result feeds `canVote`/`votingPower > 0n` at
+ *   ~line 180). On-chain `vote()` settles against the proposal's SNAPSHOT power
+ *   at proposal creation, so an account whose power changed after the snapshot
+ *   is shown the wrong eligibility (and can be prompted to submit a tx the
+ *   contract will reject, or be hidden when it should vote).
+ *   Seam for #1025: thread a snapshot-pinned power read (the proposal's snapshot
+ *   block / `getPastVotes`-style accessor) into the `canVote` gate instead of
+ *   the live `votingPower`. The gating expression and the `useReadContract`
+ *   call are the only edit points; the vote-encode path is unchanged.
+ *
+ * DAPP-2 (Med) — router deposit submits ZERO per-leg share floors.
+ *   Lives in the SIBLING component `RouterDepositTab.tsx`: the
+ *   `RouterDepositTab` deposit simulation calls
+ *   `router.deposit(depositAssets, [])` (~line 158–159) — the second arg, the
+ *   per-leg `minSharesPerLeg` floors array, is an empty `[]`, so every leg runs
+ *   with no slippage floor. Seam for #1025: derive a non-zero floor per leg
+ *   from the existing `previewDeposit` per-leg receipts (already computed for
+ *   the preview, see `buildRouterPreview`) minus a tolerance, and pass that
+ *   array as the second `deposit` arg. Touch-point is `RouterDepositTab.tsx`'s
+ *   deposit `args` only.
+ *
+ * Disjointness: #1025 is confined to clients/dapp/ (GovernancePanel.tsx +
+ * RouterDepositTab.tsx) and does not touch the indexer (#1021/#1022), watchdog
+ * (#1023), rmpc (#1024) or harness (#1026); it runs in parallel after the scout.
  */
 import { useEffect, useState } from "react";
 import { useAccount, useReadContract, useWriteContract, useSimulateContract } from "wagmi";
