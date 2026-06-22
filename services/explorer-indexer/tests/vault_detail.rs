@@ -650,9 +650,7 @@ async fn erc4626_withdraw_writes_both_transfer_and_history_rows() {
 #[test]
 fn handle_log_has_single_erc4626_withdraw_branch() {
     let src = include_str!("../src/indexer.rs");
-    let matches = src
-        .matches("topic0 == topics.erc4626_withdraw")
-        .count();
+    let matches = src.matches("topic0 == topics.erc4626_withdraw").count();
     assert_eq!(
         matches, 1,
         "expected exactly one `topic0 == topics.erc4626_withdraw` branch in handle_log, \
