@@ -1,16 +1,19 @@
-//! Dev-scout seam map — Off-chain scan remediation phase (issue #994).
+//! Historical seam map — Off-chain scan remediation phase (issue #1009, landed).
 //!
 //! Canonical: `docs/code-review/external-scan-verification-20260619.md`
-//! (verified external scan), `docs/technical/security-model.md §9` (watchdog
-//! breach requirement).
+//! (verified external scan), `docs/audits.md` (disposes FS-WD-1/FS-WD-6 as
+//! `fixed`), `docs/technical/security-model.md §9` (watchdog breach
+//! requirement).
 //!
 //! This module is **documentation-only**: no runtime logic, no behaviour
-//! change. It documents the watchdog volume-source and cursor seam touched by
-//! issue #990 and its coupling to the indexer fix in #989.
+//! change. It is retained as a historical pointer to the watchdog
+//! volume-source and cursor seam that issue #990 resolved, and to its coupling
+//! with the indexer fix in #989. The bugs it describes have been fixed; the
+//! prose below is past-tense.
 //!
 //! # The seam: volume-source functions + the poll cursor
 //!
-//! Two surfaces in this crate carry the #990 work:
+//! Two surfaces in this crate carried the #990 work:
 //!
 //! 1. **Volume-source functions** in [`crate::volume`]:
 //!    [`crate::volume::mint_volume_per_block`],
@@ -24,29 +27,29 @@
 //!    the block(s) to evaluate, calls the four volume functions, and actuates
 //!    a pause/alert on breach.
 //!
-//! # Issue #990 — reliable volume accounting + breach actuation
+//! # Resolved (#990) — reliable volume accounting + breach actuation
 //!
-//! **Gap (scan + #990):** the loop is per-block and can skip blocks under
-//! catch-up or RPC-timeout pressure, deposits/withdrawals can be
-//! double-counted or missed, and breach actuation coverage is incomplete.
-//! Reliable accounting must cover *all* blocks between cursor positions, be
-//! resilient to RPC timeouts, dedup rows, and exercise the full mint+burn
-//! breach path.
+//! **What was wrong (scan FS-WD-6):** the loop was per-block and could skip
+//! blocks under catch-up or RPC-timeout pressure, deposits/withdrawals could be
+//! double-counted or missed, and breach actuation coverage was incomplete.
 //!
-//! **Burn-side coupling with #989 (hard ordering constraint):** the burn
-//! volume functions read `vault_transfer_events(direction='withdrawal')`,
-//! which has **zero rows** until #989 revives the dead `erc4626_withdraw`
-//! branch in the indexer (`services/explorer-indexer/src/handle_log`). Until
-//! #989 lands, every burn-side assertion in a #990 test is vacuously green and
-//! the burn breaker cannot fire regardless of #990's loop changes.
+//! **How it was fixed (#990):** the breach loop now iterates *every* block
+//! newly indexed since the cursor rather than inspecting only the latest
+//! indexed block (see [`crate::watchdog::run_cycles_since_cursor`], which
+//! advances the cursor block-by-block so a mid-range error retries the
+//! remaining blocks rather than skipping them). The path is resilient to RPC
+//! timeouts and dedups rows, and exercises the full mint+burn breach path.
 //!
-//! **Recommended landing order: #989 → #990.** #990 should add an end-to-end
-//! regression that (a) drives a `Withdraw` log through the indexer, then
-//! (b) asserts `burn_volume_per_block` / `burn_volume_per_hour` return the
-//! expected non-zero value and that the breach loop actuates a pause when the
-//! configured burn threshold is crossed.
+//! **Burn-side coupling with #989 (ordering constraint that was honoured):** the
+//! burn volume functions read `vault_transfer_events(direction='withdrawal')`,
+//! which had **zero rows** until #989 revived the dead `erc4626_withdraw`
+//! branch in the indexer (`services/explorer-indexer/src/handle_log`). #989
+//! landed first; #990 then added an end-to-end regression that (a) drives a
+//! `Withdraw` log through the indexer, then (b) asserts `burn_volume_per_block`
+//! / `burn_volume_per_hour` return the expected non-zero value and that the
+//! breach loop actuates a pause when the configured burn threshold is crossed.
 //!
-//! # Newly discovered integration points and risks
+//! # Integration points and risks (still relevant)
 //!
 //! 1. **The `'withdrawal'` direction literal is a cross-crate contract.** The
 //!    burn queries here filter on the exact string the indexer writes in
@@ -56,10 +59,6 @@
 //!
 //! 2. **Block coverage vs. `blocks.timestamp` join.** The per-hour queries
 //!    join `blocks` on `(chain_id, block_number)` for the timestamp window. If
-//!    the cursor work in #990 changes which blocks the indexer persists rows
-//!    for, the per-hour window can silently undercount any block whose header
-//!    row is missing. #990's coverage test should assert the join is total for
-//!    the evaluated window.
-//!
-//! 3. **No config or schema change is in scope for the scout.** Threshold and
-//!    table shapes are owned by #990; this scout only records the seam.
+//!    the set of blocks the indexer persists rows for changes, the per-hour
+//!    window can silently undercount any block whose header row is missing; the
+//!    #990 coverage test asserts the join is total for the evaluated window.
