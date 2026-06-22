@@ -86,7 +86,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Canonical: docs/architecture.md §14 — Audit Logging. All Rust
+    // Canonical: docs/technical/security-model.md §14 — Process — audit & institutional memory. All Rust
     // binaries route through the workspace-shared logging facade so
     // operator output is byte-for-byte consistent with `rmpc` and
     // `explorer-api` (issue #247).

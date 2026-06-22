@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §14 — Audit Logging
+//! Canonical: docs/technical/security-model.md §14 — Process — audit & institutional memory
 //!
 //! Diagnostic + audit logging for `rmpc`.
 //!
