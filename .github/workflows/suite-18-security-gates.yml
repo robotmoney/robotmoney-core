@@ -44,6 +44,9 @@ on:
       - "clients/dapp/package.json"
       - "clients/dapp/scripts/audit-deps.sh"
       - "clients/dapp/scripts/check-csp.sh"
+      - "scripts/check-audit-ledger.sh"
+      - "docs/audits.md"
+      - "SECURITY.md"
       - ".github/workflows/suite-18-security-gates.yml"
   workflow_dispatch:
 
@@ -109,3 +112,23 @@ jobs:
       - name: Check CSP
         working-directory: clients/dapp
         run: bash scripts/check-csp.sh
+
+  # ── Audit-ledger gate ──────────────────────────────────────────────────────
+  # Enforces the security-model.md §9/§14 institutional-memory artifacts:
+  # docs/audits.md (audit-scope ledger + finding register with disposition and
+  # "checked against" columns, every row carrying a valid disposition enum) and
+  # the repo-root SECURITY.md (disclosure address + max response-time SLA).
+  # Script: scripts/check-audit-ledger.sh (issue #1010). shellcheck runs first
+  # because the gate is shell-driven (matches the per-suite shellcheck pattern).
+  audit-ledger:
+    name: audit-ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: shellcheck audit-ledger script
+        run: shellcheck scripts/check-audit-ledger.sh
+      - name: Check audit ledger + SECURITY.md
+        run: bash scripts/check-audit-ledger.sh
