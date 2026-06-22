@@ -43,6 +43,7 @@ use crate::commands::self_check::ChecksOutput;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::compute_fees;
+use crate::commands::withdraw::withdraw_vault_preflight;
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;
@@ -434,6 +435,37 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
+    // -- Per-leg vault share preflight (RPC-7) ----------------------------
+    // The gateway preflight above intentionally leaves USDC allowance/balance
+    // at zero (N/A for withdrawals). The redeem itself burns the agent's
+    // *vault shares*, which the gateway pulls from each source vault, so the
+    // agent must (a) hold enough shares in each vault and (b) have approved
+    // the gateway to spend them. Previously this command checked neither and
+    // reported success right up to an on-chain revert. Run the same per-vault
+    // share allowance/balance/paused check the single-vault `withdraw` path
+    // uses, once per identity-bound (vault, shares) leg.
+    for (vault, leg_shares) in vaults.iter().zip(shares_per_leg.iter()) {
+        let leg_result = rt.block_on(async {
+            withdraw_vault_preflight(&rpc, *vault, gateway_addr, agent_address, *leg_shares).await
+        });
+        if let Err(err) = leg_result {
+            record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&err).to_string())));
+            emit_refusal(
+                &WithdrawRouterFailure {
+                    status: "refused",
+                    error: error_name(&err).to_string(),
+                    message: Some(format!("vault {vault:#x}: {err}")),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: None,
+                    checks: Some(ChecksOutput::from_report(&report)),
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+    }
+
     // -- Explicit confirmation required -----------------------------------
     if !args.confirm {
         eprintln!(
@@ -728,8 +760,132 @@ fn error_name(err: &RmpcError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{keccak256, U256};
+    use crate::gateway::{Erc20, MockVault};
+    use crate::rpc::FailoverRpcClient;
+    use alloy_primitives::{address, hex as ahex, keccak256, U256};
     use alloy_sol_types::SolCall;
+    use mockito::Matcher;
+    use serde_json::json;
+
+    const SIGNER: Address = address!("00000000000000000000000000000000000000aa");
+    const GATEWAY: Address = address!("0000000000000000000000000000000000000b00");
+    const VAULT: Address = address!("0000000000000000000000000000000000000d00");
+
+    fn enc_bool(v: bool) -> String {
+        let mut w = [0u8; 32];
+        w[31] = u8::from(v);
+        format!("0x{}", ahex::encode(w))
+    }
+
+    fn enc_u256(v: U256) -> String {
+        format!("0x{}", ahex::encode(v.to_be_bytes::<32>()))
+    }
+
+    fn jrpc_result(s: &str) -> String {
+        format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{s}"}}"#)
+    }
+
+    fn match_eth_call_selector(selector: &str) -> Matcher {
+        Matcher::AllOf(vec![
+            Matcher::PartialJson(json!({"method": "eth_call"})),
+            Matcher::Regex(format!(r#""data":"{selector}"#)),
+        ])
+    }
+
+    fn selector_hex<C: SolCall>() -> String {
+        format!("0x{}", ahex::encode(C::SELECTOR))
+    }
+
+    async fn install_vault_mocks(
+        server: &mut mockito::ServerGuard,
+        paused: bool,
+        allowance: U256,
+        balance: U256,
+    ) {
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(&selector_hex::<
+                MockVault::pausedCall,
+            >()))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_bool(paused)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(
+                &selector_hex::<Erc20::allowanceCall>(),
+            ))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_u256(allowance)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+        server
+            .mock("POST", "/")
+            .match_body(match_eth_call_selector(
+                &selector_hex::<Erc20::balanceOfCall>(),
+            ))
+            .with_status(200)
+            .with_body(jrpc_result(&enc_u256(balance)))
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    /// RPC-7: the router-withdraw preflight runs the per-leg share check and
+    /// REFUSES when the agent's vault-share allowance to the gateway is
+    /// insufficient, rather than returning success against a hard-coded zero.
+    #[tokio::test]
+    async fn router_leg_preflight_refuses_on_insufficient_allowance() {
+        let mut server = mockito::Server::new_async().await;
+        // not paused, allowance too low, balance ample.
+        install_vault_mocks(&mut server, false, U256::from(1u64), U256::from(u128::MAX)).await;
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrShareAllowanceInsufficient),
+            "router leg must refuse on insufficient share allowance; got {err:?}"
+        );
+    }
+
+    /// RPC-7: the router-withdraw preflight REFUSES when the agent's vault
+    /// share balance cannot cover the leg's shares.
+    #[tokio::test]
+    async fn router_leg_preflight_refuses_on_insufficient_balance() {
+        let mut server = mockito::Server::new_async().await;
+        // not paused, ample allowance, balance too low.
+        install_vault_mocks(&mut server, false, U256::from(u128::MAX), U256::from(1u64)).await;
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let err = withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(1_000u64))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrShareBalanceInsufficient),
+            "router leg must refuse on insufficient share balance; got {err:?}"
+        );
+    }
+
+    /// With ample allowance and balance, a leg preflight passes — confirming
+    /// the check reads real values rather than always refusing.
+    #[tokio::test]
+    async fn router_leg_preflight_passes_with_ample_allowance_and_balance() {
+        let mut server = mockito::Server::new_async().await;
+        install_vault_mocks(
+            &mut server,
+            false,
+            U256::from(u128::MAX),
+            U256::from(u128::MAX),
+        )
+        .await;
+        let rpc = FailoverRpcClient::new(vec![server.url()]).unwrap();
+        let result =
+            withdraw_vault_preflight(&rpc, VAULT, GATEWAY, SIGNER, U256::from(100u64)).await;
+        assert!(result.is_ok(), "expected ok, got {result:?}");
+    }
 
     #[test]
     fn withdraw_from_router_selector_matches_canonical_signature() {

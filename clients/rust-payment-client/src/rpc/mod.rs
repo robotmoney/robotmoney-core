@@ -558,15 +558,45 @@ impl FailoverRpcClient {
         Err(last_err.expect("endpoints is non-empty"))
     }
 
-    /// `eth_getTransactionReceipt`.
+    /// `eth_getTransactionReceipt`, with failover that does **not** treat a
+    /// `None` answer as terminal (RPC-3, RPC-4).
+    ///
+    /// A receipt of `None` on the first endpoint is ambiguous: it can mean the
+    /// tx is genuinely pending, *or* that this endpoint hit Geth's transient
+    /// `-32000 "indexing is in progress"` window (which [`RpcClient::
+    /// get_transaction_receipt`] folds into `Ok(None)`), *or* that this
+    /// endpoint returned a malformed/missing `result`. Returning that `None`
+    /// immediately would defeat multi-endpoint failover for receipt lookups —
+    /// a healthy second endpoint that already has the receipt would never be
+    /// tried.
+    ///
+    /// So this loop keeps going past a `None` (and past an `Err`) to give every
+    /// endpoint a chance to produce a real receipt:
+    /// - the first `Ok(Some(receipt))` wins and returns immediately;
+    /// - if no endpoint yields a receipt but at least one answered `Ok(None)`
+    ///   (a legitimate "pending / not-yet-indexed here" answer), return
+    ///   `Ok(None)` so receipt-wait loops keep polling within their budget;
+    /// - only if *every* endpoint errored (none answered `None`) do we surface
+    ///   the last error.
     pub async fn get_transaction_receipt(
         &self,
         tx_hash: alloy_primitives::B256,
     ) -> crate::errors::Result<Option<alloy_rpc_types::TransactionReceipt>> {
+        let mut saw_none = false;
         let mut last_err = None;
         for client in &self.endpoints {
             match client.get_transaction_receipt(tx_hash).await {
-                Ok(v) => return Ok(v),
+                Ok(Some(receipt)) => return Ok(Some(receipt)),
+                Ok(None) => {
+                    // Pending / transient-indexing / empty here — try the next
+                    // endpoint, but remember that at least one endpoint gave a
+                    // valid "no receipt yet" answer.
+                    log::debug!(
+                        "rmpc rpc: get_transaction_receipt returned no receipt on {}, trying next endpoint",
+                        client.url()
+                    );
+                    saw_none = true;
+                }
                 Err(e) => {
                     log::warn!(
                         "rmpc rpc: get_transaction_receipt failed on {}, trying next; error: {e}",
@@ -576,7 +606,12 @@ impl FailoverRpcClient {
                 }
             }
         }
-        Err(last_err.expect("endpoints is non-empty"))
+        if saw_none {
+            // No endpoint had the receipt, but at least one answered "pending".
+            Ok(None)
+        } else {
+            Err(last_err.expect("endpoints is non-empty"))
+        }
     }
 
     /// `eth_getLogs`.
@@ -986,6 +1021,133 @@ mod tests {
         assert!(matches!(err, RmpcError::ErrRpcTransport(_)), "got {err:?}");
     }
 
+    // -- issue #991 — receipt failover on transient/None (RPC-3, RPC-4) ------
+
+    /// Helper: a one-shot mock server whose `/` responds with `body`.
+    async fn mock_server_with_body(body: &str) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        server
+    }
+
+    /// RPC-3: when the first endpoint returns Geth's transient `-32000`
+    /// indexing error (folded to `Ok(None)` by the single-client method) and
+    /// the second endpoint has the receipt, the failover client must query the
+    /// second endpoint and return the real receipt — `None` is not terminal.
+    #[tokio::test]
+    async fn failover_receipt_advances_past_transient_indexing_to_next_endpoint() {
+        let transient = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"transaction indexing is in progress"}}"#,
+        )
+        .await;
+        // A minimal but valid receipt with status 0x1.
+        let good = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"result":{
+                "transactionHash":"0x1111111111111111111111111111111111111111111111111111111111111111",
+                "transactionIndex":"0x0",
+                "blockHash":"0x2222222222222222222222222222222222222222222222222222222222222222",
+                "blockNumber":"0x10",
+                "from":"0x000000000000000000000000000000000000aaaa",
+                "to":"0x000000000000000000000000000000000000bbbb",
+                "cumulativeGasUsed":"0x1",
+                "gasUsed":"0x1",
+                "contractAddress":null,
+                "logs":[],
+                "logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "status":"0x1",
+                "effectiveGasPrice":"0x1",
+                "type":"0x2"
+            }}"#,
+        )
+        .await;
+
+        let client = FailoverRpcClient::new(vec![transient.url(), good.url()]).unwrap();
+        let receipt = client.get_transaction_receipt(B256::ZERO).await.unwrap();
+        assert!(
+            receipt.is_some(),
+            "failover must advance past the transient indexing error to the healthy endpoint"
+        );
+    }
+
+    /// RPC-4: a malformed/missing-`result` response on the first endpoint
+    /// (decoded to `Ok(None)`) must not be terminal either — the second
+    /// endpoint's real receipt wins.
+    #[tokio::test]
+    async fn failover_receipt_advances_past_missing_result_to_next_endpoint() {
+        // `result: null` ⇒ Ok(None) on the first endpoint.
+        let empty = mock_server_with_body(r#"{"jsonrpc":"2.0","id":1,"result":null}"#).await;
+        let good = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"result":{
+                "transactionHash":"0x1111111111111111111111111111111111111111111111111111111111111111",
+                "transactionIndex":"0x0",
+                "blockHash":"0x2222222222222222222222222222222222222222222222222222222222222222",
+                "blockNumber":"0x10",
+                "from":"0x000000000000000000000000000000000000aaaa",
+                "to":"0x000000000000000000000000000000000000bbbb",
+                "cumulativeGasUsed":"0x1",
+                "gasUsed":"0x1",
+                "contractAddress":null,
+                "logs":[],
+                "logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                "status":"0x1",
+                "effectiveGasPrice":"0x1",
+                "type":"0x2"
+            }}"#,
+        )
+        .await;
+
+        let client = FailoverRpcClient::new(vec![empty.url(), good.url()]).unwrap();
+        let receipt = client.get_transaction_receipt(B256::ZERO).await.unwrap();
+        assert!(
+            receipt.is_some(),
+            "failover must advance past a missing-result None to the healthy endpoint"
+        );
+    }
+
+    /// When every endpoint legitimately reports "pending" (`Ok(None)`), the
+    /// failover client returns `Ok(None)` — receipt-wait loops keep polling
+    /// rather than seeing a spurious hard error.
+    #[tokio::test]
+    async fn failover_receipt_returns_none_when_all_endpoints_pending() {
+        let p1 = mock_server_with_body(r#"{"jsonrpc":"2.0","id":1,"result":null}"#).await;
+        let p2 = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"transaction indexing is in progress"}}"#,
+        )
+        .await;
+        let client = FailoverRpcClient::new(vec![p1.url(), p2.url()]).unwrap();
+        let receipt = client.get_transaction_receipt(B256::ZERO).await.unwrap();
+        assert!(
+            receipt.is_none(),
+            "all-pending across endpoints must surface as Ok(None), not an error"
+        );
+    }
+
+    /// When every endpoint hard-errors (no endpoint answers `None`), the last
+    /// error is surfaced rather than a silent `Ok(None)`.
+    #[tokio::test]
+    async fn failover_receipt_errors_when_all_endpoints_hard_fail() {
+        let e1 = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#,
+        )
+        .await;
+        let e2 = mock_server_with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#,
+        )
+        .await;
+        let client = FailoverRpcClient::new(vec![e1.url(), e2.url()]).unwrap();
+        let err = client.get_transaction_receipt(B256::ZERO).await.unwrap_err();
+        assert!(
+            matches!(err, RmpcError::ErrRpcServer { .. }),
+            "all-error across endpoints must surface the last error; got {err:?}"
+        );
+    }
+
     /// Single-endpoint failover client works the same as a bare `RpcClient`.
     #[tokio::test]
     async fn failover_client_single_endpoint_success() {
@@ -1003,3 +1165,4 @@ mod tests {
         assert_eq!(block, 16);
     }
 }
+
