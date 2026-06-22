@@ -667,6 +667,15 @@ pub struct RawLog {
     pub data: Bytes,
     /// Block in which the log was included. Hex-encoded `0x…`.
     pub block_number: U64,
+    /// Index of this log within the block. Hex-encoded `0x…`. Together with
+    /// `block_number` it gives a total chain order over a contract's logs,
+    /// which is load-bearing for reconstructing role membership from
+    /// `RoleGranted`/`RoleRevoked` events: a grant→revoke→re-grant of the same
+    /// account must be replayed in emission order, not bucketed by event type
+    /// (see `commands/get_timelock::fetch_role_members`, RPC-14). Defaults to
+    /// `0` if a node omits it (some archive endpoints do for pending logs).
+    #[serde(default)]
+    pub log_index: U64,
     /// Hash of the transaction that produced the log.
     pub transaction_hash: B256,
 }
