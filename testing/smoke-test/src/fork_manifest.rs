@@ -25,6 +25,43 @@
 //! a live archive RPC and is gated behind the `pinned` flag. The validator
 //! surfaces `pinned` so callers (CI, the genesis ingester) can decide whether
 //! to require pin verification.
+//!
+//! ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
+//! Canonical: `docs/code-review/external-scan-verification-20260619.md`
+//! (smoke-test / fork-e2e harness subsystem table). Documentation-only pointer:
+//! no behaviour change here. The findings below are still present at HEAD and
+//! are owned by issue #1026 (fix(harness): authenticate fork snapshot + remove
+//! faucet-key / USDC-slot). NEITHER this scout (#1027) NOR this comment
+//! implements the fixes.
+//!
+//! HARN-5 (Med — supply-chain): the pinned manifest does not authenticate the
+//!   snapshot BYTES. `snapshot_uri` is only validated as non-empty (see the
+//!   validation rule above and `validate()` below); `pinned` covers the
+//!   `block_hash` ↔ archive-RPC check but says nothing about the contents
+//!   fetched from `snapshot_uri`. Seam for #1026: add a content digest field
+//!   (e.g. `snapshot_sha256`) to `ForkManifest` + a validation rule, and have
+//!   the genesis ingester (`src/bin/genesis-ingester.rs`) verify the downloaded
+//!   snapshot hashes to it before constructing genesis `alloc`. The struct +
+//!   `validate()` here are the seam; the ingester is the enforcement point.
+//!
+//! HARN-2 (Med — most-real): the devnet faucet private key is exposed in the
+//!   public Vite bundle / cloudflared tunnel and printed. Lives in the faucet
+//!   wiring, NOT this file (`src/genesis_alloc.rs`, `src/base_testnet.rs`,
+//!   `src/bin/smoke-test.rs`, and the dapp/Vite env). Seam for #1026: stop
+//!   embedding the key in any client-reachable surface; serve faucet grants
+//!   from a harness-side signer instead. Disjoint from the manifest struct.
+//!
+//! HARN-6 (Med — robustness, no attacker needed): the USDC grant ignores the
+//!   PACKED blacklist bit (FiatToken V2_1-vs-V2_2 storage-layout mismatch), so
+//!   on a V2_2 snapshot the grant can target/leave a stale blacklist slot.
+//!   Lives in the USDC-seed path (`src/base_testnet.rs` /
+//!   `src/bin/demo-seed-depositors.rs`), NOT this manifest module. Seam for
+//!   #1026: detect the FiatToken minor version and compute the blacklist slot
+//!   from the packed layout rather than the hardcoded V2_1 slot.
+//!
+//! Disjointness: #1026 is confined to `testing/` (manifest + USDC-seed +
+//!   faucet wiring) and does not touch the indexer (#1021/#1022), watchdog
+//!   (#1023), rmpc (#1024) or dapp (#1025); it runs in parallel after the scout.
 
 use std::path::Path;
 
