@@ -519,7 +519,8 @@ fn parse_proposal_id(raw: &str) -> crate::errors::Result<U256> {
         U256::from_str_radix(hex, 16)
             .map_err(|e| RmpcError::ErrConfig(format!("proposal-id hex parse: {e}")))
     } else {
-        U256::from_str(s).map_err(|e| RmpcError::ErrConfig(format!("proposal-id decimal parse: {e}")))
+        U256::from_str(s)
+            .map_err(|e| RmpcError::ErrConfig(format!("proposal-id decimal parse: {e}")))
     }
 }
 

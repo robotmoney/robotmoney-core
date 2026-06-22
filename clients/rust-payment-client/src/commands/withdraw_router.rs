@@ -40,10 +40,10 @@ use serde::Serialize;
 
 use crate::commands::deposit::MAX_DEADLINE_SKEW_SECS;
 use crate::commands::self_check::ChecksOutput;
+use crate::commands::withdraw::withdraw_vault_preflight;
 use crate::config::Config;
 use crate::errors::RmpcError;
 use crate::fees::compute_fees;
-use crate::commands::withdraw::withdraw_vault_preflight;
 use crate::gateway::RobotMoneyGateway;
 use crate::logging::{record_audit, AuditDecision, AuditRecordBuilder};
 use crate::network_env::NetworkEnv;

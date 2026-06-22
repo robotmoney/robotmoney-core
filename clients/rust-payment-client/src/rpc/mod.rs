@@ -1141,7 +1141,10 @@ mod tests {
         )
         .await;
         let client = FailoverRpcClient::new(vec![e1.url(), e2.url()]).unwrap();
-        let err = client.get_transaction_receipt(B256::ZERO).await.unwrap_err();
+        let err = client
+            .get_transaction_receipt(B256::ZERO)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, RmpcError::ErrRpcServer { .. }),
             "all-error across endpoints must surface the last error; got {err:?}"
@@ -1165,4 +1168,3 @@ mod tests {
         assert_eq!(block, 16);
     }
 }
-
