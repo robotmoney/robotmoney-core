@@ -1044,7 +1044,7 @@ function rebalance(uint256, uint256) external pure;
 Pre-execution cost preview: shows how `usdcAmount` would be allocated
 across active basket assets at current TWAP prices.
 Returns parallel arrays of `(assets, amountsOut)` for active assets only.
-This satisfies the cost-preview requirement in docs/architecture.md §8.
+This satisfies the cost-preview requirement in docs/architecture.md §7.1 — Previews.
 See docs/adr/ADR-0003-basketvault-rebalancing-model.md.
 
 
@@ -1320,7 +1320,7 @@ event NavDeviationGuardUpdated(uint256 oldBps, uint256 newBps);
 ### WeightSnapshot
 Emitted on every deposit, recording the equal-weight allocation applied
 to the depositor's inflow. Satisfies the event-stream cost-disclosure
-requirement from docs/architecture.md §8 and ADR-0003.
+requirement from docs/architecture.md §7.1 — Previews and ADR-0003.
 `bpsWeights` contains the basis-point weight for each element of `assets`
 (10_000 / n for each active asset, with the remainder allocated to the first).
 

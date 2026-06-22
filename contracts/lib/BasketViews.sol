@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/adr/ADR-0003-basketvault-rebalancing-model.md
-//            docs/architecture.md §8 — cost-preview / realized-weight views
+//            docs/architecture.md §7.1 — Previews (cost-preview / realized-weight views)
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
