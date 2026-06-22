@@ -170,6 +170,24 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      # Pre-pull the chain images (geth + lighthouse) BEFORE the boot clock
+      # starts (issue #988). Without this, `Fixture::new()`'s
+      # `docker compose up --build` pulls ethereum/client-go + sigp/lighthouse
+      # inline on a cold runner — on a slow runner this image pull alone was
+      # ~13 min, eating into the test's BOOT_TIMEOUT budget and timing out
+      # cli_meta right as seeding finished (the boot completed; the budget was
+      # the limiter). Pulling here moves that runner-variant pull off the boot
+      # critical path, the same way suite-07 already does for the e2e devnet.
+      # `--ignore-pull-failures` skips the build-only `setup` service (no
+      # `image:`), and `|| true` keeps a transient registry hiccup from failing
+      # the job before the test even runs. Only docker-compose.yaml is pulled:
+      # docker-compose.dapp.yaml requires deploy-time env (gateway/vault
+      # addresses) that does not exist this early, and its only pullable image
+      # (postgres:16-alpine) is small and not on the slow critical path.
+      - name: Pre-pull Docker images
+        working-directory: testing/ethereum-testnet/config
+        run: docker compose -f docker-compose.yaml pull --ignore-pull-failures || true
+
       - name: cargo build (includes CLI binary)
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
