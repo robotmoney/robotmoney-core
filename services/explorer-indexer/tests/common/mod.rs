@@ -71,6 +71,9 @@ pub struct StubRpcServer {
     pub url: String,
     handlers: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     fail: Arc<AtomicBool>,
+    /// Every JSON-RPC request body received, in arrival order. Lets tests assert
+    /// what the indexer actually requested (e.g. the `eth_getLogs` address set).
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
@@ -81,10 +84,12 @@ impl StubRpcServer {
         let url = format!("http://{addr}");
         let handlers: Arc<Mutex<HashMap<String, serde_json::Value>>> = Arc::default();
         let fail = Arc::new(AtomicBool::new(false));
+        let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let h2 = handlers.clone();
         let f2 = fail.clone();
+        let r2 = requests.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -93,6 +98,7 @@ impl StubRpcServer {
                         let Ok((mut sock, _)) = accept else { break; };
                         let h = h2.clone();
                         let f = f2.clone();
+                        let r = r2.clone();
                         tokio::spawn(async move {
                             let mut buf = vec![0u8; 16 * 1024];
                             let n = match sock.read(&mut buf).await { Ok(n) => n, Err(_) => return };
@@ -106,6 +112,7 @@ impl StubRpcServer {
                                 Ok(v) => v,
                                 Err(_) => return,
                             };
+                            r.lock().unwrap().push(req.clone());
                             let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
                             let resp = if f.load(Ordering::SeqCst) {
                                 serde_json::json!({
@@ -139,8 +146,14 @@ impl StubRpcServer {
             url,
             handlers,
             fail,
+            requests,
             shutdown: shutdown_tx,
         }
+    }
+
+    /// All JSON-RPC requests received so far, in arrival order.
+    pub fn captured_requests(&self) -> Vec<serde_json::Value> {
+        self.requests.lock().unwrap().clone()
     }
 
     pub fn set(&self, method: &str, value: serde_json::Value) {

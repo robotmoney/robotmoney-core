@@ -5,19 +5,25 @@
 //!
 //! # Cycle
 //!
-//! 1. Determine the latest indexed block from `indexer_runs`.
-//! 2. Query per-block mint/burn volume for that block.
-//! 3. Query rolling per-hour mint/burn volume.
-//! 4. Compare each metric against the global thresholds from [`Config`].
-//! 5. On breach: dispatch pause and/or alert according to `action.mode`.
+//! 1. Determine the latest indexed block from `indexer_runs` and load the
+//!    watchdog's last-processed-block cursor.
+//! 2. For **every** block in `(cursor, latest]` (not just the latest — scan
+//!    finding WD-6), query per-block mint/burn volume and the rolling per-hour
+//!    volume anchored to that block's on-chain timestamp (WD-2).
+//! 3. Compare each metric against the global thresholds from [`Config`].
+//! 4. On breach: dispatch the alert first, then the pause under an SLA-bounded
+//!    timeout, so a hung pause RPC never starves the alert path (WD-1).
+//! 5. Advance the cursor past each successfully evaluated block.
 //! 6. Sleep for `poll_interval_secs` and repeat.
 //!
 //! The watchdog does NOT exit on a breach — it continues polling to catch
 //! subsequent breaches and to log that the gateway remains paused.
 
-use chrono::Utc;
+use std::time::Duration;
+
 use reqwest::Client;
 use sqlx::postgres::PgPool;
+use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -41,10 +47,16 @@ pub enum CycleResult {
     NoData,
 }
 
+/// Rolling per-hour window width, in seconds.
+const HOUR_WINDOW_SECS: i64 = 3600;
+
 /// Run a single watchdog cycle against the given `block_number`.
 ///
 /// Exposed as a free function so integration tests can drive individual cycles
-/// deterministically without a real timer loop.
+/// deterministically without a real timer loop. Most callers should prefer
+/// [`run_cycles_since_cursor`], which evaluates every block since the cursor and
+/// persists progress; this single-block entry point is retained for tests and is
+/// also used internally per block by the cursor loop.
 pub async fn run_cycle(
     pool: &PgPool,
     config: &Config,
@@ -52,13 +64,39 @@ pub async fn run_cycle(
     chain_id: i64,
     block_number: i64,
 ) -> Result<CycleResult, WatchdogError> {
-    let now_unix = Utc::now().timestamp();
+    // Anchor the rolling per-hour window to indexed *chain* time, not wall-clock
+    // (scan finding WD-2). Using the evaluated block's on-chain timestamp keeps
+    // the window consistent whether the watchdog is at tip or catching up, and
+    // makes the breach decision deterministic for a given indexed state. Fall
+    // back to the block's persisted timestamp; if the header row is somehow
+    // missing the per-hour window is empty rather than wall-clock-skewed.
+    let now_unix = match block_timestamp(pool, chain_id, block_number).await? {
+        Some(ts) => ts,
+        None => match latest_block_timestamp(pool, chain_id).await? {
+            Some(ts) => {
+                warn!(
+                    chain_id,
+                    block_number,
+                    "no persisted header for evaluated block; anchoring per-hour \
+                     window to latest known chain time instead"
+                );
+                ts
+            }
+            None => {
+                warn!(
+                    chain_id,
+                    block_number, "no persisted block headers; per-hour window empty this cycle"
+                );
+                0
+            }
+        },
+    };
 
     // --- Compute volumes ---
     let mint_block = mint_volume_per_block(pool, chain_id, block_number).await?;
-    let mint_hour = mint_volume_per_hour(pool, chain_id, now_unix, 3600).await?;
+    let mint_hour = mint_volume_per_hour(pool, chain_id, now_unix, HOUR_WINDOW_SECS).await?;
     let burn_block = burn_volume_per_block(pool, chain_id, block_number).await?;
-    let burn_hour = burn_volume_per_hour(pool, chain_id, now_unix, 3600).await?;
+    let burn_hour = burn_volume_per_hour(pool, chain_id, now_unix, HOUR_WINDOW_SECS).await?;
 
     // --- Compare against thresholds ---
     let mut breaches: Vec<BreachEvent> = Vec::new();
@@ -153,7 +191,30 @@ pub async fn run_cycle(
     }
 
     // --- Dispatch actions ---
+    //
+    // Alert FIRST, pause SECOND, and bound every action by the SLA budget (scan
+    // finding WD-1). Previously the pause RPC was awaited before the alert with no
+    // timeout, so a hung gateway RPC stalled the single-threaded cycle: the alert
+    // never fired and the next poll never ran. Dispatching the on-call alert
+    // before the pause guarantees a human is paged even if the automated pause is
+    // wedged, and the per-action timeout caps how long any one RPC can block.
     let mode = config.action.mode;
+    let sla = Duration::from_secs(config.sla.max_response_secs);
+
+    if mode.includes_alert() {
+        if let Some(webhook_url) = &config.action.webhook_url {
+            for event in &breaches {
+                match timeout(sla, dispatch_alert(client, webhook_url, event)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("alert dispatch failed: {e}"),
+                    Err(_) => error!(
+                        sla_secs = config.sla.max_response_secs,
+                        "alert dispatch exceeded SLA budget; aborted"
+                    ),
+                }
+            }
+        }
+    }
 
     if mode.includes_pause() {
         let rpc_url = config
@@ -169,22 +230,22 @@ pub async fn run_cycle(
             .as_deref()
             .unwrap_or("");
 
-        match parse_pause_params(rpc_url, gw_addr_str, key_hex, chain_id) {
-            Ok(params) => match trigger_pause(client, &params).await {
-                Ok(tx) => info!(tx_hash = %tx, "gateway.pause() submitted"),
-                Err(e) => error!("gateway.pause() failed: {e}"),
+        match parse_pause_params(
+            rpc_url,
+            gw_addr_str,
+            key_hex,
+            chain_id,
+            config.action.pause_fee_bump_bps,
+        ) {
+            Ok(params) => match timeout(sla, trigger_pause(client, &params)).await {
+                Ok(Ok(tx)) => info!(tx_hash = %tx, "gateway.pause() submitted"),
+                Ok(Err(e)) => error!("gateway.pause() failed: {e}"),
+                Err(_) => error!(
+                    sla_secs = config.sla.max_response_secs,
+                    "gateway.pause() exceeded SLA budget; aborted (alert already dispatched)"
+                ),
             },
             Err(e) => error!("pause params invalid: {e}"),
-        }
-    }
-
-    if mode.includes_alert() {
-        if let Some(webhook_url) = &config.action.webhook_url {
-            for event in &breaches {
-                if let Err(e) = dispatch_alert(client, webhook_url, event).await {
-                    error!("alert dispatch failed: {e}");
-                }
-            }
         }
     }
 
@@ -211,12 +272,139 @@ pub async fn latest_indexed_block(
     Ok(row.and_then(|(v,)| v))
 }
 
+/// Look up the on-chain timestamp (Unix seconds) of a single block.
+///
+/// Returns `None` if the indexer has not persisted a header row for that block.
+pub async fn block_timestamp(
+    pool: &PgPool,
+    chain_id: i64,
+    block_number: i64,
+) -> Result<Option<i64>, WatchdogError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT timestamp FROM blocks WHERE chain_id = $1 AND block_number = $2")
+            .bind(chain_id)
+            .bind(block_number)
+            .fetch_optional(pool)
+            .await
+            .map_err(WatchdogError::Db)?;
+    Ok(row.map(|(t,)| t))
+}
+
+/// Look up the on-chain timestamp of the highest persisted block for `chain_id`.
+async fn latest_block_timestamp(
+    pool: &PgPool,
+    chain_id: i64,
+) -> Result<Option<i64>, WatchdogError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT MAX(timestamp) FROM blocks WHERE chain_id = $1")
+            .bind(chain_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(WatchdogError::Db)?;
+    Ok(row.and_then(|(v,)| v))
+}
+
+/// Load the watchdog's last-processed-block cursor for `chain_id`.
+///
+/// Returns `None` if the watchdog has never recorded progress for this chain.
+pub async fn load_cursor(pool: &PgPool, chain_id: i64) -> Result<Option<i64>, WatchdogError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT last_processed_block FROM watchdog_cursor WHERE chain_id = $1")
+            .bind(chain_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(WatchdogError::Db)?;
+    Ok(row.map(|(b,)| b))
+}
+
+/// Persist the watchdog's last-processed-block cursor for `chain_id`.
+///
+/// Idempotent upsert keyed on `chain_id`; safe to call after every evaluated
+/// block so a crash mid-range re-processes the remaining blocks rather than
+/// skipping them.
+pub async fn store_cursor(
+    pool: &PgPool,
+    chain_id: i64,
+    last_processed_block: i64,
+) -> Result<(), WatchdogError> {
+    sqlx::query(
+        "INSERT INTO watchdog_cursor (chain_id, last_processed_block, updated_at) \
+         VALUES ($1, $2, now()) \
+         ON CONFLICT (chain_id) DO UPDATE \
+           SET last_processed_block = EXCLUDED.last_processed_block, updated_at = now()",
+    )
+    .bind(chain_id)
+    .bind(last_processed_block)
+    .execute(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+    Ok(())
+}
+
+/// Evaluate **every** block newly indexed since the watchdog's cursor, advancing
+/// the cursor past each block it successfully evaluates (scan finding WD-6).
+///
+/// On the first run for a chain (no cursor row) the cursor is seeded at
+/// `latest_indexed_block - 1`, so the latest block is evaluated exactly once and
+/// the watchdog does not replay the entire indexed history.
+///
+/// Returns the aggregate result: `NoData` if there is nothing new to evaluate,
+/// `Breached` with the union of all kinds breached across the range, otherwise
+/// `Ok`. The cursor advances block-by-block, so a mid-range error leaves the
+/// remaining blocks to be retried on the next cycle rather than skipped.
+pub async fn run_cycles_since_cursor(
+    pool: &PgPool,
+    config: &Config,
+    client: &Client,
+    chain_id: i64,
+    latest_indexed_block: i64,
+) -> Result<CycleResult, WatchdogError> {
+    let cursor = load_cursor(pool, chain_id).await?;
+    // First run: start one below the latest indexed block so we evaluate exactly
+    // that block, not the whole history.
+    let from_block = cursor.map(|c| c + 1).unwrap_or(latest_indexed_block);
+
+    if from_block > latest_indexed_block {
+        // Nothing new since last cycle.
+        return Ok(CycleResult::NoData);
+    }
+
+    let mut all_kinds: Vec<ThresholdKind> = Vec::new();
+    for block_number in from_block..=latest_indexed_block {
+        match run_cycle(pool, config, client, chain_id, block_number).await {
+            Ok(CycleResult::Breached(kinds)) => {
+                for k in kinds {
+                    if !all_kinds.contains(&k) {
+                        all_kinds.push(k);
+                    }
+                }
+            }
+            Ok(CycleResult::Ok) | Ok(CycleResult::NoData) => {}
+            Err(e) => {
+                // Do NOT advance the cursor past a block we failed to evaluate;
+                // return so the next cycle retries from here.
+                error!(chain_id, block_number, "cycle error mid-range: {e}");
+                return Err(e);
+            }
+        }
+        // Advance the cursor only after a successful evaluation of this block.
+        store_cursor(pool, chain_id, block_number).await?;
+    }
+
+    if all_kinds.is_empty() {
+        Ok(CycleResult::Ok)
+    } else {
+        Ok(CycleResult::Breached(all_kinds))
+    }
+}
+
 /// Parse and validate the gateway pause parameters from config strings.
 fn parse_pause_params(
     rpc_url: String,
     gw_addr_str: &str,
     key_hex: &str,
     chain_id: i64,
+    fee_bump_bps: u64,
 ) -> Result<PauseParams, WatchdogError> {
     use alloy_primitives::Address;
     use std::str::FromStr;
@@ -241,5 +429,6 @@ fn parse_pause_params(
         gateway_address,
         chain_id: chain_id as u64,
         pauser_key: key_bytes,
+        fee_bump_bps,
     })
 }
