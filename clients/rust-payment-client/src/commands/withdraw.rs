@@ -608,7 +608,10 @@ pub fn run(args: Args) -> i32 {
 /// 1. vault.paused() == false
 /// 2. vault.allowance(agent, gateway) >= shares
 /// 3. vault.balanceOf(agent) >= shares
-async fn withdraw_vault_preflight(
+///
+/// `pub(crate)` so the router-withdraw path (RPC-7) can run the identical
+/// share allowance/balance check per redeem leg instead of hard-coding zero.
+pub(crate) async fn withdraw_vault_preflight(
     rpc: &FailoverRpcClient,
     source_vault: Address,
     gateway: Address,
