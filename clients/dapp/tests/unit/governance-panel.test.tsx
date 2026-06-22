@@ -19,21 +19,59 @@
  * Wagmi hooks are mocked at the network boundary (same pattern as
  * authorize-tab.test.tsx) so the tests run without a WagmiProvider.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "./helpers/render";
 import type { Address } from "viem";
 import { GovernancePanel } from "../../src/components/GovernancePanel";
 import type { FetchLike } from "../../src/lib/explorerApi";
 
-// Mock wagmi at the network boundary — GovernancePanel uses useAccount,
-// useReadContract, useSimulateContract, and useWriteContract. We stub
-// them to isolate the component's API-fetch and rendering logic.
+// ─── Wagmi mock state ─────────────────────────────────────────────────────────
+// GovernancePanel uses useAccount, useReadContract (votingPower live,
+// proposalVoteSnapshot, getPastVotes), useSimulateContract, useWriteContract.
+// We stub them at the module boundary, keyed by functionName so DAPP-1
+// snapshot-power gating (issue #1025) can be driven precisely.
+interface WagmiMockState {
+  isConnected: boolean;
+  address: Address | undefined;
+  /** Live RouterGovernance.votingPower(address) — display only. */
+  liveVotingPower: bigint | undefined;
+  /** proposalVoteSnapshot(proposalId) — the proposal's snapshot block. */
+  snapshotBlock: bigint | undefined;
+  /** getPastVotes(address, snapshotBlock) — the snapshot-pinned power. */
+  snapshotVotingPower: bigint | undefined;
+}
+
+const mockState: WagmiMockState = {
+  isConnected: false,
+  address: undefined,
+  liveVotingPower: undefined,
+  snapshotBlock: undefined,
+  snapshotVotingPower: undefined,
+};
+
+function resetMockState() {
+  mockState.isConnected = false;
+  mockState.address = undefined;
+  mockState.liveVotingPower = undefined;
+  mockState.snapshotBlock = undefined;
+  mockState.snapshotVotingPower = undefined;
+}
+
 vi.mock("wagmi", () => ({
-  useAccount: () => ({ address: undefined, isConnected: false }),
-  useReadContract: () => ({ data: undefined }),
-  useSimulateContract: () => ({ data: undefined }),
+  useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
+  useReadContract: (opts: { functionName?: string }) => {
+    if (opts.functionName === "votingPower") return { data: mockState.liveVotingPower };
+    if (opts.functionName === "proposalVoteSnapshot") return { data: mockState.snapshotBlock };
+    if (opts.functionName === "getPastVotes") return { data: mockState.snapshotVotingPower };
+    return { data: undefined };
+  },
+  useSimulateContract: () => ({ data: { request: {} } }),
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false }),
 }));
+
+beforeEach(() => {
+  resetMockState();
+});
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -225,5 +263,58 @@ describe("GovernancePanel — API call target", () => {
     });
     const call = (fetchImpl as unknown as { mock: { calls: [string][] } }).mock.calls[0];
     expect(call[0]).toBe("http://localhost:8080/v1/governance/proposals");
+  });
+});
+
+// ─── DAPP-1 (issue #1025): vote gating uses SNAPSHOT power, not live power ─────
+//
+// On-chain `vote()` settles against the proposal's snapshot-block power. The
+// panel must gate eligibility/weight on `getPastVotes(voter, snapshotBlock)`,
+// NOT on the connected wallet's current `votingPower(address)`. These tests
+// hold the two powers DIVERGENT so the assertion can only pass if the snapshot
+// power (not the live power) drives the gate.
+describe("GovernancePanel — snapshot-power vote gating (DAPP-1)", () => {
+  const VOTER = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Address;
+
+  it("ENABLES the vote button from SNAPSHOT power even when live power is zero", async () => {
+    mockState.isConnected = true;
+    mockState.address = VOTER;
+    mockState.liveVotingPower = 0n; // current power lost AFTER the snapshot
+    mockState.snapshotBlock = 8000n;
+    mockState.snapshotVotingPower = 4200n; // held power AT the snapshot → eligible
+
+    const { getByTestId, queryByTestId } = renderPanel(makeFetch(makeProposalsResponse("open")));
+    await waitFor(() => {
+      expect(getByTestId("governance-voting-prompt")).toBeTruthy();
+    });
+
+    const voteButton = getByTestId("governance-vote-button") as HTMLButtonElement;
+    // Live power is 0 — a live-power gate would DISABLE the button. Snapshot
+    // power is 4200 — the snapshot-power gate ENABLES it.
+    expect(voteButton.disabled).toBe(false);
+    // And the no-power hint (driven by snapshot power) is absent.
+    expect(queryByTestId("governance-no-voting-power-hint")).toBeNull();
+    // Snapshot power is surfaced for the user.
+    expect(getByTestId("governance-snapshot-voting-power-value").textContent).toContain("4,200");
+  });
+
+  it("DISABLES the vote button from SNAPSHOT power even when live power is non-zero", async () => {
+    mockState.isConnected = true;
+    mockState.address = VOTER;
+    mockState.liveVotingPower = 5000n; // power gained AFTER the snapshot
+    mockState.snapshotBlock = 8000n;
+    mockState.snapshotVotingPower = 0n; // held NO power at the snapshot → ineligible
+
+    const { getByTestId } = renderPanel(makeFetch(makeProposalsResponse("open")));
+    await waitFor(() => {
+      expect(getByTestId("governance-voting-prompt")).toBeTruthy();
+    });
+
+    const voteButton = getByTestId("governance-vote-button") as HTMLButtonElement;
+    // Live power is 5000 — a live-power gate would ENABLE the button. Snapshot
+    // power is 0 — the snapshot-power gate DISABLES it.
+    expect(voteButton.disabled).toBe(true);
+    // The no-power hint is shown, driven by snapshot power.
+    expect(getByTestId("governance-no-voting-power-hint")).toBeTruthy();
   });
 });

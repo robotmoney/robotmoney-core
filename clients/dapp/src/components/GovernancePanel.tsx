@@ -16,9 +16,11 @@
  * Data flow:
  *   - Proposal list and tally: fetched from GET /v1/governance/proposals
  *     (indexed API per §12 — no live RPC for proposal state).
- *   - Voting power: read via wagmi `useReadContract` calling
- *     `RouterGovernance.votingPower(connectedAddress)` — RouterGovernance
- *     uses admin-assigned on-chain voting power, not an ERC-20 token.
+ *   - Voting power: the connected wallet's live power is read for display via
+ *     `RouterGovernance.votingPower(connectedAddress)`, but vote eligibility is
+ *     gated on the proposal's SNAPSHOT power — `proposalVoteSnapshot(id)` then
+ *     `getPastVotes(voter, snapshotBlock)` (DAPP-1). RouterGovernance uses
+ *     admin-assigned on-chain voting power, not an ERC-20 token.
  *   - Voting: wagmi `useWriteContract` encodes vote(proposalId) calldata
  *     against the on-chain RouterGovernance ABI before wallet invocation.
  *
@@ -26,40 +28,27 @@
  *   - Proposal creation UI.
  *   - execute() trigger from dapp.
  *
- * ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
+ * ── DAPP-1/DAPP-2 remediation (off-chain scan residual; issue #1025) ─────────
  * Canonical: docs/code-review/external-scan-verification-20260619.md (dapp
- * subsystem table). Documentation-only pointer — no behaviour change here. The
- * bugs below are still present at HEAD and are owned by issue #1025
- * (fix(dapp): snapshot-power vote gating + non-zero router per-leg floors).
- * NEITHER this scout (#1027) NOR this comment implements the fixes.
+ * subsystem table). Both findings flagged by the 2026-06-19 scan are FIXED:
  *
- * DAPP-1 (Med) — vote gating uses CURRENT power, not SNAPSHOT power.
- *   The "Vote" button is gated on `votingPower` read live from
- *   `RouterGovernance.votingPower(connectedAddress)` (this file, ~line 159, the
- *   `useReadContract` whose result feeds `canVote`/`votingPower > 0n` at
- *   ~line 180). On-chain `vote()` settles against the proposal's SNAPSHOT power
- *   at proposal creation, so an account whose power changed after the snapshot
- *   is shown the wrong eligibility (and can be prompted to submit a tx the
- *   contract will reject, or be hidden when it should vote).
- *   Seam for #1025: thread a snapshot-pinned power read (the proposal's snapshot
- *   block / `getPastVotes`-style accessor) into the `canVote` gate instead of
- *   the live `votingPower`. The gating expression and the `useReadContract`
- *   call are the only edit points; the vote-encode path is unchanged.
+ * DAPP-1 (Med) — vote gating now uses SNAPSHOT power, not CURRENT power.
+ *   The "Vote" button was gated on `votingPower` read live from
+ *   `RouterGovernance.votingPower(connectedAddress)`. On-chain `vote()` settles
+ *   against the proposal's SNAPSHOT power captured at propose() time, so the
+ *   live read showed the wrong eligibility for any account whose power changed
+ *   after the snapshot. The gate now reads `proposalVoteSnapshot(proposalId)`
+ *   for the snapshot block, then `getPastVotes(voter, snapshotBlock)` for the
+ *   pinned power, and feeds that into `canVote`. The live `votingPower` read is
+ *   retained for display only; the vote-encode path is unchanged.
  *
- * DAPP-2 (Med) — router deposit submits ZERO per-leg share floors.
- *   Lives in the SIBLING component `RouterDepositTab.tsx`: the
- *   `RouterDepositTab` deposit simulation calls
- *   `router.deposit(depositAssets, [])` (~line 158–159) — the second arg, the
- *   per-leg `minSharesPerLeg` floors array, is an empty `[]`, so every leg runs
- *   with no slippage floor. Seam for #1025: derive a non-zero floor per leg
- *   from the existing `previewDeposit` per-leg receipts (already computed for
- *   the preview, see `buildRouterPreview`) minus a tolerance, and pass that
- *   array as the second `deposit` arg. Touch-point is `RouterDepositTab.tsx`'s
- *   deposit `args` only.
- *
- * Disjointness: #1025 is confined to clients/dapp/ (GovernancePanel.tsx +
- * RouterDepositTab.tsx) and does not touch the indexer (#1021/#1022), watchdog
- * (#1023), rmpc (#1024) or harness (#1026); it runs in parallel after the scout.
+ * DAPP-2 (Med) — router deposit now submits NON-ZERO per-leg share floors.
+ *   Fixed in the SIBLING component `RouterDepositTab.tsx`: the deposit
+ *   simulation previously called `router.deposit(depositAssets, [])` with an
+ *   empty `minSharesPerLeg` array (no slippage floor). It now derives a
+ *   non-zero floor per leg from the `previewDeposit` per-leg `estShares` minus
+ *   a tolerance (`deriveMinSharesPerLeg` in lib/routerPreview.ts) and passes
+ *   that array as the second `deposit` arg.
  */
 import { useEffect, useState } from "react";
 import { useAccount, useReadContract, useWriteContract, useSimulateContract } from "wagmi";
@@ -89,6 +78,26 @@ export const routerGovernanceVoteAbi = [
     name: "votingPower",
     stateMutability: "view",
     inputs: [{ name: "voter", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  // DAPP-1 (issue #1025): snapshot-pinned vote-power accessors. On-chain
+  // `vote()` settles against the proposal's snapshot block, so eligibility
+  // must be gated on snapshot power, not the connected wallet's live power.
+  {
+    type: "function",
+    name: "proposalVoteSnapshot",
+    stateMutability: "view",
+    inputs: [{ name: "proposalId", type: "uint256" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "getPastVotes",
+    stateMutability: "view",
+    inputs: [
+      { name: "voter", type: "address" },
+      { name: "blockNumber", type: "uint256" },
+    ],
     outputs: [{ name: "", type: "uint256" }],
   },
 ] as const;
@@ -188,9 +197,11 @@ export function GovernancePanel(props: GovernancePanelProps) {
     };
   }, [props.apiUrl, props.fetchImpl]);
 
-  // ── Admin-assigned voting power read (RouterGovernance.votingPower) ─────────
+  // ── Live admin-assigned voting power (display only) ─────────────────────────
   // RouterGovernance uses admin-assigned on-chain voting power — not ERC-20
-  // token balances. Read the power directly from the governance contract.
+  // token balances. The connected wallet's *current* power is shown to the user
+  // for context, but vote eligibility/weight is gated on SNAPSHOT power below
+  // (DAPP-1) because on-chain `vote()` settles against the proposal's snapshot.
   const { data: votingPower } = useReadContract({
     address: props.governanceAddress,
     abi: routerGovernanceVoteAbi,
@@ -206,14 +217,39 @@ export function GovernancePanel(props: GovernancePanelProps) {
       ? (proposals.find((p) => p.proposal_id === selectedProposalId) ?? null)
       : null;
 
+  // ── Snapshot-pinned voting power (DAPP-1, issue #1025) ──────────────────────
+  // 1. Read the proposal's snapshot block captured at propose() time.
+  const { data: snapshotBlock } = useReadContract({
+    address: props.governanceAddress,
+    abi: routerGovernanceVoteAbi,
+    functionName: "proposalVoteSnapshot",
+    args: selectedProposal ? [BigInt(selectedProposal.proposal_id)] : undefined,
+    query: { enabled: selectedProposal !== null },
+  });
+
+  // 2. Read the connected wallet's power AT that snapshot block — this is the
+  //    power the contract's vote() will actually settle against.
+  const { data: snapshotVotingPower } = useReadContract({
+    address: props.governanceAddress,
+    abi: routerGovernanceVoteAbi,
+    functionName: "getPastVotes",
+    args: address && typeof snapshotBlock === "bigint" ? [address, snapshotBlock] : undefined,
+    query: {
+      enabled: isConnected && Boolean(address) && typeof snapshotBlock === "bigint",
+    },
+  });
+
   // ── vote() simulation + write ────────────────────────────────────────────────
+  // Gate eligibility on SNAPSHOT power (DAPP-1), not the live `votingPower`:
+  // an account whose power changed after the snapshot must see the eligibility
+  // the contract will actually enforce.
   const canVote =
     isConnected &&
     Boolean(address) &&
     selectedProposal !== null &&
     selectedProposal.status === "open" &&
-    typeof votingPower === "bigint" &&
-    votingPower > 0n;
+    typeof snapshotVotingPower === "bigint" &&
+    snapshotVotingPower > 0n;
 
   const { data: voteSim } = useSimulateContract({
     account: address,
@@ -270,6 +306,20 @@ export function GovernancePanel(props: GovernancePanelProps) {
               <strong data-testid="governance-voting-power-value">
                 {typeof votingPower === "bigint"
                   ? votingPower.toLocaleString("en-US")
+                  : PLACEHOLDER}
+              </strong>
+            </p>
+          )}
+
+          {/* Snapshot voting power — the power vote() actually settles against
+              (DAPP-1, issue #1025). This, not the live power above, gates the
+              vote button for the selected proposal. */}
+          {isConnected && selectedProposal !== null && (
+            <p data-testid="governance-snapshot-voting-power">
+              Your voting power at this proposal&apos;s snapshot:{" "}
+              <strong data-testid="governance-snapshot-voting-power-value">
+                {typeof snapshotVotingPower === "bigint"
+                  ? snapshotVotingPower.toLocaleString("en-US")
                   : PLACEHOLDER}
               </strong>
             </p>
@@ -358,11 +408,14 @@ export function GovernancePanel(props: GovernancePanelProps) {
                   {!isConnected && (
                     <p data-testid="governance-connect-hint">Connect your wallet to vote.</p>
                   )}
-                  {isConnected && typeof votingPower === "bigint" && votingPower === 0n && (
-                    <p data-testid="governance-no-voting-power-hint">
-                      You have no voting power assigned and cannot vote on this proposal.
-                    </p>
-                  )}
+                  {isConnected &&
+                    typeof snapshotVotingPower === "bigint" &&
+                    snapshotVotingPower === 0n && (
+                      <p data-testid="governance-no-voting-power-hint">
+                        You held no voting power at this proposal&apos;s snapshot block and cannot
+                        vote on it.
+                      </p>
+                    )}
                   {voteError && <p data-testid="governance-vote-error">Vote failed: {voteError}</p>}
                   {voteSuccess && <p data-testid="governance-vote-success">{voteSuccess}</p>}
                 </div>
