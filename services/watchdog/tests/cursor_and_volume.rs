@@ -22,13 +22,22 @@ use reqwest::Client;
 use std::collections::HashMap;
 use watchdog::{
     alert::ThresholdKind,
-    config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig},
-    volume::{burn_volume_per_block, mint_volume_per_block},
+    config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig, VaultThresholds},
+    volume::{
+        burn_volume_per_block, mint_volume_per_block, mint_volume_per_block_for_vault,
+        mint_volume_per_hour_for_vault,
+    },
     watchdog::{run_cycle, run_cycles_since_cursor, CycleResult},
 };
 
 const CHAIN_ID: i64 = 8453;
 const VAULT_A: [u8; 20] = [0xA1; 20];
+const VAULT_B: [u8; 20] = [0xB2; 20];
+
+/// Lowercase hex (no `0x`) of a 20-byte vault address, as the config keys it.
+fn vault_hex(addr: &[u8; 20]) -> String {
+    addr.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 // ---- seed helpers ----------------------------------------------------------
 
@@ -178,6 +187,150 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
         },
         vault: HashMap::new(),
     }
+}
+
+/// Build an alert-only config with a single per-vault override for `vault`.
+///
+/// The global limits are set deliberately loose so the per-vault path is the only
+/// thing that can fire — exercising the WD-4 enforcement in isolation.
+fn per_vault_config(
+    global_limit: u64,
+    vault: &[u8; 20],
+    vt: VaultThresholds,
+    webhook_url: &str,
+) -> Config {
+    let mut vaults = HashMap::new();
+    vaults.insert(vault_hex(vault), vt);
+    Config {
+        global: GlobalThresholds {
+            per_block_mint_limit_usdc: global_limit.to_string(),
+            per_hour_mint_limit_usdc: global_limit.to_string(),
+            per_block_burn_limit_usdc: global_limit.to_string(),
+            per_hour_burn_limit_usdc: global_limit.to_string(),
+        },
+        action: ActionConfig {
+            mode: ActionMode::Alert,
+            webhook_url: Some(webhook_url.to_owned()),
+            gateway_rpc_url: None,
+            gateway_address: None,
+            pauser_private_key_hex: None,
+            pause_fee_bump_bps: 1500,
+        },
+        sla: SlaConfig {
+            max_response_secs: 300,
+        },
+        vault: vaults,
+    }
+}
+
+// ---- AC: per-vault breach under a passing global limit (WD-4) ---------------
+
+/// A single vault whose per-block mint exceeds *its* tighter per-vault threshold
+/// raises a breach naming that vault, even though the all-vault aggregate stays
+/// under the (looser) global limit.
+#[tokio::test]
+async fn per_vault_breach_under_passing_global_limit() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+
+    // Global cap 1_000_000; vault A capped at 100_000. The spike (150_000) is below
+    // global but above vault A's override.
+    let vt = VaultThresholds {
+        per_block_mint_limit_usdc: Some("100000".to_owned()),
+        per_hour_mint_limit_usdc: Some("1000000".to_owned()),
+        per_block_burn_limit_usdc: Some("1000000".to_owned()),
+        per_hour_burn_limit_usdc: Some("1000000".to_owned()),
+    };
+    let config = per_vault_config(1_000_000, &VAULT_A, vt, &server.url);
+
+    seed_chain(&fx.pool).await;
+    seed_block(&fx.pool, 500, 1_700_000_000).await;
+    // 150_000 in vault A: under the 1_000_000 global, over the 100_000 vault cap.
+    insert_agent_deposit(&fx.pool, 500, 0, &tx_hash(60), 150_000, Some(&VAULT_A)).await;
+
+    let result = run_cycle(&fx.pool, &config, &client, CHAIN_ID, 500)
+        .await
+        .expect("cycle must not error");
+
+    match result {
+        CycleResult::Breached(kinds) => assert!(
+            kinds.contains(&ThresholdKind::PerBlockMint),
+            "per-vault mint cap breach must surface as PerBlockMint; got {kinds:?}"
+        ),
+        other => panic!("expected Breached on per-vault cap, got {other:?}"),
+    }
+
+    // The dispatched alert must name vault A, not "global".
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    let captures = server.drain_captures();
+    assert!(
+        !captures.is_empty(),
+        "per-vault breach must dispatch an alert"
+    );
+    let expected = vault_hex(&VAULT_A);
+    let named = captures.iter().any(|c| {
+        serde_json::from_slice::<serde_json::Value>(&c.body)
+            .ok()
+            .and_then(|v| {
+                v["payload"]["custom_details"]["vault"]
+                    .as_str()
+                    .map(|s| s == expected)
+            })
+            .unwrap_or(false)
+    });
+    assert!(named, "alert must identify the breaching vault {expected}");
+
+    server.shutdown();
+}
+
+/// Volume must be accounted *per vault*: a spike in vault B does not dilute into
+/// vault A's per-vault check, and vault A's scoped volume only counts vault A.
+#[tokio::test]
+async fn per_vault_volume_is_accounted_per_vault() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    seed_chain(&fx.pool).await;
+    seed_block(&fx.pool, 600, 1_700_000_000).await;
+
+    // Vault A: 120_000. Vault B: 900_000 (a spike). The all-vault aggregate is
+    // 1_020_000, but the per-vault A figure must be exactly 120_000.
+    insert_agent_deposit(&fx.pool, 600, 0, &tx_hash(70), 120_000, Some(&VAULT_A)).await;
+    insert_agent_deposit(&fx.pool, 600, 1, &tx_hash(71), 900_000, Some(&VAULT_B)).await;
+
+    let agg = mint_volume_per_block(&fx.pool, CHAIN_ID, 600)
+        .await
+        .unwrap();
+    assert_eq!(agg, 1_020_000, "all-vault aggregate sums both vaults");
+
+    let vault_a = mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, 600, &VAULT_A[..])
+        .await
+        .unwrap();
+    assert_eq!(
+        vault_a, 120_000,
+        "vault A per-vault volume must NOT include vault B's spike"
+    );
+
+    let vault_b = mint_volume_per_block_for_vault(&fx.pool, CHAIN_ID, 600, &VAULT_B[..])
+        .await
+        .unwrap();
+    assert_eq!(
+        vault_b, 900_000,
+        "vault B per-vault volume counts only vault B"
+    );
+
+    // Per-hour scoping is likewise per vault.
+    let vault_a_hour =
+        mint_volume_per_hour_for_vault(&fx.pool, CHAIN_ID, 1_700_000_000, 3600, &VAULT_A[..])
+            .await
+            .unwrap();
+    assert_eq!(
+        vault_a_hour, 120_000,
+        "vault A per-hour volume excludes vault B"
+    );
 }
 
 // ---- AC-1 / WD-6 -----------------------------------------------------------

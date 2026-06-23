@@ -12,12 +12,14 @@
  *     high-risk classification.
  *   - buildRouterPreview — unverified bytecode refusal path.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen } from "./helpers/render";
 import {
   buildRouterPreview,
   type LegPreview,
   type RouterPreviewContext,
 } from "../../src/lib/routerPreview";
+import { DestinationSelector } from "../../src/components/DestinationSelector";
 
 // ─── DestinationSelector pure-logic tests ─────────────────────────────────
 
@@ -132,5 +134,40 @@ describe("buildRouterPreview — refusal paths", () => {
     if (preview.ok) return;
     // reason is now a typed ProductReasonCode
     expect(preview.reason).toBe("unknown_revert");
+  });
+});
+
+// ─── DestinationSelector render — undefined-element guard (issue #1038) ───────
+
+// `listVaults()` feeds DestinationSelector's render map, which keys each row on
+// `vault.toLowerCase()`. A list containing an undefined element would crash the
+// deposit-withdraw tab with the issue-#1038 TypeError. Mock `useReadContract`
+// to return such a list and assert the component still renders.
+let mockVaultListRaw: unknown;
+vi.mock("wagmi", () => ({
+  useReadContract: () => ({ data: mockVaultListRaw }),
+}));
+
+describe("DestinationSelector — undefined vault element (issue #1038 regression)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not throw when listVaults returns a list with an undefined element", () => {
+    mockVaultListRaw = [vault1, undefined, vault2];
+    expect(() =>
+      render(
+        <DestinationSelector
+          registryAddress={gateway}
+          routerAddress={router}
+          selected={vault1}
+          onSelect={vi.fn()}
+        />,
+      ),
+    ).not.toThrow();
+    // The two valid vaults render; the undefined element is filtered out.
+    expect(screen.getByTestId(`destination-vault-${vault1}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`destination-vault-${vault2}`)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Vault /)).toHaveLength(2);
   });
 });

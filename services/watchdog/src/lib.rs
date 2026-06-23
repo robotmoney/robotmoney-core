@@ -24,6 +24,11 @@ pub mod pause;
 /// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —
 /// documentation-only, no runtime code.
 pub mod scan_remediation_seams;
+/// Dev-scout seam map for the off-chain scan-remediation **residual** phase
+/// (issue #1027) — the per-vault threshold-enforcement seam for #1023.
+/// Documentation-only, no runtime code; the bug it describes is still present
+/// at HEAD.
+pub mod scan_residual_seams;
 pub mod volume;
 pub mod watchdog;
 

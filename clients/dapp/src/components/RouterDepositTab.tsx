@@ -28,6 +28,9 @@ import type { Address, Hash } from "viem";
 import { erc20Abi, routerAbi } from "../lib/abi";
 import {
   buildRouterPreview,
+  computeVaultListChanged,
+  deriveMinSharesPerLeg,
+  normaliseAddress,
   type RouterPreviewContext,
   type LegPreview,
 } from "../lib/routerPreview";
@@ -82,17 +85,24 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     query: { enabled: isConnected && depositAssets !== null },
   });
 
+  // Root cause (issue #1036): `router.previewDeposit` may decode a leg whose
+  // `vault` field is missing/undefined in the live router-deposit path (partial
+  // or transition-state tuple). Normalising the address at the source keeps a
+  // defined, checksummed `vault` flowing to every consumer (ProportionPreview,
+  // deriveMinSharesPerLeg, buildRouterPreview, computeVaultListChanged); when it
+  // genuinely can't be resolved we fall back to the raw value (possibly
+  // undefined), which every consumer now guards against rather than crashing.
   const legs: LegPreview[] = Array.isArray(previewRaw)
     ? (
         previewRaw as Array<{
-          vault: Address;
+          vault: Address | undefined;
           weightBps: bigint;
           legAmount: bigint;
           estShares: bigint;
           unavailable: boolean;
         }>
       ).map((l) => ({
-        vault: l.vault,
+        vault: (normaliseAddress(l.vault) ?? l.vault) as Address,
         weightBps: l.weightBps,
         legAmount: l.legAmount,
         estShares: l.estShares,
@@ -118,12 +128,12 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   });
 
   // Check if the live activeVaults list matches the preview vault list (AC §7).
-  const vaultListChanged = (() => {
-    if (!currentActiveVaults || legs.length === 0) return false;
-    const live = currentActiveVaults as Address[];
-    if (live.length !== legs.length) return true;
-    return legs.some((leg, i) => leg.vault.toLowerCase() !== live[i]?.toLowerCase());
-  })();
+  // Delegated to a null-safe helper (issue #1036): an undefined leg vault must
+  // not crash the component — it is treated as "list changed" (submit disabled).
+  const vaultListChanged = computeVaultListChanged(
+    legs,
+    currentActiveVaults as Address[] | undefined,
+  );
 
   const allowanceOk =
     depositAssets !== null && typeof allowance === "bigint" && allowance >= depositAssets;
@@ -151,12 +161,17 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     allowanceOk &&
     !vaultListChanged;
 
+  // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
+  // preview's per-leg estimated shares (minus a slippage tolerance) so each leg
+  // keeps slippage protection. Replaces the previous empty `[]` floors array.
+  const minSharesPerLeg = deriveMinSharesPerLeg(legs);
+
   const { data: depositSim, error: depositSimError } = useSimulateContract({
     account: address,
     address: routerAddress,
     abi: routerAbi,
     functionName: "deposit",
-    args: depositAssets !== null ? [depositAssets, []] : undefined,
+    args: depositAssets !== null ? [depositAssets, minSharesPerLeg] : undefined,
     query: { enabled: canSimDeposit, retry: 5 },
   });
 

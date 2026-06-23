@@ -74,6 +74,47 @@ fn main() -> ExitCode {
         return ExitCode::from(3);
     }
 
+    // HARN-5 (issue #1026): authenticate the snapshot BYTES before ingest. Read
+    // the snapshot file and verify it hashes to the manifest's snapshot_sha256
+    // digest. A mismatch means the snapshot was substituted or corrupted —
+    // reject before constructing genesis `alloc`. A missing digest is tolerated
+    // for legacy manifests UNLESS --require-pinned is set, in which case an
+    // unauthenticated snapshot is refused alongside an unpinned block_hash.
+    let snapshot_bytes = match std::fs::read(&cli.snapshot) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: read snapshot {}: {e}", cli.snapshot.display());
+            return ExitCode::from(7);
+        }
+    };
+    match manifest.verify_snapshot_digest(&snapshot_bytes) {
+        Ok(true) => {
+            eprintln!(
+                "snapshot digest verified against manifest snapshot_sha256 ({} bytes)",
+                snapshot_bytes.len()
+            );
+        }
+        Ok(false) => {
+            if cli.require_pinned {
+                eprintln!(
+                    "error: manifest {} has no snapshot_sha256; refusing to ingest an \
+                     unauthenticated snapshot under --require-pinned",
+                    cli.manifest.display()
+                );
+                return ExitCode::from(8);
+            }
+            eprintln!(
+                "warning: manifest {} has no snapshot_sha256; ingesting an unauthenticated \
+                 snapshot (set --require-pinned to forbid this)",
+                cli.manifest.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("error: snapshot authentication failed: {e}");
+            return ExitCode::from(9);
+        }
+    }
+
     let alloc = match build_alloc(&cli.snapshot, &manifest) {
         Ok(a) => a,
         Err(e) => {

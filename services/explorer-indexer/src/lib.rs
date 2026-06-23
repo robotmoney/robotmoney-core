@@ -32,6 +32,11 @@ pub mod rpc;
 /// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —
 /// documentation-only, no runtime code.
 pub mod scan_remediation_seams;
+/// Dev-scout seam map for the off-chain scan-remediation **residual** phase
+/// (issue #1027) — the shared indexer reorg/cursor + writers seam for #1021 and
+/// #1022. Documentation-only, no runtime code; the bugs it describes are still
+/// present at HEAD.
+pub mod scan_residual_seams;
 /// Dev-scout seam map (issue #703) — documentation-only, no runtime code.
 pub mod schema;
 

@@ -12,10 +12,10 @@
  * Wagmi hooks are mocked at the module boundary so no WagmiProvider is needed.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "./helpers/render";
+import { render, screen, fireEvent } from "./helpers/render";
 import type { Address } from "viem";
 import { RouterDepositTab } from "../../src/components/RouterDepositTab";
-import type { RouterPreviewContext } from "../../src/lib/routerPreview";
+import { deriveMinSharesPerLeg, type RouterPreviewContext } from "../../src/lib/routerPreview";
 
 // ─── Addresses ───────────────────────────────────────────────────────────────
 const ROUTER = "0xrouterrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr" as Address;
@@ -90,6 +90,10 @@ const mockState: WagmiMockState = {
   depositSim: { request: {} },
 };
 
+// Captures the args the component passes to the router `deposit` simulation so
+// DAPP-2 (issue #1025) — non-zero per-leg minSharesPerLeg — can be asserted.
+let capturedDepositArgs: readonly unknown[] | undefined;
+
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
   useReadContract: (opts: { functionName?: string }) => {
@@ -99,9 +103,12 @@ vi.mock("wagmi", () => ({
     if (opts.functionName === "activeVaults") return { data: mockState.activeVaults };
     return { data: undefined, error: null };
   },
-  useSimulateContract: (opts: { functionName?: string }) => {
+  useSimulateContract: (opts: { functionName?: string; args?: readonly unknown[] }) => {
     if (opts.functionName === "approve") return { data: mockState.approveSim, error: null };
-    if (opts.functionName === "deposit") return { data: mockState.depositSim, error: null };
+    if (opts.functionName === "deposit") {
+      capturedDepositArgs = opts.args;
+      return { data: mockState.depositSim, error: null };
+    }
     return { data: undefined, error: null };
   },
   useWriteContract: () => ({
@@ -184,5 +191,52 @@ describe("RouterDepositTab shows unavailable-leg warning and disables submit whe
     const submit = screen.getByTestId("router-deposit-tab-submit") as HTMLButtonElement;
     // The submit is disabled because vaultListChanged=true
     expect(submit.disabled).toBe(true);
+  });
+});
+
+// DAPP-2 (issue #1025): the router deposit call must submit non-zero per-leg
+// minSharesPerLeg floors derived from the preview's estimated shares, not the
+// previous empty `[]` that disabled per-leg slippage protection.
+describe("RouterDepositTab submits non-zero per-leg minSharesPerLeg floors derived from expected shares", () => {
+  beforeEach(() => {
+    mockState.isConnected = true;
+    mockState.address = USER;
+    mockState.allowance = 10_000_000n;
+    mockState.previewDepositLegs = activeLegsPrev;
+    mockState.activeVaults = [VAULT_A, VAULT_B];
+    mockState.depositSim = { request: {} };
+    capturedDepositArgs = undefined;
+  });
+
+  it("passes a non-empty floors array equal to deriveMinSharesPerLeg over the preview legs", () => {
+    renderTab();
+    // Enter an amount so depositAssets is non-null and the deposit sim runs.
+    fireEvent.change(screen.getByTestId("router-deposit-tab-amount"), {
+      target: { value: "10" },
+    });
+
+    expect(capturedDepositArgs).toBeDefined();
+    const [amountArg, floorsArg] = capturedDepositArgs as [bigint, bigint[]];
+
+    // 10 USDC (6 decimals) -> the deposit amount the user typed.
+    expect(amountArg).toBe(10_000_000n);
+
+    // Floors must be the derived, NON-zero per-leg floors — never the old `[]`.
+    const expected = deriveMinSharesPerLeg(
+      activeLegsPrev.map((l) => ({
+        vault: l.vault,
+        weightBps: l.weightBps,
+        legAmount: l.legAmount,
+        estShares: l.estShares,
+        unavailable: l.unavailable,
+      })),
+    );
+    expect(floorsArg).toEqual(expected);
+    expect(floorsArg.length).toBe(activeLegsPrev.length);
+    expect(floorsArg.every((f) => f > 0n)).toBe(true);
+    // And each floor is strictly below the estimated shares (tolerance shaved).
+    floorsArg.forEach((f, i) => {
+      expect(f).toBeLessThan(activeLegsPrev[i].estShares);
+    });
   });
 });

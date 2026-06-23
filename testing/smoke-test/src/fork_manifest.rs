@@ -25,6 +25,43 @@
 //! a live archive RPC and is gated behind the `pinned` flag. The validator
 //! surfaces `pinned` so callers (CI, the genesis ingester) can decide whether
 //! to require pin verification.
+//!
+//! ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
+//! Canonical: `docs/code-review/external-scan-verification-20260619.md`
+//! (smoke-test / fork-e2e harness subsystem table). Documentation-only pointer:
+//! no behaviour change here. The findings below are still present at HEAD and
+//! are owned by issue #1026 (fix(harness): authenticate fork snapshot + remove
+//! faucet-key / USDC-slot). NEITHER this scout (#1027) NOR this comment
+//! implements the fixes.
+//!
+//! HARN-5 (Med — supply-chain): the pinned manifest does not authenticate the
+//!   snapshot BYTES. `snapshot_uri` is only validated as non-empty (see the
+//!   validation rule above and `validate()` below); `pinned` covers the
+//!   `block_hash` ↔ archive-RPC check but says nothing about the contents
+//!   fetched from `snapshot_uri`. Seam for #1026: add a content digest field
+//!   (e.g. `snapshot_sha256`) to `ForkManifest` + a validation rule, and have
+//!   the genesis ingester (`src/bin/genesis-ingester.rs`) verify the downloaded
+//!   snapshot hashes to it before constructing genesis `alloc`. The struct +
+//!   `validate()` here are the seam; the ingester is the enforcement point.
+//!
+//! HARN-2 (Med — most-real): the devnet faucet private key is exposed in the
+//!   public Vite bundle / cloudflared tunnel and printed. Lives in the faucet
+//!   wiring, NOT this file (`src/genesis_alloc.rs`, `src/base_testnet.rs`,
+//!   `src/bin/smoke-test.rs`, and the dapp/Vite env). Seam for #1026: stop
+//!   embedding the key in any client-reachable surface; serve faucet grants
+//!   from a harness-side signer instead. Disjoint from the manifest struct.
+//!
+//! HARN-6 (Med — robustness, no attacker needed): the USDC grant ignores the
+//!   PACKED blacklist bit (FiatToken V2_1-vs-V2_2 storage-layout mismatch), so
+//!   on a V2_2 snapshot the grant can target/leave a stale blacklist slot.
+//!   Lives in the USDC-seed path (`src/base_testnet.rs` /
+//!   `src/bin/demo-seed-depositors.rs`), NOT this manifest module. Seam for
+//!   #1026: detect the FiatToken minor version and compute the blacklist slot
+//!   from the packed layout rather than the hardcoded V2_1 slot.
+//!
+//! Disjointness: #1026 is confined to `testing/` (manifest + USDC-seed +
+//!   faucet wiring) and does not touch the indexer (#1021/#1022), watchdog
+//!   (#1023), rmpc (#1024) or dapp (#1025); it runs in parallel after the scout.
 
 use std::path::Path;
 
@@ -49,6 +86,17 @@ pub struct ForkManifest {
     /// not been verified against an archive RPC. The genesis ingester is
     /// expected to refuse final devnet construction unless `pinned == true`.
     pub pinned: bool,
+    /// HARN-5 (off-chain scan remediation, issue #1026): SHA-256 content digest
+    /// of the snapshot bytes the genesis ingester will ingest, as a 0x-prefixed
+    /// 32-byte (64-hex) string. `pinned` authenticates `block_hash` against an
+    /// archive RPC but says nothing about the BYTES fetched from
+    /// `snapshot_uri`; this field closes that gap. When present, the ingester
+    /// MUST verify the snapshot hashes to it before constructing genesis
+    /// `alloc` (see [`ForkManifest::verify_snapshot_digest`]). `None` preserves
+    /// backward compatibility with manifests captured before this field
+    /// existed, but the ingester refuses to ingest an unauthenticated snapshot
+    /// under `--require-pinned`.
+    pub snapshot_sha256: Option<String>,
 }
 
 /// Errors returned by [`ForkManifest::load`] / [`ForkManifest::from_str`].
@@ -82,6 +130,8 @@ struct RawManifest {
     harness_usdc_grant_units: Option<String>,
     #[serde(default)]
     pinned: Option<bool>,
+    #[serde(default)]
+    snapshot_sha256: Option<String>,
 }
 
 impl ForkManifest {
@@ -181,6 +231,22 @@ impl ForkManifest {
 
         let pinned = raw.pinned.unwrap_or(false);
 
+        // HARN-5: the snapshot content digest, when present, must be a
+        // well-formed 0x-prefixed 32-byte sha256 hex string. A malformed
+        // digest is rejected here so the ingester never silently treats an
+        // unparseable digest as "no digest" and skips verification.
+        let snapshot_sha256 = match raw.snapshot_sha256 {
+            Some(s) => {
+                if !is_valid_b256_hex(&s) {
+                    return Err(ManifestError::Invalid(format!(
+                        "snapshot_sha256 must be 0x-prefixed 32-byte hex, got {s:?}"
+                    )));
+                }
+                Some(s.to_ascii_lowercase())
+            }
+            None => None,
+        };
+
         Ok(ForkManifest {
             chain,
             block_number,
@@ -190,8 +256,47 @@ impl ForkManifest {
             harness_usdc_holder,
             harness_usdc_grant_units,
             pinned,
+            snapshot_sha256,
         })
     }
+
+    /// HARN-5: verify that `snapshot_bytes` hashes to the manifest's
+    /// `snapshot_sha256` digest. Returns:
+    /// - `Ok(true)` when a digest is present and matches the bytes,
+    /// - `Err(ManifestError::Invalid)` when a digest is present and does NOT
+    ///   match (the snapshot was substituted or corrupted — reject before
+    ///   ingest),
+    /// - `Ok(false)` when no digest is present (unauthenticated; the caller
+    ///   decides whether that is acceptable — the ingester refuses it under
+    ///   `--require-pinned`).
+    ///
+    /// The genesis ingester calls this on the raw snapshot file bytes before
+    /// constructing genesis `alloc`, so substituted/corrupted snapshot bytes
+    /// are rejected rather than trusted.
+    pub fn verify_snapshot_digest(&self, snapshot_bytes: &[u8]) -> Result<bool, ManifestError> {
+        let Some(expected) = self.snapshot_sha256.as_deref() else {
+            return Ok(false);
+        };
+        let actual = sha256_hex(snapshot_bytes);
+        if actual != expected {
+            return Err(ManifestError::Invalid(format!(
+                "snapshot digest mismatch: manifest snapshot_sha256={expected} but ingested \
+                 snapshot bytes hash to {actual}; refusing to ingest a snapshot that does not \
+                 match the authenticated manifest digest"
+            )));
+        }
+        Ok(true)
+    }
+}
+
+/// SHA-256 of `bytes` as a `0x`-prefixed lowercase 64-hex string, matching the
+/// shape stored in `snapshot_sha256`.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    format!("0x{}", hex::encode(digest))
 }
 
 /// Returns true iff `s` is a `0x`-prefixed 32-byte hex string. Used to
@@ -359,6 +464,87 @@ mod tests {
         );
     }
 
+    // ── HARN-5 (issue #1026): snapshot-bytes digest authentication ──────────
+
+    /// A manifest body carrying a well-formed `snapshot_sha256` whose value is
+    /// the actual sha256 of `snapshot_bytes`. Returns (json, bytes) so tests
+    /// can assert verification both matches and rejects substitution.
+    fn manifest_with_digest_for(snapshot_bytes: &[u8]) -> (String, Vec<u8>) {
+        let digest = sha256_hex(snapshot_bytes);
+        let json = valid_manifest_json().replace(
+            "\"pinned\": false",
+            &format!("\"pinned\": false,\n            \"snapshot_sha256\": \"{digest}\""),
+        );
+        (json, snapshot_bytes.to_vec())
+    }
+
+    #[test]
+    fn accepts_valid_snapshot_digest_field() {
+        let (json, _) = manifest_with_digest_for(b"hello fork snapshot");
+        let m = ForkManifest::from_str(&json).expect("should parse with snapshot_sha256");
+        assert!(m.snapshot_sha256.is_some());
+        // Stored lowercase, 0x-prefixed, 64 hex chars.
+        let d = m.snapshot_sha256.unwrap();
+        assert!(d.starts_with("0x") && d.len() == 66 && d == d.to_ascii_lowercase());
+    }
+
+    #[test]
+    fn snapshot_sha256_absent_is_none() {
+        let m = ForkManifest::from_str(&valid_manifest_json()).expect("parses");
+        assert!(m.snapshot_sha256.is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_snapshot_digest() {
+        let bad = valid_manifest_json().replace(
+            "\"pinned\": false",
+            "\"pinned\": false,\n            \"snapshot_sha256\": \"0xdeadbeef\"",
+        );
+        let err = ForkManifest::from_str(&bad).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::Invalid(s) if s.contains("snapshot_sha256 must be")),
+            "malformed digest must be rejected at parse time"
+        );
+    }
+
+    /// AC: a fork manifest whose snapshot bytes do NOT match the manifest
+    /// digest is rejected before ingest. `verify_snapshot_digest` returns
+    /// `Err` on mismatch — the genesis ingester treats that as a hard refusal.
+    #[test]
+    fn rejects_snapshot_bytes_that_mismatch_digest() {
+        let (json, bytes) = manifest_with_digest_for(b"the authentic snapshot bytes");
+        let m = ForkManifest::from_str(&json).expect("parses");
+
+        // Matching bytes verify Ok(true).
+        assert!(m.verify_snapshot_digest(&bytes).unwrap());
+
+        // Substituted/corrupted bytes are rejected with a digest-mismatch error.
+        let substituted = b"a DIFFERENT (substituted) snapshot payload";
+        let err = m
+            .verify_snapshot_digest(substituted)
+            .expect_err("mismatched snapshot bytes must be rejected");
+        assert!(
+            matches!(err, ManifestError::Invalid(s) if s.contains("snapshot digest mismatch")),
+            "mismatch must surface as a digest-mismatch ManifestError"
+        );
+    }
+
+    #[test]
+    fn verify_snapshot_digest_absent_returns_false() {
+        let m = ForkManifest::from_str(&valid_manifest_json()).expect("parses");
+        // No digest present ⇒ Ok(false) (unauthenticated; caller decides).
+        assert!(!m.verify_snapshot_digest(b"anything").unwrap());
+    }
+
+    #[test]
+    fn sha256_hex_is_stable_and_lowercase() {
+        // Known vector: sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        assert_eq!(
+            sha256_hex(b""),
+            "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
     #[test]
     fn pinned_defaults_to_false_when_absent() {
         let bad = valid_manifest_json().replace(",\n            \"pinned\": false", "");
@@ -413,6 +599,35 @@ mod tests {
             .parse()
             .expect("HARNESS_USDC_HOLDER_ADDRESS_HEX parses");
         assert_eq!(m.harness_usdc_holder, expected);
+    }
+
+    /// HARN-5 CI guard (issue #1026): the committed manifest MUST carry a
+    /// `snapshot_sha256`, and it MUST match the sha256 of the committed
+    /// `CURRENT.anvil-state` snapshot the genesis ingester ingests. This fails
+    /// the build if a fixture refresh bumps the snapshot bytes without
+    /// recomputing the digest (or vice-versa), so the devnet can never ingest
+    /// an unauthenticated/stale snapshot.
+    #[test]
+    fn committed_manifest_authenticates_current_snapshot() {
+        let repo = crate::locate_repo_root().expect("locate repo root");
+        let manifest =
+            ForkManifest::load(&repo.join("testing/ethereum-testnet/config/fork-block.json"))
+                .expect("manifest validates");
+        assert!(
+            manifest.snapshot_sha256.is_some(),
+            "committed fork-block.json must carry snapshot_sha256 (HARN-5); add the sha256 of \
+             testing/fixtures/fork-state/CURRENT.anvil-state"
+        );
+
+        let snapshot_path = repo.join("testing/fixtures/fork-state/CURRENT.anvil-state");
+        let bytes = std::fs::read(&snapshot_path).expect("read CURRENT.anvil-state");
+        let verified = manifest
+            .verify_snapshot_digest(&bytes)
+            .expect("committed snapshot must match committed snapshot_sha256 digest");
+        assert!(
+            verified,
+            "verify_snapshot_digest returned false despite snapshot_sha256 being present"
+        );
     }
 
     /// CI guard for issue #557: every pair in the expected-prices fixture must

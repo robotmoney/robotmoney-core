@@ -84,9 +84,13 @@ describe("PositionSelector — empty positions", () => {
 });
 
 describe("PositionSelector — non-zero positions", () => {
+  // Field name `vault` mirrors the real explorer-api shape
+  // (clients/explorer-api/src/model.rs `VaultPosition.vault`) — NOT
+  // `vault_addr`. `fetchPositions` maps `vault` → `vault_addr`. Issue #1038:
+  // a prior blind cast left `vault_addr` undefined and crashed the render.
   const mockPositions = [
-    { vault_addr: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", shares: "10.000000" },
-    { vault_addr: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", shares: "5.500000" },
+    { vault: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", shares: "10.000000" },
+    { vault: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", shares: "5.500000" },
   ];
 
   beforeEach(() => {
@@ -120,7 +124,7 @@ describe("PositionSelector — non-zero positions", () => {
     const radios = screen.getAllByRole("radio");
     fireEvent.click(radios[0]);
     expect(onSelect).toHaveBeenCalledOnce();
-    expect(onSelect).toHaveBeenCalledWith(mockPositions[0].vault_addr, mockPositions[0].shares);
+    expect(onSelect).toHaveBeenCalledWith(mockPositions[0].vault, mockPositions[0].shares);
   });
 
   it("marks the selectedVault radio as checked", async () => {
@@ -139,10 +143,94 @@ describe("PositionSelector — non-zero positions", () => {
   });
 });
 
+describe("PositionSelector — explorer-api `vault` shape (issue #1038 regression)", () => {
+  // The exact non-zero position payload the explorer-api serves
+  // (clients/explorer-api/src/model.rs `VaultPosition`): the address field is
+  // `vault` (NOT `vault_addr`), plus `usdc_value`/`block_number`/`indexed_at`
+  // and no `vault_name`. Captured from the failing router-deposit.spec trace.
+  // Before the fix, `fetchPositions` cast this body straight to the dapp shape,
+  // leaving `vault_addr` undefined; the first non-zero row then crashed the
+  // render map at `p.vault_addr.toLowerCase()`.
+  const apiPositions = [
+    {
+      vault: "0x17435cce3d1b4fa2e5f8a08ed921d57c6762a180",
+      shares: "1000000000000000000000000000",
+      usdc_value: "1000000835",
+      block_number: 24,
+      indexed_at: "2026-06-23T01:58:26.008525Z",
+    },
+  ];
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ positions: apiPositions }),
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the position without throwing on undefined vault address", async () => {
+    // The crash was a synchronous TypeError during render; if it regresses,
+    // RTL surfaces it as a rejected render and this waitFor never resolves.
+    render(<PositionSelector account={ACCOUNT} explorerApiUrl={API_URL} onSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("position-selector")).toBeInTheDocument());
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+  });
+
+  it("calls onSelect with the mapped `vault` address on click", async () => {
+    const onSelect = vi.fn();
+    render(<PositionSelector account={ACCOUNT} explorerApiUrl={API_URL} onSelect={onSelect} />);
+    await waitFor(() => expect(screen.getByTestId("position-selector")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("radio")[0]);
+    expect(onSelect).toHaveBeenCalledWith(apiPositions[0].vault, apiPositions[0].shares);
+  });
+});
+
+describe("PositionSelector — malformed positions (missing address)", () => {
+  // Defence in depth: even if a row somehow lacks a vault address, the
+  // component must not crash — it should simply omit that row.
+  const malformed = [
+    { shares: "5.000000" },
+    { vault: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", shares: "2.000000" },
+  ];
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ positions: malformed }),
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("omits address-less rows and renders the valid one without throwing", async () => {
+    render(<PositionSelector account={ACCOUNT} explorerApiUrl={API_URL} onSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("position-selector")).toBeInTheDocument());
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+  });
+});
+
 describe("PositionSelector — zero-balance filtering", () => {
   const mixedPositions = [
-    { vault_addr: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", shares: "0.000000" },
-    { vault_addr: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", shares: "3.000000" },
+    { vault: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", shares: "0.000000" },
+    { vault: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", shares: "3.000000" },
   ];
 
   beforeEach(() => {

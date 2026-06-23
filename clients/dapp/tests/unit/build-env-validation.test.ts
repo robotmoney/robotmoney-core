@@ -112,4 +112,63 @@ describe("validateFaucetKeyForBuild", () => {
       }
     });
   });
+
+  /**
+   * HARN-2 (off-chain scan remediation, issue #1026) — AC3.
+   *
+   * The faucet private key must never reach a PUBLIC (production-like) dapp
+   * bundle nor be accepted as a public Vite build arg. The devnet/testnet/fork
+   * classes intentionally inline the key for the local faucet UX (that key
+   * existing in a devnet bundle is by-design and explicitly out of scope), but
+   * any build that is NOT an explicit local-devnet class — i.e. mainnet, or a
+   * production build with no/invalid env class — must FAIL CLOSED so the
+   * key-bearing build arg can never produce a publicly-served bundle.
+   *
+   * This is the guard test the issue's AC3 calls for: it proves the build
+   * pipeline rejects the faucet key on every public/production surface.
+   */
+  describe("HARN-2 AC3: faucet key cannot reach a public bundle / build arg", () => {
+    // Surfaces that publish a bundle to untrusted parties (or are ambiguous and
+    // must fail closed). None may accept the key as a build arg.
+    const PUBLIC_OR_FAIL_CLOSED_ENVS: ReadonlyArray<string | undefined> = [
+      "mainnet", // real-money chain — bundle is publicly served
+      undefined, // no env class declared during a production build
+      "production", // not one of the four recognized classes
+      "staging", // not one of the four recognized classes
+    ];
+
+    for (const envClass of PUBLIC_OR_FAIL_CLOSED_ENVS) {
+      it(`refuses the faucet key as a build arg for env class ${JSON.stringify(
+        envClass ?? null,
+      )}`, () => {
+        const env: Record<string, string | undefined> = {
+          VITE_FAUCET_HARNESS_PRIVATE_KEY: KEY,
+        };
+        if (envClass !== undefined) env.VITE_ENV_CLASS = envClass;
+
+        const result = validateFaucetKeyForBuild({
+          env,
+          command: "build",
+          mode: "production",
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          // The rejection names the offending build arg so an operator sees
+          // exactly which variable poisons the public bundle.
+          expect(result.reason).toMatch(/VITE_FAUCET_HARNESS_PRIVATE_KEY|VITE_ENV_CLASS/);
+        }
+      });
+    }
+
+    it("a clean mainnet build (no faucet key) carries no key in its build env", () => {
+      // The positive direction: a publicly-served bundle is permitted precisely
+      // because the faucet key is absent from the build env — so it cannot be
+      // inlined into the emitted JavaScript.
+      const env = { VITE_ENV_CLASS: "mainnet" } as const;
+      expect(env).not.toHaveProperty("VITE_FAUCET_HARNESS_PRIVATE_KEY");
+      const result = validateFaucetKeyForBuild({ env, command: "build", mode: "production" });
+      expect(result.ok).toBe(true);
+    });
+  });
 });

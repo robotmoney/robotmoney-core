@@ -31,7 +31,9 @@ use crate::{
     config::Config,
     pause::{trigger_pause, PauseParams},
     volume::{
-        burn_volume_per_block, burn_volume_per_hour, mint_volume_per_block, mint_volume_per_hour,
+        burn_volume_per_block, burn_volume_per_block_for_vault, burn_volume_per_hour,
+        burn_volume_per_hour_for_vault, mint_volume_per_block, mint_volume_per_block_for_vault,
+        mint_volume_per_hour, mint_volume_per_hour_for_vault,
     },
     WatchdogError,
 };
@@ -175,6 +177,36 @@ pub async fn run_cycle(
             block_number,
             vault: None,
         });
+    }
+
+    // --- Per-vault threshold checks (scan finding WD-4) ---
+    //
+    // The global checks above measure the all-vault aggregate. A vault configured
+    // with a *tighter* override (`[vault."<hex>"]` in config) must additionally be
+    // measured against its own limit so a spike confined to that vault is caught
+    // even when the global aggregate stays under the global cap. Volume is scoped
+    // per vault (GROUP-BY-vault semantics) so one vault's spike never dilutes into
+    // another's per-vault check.
+    for vault_hex in config.vault.keys() {
+        let Some(vault_bytes) = decode_vault_hex(vault_hex) else {
+            warn!(
+                vault = %vault_hex,
+                "per-vault threshold key is not valid hex; skipping this vault"
+            );
+            continue;
+        };
+
+        evaluate_vault_breaches(
+            pool,
+            config,
+            chain_id,
+            block_number,
+            now_unix,
+            vault_hex,
+            &vault_bytes,
+            &mut breaches,
+        )
+        .await?;
     }
 
     if breaches.is_empty() {
@@ -396,6 +428,93 @@ pub async fn run_cycles_since_cursor(
     } else {
         Ok(CycleResult::Breached(all_kinds))
     }
+}
+
+/// Decode a per-vault config key (lowercase hex address, no `0x` prefix) to raw
+/// bytes for binding against the BYTEA `vault` column.
+///
+/// Tolerates an optional `0x` prefix so a mis-keyed config entry still resolves.
+/// Returns `None` if the key is not valid hex.
+fn decode_vault_hex(vault_hex: &str) -> Option<Vec<u8>> {
+    let trimmed = vault_hex.trim_start_matches("0x");
+    hex::decode(trimmed).ok()
+}
+
+/// Evaluate the four per-vault thresholds for a single configured vault and push
+/// any breaches (with `vault` set) onto `breaches`.
+///
+/// Each metric is compared against the vault's *effective* limit from
+/// [`Config::per_block_mint_limit`] and siblings, which fall back to the global
+/// limit when the vault omits that override. A breach is recorded only when the
+/// vault's own scoped volume exceeds its effective limit.
+#[allow(clippy::too_many_arguments)]
+async fn evaluate_vault_breaches(
+    pool: &PgPool,
+    config: &Config,
+    chain_id: i64,
+    block_number: i64,
+    now_unix: i64,
+    vault_hex: &str,
+    vault_bytes: &[u8],
+    breaches: &mut Vec<BreachEvent>,
+) -> Result<(), WatchdogError> {
+    let mint_block =
+        mint_volume_per_block_for_vault(pool, chain_id, block_number, vault_bytes).await?;
+    let mint_hour =
+        mint_volume_per_hour_for_vault(pool, chain_id, now_unix, HOUR_WINDOW_SECS, vault_bytes)
+            .await?;
+    let burn_block =
+        burn_volume_per_block_for_vault(pool, chain_id, block_number, vault_bytes).await?;
+    let burn_hour =
+        burn_volume_per_hour_for_vault(pool, chain_id, now_unix, HOUR_WINDOW_SECS, vault_bytes)
+            .await?;
+
+    let checks = [
+        (
+            ThresholdKind::PerBlockMint,
+            mint_block,
+            config.per_block_mint_limit(vault_hex),
+        ),
+        (
+            ThresholdKind::PerHourMint,
+            mint_hour,
+            config.per_hour_mint_limit(vault_hex),
+        ),
+        (
+            ThresholdKind::PerBlockBurn,
+            burn_block,
+            config.per_block_burn_limit(vault_hex),
+        ),
+        (
+            ThresholdKind::PerHourBurn,
+            burn_hour,
+            config.per_hour_burn_limit(vault_hex),
+        ),
+    ];
+
+    for (kind, volume, limit) in checks {
+        if volume > limit {
+            warn!(
+                chain_id,
+                block_number,
+                vault = %vault_hex,
+                volume,
+                threshold = limit,
+                kind = kind.label(),
+                "per-vault threshold breached"
+            );
+            breaches.push(BreachEvent {
+                kind,
+                threshold_usdc: limit,
+                volume_usdc: volume,
+                chain_id,
+                block_number,
+                vault: Some(vault_hex.to_owned()),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Parse and validate the gateway pause parameters from config strings.
