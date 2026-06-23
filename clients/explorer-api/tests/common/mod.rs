@@ -86,6 +86,15 @@ pub const ACCOUNT_HISTORY_MIGRATION: &str = include_str!(
     "../../../../services/explorer-indexer/migrations/0009_account_history_events.sql"
 );
 
+/// Migration 0014: committee tables — committee_agents, committee_votes,
+/// regime_snapshots (issue #1053).
+/// Note: migrations 0010-0013 exist but are not relevant to the committee API.
+/// The API test harness applies all migrations in order via the indexer migrator;
+/// these constants are kept for explicit tracking only.
+pub const COMMITTEE_MIGRATION: &str = include_str!(
+    "../../../../services/explorer-indexer/migrations/0014_committee_tables.sql"
+);
+
 /// Primary chain used by the API instance under test.
 pub const PRIMARY_CHAIN_ID: i64 = 8453; // Base mainnet
 /// Shadow chain used only to prove cross-chain isolation (issue #178).

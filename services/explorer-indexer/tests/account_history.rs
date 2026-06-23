@@ -71,6 +71,7 @@ fn history_cfg(gateway: Address, vault: Address, gov: Option<Address>) -> Indexe
         registry: None,
         router_governance: gov,
         portfolio_router: None,
+        investment_committee: None,
         max_blocks_per_tick: 200,
         end_block: Some(10),
         feature_flags: 0,

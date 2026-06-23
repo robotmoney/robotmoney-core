@@ -76,6 +76,12 @@ pub enum CountTable {
     VaultTransferEvents,
     /// Added in migration 0009 — full account history events (issue #654).
     AccountHistoryEvents,
+    /// Added in migration 0014 — committee agent registry (issue #1053).
+    CommitteeAgents,
+    /// Added in migration 0014 — per-vote commitments (issue #1053).
+    CommitteeVotes,
+    /// Added in migration 0014 — aggregated per-vault tilt snapshots (issue #1053).
+    RegimeSnapshots,
 }
 
 impl CountTable {
@@ -101,6 +107,9 @@ impl CountTable {
             CountTable::VaultFeeEvents => "vault_fee_events",
             CountTable::VaultTransferEvents => "vault_transfer_events",
             CountTable::AccountHistoryEvents => "account_history_events",
+            CountTable::CommitteeAgents => "committee_agents",
+            CountTable::CommitteeVotes => "committee_votes",
+            CountTable::RegimeSnapshots => "regime_snapshots",
         }
     }
 }
@@ -139,6 +148,9 @@ impl TryFrom<&str> for CountTable {
             "vault_fee_events" => Ok(CountTable::VaultFeeEvents),
             "vault_transfer_events" => Ok(CountTable::VaultTransferEvents),
             "account_history_events" => Ok(CountTable::AccountHistoryEvents),
+            "committee_agents" => Ok(CountTable::CommitteeAgents),
+            "committee_votes" => Ok(CountTable::CommitteeVotes),
+            "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -1054,6 +1066,184 @@ impl Db {
         .await?;
         Ok(r.rows_affected())
     }
+
+    // ─── InvestmentCommitteePolicy writers ───────────────────────────────────
+    // Canonical: docs/architecture.md §5.4 — issue #1053.
+    //
+    // Three events drive three tables:
+    //   AgentRegistered → upsert_committee_agent (sets active=true)
+    //   AgentRevoked    → revoke_committee_agent (sets active=false)
+    //   VoteSubmitted   → insert_committee_vote + upsert_regime_snapshot
+
+    /// Upsert a committee agent row on AgentRegistered.
+    ///
+    /// Uses ON CONFLICT DO UPDATE so that re-indexing the same event is
+    /// idempotent, and so that a previously-revoked agent re-registered
+    /// with ADMIN_ROLE gets `active` flipped back to true.
+    pub async fn upsert_committee_agent(
+        &self,
+        chain_id: i64,
+        agent_address: [u8; 20],
+        agent_id: &str,
+        registered_at: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO committee_agents \
+               (chain_id, agent_address, agent_id, active, registered_at) \
+             VALUES ($1, $2, $3, TRUE, $4) \
+             ON CONFLICT (chain_id, agent_address) DO UPDATE \
+               SET agent_id = EXCLUDED.agent_id, \
+                   active   = TRUE, \
+                   registered_at = EXCLUDED.registered_at, \
+                   revoked_at    = NULL, \
+                   indexed_at    = now()",
+        )
+        .bind(chain_id)
+        .bind(&agent_address[..])
+        .bind(agent_id)
+        .bind(registered_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Mark a committee agent as revoked on AgentRevoked.
+    ///
+    /// No-ops gracefully if the agent row does not exist yet (the
+    /// AgentRegistered event may have been missed on a partial reindex).
+    pub async fn revoke_committee_agent(
+        &self,
+        chain_id: i64,
+        agent_address: [u8; 20],
+        revoked_at: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE committee_agents \
+             SET active = FALSE, revoked_at = $3, indexed_at = now() \
+             WHERE chain_id = $1 AND agent_address = $2",
+        )
+        .bind(chain_id)
+        .bind(&agent_address[..])
+        .bind(revoked_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Insert a committee vote row on VoteSubmitted.
+    ///
+    /// `verified` is set by the caller after memo fetch + keccak256 check.
+    /// Uses ON CONFLICT DO NOTHING for idempotent re-indexing.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_committee_vote(
+        &self,
+        chain_id: i64,
+        vote_id: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        agent_address: [u8; 20],
+        vault_address: [u8; 20],
+        stance: i16,
+        target_weight_bps: i16,
+        confidence: i16,
+        rationale_uri: &str,
+        vote_json_hash: [u8; 32],
+        timestamp_secs: i64,
+        verified: bool,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO committee_votes \
+               (chain_id, vote_id, block_number, log_index, tx_hash, \
+                agent_address, vault_address, stance, target_weight_bps, \
+                confidence, rationale_uri, vote_json_hash, timestamp_secs, verified) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
+             ON CONFLICT (chain_id, vote_id) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(vote_id)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(&agent_address[..])
+        .bind(&vault_address[..])
+        .bind(stance)
+        .bind(target_weight_bps)
+        .bind(confidence)
+        .bind(rationale_uri)
+        .bind(&vote_json_hash[..])
+        .bind(timestamp_secs)
+        .bind(verified)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Upsert a regime snapshot for (chain_id, vault_address, block_number).
+    ///
+    /// Called after every verified VoteSubmitted to keep the aggregate
+    /// (avg_weight_bps, vote_count) current. Uses ON CONFLICT DO UPDATE
+    /// so that re-indexing is idempotent.
+    pub async fn upsert_regime_snapshot(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        block_number: i64,
+        avg_weight_bps: f64,
+        vote_count: i32,
+    ) -> Result<u64, DbError> {
+        let avg_bps = BigDecimal::from_str(&format!("{avg_weight_bps:.2}"))
+            .unwrap_or_else(|_| BigDecimal::from(0));
+        let r = sqlx::query(
+            "INSERT INTO regime_snapshots \
+               (chain_id, vault_address, block_number, avg_weight_bps, vote_count) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (chain_id, vault_address, block_number) DO UPDATE \
+               SET avg_weight_bps = EXCLUDED.avg_weight_bps, \
+                   vote_count     = EXCLUDED.vote_count, \
+                   indexed_at     = now()",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(block_number)
+        .bind(avg_bps)
+        .bind(vote_count)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Compute verified vote aggregate for a vault and upsert the regime
+    /// snapshot row.  Returns the number of rows affected (0 or 1).
+    pub async fn refresh_regime_snapshot(
+        &self,
+        chain_id: i64,
+        vault_address: [u8; 20],
+        block_number: i64,
+    ) -> Result<u64, DbError> {
+        // Aggregate over all verified votes for this vault.
+        let row: Option<(Option<bigdecimal::BigDecimal>, Option<i64>)> = sqlx::query_as(
+            "SELECT AVG(target_weight_bps::numeric), COUNT(*) \
+             FROM committee_votes \
+             WHERE chain_id = $1 AND vault_address = $2 AND verified = TRUE",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .fetch_optional(&self.pool)
+        .await?;
+        let (avg, cnt) = row.unwrap_or((None, None));
+        let avg_f: f64 = avg
+            .and_then(|a| a.to_string().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let cnt_i = cnt.unwrap_or(0) as i32;
+        if cnt_i == 0 {
+            return Ok(0);
+        }
+        self.upsert_regime_snapshot(chain_id, vault_address, block_number, avg_f, cnt_i)
+            .await
+    }
+
+    // ─── End InvestmentCommitteePolicy writers ────────────────────────────────
 
     /// Row count for any of the nine §11 tables.
     ///

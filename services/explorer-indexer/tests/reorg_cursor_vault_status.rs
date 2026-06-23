@@ -123,6 +123,7 @@ async fn run_once_reorg_then_failure_resumes_from_root() {
         registry: None,
         router_governance: None,
         portfolio_router: None,
+        investment_committee: None,
         max_blocks_per_tick: 200,
         end_block: Some(105),
         feature_flags: 0,
