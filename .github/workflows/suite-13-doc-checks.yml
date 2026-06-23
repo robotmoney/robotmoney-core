@@ -134,7 +134,7 @@ jobs:
       - name: Install jsonschema (committee vote schema validation)
         run: pip install jsonschema
 
-      - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044)
+      - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044, #1050)
         run: python3 .github/scripts/check_committee_vote_schema.py
 
   generated-docs-freshness:
