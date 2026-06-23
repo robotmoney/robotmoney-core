@@ -345,8 +345,22 @@ contract RobotMoneyGatewayTest is Test {
     /// @dev AC: commit/reveal is the permissionless alternative to the
     ///      admin-only `authorizeAgent` (issue #753).
     function test_authorizeAgent_no_longer_requires_admin_role() public {
-        IGateway.AgentPolicy memory p = _defaultPolicy();
         address rolelessEoa = makeAddr("roleless-eoa");
+
+        // AZ-GW-1: shareReceiver must equal the committer in the permissionless path.
+        address[] memory noDestinations = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: rolelessEoa,
+            allowedDestinations: noDestinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations
+        });
 
         // Commit
         bytes32 salt = bytes32(uint256(123));
@@ -369,9 +383,23 @@ contract RobotMoneyGatewayTest is Test {
     ///      (issue #753; admin gate moved DEFAULT_ADMIN_ROLE → ADMIN_ROLE in
     ///      #965/F-01).
     function test_authorizeAgent_frontRunProtection() public {
-        IGateway.AgentPolicy memory p = _defaultPolicy();
         address victim = makeAddr("victim");
         address attacker = makeAddr("attacker");
+
+        // AZ-GW-1: victim must be their own shareReceiver in the permissionless path.
+        address[] memory noDestinations = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: victim,
+            allowedDestinations: noDestinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations
+        });
 
         // Victim commits
         bytes32 salt = bytes32(uint256(456));
@@ -587,7 +615,20 @@ contract RobotMoneyGatewayTest is Test {
         gateway.revokeAgent(agent);
 
         address freshDepositor = makeAddr("fresh-depositor");
-        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // AZ-GW-1: shareReceiver must equal the committer in the permissionless path.
+        address[] memory noDestinations = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: freshDepositor,
+            allowedDestinations: noDestinations,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noDestinations
+        });
         // After revoke, re-authorization must go through commit/reveal
         // (authorizeAgent is admin-only as of issue #753).
         bytes32 salt = bytes32(uint256(789));
@@ -2329,6 +2370,11 @@ contract GatewayCommitRevealTest is Test {
         vm.warp(1_700_000_000);
     }
 
+    /// @dev Returns a valid policy where `shareReceiver == depositor` so that
+    ///      commit/reveal tests pass the AZ-GW-1 shareReceiver consent check
+    ///      (issue #1055). Callers that need to test with a specific caller
+    ///      address other than `depositor` should build the policy inline with
+    ///      `shareReceiver` set to that caller.
     function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory) {
         address[] memory none = new address[](0);
         return IGateway.AgentPolicy({
@@ -2336,7 +2382,10 @@ contract GatewayCommitRevealTest is Test {
             validUntil: uint64(block.timestamp + 365 days),
             maxPerPayment: MAX_PER_PAYMENT,
             maxPerWindow: MAX_PER_WINDOW,
-            shareReceiver: shareReceiver,
+            // AZ-GW-1: shareReceiver must equal the committer (depositor) in the
+            // permissionless commit/reveal path. Tests that use a different caller
+            // must build their policy inline with the correct shareReceiver.
+            shareReceiver: depositor,
             allowedDestinations: none,
             assetRecipient: address(0),
             maxWithdrawPerPayment: 0,
@@ -2498,7 +2547,32 @@ contract GatewayCommitRevealTest is Test {
         bytes32 hashAlice = _commitHash(agent, alice, saltAlice);
         bytes32 hashBob = _commitHash(agent, bob, saltBob);
 
-        IGateway.AgentPolicy memory p = _defaultPolicy();
+        // AZ-GW-1: each caller must be their own shareReceiver.
+        address[] memory none = new address[](0);
+        IGateway.AgentPolicy memory pAlice = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: alice,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
+        IGateway.AgentPolicy memory pBob = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: bob,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
 
         // Both commit for the same agent address in block N.
         vm.prank(alice);
@@ -2510,13 +2584,13 @@ contract GatewayCommitRevealTest is Test {
 
         // Alice reveals first — succeeds.
         vm.prank(alice);
-        gateway.revealAuthorization(agent, saltAlice, p);
+        gateway.revealAuthorization(agent, saltAlice, pAlice);
         assertEq(gateway.agentOwner(agent), alice);
 
         // Bob's subsequent reveal for the same agent is blocked.
         vm.prank(bob);
         vm.expectRevert(RobotMoneyGateway.AgentAlreadyOwned.selector);
-        gateway.revealAuthorization(agent, saltBob, p);
+        gateway.revealAuthorization(agent, saltBob, pBob);
     }
 
     function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public {
@@ -2539,6 +2613,88 @@ contract GatewayCommitRevealTest is Test {
     // -------------------------------------------------------------------
     // Event and storage verification
     // -------------------------------------------------------------------
+
+    // -------------------------------------------------------------------
+    // AZ-GW-1 — shareReceiver consent check (issue #1055)
+    // -------------------------------------------------------------------
+
+    /// @dev Attack path: attacker names a victim as `shareReceiver` in the policy.
+    ///      The permissionless commit/reveal path must revert with
+    ///      `ShareReceiverNotAuthorized` because `msg.sender != p.shareReceiver`.
+    ///      Without this guard the attacker would obtain AGENT_ROLE for their own
+    ///      agent and drain the victim's vault-share allowances via
+    ///      `withdrawFromRouter` to an attacker-controlled `assetRecipient`.
+    function test_revealAuthorization_revertsWhenShareReceiverIsNotSelf() public {
+        address attacker = makeAddr("attacker");
+        address victim = makeAddr("victim");
+        bytes32 salt = keccak256("az-gw-1-attack-salt");
+        bytes32 commitHash = _commitHash(agent, attacker, salt);
+
+        address[] memory none = new address[](0);
+        IGateway.AgentPolicy memory maliciousPolicy = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            // Attacker names the victim as shareReceiver — attack vector AZ-GW-1.
+            shareReceiver: victim,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
+
+        vm.prank(attacker);
+        gateway.commitAuthorization(commitHash);
+
+        vm.roll(block.number + 1);
+
+        vm.prank(attacker);
+        vm.expectRevert(RobotMoneyGateway.ShareReceiverNotAuthorized.selector);
+        gateway.revealAuthorization(agent, salt, maliciousPolicy);
+
+        // Agent must NOT have been authorized.
+        assertFalse(gateway.hasRole(agentRole, agent));
+        assertEq(gateway.agentOwner(agent), address(0));
+    }
+
+    /// @dev Happy path: depositor names themselves as `shareReceiver`. The
+    ///      permissionless commit/reveal path must succeed because
+    ///      `msg.sender == p.shareReceiver`.
+    function test_revealAuthorization_succeedsWhenShareReceiverIsSelf() public {
+        address[] memory none = new address[](0);
+        bytes32 salt = keccak256("az-gw-1-happy-salt");
+        bytes32 commitHash = _commitHash(agent, depositor, salt);
+
+        IGateway.AgentPolicy memory selfPolicy = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            // Depositor is their own shareReceiver — consent is explicit.
+            shareReceiver: depositor,
+            allowedDestinations: none,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: none
+        });
+
+        vm.prank(depositor);
+        gateway.commitAuthorization(commitHash);
+
+        vm.roll(block.number + 1);
+
+        vm.prank(depositor);
+        gateway.revealAuthorization(agent, salt, selfPolicy);
+
+        // Agent must be authorized with depositor as owner and shareReceiver.
+        assertTrue(gateway.hasRole(agentRole, agent));
+        assertEq(gateway.agentOwner(agent), depositor);
+        (,,,,address recv,,,) = gateway.agents(agent);
+        assertEq(recv, depositor);
+    }
 
     /// @dev Verify commitAuthorization emits CommitSubmitted with correct fields.
     function test_commitAuthorization_emitsEvent() public {
