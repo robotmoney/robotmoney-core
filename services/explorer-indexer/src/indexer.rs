@@ -477,7 +477,10 @@ async fn walk_back_to_match(
     Ok(-1)
 }
 
-async fn handle_log(
+/// Dispatch a single decoded log to its writer(s).  Public so integration
+/// tests can drive one synthetic event through the full handler-wiring path
+/// (IDX-3 regression coverage) without booting a chain.
+pub async fn handle_log(
     db: &Db,
     cfg: &IndexerConfig,
     topics: &Topics,
@@ -738,6 +741,18 @@ async fn handle_log(
                 decoded.shares,
             )
             .await?;
+        // IDX-3: roll the owner's wallet_positions balance back by the burned
+        // shares.  ERC-4626 `Withdraw` burns `shares` from `owner`; the new
+        // balance is prior - shares (saturating at zero).
+        r += persist_wallet_position(
+            db,
+            cfg,
+            log,
+            decoded.owner.into_array(),
+            decoded.shares,
+            false,
+        )
+        .await?;
         return Ok(r);
     }
 
@@ -1061,7 +1076,7 @@ async fn handle_log(
     if topic0 == topics.erc4626_deposit {
         let decoded = IVaultEvents::Deposit::decode_log(&into_alloy_log(log), true)
             .map_err(|e| IndexerError::Decode(format!("ERC4626 Deposit: {e}")))?;
-        let r = db
+        let mut r = db
             .insert_vault_transfer_event(
                 cfg.chain_id,
                 log.block_number as i64,
@@ -1075,10 +1090,53 @@ async fn handle_log(
                 decoded.shares,
             )
             .await?;
+        // IDX-3: roll the owner's wallet_positions balance forward by the
+        // minted shares so the account-positions view is populated.  A deposit
+        // mints `shares` to `owner`; the new balance is prior + shares.
+        r += persist_wallet_position(
+            db,
+            cfg,
+            log,
+            decoded.owner.into_array(),
+            decoded.shares,
+            true,
+        )
+        .await?;
         return Ok(r);
     }
 
     Ok(0)
+}
+
+/// IDX-3: persist the owner's resulting `wallet_positions` share balance after
+/// an ERC-4626 mint/burn event.  Reads the owner's prior balance for this
+/// vault (`contract = log.address`), applies the `shares` delta (`add = true`
+/// for a deposit/mint, `false` for a withdraw/burn, saturating at zero), and
+/// writes the new block-numbered balance snapshot.  Returns the number of rows
+/// inserted (0 when the row already exists, via the writer's `ON CONFLICT`).
+async fn persist_wallet_position(
+    db: &Db,
+    cfg: &IndexerConfig,
+    log: &LogEntry,
+    owner: [u8; 20],
+    shares: U256,
+    add: bool,
+) -> Result<u64, IndexerError> {
+    let contract = log.address.into_array();
+    let block = log.block_number as i64;
+    let prior = db
+        .latest_wallet_position(cfg.chain_id, contract, owner, block)
+        .await?
+        .unwrap_or(U256::ZERO);
+    let new_balance = if add {
+        prior.saturating_add(shares)
+    } else {
+        prior.saturating_sub(shares)
+    };
+    let r = db
+        .insert_wallet_position(cfg.chain_id, contract, owner, block, new_balance)
+        .await?;
+    Ok(r)
 }
 
 /// Convert our local `LogEntry` to the `alloy_primitives::Log` shape

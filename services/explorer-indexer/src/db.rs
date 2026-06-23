@@ -550,6 +550,37 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Most-recent `wallet_positions.shares` for an `(chain_id, contract, owner)`
+    /// trio at or below `as_of_block`, i.e. the owner's running share balance
+    /// just before a new event at `as_of_block` is applied.  Returns `None`
+    /// (treated as a zero balance by callers) when the owner has no prior
+    /// position row.
+    ///
+    /// IDX-3: `insert_wallet_position` writes a per-event *resulting balance*
+    /// snapshot, so the indexer needs the prior balance to roll the delta
+    /// forward.  Bounding by `as_of_block` keeps the read deterministic if
+    /// events arrive out of block order within a tick.
+    pub async fn latest_wallet_position(
+        &self,
+        chain_id: i64,
+        contract: [u8; 20],
+        owner: [u8; 20],
+        as_of_block: i64,
+    ) -> Result<Option<U256>, DbError> {
+        let row: Option<(BigDecimal,)> = sqlx::query_as(
+            "SELECT shares FROM wallet_positions \
+             WHERE chain_id = $1 AND contract = $2 AND owner = $3 AND block_number <= $4 \
+             ORDER BY block_number DESC LIMIT 1",
+        )
+        .bind(chain_id)
+        .bind(&contract[..])
+        .bind(&owner[..])
+        .bind(as_of_block)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(d,)| decimal_to_u256(&d)))
+    }
+
     /// Idempotent insert of a vault registration row sourced from a
     /// `VaultRegistered` event.  Uses `ON CONFLICT DO NOTHING` so
     /// re-indexing the same registration block is a no-op.
@@ -684,9 +715,10 @@ impl Db {
     /// Idempotent insert of a per-voter vote row from a `VoteCast` event.
     /// Uses `ON CONFLICT DO NOTHING` (one vote per voter per proposal).
     ///
-    /// Also increments the running `votes_for` or `votes_against` counter
-    /// on the parent `governance_proposals` row — but only when the vote row
-    /// is new (rows_affected == 1).
+    /// Also adds the vote's `weight` (voting power) to the running `votes_for`
+    /// or `votes_against` tally on the parent `governance_proposals` row — but
+    /// only when the vote row is new (rows_affected == 1).  The tally sums
+    /// power, not voter count (IDX-5).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vote(
         &self,
@@ -718,20 +750,24 @@ impl Db {
         .await?;
 
         if r.rows_affected() == 1 {
-            // Update running tally on the proposal.
+            // IDX-5: sum the vote's *power* (weight) into the running tally,
+            // not `+ 1` per voter — the tally must reflect voting power so it
+            // agrees with on-chain quorum/threshold math.  The columns are
+            // NUMERIC(78, 0) (migration 0013) to hold a U256 power sum.
             let col = if support {
                 "votes_for"
             } else {
                 "votes_against"
             };
             let q = format!(
-                "UPDATE governance_proposals SET {} = {} + 1 \
+                "UPDATE governance_proposals SET {} = {} + $3 \
                  WHERE chain_id = $1 AND proposal_id = $2",
                 col, col
             );
             sqlx::query(&q)
                 .bind(chain_id)
                 .bind(proposal_id)
+                .bind(u256_to_decimal(weight))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1166,6 +1202,18 @@ fn u256_to_decimal(v: U256) -> BigDecimal {
     // U256::to_string is the decimal representation; BigDecimal parses
     // it losslessly.
     BigDecimal::from_str(&v.to_string()).expect("U256 always parses as BigDecimal")
+}
+
+/// Exact decimal `NUMERIC(78, 0)` value → uint256. ADR §3.1. The inverse of
+/// [`u256_to_decimal`]: `wallet_positions.shares` is a non-negative integer
+/// share balance, so the value round-trips through its base-10 integer string.
+/// A negative or out-of-range value saturates to `U256::ZERO` rather than
+/// panicking (defensive — the writer never persists such a value).
+fn decimal_to_u256(d: &BigDecimal) -> U256 {
+    // `with_scale(0)` drops any (always-absent for share balances) fractional
+    // part; the resulting `to_string()` is the base-10 integer, which U256
+    // parses losslessly.
+    U256::from_str(&d.with_scale(0).to_string()).unwrap_or(U256::ZERO)
 }
 
 #[cfg(test)]
