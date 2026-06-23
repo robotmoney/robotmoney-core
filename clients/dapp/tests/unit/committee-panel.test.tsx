@@ -112,8 +112,9 @@ function makeErrorFetch(): FetchLike {
 
 describe("CommitteePanel", () => {
   it("shows loading state initially", () => {
-    const fetchFn = makeFetch(twoAgents, twoVotes);
-    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    // Use a fetch that never resolves so the loading state stays visible throughout.
+    const neverFetch: FetchLike = vi.fn(() => new Promise(() => undefined)) as unknown as FetchLike;
+    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={neverFetch} />);
     expect(screen.getByTestId("committee-loading")).toBeDefined();
   });
 
