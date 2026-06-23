@@ -20,6 +20,7 @@
 - [DemoAgentBatchDeployer](DeployDemoExtraVaults.s.sol/contract.DemoAgentBatchDeployer.md)
 - [DeployDemoExtraVaults](DeployDemoExtraVaults.s.sol/contract.DeployDemoExtraVaults.md)
 - [DeployDemoUniswapV3Stubs](DeployDemoUniswapV3Stubs.s.sol/contract.DeployDemoUniswapV3Stubs.md)
+- [DeployInvestmentCommitteePolicy](DeployInvestmentCommitteePolicy.s.sol/contract.DeployInvestmentCommitteePolicy.md)
 - [DeployPortfolioRouter](DeployPortfolioRouter.s.sol/contract.DeployPortfolioRouter.md)
 - [DeployProtocolAssetVault](DeployProtocolAssetVault.s.sol/contract.DeployProtocolAssetVault.md)
 - [DeployRmToken](DeployRmToken.s.sol/contract.DeployRmToken.md)
