@@ -72,8 +72,8 @@ ALLOWLIST_PATHS = {
 ```
 
 Four snapshot paths are allowlisted because they quote the banned
-`PassthroughAdapter` / `USE_PASSTHROUGH_ADAPTER` tokens as historical evidence of
-the removed surface (issue #912). These paths are already in the final
+passthrough-adapter surface tokens as historical evidence of the removed
+implementation (issue #912). These paths are already in the final
 `docs/code-review/` prefix — no ALLOWLIST_PATHS update is required by #1045.
 
 **Risk:** if #1045 renames any of these four files, it must update all four
