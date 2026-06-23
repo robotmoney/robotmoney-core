@@ -200,7 +200,12 @@ contract InvestmentCommitteePolicy is AccessControl, ReentrancyGuard {
     /// @param p    All vote fields packed into a `VoteParams` struct to keep
     ///             the stack frame within the EVM's 16-slot limit.
     /// @return voteId  Index of the newly appended vote.
-    function submitVote(VoteParams calldata p) external onlyGateway nonReentrant returns (uint256 voteId) {
+    function submitVote(VoteParams calldata p)
+        external
+        onlyGateway
+        nonReentrant
+        returns (uint256 voteId)
+    {
         if (!hasRole(COMMITTEE_AGENT_ROLE, p.agent)) revert AgentNotAllowlisted();
         if (p.voteJsonHash == bytes32(0)) revert EmptyVoteHash();
         if (uint8(p.stance) > 2) revert InvalidStance();
@@ -255,7 +260,7 @@ contract InvestmentCommitteePolicy is AccessControl, ReentrancyGuard {
     /// @notice Latest vote index for a given agent, or type(uint256).max if none.
     function latestVoteByAgent(address agent) external view returns (uint256) {
         uint256 len = _votes.length;
-        for (uint256 i = len; i > 0; ) {
+        for (uint256 i = len; i > 0;) {
             unchecked {
                 i--;
             }

@@ -139,9 +139,7 @@ export function CommitteePanel(props: CommitteePanelProps) {
                       key={agent.address}
                       data-testid={`committee-agent-row-${agent.address}`}
                       onClick={() =>
-                        setSelectedAgent(
-                          selectedAgent === agent.address ? null : agent.address,
-                        )
+                        setSelectedAgent(selectedAgent === agent.address ? null : agent.address)
                       }
                       style={{ cursor: "pointer" }}
                     >
@@ -192,13 +190,8 @@ export function CommitteePanel(props: CommitteePanelProps) {
                 </thead>
                 <tbody>
                   {filteredVotes.map((vote) => (
-                    <tr
-                      key={vote.vote_id}
-                      data-testid={`committee-vote-row-${vote.vote_id}`}
-                    >
-                      <td data-testid="committee-vote-date">
-                        {formatTimestamp(vote.timestamp)}
-                      </td>
+                    <tr key={vote.vote_id} data-testid={`committee-vote-row-${vote.vote_id}`}>
+                      <td data-testid="committee-vote-date">{formatTimestamp(vote.timestamp)}</td>
                       <td data-testid="committee-vote-agent">
                         {agents.find((a) => a.address.toLowerCase() === vote.agent.toLowerCase())
                           ?.agent_id ?? vote.agent.slice(0, 8)}

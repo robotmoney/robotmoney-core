@@ -93,10 +93,7 @@ const emptyVotes: CommitteeVotesResponse = {
 
 // ─── Fetch mock factory ───────────────────────────────────────────────────────
 
-function makeFetch(
-  agents: CommitteeAgentsResponse,
-  votes: CommitteeVotesResponse,
-): FetchLike {
+function makeFetch(agents: CommitteeAgentsResponse, votes: CommitteeVotesResponse): FetchLike {
   return vi.fn(async (url: string) => {
     const body: CommitteeAgentsResponse | CommitteeVotesResponse = url.includes("/agents")
       ? agents
@@ -205,9 +202,7 @@ describe("CommitteePanel", () => {
     expect(screen.getAllByTestId("committee-vote-stance").length).toBe(2);
 
     // Click the first agent row
-    const agentRow = screen.getByTestId(
-      `committee-agent-row-${twoAgents.agents[0].address}`,
-    );
+    const agentRow = screen.getByTestId(`committee-agent-row-${twoAgents.agents[0].address}`);
     fireEvent.click(agentRow);
 
     // After filter: one vote (athena-v1 only)

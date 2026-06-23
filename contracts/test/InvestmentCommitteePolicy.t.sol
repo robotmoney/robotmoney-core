@@ -278,7 +278,8 @@ contract InvestmentCommitteePolicyTest is Test {
         assertFalse(ok, "IC must not accept ETH (no receive)");
 
         // 2. No `transfer(address,uint256)` selector (ERC-20).
-        bytes memory transferSelector = abi.encodeWithSignature("transfer(address,uint256)", address(this), 1);
+        bytes memory transferSelector =
+            abi.encodeWithSignature("transfer(address,uint256)", address(this), 1);
         (bool ok2,) = address(ic).call(transferSelector);
         assertFalse(ok2, "IC must not have ERC-20 transfer");
 

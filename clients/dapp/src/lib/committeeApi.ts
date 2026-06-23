@@ -102,9 +102,7 @@ export class CommitteeApiClient {
 
   /** Get votes for a specific agent. */
   async getVotesByAgent(agentAddress: string): Promise<CommitteeVotesResponse> {
-    return this.get<CommitteeVotesResponse>(
-      `/v1/committee/agents/${agentAddress}/votes`,
-    );
+    return this.get<CommitteeVotesResponse>(`/v1/committee/agents/${agentAddress}/votes`);
   }
 
   /** Get the latest regime feed entries. */

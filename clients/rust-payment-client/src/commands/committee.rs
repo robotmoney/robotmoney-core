@@ -221,15 +221,14 @@ pub fn run_register(args: RegisterArgs) -> i32 {
         Err(code) => return code,
     };
 
-    let nonce = match rt.block_on(async {
-        rpc.get_transaction_count(caller, Some("pending")).await
-    }) {
-        Ok(n) => n,
-        Err(e) => {
-            log::error!("rmpc committee register: eth_getTransactionCount failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
+    let nonce =
+        match rt.block_on(async { rpc.get_transaction_count(caller, Some("pending")).await }) {
+            Ok(n) => n,
+            Err(e) => {
+                log::error!("rmpc committee register: eth_getTransactionCount failed: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
 
     // Encode `InvestmentCommitteePolicy.registerAgent(agent, agentId)`.
     let calldata = InvestmentCommitteePolicy::registerAgentCall {
@@ -295,9 +294,7 @@ pub fn run_register(args: RegisterArgs) -> i32 {
     };
 
     let block_number = receipt.block_number.unwrap_or(0);
-    log::info!(
-        "rmpc committee register: ok tx_hash={tx_hash:#x} block={block_number}"
-    );
+    log::info!("rmpc committee register: ok tx_hash={tx_hash:#x} block={block_number}");
     emit_output(
         &CommitteeOutput {
             ok: true,
@@ -411,20 +408,26 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
-    let fees = match fetch_fees(&rt, &rpc, &cfg, args.fee_cap_wei, args.pretty, "vote-submit") {
+    let fees = match fetch_fees(
+        &rt,
+        &rpc,
+        &cfg,
+        args.fee_cap_wei,
+        args.pretty,
+        "vote-submit",
+    ) {
         Ok(f) => f,
         Err(code) => return code,
     };
 
-    let nonce = match rt.block_on(async {
-        rpc.get_transaction_count(caller, Some("pending")).await
-    }) {
-        Ok(n) => n,
-        Err(e) => {
-            log::error!("rmpc committee vote-submit: eth_getTransactionCount failed: {e}");
-            return EXIT_STARTUP_FAIL;
-        }
-    };
+    let nonce =
+        match rt.block_on(async { rpc.get_transaction_count(caller, Some("pending")).await }) {
+            Ok(n) => n,
+            Err(e) => {
+                log::error!("rmpc committee vote-submit: eth_getTransactionCount failed: {e}");
+                return EXIT_STARTUP_FAIL;
+            }
+        };
 
     // Build VoteParams struct. The `stance` field is ABI-encoded as uint8.
     let params = InvestmentCommitteePolicy::VoteParams {
@@ -500,9 +503,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
     };
 
     let block_number = receipt.block_number.unwrap_or(0);
-    log::info!(
-        "rmpc committee vote-submit: ok tx_hash={tx_hash:#x} block={block_number}"
-    );
+    log::info!("rmpc committee vote-submit: ok tx_hash={tx_hash:#x} block={block_number}");
     emit_output(
         &CommitteeOutput {
             ok: true,

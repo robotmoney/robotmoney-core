@@ -41,14 +41,12 @@ const IC_POLICY: Address = address!("0000000000000000000000000000000000000e00");
 /// Fake committee agent address.
 const COMMITTEE_AGENT: Address = address!("0000000000000000000000000000000000000f00");
 
-const TX_HASH: B256 =
-    b256!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+const TX_HASH: B256 = b256!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 
 const VOTE_JSON_HASH: B256 =
     b256!("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890");
 
-const PROMPT_HASH: B256 =
-    b256!("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+const PROMPT_HASH: B256 = b256!("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
 const INPUTS_DIGEST: B256 =
     b256!("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321");
@@ -178,7 +176,9 @@ async fn test_committee_register_happy_path() {
     // eth_getTransactionCount
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getTransactionCount"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionCount"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result("0x0"))
         .expect(1)
@@ -188,7 +188,9 @@ async fn test_committee_register_happy_path() {
     // eth_sendRawTransaction
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_sendRawTransaction"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
         .expect(1)
@@ -198,7 +200,9 @@ async fn test_committee_register_happy_path() {
     // eth_getTransactionReceipt
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getTransactionReceipt"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionReceipt"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result_raw(&simple_receipt_body()))
         .expect_at_least(1)
@@ -206,7 +210,10 @@ async fn test_committee_register_happy_path() {
         .await;
 
     let output = rmpc()
-        .env(PASSPHRASE_ENV_VAR, std::str::from_utf8(TEST_PASSPHRASE).unwrap())
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
         .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
         .args([
             "committee",
@@ -228,7 +235,11 @@ async fn test_committee_register_happy_path() {
     eprintln!("STDOUT: {stdout}");
     eprintln!("STDERR: {stderr}");
 
-    assert!(output.status.success(), "expected exit 0, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}",
+        output.status
+    );
 
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(v["ok"], true, "ok field");
@@ -265,7 +276,9 @@ async fn test_committee_vote_submit_happy_path() {
     // eth_getTransactionCount
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getTransactionCount"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionCount"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result("0x1"))
         .expect(1)
@@ -275,7 +288,9 @@ async fn test_committee_vote_submit_happy_path() {
     // eth_sendRawTransaction
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_sendRawTransaction"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result(&format!("{TX_HASH:#x}")))
         .expect(1)
@@ -285,7 +300,9 @@ async fn test_committee_vote_submit_happy_path() {
     // eth_getTransactionReceipt
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getTransactionReceipt"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionReceipt"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result_raw(&simple_receipt_body()))
         .expect_at_least(1)
@@ -298,7 +315,10 @@ async fn test_committee_vote_submit_happy_path() {
     let inputs = format!("{INPUTS_DIGEST:#x}");
 
     let output = rmpc()
-        .env(PASSPHRASE_ENV_VAR, std::str::from_utf8(TEST_PASSPHRASE).unwrap())
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
         .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
         .args([
             "committee",
@@ -336,7 +356,11 @@ async fn test_committee_vote_submit_happy_path() {
     eprintln!("STDOUT: {stdout}");
     eprintln!("STDERR: {stderr}");
 
-    assert!(output.status.success(), "expected exit 0, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}",
+        output.status
+    );
 
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
     assert_eq!(v["ok"], true, "ok field");
@@ -373,7 +397,9 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
     // eth_getTransactionCount
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_getTransactionCount"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getTransactionCount"}),
+        ))
         .with_status(200)
         .with_body(jrpc_result("0x2"))
         .expect(1)
@@ -384,9 +410,13 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
     // (the contract would revert with AgentNotAllowlisted).
     server
         .mock("POST", "/")
-        .match_body(Matcher::PartialJson(json!({"method": "eth_sendRawTransaction"})))
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_sendRawTransaction"}),
+        ))
         .with_status(200)
-        .with_body(jrpc_result_raw(r#"{"code":-32000,"message":"execution reverted"}"#))
+        .with_body(jrpc_result_raw(
+            r#"{"code":-32000,"message":"execution reverted"}"#,
+        ))
         .expect(1)
         .create_async()
         .await;
@@ -397,7 +427,10 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
     let inputs = format!("{INPUTS_DIGEST:#x}");
 
     let output = rmpc()
-        .env(PASSPHRASE_ENV_VAR, std::str::from_utf8(TEST_PASSPHRASE).unwrap())
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
         .env("RMPC_STATE_DIR", fix._tmp.path().to_str().unwrap())
         .args([
             "committee",

@@ -72,10 +72,9 @@ export function RegimeFeedPanel(props: RegimeFeedPanelProps) {
     <section data-testid="regime-feed-panel">
       <h2>Daily Regime Feed</h2>
       <p data-testid="regime-feed-description">
-        The canonical daily market regime read. Committee agents may optionally
-        consume this feed as shared context when forming their allocation tilts.
-        Agents are not obligated to use it — it is advisory input, not a
-        mandate.
+        The canonical daily market regime read. Committee agents may optionally consume this feed as
+        shared context when forming their allocation tilts. Agents are not obligated to use it — it
+        is advisory input, not a mandate.
       </p>
 
       {loading && <p data-testid="regime-feed-loading">Loading regime feed…</p>}
