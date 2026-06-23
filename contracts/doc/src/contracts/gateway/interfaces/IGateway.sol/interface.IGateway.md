@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a7ac64337cc2843fe9fad5c808ffb035e51d4697/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c9e141ffcd1c066f8ea8438f58e57b245c4556f8/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -309,6 +309,63 @@ agent's lifecycle.
 function unpause() external;
 ```
 
+### setICPolicy
+
+Set or update the Investment Committee policy contract address.
+Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
+
+
+```solidity
+function setICPolicy(address policy_) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`policy_`|`address`|Address of the deployed `InvestmentCommitteePolicy` contract, or `address(0)` to disable committee routing.|
+
+
+### committeeRegister
+
+Forward a committee agent registration to the IC policy contract.
+Restricted to `ADMIN_ROLE`. Reverts if `icPolicy` is not set.
+
+
+```solidity
+function committeeRegister(address agent, string calldata agentId_) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|   Address to register on the IC contract.|
+|`agentId_`|`string`|Human-readable label (e.g. "athena-v1").|
+
+
+### committeeVoteSubmit
+
+Forward a signed committee vote to the IC policy contract.
+Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set.
+
+
+```solidity
+function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
+    external
+    returns (uint256 voteId);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`p`|`IInvestmentCommitteePolicy.VoteParams`| All vote fields packed into a `VoteParams` struct.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`voteId`|`uint256`| Index of the newly appended vote in the IC contract.|
+
+
 ### WINDOW_SECONDS
 
 Window length in seconds for per-window gross caps.
@@ -352,6 +409,15 @@ Whether the gateway is currently paused.
 
 ```solidity
 function paused() external view returns (bool);
+```
+
+### icPolicy
+
+Investment Committee policy contract, or `address(0)` if not configured.
+
+
+```solidity
+function icPolicy() external view returns (IInvestmentCommitteePolicy);
 ```
 
 ### agentOwner

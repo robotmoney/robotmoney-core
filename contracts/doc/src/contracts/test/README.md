@@ -64,6 +64,7 @@
 - [UnderPullRouter](GatewayRouter.t.sol/contract.UnderPullRouter.md)
 - [LeakyRedeemRouterVault](GatewayRouter.t.sol/contract.LeakyRedeemRouterVault.md)
 - [GatewayRouterTest](GatewayRouter.t.sol/contract.GatewayRouterTest.md)
+- [ICGatewayIntegration](ICGatewayIntegration.t.sol/contract.ICGatewayIntegration.md)
 - [MockGateway](InvestmentCommitteePolicy.t.sol/contract.MockGateway.md)
 - [InvestmentCommitteePolicyTest](InvestmentCommitteePolicy.t.sol/contract.InvestmentCommitteePolicyTest.md)
 - [MockVaultTest](MockVault.t.sol/contract.MockVaultTest.md)

@@ -1,5 +1,5 @@
 # MockGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a7ac64337cc2843fe9fad5c808ffb035e51d4697/contracts/test/InvestmentCommitteePolicy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c9e141ffcd1c066f8ea8438f58e57b245c4556f8/contracts/test/InvestmentCommitteePolicy.t.sol)
 
 Thin stub that forwards `submitVote` calls as if they came from a
 real RobotMoneyGateway.  The real gateway enforces per-agent policy

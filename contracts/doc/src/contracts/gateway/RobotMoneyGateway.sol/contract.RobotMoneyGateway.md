@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a7ac64337cc2843fe9fad5c808ffb035e51d4697/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c9e141ffcd1c066f8ea8438f58e57b245c4556f8/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -218,6 +218,17 @@ Stop-the-world flag.
 
 ```solidity
 bool private _paused
+```
+
+
+### icPolicy
+Investment Committee Policy contract. When set, `committeeRegister`
+and `committeeVoteSubmit` forward calls here. Settable by
+`ADMIN_ROLE` via `setICPolicy`. `address(0)` means not configured.
+
+
+```solidity
+IInvestmentCommitteePolicy public icPolicy
 ```
 
 
@@ -876,6 +887,76 @@ function _routerWithdrawPaymentId(
 ) internal view returns (bytes32);
 ```
 
+### setICPolicy
+
+Set or update the Investment Committee policy contract address.
+Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
+
+
+```solidity
+function setICPolicy(address policy_) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`policy_`|`address`|Address of the deployed `InvestmentCommitteePolicy` contract, or `address(0)` to disable committee routing.|
+
+
+### committeeRegister
+
+Forward a committee agent registration to the IC policy contract.
+Restricted to `ADMIN_ROLE` (mirrors IC contract's own `ADMIN_ROLE`
+requirement on `registerAgent`). Reverts if `icPolicy` is not set.
+All committee writes pass through the gateway so that the IC
+contract's `onlyGateway` modifier enforcement is the single
+choke point — no committee side channel exists.
+
+
+```solidity
+function committeeRegister(address agent, string calldata agentId_)
+    external
+    onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`agent`|`address`|   Address to grant `COMMITTEE_AGENT_ROLE` on the IC contract.|
+|`agentId_`|`string`|Human-readable label (e.g. "athena-v1").|
+
+
+### committeeVoteSubmit
+
+Forward a signed committee vote to the IC policy contract.
+Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+if the IC contract's own guards fail (agent not allowlisted,
+invalid vote fields, etc.).
+The gateway is the sole permitted caller of `IC.submitVote`
+(enforced by the IC contract's `onlyGateway` modifier). This
+function is the only path through which an agent may reach the
+IC contract.
+
+
+```solidity
+function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
+    external
+    onlyRole(AGENT_ROLE)
+    returns (uint256 voteId);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`p`|`IInvestmentCommitteePolicy.VoteParams`| All vote fields packed into a `VoteParams` struct.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`voteId`|`uint256`| Index of the newly appended vote in the IC contract.|
+
+
 ### _executeRouterWithdraw
 
 Execute the multi-leg router withdrawal: pull shares from shareHolder,
@@ -890,6 +971,22 @@ function _executeRouterWithdraw(
     uint256[] calldata minAssetsPerLeg
 ) internal returns (uint256[] memory assetsPerLeg);
 ```
+
+## Events
+### ICPolicySet
+Emitted when the IC policy contract address is set or updated.
+
+
+```solidity
+event ICPolicySet(address indexed by, address indexed policy);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`by`|`address`|    Address that called `setICPolicy` (must hold `ADMIN_ROLE`).|
+|`policy`|`address`|New IC policy contract address (`address(0)` clears it).|
 
 ## Errors
 ### ZeroAddress
@@ -1145,6 +1242,15 @@ indicating a malicious or fee-on-transfer vault.
 
 ```solidity
 error UnexpectedAssetsReceived();
+```
+
+### ICPolicyNotSet
+`committeeRegister()` or `committeeVoteSubmit()` called but no IC
+policy contract is configured (`icPolicy == address(0)`).
+
+
+```solidity
+error ICPolicyNotSet();
 ```
 
 ### WindowBufferFull
