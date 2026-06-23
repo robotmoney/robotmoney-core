@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use clap::Parser;
-use rust_payment_client::cli::{Cli, Command};
+use rust_payment_client::cli::{Cli, Command, CommitteeSubcommand};
 use rust_payment_client::commands;
 use rust_payment_client::config::Config;
 use rust_payment_client::logging;
@@ -41,6 +41,7 @@ fn main() {
         Command::Vote { config, .. } => Some(config.as_path()),
         Command::Withdraw { config, .. } => Some(config.as_path()),
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
+        Command::Committee { config, .. } => Some(config.as_path()),
     };
     init_logging_best_effort(config_path);
 
@@ -212,6 +213,77 @@ fn main() {
             confirm,
             pretty,
         }),
+        Command::Committee {
+            config,
+            subcommand,
+            pretty,
+        } => match subcommand {
+            CommitteeSubcommand::Register {
+                agent,
+                agent_id,
+                order_id,
+                deadline_secs,
+                receipt_timeout_secs,
+                gas_limit,
+                fee_cap,
+            } => commands::committee::run_register(commands::committee::RegisterArgs {
+                config_path: config,
+                agent,
+                agent_id,
+                order_id,
+                deadline_secs,
+                receipt_timeout_secs,
+                gas_limit,
+                fee_cap_wei: fee_cap,
+                pretty,
+            }),
+            CommitteeSubcommand::VoteSubmit {
+                vault,
+                stance,
+                target_weight_bps,
+                confidence,
+                rationale_uri,
+                vote_json_hash,
+                prompt_hash,
+                inputs_digest,
+                schema_version,
+                timestamp,
+                order_id,
+                deadline_secs,
+                receipt_timeout_secs,
+                gas_limit,
+                fee_cap,
+            } => {
+                let stance = match commands::committee::Stance::from_str_ci(&stance) {
+                    Some(s) => s,
+                    None => {
+                        eprintln!(
+                            "rmpc committee vote-submit: --stance must be one of: overweight, neutral, underweight (got {stance:?})"
+                        );
+                        std::process::exit(3);
+                    }
+                };
+                commands::committee::run_vote_submit(commands::committee::VoteSubmitArgs {
+                    config_path: config,
+                    vault,
+                    stance,
+                    target_weight_bps,
+                    confidence,
+                    rationale_uri,
+                    vote_json_hash,
+                    prompt_hash,
+                    inputs_digest,
+                    schema_version,
+                    timestamp,
+                    order_id,
+                    deadline_secs,
+                    receipt_timeout_secs,
+                    gas_limit,
+                    fee_cap_wei: fee_cap,
+                    pretty,
+                })
+            }
+        },
     };
     std::process::exit(exit_code);
 }

@@ -1,5 +1,5 @@
 # Sup5Pool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/test/fv/StaleOracleRedemption.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/43d1c2f83429ede507d6169930f712ee7dbb8993/contracts/test/fv/StaleOracleRedemption.t.sol)
 
 deSPXA pool stub: satisfies addAsset cardinality/liquidity gates.
 

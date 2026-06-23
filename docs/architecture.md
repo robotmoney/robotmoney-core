@@ -24,6 +24,15 @@ each voter's power and controls proposal creation. Token-holder voting
 (RM-balance-weighted) is a future goal and is not active in the current
 deployment. See §2.3 and `docs/prd.md` §"Allocation Governance".
 
+A fourth surface, the agentic **Investment Committee**, sits upstream of
+governance: admin-allowlisted agents register an on-chain identity and
+submit signed per-vault allocation tilts that feed weight governance as a
+**signalling-only** input — they never move funds or set router weights.
+Canonical scope:
+`docs/product/20260623-product-proposal-investment-committee-v0.md`,
+`docs/prd.md` §"Committee", and issue #1044. See §2.4, §4.8, §5.1, §5.3,
+§5.4, and §5.5.
+
 ## 2. Core Model
 
 ### 2.1 Allocation Layers
@@ -102,6 +111,30 @@ cadence metadata, execution state, and the resulting router weights. Those
 surfaces are required for both the dapp and programmatic read clients.
 See `docs/technical/governance-decisions.md` for the accepted parameters.
 
+### 2.4 Investment Committee Boundary
+
+The Investment Committee is a **distinct mechanism from RouterGovernance**,
+and the two must not be conflated. RouterGovernance is the only contract
+that sets Portfolio Router target weights (§2.3). The IC policy contract
+(§4.8) holds a different thing: a registry of admin-allowlisted agents and
+their signed per-vault allocation tilts. IC output is an **upstream,
+signalling-only input** to weight governance — aggregated tilts inform a
+RouterGovernance weight proposal, but the IC contract never calls
+`setWeights`, never moves funds, and never holds an asset. Application to
+live weights stays admin-applied through RouterGovernance's existing path.
+
+Three boundary properties are load-bearing and are enforced architecturally:
+
+- **Signalling-only.** The IC contract grants no treasury-spend and no
+  auto-apply authority (custody invariant INV-4, `docs/prd.md` §12). It is
+  metadata-only storage.
+- **Gateway-routed.** Committee registration and vote submission are
+  agent-initiated writes and route through `RobotMoneyGateway` like every
+  other agent action (§5.2) — there is no committee side channel.
+- **Admin-gated membership.** Only `ADMIN_ROLE` allowlists an agent;
+  membership is registry state, not a code variant (§7.3), mirroring
+  `VaultRegistry.isRouterEligible`.
+
 ## 3. Technology Stack
 
 | Layer | Choice | Rationale | Source |
@@ -112,6 +145,9 @@ See `docs/technical/governance-decisions.md` for the accepted parameters.
 | Primary asset | USDC, 6 decimals | Product accepts USDC as the treasury input asset. | `docs/prd.md` §1; `docs/technical/smart-contracts.md` §1 |
 | Vault standard | ERC-4626 for individual vaults | Standard deposit, withdraw, redeem, preview, conversion, and `totalAssets()` surface. | `docs/technical/adapter-architecture.md` §1 |
 | Stable-yield venues | Morpho Gauntlet USDC Prime, Aave V3, Compound V3 through vault adapters | Current deployed stable-yield vault normalizes these venues behind adapters. | `docs/technical/adapter-architecture.md` §4; `docs/technical/smart-contracts.md` §4 |
+| IC policy contract | Solidity 0.8.24, OpenZeppelin AccessControl + admin-floor, same Foundry toolchain | Signalling-only registry of committee agents and signed tilts; mirrors `RouterGovernance`/`VaultRegistry` role and event conventions; routed via the gateway. | `docs/prd.md` §"Committee", §12 INV-4; proposal doc; issue #1044 |
+| Committee vote schema | Fixed-shape JSON schema committed to the repo, validated in CI | Committee votes are the core auditable signal; a valid fixture must pass and an invalid fixture must fail a CI schema job. | `docs/prd.md` §"Committee" (constraints); issue #1044 |
+| Committee agent plugin | Skill/plugin extending `robotmoney-analyst` | Reuses the analyst's regime/market datasources, adds form-tilt → sign → submit-vote; proprietary methods stay out of the published surface. | `plugins/robotmoney-analyst/`; proposal doc §3 |
 | Agent command client | Rust binary `rmpc` | Builds known calldata, signs through constrained backends, performs direct JSON-RPC reads, and emits stable JSON. | `docs/technical/rmpc-read-output-contract.md` §3 |
 | Rust workspace | Cargo workspace, Tokio, reqwest, Alloy, sqlx where applicable | Existing Rust clients, indexer, tests, and shared logging use this stack. | root `Cargo.toml`; client and service `Cargo.toml` files |
 | Human dapp | React 18, Vite, TypeScript, wagmi/viem, TanStack Query, Tailwind, Playwright | Current dapp package and ADRs target wallet signing, calldata preview, config export, and browser tests. | `clients/dapp/package.json`; `docs/technical/dapp-credential-decisions.md` §3 |
@@ -438,6 +474,67 @@ the dapp/app layer. This is the fixed policy of
 [ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md); no
 line of this lifecycle authorises forced or admin-driven migration.
 
+### 4.8 Investment Committee Policy Contract
+
+The IC policy contract is a **signalling-only registry** — a sixth
+protocol contract alongside the five in §4.5 — separate from
+`RouterGovernance` (see the boundary in §2.4).
+
+**State.** Metadata only — no USDC, share tokens, or basket assets. Two
+records: an allowlist of registered committee agents (address → org name,
+registration block, active flag), and each agent's latest **vote
+commitment** — `rationale_uri`, a `vote_digest` (the keccak256 of the
+canonical vote JSON), `prompt_hash`, `inputs_digest`, `timestamp`, and
+`schema_version`. The structured tilt itself — per-vault stance,
+target-weight bps, and confidence — lives off-chain in the hash-committed
+memo at `rationale_uri`, not in contract storage (the minimal-on-chain
+split, §7.4). A new commitment supersedes the agent's prior one; the prior
+commitment survives in event history, so the registry is the live state
+and the event log is the immutable track record.
+
+**Signalling-only enforcement (INV-4).** The contract must not implement a
+payable `receive`/`fallback`, must never call a vault or
+`PortfolioRouter.setWeights`, and must never grant any agent a
+treasury-moving role on another contract. Its only outputs are storage
+writes and events. This is the on-chain expression of `docs/prd.md` §12
+INV-4 and is mandatory (§8).
+
+**Roles and authority.** Follow the conventions the five protocol
+contracts already use: OpenZeppelin `AccessControl` with a self-administered
+`ADMIN_ROLE`, the last-admin floor (`AdminFloorAccessControl`, so the sole
+admin cannot be removed), and role separation (an address that allowlists
+agents must not also be a voting agent). `ADMIN_ROLE` is held by the
+`TimelockController` in production (§4.5) — agent allowlisting and any IC
+parameter change route through schedule → delay → execute. Casting a vote
+is a registered agent's own action and is not timelocked.
+
+**Identity model.** A committee agent's identity is its registered EOA: it
+submits its own vote through the gateway, so `msg.sender` is the
+authorization, the same identity model the gateway uses for agent actions
+(§5.2). On-chain signature recovery and EIP-712 structured-vote domains are
+not used — the codebase has no EIP-712 path, and `msg.sender`-via-gateway
+is sufficient when the agent submits its own vote. (Structured-data
+signatures would only be needed to authenticate a vote authored by one
+party and relayed by another, which the committee does not do.)
+
+**Events for observability.** Emit `AgentRegistered`, `VoteSubmitted`
+(indexed by agent, carrying `vote_digest`, `rationale_uri`,
+`schema_version`, and timestamp), and `AgentRevoked`, mirroring
+`VaultRegistry`'s event conventions (§4.1). The explorer indexer
+enumerates registered agents and vote commitments from these events, then
+fetches and hash-verifies each memo to surface per-vault tilts and
+per-agent track record (§5.4) — never reading `rmpc` output.
+
+**Governance linkage.** Committee output feeds RouterGovernance as an
+upstream signal only, with **no on-chain coupling**: the IC contract never
+calls and is never called by RouterGovernance, which stays the sole
+`setWeights` caller (§2.4). An admin (via timelock) reads the committee's
+tilts — aggregated off-chain over the hash-verified memos — and proposes
+router weights through RouterGovernance's existing path, informed by but
+not driven by committee output. Because the link is off-chain and
+admin-applied, RouterGovernance is unchanged and no governance-interface
+refactor is required.
+
 ## 5. Off-Chain Architecture
 
 ### 5.0 Read Surface Taxonomy
@@ -521,6 +618,28 @@ if a future ADR adds that path.
 Protocol-scope reads require only the chain and registry configuration;
 they do not require a signer key. This allows agent runtimes to run
 protocol reads from a read-only deployment without any key material.
+
+**Committee commands.** `rmpc` exposes committee write subcommands that
+follow the same write-command path as `deposit`,
+`propose`, and `vote` (issue #632): load config → enforce the
+production-signer gate (software keystores rejected on Base mainnet;
+HSM/KMS required) → build known calldata for the configured IC contract →
+sign the EIP-1559 envelope through the `AgentSigner` backend → route the
+call through `RobotMoneyGateway` → broadcast → decode the event → emit a
+stable JSON envelope.
+
+- `committee register` — one-time on-chain registration of the agent
+  identity.
+- `committee vote-submit` — submit a signed per-vault tilt (stance,
+  `target_weight_bps`, `confidence`, `rationale_uri`, `prompt_hash`,
+  `inputs_digest`).
+
+The IC contract address is a new optional config field, present only when
+these commands are used (same pattern as the optional governance address);
+the commands fail closed if it is absent. Committee-specific failures map
+to named `RmpcError` variants and to the stable product reason codes in
+§7.2. Committee read commands (e.g. listing an agent's registered votes)
+use the same protocol/account read envelopes as §5.0.
 
 ### 5.2 Agent Permissions Gateway
 
@@ -649,6 +768,25 @@ applicable, gross amount, fees, net amount, receipt owner, recipient,
 slippage/quote bounds where relevant, and whether execution is
 all-or-revert or an explicitly previewed partial fill.
 
+**Committee and regime-feed surfaces**
+
+Two surfaces sit alongside the dashboard, built with the same three-layer
+model and the same data sources (explorer API for indexed history, live
+chain reads for current state):
+
+- **Regime feed** — a protocol-layer, read-only surface rendering the
+  canonical shared market read that committee agents consume. No wallet,
+  no action layer.
+- **Committee** — spans all three layers. The protocol layer renders
+  registered agents, their per-vault tilts, aggregated committee tilt per
+  vault, and per-agent track record (sourced from the explorer index of IC
+  events, §5.4). The account layer shows a connected committee agent its
+  own vote history. The action layer is the vote-submission flow
+  (select vault → stance/weight → `rationale_uri` → preview → sign),
+  routed through the gateway like every other write. Committee votes are
+  signalling-only: the preview must make clear the vote records a tilt and
+  does not move funds or set weights.
+
 **Faucet UX (testnet/devnet only)**
 
 A testnet/devnet-only Faucet tab lets operators provision fresh accounts
@@ -697,6 +835,23 @@ integrators who need activity feeds without running their own indexer.
 - Account agent policies: all gateway policy states for policies owned
   by the address, including window usage history.
 
+**Committee and regime indexing.** The indexer ingests the IC contract's
+`AgentRegistered`/`VoteSubmitted`/`AgentRevoked` events through the same
+poll-based JSON-RPC path as every other event (never from `rmpc` output),
+into Postgres tables keyed by chain and event identity and subject to the
+same reorg-rewrite handling. Because the structured tilt is off-chain
+(minimal-on-chain split, §7.4), on each `VoteSubmitted` the indexer fetches
+the memo at `rationale_uri`, verifies `keccak256(memo) == vote_digest`, and
+stores the per-vault tilts only when the hash matches — a memo that is
+missing or fails the digest check is recorded as an unverified commitment,
+never as tilt data. The API then exposes protocol-scope committee reads
+(registered agents, recent votes across all agents, per-vault tilt
+aggregate, per-agent track record) and an account-scope read (the votes
+submitted by a given agent address). The regime feed is exposed as a
+protocol-scope read (latest snapshot plus history). All committee/regime
+reads are display-only and non-authoritative for signing, like the rest of
+the explorer surface.
+
 Architecture constraints:
 
 - Postgres is the database for every environment that runs the indexer.
@@ -716,6 +871,16 @@ OpenCode, OpenClaw, and other agent harnesses invoke `rmpc` as a
 process-per-call command. MCP is deferred; any future MCP surface must
 inherit `rmpc`'s command schema, chain/config pinning, and refusal
 semantics rather than becoming a new signing authority.
+
+**Committee agent skill.** The published committee-agent
+skill/plugin is an extension of `robotmoney-analyst`: it reuses the
+analyst's regime/market datasources and adds "form a per-vault tilt → post
+the rationale memo to a public link → sign and submit the vote via `rmpc
+committee vote-submit`." It is a thin skill over the same `rmpc`
+process-per-call boundary — it has no signing authority of its own, and
+proprietary allocation methods stay out of the published surface. Like the
+analyst skill it fails closed (missing IC config, unregistered agent, or a
+`rationale_uri` that is not reachable all abort before any on-chain write).
 
 ### 5.6 Mint/Burn Watchdog
 
@@ -888,6 +1053,30 @@ testing), and the operator checklist live in
 `docs/development/single-production-codebase.md`; the environment
 modes it governs live in `docs/development/environments.md`.
 
+## 7.4 Committee Vote Contract
+
+A committee vote is a **fixed-shape** record. Its field set — `agent_id`,
+`vault`, `stance`, `target_weight_bps`, `confidence`, `rationale_uri`,
+`prompt_hash`, `inputs_digest`, `timestamp`, `schema_version` — is defined
+by a JSON schema committed to the repo and enforced in CI: a valid fixture
+must pass the schema job and a deliberately invalid fixture must fail it.
+
+The split is **minimal-on-chain**. The full structured vote — the per-vault
+stance, target-weight bps, confidence, and narrative rationale — lives
+off-chain in the memo at `rationale_uri`. On-chain, the IC contract stores
+only a commitment: the `rationale_uri`, the `vote_digest`
+(keccak256 of the canonical vote JSON), `prompt_hash`, `inputs_digest`,
+`timestamp`, and `schema_version` (§4.8). The on-chain digest binds the
+off-chain memo, so the memo is tamper-evident — a reader recomputes the
+hash and compares — while keeping gas low and the contract host-agnostic
+about where the memo lives (§9). The committed schema and the on-chain
+commitment stay in lock-step through `vote_digest` and `schema_version`.
+
+Vote submission follows the standard preview → sign → execute path (§7.1):
+the preview reads the agent's live registration status before signing.
+Committee-specific failures map to the existing stable product reason codes
+(§7.2) — no new codes are required.
+
 ## 8. Security Constraints
 
 These constraints are mandatory for implementation plans derived from
@@ -929,6 +1118,13 @@ this architecture:
   `TimelockController` in production; no EOA may hold `ADMIN_ROLE`
   directly. All high-risk admin operations must pass through the
   schedule → delay → execute flow. See §4.5.
+- The IC policy contract (§4.8) is signalling-only (custody invariant
+  INV-4, `docs/prd.md` §12): it must hold no asset, expose no payable
+  path, never call a vault or `PortfolioRouter.setWeights`, and grant no
+  agent a treasury-moving role. Committee registration and vote submission
+  must route through `RobotMoneyGateway`, not a side channel. Agent
+  allowlisting and IC parameter changes are `ADMIN_ROLE` operations and
+  must route through the admin timelock in production.
 
 ## 9. Vendor Selections
 
@@ -944,6 +1140,7 @@ this architecture:
 | JSON-RPC providers | Chain data transport | Required; specific production provider is not selected. | `docs/technical/explorer-schema-decisions.md` §3.5 |
 | HSM / Secure Enclave / TPM / KMS | Production signer class | Preferred signer classes; exact vendor not selected. | Plan tracking issue #109 §0 (git history) |
 | GitHub Actions | CI/CD | Existing documented CI environment. | `docs/development/ci-suites.md` |
+| Committee memo store | Off-chain rationale store | Host-agnostic by design: the IC contract stores any public `rationale_uri` and binds it with an on-chain `vote_digest` (§4.8, §7.4), so a GitHub gist, IPFS, or any reachable URL is acceptable — tamper-evidence comes from the hash, not the host. | `docs/prd.md` §"Committee"; proposal doc §4 |
 
 ## 10. Open Decisions
 
@@ -965,7 +1162,8 @@ this architecture:
 
 | Source doc | Rules applied | Rules not applicable |
 | --- | --- | --- |
-| `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, and out-of-scope boundaries. | Implementation sequencing. |
+| `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, out-of-scope boundaries, and the Investment Committee capability (roles, Committee Vote workflow, lifecycle, constraints, INV-4). | Implementation sequencing. |
+| `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership. Used for §2.4, §4.8, §5.1/§5.3/§5.4/§5.5, §7.4. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
 | `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaVault subclasses). | None. |

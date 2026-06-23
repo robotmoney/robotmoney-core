@@ -404,4 +404,106 @@ pub enum Command {
         #[arg(long)]
         pretty: bool,
     },
+    /// Investment Committee v0 — register an agent or submit a signed
+    /// allocation vote through the InvestmentCommitteePolicy contract,
+    /// routed via RobotMoneyGateway.
+    ///
+    /// Both subcommands write through the gateway (same signer + policy
+    /// enforced as for deposits). Implements: issue #1044.
+    Committee {
+        /// Path to the operator config TOML. Requires `ic_policy_address`.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        #[command(subcommand)]
+        subcommand: CommitteeSubcommand,
+        /// Pretty-print the JSON output.
+        #[arg(long, global = true)]
+        pretty: bool,
+    },
+}
+
+/// Subcommands for `rmpc committee`.
+#[derive(Debug, Subcommand)]
+pub enum CommitteeSubcommand {
+    /// Register a committee agent address in the InvestmentCommitteePolicy
+    /// contract. Caller must hold ADMIN_ROLE on the IC policy contract.
+    ///
+    /// Routes through RobotMoneyGateway with `--order-id` as the
+    /// idempotency key.
+    Register {
+        /// Committee agent address to allowlist (0x-prefixed hex).
+        #[arg(long)]
+        agent: String,
+        /// Human-readable agent identifier (e.g. "athena-v1", "robot-money").
+        #[arg(long = "agent-id")]
+        agent_id: String,
+        /// 32-byte order id / idempotency key, 0x-prefixed hex.
+        #[arg(long = "order-id")]
+        order_id: String,
+        /// Deadline horizon in seconds from now. Default 300.
+        #[arg(long = "deadline-secs", default_value_t = 300)]
+        deadline_secs: u64,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Gas limit for the register tx. Default 300_000.
+        #[arg(long = "gas-limit", default_value_t = 300_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+    },
+    /// Submit a signed allocation vote for a vault through the
+    /// InvestmentCommitteePolicy contract. Caller must hold
+    /// COMMITTEE_AGENT_ROLE on the IC policy contract.
+    ///
+    /// Routes through RobotMoneyGateway with `--order-id` as the
+    /// idempotency key.
+    VoteSubmit {
+        /// Target vault address (0x-prefixed hex).
+        #[arg(long)]
+        vault: String,
+        /// Allocation stance: overweight | neutral | underweight.
+        #[arg(long)]
+        stance: String,
+        /// Target allocation weight in basis points (0–10 000).
+        #[arg(long = "weight-bps")]
+        target_weight_bps: u16,
+        /// Confidence score 0–100.
+        #[arg(long)]
+        confidence: u8,
+        /// Public URI to the narrative chain-of-thought / memo.
+        #[arg(long = "rationale-uri")]
+        rationale_uri: String,
+        /// keccak256 of the full vote JSON (0x-prefixed hex).
+        #[arg(long = "vote-json-hash")]
+        vote_json_hash: String,
+        /// keccak256 of the agent prompt (0x-prefixed hex).
+        #[arg(long = "prompt-hash")]
+        prompt_hash: String,
+        /// keccak256 of the inputs consumed (0x-prefixed hex).
+        #[arg(long = "inputs-digest")]
+        inputs_digest: String,
+        /// Vote JSON schema version. Default "1.0".
+        #[arg(long = "schema-version", default_value = "1.0")]
+        schema_version: String,
+        /// Unix seconds when the vote was formed.
+        #[arg(long)]
+        timestamp: u64,
+        /// 32-byte order id / idempotency key, 0x-prefixed hex.
+        #[arg(long = "order-id")]
+        order_id: String,
+        /// Deadline horizon in seconds from now. Default 300.
+        #[arg(long = "deadline-secs", default_value_t = 300)]
+        deadline_secs: u64,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Gas limit for the vote-submit tx. Default 500_000.
+        #[arg(long = "gas-limit", default_value_t = 500_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
+    },
 }

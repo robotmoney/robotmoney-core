@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "agent_id": "athena-v1",
+  "vault": "not-a-valid-address",
+  "stance": "bullish",
+  "target_weight_bps": 15000,
+  "confidence": 150,
+  "rationale_uri": "",
+  "prompt_hash": "missing-0x-prefix",
+  "inputs_digest": "also-invalid",
+  "timestamp": 123
+}

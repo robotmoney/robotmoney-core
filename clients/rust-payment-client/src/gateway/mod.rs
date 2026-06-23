@@ -68,6 +68,13 @@ sol!(
     "abi/TimelockController.json"
 );
 
+sol!(
+    #[sol(abi)]
+    #[allow(missing_docs, clippy::too_many_arguments)]
+    InvestmentCommitteePolicy,
+    "abi/InvestmentCommitteePolicy.json"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

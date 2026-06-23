@@ -14,6 +14,15 @@ is better than manual treasury management because users can choose an
 exposure profile, preview the consequences of a deposit or withdrawal,
 and rely on consistent controls across human and agent-operated flows.
 
+Beyond the treasury surface, Robot Money provides an **agentic Investment
+Committee**: an admin-allowlisted set of registered, signed AI agents that
+read a shared market-regime feed and publish auditable per-vault
+allocation tilts over the vaults. The committee's output is an upstream,
+signalling-only input to allocation governance — it never moves funds or
+sets router weights directly. It gives depositors a transparent,
+multi-party, reproducible allocation rationale and gives third-party
+organizations a way to contribute visible allocation signals.
+
 ## 2. Goals and Success Metrics
 
 - Depositors can deposit USDC into a selected vault or a Portfolio
@@ -30,6 +39,10 @@ and rely on consistent controls across human and agent-operated flows.
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
   when an operation cannot proceed or only partially succeeds.
+- Admin-allowlisted committee agents can register an on-chain identity
+  and submit signed, fixed-shape allocation-tilt votes over the vaults,
+  each referencing a public rationale memo; any user can inspect
+  registered agents, their votes, and their per-agent track record.
 
 Success is measured by:
 
@@ -39,7 +52,10 @@ Success is measured by:
 - percentage of failed operations that return a clear product reason;
 - autonomous-agent activity that remains within depositor-defined limits;
 - governance participation in allocation-weight votes;
-- user visibility into allocation, performance, fees, and state changes.
+- user visibility into allocation, performance, fees, and state changes;
+- number of registered committee agents and of third-party agents
+  producing live allocation output, plus the visibility and continuity of
+  each agent's published track record.
 
 ## 3. User Roles
 
@@ -54,6 +70,14 @@ Success is measured by:
   allocation and observes protocol value capture. Token-holder voting
   is a future goal once a real token snapshot or voting-power source
   is integrated.
+- **Committee agent.** An admin-allowlisted AI agent, operated by a
+  participating organization, that holds a registered on-chain identity
+  and submits signed per-vault allocation-tilt votes over the vaults. It
+  is distinct from an *autonomous depositor* (which sweeps treasury funds)
+  and from a *governance voter* (which votes directly on router target
+  weights): a committee agent only produces signalling-only allocation
+  tilts that feed allocation governance upstream, and has no authority
+  over funds or weights.
 - **Integrator.** A builder who embeds Robot Money treasury actions and
   reporting into an agent runtime, treasury workflow, or external
   product.
@@ -74,6 +98,10 @@ Access expectations:
   goal.)
 - Integrators can read public product state and submit user-authorized
   actions.
+- Committee agents can register an identity and submit signed votes only
+  while admin-allowlisted; their votes are signalling-only and cannot move
+  funds or set router weights. All committee actions route through the same
+  gateway entrypoint as other product actions, with no side channel.
 - Protocol operators can use product-wide safety controls, but cannot
   create, expand, or redirect an individual depositor's agent policy.
 - Authorization depends on relationship: a depositor controls only their
@@ -93,6 +121,14 @@ Access expectations:
   Portfolio Router target weights so that I can influence how the
   composite treasury exposure is balanced. (Token-holder voting is a
   future goal; current governance is admin-weighted MVP.)
+- As a committee agent operated by a participating organization, I want to
+  register a signed on-chain identity and submit a fixed-shape per-vault
+  allocation-tilt vote referencing a public rationale memo, so that my
+  allocation read is auditable, attributable to my organization, and builds
+  a visible track record without my proprietary methods being exposed.
+- As a depositor, I want to see the committee's registered agents, their
+  current per-vault tilts, and each agent's track record so that I can
+  judge the allocation rationale before it informs router weights.
 - As an integrator, I want stable read and action surfaces so that agent
   runtimes and treasury tools can embed Robot Money safely.
 - As a protocol operator, I want narrow product-wide safety controls so
@@ -152,6 +188,35 @@ MVP and is not on the build list.
 4. Depositors and agents see the resulting weights before future
    Portfolio Router actions.
 
+Committee allocation tilts (see the Committee Vote workflow) are an
+upstream, signalling-only input to this flow: aggregated committee output
+informs proposed target weights, but applying weights remains
+admin-applied. The committee never sets weights directly.
+
+### Committee Vote
+
+NOTE: Committee allocation signalling is a distinct mechanism from the
+admin-weighted allocation-weight governance above. A committee agent does
+not vote on router target weights; it publishes a signed per-vault tilt
+that feeds weight governance upstream. Membership is admin-gated, and
+committee output never auto-applies to router weights — it remains an
+upstream signal.
+
+1. An admin allowlists a participating organization's agent; the agent
+   registers a signed on-chain identity through the gateway entrypoint.
+2. The agent reads the shared market-regime feed and current holdings.
+3. The agent forms a per-vault tilt (overweight / neutral / underweight)
+   across the existing vaults and posts a narrative rationale memo to a
+   public link.
+4. The agent signs and submits a fixed-shape vote — referencing the memo
+   and the inputs it consumed — routed through the gateway and registered
+   on-chain. Votes from non-allowlisted agents are refused.
+5. The product publishes the registered agents, their current and
+   historical votes, and each agent's track record.
+6. Aggregated committee tilts become a signalling input to allocation
+   governance; any application to live router weights remains
+   admin-applied.
+
 ### Integrator Read And Action Flow
 
 1. The integrator reads vault registry, allocation weights, position
@@ -197,6 +262,14 @@ Common edge cases:
   when the user-facing preview allows partial execution.
 - **Governance proposal.** Draft -> open for voting -> approved or
   rejected -> applied or expired.
+- **Committee agent registration.** Allowlisted -> registered (signed
+  on-chain identity) -> active -> deactivated when removed from the
+  allowlist. A deactivated agent's historical votes and track record remain
+  readable.
+- **Committee vote.** Formed -> signed -> submitted -> registered on-chain
+  -> superseded by the agent's next vote. A registered vote is immutable;
+  corrections are made by submitting a new vote. Committee votes are
+  signalling-only and never transition product funds or router weights.
 - **Fee schedule.** Proposed -> published -> active -> superseded.
 - **Incident control.** Normal -> paused -> normal; normal or paused ->
   shutdown when new deposits must stop while preserving withdrawal
@@ -214,9 +287,14 @@ Common edge cases:
   execution.
 - **Governance participation.** Triggered by proposal creation, vote
   casting, vote tallying, weight publication, and execution reporting.
+- **Committee participation.** Triggered by agent allowlisting, on-chain
+  identity registration, vote signing and submission through the gateway,
+  publication of the shared market-regime feed, and posting of off-chain
+  rationale memos to public links referenced by each vote.
 - **Public state indexing and reporting.** Triggered by deposits,
   withdrawals, policy changes, governance actions, allocation changes,
-  fee events, and incident controls.
+  fee events, incident controls, committee registrations, committee votes,
+  and per-agent track record.
 - **Agent runtime integration.** Triggered when an authorized agent reads
   product state, previews an action, submits an action, or receives a
   refusal reason.
@@ -232,8 +310,9 @@ Common edge cases:
 - Fiat on-ramps and off-ramps.
 - Direct user interaction with underlying strategy venues outside Robot
   Money vault and allocation flows.
-- Agent-created vaults, agent-created assets, or agent-controlled
-  governance changes.
+- Agent-created vaults or agent-created assets. Committee agents produce
+  signalling-only allocation tilts; no agent has direct control over
+  governance changes, router weights, or funds.
 - Token-holder governance over vault internals, per-vault asset
   selection, strategy selection, fees, or individual agent permissions.
 - Hosted custody or hosted signing services.
@@ -253,6 +332,13 @@ Common edge cases:
   redirect user funds or expand an individual agent's permissions.
 - The Portfolio Router must expose target weights, active weights,
   governance state, and historical outcomes.
+- Committee actions must route through the gateway entrypoint with no side
+  channel; committee votes are signalling-only and must not move funds or
+  set router weights directly; committee membership is admin-gated; the
+  committee vote payload is a fixed, schema-validated shape; and committee
+  provenance is established by a registered, signed on-chain identity tied
+  to a participating organization. Each registered vote must reference a
+  publicly readable rationale memo.
 - Vault and Portfolio Router fee structures are limited to three
   classes: management fee, swap-fee share, and exit fee. Each fee
   class, its rate, and its recipient must be disclosed before user
@@ -541,3 +627,12 @@ and can only de-risk, never extract; and governance actions (unpause, restore,
 retire, fee-recipient and fee-parameter changes, adapter add/allowlist/caps,
 quarantine set and recover) require multisig + timelock. Depositor principal
 is moved by the depositor alone.
+
+**INV-4 — Committee policy is signalling-only.** The Investment-Committee
+policy contract holds only registered agents, their votes, and aggregated
+tilts; it grants no treasury-spend and no auto-apply authority. Committee
+writes cannot move depositor or protocol funds and cannot set Portfolio
+Router weights directly — committee output is an upstream signal, and any
+application to live weights stays on the admin-applied governance path. The
+contract is reached only through the gateway entrypoint, and
+registration/vote submission is restricted to admin-allowlisted agents.

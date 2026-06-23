@@ -5,6 +5,7 @@
 //! Each module exposes a `run(...)` function that returns the process exit
 //! code. JSON output goes on stdout; logs/warnings go on stderr.
 
+pub mod committee;
 pub mod deposit;
 pub mod get_agent;
 pub mod get_allowance;

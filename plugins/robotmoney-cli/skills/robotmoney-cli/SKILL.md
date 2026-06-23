@@ -5,9 +5,10 @@ description: >
   surface for the Robot Money Rust payment client, including read commands
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
-  write commands (deposit, withdraw, status, self-check), and governance write
-  commands (propose, vote). Covers all flags, output shapes, preflight rules,
-  and the get-governance → propose → vote example trace.
+  write commands (deposit, withdraw, status, self-check), governance write
+  commands (propose, vote), and Investment Committee commands (committee
+  register, committee vote-submit). Covers all flags, output shapes, preflight
+  rules, and the get-governance → propose → vote example trace.
 ---
 
 # robotmoney-cli (`rmpc`)
@@ -30,7 +31,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   subcommand: `deposit`, `withdraw`, `status`, `self-check`, `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `propose`, `vote`.
+  `get-tx`, `propose`, `vote`, `committee`.
 
 ## Command surface
 
@@ -55,6 +56,7 @@ rmpc get-deposit     Look up a gateway deposit by its on-chain id
 rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
+rmpc committee       Investment Committee: register agents and submit signed allocation votes
 ```
 
 ## Governance write commands
@@ -183,3 +185,32 @@ rmpc get-governance --config rmpc.toml --pretty
 The `get-governance` output includes the active proposal's `proposal_id`,
 `voting_deadline`, `proposed_vaults`, `proposed_bps`, `votes_for`,
 `votes_against`, and `votes_abstain`.
+
+## Investment Committee commands
+
+### committee register
+
+Register a committee agent in the `InvestmentCommitteePolicy` contract
+(requires `ADMIN_ROLE`). Routes through `RobotMoneyGateway`.
+
+```bash
+rmpc committee --config <CONFIG> register ...
+```
+
+See `rmpc committee register --help` for the full flag list (agent address,
+agent-id, gas-limit, fee-cap, receipt-timeout-secs, pretty).
+
+### committee vote-submit
+
+Submit a signed allocation vote from an allowlisted committee agent.
+Routes through `RobotMoneyGateway`. Signalling-only: votes have no
+treasury-spend or router-weight authority.
+
+```bash
+rmpc committee --config <CONFIG> vote-submit ...
+```
+
+See `rmpc committee vote-submit --help` for the full flag list (vault,
+stance, weight-bps, confidence, rationale-uri, vote-json-hash,
+prompt-hash, inputs-digest, timestamp, schema-version, gas-limit,
+fee-cap, receipt-timeout-secs, pretty).
