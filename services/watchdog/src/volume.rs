@@ -159,6 +159,144 @@ pub async fn burn_volume_per_hour(
     Ok(decimal_to_u128(row.0))
 }
 
+// ---- Per-vault variants (issue #1023, scan finding WD-4) -------------------
+//
+// The global functions above sum across *all* vaults; the four functions below
+// scope every aggregation to a single `vault` address (the BYTEA `vault` column
+// each source table already carries) so a per-vault threshold can be evaluated
+// without one vault's volume diluting into the all-vault total. A spike confined
+// to one vault is therefore visible to that vault's (potentially tighter) limit
+// even while the global aggregate stays under the global cap.
+
+/// Compute the mint (deposit) volume for a single block, scoped to one `vault`.
+///
+/// Same three non-overlapping deposit sources as [`mint_volume_per_block`], each
+/// additionally filtered to rows whose `vault` column equals `vault`. The direct
+/// ERC-4626 leg keys off `vault_transfer_events.vault`, so the deduplication
+/// against gateway-originated deposits is unchanged.
+pub async fn mint_volume_per_block_for_vault(
+    pool: &PgPool,
+    chain_id: i64,
+    block_number: i64,
+    vault: &[u8],
+) -> Result<u128, WatchdogError> {
+    let row: (Option<bigdecimal::BigDecimal>,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(amount), 0) \
+         FROM ( \
+           SELECT amount FROM agent_deposits \
+             WHERE chain_id = $1 AND block_number = $2 AND vault = $3 \
+           UNION ALL \
+           SELECT amount FROM router_deposit_legs \
+             WHERE chain_id = $1 AND block_number = $2 AND vault = $3 \
+           UNION ALL \
+           SELECT vte.assets AS amount FROM vault_transfer_events vte \
+             WHERE vte.chain_id = $1 AND vte.block_number = $2 \
+               AND vte.vault = $3 \
+               AND vte.direction = 'deposit' \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM agent_deposits ad \
+                 WHERE ad.chain_id = vte.chain_id AND ad.tx_hash = vte.tx_hash \
+               ) \
+         ) sub",
+    )
+    .bind(chain_id)
+    .bind(block_number)
+    .bind(vault)
+    .fetch_one(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+
+    Ok(decimal_to_u128(row.0))
+}
+
+/// Compute the rolling per-hour mint (deposit) volume scoped to one `vault`.
+pub async fn mint_volume_per_hour_for_vault(
+    pool: &PgPool,
+    chain_id: i64,
+    now_unix: i64,
+    window_secs: i64,
+    vault: &[u8],
+) -> Result<u128, WatchdogError> {
+    let since = now_unix - window_secs;
+    let row: (Option<bigdecimal::BigDecimal>,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(d.amount), 0) \
+         FROM ( \
+           SELECT chain_id, block_number, amount FROM agent_deposits \
+             WHERE vault = $3 \
+           UNION ALL \
+           SELECT chain_id, block_number, amount FROM router_deposit_legs \
+             WHERE vault = $3 \
+           UNION ALL \
+           SELECT vte.chain_id, vte.block_number, vte.assets AS amount \
+             FROM vault_transfer_events vte \
+             WHERE vte.vault = $3 AND vte.direction = 'deposit' \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM agent_deposits ad \
+                 WHERE ad.chain_id = vte.chain_id AND ad.tx_hash = vte.tx_hash \
+               ) \
+         ) d \
+         JOIN blocks b ON b.chain_id = d.chain_id AND b.block_number = d.block_number \
+         WHERE d.chain_id = $1 AND b.timestamp >= $2",
+    )
+    .bind(chain_id)
+    .bind(since)
+    .bind(vault)
+    .fetch_one(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+
+    Ok(decimal_to_u128(row.0))
+}
+
+/// Compute the burn (withdrawal) volume for a single block, scoped to one `vault`.
+pub async fn burn_volume_per_block_for_vault(
+    pool: &PgPool,
+    chain_id: i64,
+    block_number: i64,
+    vault: &[u8],
+) -> Result<u128, WatchdogError> {
+    let row: (Option<bigdecimal::BigDecimal>,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(assets), 0) \
+         FROM vault_transfer_events \
+         WHERE chain_id = $1 AND block_number = $2 AND vault = $3 \
+           AND direction = 'withdrawal'",
+    )
+    .bind(chain_id)
+    .bind(block_number)
+    .bind(vault)
+    .fetch_one(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+
+    Ok(decimal_to_u128(row.0))
+}
+
+/// Compute the rolling per-hour burn (withdrawal) volume scoped to one `vault`.
+pub async fn burn_volume_per_hour_for_vault(
+    pool: &PgPool,
+    chain_id: i64,
+    now_unix: i64,
+    window_secs: i64,
+    vault: &[u8],
+) -> Result<u128, WatchdogError> {
+    let since = now_unix - window_secs;
+    let row: (Option<bigdecimal::BigDecimal>,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(v.assets), 0) \
+         FROM vault_transfer_events v \
+         JOIN blocks b ON b.chain_id = v.chain_id AND b.block_number = v.block_number \
+         WHERE v.chain_id = $1 AND b.timestamp >= $2 AND v.vault = $3 \
+           AND v.direction = 'withdrawal'",
+    )
+    .bind(chain_id)
+    .bind(since)
+    .bind(vault)
+    .fetch_one(pool)
+    .await
+    .map_err(WatchdogError::Db)?;
+
+    Ok(decimal_to_u128(row.0))
+}
+
 /// Convert an `Option<BigDecimal>` (COALESCE result) to `u128`.
 ///
 /// Returns `0` on `None` or values that do not fit.

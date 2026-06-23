@@ -56,6 +56,10 @@ pub enum CountTable {
     IndexerRuns,
     /// Added in migration 0002 — vault registry table.
     Vaults,
+    /// Added in migration 0012 — append-only vault status transition history
+    /// that the in-place `vaults.status` is derived from, making status
+    /// reorg-safe (IDX-8).
+    VaultStatusEvents,
     /// Added in migration 0003 — governance proposal events.
     GovernanceProposals,
     /// Added in migration 0003 — per-voter vote events.
@@ -88,6 +92,7 @@ impl CountTable {
             CountTable::WalletPositions => "wallet_positions",
             CountTable::IndexerRuns => "indexer_runs",
             CountTable::Vaults => "vaults",
+            CountTable::VaultStatusEvents => "vault_status_events",
             CountTable::GovernanceProposals => "governance_proposals",
             CountTable::GovernanceVotes => "governance_votes",
             CountTable::RouterWeightSnapshots => "router_weight_snapshots",
@@ -125,6 +130,7 @@ impl TryFrom<&str> for CountTable {
             "wallet_positions" => Ok(CountTable::WalletPositions),
             "indexer_runs" => Ok(CountTable::IndexerRuns),
             "vaults" => Ok(CountTable::Vaults),
+            "vault_status_events" => Ok(CountTable::VaultStatusEvents),
             "governance_proposals" => Ok(CountTable::GovernanceProposals),
             "governance_votes" => Ok(CountTable::GovernanceVotes),
             "router_weight_snapshots" => Ok(CountTable::RouterWeightSnapshots),
@@ -241,12 +247,30 @@ impl Db {
 
     /// Reorg recovery: delete every row with block_number > `root` for
     /// the given chain. Per ADR §3.3, this is preferred over soft-delete.
+    /// Reorg-rollback cascade: remove every block-numbered row strictly above
+    /// `root` for this chain, then reconcile the two derived states that are
+    /// **not** plain block-numbered rows:
+    ///
+    /// - **`vaults.status` (IDX-8)** — status is mutated in place, so it cannot
+    ///   be deleted by block number.  After pruning the block-numbered
+    ///   `vault_status_events` history above `root`, the live `vaults.status` /
+    ///   `status_changed_at` are re-derived from the surviving highest-block
+    ///   status event per vault (falling back to 0 = Active / NULL when no
+    ///   status event survives, i.e. the registration default).
+    /// - **`indexer_runs.last_indexed_block` (IDX-2)** — the durable cursor is
+    ///   `MAX(last_indexed_block) WHERE error IS NULL`.  Any successful run that
+    ///   recorded a cursor above `root` indexed now-orphaned blocks, so its
+    ///   recorded cursor is capped down to `root` (or NULL when `root < 0`).
+    ///   This makes the cursor reorg-safe even if the run that performed the
+    ///   rollback subsequently fails: the next [`Db::last_indexed_block`]
+    ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
     pub async fn delete_above_block(&self, chain_id: i64, root: i64) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
         let mut total = 0u64;
         for table in [
             "wallet_positions",
             "vault_snapshots",
+            "vault_status_events",
             "agent_deposits",
             "agent_policies",
             "governance_votes",
@@ -271,6 +295,51 @@ impl Db {
                 .await?;
             total += r.rows_affected();
         }
+
+        // IDX-8: re-derive the in-place vaults.status from the surviving
+        // (block_number <= root) status history.  A vault whose latest event
+        // was rolled back reverts to its prior surviving status; a vault whose
+        // every status event was rolled back reverts to the registration
+        // default (status 0 = Active, status_changed_at NULL).
+        sqlx::query(
+            "UPDATE vaults v SET \
+                 status = COALESCE(latest.status, 0), \
+                 status_changed_at = latest.changed_at, \
+                 indexed_at = now() \
+             FROM ( \
+                 SELECT v2.vault_address AS vault_address, e.status AS status, e.changed_at AS changed_at \
+                 FROM vaults v2 \
+                 LEFT JOIN LATERAL ( \
+                     SELECT status, changed_at \
+                     FROM vault_status_events e2 \
+                     WHERE e2.chain_id = v2.chain_id \
+                       AND e2.vault_address = v2.vault_address \
+                     ORDER BY e2.block_number DESC, e2.log_index DESC \
+                     LIMIT 1 \
+                 ) e ON true \
+                 WHERE v2.chain_id = $1 \
+             ) latest \
+             WHERE v.chain_id = $1 AND v.vault_address = latest.vault_address",
+        )
+        .bind(chain_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // IDX-2: cap any successful-run cursor that points above the rolled-back
+        // root down to root (NULL when root < 0 — a full wipe), so the next
+        // last_indexed_block() resolves to root regardless of whether the run
+        // that triggered this rollback later fails.
+        let capped: Option<i64> = if root < 0 { None } else { Some(root) };
+        sqlx::query(
+            "UPDATE indexer_runs SET last_indexed_block = $2 \
+             WHERE chain_id = $1 AND error IS NULL AND last_indexed_block > $3",
+        )
+        .bind(chain_id)
+        .bind(capped)
+        .bind(root)
+        .execute(&mut *tx)
+        .await?;
+
         tx.commit().await?;
         Ok(total)
     }
@@ -481,6 +550,37 @@ impl Db {
         Ok(r.rows_affected())
     }
 
+    /// Most-recent `wallet_positions.shares` for an `(chain_id, contract, owner)`
+    /// trio at or below `as_of_block`, i.e. the owner's running share balance
+    /// just before a new event at `as_of_block` is applied.  Returns `None`
+    /// (treated as a zero balance by callers) when the owner has no prior
+    /// position row.
+    ///
+    /// IDX-3: `insert_wallet_position` writes a per-event *resulting balance*
+    /// snapshot, so the indexer needs the prior balance to roll the delta
+    /// forward.  Bounding by `as_of_block` keeps the read deterministic if
+    /// events arrive out of block order within a tick.
+    pub async fn latest_wallet_position(
+        &self,
+        chain_id: i64,
+        contract: [u8; 20],
+        owner: [u8; 20],
+        as_of_block: i64,
+    ) -> Result<Option<U256>, DbError> {
+        let row: Option<(BigDecimal,)> = sqlx::query_as(
+            "SELECT shares FROM wallet_positions \
+             WHERE chain_id = $1 AND contract = $2 AND owner = $3 AND block_number <= $4 \
+             ORDER BY block_number DESC LIMIT 1",
+        )
+        .bind(chain_id)
+        .bind(&contract[..])
+        .bind(&owner[..])
+        .bind(as_of_block)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(d,)| decimal_to_u256(&d)))
+    }
+
     /// Idempotent insert of a vault registration row sourced from a
     /// `VaultRegistered` event.  Uses `ON CONFLICT DO NOTHING` so
     /// re-indexing the same registration block is a no-op.
@@ -521,18 +621,44 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    /// Atomically update the `status` and `status_changed_at` columns of
-    /// a previously-registered vault from a `VaultStatusChanged` event.
+    /// Record a `VaultStatusChanged` event and refresh the live
+    /// `vaults.status` / `status_changed_at` columns from it.
     ///
-    /// A no-op if the vault address is unknown (forward-safety: the
-    /// indexer may not have seen the `VaultRegistered` event yet).
+    /// IDX-8: the transition is appended to the block-numbered, append-only
+    /// `vault_status_events` history (so a reorg can roll it back via
+    /// [`Db::delete_above_block`]) *and* the in-place `vaults` columns are
+    /// updated, in a single transaction.  The history row is idempotent on
+    /// `(chain_id, vault_address, block_number, log_index)`, so re-indexing
+    /// the same event is a no-op.
+    ///
+    /// Returns the number of `vaults` rows updated.  A `vaults` update is a
+    /// no-op if the vault address is unknown (forward-safety: the indexer may
+    /// not have seen the `VaultRegistered` event yet) — but the history event
+    /// is still recorded so a later registration can re-derive correctly.
     pub async fn update_vault_status(
         &self,
         chain_id: i64,
         vault_address: [u8; 20],
+        block_number: i64,
+        log_index: i32,
         new_status: i16,
         changed_at: i64,
     ) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO vault_status_events \
+             (chain_id, vault_address, block_number, log_index, status, changed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (chain_id, vault_address, block_number, log_index) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&vault_address[..])
+        .bind(block_number)
+        .bind(log_index)
+        .bind(new_status)
+        .bind(changed_at)
+        .execute(&mut *tx)
+        .await?;
         let r = sqlx::query(
             "UPDATE vaults \
              SET status = $3, status_changed_at = $4, indexed_at = now() \
@@ -542,8 +668,9 @@ impl Db {
         .bind(&vault_address[..])
         .bind(new_status)
         .bind(changed_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(r.rows_affected())
     }
 
@@ -588,9 +715,10 @@ impl Db {
     /// Idempotent insert of a per-voter vote row from a `VoteCast` event.
     /// Uses `ON CONFLICT DO NOTHING` (one vote per voter per proposal).
     ///
-    /// Also increments the running `votes_for` or `votes_against` counter
-    /// on the parent `governance_proposals` row — but only when the vote row
-    /// is new (rows_affected == 1).
+    /// Also adds the vote's `weight` (voting power) to the running `votes_for`
+    /// or `votes_against` tally on the parent `governance_proposals` row — but
+    /// only when the vote row is new (rows_affected == 1).  The tally sums
+    /// power, not voter count (IDX-5).
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_vote(
         &self,
@@ -622,20 +750,24 @@ impl Db {
         .await?;
 
         if r.rows_affected() == 1 {
-            // Update running tally on the proposal.
+            // IDX-5: sum the vote's *power* (weight) into the running tally,
+            // not `+ 1` per voter — the tally must reflect voting power so it
+            // agrees with on-chain quorum/threshold math.  The columns are
+            // NUMERIC(78, 0) (migration 0013) to hold a U256 power sum.
             let col = if support {
                 "votes_for"
             } else {
                 "votes_against"
             };
             let q = format!(
-                "UPDATE governance_proposals SET {} = {} + 1 \
+                "UPDATE governance_proposals SET {} = {} + $3 \
                  WHERE chain_id = $1 AND proposal_id = $2",
                 col, col
             );
             sqlx::query(&q)
                 .bind(chain_id)
                 .bind(proposal_id)
+                .bind(u256_to_decimal(weight))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -1072,6 +1204,18 @@ fn u256_to_decimal(v: U256) -> BigDecimal {
     BigDecimal::from_str(&v.to_string()).expect("U256 always parses as BigDecimal")
 }
 
+/// Exact decimal `NUMERIC(78, 0)` value → uint256. ADR §3.1. The inverse of
+/// [`u256_to_decimal`]: `wallet_positions.shares` is a non-negative integer
+/// share balance, so the value round-trips through its base-10 integer string.
+/// A negative or out-of-range value saturates to `U256::ZERO` rather than
+/// panicking (defensive — the writer never persists such a value).
+fn decimal_to_u256(d: &BigDecimal) -> U256 {
+    // `with_scale(0)` drops any (always-absent for share balances) fractional
+    // part; the resulting `to_string()` is the base-10 integer, which U256
+    // parses losslessly.
+    U256::from_str(&d.with_scale(0).to_string()).unwrap_or(U256::ZERO)
+}
+
 #[cfg(test)]
 mod count_guard_tests {
     //! Unit tests for the `CountTable` type-guard / allowlist (issue #695).
@@ -1096,6 +1240,7 @@ mod count_guard_tests {
             "wallet_positions",
             "indexer_runs",
             "vaults",
+            "vault_status_events",
             "governance_proposals",
             "governance_votes",
             "router_weight_snapshots",

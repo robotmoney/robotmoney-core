@@ -13,12 +13,17 @@
 //!   maxWithdrawPerWindow)` — the canonical authorization tuple. The
 //!   withdrawal fields surface the agent-compromise blast radius
 //!   identified in finding #5 of the 2026-05-18 coin-theft review.
-//! - `eth_getBlockByNumber(blockNumber).timestamp` → used to compute
-//!   `window_id = timestamp / WINDOW_SECONDS`, so the answer is
-//!   reproducible against the pinned block (not the daemon's wall
-//!   clock — see ADR §3.4).
-//! - `agentWindowGross(agent, windowId)` → cumulative deposit value the
-//!   agent has put through the current window.
+//! - `eth_getBlockByNumber(blockNumber).timestamp` → used to compute the
+//!   calendar `window_id = timestamp / WINDOW_SECONDS`, surfaced for
+//!   operator context and reproducibility against the pinned block (not the
+//!   daemon's wall clock — see ADR §3.4). It is **not** the source of
+//!   `window_gross` (RPC-1, #1024).
+//! - `effectiveDepositWindowGross(agent)` → cumulative deposit value the
+//!   agent has put through the current **rolling** deposit window — the
+//!   exposure the gateway enforces the deposit cap on. Issue #1024 (RPC-1)
+//!   replaced the deprecated calendar mapping `agentWindowGross(agent,
+//!   windowId)`, which reset at each `WINDOW_SECONDS` boundary regardless of
+//!   the agent's deposit anchor and could diverge from the enforced value.
 //! - `vault.allowance(agent, gateway)` → outstanding share allowance the
 //!   agent has granted the gateway. Together with the policy withdrawal
 //!   caps, this defines the maximum value an attacker who compromises
@@ -87,9 +92,17 @@ pub struct AgentData {
     /// the bound on what a compromised agent can withdraw without
     /// further on-chain action by the depositor (issue #429).
     pub share_allowance: DecimalU256,
-    /// Window id at the pinned block: `block_timestamp / WINDOW_SECONDS`.
+    /// Calendar window id at the pinned block:
+    /// `block_timestamp / WINDOW_SECONDS`. Retained for operator context
+    /// only; it is **not** the source of `window_gross` (RPC-1, #1024).
     pub window_id: u64,
-    /// `agentWindowGross(agent, window_id)` — `uint256` decimal string.
+    /// `effectiveDepositWindowGross(agent)` — the agent's cumulative
+    /// deposit gross against the current **rolling** window (the value the
+    /// gateway enforces the deposit cap on), as a `uint256` decimal string.
+    /// Issue #1024 (RPC-1) switched this from the deprecated calendar-window
+    /// mapping `agentWindowGross(agent, window_id)` to the rolling-window
+    /// effective view already used by the preflight (`policy/mod.rs`), so the
+    /// reported figure matches the gateway's actual admit/deny exposure.
     pub window_gross: DecimalU256,
 }
 
@@ -206,25 +219,25 @@ async fn read_agent(
         Err(e) => b.record_err("share_allowance", e),
     }
 
-    // window id from chain timestamp
-    let window_id = match rpc.block_timestamp(block_number).await {
-        Ok(ts) => {
-            let id = ts / WINDOW_SECONDS;
-            b.data_mut().window_id = id;
-            Some(id)
-        }
-        Err(e) => {
-            b.record_err("window_id", format!("eth_getBlockByNumber failed: {e}"));
-            None
-        }
-    };
+    // Calendar window id from the chain timestamp. Retained for operator
+    // context (RPC-1, #1024): the on-chain deposit cap is enforced on a
+    // rolling window, so this calendar bucket is no longer the source of
+    // `window_gross` — it is surfaced for reproducibility against the pinned
+    // block only.
+    match rpc.block_timestamp(block_number).await {
+        Ok(ts) => b.data_mut().window_id = ts / WINDOW_SECONDS,
+        Err(e) => b.record_err("window_id", format!("eth_getBlockByNumber failed: {e}")),
+    }
 
-    // window gross — only meaningful when we have a window id
-    if let Some(id) = window_id {
-        match call_window_gross(rpc, gateway, &block_tag, agent, id).await {
-            Ok(v) => b.data_mut().window_gross = DecimalU256(v),
-            Err(e) => b.record_err("window_gross", e),
-        }
+    // Rolling-window deposit gross — the value the gateway actually enforces
+    // the deposit cap against (RPC-1, #1024). Read from the parameterless
+    // `effectiveDepositWindowGross(agent)` view (the deposit analogue of the
+    // withdraw rolling read migrated under #449), not the deprecated
+    // per-calendar-window `agentWindowGross(agent, window_id)` mapping. The
+    // read is independent of `window_id`, so it runs unconditionally.
+    match call_effective_deposit_window_gross(rpc, gateway, &block_tag, agent).await {
+        Ok(v) => b.data_mut().window_gross = DecimalU256(v),
+        Err(e) => b.record_err("window_gross", e),
     }
 
     Ok(b.finish())
@@ -302,18 +315,21 @@ async fn call_share_allowance(
     Ok(r._0)
 }
 
-async fn call_window_gross(
+/// `effectiveDepositWindowGross(agent)` — the agent's cumulative deposit
+/// gross against the current **rolling** deposit window. Issue #1024 (RPC-1)
+/// replaced the deprecated calendar-window mapping
+/// `agentWindowGross(agent, window_id)` with this parameterless rolling-window
+/// view (the deposit analogue of the withdraw read migrated under #449), so
+/// the reported `window_gross` matches the exposure the gateway actually
+/// enforces the deposit cap on — the same view the preflight uses
+/// (`policy/mod.rs`).
+async fn call_effective_deposit_window_gross(
     rpc: &FailoverRpcClient,
     gateway: Address,
     block_tag: &str,
     agent: Address,
-    window_id: u64,
 ) -> std::result::Result<U256, String> {
-    let data = RobotMoneyGateway::agentWindowGrossCall {
-        _0: agent,
-        _1: window_id,
-    }
-    .abi_encode();
+    let data = RobotMoneyGateway::effectiveDepositWindowGrossCall { agent }.abi_encode();
     let out = rpc
         .eth_call(
             &CallRequest {
@@ -325,7 +341,7 @@ async fn call_window_gross(
         )
         .await
         .map_err(|e| format!("eth_call failed: {e}"))?;
-    let r = RobotMoneyGateway::agentWindowGrossCall::abi_decode_returns(&out, true)
+    let r = RobotMoneyGateway::effectiveDepositWindowGrossCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("abi decode: {e}"))?;
     Ok(r._0)
 }
