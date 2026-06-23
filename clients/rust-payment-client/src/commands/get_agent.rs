@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §9 — Phase 3 Direct Chain-Read Query Tooling
 //! ADR: docs/technical/rmpc-read-output-contract.md
-//! Security: docs/code-reviews/review-codex-20260518-234945.md §5 (agent-key compromise blast radius)
+//! Security: docs/code-review/20260518-code-review-internal-codex.md §5 (agent-key compromise blast radius)
 //!
 //! `rmpc get-agent --agent 0x…` — direct on-chain read of an agent's
 //! authorization record on the gateway, plus the current window's

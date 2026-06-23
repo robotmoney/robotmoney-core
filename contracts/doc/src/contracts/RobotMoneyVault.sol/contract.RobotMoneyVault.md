@@ -331,7 +331,7 @@ adapter balances.
 Idle USDC can accumulate via direct transfers or when `_routeDeposit` cannot place
 all assets (e.g. all adapter caps are exhausted). Including it here prevents NAV
 understatement and the associated TVL-cap bypass / share-price dilution described
-in docs/code-reviews/code-review-codex-20260508-1522.md — Finding 2.
+in docs/code-review/20260508-code-review-internal-claude-sonnet-4-6.md — Finding 2.
 ADP-2 (F-14): an adapter whose eligibility was revoked while still registered as
 `active` (allowlist withdrawn or codehash de-listed) is EXCLUDED from NAV. A
 revoked adapter is no longer trusted to price its holdings, so continuing to count

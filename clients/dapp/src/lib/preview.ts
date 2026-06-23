@@ -8,7 +8,7 @@
  * must never fall back to raw-calldata signing.
  *
  * Withdrawal-enabled policy surfacing (issue #429 / security review
- * `docs/code-reviews/review-codex-20260518-234945.md` §5): a non-zero
+ * `docs/code-review/20260518-code-review-internal-codex.md` §5): a non-zero
  * `maxWithdrawPerPayment` on an `authorizeAgent`/`setPolicy` tx means
  * an agent-key compromise can redeem shares to `assetRecipient` up to
  * the per-window cap. The preview surfaces this explicitly:

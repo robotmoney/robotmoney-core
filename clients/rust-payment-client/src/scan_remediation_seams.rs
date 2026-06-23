@@ -1,6 +1,6 @@
 //! Historical seam map — Off-chain scan remediation phase (issue #1009, landed).
 //!
-//! Canonical: `docs/code-review/external-scan-verification-20260619.md` (the
+//! Canonical: `docs/code-review/20260619-code-review-internal-claude-scan-verification.md` (the
 //! verified external full-stack scan whose RPC-* findings drove #991 and
 //! #993), `docs/audits.md` (disposes FS-RPC-3/4/9/15/16 as `fixed`).
 //!

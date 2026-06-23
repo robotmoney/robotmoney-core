@@ -11,7 +11,7 @@ Method: five parallel reviewer agents over logical contract groups, cross-checke
 
 ## Executive summary
 
-**The single most important result of this review is not any one vulnerability — it is audit/remediation drift.** The 2026-06-06 report (`security-deep-clean-20260606.md`) states "All actionable findings were fixed in this PR," but the fix commit (`5de13396`, PR #641) only patched `contracts/RobotMoneyVault.sol`. The following fixes that report claims as landed **do not exist on `dev`** and several have no commit anywhere in history:
+**The single most important result of this review is not any one vulnerability — it is audit/remediation drift.** The 2026-06-06 report (`20260606-code-review-internal-claude.md`) states "All actionable findings were fixed in this PR," but the fix commit (`5de13396`, PR #641) only patched `contracts/RobotMoneyVault.sol`. The following fixes that report claims as landed **do not exist on `dev`** and several have no commit anywhere in history:
 
 | Claimed fix (2026-06-06 report) | Actual status on `dev` |
 |---|---|

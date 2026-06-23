@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md (ACL-1, ORA-3, ORA-6)
-//            docs/code-review/external-audit-verification-20260619.md (F-01, F-09, F-17)
+//            docs/code-review/20260619-code-review-pekshield.md (F-01, F-09, F-17)
 //
 // POST-DEPLOY ASSERTION HARNESS (issue #964, AC4 — SCOUT STUB)
 // ───────────────────────────────────────────────────────────────────────────────
