@@ -80,6 +80,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 .github/scripts/check_explorer_adr.py
 
+      - name: Explorer positions response-body doc/model contract (issue #1041)
+        run: python3 .github/scripts/check_explorer_positions_doc.py
+
       - name: Source-doc reconciliation
         run: python3 .github/scripts/check_source_doc_reconciliation.py
 

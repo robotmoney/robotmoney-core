@@ -35,6 +35,68 @@ issues #654, #661, #675, and #695.
 
 ---
 
+## Implemented endpoint response bodies
+
+### `GET /v1/accounts/:address/positions`
+
+> **Handler:** `get_account_positions` (`clients/explorer-api/src/routes.rs`)
+> **Wire types:** `AccountPositionsResponse` / `VaultPosition` (`clients/explorer-api/src/model.rs`)
+
+Per-vault receipt-token balance and computed USDC value for one account.
+One entry per vault where the address holds a non-zero share balance
+(latest `wallet_positions` row), chain-scoped to `AppState::chain_id`.
+
+**Request:**
+```
+GET /v1/accounts/{address}/positions
+```
+
+Path parameter `address`: 0x-prefixed Ethereum address (20 bytes hex).
+
+**Response (200 OK):**
+```json
+{
+  "address": "0x1111111111111111111111111111111111111111",
+  "positions": [
+    {
+      "vault": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shares": "1000000000000000000",
+      "usdc_value": "1010000000000000000",
+      "block_number": 12345678,
+      "indexed_at": "2026-06-07T00:00:00Z"
+    }
+  ],
+  "block_number": 12345678,
+  "indexed_at": "2026-06-07T00:00:00Z"
+}
+```
+
+Field reference (matches `VaultPosition` / `AccountPositionsResponse` exactly):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `address` | string | Queried account, 0x-prefixed lower-case hex. |
+| `positions` | array | One `VaultPosition` per vault with a non-zero balance; empty array (not 404) when the account holds none. |
+| `positions[].vault` | string | **ERC-4626 vault contract address.** This is the authoritative field name for the vault address — there is no `vault_*` alias on the wire. |
+| `positions[].shares` | string | Most recent indexed share balance (receipt-token units), `uint256` decimal string. |
+| `positions[].usdc_value` | string \| null | USDC value of `shares` at the latest snapshot share price (`shares * total_assets / total_supply`), `uint256` decimal string. `null` when no `vault_snapshot` exists for the vault. |
+| `positions[].block_number` | i64 | Block of the most recent `wallet_positions` row for that vault. |
+| `positions[].indexed_at` | string | ISO-8601 UTC indexing timestamp for that row. |
+| `block_number` | i64 | Top-level freshness: block of the first position, or the indexer's latest block when `positions` is empty. |
+| `indexed_at` | string | Top-level freshness: ISO-8601 UTC. |
+
+**Cross-component contract — read before consuming this endpoint.** The
+vault-address key is serialized as `vault`. The human dapp's
+`clients/dapp/src/lib/usePositions.ts` consumes this endpoint and renames the
+`vault` key into its own internal client-side address field before rendering.
+Issue #1038 (the `PositionSelector` crash) was caused by an earlier dapp build
+that read the client-side field name directly off the API body — which the API
+never serializes — leaving every position's address `undefined`. Any new
+consumer must read the `vault` key shown above; do not assume the dapp's
+internal client field name appears on the wire.
+
+---
+
 ## Planned endpoints (stubs — not yet implemented)
 
 ### `GET /v1/accounts/:address/policies`

@@ -511,3 +511,73 @@ pub struct AccountPoliciesResponse {
     #[serde(flatten)]
     pub freshness: Freshness,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    /// Issue #1041 / #1038 root cause: the GET /v1/accounts/:address/positions
+    /// vault-address field serializes as `vault`, NOT `vault_addr`. This pins
+    /// the wire contract that docs/explorer-api.md documents so the two cannot
+    /// drift, and so a future rename can't silently reintroduce the
+    /// `PositionSelector` crash.
+    #[test]
+    fn vault_position_serializes_vault_key_not_vault_addr() {
+        let pos = VaultPosition {
+            vault: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            shares: "1000000000000000000".to_string(),
+            usdc_value: Some("1010000000000000000".to_string()),
+            block_number: 12_345_678,
+            indexed_at: Utc.with_ymd_and_hms(2026, 6, 7, 0, 0, 0).unwrap(),
+        };
+
+        let v = serde_json::to_value(&pos).expect("VaultPosition must serialize");
+        let obj = v
+            .as_object()
+            .expect("VaultPosition serializes to an object");
+
+        assert!(
+            obj.contains_key("vault"),
+            "VaultPosition must serialize a `vault` key (the documented \
+             explorer-api wire contract); got keys: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !obj.contains_key("vault_addr"),
+            "VaultPosition must NOT serialize a `vault_addr` key — that token \
+             is the dapp's internal client field, never a wire field (#1038)."
+        );
+        assert_eq!(
+            obj["vault"],
+            serde_json::json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            "the `vault` field must carry the ERC-4626 vault contract address"
+        );
+        // Remaining documented fields are present.
+        for key in ["shares", "usdc_value", "block_number", "indexed_at"] {
+            assert!(
+                obj.contains_key(key),
+                "VaultPosition must serialize the documented `{key}` field"
+            );
+        }
+    }
+
+    /// The `usdc_value` field is nullable when no vault_snapshot exists; the
+    /// documented `string | null` contract must hold.
+    #[test]
+    fn vault_position_usdc_value_serializes_null_when_absent() {
+        let pos = VaultPosition {
+            vault: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            shares: "0".to_string(),
+            usdc_value: None,
+            block_number: 1,
+            indexed_at: Utc.with_ymd_and_hms(2026, 6, 7, 0, 0, 0).unwrap(),
+        };
+
+        let v = serde_json::to_value(&pos).expect("VaultPosition must serialize");
+        assert!(
+            v["usdc_value"].is_null(),
+            "usdc_value must serialize as JSON null when None"
+        );
+    }
+}
