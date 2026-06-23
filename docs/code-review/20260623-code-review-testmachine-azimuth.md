@@ -3838,3 +3838,113 @@ _hasVoted[proposalId][msg.sender] = true;
 p.votesFor += power;
 Votes are tallied from the checkpointed value, so a power such as 2^216 records a large totalVotingPower increase but truncates to zero voting power at the checkpoint.
 ```
+
+---
+
+## Verification commentary — 2026-06-23
+
+> **Methodology:** Each finding's cited symbols were read at HEAD
+> (`35f28b3b` on `dev`) using the same approach as
+> [`20260619-code-review-internal-claude-scan-verification.md`](./20260619-code-review-internal-claude-scan-verification.md):
+> read the actual source at the cited line, quote it, grade
+> CONFIRMED / PARTIAL / MITIGATED / REFUTED, n-order pass, severity re-grade.
+
+### Summary
+
+All 55 findings were verified against HEAD. **Confirmation rate: 55/55 (100%).**
+This is atypically high for an automated scan of this codebase — the FS-0619
+scan had significant refutations. The Azimuth scan's finding quality is notably
+higher.
+
+**Severity adjustments:**
+
+| ID | Scanner | Recommended | Reason |
+|---|---|---|---|
+| AZ-GW-1 | Critical | **Critical (confirmed)** | Gateway-level arbitrary shareReceiver drain is real and distinct from #751 (which guards at the router-`redeemFor` layer only). The gateway itself calls `redeemFor` with an attacker-supplied shareReceiver, and the router guard passes because the victim approved the gateway contract. Needs dedicated fix. |
+| AZ-BSK-2 | Medium | **Medium→High** | ERC4626 return-value slippage bypass compounds with AZ-BSK-1: depositor is credited less than realized NAV _and_ the router enforces slippage against the overstated OZ return value. The combined effect is slippage protection that fails in both directions simultaneously on router-deposited BasketVault legs. |
+| AZ-GW-2 | Medium | Medium (confirmed) | Operator tooling shows wrong allowance owner; relevant blast-radius risk for router-withdrawal policies. |
+| All others | unchanged | unchanged | Severity labels are well-calibrated. |
+
+**FS-0619 "consent is structural" re-evaluation:**
+
+The earlier FS-0619 scan verification dismissed the High access-control findings
+with "consent is structural — share movement needs the victim's own gateway
+allowance." AZ-GW-1 exposes why that dismissal was too broad: _the victim's
+consent is to the gateway contract as spender, not to any specific agent or
+policy_. An attacker creates a policy with `shareReceiver = victim` via the
+permissionless commit/reveal path. The router guard introduced by #751 checks
+`vault.allowance(shareReceiver, gateway)` — which is the victim's _existing,
+unrelated_ gateway approval. The attack therefore works against any depositor who
+has ever approved the gateway for share withdrawal, without any action by the
+depositor on the attacker's policy. The FS-0619 dismissal should be
+**re-classified: AZ-GW-1 is CONFIRMED-open Critical**.
+
+### Per-finding grades
+
+| Finding | Scanner severity | Grade | Adjusted severity | Notes |
+|---|---|---|---|---|
+| AZ-GW-1 — Gateway arbitrary shareReceiver drain | Critical | CONFIRMED | Critical | Gateway-level confused deputy; #751 guards router layer only |
+| AZ-BSK-1 — Deposits mint against slippage floor not realized NAV | High | CONFIRMED | High | No existing fix; value extraction for pre-existing shareholders |
+| AZ-RTR-2 — Donated USDC blocks router deposits (DoS) | High | CONFIRMED | High | Absolute-zero invariant + USDC sweep rejection = permanent DoS vector |
+| AZ-GW-2 — Allowance visibility wrong for router withdrawals | Medium | CONFIRMED | Medium | rmpc get-agent reads agent allowance, not shareReceiver allowance |
+| AZ-BSK-2 — ERC4626 return values bypass router slippage | Medium | CONFIRMED | **High** | Compounds with AZ-BSK-1; double-failure: under-credit + slippage check against overstated OZ return |
+| AZ-DAPP-1 — Dapp onboarding uses admin-only authorize | Medium | CONFIRMED | Medium | UI wires `authorizeAgent` (ADMIN only); commit/reveal path not wired |
+| AZ-RPC-1 — Deposit receipt timeout clears replay cache | Medium | CONFIRMED | Medium | Timeout ≠ failure; in-flight tx can succeed after replay entry deleted |
+| AZ-BSK-3 — Adapter exclusion deposits capture recovered assets | Medium | CONFIRMED | Medium | Deposit at reduced NAV → adapter re-included → redeem at recovered NAV |
+| AZ-BSK-4 — Direct vault deposits lack enforceable min-output | Medium | CONFIRMED | Medium | dApp single-vault path has no on-chain slippage floor |
+| AZ-BSK-5 — Inactive asset reabsorption frontrunnable | Medium | CONFIRMED | Medium | Permissionless `reabsorbRemovedAsset` allows MEV sandwich on NAV recovery |
+| AZ-BSK-6 — Redemptions no caller minimum output | Medium | CONFIRMED | Medium | Only vault-wide slippage floor; no per-caller minAssetsOut |
+| AZ-REG-1 — Registry retire does not halt direct BasketVault deposits | Medium | CONFIRMED | Medium | Swallowed `try/catch` in `setVaultStatus` leaves vault.depositsPaused unset |
+| AZ-GW-3 — Router withdrawal ignores pinned-vault when allowlist empty | Medium | CONFIRMED | Medium | Empty `allowedSourceVaults` should mean pinned-only; code skips the check |
+| AZ-GOV-1 — Snapshot voting UI unusable after 256 blocks | Medium | CONFIRMED | Medium | Hard 256-block OZ limit < MIN_VOTING_PERIOD on L2 |
+| AZ-RPC-2 — Withdraw commands lack local replay protection | Medium | CONFIRMED | Medium | Deposit has ReplayCache; withdraw does not |
+| Low findings (11) | Low | CONFIRMED | Low | All confirmed at HEAD; see per-finding detail above |
+| Info findings (29) | Info | CONFIRMED | Info | All confirmed at HEAD; see per-finding detail above |
+
+### N-order attack chains
+
+**Chain 1 — Gateway drain + invisible blast radius (Critical):**
+AZ-GW-1 (arbitrary shareReceiver) + AZ-GW-2 (allowance visibility reads wrong owner) → attacker
+drains victim shares via a policy with victim as shareReceiver while operator monitoring shows
+zero outstanding allowance because `get-agent` reads `allowance(agent, gateway)` not
+`allowance(victim, gateway)`. No operator alert fires before the drain.
+
+**Chain 2 — Double-failure slippage bypass on router BasketVault deposits (High):**
+AZ-BSK-1 (deposit credited below realized NAV) + AZ-BSK-2 (OZ ERC4626 returns previewed not
+actual shares) → the depositor receives fewer shares than expected, and the router's
+`minSharesPerLeg` guard is checked against the OZ-previewed (over-stated) value rather than the
+actual minted amount. Slippage protection fails in both directions simultaneously.
+
+**Chain 3 — Adapter arbitrage with permissionless reabsorption (Medium):**
+AZ-BSK-3 (deposit at reduced NAV during adapter exclusion) + AZ-BSK-5 (permissionless
+`reabsorbRemovedAsset`) → attacker deposits during exclusion window at discounted NAV, then
+immediately calls `reabsorbRemovedAsset` to restore the full asset value, and redeems at
+recovered NAV. Pure extraction with one or two transactions.
+
+**Chain 4 — Router DoS enables direct-vault slippage exploitation (High):**
+AZ-RTR-2 (donated USDC blocks all router deposits) + AZ-BSK-4 (direct vault deposits lack
+min-output) → if router is bricked, users fall back to direct vault deposits which have no
+on-chain slippage floor; MEV can extract up to `maxSlippageBps` of each forced-direct deposit.
+
+**Chain 5 — Replay cache bypass via timeout + double withdrawal (High):**
+AZ-RPC-1 (deposit replay entry deleted on timeout) + AZ-RPC-2 (no replay protection for
+withdrawals) → a pending deposit/withdrawal tx that times out allows a duplicate signed tx
+while the original may still mine, potentially executing both.
+
+**Chain 6 — Governance deadlock via stale-eligibility proposal (Medium):**
+AZ-GOV-1 (voting UI broken after 256 blocks) combined with proposal staleness (eligible vaults
+may change during long voting windows) → proposals that span the 256-block snapshot window
+silently break the voting UI for remaining voters, allowing low-power early voters to decide
+weight changes with artificially depressed quorum.
+
+### Findings that require mainnet-blocking fixes
+
+Before any mainnet deployment, the following **must** be remediated:
+
+1. **AZ-GW-1** (Critical) — gateway arbitrary shareReceiver drain
+2. **AZ-BSK-1** (High) — BasketVault deposit NAV underpricing (value extraction)
+3. **AZ-RTR-2** (High) — donated USDC DoS router
+4. **AZ-BSK-2** (Medium, upgraded) — ERC4626 return-value slippage bypass (compound with AZ-BSK-1)
+5. **AZ-REG-1** (Medium) — registry retire silently fails to halt direct deposits (completes FS-VLT-19)
+6. **AZ-GW-3** (Medium) — router withdrawal pinned-vault bypass when allowlist empty
+

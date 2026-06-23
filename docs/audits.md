@@ -77,6 +77,7 @@
     CD-0602 = docs/code-review/20260602-code-review-internal-claude.md
     DC-0606 = docs/code-review/20260606-code-review-internal-claude.md
     SR-0612 = docs/code-review/20260612-code-review-internal-claude.md
+    AZ-0623 = docs/code-review/20260623-code-review-testmachine-azimuth.md
 -->
 
 Every production contract under `contracts/` (excluding `contracts/test/`,
@@ -85,18 +86,18 @@ Every production contract under `contracts/` (excluding `contracts/test/`,
 
 | Contract | Audit report(s) | Status | Exception (if any) |
 |---|---|---|---|
-| `RobotMoneyVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612 | Audited | — |
+| `RobotMoneyVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
 | `RmToken.sol` | VA-0609, HR-0618 | Audited | — |
-| `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612 | Audited | — |
-| `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612 | Audited | — |
-| `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612 | Audited | — |
+| `PortfolioRouter.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
+| `RouterGovernance.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
+| `VaultRegistry.sol` | VA-0609, HR-0618, MC-0619, CD-0602, SR-0612, AZ-0623 | Audited | — |
 | `FeatureFlags.sol` | VA-0609 | Audited | Pre-mainnet re-audit pending under the bucket-B/C economic-audit gate (security-model.md §14) |
 | `UniswapV3PoolSlot0Stub.sol` | VA-0609, HR-0618 | Audited | Devnet/demo helper; not router-eligible. Documented exception: fail-closed at the vault, not a production swap surface |
-| `gateway/RobotMoneyGateway.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612 | Audited | — |
+| `gateway/RobotMoneyGateway.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | — |
 | `gateway/AccessRoles.sol` | VA-0609, HR-0618, MC-0619, CD-0602 | Audited | — |
 | `gateway/MockVault.sol` | VA-0609, HR-0618 | Audited | Test/mock surface (constructor asset-mismatch revert pinned, HR-0618 I-9); not production-reachable |
-| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001) |
-| `vaults/RwaVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612 | Audited | Same bucket-B/C economic-audit gate as BasketVault |
+| `vaults/BasketVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, CD-0602, DC-0606, SR-0612, AZ-0623 | Audited | Bucket-B/C economic-model audit required before router-eligible production use (security-model.md §14; gap BASKET-001/ECONOMIC-AUDIT-001) |
+| `vaults/RwaVault.sol` | VA-0609, HR-0618, MC-0619, FS-0619, SR-0612, AZ-0623 | Audited | Same bucket-B/C economic-audit gate as BasketVault |
 | `vaults/AgentTokenVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
 | `vaults/ProtocolAssetVault.sol` | VA-0609, HR-0618 | Audited | Same bucket-B/C economic-audit gate |
 | `adapters/AaveV3Adapter.sol` | VA-0609, HR-0618, SR-0612 | Audited | — |
@@ -370,6 +371,36 @@ found by SR-0612 do not contradict it). Nothing to remediate.
 | DC-0606-LANDED | DC-0606 | High–Info | fixed | RobotMoneyVault, BasketVault, RobotMoneyGateway, RouterGovernance, ChronicleOracleAdapter, UniswapV4SwapAdapter, explorer-indexer, rmpc, dapp | #836, #933, #958 | ~63 deep-clean findings landed (5 Critical/High + Medium/Low/Info) across the contract-security-remediation phases; excludes the 8 contradicted-by-SR-0612 claims (above) and the 4 deferred items (below) |
 | DC-0606-DEFER | DC-0606 | Deferred | accepted-with-rationale | VaultRegistry, RouterGovernance, BasketVault/AgentTokenVault, admin-transfer surface | — | 4 deferred items (RMDA-003 stale cached status, GOV-003 execute() re-validation, VAULT-011 SHORTLIST_ADD_DELAY, AC-008 two-step admin transfer); NatSpec invariant added, full fix needs governance/interface upgrade |
 
+### AZ-0623 — TestMachine Azimuth automated scan (2026-06-23, 55 findings)
+
+Automated scan at HEAD `35f28b3b` (branch `dev`). All 55 findings verified at HEAD;
+confirmation rate 100% — atypically high. Verification and commentary (severity re-grades,
+n-order chains, mainnet-blocking list) in
+`docs/code-review/20260623-code-review-testmachine-azimuth.md` (§ "Verification commentary").
+The earlier FS-0619 "consent is structural" dismissal of gateway access-control findings is
+**re-classified** by AZ-GW-1: victim consent is to the gateway contract as spender, not to any
+specific agent; the #751 router-layer guard does not address the gateway-level confused deputy.
+
+| Finding ID | Source | Severity (orig→regrade) | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| AZ-GW-1 | AZ-0623 | Critical | accepted-with-rationale | RobotMoneyGateway, PortfolioRouter | — | Gateway arbitrary shareReceiver drain: attacker creates permissionless policy with victim as shareReceiver; gateway calls redeemFor using victim's existing gateway approval as the allowance check passes. #751 guards router layer only. Mainnet-blocking. |
+| AZ-BSK-1 | AZ-0623 | High | accepted-with-rationale | BasketVault | — | Deposits mint shares against slippage-floor (discounted credit), not realized NAV; when realized NAV > floor, uncredited surplus remains in totalAssets for existing shareholders to extract. No existing fix. |
+| AZ-RTR-2 | AZ-0623 | High | accepted-with-rationale | PortfolioRouter | — | Donated USDC DoS: absolute-zero post-deposit invariant + USDC sweep rejection means any external USDC transfer to router permanently blocks all deposits. Distinct from FS-RTR-1 (blacklist/fee-on-transfer). |
+| AZ-BSK-2 | AZ-0623 | Medium→High | accepted-with-rationale | BasketVault, PortfolioRouter | — | BasketVault _deposit/_withdraw overrides discard the ERC4626 `shares`/`assets` args and mint/transfer post-swap amounts, but OZ ERC4626 returns the previewed (overstated) value; router slippage check against overstated return. Compounds with AZ-BSK-1. |
+| AZ-GW-2 | AZ-0623 | Medium | accepted-with-rationale | RobotMoneyGateway, rmpc (get_agent.rs), dapp (AgentPoliciesPanel.tsx) | — | rmpc get-agent and dapp report allowance(agent, gateway); router withdrawals spend shareReceiver allowances. Operator sees wrong blast radius for router-withdrawal policies. |
+| AZ-DAPP-1 | AZ-0623 | Medium | accepted-with-rationale | dapp (OnboardingWizard.tsx, AuthorizeTab.tsx), RobotMoneyGateway | — | Dapp onboarding and authorize tab call admin-only `authorizeAgent`; permissionless commit/reveal path not wired. Normal depositor cannot complete wizard. |
+| AZ-RPC-1 | AZ-0623 | Medium | accepted-with-rationale | rmpc (deposit.rs, tx/mod.rs) | — | Deposit receipt timeout unconditionally clears the replay cache entry even though timeout ≠ tx failed; in-flight tx can succeed after entry deleted, allowing duplicate broadcast. |
+| AZ-BSK-3 | AZ-0623 | Medium | accepted-with-rationale | BasketVault, RobotMoneyVault | — | Deposits during adapter exclusion proceed at reduced NAV; once excluded adapter re-included, pre-exclusion depositors capture recovered NAV surplus without contributing to it. |
+| AZ-BSK-4 | AZ-0623 | Medium | accepted-with-rationale | BasketVault, dapp (DepositWithdrawTab.tsx) | — | Direct vault deposit/redeem paths have no on-chain minimum-output parameter; preview is advisory only. |
+| AZ-BSK-5 | AZ-0623 | Medium | accepted-with-rationale | BasketVault | — | Permissionless `reabsorbRemovedAsset` allows MEV to sandwich NAV recovery: deposit at discounted NAV → trigger reabsorption → redeem at recovered NAV. |
+| AZ-BSK-6 | AZ-0623 | Medium | accepted-with-rationale | BasketVault | — | Redemptions use only vault-wide slippage floor; no per-caller `minAssetsOut`; MEV can extract up to `maxSlippageBps` within the configured band. |
+| AZ-REG-1 | AZ-0623 | Medium | accepted-with-rationale | VaultRegistry, BasketVault | — | `VaultRegistry.setVaultStatus` wraps the vault retire hook in empty try/catch; if the hook fails, registry advertises non-Active status but vault `depositsPaused` is unset, allowing direct deposits. Completes the risk identified by FS-VLT-19. |
+| AZ-GW-3 | AZ-0623 | Medium | accepted-with-rationale | RobotMoneyGateway, PortfolioRouter | — | Router withdrawal path skips `allowedSourceVaults` check when the array is empty; empty allowlist should mean pinned-vault-only but currently means no restriction. |
+| AZ-GOV-1 | AZ-0623 | Medium | accepted-with-rationale | RouterGovernance, dapp (GovernancePanel.tsx) | — | Hard 256-block OZ snapshot cap < MIN_VOTING_PERIOD on L2; voting UI breaks for remaining voters before voting closes. |
+| AZ-RPC-2 | AZ-0623 | Medium | accepted-with-rationale | rmpc (withdraw.rs, withdraw_router.rs) | — | Deposit path has local replay-cache protection; withdraw paths do not; duplicate withdrawals can be signed if first tx still pending. |
+| AZ-LOW | AZ-0623 | Low (11 findings) | accepted-with-rationale | RobotMoneyGateway, rmpc, dapp, PortfolioRouter | — | Deposit-lookup misses router-path events; destination selector allows non-Active vaults; off-chain feature flags not on-chain enforced; permissionless agent-address reservation; policy expiry at exact timestamp; receipt not bound to broadcast tx; router-withdrawal wall-clock deadline; router-withdrawal zero slippage floors; keystore file permissions; share-price overflow silently saturated; vault-selector gate races during status load. All low-severity, no existing fixes. |
+| AZ-INFO | AZ-0623 | Info (29 findings) | accepted-with-rationale | all components | — | Audit log rotation not cross-process synchronized; Base fee cap / priority floor incompatibility; Chronicle NAV freshness not checked in-scope; plus 26 additional info-class observations. Accepted background risk. |
+
 ### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),
@@ -411,3 +442,4 @@ the per-finding rationale lives in the register above.
 | SR-0612 open findings (SR-0612-OPEN, SR-0612-P1) | accepted-with-rationale | 20260612-code-review-internal-claude.md | The contract-security-remediation phases must land the open SR-* fixes before mainnet; verify landing, not claimed status |
 | DC-0606 deferred (DC-0606-DEFER) | accepted-with-rationale | 20260606-code-review-internal-claude.md + 20260612-code-review-internal-claude.md cross-check | Registry status caching, RouterGovernance execute() re-validation, shortlist delay, admin transfer before those upgrades |
 | Gap-analysis backlog (GAP-BACKLOG) | accepted-with-rationale | 20260607-code-review-internal-claude-gap-analysis.md | Resolve each #643–#692 tracking issue before the dependent launch gate (mainnet deploy, public dapp, bucket-B/C) |
+| AZ-0623 all findings (AZ-GW-1…AZ-INFO) | accepted-with-rationale | 20260623-code-review-testmachine-azimuth.md §Verification commentary (2026-06-23 in-context pass) | AZ-GW-1 / AZ-BSK-1 / AZ-RTR-2 / AZ-BSK-2 / AZ-REG-1 / AZ-GW-3 are mainnet-blocking; re-evaluate before any change to gateway authorization, BasketVault _deposit/_withdraw, PortfolioRouter deposit, VaultRegistry setVaultStatus, or router-withdrawal allowedSourceVaults logic. FS-0619 "consent is structural" dismissal superseded by AZ-GW-1. |
