@@ -192,3 +192,34 @@ rmpc vote --config <CONFIG> --proposal-id <ID> --choice yes|no|abstain
 client-side no-ops (the contract only records FOR votes). Re-calling with the
 same choice after a `yes` vote exits 0 (idempotent). A different choice after
 an on-chain `yes` exits 2 with `ErrVoteAlreadyCast`.
+
+## Investment Committee write commands
+
+### `rmpc committee register`
+
+Register a committee agent in `InvestmentCommitteePolicy`.
+Requires `ADMIN_ROLE`. Routes through `RobotMoneyGateway`.
+
+```
+rmpc committee --config <CONFIG> register ...
+```
+
+Pass `rmpc committee register --help` for the full flag list.
+Required args: agent address, agent-id string.
+Common options: `--gas-limit`, `--fee-cap`, `--receipt-timeout-secs`, `--pretty`.
+
+### `rmpc committee vote-submit`
+
+Submit a signed allocation vote from an allowlisted committee agent.
+Routes through `RobotMoneyGateway`. Votes are signalling-only.
+
+```
+rmpc committee --config <CONFIG> vote-submit ...
+```
+
+Pass `rmpc committee vote-submit --help` for the full flag list.
+Required args: vault address, stance (overweight/neutral/underweight),
+weight-bps, confidence, rationale-uri, vote-json-hash, prompt-hash,
+inputs-digest, timestamp.
+Common options: schema-version, gas-limit, fee-cap,
+receipt-timeout-secs, pretty.

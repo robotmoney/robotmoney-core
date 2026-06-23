@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://robotmoney.net/schemas/committee-vote/1.0",
+  "title": "CommitteeVote",
+  "description": "Fixed-shape JSON vote submitted by a registered Investment Committee agent. Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3 and docs/sprint/20260601-week-sprint.md §3 (Workstream A).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent_id",
+    "vault",
+    "stance",
+    "target_weight_bps",
+    "confidence",
+    "rationale_uri",
+    "prompt_hash",
+    "inputs_digest",
+    "timestamp"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Vote JSON schema version. Must be '1.0' for this revision.",
+      "const": "1.0"
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable identifier for the committee agent (e.g. 'athena-v1', 'robot-money', 'woon')."
+    },
+    "vault": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{40}$",
+      "description": "Target vault address (one of the four PRD §11 vaults). 0x-prefixed 20-byte hex."
+    },
+    "stance": {
+      "type": "string",
+      "enum": ["overweight", "neutral", "underweight"],
+      "description": "Allocation tilt for the vault: overweight / neutral / underweight."
+    },
+    "target_weight_bps": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Target allocation weight in basis points (0–10 000). 10 000 bps = 100%."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Agent's confidence score for this vote (0–100)."
+    },
+    "rationale_uri": {
+      "type": "string",
+      "minLength": 1,
+      "format": "uri",
+      "description": "Public URI to the narrative chain-of-thought / memo (any readable format at any public host, e.g. GitHub gist, pastebin)."
+    },
+    "prompt_hash": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{64}$",
+      "description": "keccak256 of the agent prompt used to produce this vote. Enables reproducibility verification."
+    },
+    "inputs_digest": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{64}$",
+      "description": "keccak256 of the inputs consumed (regime feed + holdings snapshot). Enables reproducibility verification."
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 1000000000,
+      "description": "Unix seconds when the vote was formed by the agent."
+    }
+  }
+}

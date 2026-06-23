@@ -1,5 +1,5 @@
 # CustodyInvariantTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/271183ff0750d8d86b43d3f447e02f6eb9f2e265/contracts/test/CustodyInvariant.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/43d1c2f83429ede507d6169930f712ee7dbb8993/contracts/test/CustodyInvariant.t.sol)
 
 **Inherits:**
 StdInvariant, Test
