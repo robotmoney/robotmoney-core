@@ -152,7 +152,17 @@ pub async fn run_once(
     let from_block = last_indexed.map(|x| x + 1).unwrap_or(0);
     let run_id = db.start_run(cfg.chain_id, from_block).await?;
 
-    let outcome = match run_inner(db, rpc, cfg, last_indexed).await {
+    // IDX-2: `run_inner` may roll a reorg back via `delete_above_block` and
+    // *then* fail (e.g. an RPC error fetching the new range).  The corrected
+    // post-rollback cursor must survive into the error arm — recording the
+    // stale pre-reorg cursor here would leave the next run resuming above the
+    // deleted blocks.  `run_inner` writes the post-rollback cursor into
+    // `rollback_cursor` before any fallible step that follows the rollback, so
+    // the error arm persists `root` (the durable cursor) rather than the
+    // pre-reorg value captured above.
+    let mut rollback_cursor = last_indexed;
+
+    let outcome = match run_inner(db, rpc, cfg, last_indexed, &mut rollback_cursor).await {
         Ok(mut o) => {
             o.run_id = run_id;
             o.from_block = from_block;
@@ -169,13 +179,19 @@ pub async fn run_once(
         }
         Err(e) => {
             let msg = format!("{e}");
-            db.finish_run(run_id, None, last_indexed, 0, 0, Some(&msg))
+            // Persist the post-rollback cursor, not the pre-reorg one.  Note
+            // this run row is `error IS NOT NULL` so it is excluded from the
+            // `last_indexed_block()` MAX; the durable cursor reconciliation
+            // happens inside `delete_above_block`, which caps any successful
+            // run's cursor down to root.  Recording `rollback_cursor` here keeps
+            // the failed run's audit row internally consistent with the rollback.
+            db.finish_run(run_id, None, rollback_cursor, 0, 0, Some(&msg))
                 .await?;
             IndexerOutcome {
                 run_id,
                 from_block,
                 to_block: None,
-                last_indexed_block: last_indexed,
+                last_indexed_block: rollback_cursor,
                 rows_inserted: 0,
                 reorg_detected: false,
                 error: Some(msg),
@@ -190,6 +206,7 @@ async fn run_inner(
     rpc: &JsonRpc,
     cfg: &IndexerConfig,
     last_indexed: Option<i64>,
+    rollback_cursor: &mut Option<i64>,
 ) -> Result<IndexerOutcome, IndexerError> {
     let topics = Topics::new();
 
@@ -203,6 +220,10 @@ async fn run_inner(
                     let root = walk_back_to_match(db, rpc, cfg.chain_id, li).await?;
                     db.delete_above_block(cfg.chain_id, root).await?;
                     last_indexed = if root < 0 { None } else { Some(root) };
+                    // IDX-2: publish the post-rollback cursor *immediately* after
+                    // the rollback commits, so a later failure in this same run
+                    // carries `root` into the error arm.
+                    *rollback_cursor = last_indexed;
                     reorg_detected = true;
                 }
             }
@@ -864,6 +885,8 @@ async fn handle_log(
             .update_vault_status(
                 cfg.chain_id,
                 decoded.vault.into_array(),
+                log.block_number as i64,
+                log.log_index as i32,
                 decoded.newStatus as i16,
                 decoded.timestamp.try_into().unwrap_or(i64::MAX),
             )
