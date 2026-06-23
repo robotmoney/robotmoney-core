@@ -27,6 +27,42 @@ export interface PositionsResponse {
   readonly positions: readonly VaultPosition[];
 }
 
+/**
+ * Raw position object as the explorer-api actually serialises it
+ * (clients/explorer-api/src/model.rs `VaultPosition`): the vault address
+ * field is `vault`, not `vault_addr`, and there is no `vault_name`. We accept
+ * the legacy `vault_addr`/`vault_name` keys too so a future API shape change
+ * (or a fixture using the old names) keeps working.
+ *
+ * Issue #1038 root cause: `fetchPositions` previously cast the API body
+ * straight to `PositionsResponse`, leaving `p.vault_addr` undefined for every
+ * row. The first non-zero position then crashed `PositionSelector`'s render
+ * map at `p.vault_addr.toLowerCase()`. This shape-mapping is the fix.
+ */
+interface RawVaultPosition {
+  vault?: unknown;
+  vault_addr?: unknown;
+  vault_name?: unknown;
+  shares?: unknown;
+}
+
+/**
+ * Normalise one raw API position into a `VaultPosition`. Returns `null` when
+ * the row has no usable vault address or share string so callers never see a
+ * position with an `undefined` address (which would crash any `.toLowerCase()`
+ * keyed render).
+ */
+function normalisePosition(raw: RawVaultPosition): VaultPosition | null {
+  const addr = typeof raw.vault === "string" ? raw.vault : raw.vault_addr;
+  if (typeof addr !== "string" || addr.length === 0) return null;
+  if (typeof raw.shares !== "string") return null;
+  return {
+    vault_addr: addr,
+    vault_name: typeof raw.vault_name === "string" ? raw.vault_name : undefined,
+    shares: raw.shares,
+  };
+}
+
 /** Minimum fetch interface to allow test-injection without globals. */
 export type FetchLike = (
   input: string,
@@ -49,6 +85,12 @@ export async function fetchPositions(
   if (!res.ok) {
     throw new Error(`positions API ${res.status}`);
   }
-  const body = (await res.json()) as PositionsResponse;
-  return body;
+  const body = (await res.json()) as { positions?: readonly RawVaultPosition[] };
+  const rawPositions = Array.isArray(body.positions) ? body.positions : [];
+  // Map the API's `vault` field onto the dapp's `vault_addr` shape and drop any
+  // row without a usable address — see normalisePosition (issue #1038).
+  const positions = rawPositions
+    .map(normalisePosition)
+    .filter((p): p is VaultPosition => p !== null);
+  return { positions };
 }

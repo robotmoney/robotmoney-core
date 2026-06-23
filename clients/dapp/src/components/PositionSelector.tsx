@@ -93,7 +93,12 @@ export function PositionSelector({ account, explorerApiUrl, onSelect, selectedVa
     );
   }
 
-  const positions = load.positions;
+  // Defence in depth (issue #1038): never render a position whose vault
+  // address is missing — the map below calls `p.vault_addr.toLowerCase()`,
+  // which throws on undefined. `fetchPositions` already normalises the API
+  // `vault` field into `vault_addr` and drops address-less rows, but guard
+  // here too so a malformed position can never crash the deposit/withdraw tab.
+  const positions = load.positions.filter((p) => typeof p.vault_addr === "string");
 
   if (positions.length === 0) {
     return (
