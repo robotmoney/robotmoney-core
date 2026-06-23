@@ -108,12 +108,16 @@ function makeErrorFetch(): FetchLike {
   }) as unknown as FetchLike;
 }
 
+function makeNeverFetch(): FetchLike {
+  return vi.fn(() => new Promise(() => {})) as unknown as FetchLike;
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("CommitteePanel", () => {
   it("shows loading state initially", () => {
-    const fetchFn = makeFetch(twoAgents, twoVotes);
-    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    // Use a never-resolving fetch so no state updates happen outside act().
+    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={makeNeverFetch()} />);
     expect(screen.getByTestId("committee-loading")).toBeDefined();
   });
 
