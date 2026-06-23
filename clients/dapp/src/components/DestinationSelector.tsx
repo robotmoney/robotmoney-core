@@ -36,7 +36,13 @@ export function DestinationSelector(props: Props) {
     functionName: "listVaults",
   });
 
-  const vaults: Address[] = Array.isArray(vaultListRaw) ? (vaultListRaw as Address[]) : [];
+  // Filter to valid string addresses before mapping. `listVaults()` should
+  // only ever decode to a clean `address[]`, but a partial/transition-state
+  // multicall result could surface an undefined element — which would crash
+  // the render at `vault.toLowerCase()` below (issue #1038 crash class).
+  const vaults: Address[] = Array.isArray(vaultListRaw)
+    ? (vaultListRaw as unknown[]).filter((v): v is Address => typeof v === "string")
+    : [];
 
   const hasRouter = props.routerAddress !== "0x0000000000000000000000000000000000000000";
 
