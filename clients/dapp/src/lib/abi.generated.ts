@@ -397,6 +397,100 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "committeeRegister",
+    inputs: [
+      {
+        name: "agent",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "agentId_",
+        type: "string",
+        internalType: "string",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "committeeVoteSubmit",
+    inputs: [
+      {
+        name: "p",
+        type: "tuple",
+        internalType: "struct IInvestmentCommitteePolicy.VoteParams",
+        components: [
+          {
+            name: "agent",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "vault",
+            type: "address",
+            internalType: "address",
+          },
+          {
+            name: "stance",
+            type: "uint8",
+            internalType: "enum IInvestmentCommitteePolicy.Stance",
+          },
+          {
+            name: "targetWeightBps",
+            type: "uint16",
+            internalType: "uint16",
+          },
+          {
+            name: "confidence",
+            type: "uint8",
+            internalType: "uint8",
+          },
+          {
+            name: "rationaleUri",
+            type: "string",
+            internalType: "string",
+          },
+          {
+            name: "voteJsonHash",
+            type: "bytes32",
+            internalType: "bytes32",
+          },
+          {
+            name: "promptHash",
+            type: "bytes32",
+            internalType: "bytes32",
+          },
+          {
+            name: "inputsDigest",
+            type: "bytes32",
+            internalType: "bytes32",
+          },
+          {
+            name: "schemaVersion",
+            type: "string",
+            internalType: "string",
+          },
+          {
+            name: "timestamp",
+            type: "uint64",
+            internalType: "uint64",
+          },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        name: "voteId",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "deposit",
     inputs: [
       {
@@ -579,6 +673,19 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "icPolicy",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "contract IInvestmentCommitteePolicy",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "pause",
     inputs: [],
     outputs: [],
@@ -746,6 +853,19 @@ export const gatewayAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "setICPolicy",
+    inputs: [
+      {
+        name: "policy_",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -1341,6 +1461,25 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "ICPolicySet",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "policy",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "Paused",
     inputs: [
       {
@@ -1551,6 +1690,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "FeeOnTransferDetected",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "ICPolicyNotSet",
     inputs: [],
   },
   {
