@@ -58,11 +58,16 @@ function makeErrorFetch(): FetchLike {
   }) as unknown as FetchLike;
 }
 
+function makeNeverFetch(): FetchLike {
+  return vi.fn(() => new Promise(() => {})) as unknown as FetchLike;
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("RegimeFeedPanel", () => {
   it("shows loading state initially", () => {
-    render(<RegimeFeedPanel explorerApiUrl={BASE_URL} fetch={makeFetch(twoFeeds)} />);
+    // Use a never-resolving fetch so no state updates happen outside act().
+    render(<RegimeFeedPanel explorerApiUrl={BASE_URL} fetch={makeNeverFetch()} />);
     expect(screen.getByTestId("regime-feed-loading")).toBeDefined();
   });
 
