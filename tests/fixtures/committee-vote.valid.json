@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "agent_id": "athena-v1",
+  "vault": "0x1111111111111111111111111111111111111111",
+  "stance": "overweight",
+  "target_weight_bps": 6000,
+  "confidence": 85,
+  "rationale_uri": "https://gist.github.com/robotmoney/abc123def456",
+  "prompt_hash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "inputs_digest": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "timestamp": 1750000000
+}
