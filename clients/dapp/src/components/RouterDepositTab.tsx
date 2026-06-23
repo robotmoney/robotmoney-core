@@ -28,7 +28,9 @@ import type { Address, Hash } from "viem";
 import { erc20Abi, routerAbi } from "../lib/abi";
 import {
   buildRouterPreview,
+  computeVaultListChanged,
   deriveMinSharesPerLeg,
+  normaliseAddress,
   type RouterPreviewContext,
   type LegPreview,
 } from "../lib/routerPreview";
@@ -83,17 +85,24 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     query: { enabled: isConnected && depositAssets !== null },
   });
 
+  // Root cause (issue #1036): `router.previewDeposit` may decode a leg whose
+  // `vault` field is missing/undefined in the live router-deposit path (partial
+  // or transition-state tuple). Normalising the address at the source keeps a
+  // defined, checksummed `vault` flowing to every consumer (ProportionPreview,
+  // deriveMinSharesPerLeg, buildRouterPreview, computeVaultListChanged); when it
+  // genuinely can't be resolved we fall back to the raw value (possibly
+  // undefined), which every consumer now guards against rather than crashing.
   const legs: LegPreview[] = Array.isArray(previewRaw)
     ? (
         previewRaw as Array<{
-          vault: Address;
+          vault: Address | undefined;
           weightBps: bigint;
           legAmount: bigint;
           estShares: bigint;
           unavailable: boolean;
         }>
       ).map((l) => ({
-        vault: l.vault,
+        vault: (normaliseAddress(l.vault) ?? l.vault) as Address,
         weightBps: l.weightBps,
         legAmount: l.legAmount,
         estShares: l.estShares,
@@ -119,12 +128,12 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   });
 
   // Check if the live activeVaults list matches the preview vault list (AC §7).
-  const vaultListChanged = (() => {
-    if (!currentActiveVaults || legs.length === 0) return false;
-    const live = currentActiveVaults as Address[];
-    if (live.length !== legs.length) return true;
-    return legs.some((leg, i) => leg.vault.toLowerCase() !== live[i]?.toLowerCase());
-  })();
+  // Delegated to a null-safe helper (issue #1036): an undefined leg vault must
+  // not crash the component — it is treated as "list changed" (submit disabled).
+  const vaultListChanged = computeVaultListChanged(
+    legs,
+    currentActiveVaults as Address[] | undefined,
+  );
 
   const allowanceOk =
     depositAssets !== null && typeof allowance === "bigint" && allowance >= depositAssets;
