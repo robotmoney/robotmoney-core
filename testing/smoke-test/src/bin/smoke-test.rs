@@ -277,7 +277,13 @@ fn run() -> i32 {
         println!("morpho_adapter_addr={:#x}", fixture.morpho_adapter());
         // Issue #261: surface the harness USDC holder so dapp e2e tests
         // can verify the testnet faucet path drips from the same EOA the
-        // Rust `Fixture::fund_usdc` helper uses.
+        // Rust `Fixture::fund_usdc` helper uses. The private key is consumed
+        // only by the LOCAL Playwright harness over a captured stdout pipe
+        // (clients/dapp/tests/e2e/devnet-global-setup.ts) — it is never written
+        // to the cloudflared tunnel surface, which only publishes the
+        // rpc/dapp/explorer URLs (see Tunnels::start). HARN-2's public-surface
+        // exposure (issue #1026) is the dapp Vite BUNDLE / build arg, tracked
+        // separately; this local pipe is required by the e2e harness.
         println!(
             "harness_usdc_holder_addr={}",
             smoke_test::HARNESS_USDC_HOLDER_ADDRESS_HEX
