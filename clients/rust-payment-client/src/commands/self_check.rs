@@ -1,6 +1,6 @@
 //! Canonical: Plan tracking issue #109 §4.8 — CLI surface (self-check subcommand)
 //! (See also: docs/architecture.md §5.1 — `rmpc` (signing path); §9 — Vendor Selections)
-//! Security: docs/code-reviews/review-codex-20260518-234945.md §5 (agent-key compromise blast radius)
+//! Security: docs/code-review/20260518-code-review-internal-codex.md §5 (agent-key compromise blast radius)
 //!
 //! `rmpc self-check` — read-only backend report (v0 §9.2 + preflight snapshot).
 //!

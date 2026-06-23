@@ -1,6 +1,6 @@
 //! Historical seam map — Off-chain scan remediation phase (issue #1009, landed).
 //!
-//! Canonical: `docs/code-review/external-scan-verification-20260619.md`
+//! Canonical: `docs/code-review/20260619-code-review-internal-claude-scan-verification.md`
 //! (verified external scan), `docs/audits.md` (disposes FS-WD-1/FS-WD-6 as
 //! `fixed`), `docs/technical/security-model.md §9` (watchdog breach
 //! requirement).

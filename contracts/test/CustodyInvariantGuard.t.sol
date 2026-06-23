@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/code-review/smart-contract-holistic-review-20260618.md (L-11, L-15)
+// Canonical: docs/code-review/20260618-code-review-internal-claude.md (L-11, L-15)
 // (See also: docs/prd.md — Security invariants INV-1/INV-2/INV-3)
 //
 // Guard test for custody invariants INV-1/INV-2/INV-3 (issue #929). This is a

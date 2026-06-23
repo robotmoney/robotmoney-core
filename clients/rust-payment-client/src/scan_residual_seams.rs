@@ -1,7 +1,7 @@
 //! Historical seam map — Off-chain scan remediation **residual** phase (issue
 //! #1027 scout; fix landed under #1024).
 //!
-//! Canonical: `docs/code-review/external-scan-verification-20260619.md` — the
+//! Canonical: `docs/code-review/20260619-code-review-internal-claude-scan-verification.md` — the
 //! verified external full-stack scan. The residual rmpc finding remediated by
 //! this phase is **RPC-1** (`get-agent` used the deprecated calendar-window
 //! gross), in the "rmpc payment client" subsystem table.

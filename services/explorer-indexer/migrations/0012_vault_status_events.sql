@@ -1,4 +1,4 @@
--- Canonical: docs/code-review/external-scan-verification-20260619.md (IDX-8)
+-- Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-8)
 --            services/explorer-indexer/src/scan_residual_seams.rs §A2
 --
 -- IDX-8 — make vault status reorg-safe.

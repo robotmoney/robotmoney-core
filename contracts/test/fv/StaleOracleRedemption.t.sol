@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md (SUP-5, ORA-2)
-//            docs/code-review/external-audit-verification-20260619.md (NC-1, F-08)
+//            docs/code-review/20260619-code-review-pekshield.md (NC-1, F-08)
 //
 // STALE-ORACLE REDEMPTION HARNESS (issue #964, AC4 — SCOUT STUB)
 // ───────────────────────────────────────────────────────────────────────────────

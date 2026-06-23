@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md (ORA-7 — highest-leverage
 //            new invariant; ORA-1)
-//            docs/code-review/external-audit-verification-20260619.md
+//            docs/code-review/20260619-code-review-pekshield.md
 //            (Load-bearing insight: BasketVault/RwaVault maxSlippageBps floor is
 //             derived from the SAME TWAP that prices NAV → not an independent
 //             backstop; F-09/F-11/F-16 compose because of it.)

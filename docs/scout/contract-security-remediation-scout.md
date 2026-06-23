@@ -1,6 +1,6 @@
 # Contract Security Remediation — Dev Scout
 
-> Reference: [Smart-Contract Vulnerability Audit 2026-06-09](../code-review/smart-contract-vulnerability-audit-20260609.md)
+> Reference: [Smart-Contract Vulnerability Audit 2026-06-09](../code-review/20260609-code-review-internal-claude.md)
 > Phase: Contract security remediation (phase/contract-security-remediation)
 > Scout issue: #745
 

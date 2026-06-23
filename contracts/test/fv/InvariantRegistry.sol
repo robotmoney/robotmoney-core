@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md (textual source of truth
 //            for every invariant ID + its FV strategy)
-//            docs/code-review/external-audit-verification-20260619.md (finding
+//            docs/code-review/20260619-code-review-pekshield.md (finding
 //            register; every 🔴 invariant links to the finding that violates it)
 //
 // FORMAL-VERIFICATION REGISTRY (issue #964 — contract-security-remediation-2 scout)

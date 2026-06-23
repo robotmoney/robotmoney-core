@@ -28,7 +28,7 @@
  * caller turns the click into an on-chain `approve(gateway, 0)` tx.
  *
  * docs/architecture.md §5.3.
- * Security: docs/code-reviews/review-codex-20260518-234945.md §5.
+ * Security: docs/code-review/20260518-code-review-internal-codex.md §5.
  */
 import type { Address } from "viem";
 

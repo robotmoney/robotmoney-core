@@ -1,7 +1,7 @@
 //! Historical seam map — Off-chain scan remediation phase (issue #1009, landed).
 //!
 //! # Canonical docs
-//! - `docs/code-review/external-scan-verification-20260619.md` — the verified
+//! - `docs/code-review/20260619-code-review-internal-claude-scan-verification.md` — the verified
 //!   external full-stack automated scan that motivated this phase. The
 //!   indexer findings (duplicate `erc4626_withdraw` branch, watchdog burn
 //!   blindness) are graded there.
@@ -44,7 +44,7 @@
 //! `watchdog::volume::burn_volume_per_hour`, in the `watchdog` crate) read
 //! exclusively from that table, so the burn/redemption circuit breaker could
 //! never observe outflow and never fire. The scan re-graded this UP to
-//! Critical (`external-scan-verification-20260619.md`, headline §2).
+//! Critical (`20260619-code-review-internal-claude-scan-verification.md`, headline §2).
 //!
 //! **How it was fixed (#989):** the two `erc4626_withdraw` branches were merged
 //! into one, so a single decode now writes *both* the history row and the

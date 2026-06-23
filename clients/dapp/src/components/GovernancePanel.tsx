@@ -29,7 +29,7 @@
  *   - execute() trigger from dapp.
  *
  * ── DAPP-1/DAPP-2 remediation (off-chain scan residual; issue #1025) ─────────
- * Canonical: docs/code-review/external-scan-verification-20260619.md (dapp
+ * Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (dapp
  * subsystem table). Both findings flagged by the 2026-06-19 scan are FIXED:
  *
  * DAPP-1 (Med) — vote gating now uses SNAPSHOT power, not CURRENT power.

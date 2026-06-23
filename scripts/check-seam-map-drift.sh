@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical: docs/code-review/external-scan-verification-20260619.md
+# Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md
 # Feature work: issue #1040 (retire stale scan_residual_seams.rs scout modules)
 #
 # ============================================================================

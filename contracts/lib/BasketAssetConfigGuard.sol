@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md (ADP-2, ORA-3)
-//            docs/code-review/external-audit-verification-20260619.md (NC-2, F-09)
+//            docs/code-review/20260619-code-review-pekshield.md (NC-2, F-09)
 pragma solidity ^0.8.24;
 
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";

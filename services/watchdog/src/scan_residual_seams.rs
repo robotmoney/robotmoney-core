@@ -1,7 +1,7 @@
 //! Historical seam map — Off-chain scan remediation **residual** phase (issue
 //! #1027 scout; fix landed under #1023).
 //!
-//! Canonical: `docs/code-review/external-scan-verification-20260619.md` — the
+//! Canonical: `docs/code-review/20260619-code-review-internal-claude-scan-verification.md` — the
 //! verified external full-stack scan. The residual watchdog finding remediated
 //! by this phase is **WD-4** (per-vault thresholds parsed but never enforced),
 //! in the "watchdog" subsystem table.

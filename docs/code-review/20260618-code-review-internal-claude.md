@@ -11,7 +11,7 @@ adapters (`AaveV3Adapter`, `CompoundV3Adapter`, `MorphoAdapter`,
 
 **HEAD commit:** `126e7ae49a1e62e5dcf25eda45edafc0438436bf` (branch `dev`).
 
-**Prior audit:** [`docs/code-review/smart-contract-vulnerability-audit-20260609.md`](./smart-contract-vulnerability-audit-20260609.md).
+**Prior audit:** [`docs/code-review/20260609-code-review-internal-claude.md`](./20260609-code-review-internal-claude.md).
 
 **Method — three layers plus adversarial verification:**
 

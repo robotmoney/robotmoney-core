@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/code-review/smart-contract-holistic-review-20260618.md (L-10)
+// Canonical: docs/code-review/20260618-code-review-internal-claude.md (L-10)
 // (See also: docs/architecture.md §2.3 — Governance Boundary)
 pragma solidity ^0.8.24;
 

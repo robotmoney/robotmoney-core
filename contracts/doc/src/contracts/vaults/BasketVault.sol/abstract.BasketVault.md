@@ -475,7 +475,7 @@ Grosses up the raw NAV by `MAX_BPS / (MAX_BPS - maxSlippageBps)` so that
 after the on-chain swap applies the same `maxSlippageBps` haircut, the vault
 captures the full proportional NAV. Without this override, `mint()` would
 undercharge relative to `deposit()`, allowing a permissionless value leak
-onto existing holders (see docs/code-review/smart-contract-vulnerability-audit-20260609.md H-1).
+onto existing holders (see docs/code-review/20260609-code-review-internal-claude.md H-1).
 Rounded up (Ceil) so the vault is never shortchanged.
 
 

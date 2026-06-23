@@ -3,7 +3,7 @@
 **Scope:** Independent source-level verification of an external automated security
 scan of `robotmoney/robotmoney-monorepo` that reported **95 findings (6 High,
 61 Medium, 28 Low, 0 Critical)**. Unlike the
-[multi-contract lifecycle audit](./external-audit-verification-20260619.md)
+[multi-contract lifecycle audit](./20260619-code-review-pekshield.md)
 (which focused on gateway↔router↔registry↔vault control flow), this scan swept
 the **entire stack**: the Rust `explorer-indexer`, the `watchdog` service, the
 Solidity contracts (gateway, router, vault, adapters), the `rmpc` Rust payment
@@ -12,10 +12,10 @@ client, the `dapp` (React/TypeScript), and the `smoke-test`/`fork-e2e` harness.
 **HEAD commit:** `e8712ae37e435f5bb82b7017b5079f735817142c` (branch `dev`).
 
 **Prior audits / companions:**
-[`external-audit-verification-20260619.md`](./external-audit-verification-20260619.md),
-[`smart-contract-holistic-review-20260618.md`](./smart-contract-holistic-review-20260618.md),
-[`smart-contract-vulnerability-audit-20260609.md`](./smart-contract-vulnerability-audit-20260609.md),
-[`confused-deputy-access-control-audit-20260602.md`](./confused-deputy-access-control-audit-20260602.md).
+[`20260619-code-review-pekshield.md`](./20260619-code-review-pekshield.md),
+[`20260618-code-review-internal-claude.md`](./20260618-code-review-internal-claude.md),
+[`20260609-code-review-internal-claude.md`](./20260609-code-review-internal-claude.md),
+[`20260602-code-review-internal-claude.md`](./20260602-code-review-internal-claude.md).
 
 **Method:** Every substantive finding was independently re-checked against HEAD
 source. For each, the cited file was read at the named symbol (line numbers in the

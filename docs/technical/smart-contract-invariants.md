@@ -10,7 +10,7 @@ bugs FV must pin once fixed).
 - `docs/prd.md` §12 defines the three **custody** invariants INV-1/INV-2/INV-3. Those
   are reproduced verbatim in the [Custody](#1-custody--solvency-inv-123) section below
   and remain canonical; this document is their superset.
-- `docs/code-review/external-audit-verification-20260619.md` is the current finding
+- `docs/code-review/20260619-code-review-pekshield.md` is the current finding
   register. Invariants marked 🔴 link to the finding that violates them.
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests

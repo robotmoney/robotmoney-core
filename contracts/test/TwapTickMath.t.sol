@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/code-review/smart-contract-holistic-review-20260618.md §2
+// Canonical: docs/code-review/20260618-code-review-internal-claude.md §2
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";

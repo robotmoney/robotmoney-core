@@ -14,7 +14,7 @@
 //!   unequal weight and asserts the tally equals the *sum of weights*, not the
 //!   voter count (2).
 //!
-//! Canonical: docs/code-review/external-scan-verification-20260619.md (IDX-3/IDX-5),
+//! Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-3/IDX-5),
 //!            services/explorer-indexer/src/scan_residual_seams.rs §B1/§B2.
 
 mod common;

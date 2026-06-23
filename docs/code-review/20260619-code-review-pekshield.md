@@ -9,9 +9,9 @@ external report raised 1 High, 9 Medium, 5 Low, and 4 Info findings (F-01 … F-
 **HEAD commit:** `e8712ae37e435f5bb82b7017b5079f735817142c` (branch `dev`).
 
 **Prior audits:**
-[`smart-contract-holistic-review-20260618.md`](./smart-contract-holistic-review-20260618.md),
-[`smart-contract-vulnerability-audit-20260609.md`](./smart-contract-vulnerability-audit-20260609.md),
-[`confused-deputy-access-control-audit-20260602.md`](./confused-deputy-access-control-audit-20260602.md).
+[`20260618-code-review-internal-claude.md`](./20260618-code-review-internal-claude.md),
+[`20260609-code-review-internal-claude.md`](./20260609-code-review-internal-claude.md),
+[`20260602-code-review-internal-claude.md`](./20260602-code-review-internal-claude.md).
 
 **Companion spec:** the findings and Layer 2 categories below are mapped to
 named, FV-targetable invariants in
