@@ -28,6 +28,7 @@ import type { Address, Hash } from "viem";
 import { erc20Abi, routerAbi } from "../lib/abi";
 import {
   buildRouterPreview,
+  deriveMinSharesPerLeg,
   type RouterPreviewContext,
   type LegPreview,
 } from "../lib/routerPreview";
@@ -151,12 +152,17 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     allowanceOk &&
     !vaultListChanged;
 
+  // DAPP-2 (issue #1025): submit non-zero per-leg share floors derived from the
+  // preview's per-leg estimated shares (minus a slippage tolerance) so each leg
+  // keeps slippage protection. Replaces the previous empty `[]` floors array.
+  const minSharesPerLeg = deriveMinSharesPerLeg(legs);
+
   const { data: depositSim, error: depositSimError } = useSimulateContract({
     account: address,
     address: routerAddress,
     abi: routerAbi,
     functionName: "deposit",
-    args: depositAssets !== null ? [depositAssets, []] : undefined,
+    args: depositAssets !== null ? [depositAssets, minSharesPerLeg] : undefined,
     query: { enabled: canSimDeposit, retry: 5 },
   });
 

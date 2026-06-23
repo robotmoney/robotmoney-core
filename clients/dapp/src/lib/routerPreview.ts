@@ -3,8 +3,10 @@
 /**
  * Router deposit preview pipeline (issue #320).
  *
- * Builds a structured preview for a `PortfolioRouter.deposit(amount, [])`
- * call. Mirrors the vault preview shape so the same TxPreview component
+ * Builds a structured preview for a
+ * `PortfolioRouter.deposit(amount, minSharesPerLeg)` call, where the per-leg
+ * floors are derived from the preview's estimated shares (DAPP-2, issue #1025).
+ * Mirrors the vault preview shape so the same TxPreview component
  * renders it. The per-leg breakdown (weights, estimated shares, unavailable
  * flag) comes from an off-chain call to `router.previewDeposit(amount)`.
  *
@@ -26,6 +28,43 @@ export interface LegPreview {
   legAmount: bigint;
   estShares: bigint;
   unavailable: boolean;
+}
+
+/**
+ * Default per-leg slippage tolerance, in basis points (0.50%).
+ *
+ * The router's `deposit(amount, minSharesPerLeg)` reverts a leg whose live
+ * `sharesReceived` falls below the supplied floor (docs/technical/
+ * portfolio-router-decisions.md §3.3 step 5). We derive each floor from the
+ * `previewDeposit` per-leg `estShares`, shaved by this tolerance so ordinary
+ * preview-vs-execution drift does not trip the guard while a materially worse
+ * fill still reverts.
+ */
+export const ROUTER_SLIPPAGE_TOLERANCE_BPS = 50n;
+
+const BPS_DENOMINATOR = 10_000n;
+
+/**
+ * Derive a non-zero per-leg `minSharesPerLeg` floor array from the preview legs.
+ *
+ * Each available leg's floor is its `estShares` reduced by
+ * `toleranceBps`; an unavailable leg gets a `0n` floor (the contract treats a
+ * zero floor as "skip the check", and the deposit already reverts up-front when
+ * any leg is unavailable). Floors are ordered identically to `legs`, which the
+ * router requires to match `activeVaults()` order.
+ *
+ * DAPP-2 (issue #1025): replaces the previous empty `[]` floor array that
+ * disabled per-leg slippage protection.
+ */
+export function deriveMinSharesPerLeg(
+  legs: readonly LegPreview[],
+  toleranceBps: bigint = ROUTER_SLIPPAGE_TOLERANCE_BPS,
+): bigint[] {
+  return legs.map((leg) => {
+    if (leg.unavailable || leg.estShares <= 0n) return 0n;
+    // floor = estShares * (10_000 - toleranceBps) / 10_000, rounded down.
+    return (leg.estShares * (BPS_DENOMINATOR - toleranceBps)) / BPS_DENOMINATOR;
+  });
 }
 
 /** Context for a router deposit preview. */
@@ -69,14 +108,17 @@ export function buildRouterPreview(
 
   const functionName: RouterActionName = "deposit";
 
+  // DAPP-2 (issue #1025): derive non-zero per-leg share floors from the
+  // preview's estimated shares so the encoded calldata carries real slippage
+  // protection instead of a wide-open empty array.
+  const minSharesPerLeg = deriveMinSharesPerLeg(legs);
+
   let calldata: Hex;
   try {
     calldata = encodeFunctionData({
       abi: routerAbi,
       functionName: "deposit",
-      // Pass empty minSharesPerLeg array — no slippage floor; the preview
-      // already surfaces unavailable legs before the user signs.
-      args: [amount, []],
+      args: [amount, minSharesPerLeg],
     });
   } catch {
     return { ok: false, reason: "unknown_revert" as const };
@@ -124,8 +166,10 @@ export function buildRouterPreview(
       },
       {
         name: "minSharesPerLeg",
-        raw: "[]",
-        gloss: "no slippage floor (preview shows estimated shares per leg)",
+        raw: `[${minSharesPerLeg.map((s) => s.toString()).join(", ")}]`,
+        gloss: `per-leg slippage floor at ${formatPercentFromBps(
+          BPS_DENOMINATOR - ROUTER_SLIPPAGE_TOLERANCE_BPS,
+        )} of estimated shares (0 for unavailable legs)`,
       },
     ],
     effect,
