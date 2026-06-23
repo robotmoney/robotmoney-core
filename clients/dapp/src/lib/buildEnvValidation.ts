@@ -28,7 +28,7 @@
  * verifiable without spinning up a Vite build.
  *
  * Canonical:
- *   - docs/code-reviews/review-codex-20260518-234945.md §7
+ *   - docs/code-review/20260518-code-review-internal-codex.md §7
  *   - docs/technical/dapp-topology.md
  *   - docs/development/smoke-test-design.md (faucet harness origin)
  */
@@ -95,7 +95,7 @@ export function validateFaucetKeyForBuild(
         "VITE_FAUCET_HARNESS_PRIVATE_KEY must not be set when VITE_ENV_CLASS=mainnet. " +
         "Bundled keys are public secrets — anyone with the dapp HTML can extract them. " +
         "Unset VITE_FAUCET_HARNESS_PRIVATE_KEY for mainnet/production-like builds. " +
-        "See docs/code-reviews/review-codex-20260518-234945.md §7.",
+        "See docs/code-review/20260518-code-review-internal-codex.md §7.",
     };
   }
 
@@ -106,7 +106,7 @@ export function validateFaucetKeyForBuild(
         "VITE_FAUCET_HARNESS_PRIVATE_KEY is set but VITE_ENV_CLASS is missing or invalid " +
         `(got ${JSON.stringify(rawClass ?? null)}). Production builds must declare an explicit ` +
         "non-mainnet env class (fork|devnet|testnet) before a faucet key is permitted in the bundle. " +
-        "See docs/code-reviews/review-codex-20260518-234945.md §7.",
+        "See docs/code-review/20260518-code-review-internal-codex.md §7.",
     };
   }
 

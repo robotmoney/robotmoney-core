@@ -61,7 +61,7 @@ No cross-reference creates a merge conflict between the parallel issues.
 ## 3. Security-review integration constraint (supersession of #829, dependency on #835)
 
 The 2026-06-12 revalidation
-([`docs/code-reviews/security-review-20260612.md`](../code-reviews/security-review-20260612.md))
+([`docs/code-review/20260612-code-review-internal-claude.md`](../code-review/20260612-code-review-internal-claude.md))
 changes the security surface of this phase:
 
 - **#829 is superseded by #835 and is removed from this documentation phase.**

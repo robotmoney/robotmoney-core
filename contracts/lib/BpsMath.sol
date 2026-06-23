@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/code-review/smart-contract-holistic-review-20260618.md §1 —
+// Canonical: docs/code-review/20260618-code-review-internal-claude.md §1 —
 // duplicate basis-points denominator constants.
 pragma solidity ^0.8.24;
 

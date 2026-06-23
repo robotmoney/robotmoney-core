@@ -27,7 +27,7 @@
 //! to require pin verification.
 //!
 //! ── DEV-SCOUT SEAM (off-chain scan remediation — residual; issue #1027) ──────
-//! Canonical: `docs/code-review/external-scan-verification-20260619.md`
+//! Canonical: `docs/code-review/20260619-code-review-internal-claude-scan-verification.md`
 //! (smoke-test / fork-e2e harness subsystem table). Documentation-only pointer:
 //! no behaviour change here. The findings below are still present at HEAD and
 //! are owned by issue #1026 (fix(harness): authenticate fork snapshot + remove

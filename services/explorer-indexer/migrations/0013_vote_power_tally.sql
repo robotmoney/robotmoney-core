@@ -1,4 +1,4 @@
--- Canonical: docs/code-review/external-scan-verification-20260619.md (IDX-5)
+-- Canonical: docs/code-review/20260619-code-review-internal-claude-scan-verification.md (IDX-5)
 --            services/explorer-indexer/src/scan_residual_seams.rs §B2
 --
 -- IDX-5 — make the governance proposal tally power-weighted.

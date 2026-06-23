@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/prd.md §12 — Security invariants (INV-1/INV-2)
-//            docs/code-review/smart-contract-holistic-review-20260618.md (L-11, L-15)
+//            docs/code-review/20260618-code-review-internal-claude.md (L-11, L-15)
 //
 // Stateful Foundry invariant test for custody invariants INV-1/INV-2 on
 // RobotMoneyVault (issue #929). A handler drives fuzzed deposit / withdraw /

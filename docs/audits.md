@@ -20,7 +20,7 @@
   (disposition = field 5, checked-against = field 6) stays valid.
 
   Disposition discipline (per #1010): rows transcribe the *disposition already
-  recorded in the cited snapshot* under docs/code-reviews/ and docs/code-review/.
+  recorded in the cited snapshot* under docs/code-review/.
   No finding is re-audited or re-triaged here. Where a snapshot is a
   verification/grade rather than a remediation log, the mapping rule used is:
     REFUTED / "does not reproduce" / "miscalibrated, collapses" -> dismissed-with-rationale
@@ -52,7 +52,7 @@
 > `dismissed-with-rationale`. Every finding-register row carries exactly one.
 >
 > **Source snapshots** are the external review/audit/scan reports under
-> `docs/code-reviews/` and `docs/code-review/`. This ledger transcribes the
+> `docs/code-review/`. This ledger transcribes the
 > dispositions those snapshots record; it does not re-audit or re-triage.
 >
 > **Remediated by (PR)** points to the merged PR that landed the fix (verified
@@ -70,13 +70,13 @@
   explicit documented exception approved by the team.
 
   Report keys used in the table:
-    VA-0609 = docs/code-review/smart-contract-vulnerability-audit-20260609.md
-    HR-0618 = docs/code-review/smart-contract-holistic-review-20260618.md
-    MC-0619 = docs/code-review/external-audit-verification-20260619.md (multi-contract)
-    FS-0619 = docs/code-review/external-scan-verification-20260619.md (full-stack scan)
-    CD-0602 = docs/code-review/confused-deputy-access-control-audit-20260602.md
-    DC-0606 = docs/code-reviews/security-deep-clean-20260606.md
-    SR-0612 = docs/code-reviews/security-review-20260612.md
+    VA-0609 = docs/code-review/20260609-code-review-internal-claude.md
+    HR-0618 = docs/code-review/20260618-code-review-internal-claude.md
+    MC-0619 = docs/code-review/20260619-code-review-pekshield.md (multi-contract)
+    FS-0619 = docs/code-review/20260619-code-review-internal-claude-scan-verification.md (full-stack scan)
+    CD-0602 = docs/code-review/20260602-code-review-internal-claude.md
+    DC-0606 = docs/code-review/20260606-code-review-internal-claude.md
+    SR-0612 = docs/code-review/20260612-code-review-internal-claude.md
 -->
 
 Every production contract under `contracts/` (excluding `contracts/test/`,
@@ -146,7 +146,7 @@ remediate).
 ### FS-0619 — Full-stack automated scan verification (2026-06-19, 95 findings)
 
 The external scan reported 95 findings (6 High, 61 Medium, 28 Low, 0 Critical);
-the verification (`docs/code-review/external-scan-verification-20260619.md`)
+the verification (`docs/code-review/20260619-code-review-internal-claude-scan-verification.md`)
 collapses 3 duplicate listings into 92 distinct IDs and re-grades severities in
 both directions. The four "High access-control" contract findings collapse
 (consent is structural — share movement needs the victim's own gateway
@@ -366,11 +366,11 @@ found by SR-0612 do not contradict it). Nothing to remediate.
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
 | SR-0612-OPEN | SR-0612 | High–Medium | accepted-with-rationale | RobotMoneyGateway, PortfolioRouter, RobotMoneyVault, BasketVault, RwaVault, RouterGovernance, ChronicleOracleAdapter, AerodromeSwapAdapter | — | 4 High + 19 Medium + 14 Low + 10 Info open on `dev` (or with fixes only on an unmerged remediation branch); each a known, acknowledged risk pending the contract-security-remediation phases (#933/#958/#987) |
-| SR-0612-P1 | SR-0612 | Process | accepted-with-rationale | docs/code-reviews/security-deep-clean-20260606.md | — | Audit/remediation drift: DC-0606 claimed fixes (VAULT-002, VAULT-006, ORA-001/AC-005, MEV-001, AC-006, GOV-001/AC-002, VaultRegistry asset check) never landed on `dev`; recorded so this ledger reflects landing status, not claimed status |
+| SR-0612-P1 | SR-0612 | Process | accepted-with-rationale | docs/code-review/20260606-code-review-internal-claude.md | — | Audit/remediation drift: DC-0606 claimed fixes (VAULT-002, VAULT-006, ORA-001/AC-005, MEV-001, AC-006, GOV-001/AC-002, VaultRegistry asset check) never landed on `dev`; recorded so this ledger reflects landing status, not claimed status |
 | DC-0606-LANDED | DC-0606 | High–Info | fixed | RobotMoneyVault, BasketVault, RobotMoneyGateway, RouterGovernance, ChronicleOracleAdapter, UniswapV4SwapAdapter, explorer-indexer, rmpc, dapp | #836, #933, #958 | ~63 deep-clean findings landed (5 Critical/High + Medium/Low/Info) across the contract-security-remediation phases; excludes the 8 contradicted-by-SR-0612 claims (above) and the 4 deferred items (below) |
 | DC-0606-DEFER | DC-0606 | Deferred | accepted-with-rationale | VaultRegistry, RouterGovernance, BasketVault/AgentTokenVault, admin-transfer surface | — | 4 deferred items (RMDA-003 stale cached status, GOV-003 execute() re-validation, VAULT-011 SHORTLIST_ADD_DELAY, AC-008 two-step admin transfer); NatSpec invariant added, full fix needs governance/interface upgrade |
 
-### Gap analysis — process & coverage backlog (gap-analysis-20260607.md)
+### Gap analysis — process & coverage backlog (20260607-code-review-internal-claude-gap-analysis.md)
 
 > The gap analysis enumerates 50 tracked-as-future-work items (issues #643–#692),
 > not contract bugs. SECURITY-003 ("No audit ledger") is resolved by this issue
@@ -378,9 +378,9 @@ found by SR-0612 do not contradict it). Nothing to remediate.
 
 | Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
 |---|---|---|---|---|---|---|
-| SECURITY-003 | gap-analysis-20260607.md | Medium | fixed | docs/audits.md, SECURITY.md | #1013, #1014 | "No audit ledger" — resolved by creating this `docs/audits.md` and the repo-root `SECURITY.md` (issue #1010) |
-| SECURITY-001 | gap-analysis-20260607.md | Medium | fixed | SECURITY.md | #1013, #1014 | "No SECURITY.md at repo root" — resolved by creating repo-root `SECURITY.md` (tracking issue #643) |
-| GAP-BACKLOG | gap-analysis-20260607.md | Critical–Low | accepted-with-rationale | architecture/security-model/CI/dapp/rmpc surfaces | — | The remaining ~48 gap items (#643–#692, e.g. MAINNET-001, WATCHDOG-001, CSP-001, bug-bounty SECURITY-002) are acknowledged future-work, each tracked by its GitHub issue; a coverage backlog, not a per-contract vulnerability |
+| SECURITY-003 | 20260607-code-review-internal-claude-gap-analysis.md | Medium | fixed | docs/audits.md, SECURITY.md | #1013, #1014 | "No audit ledger" — resolved by creating this `docs/audits.md` and the repo-root `SECURITY.md` (issue #1010) |
+| SECURITY-001 | 20260607-code-review-internal-claude-gap-analysis.md | Medium | fixed | SECURITY.md | #1013, #1014 | "No SECURITY.md at repo root" — resolved by creating repo-root `SECURITY.md` (tracking issue #643) |
+| GAP-BACKLOG | 20260607-code-review-internal-claude-gap-analysis.md | Critical–Low | accepted-with-rationale | architecture/security-model/CI/dapp/rmpc surfaces | — | The remaining ~48 gap items (#643–#692, e.g. MAINNET-001, WATCHDOG-001, CSP-001, bug-bounty SECURITY-002) are acknowledged future-work, each tracked by its GitHub issue; a coverage backlog, not a per-contract vulnerability |
 
 ## Finding-disposition log
 
@@ -402,12 +402,12 @@ the per-finding rationale lives in the register above.
 
 | Finding group | Disposition | Second reviewer (verification pass) | Revisit-before path |
 |---|---|---|---|
-| FS-0619 dismissed (FS-IDX-9, FS-WD-3, FS-RTR-3/4, FS-VLT-2/4/6/7/11/14/16/24/25, FS-RPC-6/17, FS-HARN-1/3/4/7/8/9, FS-DAPP-3) | dismissed-with-rationale | external-scan-verification-20260619.md (7 reviewer passes) | The named component before any change to indexer/watchdog/router/gateway/vault/adapter/rmpc/harness/dapp logic those IDs touch |
-| FS-0619 accepted-open (FS-RTR-1, FS-VLT-10, FS-VLT-19, FS-RPC-11 + all FS-* not fixed/dismissed) | accepted-with-rationale | external-scan-verification-20260619.md (7 reviewer passes) | The named component before any change to that finding's code path; FS-RTR-1 / FS-VLT-10 / FS-VLT-19 / FS-RPC-11 are CONFIRMED-open with no landed fix — close before mainnet |
-| MC-0619 accepted/dismissed (MC-F-12, MC-F-18, MC-F-19) | accepted-with-rationale / dismissed-with-rationale | external-audit-verification-20260619.md (4 reviewer passes) | PortfolioRouter cap config; IUpstreamMonitor wiring; Slither suppressions |
-| HR-0618 accepted (HR-M-10 bypass-half, HR-L-9/11/13, HR-I-1…I-8, HR-L3-F1/F2) | accepted-with-rationale | smart-contract-holistic-review-20260618.md (double-checked second pass) | Governance `setWeights`/admin-floor; vault redeemFor/rescue paths; adapter sentinel/oracle scaling before any major change |
-| HR-0618 dismissed (HR-S-1) | dismissed-with-rationale | smart-contract-holistic-review-20260618.md + Slither 0.11.5 triage | Production Solidity before re-running Slither / changing suppressions |
-| CD-0602 SAFE verdicts (all CD-*) | accepted-with-rationale | confused-deputy-access-control-audit-20260602.md | Any fund-moving entrypoint before introducing caller-supplied authority or a zero-slippage swap path |
-| SR-0612 open findings (SR-0612-OPEN, SR-0612-P1) | accepted-with-rationale | security-review-20260612.md | The contract-security-remediation phases must land the open SR-* fixes before mainnet; verify landing, not claimed status |
-| DC-0606 deferred (DC-0606-DEFER) | accepted-with-rationale | security-deep-clean-20260606.md + security-review-20260612.md cross-check | Registry status caching, RouterGovernance execute() re-validation, shortlist delay, admin transfer before those upgrades |
-| Gap-analysis backlog (GAP-BACKLOG) | accepted-with-rationale | gap-analysis-20260607.md | Resolve each #643–#692 tracking issue before the dependent launch gate (mainnet deploy, public dapp, bucket-B/C) |
+| FS-0619 dismissed (FS-IDX-9, FS-WD-3, FS-RTR-3/4, FS-VLT-2/4/6/7/11/14/16/24/25, FS-RPC-6/17, FS-HARN-1/3/4/7/8/9, FS-DAPP-3) | dismissed-with-rationale | 20260619-code-review-internal-claude-scan-verification.md (7 reviewer passes) | The named component before any change to indexer/watchdog/router/gateway/vault/adapter/rmpc/harness/dapp logic those IDs touch |
+| FS-0619 accepted-open (FS-RTR-1, FS-VLT-10, FS-VLT-19, FS-RPC-11 + all FS-* not fixed/dismissed) | accepted-with-rationale | 20260619-code-review-internal-claude-scan-verification.md (7 reviewer passes) | The named component before any change to that finding's code path; FS-RTR-1 / FS-VLT-10 / FS-VLT-19 / FS-RPC-11 are CONFIRMED-open with no landed fix — close before mainnet |
+| MC-0619 accepted/dismissed (MC-F-12, MC-F-18, MC-F-19) | accepted-with-rationale / dismissed-with-rationale | 20260619-code-review-pekshield.md (4 reviewer passes) | PortfolioRouter cap config; IUpstreamMonitor wiring; Slither suppressions |
+| HR-0618 accepted (HR-M-10 bypass-half, HR-L-9/11/13, HR-I-1…I-8, HR-L3-F1/F2) | accepted-with-rationale | 20260618-code-review-internal-claude.md (double-checked second pass) | Governance `setWeights`/admin-floor; vault redeemFor/rescue paths; adapter sentinel/oracle scaling before any major change |
+| HR-0618 dismissed (HR-S-1) | dismissed-with-rationale | 20260618-code-review-internal-claude.md + Slither 0.11.5 triage | Production Solidity before re-running Slither / changing suppressions |
+| CD-0602 SAFE verdicts (all CD-*) | accepted-with-rationale | 20260602-code-review-internal-claude.md | Any fund-moving entrypoint before introducing caller-supplied authority or a zero-slippage swap path |
+| SR-0612 open findings (SR-0612-OPEN, SR-0612-P1) | accepted-with-rationale | 20260612-code-review-internal-claude.md | The contract-security-remediation phases must land the open SR-* fixes before mainnet; verify landing, not claimed status |
+| DC-0606 deferred (DC-0606-DEFER) | accepted-with-rationale | 20260606-code-review-internal-claude.md + 20260612-code-review-internal-claude.md cross-check | Registry status caching, RouterGovernance execute() re-validation, shortlist delay, admin transfer before those upgrades |
+| Gap-analysis backlog (GAP-BACKLOG) | accepted-with-rationale | 20260607-code-review-internal-claude-gap-analysis.md | Resolve each #643–#692 tracking issue before the dependent launch gate (mainnet deploy, public dapp, bucket-B/C) |

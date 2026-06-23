@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Canonical: docs/technical/smart-contract-invariants.md
-//            docs/code-review/external-audit-verification-20260619.md
+//            docs/code-review/20260619-code-review-pekshield.md
 //
 // FORMAL-VERIFICATION SUITE — one named test per invariant ID (issue #964, AC2)
 // ────────────────────────────────────────────────────────────────────────────

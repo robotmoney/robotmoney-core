@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/code-review/confused-deputy-access-control-audit-20260602.md
+// Canonical: docs/code-review/20260602-code-review-internal-claude.md
 // Covers: issue #569 — defense-in-depth against confused-deputy / caller-supplied-identity
 //         execution (SquidRouterModule class)
 //

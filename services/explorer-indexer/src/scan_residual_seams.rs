@@ -2,7 +2,7 @@
 //! #1027 scout; fixes landed under #1021 and #1022).
 //!
 //! # Canonical docs
-//! - `docs/code-review/external-scan-verification-20260619.md` — the verified
+//! - `docs/code-review/20260619-code-review-internal-claude-scan-verification.md` — the verified
 //!   external full-stack automated scan. The residual indexer findings
 //!   remediated by this phase (IDX-2, IDX-3, IDX-5, IDX-8) are graded in the
 //!   "explorer-indexer + explorer-api" subsystem table and the severity
