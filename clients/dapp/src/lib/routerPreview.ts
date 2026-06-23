@@ -67,6 +67,32 @@ export function deriveMinSharesPerLeg(
   });
 }
 
+/**
+ * Decide whether the live `activeVaults()` list still matches the preview's leg
+ * vault list (AC §7). A mismatch means the deposit would revert (leg ordering or
+ * membership changed between preview and submit), so the UI disables submit.
+ *
+ * Null-safety (issue #1036): a leg whose `vault` is undefined — which can occur
+ * when `router.previewDeposit` decodes a partial/transition-state tuple in the
+ * live router-deposit path — must NOT crash the component. An unresolved leg
+ * vault is treated as "list changed" (the safe, submit-disabling outcome) rather
+ * than throwing `Cannot read properties of undefined (reading 'toLowerCase')`.
+ * Returns a boolean unconditionally.
+ */
+export function computeVaultListChanged(
+  legs: readonly Pick<LegPreview, "vault">[],
+  currentActiveVaults: readonly Address[] | undefined,
+): boolean {
+  if (!currentActiveVaults || legs.length === 0) return false;
+  if (currentActiveVaults.length !== legs.length) return true;
+  return legs.some((leg, i) => {
+    const want = leg.vault?.toLowerCase();
+    // An unresolved leg vault can't be confirmed to match → treat as changed.
+    if (want === undefined) return true;
+    return want !== currentActiveVaults[i]?.toLowerCase();
+  });
+}
+
 /** Context for a router deposit preview. */
 export interface RouterPreviewContext extends PreviewContext {
   router: Address;
@@ -184,7 +210,10 @@ export function shortenAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
-function shorten(addr: string): string {
+function shorten(addr: string | undefined): string {
+  // Null-safe (issue #1036): a leg whose `vault` failed to decode must not crash
+  // the preview-summary string; render a placeholder instead.
+  if (!addr) return "—";
   return shortenAddr(addr);
 }
 
