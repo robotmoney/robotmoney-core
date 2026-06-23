@@ -437,9 +437,9 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         targetWeightBps: args.target_weight_bps,
         confidence: args.confidence,
         rationaleUri: args.rationale_uri.clone(),
-        voteJsonHash: vote_json_hash.into(),
-        promptHash: prompt_hash.into(),
-        inputsDigest: inputs_digest.into(),
+        voteJsonHash: vote_json_hash,
+        promptHash: prompt_hash,
+        inputsDigest: inputs_digest,
         schemaVersion: args.schema_version.clone(),
         timestamp: args.timestamp,
     };

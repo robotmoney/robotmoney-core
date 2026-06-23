@@ -41,6 +41,7 @@ fn config() -> Config {
         router_address: None,
         governance_address: None,
         timelock_address: None,
+        ic_policy_address: None,
         signer: SignerConfig {
             allow_software_fallback: true,
             keystore_path: PathBuf::from("/tmp/ks.enc"),

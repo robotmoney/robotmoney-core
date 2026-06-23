@@ -17,14 +17,10 @@
 
 mod common;
 
-use crate::common::{
-    enc_bool, jrpc_result, jrpc_result_raw, Fixture, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE,
-};
-use alloy_primitives::{address, b256, hex as ahex, Address, B256, U256};
-use alloy_sol_types::SolCall;
+use crate::common::{jrpc_result, jrpc_result_raw, GATEWAY, SIGNER_ADDRESS, TEST_PASSPHRASE};
+use alloy_primitives::{address, b256, hex as ahex, Address, B256};
 use assert_cmd::Command;
 use mockito::Matcher;
-use rust_payment_client::gateway::InvestmentCommitteePolicy;
 use rust_payment_client::signer::software::PASSPHRASE_ENV_VAR;
 use serde_json::json;
 use std::path::PathBuf;
@@ -57,7 +53,7 @@ const INPUTS_DIGEST: B256 =
 struct CommitteeFixture {
     _tmp: TempDir,
     pub config_path: PathBuf,
-    pub keystore_path: PathBuf,
+    pub _keystore_path: PathBuf,
 }
 
 impl CommitteeFixture {
@@ -103,7 +99,7 @@ keystore_path           = "{ks}"
         Self {
             _tmp: tmp,
             config_path,
-            keystore_path,
+            _keystore_path: keystore_path,
         }
     }
 }
