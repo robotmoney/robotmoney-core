@@ -45,6 +45,10 @@ on:
       - "clients/dapp/scripts/audit-deps.sh"
       - "clients/dapp/scripts/check-csp.sh"
       - "scripts/check-audit-ledger.sh"
+      - "scripts/check-seam-map-drift.sh"
+      - "services/watchdog/src/scan_residual_seams.rs"
+      - "services/explorer-indexer/src/scan_residual_seams.rs"
+      - "clients/rust-payment-client/src/scan_residual_seams.rs"
       - "docs/audits.md"
       - "SECURITY.md"
       - ".github/workflows/suite-18-security-gates.yml"
@@ -132,3 +136,23 @@ jobs:
         run: shellcheck scripts/check-audit-ledger.sh
       - name: Check audit ledger + SECURITY.md
         run: bash scripts/check-audit-ledger.sh
+
+  # ── Seam-map drift guard ──────────────────────────────────────────────────
+  # Fails if any scan_residual_seams.rs dev-scout module reintroduces the
+  # present-tense-after-landing drift #1040 fixed: claiming a now-fixed residual
+  # bug is "still present at HEAD" or handing off in future tense to an
+  # already-merged issue (#1021-#1024).
+  # Script: scripts/check-seam-map-drift.sh (issue #1040). shellcheck runs first
+  # because the gate is shell-driven (matches the per-suite shellcheck pattern).
+  seam-map-drift:
+    name: seam-map-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: shellcheck seam-map-drift script
+        run: shellcheck scripts/check-seam-map-drift.sh
+      - name: Check scan_residual_seams.rs drift
+        run: bash scripts/check-seam-map-drift.sh
