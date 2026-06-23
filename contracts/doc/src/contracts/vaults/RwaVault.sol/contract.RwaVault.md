@@ -1,5 +1,5 @@
 # RwaVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/04ed1dbad12586b776088eccf72044b65f6c4cc3/contracts/vaults/RwaVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/43d1c2f83429ede507d6169930f712ee7dbb8993/contracts/vaults/RwaVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
