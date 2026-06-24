@@ -1,5 +1,5 @@
 # MockMorpho4626
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/895f74f9a312639869e61e1d4ba3dfce78950c03/contracts/test/ERC4626PreconditionChecks.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/7d568c59b4026ccbeb96c8683b875a28e63a7d18/contracts/test/ERC4626PreconditionChecks.t.sol)
 
 **Title:**
 Minimal ERC-4626 Morpho-vault stand-in.
