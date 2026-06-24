@@ -12,6 +12,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 ///         shares 1:1 against deposited USDC and redeems 1:1 with no exit fee.
 ///         Covers the full deposit→redeem round-trip exercised by the dapp e2e
 ///         (issue #257). This contract is a TEST FIXTURE only.
+///
+///         Implements `IRetirableVault` (retire/unretire) as no-ops so that
+///         `VaultRegistry.setVaultStatus` can call the deposit-halt hook without
+///         reverting. The mock has no registry link, so no access-control is
+///         enforced here — the stubs satisfy the interface only.
 contract MockVault is ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -52,6 +57,18 @@ contract MockVault is ERC20, ReentrancyGuard {
     constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC") {
         assetToken = IERC20(asset_);
     }
+
+    // ── IRetirableVault stubs ────────────────────────────────────────────────
+
+    /// @notice No-op retire stub. Satisfies `IRetirableVault` so
+    ///         `VaultRegistry.setVaultStatus(Paused/Retired)` can call the
+    ///         deposit-halt hook without reverting. The mock has no registry
+    ///         link and no deposit-halt flag; this is a test fixture only.
+    function retire() external {}
+
+    /// @notice No-op unretire stub. Mirror of `retire()` for the `Active`
+    ///         restore path of `VaultRegistry.setVaultStatus`.
+    function unretire() external {}
 
     /// @notice Match the underlying USDC's 6 decimals (mirrors ERC-4626 default).
     function decimals() public pure override returns (uint8) {

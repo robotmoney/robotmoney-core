@@ -36,6 +36,46 @@ contract MockRetirableVault {
     }
 }
 
+/// @notice Simulates the registry-gated retire pattern implemented by BasketVault
+///         (FS-VLT-19): retire()/unretire() are only callable by the linked
+///         registry, and they set/clear a `depositsPaused` flag. Used to assert
+///         that VaultRegistry.retire(basketVaultAddress) completes without revert
+///         when the vault has called setRegistry with the registry's address.
+contract MockBasketLikeVault {
+    address public registry;
+    bool public depositsPaused;
+
+    error OnlyRegistry();
+
+    function setRegistry(address reg) external {
+        registry = reg;
+    }
+
+    function retire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        depositsPaused = true;
+    }
+
+    function unretire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        depositsPaused = false;
+    }
+}
+
+/// @notice Vault whose retire() always reverts — used to assert that
+///         VaultRegistry.setVaultStatus propagates the revert (AZ-REG-1 fix).
+contract RevertingRetireVault {
+    error RetireHookFailed();
+
+    function retire() external pure {
+        revert RetireHookFailed();
+    }
+
+    function unretire() external pure {
+        revert RetireHookFailed();
+    }
+}
+
 contract VaultRegistryTest is Test {
     VaultRegistry internal registry;
 
@@ -302,6 +342,56 @@ contract VaultRegistryTest is Test {
         );
         vm.prank(stranger);
         registry.reactivate(address(mockVault));
+    }
+
+    // ─── retire: BasketVault registry-gated path (FS-VLT-19) ─────────────────
+
+    /// @notice FS-VLT-19: VaultRegistry.retire(basketVaultAddress) completes
+    ///         without revert when the BasketVault has the registry address set
+    ///         (simulated via MockBasketLikeVault which mirrors BasketVault's
+    ///         registry-gated retire/unretire pattern).
+    function test_retire_succeedsForBasketLikeVault() public {
+        MockBasketLikeVault basketVault = new MockBasketLikeVault();
+        // Wire the registry link into the vault (mirrors DeployTimelock.s.sol
+        // which calls vault.setRegistry(registry) before handing over ADMIN_ROLE).
+        basketVault.setRegistry(address(registry));
+
+        vm.startPrank(admin);
+        registry.registerVault(address(basketVault), meta1);
+        registry.retire(address(basketVault));
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(basketVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Retired),
+            "registry status must be Retired"
+        );
+        assertTrue(basketVault.depositsPaused(), "vault depositsPaused must be set by retire()");
+    }
+
+    // ─── setVaultStatus: revert propagation (AZ-REG-1) ───────────────────────
+
+    /// @notice AZ-REG-1 fix: VaultRegistry.setVaultStatus on a vault whose
+    ///         retire hook reverts must propagate the revert to the caller so
+    ///         the registry never records the vault as Retired while its
+    ///         deposit-halt flag is unset.
+    function test_setVaultStatus_revertsWhenRetireHookReverts() public {
+        RevertingRetireVault badVault = new RevertingRetireVault();
+
+        vm.startPrank(admin);
+        registry.registerVault(address(badVault), meta1);
+        vm.expectRevert(RevertingRetireVault.RetireHookFailed.selector);
+        registry.setVaultStatus(address(badVault), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
+
+        // Registry status must NOT have been updated — the revert aborted the state change.
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(badVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "registry status must remain Active when retire hook reverts"
+        );
     }
 
     // ─── getVault ────────────────────────────────────────────────────────────

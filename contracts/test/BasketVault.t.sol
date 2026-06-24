@@ -1988,6 +1988,63 @@ contract BasketVaultTest is Test {
         uint256 shares = _depositAt1to1(stranger, 1_000e6);
         assertGt(shares, 0, "ORA-4: in-band deposit settles");
     }
+
+    // ─── IRetirableVault: retire/unretire (FS-VLT-19) ────────────────────────
+
+    /// @notice FS-VLT-19: retire() sets depositsPaused = true and emits Retired.
+    function test_retire_setsDepositsPaused() public {
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+
+        assertFalse(vault.depositsPaused(), "deposits must be open before retire");
+
+        vm.prank(reg);
+        vault.retire();
+
+        assertTrue(vault.depositsPaused(), "retire() must set depositsPaused = true");
+    }
+
+    /// @notice FS-VLT-19: unretire() clears depositsPaused and emits Unretired.
+    function test_unretire_clearsDepositsPaused() public {
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+
+        vm.prank(reg);
+        vault.retire();
+        assertTrue(vault.depositsPaused(), "deposits must be paused after retire");
+
+        vm.prank(reg);
+        vault.unretire();
+
+        assertFalse(vault.depositsPaused(), "unretire() must clear depositsPaused");
+    }
+
+    /// @notice retire() reverts when caller is not the linked registry.
+    function test_retire_revertsForNonRegistry() public {
+        vm.expectRevert(BasketVault.OnlyRegistry.selector);
+        vm.prank(stranger);
+        vault.retire();
+    }
+
+    /// @notice unretire() reverts when caller is not the linked registry.
+    function test_unretire_revertsForNonRegistry() public {
+        vm.expectRevert(BasketVault.OnlyRegistry.selector);
+        vm.prank(stranger);
+        vault.unretire();
+    }
+
+    /// @notice setRegistry() is set-once; a second call reverts RegistryAlreadySet.
+    function test_setRegistry_revertsOnSecondCall() public {
+        address reg = makeAddr("registry");
+        vm.prank(admin);
+        vault.setRegistry(reg);
+
+        vm.expectRevert(BasketVault.RegistryAlreadySet.selector);
+        vm.prank(admin);
+        vault.setRegistry(reg);
+    }
 }
 
 // ─── ADR-0003: Rebalancing model (WeightSnapshot, previewDepositWeights, realizedWeights, rebalance stub) ─────────

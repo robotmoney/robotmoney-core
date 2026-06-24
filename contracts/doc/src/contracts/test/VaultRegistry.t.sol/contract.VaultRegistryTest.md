@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -235,6 +235,30 @@ function test_reactivate_setsActiveStatusAndReopensVaultDeposits() public;
 
 ```solidity
 function test_reactivate_revertsForUnauthorizedCaller() public;
+```
+
+### test_retire_succeedsForBasketLikeVault
+
+FS-VLT-19: VaultRegistry.retire(basketVaultAddress) completes
+without revert when the BasketVault has the registry address set
+(simulated via MockBasketLikeVault which mirrors BasketVault's
+registry-gated retire/unretire pattern).
+
+
+```solidity
+function test_retire_succeedsForBasketLikeVault() public;
+```
+
+### test_setVaultStatus_revertsWhenRetireHookReverts
+
+AZ-REG-1 fix: VaultRegistry.setVaultStatus on a vault whose
+retire hook reverts must propagate the revert to the caller so
+the registry never records the vault as Retired while its
+deposit-halt flag is unset.
+
+
+```solidity
+function test_setVaultStatus_revertsWhenRetireHookReverts() public;
 ```
 
 ### test_getVault_revertsForNotRegistered
