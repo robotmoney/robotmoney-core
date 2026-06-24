@@ -212,8 +212,10 @@ fn deploy_gateway(
     args[108..128].copy_from_slice(pauser.as_slice());
     // router = address(0) — slot 128..160 stays zero
     code.extend_from_slice(&args);
+    // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
+    // committee routing additions in issue #1049 (deployment cost ~5.15M).
     deployer
-        .deploy(Bytes::from(code), 5_000_000)
+        .deploy(Bytes::from(code), 8_000_000)
         .expect("deploy RobotMoneyGateway")
 }
 
@@ -880,8 +882,10 @@ fn router_withdrawal() {
         args[108..128].copy_from_slice(pauser.address.as_slice());
         args[140..160].copy_from_slice(router.as_slice());
         code.extend_from_slice(&args);
+        // Gas limit bumped from 5_000_000 → 8_000_000 to accommodate the
+        // committee routing additions in issue #1049 (deployment cost ~5.15M).
         admin
-            .deploy(Bytes::from(code), 5_000_000)
+            .deploy(Bytes::from(code), 8_000_000)
             .expect("deploy RobotMoneyGateway")
     };
 
