@@ -179,6 +179,14 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 public maxSlippageBps;
     bool public shutdown;
     bool public depositsPaused;
+
+    /// @notice Linked `VaultRegistry`. Set once by `ADMIN_ROLE` via `setRegistry`.
+    ///         The registry is the only address permitted to call `retire()` /
+    ///         `unretire()`, so the unified governance retire action (registry
+    ///         status flip + vault deposit-halt) always lands atomically (DI-2,
+    ///         FS-VLT-19).
+    address public registry;
+
     mapping(address => EmergencyUnwindGuard) public emergencyUnwindGuard;
     /// @notice Per-asset TWAP window in seconds. `0` falls back to
     ///         `DEFAULT_TWAP_WINDOW` so newly registered assets are
@@ -211,6 +219,13 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000; // 20%
 
     // ─── Events ───────────────────────────────────────────────────────
+
+    /// @dev Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
+    event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
+    /// @dev Emitted when the registry calls `retire()` and halts direct deposits.
+    event Retired();
+    /// @dev Emitted when the registry calls `unretire()` and re-opens direct deposits.
+    event Unretired();
 
     event AssetAdded(
         uint256 indexed index,
@@ -278,6 +293,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     error TVLCapExceeded();
     error PerDepositCapExceeded();
     error ZeroAddress();
+    /// @notice `retire()` / `unretire()` caller is not the linked registry.
+    error OnlyRegistry();
+    /// @notice `setRegistry` was called more than once; registry is set-once.
+    error RegistryAlreadySet();
     error VaultShutdown();
     /// @notice `restoreVault` called while the vault is not in a shut-down state.
     error NotShutdown();
@@ -1069,6 +1088,43 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     /// @dev Apply the configured max-slippage haircut to a USDC value.
     function _applySlippage(uint256 usdcValue) internal view returns (uint256) {
         return usdcValue * (MAX_BPS - maxSlippageBps) / MAX_BPS;
+    }
+
+    // ─── Unified governance retire (DI-2 / FS-VLT-19) ────────────────
+
+    /// @notice Set the linked `VaultRegistry` once. Restricted to `ADMIN_ROLE`.
+    ///         The registry is the only address permitted to call `retire()` /
+    ///         `unretire()`; this dedicated link keeps the registry's authority
+    ///         over the vault narrow (deposit-halt only, not full admin) while
+    ///         letting the unified governance retire action land atomically.
+    /// @param newRegistry Address of the `VaultRegistry` (must not be zero).
+    function setRegistry(address newRegistry) external onlyRole(ADMIN_ROLE) {
+        if (newRegistry == address(0)) revert ZeroAddress();
+        if (registry != address(0)) revert RegistryAlreadySet();
+        registry = newRegistry;
+        emit RegistrySet(address(0), newRegistry);
+    }
+
+    /// @notice Hard-stop direct deposits. Callable ONLY by the linked registry,
+    ///         which sets registry status to `Retired` in the same call (atomic
+    ///         unified governance retire, DI-2 / FS-VLT-19). Idempotent.
+    ///         Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
+    ///         revoked; ADR-0009).
+    function retire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        if (depositsPaused) return;
+        _setDepositsPaused(true);
+        emit Retired();
+    }
+
+    /// @notice Re-open direct deposits (governance abort). Callable ONLY by the
+    ///         linked registry, mirroring the `Retired → Active` transition in
+    ///         docs/architecture.md §4.7. Idempotent.
+    function unretire() external {
+        if (msg.sender != registry) revert OnlyRegistry();
+        if (!depositsPaused) return;
+        _setDepositsPaused(false);
+        emit Unretired();
     }
 
     // ─── Emergency ────────────────────────────────────────────────────

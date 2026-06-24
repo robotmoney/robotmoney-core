@@ -253,8 +253,8 @@ contract VaultRegistry is AdminFloorAccessControl {
 
     /// @notice Update a vault's lifecycle status, driving the vault's own
     ///         deposit-halt flag in the same call so registry status and the vault
-    ///         flag never drift (LIFE-1; finding F-04 residual). Restricted to
-    ///         `ADMIN_ROLE`.
+    ///         flag never drift (LIFE-1; finding F-04 residual / AZ-REG-1).
+    ///         Restricted to `ADMIN_ROLE`.
     ///
     ///         Closing the back-door: previously this set only registry `_status`,
     ///         leaving the vault's `retired` deposit-halt flag untouched — so
@@ -266,10 +266,13 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///         atomic `retire()` / `reactivate()` paths. Both vault legs are
     ///         idempotent and registry-gated.
     ///
-    ///         The vault calls are wrapped so a registered address that does not
-    ///         implement the deposit-halt leg, or is not linked to this registry,
-    ///         does not brick the status change — there is no vault flag to sync in
-    ///         that case. A vault linked to this registry always stays in sync.
+    ///         AZ-REG-1 fix: vault calls are no longer wrapped in try/catch. A
+    ///         failed retire hook propagates to the caller so the registry never
+    ///         records a vault as `Retired` while its deposit-halt leg is
+    ///         unset — deposits would otherwise continue against a supposedly-
+    ///         retired vault. Every vault type in the protocol implements
+    ///         `IRetirableVault`; a registered address that lacks the hook
+    ///         fails the call intentionally.
     /// @param vault      Address of an already-registered vault.
     /// @param newStatus  New lifecycle status (Active, Paused, or Retired).
     function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(ADMIN_ROLE) {
@@ -277,19 +280,20 @@ contract VaultRegistry is AdminFloorAccessControl {
         _status[vault] = newStatus;
 
         // Drive the vault's deposit-halt flag so it can never disagree with the
-        // registry status (LIFE-1 / F-04). Active re-opens direct deposits; any
-        // non-Active status (Paused or Retired) hard-stops them. The empty-code
-        // guard skips addresses with no contract code (an EVM call to such an
-        // address would revert the EXTCODESIZE check before the try frame); the
-        // try/catch then tolerates a registered vault that does not implement the
-        // deposit-halt leg, or is not linked to this registry — there is no vault
-        // flag to sync in either case. A vault linked to this registry always
-        // syncs.
+        // registry status (LIFE-1 / F-04 / AZ-REG-1). Active re-opens direct
+        // deposits; any non-Active status (Paused or Retired) hard-stops them.
+        // The empty-code guard skips addresses with no contract code. Calls are
+        // made directly (no try/catch) so a hook failure propagates to the
+        // caller: a failed retire must NOT be silently absorbed while the
+        // registry records the vault as Retired (AZ-REG-1 — deposits would
+        // continue against a supposedly-retired vault). Every vault type in the
+        // protocol implements IRetirableVault; a registered address that lacks
+        // the hook fails the call intentionally.
         if (vault.code.length > 0) {
             if (newStatus == VaultStatus.Active) {
-                try IRetirableVault(vault).unretire() {} catch {}
+                IRetirableVault(vault).unretire();
             } else {
-                try IRetirableVault(vault).retire() {} catch {}
+                IRetirableVault(vault).retire();
             }
         }
 
