@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -945,6 +945,33 @@ guards are evaluated against accurate amounts.
 
 ```solidity
 function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public;
+```
+
+### test_AZBSK3_depositExclusionWindowUsesEligibleNAV
+
+AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
+adapter), a new deposit prices shares against the active-adapter-only
+NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
+new depositor from capturing recovery value that belongs to existing
+holders who bore the original loss.
+Setup: seed the vault at 1:1, inject idle USDC directly to simulate
+the proceeds of an excluded adapter sitting un-deployed, then deposit
+and verify the minted shares match the eligible-NAV formula.
+
+
+```solidity
+function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public;
+```
+
+### test_AZBSK3_totalAssetsUnchangedByExclusionFix
+
+AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
+proceeds from excluded adapters). The fix only changes how shares are
+priced during deposit — it does not alter the NAV accounting.
+
+
+```solidity
+function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public;
 ```
 
 ### test_retire_setsDepositsPaused

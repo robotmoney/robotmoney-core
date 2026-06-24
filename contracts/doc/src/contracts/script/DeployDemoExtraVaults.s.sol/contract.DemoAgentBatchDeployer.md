@@ -1,5 +1,5 @@
 # DemoAgentBatchDeployer
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Batch deployer #2b — the `AgentTokenVault` (PRD §11.3) alone.
 Split from the former `DemoAgentRwaBatchDeployer` to keep each
