@@ -402,17 +402,18 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
         .create_async()
         .await;
 
-    // eth_sendRawTransaction — simulate an on-chain revert
-    // (the contract would revert with AgentNotAllowlisted).
+    // eth_sendRawTransaction — simulate a pre-inclusion revert
+    // (the node simulates the tx and returns AgentNotAllowlisted as a
+    // JSON-RPC error, not a successful tx hash).
     server
         .mock("POST", "/")
         .match_body(Matcher::PartialJson(
             json!({"method": "eth_sendRawTransaction"}),
         ))
         .with_status(200)
-        .with_body(jrpc_result_raw(
-            r#"{"code":-32000,"message":"execution reverted"}"#,
-        ))
+        .with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#,
+        )
         .expect(1)
         .create_async()
         .await;
@@ -474,4 +475,100 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
     // stdout should contain a JSON failure envelope.
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON on stdout");
     assert_eq!(v["ok"], false, "ok must be false for failure");
+    // AC-3: the named error variant must be ErrNotAllowlisted.
+    assert_eq!(
+        v["error"], "ErrNotAllowlisted",
+        "expected ErrNotAllowlisted, got {:?}",
+        v["error"]
+    );
+}
+
+/// AC-4: missing `ic_policy_address` in operator config produces
+/// `IcContractNotConfigured` error before any on-chain write.
+///
+/// No RPC mocks are registered — this test asserts the command fails closed
+/// at config-validation time, before it touches the network.
+#[tokio::test]
+async fn test_committee_missing_ic_contract_address() {
+    use alloy_primitives::keccak256;
+    use rust_payment_client::signer::software::SoftwareSigner;
+
+    const TEST_PRIVKEY: [u8; 32] = [
+        0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38, 0xff,
+        0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b, 0xf4, 0xf2,
+        0xff, 0x80,
+    ];
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let keystore_path = tmp.path().join("keystore.json");
+    SoftwareSigner::create_keystore(&keystore_path, &TEST_PRIVKEY, TEST_PASSPHRASE)
+        .expect("create keystore");
+
+    const GATEWAY_CODE: &[u8] = &[0x60, 0x80, 0x60, 0x40, 0x52, 0xfe, 0xfe, 0xfe];
+    let runtime_hash = format!(
+        "0x{}",
+        alloy_primitives::hex::encode(keccak256(GATEWAY_CODE))
+    );
+
+    // Config WITHOUT ic_policy_address.
+    let config_path = tmp.path().join("rmpc-no-ic.toml");
+    let toml = format!(
+        r#"chain_id              = {CHAIN_ID}
+rpc_url               = "http://127.0.0.1:9999"
+gateway_address       = "{GATEWAY:#x}"
+usdc_address          = "0x0000000000000000000000000000000000000c00"
+vault_address         = "0x0000000000000000000000000000000000000d00"
+gateway_runtime_hash  = "{runtime_hash}"
+max_fee_per_gas_cap   = 100000000000
+
+[signer]
+allow_software_fallback = true
+keystore_path           = "{ks}"
+"#,
+        ks = keystore_path.display()
+    );
+    std::fs::write(&config_path, toml).expect("write config");
+
+    // Try `committee register` — must fail before any network call.
+    let output = rmpc()
+        .env(
+            PASSPHRASE_ENV_VAR,
+            std::str::from_utf8(TEST_PASSPHRASE).unwrap(),
+        )
+        .env("RMPC_STATE_DIR", tmp.path().to_str().unwrap())
+        .args([
+            "committee",
+            "--config",
+            config_path.to_str().unwrap(),
+            "register",
+            "--agent",
+            &format!("{COMMITTEE_AGENT:#x}"),
+            "--agent-id",
+            "athena-v1",
+            "--order-id",
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .output()
+        .expect("rmpc ran");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("STDOUT: {stdout}");
+    eprintln!("STDERR: {stderr}");
+
+    // Must exit non-zero.
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for missing ic_policy_address, got {:?}",
+        output.status
+    );
+
+    // stdout must contain a JSON failure with ErrIcContractNotConfigured.
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON on stdout");
+    assert_eq!(v["ok"], false, "ok must be false");
+    assert_eq!(
+        v["error"], "ErrIcContractNotConfigured",
+        "expected ErrIcContractNotConfigured, got {:?}",
+        v["error"]
+    );
 }
