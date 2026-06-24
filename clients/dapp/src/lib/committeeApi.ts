@@ -1,5 +1,5 @@
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3
-// Implements: issue #1044 — committee dapp surface
+// Implements: issue #1054 — committee dapp surface (agents, tilts, track record, vote-submit flow)
 
 /**
  * Investment Committee API client — wraps explorer-api endpoints for the
@@ -8,11 +8,20 @@
  * Wire shapes mirror the on-chain InvestmentCommitteePolicy contract:
  *   CommitteeAgent  → registered agent metadata
  *   CommitteeVote   → on-chain vote record
- *   RegimeFeed      → daily regime snapshot
+ *   CommitteeTilt   → aggregated per-vault tilt from /v1/committee/tilts
+ *   RegimeFeed      → daily regime snapshot from /v1/regime/feed
  *
  * All data is read from the indexed explorer API — no live chain RPC calls.
  * The committee acts as signalling-only (docs/architecture.md §IC); these
  * views display signals, not live weights.
+ *
+ * Endpoints:
+ *   GET /v1/committee/agents                          → CommitteeAgentsResponse
+ *   GET /v1/committee/tilts                           → CommitteeTiltsResponse
+ *   GET /v1/committee/votes?limit=N                   → CommitteeVotesResponse
+ *   GET /v1/committee/agents/:address/votes           → CommitteeVotesResponse
+ *   GET /v1/accounts/:address/committee-votes         → AccountCommitteeVotesResponse
+ *   GET /v1/regime/feed?limit=N                       → RegimeFeedResponse
  */
 import type { FetchLike } from "./explorerApi";
 export type { FetchLike };
@@ -47,6 +56,23 @@ export interface CommitteeVote {
   readonly tx_hash: string;
 }
 
+/**
+ * Aggregated per-vault tilt from the committee.
+ * Sourced from /v1/committee/tilts — computed by the indexer as a
+ * weighted aggregate of recent VoteSubmitted events per vault.
+ */
+export interface CommitteeTilt {
+  readonly vault: string;
+  /** Aggregated stance label across registered agents. */
+  readonly aggregate_stance: Stance;
+  /** Weighted average target weight in basis points. */
+  readonly aggregate_weight_bps: number;
+  /** Count of agents contributing to this tilt. */
+  readonly agent_count: number;
+  /** Timestamp of the most recent vote that contributed to this tilt. */
+  readonly last_updated: number;
+}
+
 /** Daily regime snapshot produced by the analyst feed. */
 export interface RegimeFeed {
   readonly date: string;
@@ -63,6 +89,22 @@ export interface CommitteeAgentsResponse {
 }
 
 export interface CommitteeVotesResponse {
+  readonly votes: readonly CommitteeVote[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+export interface CommitteeTiltsResponse {
+  readonly tilts: readonly CommitteeTilt[];
+  readonly block_number: number;
+  readonly indexed_at: string;
+}
+
+/**
+ * Account-scoped committee votes response.
+ * Returned by GET /v1/accounts/:address/committee-votes.
+ */
+export interface AccountCommitteeVotesResponse {
   readonly votes: readonly CommitteeVote[];
   readonly block_number: number;
   readonly indexed_at: string;
@@ -90,23 +132,44 @@ export class CommitteeApiClient {
     return res.json() as Promise<T>;
   }
 
-  /** List all registered committee agents. */
+  /** List all registered committee agents. GET /v1/committee/agents */
   async getAgents(): Promise<CommitteeAgentsResponse> {
     return this.get<CommitteeAgentsResponse>("/v1/committee/agents");
   }
 
-  /** List recent committee votes (latest first). */
+  /**
+   * Get aggregated per-vault tilt from registered committee agents.
+   * GET /v1/committee/tilts
+   */
+  async getTilts(): Promise<CommitteeTiltsResponse> {
+    return this.get<CommitteeTiltsResponse>("/v1/committee/tilts");
+  }
+
+  /** List recent committee votes (latest first). GET /v1/committee/votes?limit=N */
   async getVotes(limit = 50): Promise<CommitteeVotesResponse> {
     return this.get<CommitteeVotesResponse>(`/v1/committee/votes?limit=${limit}`);
   }
 
-  /** Get votes for a specific agent. */
+  /** Get votes submitted by a specific agent. GET /v1/committee/agents/:address/votes */
   async getVotesByAgent(agentAddress: string): Promise<CommitteeVotesResponse> {
     return this.get<CommitteeVotesResponse>(`/v1/committee/agents/${agentAddress}/votes`);
   }
 
-  /** Get the latest regime feed entries. */
+  /**
+   * Get the committee votes submitted by a specific wallet address.
+   * Account-scope endpoint: GET /v1/accounts/:address/committee-votes
+   */
+  async getAccountCommitteeVotes(address: string): Promise<AccountCommitteeVotesResponse> {
+    return this.get<AccountCommitteeVotesResponse>(
+      `/v1/accounts/${address}/committee-votes`,
+    );
+  }
+
+  /**
+   * Get the latest regime feed entries.
+   * GET /v1/regime/feed?limit=N
+   */
   async getRegimeFeed(limit = 7): Promise<RegimeFeedResponse> {
-    return this.get<RegimeFeedResponse>(`/v1/regime-feed?limit=${limit}`);
+    return this.get<RegimeFeedResponse>(`/v1/regime/feed?limit=${limit}`);
   }
 }

@@ -1,12 +1,16 @@
 /**
- * RegimeFeedPanel — RTL unit tests (issue #1044 AC-5 / Test plan item 4).
+ * RegimeFeedPanel — RTL unit tests (issue #1054 AC5).
+ *
+ * AC5: clients/dapp Vitest suite exits 0 with a test asserting RegimeFeed
+ * page renders the regime snapshot from a mocked /v1/regime/feed response.
  *
  * Covers:
  *   - Loading state shows loading text.
  *   - Error state renders the API error message.
  *   - Empty state shows empty notice.
- *   - Feed renders regime date, label, description, and source link.
+ *   - Feed renders regime date, label, description, and source link (AC5).
  *   - Description text is always visible.
+ *   - Fetch URL uses /v1/regime/feed (not /v1/regime-feed) (AC5).
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, waitFor, screen } from "./helpers/render";
@@ -45,7 +49,7 @@ const emptyFeed: RegimeFeedResponse = {
 // ─── Fetch mock factory ───────────────────────────────────────────────────────
 
 function makeFetch(data: RegimeFeedResponse): FetchLike {
-  return vi.fn(async () => ({
+  return vi.fn(async (_url: string) => ({
     ok: true as const,
     status: 200,
     json: async () => data,
@@ -123,5 +127,42 @@ describe("RegimeFeedPanel", () => {
     expect(links.length).toBe(2);
     expect(links[0].href).toBe("https://gist.github.com/robotmoney/regime-2026-06-23");
     expect(links[0].target).toBe("_blank");
+  });
+
+  // ── AC5: regime snapshot from /v1/regime/feed ─────────────────────────────
+
+  it("renders regime snapshot from mocked /v1/regime/feed response (AC5)", async () => {
+    const fetchFn = makeFetch(twoFeeds);
+    render(<RegimeFeedPanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("regime-feed-loading")).toBeNull();
+    });
+
+    // Regime list present
+    expect(screen.getByTestId("regime-feed-list")).toBeDefined();
+
+    // Entries rendered
+    const dates = screen.getAllByTestId("regime-feed-date");
+    expect(dates[0].textContent).toBe("2026-06-23");
+
+    const regimes = screen.getAllByTestId("regime-feed-regime");
+    expect(regimes[0].textContent).toBe("Risk-On");
+
+    const descs = screen.getAllByTestId("regime-feed-description-text");
+    expect(descs[0].textContent).toContain("elevated");
+  });
+
+  it("fetches from /v1/regime/feed endpoint (not /v1/regime-feed) (AC5)", async () => {
+    const fetchFn = makeFetch(twoFeeds);
+    render(<RegimeFeedPanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("regime-feed-loading")).toBeNull();
+    });
+
+    const calls = (fetchFn as ReturnType<typeof vi.fn>).mock.calls as [string][];
+    expect(calls.length).toBeGreaterThan(0);
+    const calledUrl = calls[0][0];
+    expect(calledUrl).toContain("/v1/regime/feed");
+    expect(calledUrl).not.toContain("/v1/regime-feed");
   });
 });
