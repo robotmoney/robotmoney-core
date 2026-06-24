@@ -233,11 +233,19 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vault The vault address whose `asset()` call reverted.
     error VaultAssetUnreadable(address vault);
 
-    /// @notice After `_executeLegs` completes the router's USDC balance is
-    ///         non-zero, meaning one or more vaults accepted less than their
-    ///         allocated `legAmount`. The entire deposit is reverted so no
-    ///         USDC is permanently stranded in the router.
+    /// @notice After `_executeLegs` completes the router's USDC balance delta
+    ///         (relative to the snapshot taken before any legs ran) is non-zero,
+    ///         meaning one or more vaults accepted less than their allocated
+    ///         `legAmount`. The entire deposit is reverted so no USDC is
+    ///         permanently stranded in the router.
     error UsdcCustodyInvariantViolated();
+
+    /// @notice A vault's ERC-4626 `deposit()` call reverted, indicating a USDC
+    ///         blacklist hit or fee-on-transfer failure for this leg. Wraps the
+    ///         low-level revert so callers can distinguish this cause from the
+    ///         generic `UsdcCustodyInvariantViolated` custody check (FS-RTR-1).
+    /// @param vault  The vault whose deposit call reverted.
+    error UsdcLegTransferFailed(address vault);
 
     /// @notice Caller is not the shareHolder and has insufficient ERC-20
     ///         allowance on the vault share token to redeem on its behalf.
@@ -747,6 +755,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // Global router cap check.
         if (routerCap != 0 && amount > routerCap) revert RouterCapExceeded();
 
+        // AZ-RTR-2: snapshot the router's USDC balance before pulling the
+        // caller's deposit. After all legs complete the balance must return to
+        // this value — any pre-existing donated USDC is excluded from the
+        // invariant because it appears in both the before and after snapshots.
+        uint256 usdcBalanceBefore = usdc.balanceOf(address(this));
+
         // Collect USDC from caller into this contract.
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -782,7 +796,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // Execute legs in a separate frame so its locals do not pile onto this
         // function's stack (Solidity stack-too-deep guard).
         _executeLegs(
-            receiver, vaultList, bpsList, legAmounts, available, minSharesPerLeg, sharesPerLeg
+            receiver,
+            vaultList,
+            bpsList,
+            legAmounts,
+            available,
+            minSharesPerLeg,
+            sharesPerLeg,
+            usdcBalanceBefore
         );
     }
 
@@ -800,7 +821,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         uint256[] memory legAmounts,
         bool[] memory available,
         uint256[] calldata minSharesPerLeg,
-        uint256[] memory sharesPerLeg
+        uint256[] memory sharesPerLeg,
+        uint256 usdcBalanceBefore
     ) internal {
         for (uint256 i = 0; i < vaultList.length; i++) {
             if (!available[i]) continue; // skip non-depositable legs (RTR-5)
@@ -814,11 +836,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
             }
         }
 
-        // Post-loop custody invariant: the router must hold zero USDC after all
-        // legs have been executed. If any vault accepted less than its allocated
-        // legAmount the deposit reverts entirely, preventing USDC from being
-        // permanently stranded with no recovery path.
-        if (usdc.balanceOf(address(this)) != 0) {
+        // AZ-RTR-2: post-loop custody invariant — the router's USDC balance
+        // must return to the pre-deposit snapshot taken before the caller's
+        // funds were pulled in. Any pre-existing donated USDC is present in
+        // both the before and after snapshots, so it cannot trigger a false
+        // revert. If any vault accepted less than its allocated legAmount the
+        // deposit reverts entirely, preventing USDC from being permanently
+        // stranded with no recovery path.
+        if (usdc.balanceOf(address(this)) != usdcBalanceBefore) {
             revert UsdcCustodyInvariantViolated();
         }
     }
@@ -854,8 +879,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         // Approve vault to pull legAmount USDC.
         usdc.forceApprove(vault, legAmount);
 
-        // deposit() returns shares minted to receiver.
-        sharesReceived = IERC4626(vault).deposit(legAmount, receiver);
+        // FS-RTR-1: wrap vault.deposit() so a USDC blacklist hit or
+        // fee-on-transfer revert surfaces as a named error instead of the
+        // opaque UsdcCustodyInvariantViolated custody check. The try/catch
+        // catches all EVM reverts from the external call, including those
+        // triggered by USDC's internal transfer restrictions.
+        try IERC4626(vault).deposit(legAmount, receiver) returns (uint256 shares) {
+            sharesReceived = shares;
+        } catch {
+            revert UsdcLegTransferFailed(vault);
+        }
 
         emit RouterDeposit(receiver, vault, legAmount, sharesReceived, weightBps);
     }

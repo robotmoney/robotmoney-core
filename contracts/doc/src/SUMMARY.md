@@ -170,6 +170,8 @@
     - [MockUSDC](contracts/test/PortfolioRouter.t.sol/contract.MockUSDC.md)
     - [MockRouterVault](contracts/test/PortfolioRouter.t.sol/contract.MockRouterVault.md)
     - [PartialAcceptVault](contracts/test/PortfolioRouter.t.sol/contract.PartialAcceptVault.md)
+    - [BlacklistableUSDC](contracts/test/PortfolioRouter.t.sol/contract.BlacklistableUSDC.md)
+    - [BlacklistableVault](contracts/test/PortfolioRouter.t.sol/contract.BlacklistableVault.md)
     - [PortfolioRouterTest](contracts/test/PortfolioRouter.t.sol/contract.PortfolioRouterTest.md)
     - [FeeOnTransferUSDC](contracts/test/RobotMoneyGateway.t.sol/contract.FeeOnTransferUSDC.md)
     - [ShareLeakVault](contracts/test/RobotMoneyGateway.t.sol/contract.ShareLeakVault.md)

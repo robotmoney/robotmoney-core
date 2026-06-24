@@ -7143,6 +7143,17 @@ export const routerAbiGenerated = [
   },
   {
     type: "error",
+    name: "UsdcLegTransferFailed",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "VaultAssetMismatch",
     inputs: [
       {

@@ -1,12 +1,12 @@
-# PartialAcceptVault
+# BlacklistableVault
 [Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 ERC20
 
-A misbehaving vault that only accepts half of the legAmount,
-leaving the other half stranded in the router. Used to exercise
-the UsdcCustodyInvariantViolated post-loop check.
+ERC-4626-shaped vault that uses a BlacklistableUSDC instance.
+Identical to MockRouterVault but typed to BlacklistableUSDC so the
+blacklist test can pass the address check in setWeights / _requireRouterEligible.
 
 
 ## Constants
@@ -22,7 +22,7 @@ IERC20 public immutable assetToken
 
 
 ```solidity
-constructor(address asset_) ERC20("Partial Vault Shares", "PVS");
+constructor(address asset_) ERC20("Blacklistable Vault Shares", "BVS");
 ```
 
 ### decimals
@@ -54,8 +54,6 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 ```
 
 ### deposit
-
-Accepts only half of `assets`, leaving the remainder in the router.
 
 
 ```solidity
