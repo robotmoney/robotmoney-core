@@ -297,6 +297,106 @@ contract MorphoAdapterTest is Test {
     }
 
     // -----------------------------------------------------------------------
+    // setMaxExposure / ExposureCapExceeded (FS-VLT-10)
+    // -----------------------------------------------------------------------
+
+    /// @notice Default maxExposure is 0 (uncapped); deploy succeeds for any amount.
+    function test_deploy_uncappedByDefault() public {
+        uint256 amount = 1_000_000 * ONE_USDC;
+        usdc.mint(vault, amount);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), amount);
+
+        vm.prank(vault);
+        adapter.deploy(amount); // must not revert
+
+        assertEq(morphoVault.balanceOf(address(adapter)), amount);
+    }
+
+    /// @notice setMaxExposure stores the cap and can be read back.
+    function test_setMaxExposure_storesCap() public {
+        vm.prank(vault);
+        adapter.setMaxExposure(500 * ONE_USDC);
+        assertEq(adapter.maxExposure(), 500 * ONE_USDC);
+    }
+
+    /// @notice setMaxExposure reverts when called by a non-VAULT address.
+    function test_setMaxExposure_revertsForNonVault() public {
+        vm.prank(stranger);
+        vm.expectRevert(MorphoAdapter.OnlyVault.selector);
+        adapter.setMaxExposure(500 * ONE_USDC);
+    }
+
+    /// @notice deploy() with maxExposure set below the attempted amount reverts
+    ///         with ExposureCapExceeded (FS-VLT-10 AC).
+    function test_deploy_revertsWhenCapExceeded() public {
+        uint256 cap = 100 * ONE_USDC;
+        uint256 amount = 101 * ONE_USDC;
+
+        vm.prank(vault);
+        adapter.setMaxExposure(cap);
+
+        usdc.mint(vault, amount);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), amount);
+
+        vm.prank(vault);
+        vm.expectRevert(
+            abi.encodeWithSelector(MorphoAdapter.ExposureCapExceeded.selector, 0, amount, cap)
+        );
+        adapter.deploy(amount);
+    }
+
+    /// @notice deploy() with maxExposure = 0 succeeds regardless of amount
+    ///         (backward-compatible uncapped path, FS-VLT-10 AC).
+    function test_deploy_zeroCapIsUncapped() public {
+        // Ensure cap is explicitly zero (the default).
+        vm.prank(vault);
+        adapter.setMaxExposure(0);
+
+        uint256 amount = 1_000_000 * ONE_USDC;
+        usdc.mint(vault, amount);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), amount);
+
+        vm.prank(vault);
+        adapter.deploy(amount); // must not revert
+
+        assertEq(morphoVault.balanceOf(address(adapter)), amount);
+    }
+
+    /// @notice deploy() that would push the adapter's running balance above cap
+    ///         also reverts with ExposureCapExceeded.
+    function test_deploy_revertsWhenCumulative_exceedsCap() public {
+        uint256 cap = 200 * ONE_USDC;
+
+        vm.prank(vault);
+        adapter.setMaxExposure(cap);
+
+        // First deploy: 150 USDC — within cap.
+        uint256 first = 150 * ONE_USDC;
+        usdc.mint(vault, first);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), first);
+        vm.prank(vault);
+        adapter.deploy(first);
+
+        // Second deploy: 51 USDC — would push total to 201 USDC, above cap=200.
+        uint256 second = 51 * ONE_USDC;
+        usdc.mint(vault, second);
+        vm.prank(vault);
+        usdc.transfer(address(adapter), second);
+
+        vm.prank(vault);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MorphoAdapter.ExposureCapExceeded.selector, first, second, cap
+            )
+        );
+        adapter.deploy(second);
+    }
+
+    // -----------------------------------------------------------------------
     // harvestRewards — AC5 (INV-2: emissions reach the vault, never stranded)
     // -----------------------------------------------------------------------
 
