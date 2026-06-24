@@ -65,6 +65,14 @@ struct Cli {
     #[arg(long, env = "INDEXER_PORTFOLIO_ROUTER")]
     portfolio_router: Option<String>,
 
+    /// Optional InvestmentCommitteePolicy contract address.
+    /// When set, the indexer ingests AgentRegistered, AgentRevoked, and
+    /// VoteSubmitted events, performs memo keccak256 verification, and
+    /// writes to committee_agents, committee_votes, and regime_snapshots
+    /// tables (issue #1053).
+    #[arg(long, env = "INDEXER_INVESTMENT_COMMITTEE")]
+    investment_committee: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -127,6 +135,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let investment_committee = cli
+        .investment_committee
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -136,6 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         registry,
         router_governance,
         portfolio_router,
+        investment_committee,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
         // Load feature flags from FEATURE_FLAGS env var at startup.

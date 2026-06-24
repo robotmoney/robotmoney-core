@@ -23,8 +23,8 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IGatewayEvents, IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
-    IVaultRegistryEvents, Topics,
+    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents,
+    IRouterGovernanceEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -69,6 +69,11 @@ pub struct IndexerConfig {
     /// ensuring deposits via the router are reflected in the TVL index without
     /// waiting for the SNAPSHOT_HEARTBEAT_BLOCKS interval.
     pub portfolio_router: Option<Address>,
+    /// Optional InvestmentCommitteePolicy contract address.
+    /// When set, the indexer ingests `AgentRegistered`, `AgentRevoked`, and
+    /// `VoteSubmitted` events and writes to `committee_agents`,
+    /// `committee_votes`, and `regime_snapshots` tables (issue #1053).
+    pub investment_committee: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -102,6 +107,11 @@ impl IndexerConfig {
             // Only add if not already present (e.g. when portfolio_router == router_governance).
             if !addrs.contains(&pr) {
                 addrs.push(pr);
+            }
+        }
+        if let Some(ic) = self.investment_committee {
+            if !addrs.contains(&ic) {
+                addrs.push(ic);
             }
         }
         addrs
@@ -145,6 +155,10 @@ pub async fn run_once(
         // attributed correctly. Use "portfolio_router" type to distinguish from
         // the RouterGovernance contract.
         db.upsert_contract(cfg.chain_id, pr.into_array(), "portfolio_router", None)
+            .await?;
+    }
+    if let Some(ic) = cfg.investment_committee {
+        db.upsert_contract(cfg.chain_id, ic.into_array(), "investment_committee", None)
             .await?;
     }
 
@@ -1105,7 +1119,144 @@ pub async fn handle_log(
         return Ok(r);
     }
 
+    // ─── InvestmentCommitteePolicy event handlers ─────────────────────────────
+    // Canonical: docs/architecture.md §5.4 — issue #1053.
+    //
+    // Three events: AgentRegistered, AgentRevoked (IC-specific), VoteSubmitted.
+    // Note: IC AgentRevoked has signature `AgentRevoked(address)` — one indexed
+    // field — which is distinct from IGateway AgentRevoked `AgentRevoked(address,address)`
+    // (two indexed fields).  They have different topic-0 hashes and are dispatched
+    // independently.
+
+    if topic0 == topics.ic_agent_registered {
+        let decoded = IInvestmentCommitteePolicyEvents::AgentRegistered::decode_log(
+            &into_alloy_log(log),
+            true,
+        )
+        .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
+        let r = db
+            .upsert_committee_agent(
+                cfg.chain_id,
+                decoded.agent.into_array(),
+                &decoded.agentId,
+                log.block_number as i64,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    if topic0 == topics.ic_agent_revoked {
+        let decoded =
+            IInvestmentCommitteePolicyEvents::AgentRevoked::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("IC AgentRevoked: {e}")))?;
+        let r = db
+            .revoke_committee_agent(
+                cfg.chain_id,
+                decoded.agent.into_array(),
+                log.block_number as i64,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    if topic0 == topics.ic_vote_submitted {
+        let decoded =
+            IInvestmentCommitteePolicyEvents::VoteSubmitted::decode_log(&into_alloy_log(log), true)
+                .map_err(|e| IndexerError::Decode(format!("IC VoteSubmitted: {e}")))?;
+        let vote_id: i64 = decoded.voteId.try_into().unwrap_or(i64::MAX);
+        let agent = decoded.agent.into_array();
+        let vault = decoded.vault.into_array();
+        let vote_json_hash: [u8; 32] = decoded.voteJsonHash.0;
+
+        // Memo fetch + keccak256 verification.
+        // If rationaleUri is empty or the fetch fails, store with verified=false.
+        // If the memo's keccak256 matches voteJsonHash, store with verified=true.
+        let verified = if decoded.rationaleUri.is_empty() {
+            false
+        } else {
+            match fetch_and_verify_memo(&decoded.rationaleUri, vote_json_hash).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        vote_id,
+                        rationale_uri = %decoded.rationaleUri,
+                        error = %e,
+                        "memo fetch/verify failed; storing vote with verified=false"
+                    );
+                    false
+                }
+            }
+        };
+
+        let mut r = db
+            .insert_committee_vote(
+                cfg.chain_id,
+                vote_id,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                agent,
+                vault,
+                decoded.stance as i16,
+                decoded.targetWeightBps as i16,
+                decoded.confidence as i16,
+                &decoded.rationaleUri,
+                vote_json_hash,
+                decoded.timestamp as i64,
+                verified,
+            )
+            .await?;
+
+        // Refresh the regime snapshot for this vault (verified votes only).
+        if verified {
+            r += db
+                .refresh_regime_snapshot(cfg.chain_id, vault, log.block_number as i64)
+                .await?;
+        }
+
+        return Ok(r);
+    }
+
     Ok(0)
+}
+
+/// Fetch the JSON memo from `rationale_uri` and verify its keccak256 against
+/// `expected_hash`.  Returns `true` if the hash matches, `false` otherwise.
+/// Errors on network failure, non-200 HTTP, or response body too large.
+async fn fetch_and_verify_memo(
+    rationale_uri: &str,
+    expected_hash: [u8; 32],
+) -> Result<bool, String> {
+    // Use a one-off reqwest client — the indexer is single-tick so no pool needed.
+    // Limit body to 1 MiB to prevent runaway allocations on malicious URIs.
+    const MAX_BODY: usize = 1024 * 1024;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("build client: {e}"))?;
+
+    let resp = client
+        .get(rationale_uri)
+        .send()
+        .await
+        .map_err(|e| format!("GET {rationale_uri}: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GET {rationale_uri} returned {}", resp.status()));
+    }
+
+    let body = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+
+    if body.len() > MAX_BODY {
+        return Err(format!(
+            "memo body too large: {} bytes (max {MAX_BODY})",
+            body.len()
+        ));
+    }
+
+    let actual = alloy_primitives::keccak256(&body);
+    Ok(actual.0 == expected_hash)
 }
 
 /// IDX-3: persist the owner's resulting `wallet_positions` share balance after
