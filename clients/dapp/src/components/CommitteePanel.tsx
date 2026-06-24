@@ -1,9 +1,10 @@
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §3
-// Implements: issue #1044 — committee dapp surface
+// Implements: issue #1054 — committee dapp surface (agents, tilts, track record, vote-submit flow)
 
 /**
- * CommitteePanel — renders the Investment Committee surface:
- *   - Registered agents list (admin_id, address, registration date).
+ * CommitteePanel — renders the Investment Committee protocol-layer surface:
+ *   - Registered agents list (agent_id, address, registration date).
+ *   - Aggregated per-vault committee tilts (GET /v1/committee/tilts).
  *   - Per-agent vote history with per-vault stance, target weight, confidence,
  *     and a link to the rationale URI.
  *
@@ -13,8 +14,9 @@
  *
  * Data flow:
  *   - Agents list: GET /v1/committee/agents (indexed explorer API).
+ *   - Tilts aggregate: GET /v1/committee/tilts (indexed explorer API).
  *   - Votes: GET /v1/committee/votes (indexed explorer API).
- *   - CommitteeApiClient wraps both endpoints.
+ *   - CommitteeApiClient wraps all endpoints.
  *
  * Out of scope (v0):
  *   - Inter-agent deliberation / debate surfaces (v1+).
@@ -25,8 +27,10 @@ import { useEffect, useState } from "react";
 import type {
   CommitteeAgent,
   CommitteeVote,
+  CommitteeTilt,
   CommitteeAgentsResponse,
   CommitteeVotesResponse,
+  CommitteeTiltsResponse,
   FetchLike,
   Stance,
 } from "../lib/committeeApi";
@@ -65,6 +69,7 @@ function formatTimestamp(ts: number): string {
 export function CommitteePanel(props: CommitteePanelProps) {
   const [agents, setAgents] = useState<readonly CommitteeAgent[]>([]);
   const [votes, setVotes] = useState<readonly CommitteeVote[]>([]);
+  const [tilts, setTilts] = useState<readonly CommitteeTilt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -77,11 +82,15 @@ export function CommitteePanel(props: CommitteePanelProps) {
     async function load() {
       try {
         setLoading(true);
-        const [agentsRes, votesRes]: [CommitteeAgentsResponse, CommitteeVotesResponse] =
-          await Promise.all([client.getAgents(), client.getVotes(50)]);
+        const [agentsRes, votesRes, tiltsRes]: [
+          CommitteeAgentsResponse,
+          CommitteeVotesResponse,
+          CommitteeTiltsResponse,
+        ] = await Promise.all([client.getAgents(), client.getVotes(50), client.getTilts()]);
         if (!cancelled) {
           setAgents(agentsRes.agents);
           setVotes(votesRes.votes);
+          setTilts(tiltsRes.tilts);
           setError(null);
         }
       } catch (e) {
@@ -149,6 +158,43 @@ export function CommitteePanel(props: CommitteePanelProps) {
                       </td>
                       <td data-testid="committee-agent-registered-at">
                         {formatTimestamp(agent.registered_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          {/* Per-vault tilt aggregate */}
+          <section data-testid="committee-tilts-section">
+            <h3>Per-Vault Committee Tilt Aggregate</h3>
+            {tilts.length === 0 ? (
+              <p data-testid="committee-no-tilts">No tilt data available yet.</p>
+            ) : (
+              <table data-testid="committee-tilts-table">
+                <thead>
+                  <tr>
+                    <th>Vault</th>
+                    <th>Aggregate Stance</th>
+                    <th>Aggregate Weight (bps)</th>
+                    <th>Contributing Agents</th>
+                    <th>Last Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tilts.map((tilt) => (
+                    <tr key={tilt.vault} data-testid={`committee-tilt-row-${tilt.vault}`}>
+                      <td data-testid="committee-tilt-vault">
+                        <code>{tilt.vault.slice(0, 10)}…</code>
+                      </td>
+                      <td data-testid="committee-tilt-stance">
+                        {stanceLabel(tilt.aggregate_stance)}
+                      </td>
+                      <td data-testid="committee-tilt-weight">{tilt.aggregate_weight_bps}</td>
+                      <td data-testid="committee-tilt-agent-count">{tilt.agent_count}</td>
+                      <td data-testid="committee-tilt-last-updated">
+                        {formatTimestamp(tilt.last_updated)}
                       </td>
                     </tr>
                   ))}

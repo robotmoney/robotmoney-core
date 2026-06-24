@@ -1,11 +1,12 @@
 /**
- * CommitteePanel — RTL unit tests (issue #1044 AC-5 / Test plan item 4).
+ * CommitteePanel — RTL unit tests (issue #1054 AC).
  *
  * Covers:
  *   - Loading state shows loading text.
  *   - Error state renders the API error message.
- *   - Empty state (no agents, no votes) shows empty notices.
+ *   - Empty state (no agents, no votes, no tilts) shows empty notices.
  *   - Agents table renders agent_id, address, and registration date.
+ *   - Tilts table renders per-vault aggregate stance and weight (AC2).
  *   - Votes table renders stance, weight, confidence, and a rationale link.
  *   - Signalling-only disclosure is always visible.
  *   - Agent click filters votes by agent.
@@ -16,6 +17,7 @@ import { CommitteePanel } from "../../src/components/CommitteePanel";
 import type {
   CommitteeAgentsResponse,
   CommitteeVotesResponse,
+  CommitteeTiltsResponse,
   FetchLike,
 } from "../../src/lib/committeeApi";
 
@@ -91,13 +93,49 @@ const emptyVotes: CommitteeVotesResponse = {
   indexed_at: "2026-06-23T00:00:00Z",
 };
 
+const twoTilts: CommitteeTiltsResponse = {
+  tilts: [
+    {
+      vault: "0x1111111111111111111111111111111111111111",
+      aggregate_stance: "overweight",
+      aggregate_weight_bps: 6000,
+      agent_count: 2,
+      last_updated: 1750000200,
+    },
+    {
+      vault: "0x2222222222222222222222222222222222222222",
+      aggregate_stance: "neutral",
+      aggregate_weight_bps: 5000,
+      agent_count: 1,
+      last_updated: 1750001200,
+    },
+  ],
+  block_number: 200,
+  indexed_at: "2026-06-23T00:00:00Z",
+};
+
+const emptyTilts: CommitteeTiltsResponse = {
+  tilts: [],
+  block_number: 1,
+  indexed_at: "2026-06-23T00:00:00Z",
+};
+
 // ─── Fetch mock factory ───────────────────────────────────────────────────────
 
-function makeFetch(agents: CommitteeAgentsResponse, votes: CommitteeVotesResponse): FetchLike {
+function makeFetch(
+  agents: CommitteeAgentsResponse,
+  votes: CommitteeVotesResponse,
+  tilts: CommitteeTiltsResponse = emptyTilts,
+): FetchLike {
   return vi.fn(async (url: string) => {
-    const body: CommitteeAgentsResponse | CommitteeVotesResponse = url.includes("/agents")
-      ? agents
-      : votes;
+    let body: CommitteeAgentsResponse | CommitteeVotesResponse | CommitteeTiltsResponse;
+    if (url.includes("/committee/tilts")) {
+      body = tilts;
+    } else if (url.includes("/agents")) {
+      body = agents;
+    } else {
+      body = votes;
+    }
     return { ok: true as const, status: 200, json: async () => body };
   }) as unknown as FetchLike;
 }
@@ -214,5 +252,40 @@ describe("CommitteePanel", () => {
     const clearBtn = screen.getByTestId("committee-votes-clear-filter");
     fireEvent.click(clearBtn);
     expect(screen.getAllByTestId("committee-vote-stance").length).toBe(2);
+  });
+
+  // ── AC2: per-vault tilt aggregate ──────────────────────────────────────────
+
+  it("renders per-vault tilt aggregate from mocked /v1/committee/tilts response (AC2)", async () => {
+    const fetchFn = makeFetch(twoAgents, twoVotes, twoTilts);
+    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("committee-loading")).toBeNull();
+    });
+
+    // Tilts table should be present
+    expect(screen.getByTestId("committee-tilts-section")).toBeDefined();
+    expect(screen.getByTestId("committee-tilts-table")).toBeDefined();
+
+    const stances = screen.getAllByTestId("committee-tilt-stance");
+    expect(stances.length).toBe(2);
+    expect(stances[0].textContent).toContain("Overweight");
+    expect(stances[1].textContent).toContain("Neutral");
+
+    const weights = screen.getAllByTestId("committee-tilt-weight");
+    expect(weights[0].textContent).toBe("6000");
+    expect(weights[1].textContent).toBe("5000");
+
+    const agentCounts = screen.getAllByTestId("committee-tilt-agent-count");
+    expect(agentCounts[0].textContent).toBe("2");
+  });
+
+  it("shows empty tilt notice when /v1/committee/tilts returns empty list", async () => {
+    const fetchFn = makeFetch(twoAgents, emptyVotes, emptyTilts);
+    render(<CommitteePanel explorerApiUrl={BASE_URL} fetch={fetchFn} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("committee-loading")).toBeNull();
+    });
+    expect(screen.getByTestId("committee-no-tilts")).toBeDefined();
   });
 });
