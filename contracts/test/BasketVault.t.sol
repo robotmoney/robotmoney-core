@@ -1909,7 +1909,15 @@ contract BasketVaultTest is Test {
     /// @notice SUP-3 (stateful): a real deposit → immediate redeem within the
     ///         deviation band returns no more than was deposited. Exercises the
     ///         mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
-    ///         on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+    ///         on the realized post-swap NAV delta (AZ-BSK-1 fix), and
+    ///         redeem() returns the actual USDC received (AZ-BSK-2 fix).
+    ///
+    ///         Router mock is set to return the stranger's proportional share at 1:1.
+    ///         AZ-BSK-1 fix: stranger is credited realizedDelta shares (not
+    ///         just slippageFloor shares). At 1:1 execution on a 10 000 USDC pool,
+    ///         stranger's fraction = 1000/(10000+1000) = 1/11, so their sell
+    ///         of 1/11 of the basket at 1:1 USDC yields exactly x. The invariant
+    ///         got <= x holds (with equality at 1:1).
     function test_SUP3_statefulDepositRedeemNeverProfits() public {
         vm.prank(admin);
         vault.setMaxSlippageBps(100);
@@ -1921,11 +1929,13 @@ contract BasketVaultTest is Test {
         uint256 x = 1_000e6;
         uint256 shares = _depositAt1to1(stranger, x);
 
-        // Redeem immediately. Mock returns 1:1 USDC for the sold basket tokens.
-        // The vault holds basketToken; sell proceeds come back as USDC.
-        uint256 sellProceeds = (10_000e6 + x); // 1:1 token→USDC across the basket
-        usdc.mint(address(router), sellProceeds);
-        router.setAmountOut(sellProceeds); // generous: still bounded by share fraction
+        // Redeem immediately at 1:1. The stranger's proportional sell is
+        // x / (10_000e6 + x) * totalBasketTokens = x (at 1:1 prices).
+        // Router is set to return x USDC for the stranger's token fraction.
+        // AZ-BSK-2: redeem() now returns the ACTUAL USDC balance delta,
+        // not OZ's previewRedeem estimate — so got == x at 1:1 execution.
+        usdc.mint(address(router), x);
+        router.setAmountOut(x); // 1:1 proportional proceeds for stranger's share
 
         vm.prank(stranger);
         uint256 got = vault.redeem(shares, stranger, stranger);
@@ -1987,6 +1997,146 @@ contract BasketVaultTest is Test {
 
         uint256 shares = _depositAt1to1(stranger, 1_000e6);
         assertGt(shares, 0, "ORA-4: in-band deposit settles");
+    }
+
+    // ─── AZ-BSK-1: deposit credits realizedDelta not slippage floor ──────────────
+
+    /// @notice AZ-BSK-1: when realized NAV > slippage floor (swap beats the TWAP
+    ///         worst-case), the depositor is credited realizedDelta shares, not just
+    ///         the slippage-discounted floor.  Pre-fix, the floor capped credit even
+    ///         when swaps captured extra value; post-fix the full delta is minted.
+    function test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100); // 1% slippage
+
+        // Seed pool so the vault has non-zero NAV.
+        _depositAt1to1(address(this), 10_000e6);
+
+        uint256 depositAmount = 1_000e6;
+
+        // Configure swap to deliver MORE than the slippage-discounted floor.
+        // At 1% slippage, floor = 990 USDC of tokens. Deliver 1000 (full 1:1).
+        uint256 swapOut = depositAmount; // 1:1 → realized > floor
+        basketToken.mint(address(router), swapOut);
+        router.setAmountOut(swapOut);
+
+        uint256 taBefore = vault.totalAssets();
+
+        usdc.mint(stranger, depositAmount);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 realizedDelta = vault.totalAssets() - taBefore;
+        uint256 slippageFloor = depositAmount * (10_000 - 100) / 10_000; // 990e6
+
+        assertGt(realizedDelta, slippageFloor, "swap must beat slippage floor for this test");
+
+        // AZ-BSK-1: the depositor's balance must match the return value.
+        assertEq(vault.balanceOf(stranger), shares, "stranger balance must match minted shares");
+
+        // Pre-fix shares would have been based on slippageFloor credit.
+        // Post-fix shares use realizedDelta. Compute both to verify the fix gives more.
+        // shares = realizedDelta * (supplyBefore + 10^18) / (taBefore + 1), Floor
+        // Pre-fix: floorShares = slippageFloor * (supplyBefore + 10^18) / (taBefore + 1)
+        // Since realizedDelta > slippageFloor, post-fix shares > pre-fix shares.
+        uint256 floorBasedShares = vault.previewDeposit(depositAmount);
+        assertGt(shares, floorBasedShares, "AZ-BSK-1: fix yields more shares than old floor cap");
+    }
+
+    /// @notice AZ-BSK-1: when realized NAV equals the slippage floor (worst-case
+    ///         execution), the depositor is still credited the realized delta
+    ///         (which equals the floor in this case).
+    function test_AZBSK1_depositAtFloorCreditsFloor() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100);
+
+        _depositAt1to1(address(this), 10_000e6);
+
+        uint256 depositAmount = 1_000e6;
+        uint256 swapOut = depositAmount * (10_000 - 100) / 10_000; // exactly at floor
+        basketToken.mint(address(router), swapOut);
+        router.setAmountOut(swapOut);
+
+        uint256 taBefore = vault.totalAssets();
+
+        usdc.mint(stranger, depositAmount);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 shares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 realizedDelta = vault.totalAssets() - taBefore;
+        uint256 slippageFloor = depositAmount * (10_000 - 100) / 10_000;
+        // At-floor execution: realizedDelta == slippageFloor.
+        assertEq(realizedDelta, slippageFloor, "at-floor test: realized must equal floor");
+        // Shares must equal the previewDeposit floor estimate (realizedDelta == floor).
+        assertEq(shares, vault.previewDeposit(depositAmount), "AZ-BSK-1: at-floor shares match previewDeposit");
+    }
+
+    // ─── AZ-BSK-2: deposit()/redeem() return actual amounts ──────────────────────
+
+    /// @notice AZ-BSK-2: BasketVault.deposit() returns the ACTUAL minted share
+    ///         count, not OZ's previewDeposit estimate. When realized NAV > floor,
+    ///         previewDeposit underestimates; the override must return the true count.
+    function test_AZBSK2_depositReturnsActualMintedShares() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100);
+
+        _depositAt1to1(address(this), 10_000e6);
+
+        uint256 depositAmount = 1_000e6;
+        // Swap yields above the slippage floor (1:1, floor = 990e6).
+        uint256 swapOut = depositAmount; // 1:1
+        basketToken.mint(address(router), swapOut);
+        router.setAmountOut(swapOut);
+
+        uint256 previewShares = vault.previewDeposit(depositAmount);
+
+        usdc.mint(stranger, depositAmount);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 returnedShares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 actualBalance = vault.balanceOf(stranger);
+
+        // AZ-BSK-2: return value must equal actual minted shares, not previewDeposit.
+        assertEq(returnedShares, actualBalance, "AZ-BSK-2: deposit() return must equal actual minted");
+        // When realized NAV > floor, actual > preview.
+        assertGt(returnedShares, previewShares, "AZ-BSK-2: actual shares must exceed previewDeposit floor");
+    }
+
+    /// @notice AZ-BSK-2: BasketVault.redeem() returns the ACTUAL USDC withdrawn,
+    ///         not OZ's previewRedeem estimate. Confirms PortfolioRouter slippage
+    ///         guards are evaluated against accurate amounts.
+    function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public {
+        vm.prank(admin);
+        vault.setMaxSlippageBps(100);
+
+        _depositAt1to1(address(this), 10_000e6);
+
+        uint256 depositAmount = 1_000e6;
+        uint256 shares = _depositAt1to1(stranger, depositAmount);
+
+        // Redeem: swap returns 1:1 for stranger's fraction of the basket.
+        // Stranger's fraction ≈ 1000/11000 of 11000e6 = 1000e6 tokens.
+        uint256 swapBack = depositAmount; // 1:1 USDC for basket tokens
+        usdc.mint(address(router), swapBack);
+        router.setAmountOut(swapBack);
+
+        uint256 previewAssets = vault.previewRedeem(shares);
+
+        uint256 usdcBefore = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        uint256 returnedAssets = vault.redeem(shares, stranger, stranger);
+        uint256 actualReceived = usdc.balanceOf(stranger) - usdcBefore;
+
+        // AZ-BSK-2: return value must equal actual USDC received.
+        assertEq(returnedAssets, actualReceived, "AZ-BSK-2: redeem() return must equal actual USDC received");
+        // Actual proceeds should exceed the conservative previewRedeem floor.
+        assertGt(returnedAssets, previewAssets, "AZ-BSK-2: actual proceeds must exceed previewRedeem floor");
     }
 
     // ─── IRetirableVault: retire/unretire (FS-VLT-19) ────────────────────────
