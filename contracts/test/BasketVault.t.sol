@@ -15,6 +15,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -2154,6 +2155,106 @@ contract BasketVaultTest is Test {
             returnedAssets,
             previewAssets,
             "AZ-BSK-2: actual proceeds must exceed previewRedeem floor"
+        );
+    }
+
+    // ─── AZ-BSK-3: deposit NAV excludes idle USDC from excluded adapters ────────
+
+    /// @notice AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
+    ///         adapter), a new deposit prices shares against the active-adapter-only
+    ///         NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
+    ///         new depositor from capturing recovery value that belongs to existing
+    ///         holders who bore the original loss.
+    ///
+    ///         Setup: seed the vault at 1:1, inject idle USDC directly to simulate
+    ///         the proceeds of an excluded adapter sitting un-deployed, then deposit
+    ///         and verify the minted shares match the eligible-NAV formula.
+    function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public {
+        // Seed vault so it has non-zero NAV and share supply.
+        _depositAt1to1(address(this), 10_000e6);
+
+        // Simulate idle USDC from an excluded adapter (bypass emergency unwind
+        // to avoid the depositsPaused gate; the relevant invariant is the idle
+        // USDC balance, not how it arrived).
+        uint256 idleUsdc = 5_000e6;
+        usdc.mint(address(vault), idleUsdc);
+
+        // Snapshot pre-deposit state (mirrors what _deposit() does internally).
+        uint256 supplyBefore = vault.totalSupply();
+        uint256 taBefore = vault.totalAssets(); // includes idleUsdc
+        uint256 navBefore = taBefore - usdc.balanceOf(address(vault)); // active-adapter NAV only
+
+        assertGt(idleUsdc, 0, "idle USDC must be non-zero for this test to be meaningful");
+        assertGt(navBefore, 0, "active-adapter NAV must be positive for a valid deposit");
+        assertLt(navBefore, taBefore, "eligible NAV must be less than full totalAssets");
+
+        // Configure swap: 1,000 USDC → 1,000 basket tokens (1:1).
+        uint256 depositAmount = 1_000e6;
+        uint256 swapOut = depositAmount; // 1:1 execution
+        basketToken.mint(address(router), swapOut);
+        router.setAmountOut(swapOut);
+
+        usdc.mint(stranger, depositAmount);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), depositAmount);
+        uint256 actualShares = vault.deposit(depositAmount, stranger);
+        vm.stopPrank();
+
+        uint256 realizedDelta = vault.totalAssets() - taBefore; // delta from the swap
+
+        // AZ-BSK-3: expected shares use navBefore (active-adapter NAV) in the
+        // denominator, NOT taBefore (full NAV including idle USDC).
+        // _decimalsOffset() = 18 (large virtual offset to prevent first-deposit
+        // inflation attacks; BasketVault.decimals() returns 6, offset = 18).
+        uint256 decimalsOffset = 1e18; // 10 ** _decimalsOffset()
+        uint256 expectedShares = Math.mulDiv(
+            realizedDelta, supplyBefore + decimalsOffset, navBefore + 1
+        );
+        // OLD (vulnerable) formula would have used taBefore as denominator.
+        uint256 vulnerableShares = Math.mulDiv(
+            realizedDelta, supplyBefore + decimalsOffset, taBefore + 1
+        );
+
+        assertEq(
+            actualShares,
+            expectedShares,
+            "AZ-BSK-3: shares must use eligible-NAV denominator (active tokens only)"
+        );
+        // When idle USDC > 0, the fix gives MORE shares (smaller denominator),
+        // which correctly prices the deposit against only the active-adapter NAV.
+        assertGt(
+            actualShares,
+            vulnerableShares,
+            "AZ-BSK-3: eligible-NAV formula gives more shares than full-NAV (idle USDC excluded)"
+        );
+    }
+
+    /// @notice AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
+    ///         proceeds from excluded adapters). The fix only changes how shares are
+    ///         priced during deposit — it does not alter the NAV accounting.
+    function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public {
+        // Seed with 10,000 USDC worth of basket tokens (all swapped in).
+        _depositAt1to1(address(this), 10_000e6);
+
+        uint256 activeNav = vault.totalAssets(); // = basket token value, no idle USDC
+        assertEq(usdc.balanceOf(address(vault)), 0, "no idle USDC yet");
+
+        // Inject idle USDC simulating an excluded adapter's proceeds.
+        uint256 idleUsdc = 3_000e6;
+        usdc.mint(address(vault), idleUsdc);
+
+        // totalAssets() must include idle USDC — it is part of the vault's NAV
+        // and belongs to existing holders pro-rata.
+        uint256 fullNav = vault.totalAssets();
+        assertEq(
+            fullNav,
+            activeNav + idleUsdc,
+            "AZ-BSK-3: totalAssets() includes idle USDC from excluded adapters unchanged"
+        );
+        assertEq(
+            usdc.balanceOf(address(vault)),
+            idleUsdc,
+            "AZ-BSK-3: idle USDC is held directly in vault"
         );
     }
 
