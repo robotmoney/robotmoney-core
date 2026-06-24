@@ -487,7 +487,7 @@ contract BasketVaultTest is Test {
         // Permissionless: an arbitrary stranger triggers re-absorption.
         address stranger = makeAddr("stranger");
         vm.prank(stranger);
-        vault.reabsorbRemovedAsset(0);
+        vault.reabsorbRemovedAsset(0, 0);
 
         assertEq(basketToken.balanceOf(address(vault)), 0, "reappeared balance consumed");
         assertEq(
@@ -507,7 +507,7 @@ contract BasketVaultTest is Test {
     function test_reabsorbRemovedAsset_revertsForActiveAsset() public {
         basketToken.mint(address(vault), 7 * ONE_USDC);
         vm.expectRevert(BasketVault.AssetInBasket.selector);
-        vault.reabsorbRemovedAsset(0);
+        vault.reabsorbRemovedAsset(0, 0);
     }
 
     /// @notice LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
@@ -537,7 +537,7 @@ contract BasketVaultTest is Test {
             address(basketToken), reappeared, stranger
         );
         vm.prank(stranger);
-        vault.reabsorbRemovedAsset(0); // does not revert (LIFE-6)
+        vault.reabsorbRemovedAsset(0, 0); // does not revert (LIFE-6)
 
         // The reappeared balance left the vault for quarantine — never stranded.
         assertEq(basketToken.balanceOf(address(vault)), 0, "LIFE-6: balance not stranded on vault");
@@ -555,8 +555,60 @@ contract BasketVaultTest is Test {
         vault.removeAsset(0);
         pool.setRevertObserve(true);
         // No balance reappeared; the call returns without reverting or sweeping.
-        vault.reabsorbRemovedAsset(0);
+        vault.reabsorbRemovedAsset(0, 0);
         assertEq(basketToken.balanceOf(ForeignTokenQuarantine.QUARANTINE), 0, "nothing swept");
+    }
+
+    /// @notice AZ-BSK-5: reabsorbRemovedAsset reverts with SlippageExceeded when
+    ///         the caller-supplied minUsdcOut exceeds the actual swap output, so
+    ///         MEV sandwich attacks on NAV recovery cannot extract value below the
+    ///         caller's floor.
+    function test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // Router returns 6 USDC; TWAP floor at 1:1 / 1% slippage = 6.93 USDC.
+        // The router will accept 6 USDC because it is < twapFloor so we need to
+        // set the mock to satisfy the TWAP floor but have the caller's floor higher.
+        // Strategy: set router output to exactly the TWAP floor (6.93 USDC = 6930000
+        // for 6 decimal USDC), then set minUsdcOut above that.
+        // TWAP floor: 7 * ONE_USDC * (10000 - 100) / 10000 = 6930000 (6 decimals).
+        uint256 twapFloor = reappeared * (10_000 - 100) / 10_000; // 6.93 USDC
+        // Router pays out exactly the TWAP floor — swap succeeds at the TWAP guard,
+        // but the caller demands more: minUsdcOut = twapFloor + 1.
+        uint256 usdcOut = twapFloor;
+        router.setAmountOut(usdcOut);
+        usdc.mint(address(router), usdcOut);
+
+        vm.expectRevert(BasketVault.SlippageExceeded.selector);
+        vault.reabsorbRemovedAsset(0, twapFloor + 1);
+    }
+
+    /// @notice AZ-BSK-5: reabsorbRemovedAsset succeeds and credits NAV when the
+    ///         caller-supplied minUsdcOut is at or below the actual swap output.
+    function test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav() public {
+        vm.prank(admin);
+        vault.removeAsset(0);
+
+        uint256 reappeared = 7 * ONE_USDC;
+        basketToken.mint(address(vault), reappeared);
+
+        // Router returns 7 USDC (full 1:1 value, well above TWAP floor and caller's floor).
+        uint256 usdcOut = 7 * ONE_USDC;
+        router.setAmountOut(usdcOut);
+        usdc.mint(address(router), usdcOut);
+
+        uint256 navBefore = vault.totalAssets();
+
+        // Caller supplies minUsdcOut <= actual output → succeeds.
+        uint256 minUsdcOut = 6 * ONE_USDC;
+        vault.reabsorbRemovedAsset(0, minUsdcOut);
+
+        assertEq(basketToken.balanceOf(address(vault)), 0, "reappeared balance consumed");
+        assertEq(vault.totalAssets(), navBefore + usdcOut, "NAV rises by re-absorbed USDC");
     }
 
     /// @notice NC-8: re-adding a token that already has an ACTIVE registry entry

@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -267,6 +267,28 @@ never a revert, even on a degraded pool.
 
 ```solidity
 function test_LIFE6_reabsorbZeroBalanceIsNoOp() public;
+```
+
+### test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded
+
+AZ-BSK-5: reabsorbRemovedAsset reverts with SlippageExceeded when
+the caller-supplied minUsdcOut exceeds the actual swap output, so
+MEV sandwich attacks on NAV recovery cannot extract value below the
+caller's floor.
+
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded() public;
+```
+
+### test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav
+
+AZ-BSK-5: reabsorbRemovedAsset succeeds and credits NAV when the
+caller-supplied minUsdcOut is at or below the actual swap output.
+
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav() public;
 ```
 
 ### test_NC8_addAsset_rejectsActiveDuplicate
