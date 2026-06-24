@@ -2299,7 +2299,11 @@ contract GatewayRouterTest is Test {
     ) internal {
         address leakyDepositor = makeAddr("leakyDepositor");
         address leakyAgent = makeAddr("leakyAgent");
-        address leakyShareReceiver = makeAddr("leakyShareReceiver");
+        // AZ-GW-1: shareReceiver must equal the committer (leakyDepositor) in the
+        // permissionless commit/reveal path. The leaky-custody invariant test still
+        // holds because LeakyRedeemRouterVault leaks shares during redeem regardless
+        // of who the share holder is.
+        address leakyShareReceiver = leakyDepositor;
 
         {
             address[] memory dests = new address[](1);

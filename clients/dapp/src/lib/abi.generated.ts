@@ -1790,6 +1790,11 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
+    name: "ShareReceiverNotAuthorized",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "SharesExceedWithdrawPerPaymentCap",
     inputs: [],
   },

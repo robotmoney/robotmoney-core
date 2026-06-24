@@ -83,6 +83,12 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `revealAuthorization` called in the same block as the commitment.
     ///         Must wait at least one block before revealing.
     error CommitmentTooRecent();
+    /// @notice `revealAuthorization` called with a policy whose `shareReceiver`
+    ///         is not `msg.sender`. In the permissionless commit/reveal path the
+    ///         caller must be the intended share receiver so that vault-share
+    ///         allowances from the receiver cannot be spent by an unauthorized
+    ///         third party (AZ-GW-1 — critical / access-control).
+    error ShareReceiverNotAuthorized();
     /// @notice `depositTo` was called with a destination not in the agent's
     ///         `allowedDestinations` list (when the list is non-empty), or the
     ///         destination is neither the pinned vault nor the router.
@@ -624,6 +630,19 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     function _authorizeAgentInternal(address agent, AgentPolicy calldata p) internal {
         if (agent == address(0)) revert ZeroAddress();
         if (agentOwner[agent] != address(0)) revert AgentAlreadyOwned();
+
+        // AZ-GW-1 (critical): in the permissionless commit/reveal path the caller
+        // must be the intended share receiver. Without this gate an attacker can
+        // name a victim as `shareReceiver`, obtain AGENT_ROLE, and drain the
+        // victim's vault-share allowance via `withdrawFromRouter` by routing USDC
+        // to an attacker-controlled `assetRecipient`. The `ADMIN_ROLE` path
+        // (`authorizeAgent`) is exempt because the caller is a trusted privileged
+        // account; permissionless callers have no implicit authority over a
+        // third-party's share allowances.
+        if (!hasRole(ADMIN_ROLE, msg.sender)) {
+            if (p.shareReceiver != msg.sender) revert ShareReceiverNotAuthorized();
+        }
+
         _validatePolicy(p);
 
         agentOwner[agent] = msg.sender;

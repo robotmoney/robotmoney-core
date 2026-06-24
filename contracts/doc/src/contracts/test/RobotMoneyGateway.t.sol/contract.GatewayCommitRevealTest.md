@@ -1,5 +1,5 @@
 # GatewayCommitRevealTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c509d0100d3df416d312069339974e56f8ecce75/contracts/test/RobotMoneyGateway.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/895f74f9a312639869e61e1d4ba3dfce78950c03/contracts/test/RobotMoneyGateway.t.sol)
 
 **Inherits:**
 Test
@@ -101,6 +101,12 @@ function setUp() public;
 
 ### _defaultPolicy
 
+Returns a valid policy where `shareReceiver == depositor` so that
+commit/reveal tests pass the AZ-GW-1 shareReceiver consent check
+(issue #1055). Callers that need to test with a specific caller
+address other than `depositor` should build the policy inline with
+`shareReceiver` set to that caller.
+
 
 ```solidity
 function _defaultPolicy() internal view returns (IGateway.AgentPolicy memory);
@@ -199,6 +205,31 @@ function test_revealAuthorization_frontRunnerBlockedByAlreadyOwned() public;
 
 ```solidity
 function test_commitAuthorization_sameHashCannotClobberAnotherCommitter() public;
+```
+
+### test_revealAuthorization_revertsWhenShareReceiverIsNotSelf
+
+Attack path: attacker names a victim as `shareReceiver` in the policy.
+The permissionless commit/reveal path must revert with
+`ShareReceiverNotAuthorized` because `msg.sender != p.shareReceiver`.
+Without this guard the attacker would obtain AGENT_ROLE for their own
+agent and drain the victim's vault-share allowances via
+`withdrawFromRouter` to an attacker-controlled `assetRecipient`.
+
+
+```solidity
+function test_revealAuthorization_revertsWhenShareReceiverIsNotSelf() public;
+```
+
+### test_revealAuthorization_succeedsWhenShareReceiverIsSelf
+
+Happy path: depositor names themselves as `shareReceiver`. The
+permissionless commit/reveal path must succeed because
+`msg.sender == p.shareReceiver`.
+
+
+```solidity
+function test_revealAuthorization_succeedsWhenShareReceiverIsSelf() public;
 ```
 
 ### test_commitAuthorization_emitsEvent

@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c509d0100d3df416d312069339974e56f8ecce75/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/895f74f9a312639869e61e1d4ba3dfce78950c03/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -1180,6 +1180,18 @@ Must wait at least one block before revealing.
 
 ```solidity
 error CommitmentTooRecent();
+```
+
+### ShareReceiverNotAuthorized
+`revealAuthorization` called with a policy whose `shareReceiver`
+is not `msg.sender`. In the permissionless commit/reveal path the
+caller must be the intended share receiver so that vault-share
+allowances from the receiver cannot be spent by an unauthorized
+third party (AZ-GW-1 — critical / access-control).
+
+
+```solidity
+error ShareReceiverNotAuthorized();
 ```
 
 ### InvalidDestination
