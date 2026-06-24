@@ -1,5 +1,5 @@
 # RwaVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/vaults/RwaVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/vaults/RwaVault.sol)
 
 **Inherits:**
 [BasketVault](/contracts/vaults/BasketVault.sol/abstract.BasketVault.md)
@@ -219,6 +219,8 @@ True when the vault holds a non-zero balance of any active basket
 asset (the priced RWA token). When false, `totalAssets()` is exactly
 the idle USDC balance and needs no oracle read, so freshness is
 short-circuited for the idle-USDC redemption path (SUP-5).
+RwaVault enforces maxAssets() == 1, so checking only index 0 is
+equivalent to the general loop.
 
 
 ```solidity
@@ -254,6 +256,16 @@ and dump the basket against it (audit 2026-06-19 F-08).
 
 ```solidity
 function setEmergencyUnwindStaleOverride(bool allowed_) external onlyRole(ADMIN_ROLE);
+```
+
+### _guardEmergencyFreshness
+
+Check oracle freshness unless the stale-override flag is set.
+Extracted to avoid duplicating the guard in both emergencyUnwind variants.
+
+
+```solidity
+function _guardEmergencyFreshness() private view;
 ```
 
 ### emergencyUnwind

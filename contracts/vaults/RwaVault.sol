@@ -217,13 +217,12 @@ contract RwaVault is BasketVault {
     ///      asset (the priced RWA token). When false, `totalAssets()` is exactly
     ///      the idle USDC balance and needs no oracle read, so freshness is
     ///      short-circuited for the idle-USDC redemption path (SUP-5).
+    ///      RwaVault enforces maxAssets() == 1, so checking only index 0 is
+    ///      equivalent to the general loop.
     function _holdsPricedRwa() internal view returns (bool) {
-        uint256 len = assets.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!assets[i].active) continue;
-            if (IERC20(assets[i].token).balanceOf(address(this)) > 0) return true;
-        }
-        return false;
+        if (assets.length == 0) return false;
+        AssetInfo storage a = assets[0];
+        return a.active && IERC20(a.token).balanceOf(address(this)) > 0;
     }
 
     // ─── Oracle freshness ─────────────────────────────────────────────
@@ -266,13 +265,17 @@ contract RwaVault is BasketVault {
         emit EmergencyUnwindStaleOverrideUpdated(allowed_);
     }
 
+    /// @dev Check oracle freshness unless the stale-override flag is set.
+    ///      Extracted to avoid duplicating the guard in both emergencyUnwind variants.
+    function _guardEmergencyFreshness() private view {
+        if (!emergencyUnwindStaleOverride) _checkOracleFreshness();
+    }
+
     /// @notice Emergency unwind with Chronicle staleness gate.
     /// @dev Reverts with `StalePriceFeed` when the feed is stale, unless
     ///      `emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
     function emergencyUnwind() public override onlyRole(EMERGENCY_ROLE) {
-        if (!emergencyUnwindStaleOverride) {
-            _checkOracleFreshness();
-        }
+        _guardEmergencyFreshness();
         super.emergencyUnwind();
     }
 
@@ -284,9 +287,7 @@ contract RwaVault is BasketVault {
         override
         onlyRole(EMERGENCY_ROLE)
     {
-        if (!emergencyUnwindStaleOverride) {
-            _checkOracleFreshness();
-        }
+        _guardEmergencyFreshness();
         super.emergencyUnwindWithOverride(tokens);
     }
 
