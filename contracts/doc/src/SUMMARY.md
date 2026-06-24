@@ -159,6 +159,7 @@
     - [UnderPullRouter](contracts/test/GatewayRouter.t.sol/contract.UnderPullRouter.md)
     - [LeakyRedeemRouterVault](contracts/test/GatewayRouter.t.sol/contract.LeakyRedeemRouterVault.md)
     - [GatewayRouterTest](contracts/test/GatewayRouter.t.sol/contract.GatewayRouterTest.md)
+    - [ICGatewayIntegration](contracts/test/ICGatewayIntegration.t.sol/contract.ICGatewayIntegration.md)
     - [MockGateway](contracts/test/InvestmentCommitteePolicy.t.sol/contract.MockGateway.md)
     - [InvestmentCommitteePolicyTest](contracts/test/InvestmentCommitteePolicy.t.sol/contract.InvestmentCommitteePolicyTest.md)
     - [MockVaultTest](contracts/test/MockVault.t.sol/contract.MockVaultTest.md)
