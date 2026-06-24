@@ -149,11 +149,7 @@ contract BlacklistableUSDC is ERC20 {
         isBlacklisted[account] = true;
     }
 
-    function transferFrom(address from, address to, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
         require(!isBlacklisted[from], "USDC: account is blacklisted");
         return super.transferFrom(from, to, amount);
     }
@@ -1239,14 +1235,11 @@ contract PortfolioRouterTest is Test {
         // Deploy fresh USDC + vault + router for this scenario.
         BlacklistableUSDC bUsdc = new BlacklistableUSDC();
         VaultRegistry bRegistry = new VaultRegistry(admin);
-        PortfolioRouter bRouter =
-            new PortfolioRouter(address(bUsdc), address(bRegistry), admin);
+        PortfolioRouter bRouter = new PortfolioRouter(address(bUsdc), address(bRegistry), admin);
 
         BlacklistableVault bVault = new BlacklistableVault(address(bUsdc));
         VaultRegistry.VaultMetadata memory bMeta = VaultRegistry.VaultMetadata({
-            name: "Blacklistable Vault",
-            asset: address(bUsdc),
-            registeredAt: 0
+            name: "Blacklistable Vault", asset: address(bUsdc), registeredAt: 0
         });
 
         vm.startPrank(admin);
@@ -1269,9 +1262,7 @@ contract PortfolioRouterTest is Test {
 
         vm.prank(depositor);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                PortfolioRouter.UsdcLegTransferFailed.selector, address(bVault)
-            )
+            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(bVault))
         );
         bRouter.deposit(amount, new uint256[](0));
     }
@@ -1303,9 +1294,7 @@ contract PortfolioRouterTest is Test {
 
         // Donated USDC is still on the router — the invariant did not consume it.
         assertEq(
-            usdc.balanceOf(address(router)),
-            1 * ONE_USDC,
-            "donated USDC remains after deposit"
+            usdc.balanceOf(address(router)), 1 * ONE_USDC, "donated USDC remains after deposit"
         );
     }
 
