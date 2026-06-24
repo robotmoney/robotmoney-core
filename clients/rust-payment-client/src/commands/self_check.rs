@@ -509,6 +509,8 @@ fn error_name(err: &RmpcError) -> &'static str {
         RmpcError::ErrShareAllowanceInsufficient => "ErrShareAllowanceInsufficient",
         RmpcError::ErrAgentWithdrawLogMissing { .. } => "ErrAgentWithdrawLogMissing",
         RmpcError::ErrVoteAlreadyCast { .. } => "ErrVoteAlreadyCast",
+        RmpcError::ErrNotAllowlisted => "ErrNotAllowlisted",
+        RmpcError::ErrIcContractNotConfigured => "ErrIcContractNotConfigured",
     }
 }
 
