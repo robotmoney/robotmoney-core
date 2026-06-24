@@ -2207,11 +2207,13 @@ contract BasketVaultTest is Test {
         // _decimalsOffset() = 18 (large virtual offset to prevent first-deposit
         // inflation attacks; BasketVault.decimals() returns 6, offset = 18).
         uint256 decimalsOffset = 1e18; // 10 ** _decimalsOffset()
-        uint256 expectedShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, navBefore + 1);
+        uint256 expectedShares = Math.mulDiv(
+            realizedDelta, supplyBefore + decimalsOffset, navBefore + 1
+        );
         // OLD (vulnerable) formula would have used taBefore as denominator.
-        uint256 vulnerableShares =
-            Math.mulDiv(realizedDelta, supplyBefore + decimalsOffset, taBefore + 1);
+        uint256 vulnerableShares = Math.mulDiv(
+            realizedDelta, supplyBefore + decimalsOffset, taBefore + 1
+        );
 
         assertEq(
             actualShares,
