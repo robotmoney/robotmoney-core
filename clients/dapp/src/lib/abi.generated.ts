@@ -2425,6 +2425,13 @@ export const vaultAbiGenerated = [
   },
   {
     type: "function",
+    name: "retire",
+    inputs: [],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "symbol",
     inputs: [],
     outputs: [
@@ -2513,6 +2520,13 @@ export const vaultAbiGenerated = [
         internalType: "bool",
       },
     ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "unretire",
+    inputs: [],
+    outputs: [],
     stateMutability: "nonpayable",
   },
   {

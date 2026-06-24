@@ -1,5 +1,5 @@
 # IRetirableVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/VaultRegistry.sol)
 
 Minimal view the registry needs to drive the vault deposit-halt leg of
 the unified governance `retire()` action (DI-2). Declared as an

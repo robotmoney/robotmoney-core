@@ -114,4 +114,6 @@
 - [VaultForkRegressions](VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
 - [MockDefaultWeightsRouter](VaultRegistry.t.sol/contract.MockDefaultWeightsRouter.md)
 - [MockRetirableVault](VaultRegistry.t.sol/contract.MockRetirableVault.md)
+- [MockBasketLikeVault](VaultRegistry.t.sol/contract.MockBasketLikeVault.md)
+- [RevertingRetireVault](VaultRegistry.t.sol/contract.RevertingRetireVault.md)
 - [VaultRegistryTest](VaultRegistry.t.sol/contract.VaultRegistryTest.md)

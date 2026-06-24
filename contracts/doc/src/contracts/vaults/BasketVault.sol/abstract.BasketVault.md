@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -208,6 +208,19 @@ bool public shutdown
 
 ```solidity
 bool public depositsPaused
+```
+
+
+### registry
+Linked `VaultRegistry`. Set once by `ADMIN_ROLE` via `setRegistry`.
+The registry is the only address permitted to call `retire()` /
+`unretire()`, so the unified governance retire action (registry
+status flip + vault deposit-halt) always lands atomically (DI-2,
+FS-VLT-19).
+
+
+```solidity
+address public registry
 ```
 
 
@@ -760,6 +773,49 @@ Apply the configured max-slippage haircut to a USDC value.
 function _applySlippage(uint256 usdcValue) internal view returns (uint256);
 ```
 
+### setRegistry
+
+Set the linked `VaultRegistry` once. Restricted to `ADMIN_ROLE`.
+The registry is the only address permitted to call `retire()` /
+`unretire()`; this dedicated link keeps the registry's authority
+over the vault narrow (deposit-halt only, not full admin) while
+letting the unified governance retire action land atomically.
+
+
+```solidity
+function setRegistry(address newRegistry) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`newRegistry`|`address`|Address of the `VaultRegistry` (must not be zero).|
+
+
+### retire
+
+Hard-stop direct deposits. Callable ONLY by the linked registry,
+which sets registry status to `Retired` in the same call (atomic
+unified governance retire, DI-2 / FS-VLT-19). Idempotent.
+Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
+revoked; ADR-0009).
+
+
+```solidity
+function retire() external;
+```
+
+### unretire
+
+Re-open direct deposits (governance abort). Callable ONLY by the
+linked registry, mirroring the `Retired → Active` transition in
+docs/architecture.md §4.7. Idempotent.
+
+
+```solidity
+function unretire() external;
+```
+
 ### pause
 
 
@@ -1175,6 +1231,30 @@ function _executeSwap(
 ```
 
 ## Events
+### RegistrySet
+Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
+
+
+```solidity
+event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
+```
+
+### Retired
+Emitted when the registry calls `retire()` and halts direct deposits.
+
+
+```solidity
+event Retired();
+```
+
+### Unretired
+Emitted when the registry calls `unretire()` and re-opens direct deposits.
+
+
+```solidity
+event Unretired();
+```
+
 ### AssetAdded
 
 ```solidity
@@ -1357,6 +1437,22 @@ error PerDepositCapExceeded();
 
 ```solidity
 error ZeroAddress();
+```
+
+### OnlyRegistry
+`retire()` / `unretire()` caller is not the linked registry.
+
+
+```solidity
+error OnlyRegistry();
+```
+
+### RegistryAlreadySet
+`setRegistry` was called more than once; registry is set-once.
+
+
+```solidity
+error RegistryAlreadySet();
 ```
 
 ### VaultShutdown

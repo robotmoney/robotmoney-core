@@ -70,6 +70,12 @@ contract MockRouterVault is ERC20 {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
+    /// @dev IRetirableVault deposit-halt stubs. MockRouterVault has no registry
+    ///      link, so these are no-ops that satisfy the interface without reverting.
+    function retire() external {}
+
+    function unretire() external {}
+
     function redeem(uint256 shares, address receiver, address owner)
         external
         returns (uint256 assets)

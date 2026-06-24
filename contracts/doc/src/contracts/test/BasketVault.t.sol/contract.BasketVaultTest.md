@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -893,6 +893,51 @@ guard does not block ordinary, market-consistent settlement.
 
 ```solidity
 function test_ORA4_withinBandSettles() public;
+```
+
+### test_retire_setsDepositsPaused
+
+FS-VLT-19: retire() sets depositsPaused = true and emits Retired.
+
+
+```solidity
+function test_retire_setsDepositsPaused() public;
+```
+
+### test_unretire_clearsDepositsPaused
+
+FS-VLT-19: unretire() clears depositsPaused and emits Unretired.
+
+
+```solidity
+function test_unretire_clearsDepositsPaused() public;
+```
+
+### test_retire_revertsForNonRegistry
+
+retire() reverts when caller is not the linked registry.
+
+
+```solidity
+function test_retire_revertsForNonRegistry() public;
+```
+
+### test_unretire_revertsForNonRegistry
+
+unretire() reverts when caller is not the linked registry.
+
+
+```solidity
+function test_unretire_revertsForNonRegistry() public;
+```
+
+### test_setRegistry_revertsOnSecondCall
+
+setRegistry() is set-once; a second call reverts RegistryAlreadySet.
+
+
+```solidity
+function test_setRegistry_revertsOnSecondCall() public;
 ```
 
 ## Events
