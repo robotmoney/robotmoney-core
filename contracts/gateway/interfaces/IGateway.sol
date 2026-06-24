@@ -3,6 +3,8 @@
 // (See also: Plan tracking issue #109 §3.2 — RobotMoneyGateway.sol)
 pragma solidity ^0.8.24;
 
+import {IInvestmentCommitteePolicy} from "./IInvestmentCommitteePolicy.sol";
+
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
 /// @dev Per the MVP plan (`Plan tracking issue #109` §2.2), the gateway
@@ -371,6 +373,26 @@ interface IGateway {
     ///         agent's lifecycle.
     function unpause() external;
 
+    /// @notice Set or update the Investment Committee policy contract address.
+    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
+    /// @param policy_ Address of the deployed `InvestmentCommitteePolicy` contract,
+    ///                or `address(0)` to disable committee routing.
+    function setICPolicy(address policy_) external;
+
+    /// @notice Forward a committee agent registration to the IC policy contract.
+    ///         Restricted to `ADMIN_ROLE`. Reverts if `icPolicy` is not set.
+    /// @param agent    Address to register on the IC contract.
+    /// @param agentId_ Human-readable label (e.g. "athena-v1").
+    function committeeRegister(address agent, string calldata agentId_) external;
+
+    /// @notice Forward a signed committee vote to the IC policy contract.
+    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set.
+    /// @param p  All vote fields packed into a `VoteParams` struct.
+    /// @return voteId  Index of the newly appended vote in the IC contract.
+    function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
+        external
+        returns (uint256 voteId);
+
     // -------------------------------------------------------------------
     // Views
     // -------------------------------------------------------------------
@@ -389,6 +411,9 @@ interface IGateway {
 
     /// @notice Whether the gateway is currently paused.
     function paused() external view returns (bool);
+
+    /// @notice Investment Committee policy contract, or `address(0)` if not configured.
+    function icPolicy() external view returns (IInvestmentCommitteePolicy);
 
     /// @notice Recorded owner (depositor EOA) for `agent`, or `address(0)`
     ///         if no policy is recorded.

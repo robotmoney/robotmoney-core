@@ -11,6 +11,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
 import {IPortfolioRouter} from "./interfaces/IPortfolioRouter.sol";
+import {IInvestmentCommitteePolicy} from "./interfaces/IInvestmentCommitteePolicy.sol";
 
 /// @title RobotMoneyGateway
 /// @notice Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC from
@@ -102,6 +103,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `withdraw()` USDC balance did not increase by the expected amount,
     ///         indicating a malicious or fee-on-transfer vault.
     error UnexpectedAssetsReceived();
+    /// @notice `committeeRegister()` or `committeeVoteSubmit()` called but no IC
+    ///         policy contract is configured (`icPolicy == address(0)`).
+    error ICPolicyNotSet();
 
     // -------------------------------------------------------------------
     // Constants
@@ -271,6 +275,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
 
     /// @notice Stop-the-world flag.
     bool private _paused;
+
+    /// @notice Investment Committee Policy contract. When set, `committeeRegister`
+    ///         and `committeeVoteSubmit` forward calls here. Settable by
+    ///         `ADMIN_ROLE` via `setICPolicy`. `address(0)` means not configured.
+    IInvestmentCommitteePolicy public icPolicy;
 
     // ─── Last-admin floor (ACL-3 / F-06) ──────────────────────────────
     //
@@ -1347,6 +1356,63 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
                 idempotencyKey
             )
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Investment Committee routing (issue #1049)
+    // -------------------------------------------------------------------
+
+    /// @notice Emitted when the IC policy contract address is set or updated.
+    /// @param by     Address that called `setICPolicy` (must hold `ADMIN_ROLE`).
+    /// @param policy New IC policy contract address (`address(0)` clears it).
+    event ICPolicySet(address indexed by, address indexed policy);
+
+    /// @notice Set or update the Investment Committee policy contract address.
+    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
+    /// @param policy_ Address of the deployed `InvestmentCommitteePolicy` contract,
+    ///                or `address(0)` to disable committee routing.
+    function setICPolicy(address policy_) external onlyRole(ADMIN_ROLE) {
+        icPolicy = IInvestmentCommitteePolicy(policy_);
+        emit ICPolicySet(msg.sender, policy_);
+    }
+
+    /// @notice Forward a committee agent registration to the IC policy contract.
+    ///         Restricted to `ADMIN_ROLE` (mirrors IC contract's own `ADMIN_ROLE`
+    ///         requirement on `registerAgent`). Reverts if `icPolicy` is not set.
+    ///
+    ///         All committee writes pass through the gateway so that the IC
+    ///         contract's `onlyGateway` modifier enforcement is the single
+    ///         choke point — no committee side channel exists.
+    ///
+    /// @param agent    Address to grant `COMMITTEE_AGENT_ROLE` on the IC contract.
+    /// @param agentId_ Human-readable label (e.g. "athena-v1").
+    function committeeRegister(address agent, string calldata agentId_)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
+        icPolicy.registerAgent(agent, agentId_);
+    }
+
+    /// @notice Forward a signed committee vote to the IC policy contract.
+    ///         Restricted to `AGENT_ROLE`. Reverts if `icPolicy` is not set or
+    ///         if the IC contract's own guards fail (agent not allowlisted,
+    ///         invalid vote fields, etc.).
+    ///
+    ///         The gateway is the sole permitted caller of `IC.submitVote`
+    ///         (enforced by the IC contract's `onlyGateway` modifier). This
+    ///         function is the only path through which an agent may reach the
+    ///         IC contract.
+    ///
+    /// @param p  All vote fields packed into a `VoteParams` struct.
+    /// @return voteId  Index of the newly appended vote in the IC contract.
+    function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
+        external
+        onlyRole(AGENT_ROLE)
+        returns (uint256 voteId)
+    {
+        if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
+        voteId = icPolicy.submitVote(p);
     }
 
     /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,

@@ -1,5 +1,5 @@
 # DeployInvestmentCommitteePolicy
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a7ac64337cc2843fe9fad5c808ffb035e51d4697/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c509d0100d3df416d312069339974e56f8ecce75/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
 
 **Inherits:**
 Script
@@ -9,14 +9,17 @@ DeployInvestmentCommitteePolicy
 
 Foundry deploy script for the InvestmentCommitteePolicy contract.
 Deploys InvestmentCommitteePolicy with the given admin and gateway
-addresses and writes a deployment JSON readable by the smoke-test
-fixture and off-chain tooling.
+addresses, wires the IC policy into the gateway (`setICPolicy`),
+and grants the gateway IC's `ADMIN_ROLE` so it can forward
+`committeeRegister` calls to the IC contract on behalf of the admin.
+Writes a deployment JSON readable by the smoke-test fixture and
+off-chain tooling.
 Required env vars:
-ADMIN_ADDRESS    — receives DEFAULT_ADMIN_ROLE and ADMIN_ROLE;
-may then call registerAgent / revokeAgent.
-GATEWAY_ADDRESS  — deployed RobotMoneyGateway address; all
-committee writes (register, voteSubmit) must
-originate from this address.
+ADMIN_ADDRESS    — receives DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC;
+must also hold ADMIN_ROLE on the gateway (for
+setICPolicy and gateway grantRole).
+GATEWAY_ADDRESS  — deployed RobotMoneyGateway address; all committee
+writes (register, voteSubmit) must originate here.
 Optional env vars:
 DEPLOYMENT_OUT   — path for the output JSON
 (default: "deployments/ic-policy-<chain_id>.json")
@@ -26,7 +29,8 @@ DEPLOYMENT_OUT   — path for the output JSON
 ### run
 
 Forge broadcast entrypoint. Reads env vars, deploys the
-InvestmentCommitteePolicy contract, and writes a deployment JSON.
+InvestmentCommitteePolicy contract, wires it into the gateway,
+and writes a deployment JSON.
 
 
 ```solidity
@@ -53,7 +57,7 @@ function runInProcessWith(address admin_, address gateway_)
 
 |Name|Type|Description|
 |----|----|-----------|
-|`admin_`|`address`|  Address to receive DEFAULT_ADMIN_ROLE and ADMIN_ROLE.|
+|`admin_`|`address`|  Address to receive DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC. Must also hold ADMIN_ROLE on the gateway.|
 |`gateway_`|`address`|Deployed RobotMoneyGateway address.|
 
 **Returns**
@@ -68,6 +72,22 @@ function runInProcessWith(address admin_, address gateway_)
 
 ```solidity
 function _deploy(address admin_, address gateway_) internal returns (Deployed memory d);
+```
+
+### _wireGateway
+
+Wire the deployed IC policy into the gateway.
+1. Call `gateway.setICPolicy(policy)` — requires ADMIN_ROLE on gateway.
+2. Grant IC's `ADMIN_ROLE` to the gateway so it can forward
+`committeeRegister` calls — requires DEFAULT_ADMIN_ROLE on IC
+(held by the admin set at IC construction time).
+Must be called in a context where `msg.sender` holds ADMIN_ROLE on
+the gateway AND DEFAULT_ADMIN_ROLE on the IC contract (i.e. the
+same admin address supplied to both constructors).
+
+
+```solidity
+function _wireGateway(Deployed memory d) internal;
 ```
 
 ### _logResult

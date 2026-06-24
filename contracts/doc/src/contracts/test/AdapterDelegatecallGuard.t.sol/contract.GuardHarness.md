@@ -1,5 +1,5 @@
 # GuardHarness
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/a7ac64337cc2843fe9fad5c808ffb035e51d4697/contracts/test/AdapterDelegatecallGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c509d0100d3df416d312069339974e56f8ecce75/contracts/test/AdapterDelegatecallGuard.t.sol)
 
 Library-consumer harness so we can test `requireNoDelegatecall`
 with `vm.expectRevert` against the library's custom error.
