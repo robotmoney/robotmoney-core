@@ -294,7 +294,9 @@ fn registry_register_list() {
                 }
             }
         }
-        result.unwrap_or_else(|| panic!("listVaults never returned vault after registerVault: {last_err}"))
+        result.unwrap_or_else(|| {
+            panic!("listVaults never returned vault after registerVault: {last_err}")
+        })
     };
     assert_eq!(
         vaults.len(),
