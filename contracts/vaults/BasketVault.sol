@@ -384,6 +384,10 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      nevertheless deficient.
     error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
 
+    /// @dev AZ-BSK-5: raised when the caller-supplied `minUsdcOut` floor on
+    ///      `reabsorbRemovedAsset` is not met by the swap output.
+    error SlippageExceeded();
+
     // ─── Constructor ─────────────────────────────────────────────────
 
     /// @param admin_              Receives ADMIN_ROLE (cold/multisig key for
@@ -1112,9 +1116,17 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      no-stranded-asset invariant without arbitrary admin routing. The
     ///      min-out is TWAP-derived and slippage-bounded exactly like the
     ///      proportional-withdraw sell leg, so the swap fails closed if the
-    ///      oracle is unavailable or the price is manipulated.
-    /// @param index Registry index of an inactive (removed) basket asset.
-    function reabsorbRemovedAsset(uint256 index) external nonReentrant {
+    ///      oracle is unavailable or the price is manipulated. The additional
+    ///      caller-supplied minUsdcOut is checked against the actual received
+    ///      amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+    /// @param index      Registry index of an inactive (removed) basket asset.
+    /// @param minUsdcOut Caller-supplied slippage floor (in USDC raw units).
+    ///                   Reverts with SlippageExceeded when the swap output is
+    ///                   below this floor, preventing MEV sandwich attacks on
+    ///                   NAV recovery. Pass 0 to use only the TWAP-derived
+    ///                   floor. Only enforced on the pool-healthy path; the
+    ///                   degraded-pool path quarantines instead of swapping.
+    function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant {
         AssetInfo memory assetInfo = assets[index]; // reverts on OOB index
         // Only inactive (removed) entries qualify: active assets are already
         // counted in NAV and are sold proportionally on withdrawal.
@@ -1137,9 +1149,18 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // the reappeared balance is always actionable — `reabsorbRemovedAsset`
         // can never revert-and-strand (LIFE-6). The floor read reuses the existing
         // self-only `emergencyTwapUsdcValue` so its revert is catchable.
+        //
+        // AZ-BSK-5: enforce the caller-supplied minUsdcOut with a stable
+        // SlippageExceeded error so off-chain consumers get a consistent
+        // revert surface. The TWAP-derived floor is the worst-case bound on
+        // the swap output; if it falls below the caller's floor the swap
+        // cannot be guaranteed to satisfy minUsdcOut, so we revert early.
         try this.emergencyTwapUsdcValue(assetInfo, bal) returns (uint256 twapValue) {
-            // Pool healthy: swap to USDC into NAV under the slippage-bounded floor.
-            _emergencyUnwindAsset(assetInfo, _applySlippage(twapValue));
+            // Pool healthy: reject early if TWAP floor undercuts caller's minimum,
+            // then swap to USDC into NAV under the TWAP-derived floor.
+            uint256 floor = _applySlippage(twapValue);
+            if (floor < minUsdcOut) revert SlippageExceeded();
+            _emergencyUnwindAsset(assetInfo, floor);
         } catch {
             // Pool degraded: TWAP unavailable. Sweep rather than strand (INV-1);
             // `sweep` emits ForeignTokenQuarantined(token, amount, caller).

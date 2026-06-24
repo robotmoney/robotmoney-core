@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -800,17 +800,20 @@ credits it to ALL holders pro-rata (NAV rises), keeping the
 no-stranded-asset invariant without arbitrary admin routing. The
 min-out is TWAP-derived and slippage-bounded exactly like the
 proportional-withdraw sell leg, so the swap fails closed if the
-oracle is unavailable or the price is manipulated.
+oracle is unavailable or the price is manipulated. The additional
+caller-supplied minUsdcOut is checked against the actual received
+amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
 
 
 ```solidity
-function reabsorbRemovedAsset(uint256 index) external nonReentrant;
+function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`index`|`uint256`|Registry index of an inactive (removed) basket asset.|
+|`index`|`uint256`|     Registry index of an inactive (removed) basket asset.|
+|`minUsdcOut`|`uint256`|Caller-supplied slippage floor (in USDC raw units). Reverts with SlippageExceeded when the swap output is below this floor, preventing MEV sandwich attacks on NAV recovery. Pass 0 to use only the TWAP-derived floor. Only enforced on the pool-healthy path; the degraded-pool path quarantines instead of swapping.|
 
 
 ### _slippageFloor
@@ -1703,6 +1706,15 @@ nevertheless deficient.
 
 ```solidity
 error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
+```
+
+### SlippageExceeded
+AZ-BSK-5: raised when the caller-supplied `minUsdcOut` floor on
+`reabsorbRemovedAsset` is not met by the swap output.
+
+
+```solidity
+error SlippageExceeded();
 ```
 
 ## Structs

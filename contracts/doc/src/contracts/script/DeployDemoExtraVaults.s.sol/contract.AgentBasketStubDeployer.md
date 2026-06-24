@@ -1,5 +1,5 @@
 # AgentBasketStubDeployer
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/script/DeployDemoExtraVaults.s.sol)
 
 One-shot batch deployer for the AgentTokenVault devnet basket
 stand-ins (PRD §11.3 — BNKR/JUNO/RM, three real-asset demo tokens)

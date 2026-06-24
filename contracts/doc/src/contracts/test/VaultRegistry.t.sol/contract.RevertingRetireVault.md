@@ -1,5 +1,5 @@
 # RevertingRetireVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/VaultRegistry.t.sol)
 
 Vault whose retire() always reverts — used to assert that
 VaultRegistry.setVaultStatus propagates the revert (AZ-REG-1 fix).

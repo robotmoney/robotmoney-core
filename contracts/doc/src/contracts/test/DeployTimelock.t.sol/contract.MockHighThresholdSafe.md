@@ -1,5 +1,5 @@
 # MockHighThresholdSafe
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/b58df0d9705fd40d8110bd43d533f82a20b8ace3/contracts/test/DeployTimelock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/DeployTimelock.t.sol)
 
 Minimal stub that mimics a compliant 2-of-3 Safe — `getThreshold()` returns 2.
 Used as the SAFE_ADDRESS in setUp() so DeployTimelock's code-length and
