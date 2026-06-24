@@ -113,14 +113,10 @@ export function CommitteeAccountLayer(props: CommitteeAccountLayerProps) {
         <p data-testid="committee-account-loading">Loading vote history…</p>
       )}
 
-      {props.walletAddress && error && (
-        <p data-testid="committee-account-error">Error: {error}</p>
-      )}
+      {props.walletAddress && error && <p data-testid="committee-account-error">Error: {error}</p>}
 
       {props.walletAddress && !loading && !error && votes.length === 0 && (
-        <p data-testid="committee-account-no-votes">
-          No committee votes found for this address.
-        </p>
+        <p data-testid="committee-account-no-votes">No committee votes found for this address.</p>
       )}
 
       {props.walletAddress && !loading && !error && votes.length > 0 && (
@@ -138,9 +134,7 @@ export function CommitteeAccountLayer(props: CommitteeAccountLayerProps) {
           <tbody>
             {votes.map((vote) => (
               <tr key={vote.vote_id} data-testid={`committee-account-vote-row-${vote.vote_id}`}>
-                <td data-testid="committee-account-vote-date">
-                  {formatTimestamp(vote.timestamp)}
-                </td>
+                <td data-testid="committee-account-vote-date">{formatTimestamp(vote.timestamp)}</td>
                 <td data-testid="committee-account-vote-vault">
                   <code>{vote.vault.slice(0, 10)}…</code>
                 </td>

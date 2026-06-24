@@ -160,9 +160,7 @@ export class CommitteeApiClient {
    * Account-scope endpoint: GET /v1/accounts/:address/committee-votes
    */
   async getAccountCommitteeVotes(address: string): Promise<AccountCommitteeVotesResponse> {
-    return this.get<AccountCommitteeVotesResponse>(
-      `/v1/accounts/${address}/committee-votes`,
-    );
+    return this.get<AccountCommitteeVotesResponse>(`/v1/accounts/${address}/committee-votes`);
   }
 
   /**

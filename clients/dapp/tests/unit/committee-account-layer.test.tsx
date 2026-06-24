@@ -108,11 +108,7 @@ describe("CommitteeAccountLayer", () => {
   it("shows loading state while fetch is in progress", () => {
     const neverFetch: FetchLike = vi.fn(() => new Promise(() => undefined)) as unknown as FetchLike;
     render(
-      <CommitteeAccountLayer
-        explorerApiUrl={BASE_URL}
-        walletAddress={WALLET}
-        fetch={neverFetch}
-      />,
+      <CommitteeAccountLayer explorerApiUrl={BASE_URL} walletAddress={WALLET} fetch={neverFetch} />,
     );
     expect(screen.getByTestId("committee-account-loading")).toBeDefined();
   });
@@ -151,11 +147,7 @@ describe("CommitteeAccountLayer", () => {
   it("renders agent own vote history from /v1/accounts/:address/committee-votes when wallet is connected (AC3)", async () => {
     const fetchFn = makeFetch(twoVotes);
     render(
-      <CommitteeAccountLayer
-        explorerApiUrl={BASE_URL}
-        walletAddress={WALLET}
-        fetch={fetchFn}
-      />,
+      <CommitteeAccountLayer explorerApiUrl={BASE_URL} walletAddress={WALLET} fetch={fetchFn} />,
     );
     await waitFor(() => {
       expect(screen.queryByTestId("committee-account-loading")).toBeNull();
@@ -187,11 +179,7 @@ describe("CommitteeAccountLayer", () => {
   it("fetches from /v1/accounts/:address/committee-votes endpoint", async () => {
     const fetchFn = makeFetch(twoVotes);
     render(
-      <CommitteeAccountLayer
-        explorerApiUrl={BASE_URL}
-        walletAddress={WALLET}
-        fetch={fetchFn}
-      />,
+      <CommitteeAccountLayer explorerApiUrl={BASE_URL} walletAddress={WALLET} fetch={fetchFn} />,
     );
     await waitFor(() => {
       expect(screen.queryByTestId("committee-account-loading")).toBeNull();
