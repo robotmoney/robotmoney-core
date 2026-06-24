@@ -581,6 +581,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // a revert guard only — if the swap router already enforced amountOutMinimum
         // this check is belt-and-suspenders; if not, it prevents crediting shares
         // against a deficit.
+        //
+        // slither-disable-start reentrancy-balance
+        // taBefore snapshot is intentional: we compare post-swap totalAssets()
+        // against the pre-deposit baseline to measure realizedDelta. The
+        // nonReentrant modifier prevents any actual re-entry; USDC and the swap
+        // adapters are not ERC777 tokens.
         uint256 slippageFloor = usdcAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
         uint256 realizedDelta = totalAssets() - taBefore;
         if (realizedDelta < slippageFloor) {
@@ -592,6 +598,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
         _mint(receiver, mintShares);
         _lastMintedShares = mintShares; // AZ-BSK-2: expose to deposit() override
+        // slither-disable-end reentrancy-balance
         emit Deposit(caller, receiver, usdcAmount, mintShares);
     }
 

@@ -1,5 +1,5 @@
 # IRetirableVaultLink
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/829e61766b365e1704d8f027d8ca3d18f7ce4b26/contracts/script/DeployTimelock.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/script/DeployTimelock.s.sol)
 
 Minimal vault interface used to link the registry into the vault so the
 unified governance `retire()` action (DI-2) can drive the vault's

@@ -1,5 +1,5 @@
 # _FvSafeStub
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/829e61766b365e1704d8f027d8ca3d18f7ce4b26/contracts/test/fv/DeployAssertions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/test/fv/DeployAssertions.t.sol)
 
 Minimal 2-of-N Safe stub (code + threshold>=2) so DeployTimelock's
 SAFE_ADDRESS guards are satisfied without a real Safe.
