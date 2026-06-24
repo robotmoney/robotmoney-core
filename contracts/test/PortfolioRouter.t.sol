@@ -129,6 +129,70 @@ contract PartialAcceptVault is ERC20 {
     }
 }
 
+/// @notice USDC mock that supports Circle-style address blacklisting.
+///         Any transferFrom whose `from` address is blacklisted reverts,
+///         simulating FS-RTR-1 (USDC blacklist hit inside _executeLeg).
+contract BlacklistableUSDC is ERC20 {
+    mapping(address => bool) public isBlacklisted;
+
+    constructor() ERC20("USD Coin", "USDC") {}
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function blacklist(address account) external {
+        isBlacklisted[account] = true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+        require(!isBlacklisted[from], "USDC: account is blacklisted");
+        return super.transferFrom(from, to, amount);
+    }
+}
+
+/// @notice ERC-4626-shaped vault that uses a BlacklistableUSDC instance.
+///         Identical to MockRouterVault but typed to BlacklistableUSDC so the
+///         blacklist test can pass the address check in setWeights / _requireRouterEligible.
+contract BlacklistableVault is ERC20 {
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable assetToken;
+
+    event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
+
+    constructor(address asset_) ERC20("Blacklistable Vault Shares", "BVS") {
+        assetToken = IERC20(asset_);
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function asset() external view returns (address) {
+        return address(assetToken);
+    }
+
+    function totalAssets() external view returns (uint256) {
+        return assetToken.balanceOf(address(this));
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets;
+    }
+
+    function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
+        assetToken.safeTransferFrom(msg.sender, address(this), assets);
+        shares = assets;
+        _mint(receiver, shares);
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+}
+
 // ─── PortfolioRouterTest ──────────────────────────────────────────────────────
 
 contract PortfolioRouterTest is Test {
@@ -355,6 +419,10 @@ contract PortfolioRouterTest is Test {
 
     // ─── deposit: all-or-revert ───────────────────────────────────────────────
 
+    /// @notice FS-RTR-1: when a vault's deposit() reverts (e.g. USDC blacklist
+    ///         or fee-on-transfer), the router surfaces a named
+    ///         UsdcLegTransferFailed error that identifies the vault, rather
+    ///         than the opaque raw revert string from the vault.
     function test_deposit_revertsIfAnyLegReverts() public {
         _setEqualWeights();
         vaultB.setFailOnDeposit(true);
@@ -363,7 +431,9 @@ contract PortfolioRouterTest is Test {
         _fundAndApprove(depositor, amount);
 
         vm.prank(depositor);
-        vm.expectRevert("MockRouterVault: deposit reverted");
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(vaultB))
+        );
         router.deposit(amount, new uint256[](0));
     }
 
@@ -1149,6 +1219,83 @@ contract PortfolioRouterTest is Test {
         router.deposit(amount, new uint256[](0));
 
         assertEq(usdc.balanceOf(address(router)), 0, "router must hold zero USDC after deposit");
+    }
+
+    // ─── FS-RTR-1: named blacklist error ─────────────────────────────────────
+
+    /// @notice FS-RTR-1 / AC#2: when the router's USDC contract reverts on
+    ///         transferFrom because the router address is blacklisted, the
+    ///         router re-raises UsdcLegTransferFailed (not the opaque
+    ///         UsdcCustodyInvariantViolated) so callers can identify the cause.
+    ///
+    ///         Setup: deploy a BlacklistableUSDC + BlacklistableVault, wire a
+    ///         fresh router, blacklist the router address, then attempt a
+    ///         deposit through that vault.
+    function test_deposit_revertsWithNamedError_whenUsdcBlacklist() public {
+        // Deploy fresh USDC + vault + router for this scenario.
+        BlacklistableUSDC bUsdc = new BlacklistableUSDC();
+        VaultRegistry bRegistry = new VaultRegistry(admin);
+        PortfolioRouter bRouter = new PortfolioRouter(address(bUsdc), address(bRegistry), admin);
+
+        BlacklistableVault bVault = new BlacklistableVault(address(bUsdc));
+        VaultRegistry.VaultMetadata memory bMeta = VaultRegistry.VaultMetadata({
+            name: "Blacklistable Vault", asset: address(bUsdc), registeredAt: 0
+        });
+
+        vm.startPrank(admin);
+        bRegistry.registerVault(address(bVault), bMeta);
+        bRegistry.setRouterEligible(address(bVault), true);
+        address[] memory bVaults = new address[](1);
+        uint256[] memory bBps = new uint256[](1);
+        bVaults[0] = address(bVault);
+        bBps[0] = 10_000;
+        bRouter.setWeights(bVaults, bBps);
+        vm.stopPrank();
+
+        // Blacklist the router so that vault.deposit's safeTransferFrom reverts.
+        bUsdc.blacklist(address(bRouter));
+
+        uint256 amount = 100 * ONE_USDC;
+        bUsdc.mint(depositor, amount);
+        vm.prank(depositor);
+        bUsdc.approve(address(bRouter), amount);
+
+        vm.prank(depositor);
+        vm.expectRevert(
+            abi.encodeWithSelector(PortfolioRouter.UsdcLegTransferFailed.selector, address(bVault))
+        );
+        bRouter.deposit(amount, new uint256[](0));
+    }
+
+    // ─── AZ-RTR-2: donation DoS fix ──────────────────────────────────────────
+
+    /// @notice AZ-RTR-2 / AC#3: a small USDC donation to the router before a
+    ///         deposit must not cause the deposit to revert. The post-deposit
+    ///         invariant uses a balance delta (snapshot before pulling the
+    ///         caller's funds) so the pre-existing donated USDC is excluded.
+    function test_deposit_succeedsWithDonatedUsdcInRouter() public {
+        _setEqualWeights();
+
+        // Donate 1 USDC to the router before any deposit.
+        usdc.mint(address(router), 1 * ONE_USDC);
+        assertEq(usdc.balanceOf(address(router)), 1 * ONE_USDC, "donation present");
+
+        uint256 amount = 1000 * ONE_USDC;
+        _fundAndApprove(depositor, amount);
+
+        // Deposit must succeed: the delta is zero even though the absolute
+        // post-deposit balance is 1 USDC (the donated amount).
+        vm.prank(depositor);
+        uint256[] memory shares = router.deposit(amount, new uint256[](0));
+
+        // All shares minted (1:1 mock vault).
+        assertEq(shares[0], 500 * ONE_USDC, "vaultA shares");
+        assertEq(shares[1], 500 * ONE_USDC, "vaultB shares");
+
+        // Donated USDC is still on the router — the invariant did not consume it.
+        assertEq(
+            usdc.balanceOf(address(router)), 1 * ONE_USDC, "donated USDC remains after deposit"
+        );
     }
 
     /// @notice INV-1: USDC (a protocol asset) can never be swept out of the router.

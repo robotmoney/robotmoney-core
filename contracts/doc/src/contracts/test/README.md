@@ -75,6 +75,8 @@
 - [MockUSDC](PortfolioRouter.t.sol/contract.MockUSDC.md)
 - [MockRouterVault](PortfolioRouter.t.sol/contract.MockRouterVault.md)
 - [PartialAcceptVault](PortfolioRouter.t.sol/contract.PartialAcceptVault.md)
+- [BlacklistableUSDC](PortfolioRouter.t.sol/contract.BlacklistableUSDC.md)
+- [BlacklistableVault](PortfolioRouter.t.sol/contract.BlacklistableVault.md)
 - [PortfolioRouterTest](PortfolioRouter.t.sol/contract.PortfolioRouterTest.md)
 - [FeeOnTransferUSDC](RobotMoneyGateway.t.sol/contract.FeeOnTransferUSDC.md)
 - [ShareLeakVault](RobotMoneyGateway.t.sol/contract.ShareLeakVault.md)
