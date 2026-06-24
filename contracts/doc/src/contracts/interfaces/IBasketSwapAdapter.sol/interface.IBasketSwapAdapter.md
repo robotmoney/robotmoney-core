@@ -1,5 +1,5 @@
 # IBasketSwapAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/7d568c59b4026ccbeb96c8683b875a28e63a7d18/contracts/interfaces/IBasketSwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/interfaces/IBasketSwapAdapter.sol)
 
 **Title:**
 IBasketSwapAdapter

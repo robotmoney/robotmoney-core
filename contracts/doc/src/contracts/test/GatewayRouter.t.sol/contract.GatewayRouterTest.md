@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/7d568c59b4026ccbeb96c8683b875a28e63a7d18/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -837,6 +837,17 @@ complete without reverting.
 
 ```solidity
 function test_withdrawFromRouter_emptyAllowedSourceVaults_acceptsPinnedVault() public;
+```
+
+### test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg
+
+AZ-GW-3: zero-share leg in the empty-allowedSourceVaults path is
+skipped without checking against pinnedVault, allowing a mixed-leg
+call where only the pinned-vault leg carries non-zero shares.
+
+
+```solidity
+function test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg() public;
 ```
 
 ### test_withdrawFromRouter_nonEmptyAllowedSourceVaults_unchangedBehavior
