@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0d868fe02e5cf19ce075213817ca84416ca13c09/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/829e61766b365e1704d8f027d8ca3d18f7ce4b26/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -273,6 +273,27 @@ uint256 public navDeviationGuardBps
 ```
 
 
+### _lastMintedShares
+AZ-BSK-2: scratch slots set by _deposit/_withdraw so that the
+overridden deposit()/redeem() can return the ACTUAL minted/withdrawn
+amounts instead of OZ's pre-computed preview values. The reentrancy
+guard on _deposit/_withdraw ensures these are single-writer.
+`internal` (no public getter) to save bytecode on the EIP-170-tight
+vault family.
+
+
+```solidity
+uint256 internal _lastMintedShares
+```
+
+
+### _lastWithdrawnAssets
+
+```solidity
+uint256 internal _lastWithdrawnAssets
+```
+
+
 ## Functions
 ### _grantRole
 
@@ -389,8 +410,8 @@ post-swap realizedDelta shares instead, so OZ's return value is
 overstated when realized NAV > slippage floor. PortfolioRouter
 compares minSharesPerLeg against the deposit() return value; an
 overstated return makes the per-leg slippage guard ineffective.
-This override measures the actual minted shares via balance delta
-and returns that instead.
+This override reads _lastMintedShares written by _deposit() and
+returns that instead.
 
 
 ```solidity
@@ -463,8 +484,8 @@ _withdraw() delivers post-swap net USDC (after exit fee), which can
 differ from previewRedeem. PortfolioRouter compares minAssetsPerLeg
 against the redeem() return value; an overstated return makes the
 per-leg slippage guard ineffective.
-This override measures the actual USDC received by the receiver via
-balance delta and returns that instead.
+This override reads _lastWithdrawnAssets written by _withdraw() and
+returns that instead.
 
 
 ```solidity

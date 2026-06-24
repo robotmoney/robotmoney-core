@@ -218,6 +218,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      the EIP-170-tight vault family — the value is documented here.
     uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000; // 20%
 
+    /// @dev AZ-BSK-2: scratch slots set by _deposit/_withdraw so that the
+    ///      overridden deposit()/redeem() can return the ACTUAL minted/withdrawn
+    ///      amounts instead of OZ's pre-computed preview values. The reentrancy
+    ///      guard on _deposit/_withdraw ensures these are single-writer.
+    ///      `internal` (no public getter) to save bytecode on the EIP-170-tight
+    ///      vault family.
+    uint256 internal _lastMintedShares;
+    uint256 internal _lastWithdrawnAssets;
+
     // ─── Events ───────────────────────────────────────────────────────
 
     /// @dev Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
@@ -496,12 +505,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         overstated when realized NAV > slippage floor. PortfolioRouter
     ///         compares minSharesPerLeg against the deposit() return value; an
     ///         overstated return makes the per-leg slippage guard ineffective.
-    ///         This override measures the actual minted shares via balance delta
-    ///         and returns that instead.
+    ///         This override reads _lastMintedShares written by _deposit() and
+    ///         returns that instead.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
-        uint256 sharesBefore = balanceOf(receiver);
         super.deposit(assets, receiver);
-        return balanceOf(receiver) - sharesBefore;
+        return _lastMintedShares;
     }
 
     /// @notice Deposit `assets` USDC and mint shares on the REALIZED swap
@@ -583,6 +591,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         );
 
         _mint(receiver, mintShares);
+        _lastMintedShares = mintShares; // AZ-BSK-2: expose to deposit() override
         emit Deposit(caller, receiver, usdcAmount, mintShares);
     }
 
@@ -647,16 +656,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         differ from previewRedeem. PortfolioRouter compares minAssetsPerLeg
     ///         against the redeem() return value; an overstated return makes the
     ///         per-leg slippage guard ineffective.
-    ///         This override measures the actual USDC received by the receiver via
-    ///         balance delta and returns that instead.
+    ///         This override reads _lastWithdrawnAssets written by _withdraw() and
+    ///         returns that instead.
     function redeem(uint256 shares, address receiver, address owner)
         public
         override
         returns (uint256)
     {
-        uint256 assetsBefore = _USDC.balanceOf(receiver);
         super.redeem(shares, receiver, owner);
-        return _USDC.balanceOf(receiver) - assetsBefore;
+        return _lastWithdrawnAssets;
     }
 
     /// @notice Worst-case floor of USDC received when redeeming `shares`.
@@ -801,6 +809,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             _USDC.safeTransfer(feeRecipient, fee);
         }
         _USDC.safeTransfer(receiver, net);
+        _lastWithdrawnAssets = net; // AZ-BSK-2: expose to redeem() override
 
         emit ExitFeeCharged(owner, receiver, usdcReceived, fee, net);
         emit Withdraw(caller, receiver, owner, net, shares);
