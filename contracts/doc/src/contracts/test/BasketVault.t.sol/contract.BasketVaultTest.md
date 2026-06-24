@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0d868fe02e5cf19ce075213817ca84416ca13c09/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -865,7 +865,14 @@ function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public;
 SUP-3 (stateful): a real deposit → immediate redeem within the
 deviation band returns no more than was deposited. Exercises the
 mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
-on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+on the realized post-swap NAV delta (AZ-BSK-1 fix), and
+redeem() returns the actual USDC received (AZ-BSK-2 fix).
+Router mock is set to return the stranger's proportional share at 1:1.
+AZ-BSK-1 fix: stranger is credited realizedDelta shares (not
+just slippageFloor shares). At 1:1 execution on a 10 000 USDC pool,
+stranger's fraction = 1000/(10000+1000) = 1/11, so their sell
+of 1/11 of the basket at 1:1 USDC yields exactly x. The invariant
+got <= x holds (with equality at 1:1).
 
 
 ```solidity
@@ -893,6 +900,51 @@ guard does not block ordinary, market-consistent settlement.
 
 ```solidity
 function test_ORA4_withinBandSettles() public;
+```
+
+### test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor
+
+AZ-BSK-1: when realized NAV > slippage floor (swap beats the TWAP
+worst-case), the depositor is credited realizedDelta shares, not just
+the slippage-discounted floor.  Pre-fix, the floor capped credit even
+when swaps captured extra value; post-fix the full delta is minted.
+
+
+```solidity
+function test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor() public;
+```
+
+### test_AZBSK1_depositAtFloorCreditsFloor
+
+AZ-BSK-1: when realized NAV equals the slippage floor (worst-case
+execution), the depositor is still credited the realized delta
+(which equals the floor in this case).
+
+
+```solidity
+function test_AZBSK1_depositAtFloorCreditsFloor() public;
+```
+
+### test_AZBSK2_depositReturnsActualMintedShares
+
+AZ-BSK-2: BasketVault.deposit() returns the ACTUAL minted share
+count, not OZ's previewDeposit estimate. When realized NAV > floor,
+previewDeposit underestimates; the override must return the true count.
+
+
+```solidity
+function test_AZBSK2_depositReturnsActualMintedShares() public;
+```
+
+### test_AZBSK2_redeemReturnsActualWithdrawnAssets
+
+AZ-BSK-2: BasketVault.redeem() returns the ACTUAL USDC withdrawn,
+not OZ's previewRedeem estimate. Confirms PortfolioRouter slippage
+guards are evaluated against accurate amounts.
+
+
+```solidity
+function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public;
 ```
 
 ### test_retire_setsDepositsPaused

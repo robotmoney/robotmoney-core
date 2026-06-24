@@ -575,7 +575,9 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // against a deficit.
         uint256 slippageFloor = usdcAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
         uint256 realizedDelta = totalAssets() - taBefore;
-        if (realizedDelta < slippageFloor) revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
+        if (realizedDelta < slippageFloor) {
+            revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
+        }
         uint256 mintShares = realizedDelta.mulDiv(
             supplyBefore + 10 ** _decimalsOffset(), taBefore + 1, Math.Rounding.Floor
         );
@@ -647,7 +649,11 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///         per-leg slippage guard ineffective.
     ///         This override measures the actual USDC received by the receiver via
     ///         balance delta and returns that instead.
-    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
         uint256 assetsBefore = _USDC.balanceOf(receiver);
         super.redeem(shares, receiver, owner);
         return _USDC.balanceOf(receiver) - assetsBefore;

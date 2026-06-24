@@ -2072,7 +2072,11 @@ contract BasketVaultTest is Test {
         // At-floor execution: realizedDelta == slippageFloor.
         assertEq(realizedDelta, slippageFloor, "at-floor test: realized must equal floor");
         // Shares must equal the previewDeposit floor estimate (realizedDelta == floor).
-        assertEq(shares, vault.previewDeposit(depositAmount), "AZ-BSK-1: at-floor shares match previewDeposit");
+        assertEq(
+            shares,
+            vault.previewDeposit(depositAmount),
+            "AZ-BSK-1: at-floor shares match previewDeposit"
+        );
     }
 
     // ─── AZ-BSK-2: deposit()/redeem() return actual amounts ──────────────────────
@@ -2103,9 +2107,15 @@ contract BasketVaultTest is Test {
         uint256 actualBalance = vault.balanceOf(stranger);
 
         // AZ-BSK-2: return value must equal actual minted shares, not previewDeposit.
-        assertEq(returnedShares, actualBalance, "AZ-BSK-2: deposit() return must equal actual minted");
+        assertEq(
+            returnedShares, actualBalance, "AZ-BSK-2: deposit() return must equal actual minted"
+        );
         // When realized NAV > floor, actual > preview.
-        assertGt(returnedShares, previewShares, "AZ-BSK-2: actual shares must exceed previewDeposit floor");
+        assertGt(
+            returnedShares,
+            previewShares,
+            "AZ-BSK-2: actual shares must exceed previewDeposit floor"
+        );
     }
 
     /// @notice AZ-BSK-2: BasketVault.redeem() returns the ACTUAL USDC withdrawn,
@@ -2134,9 +2144,17 @@ contract BasketVaultTest is Test {
         uint256 actualReceived = usdc.balanceOf(stranger) - usdcBefore;
 
         // AZ-BSK-2: return value must equal actual USDC received.
-        assertEq(returnedAssets, actualReceived, "AZ-BSK-2: redeem() return must equal actual USDC received");
+        assertEq(
+            returnedAssets,
+            actualReceived,
+            "AZ-BSK-2: redeem() return must equal actual USDC received"
+        );
         // Actual proceeds should exceed the conservative previewRedeem floor.
-        assertGt(returnedAssets, previewAssets, "AZ-BSK-2: actual proceeds must exceed previewRedeem floor");
+        assertGt(
+            returnedAssets,
+            previewAssets,
+            "AZ-BSK-2: actual proceeds must exceed previewRedeem floor"
+        );
     }
 
     // ─── IRetirableVault: retire/unretire (FS-VLT-19) ────────────────────────

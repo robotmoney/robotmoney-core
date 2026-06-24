@@ -1,5 +1,5 @@
 # MockRetirableVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/0d868fe02e5cf19ce075213817ca84416ca13c09/contracts/test/VaultRegistry.t.sol)
 
 Minimal stand-in for `RobotMoneyVault` exposing the deposit-halt legs
 (`retire`/`unretire`) the registry's unified governance `retire`
