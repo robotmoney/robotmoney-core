@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/4b9f1e53ce2923a3a2346fb7de25157672f7633c/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/e699d5af7edaf7c4c89b6772ee092727a36235c7/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -191,8 +191,8 @@ function reactivate(address vault) external onlyRole(ADMIN_ROLE);
 
 Update a vault's lifecycle status, driving the vault's own
 deposit-halt flag in the same call so registry status and the vault
-flag never drift (LIFE-1; finding F-04 residual). Restricted to
-`ADMIN_ROLE`.
+flag never drift (LIFE-1; finding F-04 residual / AZ-REG-1).
+Restricted to `ADMIN_ROLE`.
 Closing the back-door: previously this set only registry `_status`,
 leaving the vault's `retired` deposit-halt flag untouched — so
 `setVaultStatus(_, Retired)` recorded "Retired" in the registry
@@ -202,10 +202,13 @@ non-`Active` status drives `IRetirableVault.retire()` (hard-stop
 direct deposits) and `Active` drives `unretire()`, mirroring the
 atomic `retire()` / `reactivate()` paths. Both vault legs are
 idempotent and registry-gated.
-The vault calls are wrapped so a registered address that does not
-implement the deposit-halt leg, or is not linked to this registry,
-does not brick the status change — there is no vault flag to sync in
-that case. A vault linked to this registry always stays in sync.
+AZ-REG-1 fix: vault calls are no longer wrapped in try/catch. A
+failed retire hook propagates to the caller so the registry never
+records a vault as `Retired` while its deposit-halt leg is
+unset — deposits would otherwise continue against a supposedly-
+retired vault. Every vault type in the protocol implements
+`IRetirableVault`; a registered address that lacks the hook
+fails the call intentionally.
 
 
 ```solidity
