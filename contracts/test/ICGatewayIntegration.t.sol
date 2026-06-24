@@ -206,4 +206,51 @@ contract ICGatewayIntegration is Test {
         vm.expectRevert();
         ic.registerAgent(committeeAgent, "self-register-attempt");
     }
+
+    // ─── ICPolicyNotSet revert paths (coverage gate §1393, §1414) ────────────
+
+    /// @dev Proves the `ICPolicyNotSet` guard on `committeeRegister` fires when
+    ///      the gateway's `icPolicy` slot is empty.  A freshly-deployed gateway
+    ///      with no `setICPolicy` call has `icPolicy == address(0)`.
+    function test_committeeRegister_revertsWhenICPolicyNotSet() public {
+        // Fresh gateway — icPolicy is address(0).
+        RobotMoneyGateway gw2 = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
+
+        vm.prank(admin);
+        vm.expectRevert(RobotMoneyGateway.ICPolicyNotSet.selector);
+        gw2.committeeRegister(address(0xD2), "no-policy");
+    }
+
+    /// @dev Proves the `ICPolicyNotSet` guard on `committeeVoteSubmit` fires when
+    ///      the gateway's `icPolicy` slot is empty.
+    function test_committeeVoteSubmit_revertsWhenICPolicyNotSet() public {
+        // Fresh gateway — icPolicy is address(0).
+        RobotMoneyGateway gw2 = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vault)), admin, pauser, address(0)
+        );
+
+        // Authorize committeeAgent on the fresh gateway so AGENT_ROLE is held.
+        address[] memory noList = new address[](0);
+        IGateway.AgentPolicy memory pol = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 30 days),
+            maxPerPayment: 1e6,
+            maxPerWindow: 10e6,
+            shareReceiver: shareReceiver,
+            allowedDestinations: noList,
+            assetRecipient: address(0),
+            maxWithdrawPerPayment: 0,
+            maxWithdrawPerWindow: 0,
+            allowedSourceVaults: noList
+        });
+        vm.prank(admin);
+        gw2.authorizeAgent(committeeAgent, pol);
+
+        IInvestmentCommitteePolicy.VoteParams memory p = _defaultVoteParams();
+        vm.prank(committeeAgent);
+        vm.expectRevert(RobotMoneyGateway.ICPolicyNotSet.selector);
+        gw2.committeeVoteSubmit(p);
+    }
 }
