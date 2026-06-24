@@ -2385,6 +2385,76 @@ fn reap_stale_testnet_containers(current_run_id: &str) {
     }
 }
 
+/// Proactively tear down any stale `robotmoney-dapp` compose state before a
+/// fresh `DappStack::boot`. Runs `compose down -v --remove-orphans` on
+/// `docker-compose.dapp.yaml` so that containers, volumes, AND the
+/// `robotmoney-dapp_default` Docker network are fully removed.
+///
+/// This addresses the root cause of issue #1085: `reap_stale_testnet_containers`
+/// force-removes individual containers by ID but does not remove the Docker
+/// network itself. A network stuck in `REMOVING` state (left by a cancelled or
+/// crashed CI run) causes the subsequent `compose up --build` to fail in ~36 s
+/// because Docker cannot create a new network with the same name. Calling
+/// `compose down` before `compose up` removes the network atomically.
+///
+/// The minimum required env vars for `compose down` are the mandatory `?:`
+/// substitutions in `docker-compose.dapp.yaml`; everything else defaults.
+/// Best-effort: a non-zero exit means there was nothing to tear down (happy
+/// path); the outcome is logged and execution continues regardless.
+fn purge_stale_dapp_compose_state(
+    compose_dir: &Path,
+    gateway_hex: &str,
+    vault_hex: &str,
+    gateway_runtime_hash: &str,
+) {
+    logging::info(
+        "smoke-test",
+        "purging stale dapp compose state before boot (removes stuck networks/volumes)",
+    );
+    let out = Command::new("docker")
+        .args([
+            "compose",
+            "-f",
+            "docker-compose.dapp.yaml",
+            "down",
+            "-v",
+            "--remove-orphans",
+        ])
+        // Satisfy the mandatory ?:-substitutions in docker-compose.dapp.yaml.
+        // compose down does not bind ports, so port env vars are not required.
+        .env("VITE_GATEWAY_ADDRESS", gateway_hex)
+        .env("VITE_VAULT_ADDRESS", vault_hex)
+        .env("VITE_GATEWAY_EXPECTED_CODE_HASH", gateway_runtime_hash)
+        .env("INDEXER_GATEWAY", gateway_hex)
+        .env("INDEXER_VAULT", vault_hex)
+        .current_dir(compose_dir)
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            logging::info("smoke-test", "stale dapp compose state purged");
+        }
+        Ok(out) => {
+            // Non-zero exit is normal when the project has no containers/networks
+            // to remove; log at debug so CI noise stays low.
+            logging::debug(
+                "smoke-test",
+                format!(
+                    "dapp compose down (pre-boot purge) exited {:?}: {} {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stdout).trim(),
+                    String::from_utf8_lossy(&out.stderr).trim(),
+                ),
+            );
+        }
+        Err(err) => {
+            logging::warn(
+                "smoke-test",
+                format!("dapp compose down (pre-boot purge) failed to launch: {err}"),
+            );
+        }
+    }
+}
+
 fn ensure_compose_project_idle(
     compose_dir: &Path,
     compose_files: &[String],
@@ -3272,6 +3342,25 @@ impl DappStack {
         // without first booting the chain fixture.
         ensure_run_identity();
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
+
+        // Proactively purge any stale dapp compose state (containers, networks,
+        // volumes) from a previous run before calling compose-up. This is
+        // belt-and-suspenders over reap_stale_testnet_containers: that helper
+        // force-removes individual containers but does NOT remove the
+        // robotmoney-dapp_default Docker network, which can get stuck in
+        // REMOVING state after an aborted CI run. A stuck network causes the
+        // subsequent compose-up to fail immediately (in ~36 s, well before
+        // image builds complete) because Docker cannot create a new network
+        // with the same name. Calling compose-down here removes containers,
+        // volumes, AND the stuck network atomically before we start fresh.
+        // Best-effort: a non-zero exit here means there was nothing to clean
+        // up, which is the happy path; we log the outcome and continue.
+        purge_stale_dapp_compose_state(
+            &compose_dir,
+            fixture.gateway_hex(),
+            fixture.vault_hex(),
+            fixture.gateway_runtime_hash(),
+        );
         let gateway_hex = fixture.gateway_hex();
         let vault_hex = fixture.vault_hex();
         let gateway_runtime_hash = fixture.gateway_runtime_hash().to_string();
