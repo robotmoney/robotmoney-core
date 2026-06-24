@@ -2692,7 +2692,7 @@ contract GatewayCommitRevealTest is Test {
         // Agent must be authorized with depositor as owner and shareReceiver.
         assertTrue(gateway.hasRole(agentRole, agent));
         assertEq(gateway.agentOwner(agent), depositor);
-        (,,,,address recv,,,) = gateway.agents(agent);
+        (,,,, address recv,,,) = gateway.agents(agent);
         assertEq(recv, depositor);
     }
 
