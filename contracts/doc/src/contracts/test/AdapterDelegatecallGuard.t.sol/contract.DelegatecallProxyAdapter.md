@@ -1,5 +1,5 @@
 # DelegatecallProxyAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/AdapterDelegatecallGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/test/AdapterDelegatecallGuard.t.sol)
 
 A contrived "proxy adapter" whose runtime bytecode contains a
 `DELEGATECALL` opcode. Mirrors the EIP-1167 minimal-proxy shape: a

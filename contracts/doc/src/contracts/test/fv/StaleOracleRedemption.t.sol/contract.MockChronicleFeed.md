@@ -1,5 +1,5 @@
 # MockChronicleFeed
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/test/fv/StaleOracleRedemption.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/test/fv/StaleOracleRedemption.t.sol)
 
 Minimal Chronicle-feed mock: a settable latest-update timestamp so a test
 can age the feed past any heartbeat. Mirrors the IChronicleOracle surface

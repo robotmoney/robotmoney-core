@@ -218,6 +218,15 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      the EIP-170-tight vault family — the value is documented here.
     uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000; // 20%
 
+    /// @dev AZ-BSK-2: scratch slots set by _deposit/_withdraw so that the
+    ///      overridden deposit()/redeem() can return the ACTUAL minted/withdrawn
+    ///      amounts instead of OZ's pre-computed preview values. The reentrancy
+    ///      guard on _deposit/_withdraw ensures these are single-writer.
+    ///      `internal` (no public getter) to save bytecode on the EIP-170-tight
+    ///      vault family.
+    uint256 internal _lastMintedShares;
+    uint256 internal _lastWithdrawnAssets;
+
     // ─── Events ───────────────────────────────────────────────────────
 
     /// @dev Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
@@ -368,6 +377,12 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      guarantee ERC-4626 exactness for proportional-swap exits — use
     ///      redeem() instead, which returns actual swap proceeds.
     error RedeemOnly();
+    /// @dev AZ-BSK-1: raised (belt-and-suspenders) when the realized NAV delta
+    ///      from the deposit swaps falls below the slippage-discounted floor.
+    ///      Under normal operation the swap router's `amountOutMinimum` guard
+    ///      fires first; this catches any residual path where total delta is
+    ///      nevertheless deficient.
+    error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
 
     // ─── Constructor ─────────────────────────────────────────────────
 
@@ -479,6 +494,24 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
 
     // ─── Deposit ─────────────────────────────────────────────────────
 
+    /// @notice AZ-BSK-2: override OZ ERC4626.deposit() to return the ACTUAL
+    ///         minted share count rather than OZ's pre-computed previewDeposit
+    ///         estimate.
+    ///
+    ///         OZ ERC4626.deposit() computes `shares = previewDeposit(assets)`
+    ///         before calling _deposit() and returns that pre-computed value.
+    ///         BasketVault._deposit() discards the precomputed shares and mints
+    ///         post-swap realizedDelta shares instead, so OZ's return value is
+    ///         overstated when realized NAV > slippage floor. PortfolioRouter
+    ///         compares minSharesPerLeg against the deposit() return value; an
+    ///         overstated return makes the per-leg slippage guard ineffective.
+    ///         This override reads _lastMintedShares written by _deposit() and
+    ///         returns that instead.
+    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+        super.deposit(assets, receiver);
+        return _lastMintedShares;
+    }
+
     /// @notice Deposit `assets` USDC and mint shares on the REALIZED swap
     ///         proceeds (post-swap NAV delta), not a pre-swap TWAP mark.
     ///
@@ -488,22 +521,22 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     ///      share count no longer matches the value the vault actually captured:
     ///      if spot beats TWAP the depositor's own swap surplus inflates their
     ///      share value so `previewRedeem(previewDeposit(x)) > x` becomes
-    ///      reachable (a farmable round-trip leak). We override `deposit` to
+    ///      reachable (a farmable round-trip leak). We override `_deposit` to
     ///      swap FIRST, measure the realized TWAP-valued NAV delta the vault
-    ///      gained, and mint against that — capped at the slippage-discounted
-    ///      deposit floor so the depositor is never credited more than the
-    ///      worst-case `previewDeposit` floor. This makes the round trip
-    ///      `previewRedeem(previewDeposit(x)) <= x` hold for every realized
-    ///      execution price (SUP-3), and removes the mint-vs-haircut asymmetry
-    ///      that transferred value to incumbents (NC-6).
+    ///      gained, and mint against the FULL realized delta — closing the
+    ///      AZ-BSK-1 value-extraction vector where the slippage floor was used as
+    ///      a credit cap instead of a revert guard. The slippage floor now acts
+    ///      only as a revert guard (AZ-BSK-1 fix). SUP-3 is preserved because
+    ///      `previewRedeem(previewDeposit(x)) <= x` holds: `previewDeposit`
+    ///      returns the slippage-discounted floor (a lower bound on actual minted
+    ///      shares) and `previewRedeem` discounts by slippage again on exit.
     /// @dev Deposit core (the OZ `deposit`/`mint` entrypoints route here). The
     ///      `shares` arg OZ pre-computed from `previewDeposit`/`previewMint` is
     ///      DISCARDED: we mint on the REALIZED post-swap NAV delta instead, so
     ///      the minted count reflects the value the vault actually captured —
     ///      not a pre-swap TWAP mark — closing the SUP-3/F-16/NC-6 round-trip
-    ///      leak. The realized credit is capped at the slippage-discounted
-    ///      deposit floor, which equals the OZ preview floor in the normal
-    ///      (capped) case, so `deposit`/`mint` return values stay consistent.
+    ///      leak. `deposit()` is overridden to return the actual minted share
+    ///      count (AZ-BSK-2 fix) rather than OZ's pre-computed preview value.
     function _deposit(
         address caller,
         address receiver,
@@ -543,17 +576,29 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
         // amountOutMinimum floored by the independent slippage bound.
         _routeDeposit(caller, usdcAmount);
 
-        // Shares on REALIZED NAV the vault captured (TWAP-valued post-swap),
-        // capped at the slippage-discounted floor so the depositor is never
-        // credited beyond the worst-case `previewDeposit` floor (SUP-3).
-        uint256 credit = usdcAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
+        // AZ-BSK-1: credit the depositor with the FULL realized NAV delta the
+        // vault captured, not the slippage-discounted floor. The floor is now
+        // a revert guard only — if the swap router already enforced amountOutMinimum
+        // this check is belt-and-suspenders; if not, it prevents crediting shares
+        // against a deficit.
+        //
+        // slither-disable-start reentrancy-balance
+        // taBefore snapshot is intentional: we compare post-swap totalAssets()
+        // against the pre-deposit baseline to measure realizedDelta. The
+        // nonReentrant modifier prevents any actual re-entry; USDC and the swap
+        // adapters are not ERC777 tokens.
+        uint256 slippageFloor = usdcAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
         uint256 realizedDelta = totalAssets() - taBefore;
-        if (realizedDelta < credit) credit = realizedDelta;
-        uint256 mintShares = credit.mulDiv(
+        if (realizedDelta < slippageFloor) {
+            revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
+        }
+        uint256 mintShares = realizedDelta.mulDiv(
             supplyBefore + 10 ** _decimalsOffset(), taBefore + 1, Math.Rounding.Floor
         );
 
         _mint(receiver, mintShares);
+        _lastMintedShares = mintShares; // AZ-BSK-2: expose to deposit() override
+        // slither-disable-end reentrancy-balance
         emit Deposit(caller, receiver, usdcAmount, mintShares);
     }
 
@@ -607,6 +652,27 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
     }
 
     // ─── Withdraw / redeem ────────────────────────────────────────────
+
+    /// @notice AZ-BSK-2: override OZ ERC4626.redeem() to return the ACTUAL
+    ///         withdrawn USDC amount rather than OZ's pre-computed previewRedeem
+    ///         estimate.
+    ///
+    ///         OZ ERC4626.redeem() computes `assets = previewRedeem(shares)` before
+    ///         calling _withdraw() and returns that pre-computed value. BasketVault.
+    ///         _withdraw() delivers post-swap net USDC (after exit fee), which can
+    ///         differ from previewRedeem. PortfolioRouter compares minAssetsPerLeg
+    ///         against the redeem() return value; an overstated return makes the
+    ///         per-leg slippage guard ineffective.
+    ///         This override reads _lastWithdrawnAssets written by _withdraw() and
+    ///         returns that instead.
+    function redeem(uint256 shares, address receiver, address owner)
+        public
+        override
+        returns (uint256)
+    {
+        super.redeem(shares, receiver, owner);
+        return _lastWithdrawnAssets;
+    }
 
     /// @notice Worst-case floor of USDC received when redeeming `shares`.
     ///
@@ -750,6 +816,7 @@ abstract contract BasketVault is ERC4626, AccessControl, Pausable, ReentrancyGua
             _USDC.safeTransfer(feeRecipient, fee);
         }
         _USDC.safeTransfer(receiver, net);
+        _lastWithdrawnAssets = net; // AZ-BSK-2: expose to redeem() override
 
         emit ExitFeeCharged(owner, receiver, usdcReceived, fee, net);
         emit Withdraw(caller, receiver, owner, net, shares);
