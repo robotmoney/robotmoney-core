@@ -411,7 +411,9 @@ async fn test_committee_vote_submit_unauthorized_rejected() {
             json!({"method": "eth_sendRawTransaction"}),
         ))
         .with_status(200)
-        .with_body(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#)
+        .with_body(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}"#,
+        )
         .expect(1)
         .create_async()
         .await;
@@ -492,9 +494,9 @@ async fn test_committee_missing_ic_contract_address() {
     use rust_payment_client::signer::software::SoftwareSigner;
 
     const TEST_PRIVKEY: [u8; 32] = [
-        0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
-        0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b,
-        0xf4, 0xf2, 0xff, 0x80,
+        0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38, 0xff,
+        0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b, 0xf4, 0xf2,
+        0xff, 0x80,
     ];
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -503,7 +505,10 @@ async fn test_committee_missing_ic_contract_address() {
         .expect("create keystore");
 
     const GATEWAY_CODE: &[u8] = &[0x60, 0x80, 0x60, 0x40, 0x52, 0xfe, 0xfe, 0xfe];
-    let runtime_hash = format!("0x{}", alloy_primitives::hex::encode(keccak256(GATEWAY_CODE)));
+    let runtime_hash = format!(
+        "0x{}",
+        alloy_primitives::hex::encode(keccak256(GATEWAY_CODE))
+    );
 
     // Config WITHOUT ic_policy_address.
     let config_path = tmp.path().join("rmpc-no-ic.toml");

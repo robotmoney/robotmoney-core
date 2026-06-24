@@ -478,9 +478,12 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
             // the named ErrNotAllowlisted variant so callers can match on it.
             let err_str = format!("{e}");
             let (error_name, message) = if err_str.contains("revert") {
-                ("ErrNotAllowlisted", Some(format!(
+                (
+                    "ErrNotAllowlisted",
+                    Some(format!(
                     "transaction reverted — caller is not an allowlisted committee agent: {err_str}"
-                )))
+                )),
+                )
             } else {
                 ("ErrBroadcastFailed", Some(err_str))
             };

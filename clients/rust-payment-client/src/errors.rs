@@ -123,7 +123,6 @@ pub enum RmpcError {
     ErrVoteAlreadyCast { proposal_id: String },
 
     // ── Committee errors ───────────────────────────────────────────────────
-
     /// The caller's address is not on the IC policy allowlist.
     /// On-chain: `AgentNotAllowlisted` custom error on `submitVote`.
     /// Emitted when `eth_sendRawTransaction` is rejected with a revert that
