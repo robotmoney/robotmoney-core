@@ -1271,7 +1271,11 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
             if (sharesPerLeg.length != args.vaultList.length) revert RouterLegLengthMismatch();
 
             // 5a. allowedSourceVaults check: every vault with non-zero shares
-            //     must be in the policy allowlist (when non-empty).
+            //     must be in the policy allowlist when non-empty, or must be
+            //     the pinned vault (vaultContract) when the list is empty.
+            //     AZ-GW-3: an empty list is NOT an open allowlist — it is a
+            //     pinned-vault-only restriction (matching the single-vault
+            //     withdraw path and the IGateway.AgentPolicy natspec).
             uint256 slen = p.allowedSourceVaults.length;
             if (slen > 0) {
                 for (uint256 i = 0; i < args.vaultList.length; i++) {
@@ -1282,6 +1286,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
                         found = p.allowedSourceVaults[j] == vaultAddr;
                     }
                     if (!found) revert InvalidSourceVault();
+                }
+            } else {
+                // Empty allowlist → pinned-vault only.
+                address pinned = address(vaultContract);
+                for (uint256 i = 0; i < args.vaultList.length; i++) {
+                    if (sharesPerLeg[i] == 0) continue;
+                    if (args.vaultList[i] != pinned) revert InvalidSourceVault();
                 }
             }
 
