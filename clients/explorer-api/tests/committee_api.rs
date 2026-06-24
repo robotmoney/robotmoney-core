@@ -50,10 +50,7 @@ struct TestServer {
 }
 
 async fn start_committee_server() -> TestServer {
-    let container = Postgres::default()
-        .start()
-        .await
-        .expect("start postgres");
+    let container = Postgres::default().start().await.expect("start postgres");
     let host = container.get_host().await.expect("host");
     let port = container.get_host_port_ipv4(5432).await.expect("port");
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
@@ -231,8 +228,14 @@ async fn list_committee_agents_returns_all_agents() {
     assert_eq!(agents.len(), 2, "expected 2 agents");
 
     // Both active and inactive agents are returned.
-    let active_count = agents.iter().filter(|a| a["active"].as_bool() == Some(true)).count();
-    let inactive_count = agents.iter().filter(|a| a["active"].as_bool() == Some(false)).count();
+    let active_count = agents
+        .iter()
+        .filter(|a| a["active"].as_bool() == Some(true))
+        .count();
+    let inactive_count = agents
+        .iter()
+        .filter(|a| a["active"].as_bool() == Some(false))
+        .count();
     assert_eq!(active_count, 1, "expected 1 active agent");
     assert_eq!(inactive_count, 1, "expected 1 inactive agent");
 

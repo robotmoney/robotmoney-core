@@ -158,13 +158,8 @@ pub async fn run_once(
             .await?;
     }
     if let Some(ic) = cfg.investment_committee {
-        db.upsert_contract(
-            cfg.chain_id,
-            ic.into_array(),
-            "investment_committee",
-            None,
-        )
-        .await?;
+        db.upsert_contract(cfg.chain_id, ic.into_array(), "investment_committee", None)
+            .await?;
     }
 
     let last_indexed = db.last_indexed_block(cfg.chain_id).await?;
@@ -1134,9 +1129,11 @@ pub async fn handle_log(
     // independently.
 
     if topic0 == topics.ic_agent_registered {
-        let decoded =
-            IInvestmentCommitteePolicyEvents::AgentRegistered::decode_log(&into_alloy_log(log), true)
-                .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
+        let decoded = IInvestmentCommitteePolicyEvents::AgentRegistered::decode_log(
+            &into_alloy_log(log),
+            true,
+        )
+        .map_err(|e| IndexerError::Decode(format!("IC AgentRegistered: {e}")))?;
         let r = db
             .upsert_committee_agent(
                 cfg.chain_id,
@@ -1226,7 +1223,10 @@ pub async fn handle_log(
 /// Fetch the JSON memo from `rationale_uri` and verify its keccak256 against
 /// `expected_hash`.  Returns `true` if the hash matches, `false` otherwise.
 /// Errors on network failure, non-200 HTTP, or response body too large.
-async fn fetch_and_verify_memo(rationale_uri: &str, expected_hash: [u8; 32]) -> Result<bool, String> {
+async fn fetch_and_verify_memo(
+    rationale_uri: &str,
+    expected_hash: [u8; 32],
+) -> Result<bool, String> {
     // Use a one-off reqwest client — the indexer is single-tick so no pool needed.
     // Limit body to 1 MiB to prevent runaway allocations on malicious URIs.
     const MAX_BODY: usize = 1024 * 1024;
@@ -1243,16 +1243,10 @@ async fn fetch_and_verify_memo(rationale_uri: &str, expected_hash: [u8; 32]) -> 
         .map_err(|e| format!("GET {rationale_uri}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!(
-            "GET {rationale_uri} returned {}",
-            resp.status()
-        ));
+        return Err(format!("GET {rationale_uri} returned {}", resp.status()));
     }
 
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("read body: {e}"))?;
+    let body = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
 
     if body.len() > MAX_BODY {
         return Err(format!(

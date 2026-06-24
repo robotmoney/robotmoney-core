@@ -46,10 +46,7 @@ struct TestServer {
 }
 
 async fn start_regime_server() -> TestServer {
-    let container = Postgres::default()
-        .start()
-        .await
-        .expect("start postgres");
+    let container = Postgres::default().start().await.expect("start postgres");
     let host = container.get_host().await.expect("host");
     let port = container.get_host_port_ipv4(5432).await.expect("port");
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
@@ -163,7 +160,11 @@ async fn regime_feed_returns_latest_snapshot() {
 
     let snapshots = body["snapshots"].as_array().unwrap();
     // Two vaults, one snapshot each (latest).
-    assert_eq!(snapshots.len(), 2, "expected 2 regime snapshots (one per vault)");
+    assert_eq!(
+        snapshots.len(),
+        2,
+        "expected 2 regime snapshots (one per vault)"
+    );
 
     // Find vault_a snapshot — should be block 300 with vote_count=3.
     let vault_a_hex = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

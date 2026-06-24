@@ -1486,18 +1486,16 @@ async fn get_committee_track_record(
     let votes = rows
         .into_iter()
         .map(
-            |(vote_id, vault, stance, weight, conf, uri, verified, block, ts)| {
-                CommitteeVoteEntry {
-                    vote_id,
-                    vault: format!("0x{}", hex::encode(vault)),
-                    stance,
-                    target_weight_bps: weight,
-                    confidence: conf,
-                    rationale_uri: uri,
-                    verified,
-                    block_number: block,
-                    timestamp_secs: ts,
-                }
+            |(vote_id, vault, stance, weight, conf, uri, verified, block, ts)| CommitteeVoteEntry {
+                vote_id,
+                vault: format!("0x{}", hex::encode(vault)),
+                stance,
+                target_weight_bps: weight,
+                confidence: conf,
+                rationale_uri: uri,
+                verified,
+                block_number: block,
+                timestamp_secs: ts,
             },
         )
         .collect();
@@ -1552,9 +1550,7 @@ type RegimeSnapshotRow = (Vec<u8>, BigDecimal, i32, i64, DateTime<Utc>);
 /// GET /v1/regime/feed
 ///
 /// Returns the latest regime snapshot per vault (most recent block_number).
-async fn get_regime_feed(
-    State(state): State<AppState>,
-) -> ApiResult<Json<RegimeFeedResponse>> {
+async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<RegimeFeedResponse>> {
     let rows: Vec<RegimeSnapshotRow> = sqlx::query_as(
         "SELECT DISTINCT ON (vault_address) \
                 vault_address, avg_weight_bps, vote_count, block_number, indexed_at \

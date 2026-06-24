@@ -203,27 +203,23 @@ async fn agent_registered_creates_row() {
     let agent = agent_addr();
     let tx: [u8; 32] = [0x01; 32];
 
-    let reg_log =
-        encode_agent_registered_log(ic, agent, "athena-v1", 10, tx, 0);
+    let reg_log = encode_agent_registered_log(ic, agent, "athena-v1", 10, tx, 0);
 
     let stub = StubRpcServer::start().await;
     program_stub_block10(&stub);
-    stub.set(
-        "eth_getLogs",
-        serde_json::json!([reg_log]),
-    );
+    stub.set("eth_getLogs", serde_json::json!([reg_log]));
 
     let rpc = JsonRpc::new(&stub.url);
     let cfg = base_cfg(&stub);
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(outcome.error.is_none(), "indexer error: {:?}", outcome.error);
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
 
-    let count = fx
-        .db
-        .count(CountTable::CommitteeAgents)
-        .await
-        .unwrap();
+    let count = fx.db.count(CountTable::CommitteeAgents).await.unwrap();
     assert_eq!(count, 1, "expected 1 committee_agents row");
 
     // Verify the row fields.
@@ -307,7 +303,7 @@ async fn vote_submitted_valid_memo_sets_verified_true() {
         1,
         agent,
         vault,
-        0,  // Overweight
+        0, // Overweight
         6000,
         80,
         &memo_srv.url,
@@ -320,16 +316,17 @@ async fn vote_submitted_valid_memo_sets_verified_true() {
 
     let stub = StubRpcServer::start().await;
     program_stub_block10(&stub);
-    stub.set(
-        "eth_getLogs",
-        serde_json::json!([reg_log, vote_log]),
-    );
+    stub.set("eth_getLogs", serde_json::json!([reg_log, vote_log]));
 
     let rpc = JsonRpc::new(&stub.url);
     let cfg = base_cfg(&stub);
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(outcome.error.is_none(), "indexer error: {:?}", outcome.error);
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
 
     let (verified, stance, weight): (bool, i16, i16) = sqlx::query_as(
         "SELECT verified, stance, target_weight_bps FROM committee_votes \
@@ -345,11 +342,7 @@ async fn vote_submitted_valid_memo_sets_verified_true() {
     assert_eq!(weight, 6000, "target_weight_bps mismatch");
 
     // Regime snapshot should also exist.
-    let snap_count = fx
-        .db
-        .count(CountTable::RegimeSnapshots)
-        .await
-        .unwrap();
+    let snap_count = fx.db.count(CountTable::RegimeSnapshots).await.unwrap();
     assert_eq!(snap_count, 1, "expected 1 regime_snapshots row");
 }
 
@@ -379,7 +372,7 @@ async fn vote_submitted_hash_mismatch_sets_verified_false() {
         2,
         agent,
         vault,
-        1,    // Neutral
+        1, // Neutral
         5000,
         50,
         &memo_srv.url,
@@ -392,34 +385,33 @@ async fn vote_submitted_hash_mismatch_sets_verified_false() {
 
     let stub = StubRpcServer::start().await;
     program_stub_block10(&stub);
-    stub.set(
-        "eth_getLogs",
-        serde_json::json!([reg_log, vote_log]),
-    );
+    stub.set("eth_getLogs", serde_json::json!([reg_log, vote_log]));
 
     let rpc = JsonRpc::new(&stub.url);
     let cfg = base_cfg(&stub);
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(outcome.error.is_none(), "indexer error: {:?}", outcome.error);
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
 
-    let (verified,): (bool,) = sqlx::query_as(
-        "SELECT verified FROM committee_votes WHERE chain_id = $1 AND vote_id = 2",
-    )
-    .bind(8453i64)
-    .fetch_one(fx.db.pool())
-    .await
-    .unwrap();
+    let (verified,): (bool,) =
+        sqlx::query_as("SELECT verified FROM committee_votes WHERE chain_id = $1 AND vote_id = 2")
+            .bind(8453i64)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
 
     assert!(!verified, "verified should be false for hash mismatch");
 
     // No regime snapshot should be created for unverified votes.
-    let snap_count = fx
-        .db
-        .count(CountTable::RegimeSnapshots)
-        .await
-        .unwrap();
-    assert_eq!(snap_count, 0, "expected 0 regime_snapshots for unverified vote");
+    let snap_count = fx.db.count(CountTable::RegimeSnapshots).await.unwrap();
+    assert_eq!(
+        snap_count, 0,
+        "expected 0 regime_snapshots for unverified vote"
+    );
 }
 
 // ─── AC-4: AgentRevoked sets active=false ────────────────────────────────────
@@ -440,24 +432,24 @@ async fn agent_revoked_sets_active_false() {
 
     let stub = StubRpcServer::start().await;
     program_stub_block10(&stub);
-    stub.set(
-        "eth_getLogs",
-        serde_json::json!([reg_log, rev_log]),
-    );
+    stub.set("eth_getLogs", serde_json::json!([reg_log, rev_log]));
 
     let rpc = JsonRpc::new(&stub.url);
     let cfg = base_cfg(&stub);
 
     let outcome = run_once(&fx.db, &rpc, &cfg).await.unwrap();
-    assert!(outcome.error.is_none(), "indexer error: {:?}", outcome.error);
+    assert!(
+        outcome.error.is_none(),
+        "indexer error: {:?}",
+        outcome.error
+    );
 
-    let (active, revoked_at): (bool, Option<i64>) = sqlx::query_as(
-        "SELECT active, revoked_at FROM committee_agents WHERE chain_id = $1",
-    )
-    .bind(8453i64)
-    .fetch_one(fx.db.pool())
-    .await
-    .unwrap();
+    let (active, revoked_at): (bool, Option<i64>) =
+        sqlx::query_as("SELECT active, revoked_at FROM committee_agents WHERE chain_id = $1")
+            .bind(8453i64)
+            .fetch_one(fx.db.pool())
+            .await
+            .unwrap();
 
     assert!(!active, "active should be false after AgentRevoked");
     assert_eq!(revoked_at, Some(10), "revoked_at should be block 10");
