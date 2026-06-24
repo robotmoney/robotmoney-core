@@ -1,5 +1,5 @@
 # MockRouterVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 ERC20
@@ -72,23 +72,6 @@ function setFailOnDeposit(bool fail) external;
 
 ```solidity
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
-```
-
-### retire
-
-IRetirableVault deposit-halt stubs. MockRouterVault has no registry
-link, so these are no-ops that satisfy the interface without reverting.
-
-
-```solidity
-function retire() external;
-```
-
-### unretire
-
-
-```solidity
-function unretire() external;
 ```
 
 ### redeem

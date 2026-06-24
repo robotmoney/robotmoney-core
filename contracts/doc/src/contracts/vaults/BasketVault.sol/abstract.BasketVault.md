@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -211,19 +211,6 @@ bool public depositsPaused
 ```
 
 
-### registry
-Linked `VaultRegistry`. Set once by `ADMIN_ROLE` via `setRegistry`.
-The registry is the only address permitted to call `retire()` /
-`unretire()`, so the unified governance retire action (registry
-status flip + vault deposit-halt) always lands atomically (DI-2,
-FS-VLT-19).
-
-
-```solidity
-address public registry
-```
-
-
 ### emergencyUnwindGuard
 
 ```solidity
@@ -270,27 +257,6 @@ set a non-zero, timelock-governed threshold. Bounded above by
 
 ```solidity
 uint256 public navDeviationGuardBps
-```
-
-
-### _lastMintedShares
-AZ-BSK-2: scratch slots set by _deposit/_withdraw so that the
-overridden deposit()/redeem() can return the ACTUAL minted/withdrawn
-amounts instead of OZ's pre-computed preview values. The reentrancy
-guard on _deposit/_withdraw ensures these are single-writer.
-`internal` (no public getter) to save bytecode on the EIP-170-tight
-vault family.
-
-
-```solidity
-uint256 internal _lastMintedShares
-```
-
-
-### _lastWithdrawnAssets
-
-```solidity
-uint256 internal _lastWithdrawnAssets
 ```
 
 
@@ -398,26 +364,6 @@ checks before delegating to this base implementation.
 function totalAssets() public view virtual override returns (uint256);
 ```
 
-### deposit
-
-AZ-BSK-2: override OZ ERC4626.deposit() to return the ACTUAL
-minted share count rather than OZ's pre-computed previewDeposit
-estimate.
-OZ ERC4626.deposit() computes `shares = previewDeposit(assets)`
-before calling _deposit() and returns that pre-computed value.
-BasketVault._deposit() discards the precomputed shares and mints
-post-swap realizedDelta shares instead, so OZ's return value is
-overstated when realized NAV > slippage floor. PortfolioRouter
-compares minSharesPerLeg against the deposit() return value; an
-overstated return makes the per-leg slippage guard ineffective.
-This override reads _lastMintedShares written by _deposit() and
-returns that instead.
-
-
-```solidity
-function deposit(uint256 assets, address receiver) public override returns (uint256);
-```
-
 ### _deposit
 
 Deposit `assets` USDC and mint shares on the REALIZED swap
@@ -429,23 +375,23 @@ the realized spot proceeds diverge from the TWAP mark, the minted
 share count no longer matches the value the vault actually captured:
 if spot beats TWAP the depositor's own swap surplus inflates their
 share value so `previewRedeem(previewDeposit(x)) > x` becomes
-reachable (a farmable round-trip leak). We override `_deposit` to
+reachable (a farmable round-trip leak). We override `deposit` to
 swap FIRST, measure the realized TWAP-valued NAV delta the vault
-gained, and mint against the FULL realized delta — closing the
-AZ-BSK-1 value-extraction vector where the slippage floor was used as
-a credit cap instead of a revert guard. The slippage floor now acts
-only as a revert guard (AZ-BSK-1 fix). SUP-3 is preserved because
-`previewRedeem(previewDeposit(x)) <= x` holds: `previewDeposit`
-returns the slippage-discounted floor (a lower bound on actual minted
-shares) and `previewRedeem` discounts by slippage again on exit.
+gained, and mint against that — capped at the slippage-discounted
+deposit floor so the depositor is never credited more than the
+worst-case `previewDeposit` floor. This makes the round trip
+`previewRedeem(previewDeposit(x)) <= x` hold for every realized
+execution price (SUP-3), and removes the mint-vs-haircut asymmetry
+that transferred value to incumbents (NC-6).
 
 Deposit core (the OZ `deposit`/`mint` entrypoints route here). The
 `shares` arg OZ pre-computed from `previewDeposit`/`previewMint` is
 DISCARDED: we mint on the REALIZED post-swap NAV delta instead, so
 the minted count reflects the value the vault actually captured —
 not a pre-swap TWAP mark — closing the SUP-3/F-16/NC-6 round-trip
-leak. `deposit()` is overridden to return the actual minted share
-count (AZ-BSK-2 fix) rather than OZ's pre-computed preview value.
+leak. The realized credit is capped at the slippage-discounted
+deposit floor, which equals the OZ preview floor in the normal
+(capped) case, so `deposit`/`mint` return values stay consistent.
 
 
 ```solidity
@@ -471,28 +417,6 @@ Emits a WeightSnapshot event recording the equal-weight allocation applied.
 
 ```solidity
 function _routeDeposit(address caller, uint256 usdcAmount) internal;
-```
-
-### redeem
-
-AZ-BSK-2: override OZ ERC4626.redeem() to return the ACTUAL
-withdrawn USDC amount rather than OZ's pre-computed previewRedeem
-estimate.
-OZ ERC4626.redeem() computes `assets = previewRedeem(shares)` before
-calling _withdraw() and returns that pre-computed value. BasketVault.
-_withdraw() delivers post-swap net USDC (after exit fee), which can
-differ from previewRedeem. PortfolioRouter compares minAssetsPerLeg
-against the redeem() return value; an overstated return makes the
-per-leg slippage guard ineffective.
-This override reads _lastWithdrawnAssets written by _withdraw() and
-returns that instead.
-
-
-```solidity
-function redeem(uint256 shares, address receiver, address owner)
-    public
-    override
-    returns (uint256);
 ```
 
 ### previewRedeem
@@ -800,20 +724,17 @@ credits it to ALL holders pro-rata (NAV rises), keeping the
 no-stranded-asset invariant without arbitrary admin routing. The
 min-out is TWAP-derived and slippage-bounded exactly like the
 proportional-withdraw sell leg, so the swap fails closed if the
-oracle is unavailable or the price is manipulated. The additional
-caller-supplied minUsdcOut is checked against the actual received
-amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+oracle is unavailable or the price is manipulated.
 
 
 ```solidity
-function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant;
+function reabsorbRemovedAsset(uint256 index) external nonReentrant;
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`index`|`uint256`|     Registry index of an inactive (removed) basket asset.|
-|`minUsdcOut`|`uint256`|Caller-supplied slippage floor (in USDC raw units). Reverts with SlippageExceeded when the swap output is below this floor, preventing MEV sandwich attacks on NAV recovery. Pass 0 to use only the TWAP-derived floor. Only enforced on the pool-healthy path; the degraded-pool path quarantines instead of swapping.|
+|`index`|`uint256`|Registry index of an inactive (removed) basket asset.|
 
 
 ### _slippageFloor
@@ -837,49 +758,6 @@ Apply the configured max-slippage haircut to a USDC value.
 
 ```solidity
 function _applySlippage(uint256 usdcValue) internal view returns (uint256);
-```
-
-### setRegistry
-
-Set the linked `VaultRegistry` once. Restricted to `ADMIN_ROLE`.
-The registry is the only address permitted to call `retire()` /
-`unretire()`; this dedicated link keeps the registry's authority
-over the vault narrow (deposit-halt only, not full admin) while
-letting the unified governance retire action land atomically.
-
-
-```solidity
-function setRegistry(address newRegistry) external onlyRole(ADMIN_ROLE);
-```
-**Parameters**
-
-|Name|Type|Description|
-|----|----|-----------|
-|`newRegistry`|`address`|Address of the `VaultRegistry` (must not be zero).|
-
-
-### retire
-
-Hard-stop direct deposits. Callable ONLY by the linked registry,
-which sets registry status to `Retired` in the same call (atomic
-unified governance retire, DI-2 / FS-VLT-19). Idempotent.
-Withdrawals/redemptions stay open (ERC-4626 `redeem` is never
-revoked; ADR-0009).
-
-
-```solidity
-function retire() external;
-```
-
-### unretire
-
-Re-open direct deposits (governance abort). Callable ONLY by the
-linked registry, mirroring the `Retired → Active` transition in
-docs/architecture.md §4.7. Idempotent.
-
-
-```solidity
-function unretire() external;
 ```
 
 ### pause
@@ -1297,30 +1175,6 @@ function _executeSwap(
 ```
 
 ## Events
-### RegistrySet
-Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
-
-
-```solidity
-event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
-```
-
-### Retired
-Emitted when the registry calls `retire()` and halts direct deposits.
-
-
-```solidity
-event Retired();
-```
-
-### Unretired
-Emitted when the registry calls `unretire()` and re-opens direct deposits.
-
-
-```solidity
-event Unretired();
-```
-
 ### AssetAdded
 
 ```solidity
@@ -1505,22 +1359,6 @@ error PerDepositCapExceeded();
 error ZeroAddress();
 ```
 
-### OnlyRegistry
-`retire()` / `unretire()` caller is not the linked registry.
-
-
-```solidity
-error OnlyRegistry();
-```
-
-### RegistryAlreadySet
-`setRegistry` was called more than once; registry is set-once.
-
-
-```solidity
-error RegistryAlreadySet();
-```
-
 ### VaultShutdown
 
 ```solidity
@@ -1694,27 +1532,6 @@ redeem() instead, which returns actual swap proceeds.
 
 ```solidity
 error RedeemOnly();
-```
-
-### DepositBelowSlippageFloor
-AZ-BSK-1: raised (belt-and-suspenders) when the realized NAV delta
-from the deposit swaps falls below the slippage-discounted floor.
-Under normal operation the swap router's `amountOutMinimum` guard
-fires first; this catches any residual path where total delta is
-nevertheless deficient.
-
-
-```solidity
-error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
-```
-
-### SlippageExceeded
-AZ-BSK-5: raised when the caller-supplied `minUsdcOut` floor on
-`reabsorbRemovedAsset` is not met by the swap output.
-
-
-```solidity
-error SlippageExceeded();
 ```
 
 ## Structs

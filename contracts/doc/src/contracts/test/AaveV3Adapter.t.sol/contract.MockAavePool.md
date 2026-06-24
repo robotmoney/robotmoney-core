@@ -1,5 +1,5 @@
 # MockAavePool
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/AaveV3Adapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/AaveV3Adapter.t.sol)
 
 Minimal Aave V3 Pool mock. `supply` pulls USDC from the caller via
 `transferFrom` (consuming the adapter's allowance, like the real pool)

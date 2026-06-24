@@ -1,5 +1,5 @@
 # TestERC20
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/helpers/TestERC20.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/helpers/TestERC20.sol)
 
 **Inherits:**
 ERC20

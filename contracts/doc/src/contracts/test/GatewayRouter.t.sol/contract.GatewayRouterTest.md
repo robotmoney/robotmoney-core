@@ -1,5 +1,5 @@
 # GatewayRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5a164c31574dc88f5c31048af5cc49fb7a941a1f/contracts/test/GatewayRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/GatewayRouter.t.sol)
 
 **Inherits:**
 Test
@@ -814,50 +814,6 @@ function _doLeakyWithdraw(
     LeakyRedeemRouterVault leakyVault,
     PortfolioRouter leakyRouter
 ) internal;
-```
-
-### test_withdrawFromRouter_emptyAllowedSourceVaults_rejectsNonPinned
-
-AZ-GW-3: router withdrawal with empty allowedSourceVaults and a
-non-pinned source vault reverts with InvalidSourceVault.
-
-
-```solidity
-function test_withdrawFromRouter_emptyAllowedSourceVaults_rejectsNonPinned() public;
-```
-
-### test_withdrawFromRouter_emptyAllowedSourceVaults_acceptsPinnedVault
-
-AZ-GW-3: router withdrawal with empty allowedSourceVaults and the
-pinnedVault as sole source succeeds (pinned-only semantics allow it).
-Uses a fresh gateway whose immutable vaultContract equals vaultA so
-the pinned vault is also router-eligible, allowing the full call to
-complete without reverting.
-
-
-```solidity
-function test_withdrawFromRouter_emptyAllowedSourceVaults_acceptsPinnedVault() public;
-```
-
-### test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg
-
-AZ-GW-3: zero-share leg in the empty-allowedSourceVaults path is
-skipped without checking against pinnedVault, allowing a mixed-leg
-call where only the pinned-vault leg carries non-zero shares.
-
-
-```solidity
-function test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg() public;
-```
-
-### test_withdrawFromRouter_nonEmptyAllowedSourceVaults_unchangedBehavior
-
-AZ-GW-3 regression: non-empty allowedSourceVaults path is unchanged —
-a vault in the allowlist succeeds, one not in the list reverts.
-
-
-```solidity
-function test_withdrawFromRouter_nonEmptyAllowedSourceVaults_unchangedBehavior() public;
 ```
 
 ### _assertWithdrawalRoutedLog

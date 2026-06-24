@@ -1,10 +1,12 @@
-# RouterMockVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/GatewayRouter.t.sol)
+# BlacklistableVault
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/f6c8b468bb5448ecb94913113b3bd7ba124894db/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 ERC20
 
-Minimal ERC-4626-shaped vault for router integration tests. 1:1 deposit.
+ERC-4626-shaped vault that uses a BlacklistableUSDC instance.
+Identical to MockRouterVault but typed to BlacklistableUSDC so the
+blacklist test can pass the address check in setWeights / _requireRouterEligible.
 
 
 ## Constants
@@ -20,7 +22,7 @@ IERC20 public immutable assetToken
 
 
 ```solidity
-constructor(address asset_, string memory name_, string memory symbol_) ERC20(name_, symbol_);
+constructor(address asset_) ERC20("Blacklistable Vault Shares", "BVS");
 ```
 
 ### decimals
@@ -58,16 +60,10 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
 ```
 
-### redeem
-
-ERC-4626-style redeem (1:1 no exit fee). Burns `shares` from
-`owner`; transfers `assets == shares` to `receiver`. Enforces
-`_spendAllowance` when `owner != msg.sender`, mirroring MockVault.
-
+## Events
+### Deposit
 
 ```solidity
-function redeem(uint256 shares, address receiver, address owner)
-    external
-    returns (uint256 assets);
+event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
 ```
 
