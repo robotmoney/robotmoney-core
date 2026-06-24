@@ -451,6 +451,43 @@ contract RouterGovernanceTest is Test {
         assertEq(gov.votingPower(alice), 1e18);
     }
 
+    /// @notice getPastVotes for a snapshot 300 blocks in the past does not
+    ///         revert (AZ-GOV-1). The old 256-block cap would revert here.
+    function test_getPastVotes_300BlocksInPastDoesNotRevert() public {
+        // Voting power was set in setUp at block N. Roll forward 300 blocks so
+        // the snapshot is 300 behind the current tip.
+        uint256 snapshotBlock = block.number;
+        vm.roll(block.number + 300);
+
+        // Must not revert despite being 300 blocks behind tip.
+        uint256 power = gov.getPastVotes(alice, snapshotBlock);
+        assertEq(power, ALICE_POWER);
+    }
+
+    /// @notice getPastVotes for a snapshot 1800 blocks in the past (beyond
+    ///         MIN_VOTING_PERIOD on a 2s L2) does not revert (AZ-GOV-1).
+    function test_getPastVotes_1800BlocksInPastDoesNotRevert() public {
+        // Voting power was set in setUp at block N. Roll forward 1800 blocks
+        // (≈ 1 hour on a 2-second L2 — the full MIN_VOTING_PERIOD window) so
+        // the snapshot is 1800 behind the current tip.
+        uint256 snapshotBlock = block.number;
+        vm.roll(block.number + 1800);
+
+        // Must not revert despite being 1800 blocks behind tip.
+        uint256 power = gov.getPastVotes(alice, snapshotBlock);
+        assertEq(power, ALICE_POWER);
+    }
+
+    /// @notice getPastVotes for a snapshot more than MAX_HISTORY_BLOCKS behind
+    ///         the tip reverts with CheckpointTooOld.
+    function test_getPastVotes_revertsWhenTooOld() public {
+        uint256 snapshotBlock = block.number;
+        vm.roll(block.number + gov.MAX_HISTORY_BLOCKS() + 1);
+
+        vm.expectRevert(RouterGovernance.CheckpointTooOld.selector);
+        gov.getPastVotes(alice, snapshotBlock);
+    }
+
     // ─── vote() ──────────────────────────────────────────────────────────────
 
     function test_vote_success() public {
