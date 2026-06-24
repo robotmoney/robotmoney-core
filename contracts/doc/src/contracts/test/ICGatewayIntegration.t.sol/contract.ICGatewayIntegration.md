@@ -1,5 +1,5 @@
 # ICGatewayIntegration
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c9e141ffcd1c066f8ea8438f58e57b245c4556f8/contracts/test/ICGatewayIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/c509d0100d3df416d312069339974e56f8ecce75/contracts/test/ICGatewayIntegration.t.sol)
 
 **Inherits:**
 Test
@@ -162,5 +162,26 @@ separation ensures the agent has no IC admin privileges.
 
 ```solidity
 function test_directCallToICRegister_byAgent_reverts() public;
+```
+
+### test_committeeRegister_revertsWhenICPolicyNotSet
+
+Proves the `ICPolicyNotSet` guard on `committeeRegister` fires when
+the gateway's `icPolicy` slot is empty.  A freshly-deployed gateway
+with no `setICPolicy` call has `icPolicy == address(0)`.
+
+
+```solidity
+function test_committeeRegister_revertsWhenICPolicyNotSet() public;
+```
+
+### test_committeeVoteSubmit_revertsWhenICPolicyNotSet
+
+Proves the `ICPolicyNotSet` guard on `committeeVoteSubmit` fires when
+the gateway's `icPolicy` slot is empty.
+
+
+```solidity
+function test_committeeVoteSubmit_revertsWhenICPolicyNotSet() public;
 ```
 
