@@ -1418,7 +1418,12 @@ contract GatewayRouterTest is Test {
     function _policyWithRouterWithdrawal() internal returns (IGateway.AgentPolicy memory) {
         address[] memory destinations = new address[](1);
         destinations[0] = address(router);
-        address[] memory noSources = new address[](0);
+        // AZ-GW-3 fix: empty allowedSourceVaults now means pinned-vault-only.
+        // Router withdrawal tests that pull from vaultA/vaultB must enumerate
+        // both vaults in the allowlist so the policy correctly permits them.
+        address[] memory sources = new address[](2);
+        sources[0] = address(vaultA);
+        sources[1] = address(vaultB);
         return IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
@@ -1429,7 +1434,7 @@ contract GatewayRouterTest is Test {
             assetRecipient: makeAddr("routerWithdrawRecipient"),
             maxWithdrawPerPayment: MAX_PER_PAYMENT,
             maxWithdrawPerWindow: MAX_PER_WINDOW,
-            allowedSourceVaults: noSources
+            allowedSourceVaults: sources
         });
     }
 
@@ -1851,7 +1856,10 @@ contract GatewayRouterTest is Test {
         // Policy with large window cap so two withdrawals fit.
         address[] memory destinations = new address[](1);
         destinations[0] = address(router);
-        address[] memory noSources = new address[](0);
+        // AZ-GW-3 fix: enumerate the two router vaults in allowedSourceVaults.
+        address[] memory sources = new address[](2);
+        sources[0] = address(vaultA);
+        sources[1] = address(vaultB);
         IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
             active: true,
             validUntil: uint64(block.timestamp + 365 days),
@@ -1862,7 +1870,7 @@ contract GatewayRouterTest is Test {
             assetRecipient: makeAddr("routerWithdrawRecipient"),
             maxWithdrawPerPayment: 200 * ONE_USDC,
             maxWithdrawPerWindow: MAX_PER_WINDOW,
-            allowedSourceVaults: noSources
+            allowedSourceVaults: sources
         });
         _authorize(agent, p);
 
@@ -2308,7 +2316,10 @@ contract GatewayRouterTest is Test {
         {
             address[] memory dests = new address[](1);
             dests[0] = address(leakyRouter);
-            address[] memory noSrcs = new address[](0);
+            // AZ-GW-3 fix: enumerate leakyVault in allowedSourceVaults so the
+            // withdrawal reaches the share-custody invariant check it is testing.
+            address[] memory srcs = new address[](1);
+            srcs[0] = address(leakyVault);
             IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
                 active: true,
                 validUntil: uint64(block.timestamp + 365 days),
@@ -2319,7 +2330,7 @@ contract GatewayRouterTest is Test {
                 assetRecipient: makeAddr("leakyRecipient"),
                 maxWithdrawPerPayment: MAX_PER_PAYMENT,
                 maxWithdrawPerWindow: MAX_PER_WINDOW,
-                allowedSourceVaults: noSrcs
+                allowedSourceVaults: srcs
             });
             bytes32 salt = keccak256("leaky-authorization");
             bytes32 commitHash = keccak256(abi.encode(leakyAgent, leakyDepositor, salt));
@@ -2366,6 +2377,266 @@ contract GatewayRouterTest is Test {
             uint64(block.timestamp + 60),
             keccak256("leaky-withdraw-idem")
         );
+    }
+
+    // ─── AZ-GW-3: empty allowedSourceVaults → pinned-vault-only ─────────────
+
+    /// @dev AZ-GW-3: router withdrawal with empty allowedSourceVaults and a
+    ///      non-pinned source vault reverts with InvalidSourceVault.
+    function test_withdrawFromRouter_emptyAllowedSourceVaults_rejectsNonPinned() public {
+        // Policy with empty allowedSourceVaults (pinned-vault-only semantics).
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory noSources = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("az-gw3-recipient"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: noSources
+        });
+        _authorize(agent, p);
+
+        (uint256 sharesA,) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+
+        // Single-leg withdrawal from vaultA — not the pinned vault (vault/MockVault).
+        // Must revert: empty allowedSourceVaults means pinned-vault-only.
+        address[] memory vaults_ = new address[](1);
+        vaults_[0] = address(vaultA);
+        uint256[] memory sharesPerLeg = new uint256[](1);
+        sharesPerLeg[0] = sharesA;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.InvalidSourceVault.selector);
+        gateway.withdrawFromRouter(
+            keccak256("az-gw3-reject-order"),
+            vaults_,
+            sharesPerLeg,
+            new uint256[](1),
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-reject-idem")
+        );
+    }
+
+    /// @dev AZ-GW-3: router withdrawal with empty allowedSourceVaults and the
+    ///      pinnedVault as sole source succeeds (pinned-only semantics allow it).
+    ///      Uses a fresh gateway whose immutable vaultContract equals vaultA so
+    ///      the pinned vault is also router-eligible, allowing the full call to
+    ///      complete without reverting.
+    function test_withdrawFromRouter_emptyAllowedSourceVaults_acceptsPinnedVault() public {
+        // Deploy a gateway whose pinned vault is vaultA (which is router-registered).
+        RobotMoneyGateway pinnedGw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vaultA)), admin, pauser, address(router)
+        );
+
+        address pinnedAgent = makeAddr("pinnedAgent");
+        address pinnedDepositor = makeAddr("pinnedDepositor");
+        address pinnedRecipient = makeAddr("pinnedRecipient");
+
+        // Authorize the agent with empty allowedSourceVaults (pinned-vault-only).
+        address[] memory dests = new address[](1);
+        dests[0] = address(router);
+        address[] memory noSources = new address[](0);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: pinnedDepositor,
+            allowedDestinations: dests,
+            assetRecipient: pinnedRecipient,
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: noSources
+        });
+        vm.prank(admin);
+        pinnedGw.authorizeAgent(pinnedAgent, p);
+
+        // Deposit via router to get vaultA shares.
+        usdc.mint(pinnedAgent, 100 * ONE_USDC);
+        vm.prank(pinnedAgent);
+        usdc.approve(address(pinnedGw), 100 * ONE_USDC);
+        uint256[] memory emptyMin = new uint256[](0);
+        vm.prank(pinnedAgent);
+        pinnedGw.depositTo(
+            keccak256("az-gw3-pinned-deposit"),
+            100 * ONE_USDC,
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-pinned-deposit-idem"),
+            address(router),
+            emptyMin
+        );
+
+        uint256 sharesA = vaultA.balanceOf(pinnedDepositor);
+        assertTrue(sharesA > 0, "vaultA shares minted");
+
+        vm.prank(pinnedDepositor);
+        vaultA.approve(address(pinnedGw), sharesA);
+
+        // Single-leg withdrawal from vaultA — the pinned vault. Must succeed.
+        address[] memory vaults_ = new address[](1);
+        vaults_[0] = address(vaultA);
+        uint256[] memory sharesPerLeg = new uint256[](1);
+        sharesPerLeg[0] = sharesA;
+
+        vm.prank(pinnedAgent);
+        (bytes32 paymentId, uint256[] memory assetsPerLeg) = pinnedGw.withdrawFromRouter(
+            keccak256("az-gw3-pinned-order"),
+            vaults_,
+            sharesPerLeg,
+            new uint256[](1),
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-pinned-idem")
+        );
+
+        assertTrue(paymentId != bytes32(0), "paymentId non-zero");
+        assertEq(assetsPerLeg.length, 1, "one leg");
+        assertGt(assetsPerLeg[0], 0, "USDC out > 0");
+        assertGt(usdc.balanceOf(pinnedRecipient), 0, "USDC to recipient");
+    }
+
+    /// @dev AZ-GW-3: zero-share leg in the empty-allowedSourceVaults path is
+    ///      skipped without checking against pinnedVault, allowing a mixed-leg
+    ///      call where only the pinned-vault leg carries non-zero shares.
+    function test_withdrawFromRouter_emptyAllowedSourceVaults_skipsZeroShareLeg() public {
+        // Gateway whose pinned vault is vaultA (router-registered).
+        RobotMoneyGateway pinnedGw = new RobotMoneyGateway(
+            IERC20(address(usdc)), IERC4626(address(vaultA)), admin, pauser, address(router)
+        );
+
+        address pinnedAgent2 = makeAddr("pinnedAgent2");
+        address pinnedDepositor2 = makeAddr("pinnedDepositor2");
+        address pinnedRecipient2 = makeAddr("pinnedRecipient2");
+
+        // Empty allowedSourceVaults → pinned-vault-only.
+        address[] memory dests2 = new address[](1);
+        dests2[0] = address(router);
+        address[] memory noSources2 = new address[](0);
+        IGateway.AgentPolicy memory p2 = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: pinnedDepositor2,
+            allowedDestinations: dests2,
+            assetRecipient: pinnedRecipient2,
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: noSources2
+        });
+        vm.prank(admin);
+        pinnedGw.authorizeAgent(pinnedAgent2, p2);
+
+        // Deposit via router: splits into vaultA + vaultB shares.
+        usdc.mint(pinnedAgent2, 100 * ONE_USDC);
+        vm.prank(pinnedAgent2);
+        usdc.approve(address(pinnedGw), 100 * ONE_USDC);
+        vm.prank(pinnedAgent2);
+        pinnedGw.depositTo(
+            keccak256("az-gw3-zero-deposit"),
+            100 * ONE_USDC,
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-zero-deposit-idem"),
+            address(router),
+            new uint256[](0)
+        );
+
+        uint256 sharesA2 = vaultA.balanceOf(pinnedDepositor2);
+        assertTrue(sharesA2 > 0, "vaultA shares minted");
+
+        // Only approve gateway for vaultA — vaultB leg is zero so no transfer needed.
+        vm.prank(pinnedDepositor2);
+        vaultA.approve(address(pinnedGw), sharesA2);
+
+        // Two-leg call: vaultA (pinned, non-zero shares) + vaultB (zero shares).
+        // The zero-share vaultB leg must be skipped by the empty-allowlist check
+        // without triggering InvalidSourceVault.
+        address[] memory twoVaults = _routerVaults();
+        uint256[] memory sharesPerLeg2 = new uint256[](2);
+        sharesPerLeg2[0] = sharesA2;
+        sharesPerLeg2[1] = 0; // zero-share vaultB leg — must be skipped
+
+        vm.prank(pinnedAgent2);
+        (, uint256[] memory assetsPerLeg2) = pinnedGw.withdrawFromRouter(
+            keccak256("az-gw3-zero-order"),
+            twoVaults,
+            sharesPerLeg2,
+            new uint256[](2),
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-zero-idem")
+        );
+
+        assertGt(assetsPerLeg2[0], 0, "vaultA leg USDC received");
+        assertEq(assetsPerLeg2[1], 0, "vaultB leg skipped (zero shares)");
+        assertGt(usdc.balanceOf(pinnedRecipient2), 0, "USDC to recipient");
+    }
+
+    /// @dev AZ-GW-3 regression: non-empty allowedSourceVaults path is unchanged —
+    ///      a vault in the allowlist succeeds, one not in the list reverts.
+    function test_withdrawFromRouter_nonEmptyAllowedSourceVaults_unchangedBehavior() public {
+        // Policy restricts to vaultA only.
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(router);
+        address[] memory sources = new address[](1);
+        sources[0] = address(vaultA);
+        IGateway.AgentPolicy memory p = IGateway.AgentPolicy({
+            active: true,
+            validUntil: uint64(block.timestamp + 365 days),
+            maxPerPayment: MAX_PER_PAYMENT,
+            maxPerWindow: MAX_PER_WINDOW,
+            shareReceiver: shareReceiver,
+            allowedDestinations: destinations,
+            assetRecipient: makeAddr("az-gw3-reg-recipient"),
+            maxWithdrawPerPayment: MAX_PER_PAYMENT,
+            maxWithdrawPerWindow: MAX_PER_WINDOW,
+            allowedSourceVaults: sources
+        });
+        _authorize(agent, p);
+
+        (uint256 sharesA, uint256 sharesB) = _routerDepositAndGetShares(agent, 100 * ONE_USDC);
+        vm.prank(shareReceiver);
+        vaultA.approve(address(gateway), sharesA);
+        vm.prank(shareReceiver);
+        vaultB.approve(address(gateway), sharesB);
+
+        // Leg sourced from vaultB (not in allowlist) with non-zero shares → revert.
+        uint256[] memory sharesPerLeg2 = new uint256[](2);
+        sharesPerLeg2[0] = 0;
+        sharesPerLeg2[1] = sharesB;
+
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.InvalidSourceVault.selector);
+        gateway.withdrawFromRouter(
+            keccak256("az-gw3-reg-reject-order"),
+            _routerVaults(),
+            sharesPerLeg2,
+            new uint256[](2),
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-reg-reject-idem")
+        );
+
+        // Leg sourced from vaultA (in allowlist) → succeeds.
+        uint256[] memory sharesPerLeg1 = new uint256[](2);
+        sharesPerLeg1[0] = sharesA;
+        sharesPerLeg1[1] = 0;
+
+        vm.prank(agent);
+        (, uint256[] memory assetsPerLeg) = gateway.withdrawFromRouter(
+            keccak256("az-gw3-reg-accept-order"),
+            _routerVaults(),
+            sharesPerLeg1,
+            new uint256[](2),
+            uint64(block.timestamp + 60),
+            keccak256("az-gw3-reg-accept-idem")
+        );
+        assertGt(assetsPerLeg[0], 0, "vaultA leg assets received");
     }
 
     /// @dev Extract AgentWithdrawalRouted log and assert indexed topics.

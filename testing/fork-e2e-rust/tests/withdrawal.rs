@@ -899,6 +899,9 @@ fn router_withdrawal() {
         .unwrap()
         .as_secs();
 
+    // AZ-GW-3 fix: empty allowedSourceVaults now means pinned-vault-only
+    // (vault_a, which is the gateway's vaultContract). Router withdrawal pulls
+    // from both vault_a and vault_b, so enumerate both in allowedSourceVaults.
     let policy = IGateway::AgentPolicy {
         active: true,
         validUntil: now_secs + 3600,
@@ -909,7 +912,7 @@ fn router_withdrawal() {
         assetRecipient: asset_recipient,
         maxWithdrawPerPayment: deposit_amount,
         maxWithdrawPerWindow: deposit_amount * U256::from(10u64),
-        allowedSourceVaults: vec![],
+        allowedSourceVaults: vec![vault_a, vault_b],
     };
     admin
         .send(
