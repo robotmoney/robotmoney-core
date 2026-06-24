@@ -257,13 +257,45 @@ fn registry_register_list() {
     );
 
     // listVaults() — verify the vault is present.
+    // Retry loop: on Geth devnet there is a brief window after wait_for_receipt
+    // returns where eth_call "latest" may still reflect pre-TX state and return
+    // 0 vaults or undecodable data (blocker #1081). Poll up to 5 times with
+    // 200 ms backoff before failing.
     let list_call = IOnchainVaultRegistry::listVaultsCall {};
-    let raw = deployer
-        .call(registry_addr, &list_call)
-        .expect("listVaults");
-    let decoded = IOnchainVaultRegistry::listVaultsCall::abi_decode_returns(&raw, true)
-        .expect("decode listVaults returns");
-    let vaults = decoded._0;
+    let vaults = {
+        let mut last_err = String::new();
+        let mut result = None;
+        for attempt in 0..5u32 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            match deployer.call(registry_addr, &list_call) {
+                Err(e) => {
+                    last_err = format!("listVaults attempt {attempt}: {e}");
+                    eprintln!("[registry_register_list] {last_err}");
+                }
+                Ok(raw) => {
+                    match IOnchainVaultRegistry::listVaultsCall::abi_decode_returns(&raw, true) {
+                        Ok(decoded) if !decoded._0.is_empty() => {
+                            result = Some(decoded._0);
+                            break;
+                        }
+                        Ok(_) => {
+                            last_err = format!(
+                                "listVaults attempt {attempt}: returned empty (state not yet visible)"
+                            );
+                            eprintln!("[registry_register_list] {last_err}");
+                        }
+                        Err(e) => {
+                            last_err = format!("listVaults attempt {attempt}: decode: {e}");
+                            eprintln!("[registry_register_list] {last_err}");
+                        }
+                    }
+                }
+            }
+        }
+        result.unwrap_or_else(|| panic!("listVaults never returned vault after registerVault: {last_err}"))
+    };
     assert_eq!(
         vaults.len(),
         1,
