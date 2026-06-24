@@ -512,6 +512,84 @@ pub struct AccountPoliciesResponse {
     pub freshness: Freshness,
 }
 
+// ─── Investment Committee (IC) models ────────────────────────────────────────
+// Canonical: docs/architecture.md §5.4 — issue #1053.
+
+/// A registered IC committee agent.
+#[derive(Debug, Serialize)]
+pub struct CommitteeAgent {
+    pub address: String,
+    pub agent_id: String,
+    pub active: bool,
+    pub registered_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
+/// Response envelope for GET /v1/committee/agents.
+#[derive(Debug, Serialize)]
+pub struct CommitteeAgentsResponse {
+    pub agents: Vec<CommitteeAgent>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// A single verified vote in an agent's track record.
+#[derive(Debug, Serialize)]
+pub struct CommitteeVoteEntry {
+    pub vote_id: i64,
+    pub vault: String,
+    pub stance: i16,
+    pub target_weight_bps: i16,
+    pub confidence: i16,
+    pub rationale_uri: String,
+    pub verified: bool,
+    pub block_number: i64,
+    pub timestamp_secs: i64,
+}
+
+/// Response envelope for GET /v1/committee/agents/:address/track-record.
+#[derive(Debug, Serialize)]
+pub struct CommitteeTrackRecordResponse {
+    pub agent: String,
+    pub votes: Vec<CommitteeVoteEntry>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Per-vault verified tilt aggregate for GET /v1/committee/tilts.
+#[derive(Debug, Serialize)]
+pub struct CommitteeTilt {
+    pub vault: String,
+    pub avg_weight_bps: String,
+    pub vote_count: i64,
+}
+
+/// Response envelope for GET /v1/committee/tilts.
+#[derive(Debug, Serialize)]
+pub struct CommitteeTiltsResponse {
+    pub tilts: Vec<CommitteeTilt>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// A per-vault regime snapshot row.
+#[derive(Debug, Serialize)]
+pub struct RegimeSnapshot {
+    pub vault: String,
+    pub avg_weight_bps: String,
+    pub vote_count: i32,
+    pub block_number: i64,
+    pub indexed_at: DateTime<Utc>,
+}
+
+/// Response envelope for GET /v1/regime/feed.
+#[derive(Debug, Serialize)]
+pub struct RegimeFeedResponse {
+    pub snapshots: Vec<RegimeSnapshot>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

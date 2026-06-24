@@ -53,12 +53,14 @@ use crate::error::{ApiError, ApiResult};
 use crate::model::{
     dec_to_string, proposal_status_label, AccountHistoryEntry, AccountHistoryResponse,
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
-    AdapterAllocationEntry, AgentPolicy, AgentResponse, Contract, ContractsResponse, Deposit,
-    DepositResponse, DepositsResponse, EventKind, Freshness, Health, ProposalDetail,
-    ProposalDetailResponse, ProposalSummary, ProposalsResponse, RouterStateResponse,
-    RouterWeightsResponse, StatsResponse, Transaction, TransactionResponse, Vault, VaultDetail,
-    VaultDetailResponse, VaultFeeEntry, VaultPosition, VaultSnapshot, VaultSnapshotsResponse,
-    VaultTransferEntry, VaultTvlPoint, VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
+    AdapterAllocationEntry, AgentPolicy, AgentResponse, CommitteeAgent, CommitteeAgentsResponse,
+    CommitteeTilt, CommitteeTiltsResponse, CommitteeTrackRecordResponse, CommitteeVoteEntry,
+    Contract, ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness,
+    Health, ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
+    RegimeFeedResponse, RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse,
+    Transaction, TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry,
+    VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint,
+    VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -239,6 +241,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/accounts/:address/positions", get(get_account_positions))
         .route("/v1/accounts/:address/history", get(get_account_history))
         .route("/v1/accounts/:address/policies", get(get_account_policies))
+        // Investment Committee — issue #1053.
+        .route("/v1/committee/agents", get(list_committee_agents))
+        .route(
+            "/v1/committee/agents/:address/track-record",
+            get(get_committee_track_record),
+        )
+        .route("/v1/committee/tilts", get(get_committee_tilts))
+        .route("/v1/regime/feed", get(get_regime_feed))
         .fallback(not_found)
         .with_state(state)
 }
@@ -1410,4 +1420,162 @@ async fn latest_freshness(state: &AppState) -> ApiResult<Freshness> {
         block_number,
         indexed_at,
     })
+}
+
+// ─── Investment Committee endpoints ──────────────────────────────────────────
+// Canonical: docs/architecture.md §5.4 — issue #1053.
+
+// (agent_address BYTEA, agent_id TEXT, active BOOL, registered_at BIGINT, revoked_at BIGINT?)
+type CommitteeAgentRow = (Vec<u8>, String, bool, i64, Option<i64>);
+
+/// GET /v1/committee/agents
+///
+/// Returns all registered committee agents (active and revoked).
+async fn list_committee_agents(
+    State(state): State<AppState>,
+) -> ApiResult<Json<CommitteeAgentsResponse>> {
+    let rows: Vec<CommitteeAgentRow> = sqlx::query_as(
+        "SELECT agent_address, agent_id, active, registered_at, revoked_at \
+         FROM committee_agents \
+         WHERE chain_id = $1 \
+         ORDER BY registered_at ASC",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let agents = rows
+        .into_iter()
+        .map(|(addr, id, active, reg, rev)| CommitteeAgent {
+            address: format!("0x{}", hex::encode(addr)),
+            agent_id: id,
+            active,
+            registered_at: reg,
+            revoked_at: rev,
+        })
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(CommitteeAgentsResponse { agents, freshness }))
+}
+
+// (vote_id, vault_address, stance, target_weight_bps, confidence, rationale_uri, verified, block_number, timestamp_secs)
+type TrackRecordRow = (i64, Vec<u8>, i16, i16, i16, String, bool, i64, i64);
+
+/// GET /v1/committee/agents/:address/track-record
+///
+/// Returns all votes (verified and unverified) for a given agent, newest first.
+async fn get_committee_track_record(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> ApiResult<Json<CommitteeTrackRecordResponse>> {
+    let addr_bytes = decode_address_param(&address)?;
+
+    let rows: Vec<TrackRecordRow> = sqlx::query_as(
+        "SELECT vote_id, vault_address, stance, target_weight_bps, confidence, \
+                rationale_uri, verified, block_number, timestamp_secs \
+         FROM committee_votes \
+         WHERE chain_id = $1 AND agent_address = $2 \
+         ORDER BY block_number DESC, log_index DESC",
+    )
+    .bind(state.chain_id)
+    .bind(&addr_bytes)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let votes = rows
+        .into_iter()
+        .map(
+            |(vote_id, vault, stance, weight, conf, uri, verified, block, ts)| CommitteeVoteEntry {
+                vote_id,
+                vault: format!("0x{}", hex::encode(vault)),
+                stance,
+                target_weight_bps: weight,
+                confidence: conf,
+                rationale_uri: uri,
+                verified,
+                block_number: block,
+                timestamp_secs: ts,
+            },
+        )
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(CommitteeTrackRecordResponse {
+        agent: address,
+        votes,
+        freshness,
+    }))
+}
+
+// (vault_address, avg_weight_bps as text, vote_count)
+type TiltRow = (Vec<u8>, BigDecimal, i64);
+
+/// GET /v1/committee/tilts
+///
+/// Returns per-vault average tilt from verified votes only.
+/// Excludes vaults where all votes are unverified.
+async fn get_committee_tilts(
+    State(state): State<AppState>,
+) -> ApiResult<Json<CommitteeTiltsResponse>> {
+    let rows: Vec<TiltRow> = sqlx::query_as(
+        "SELECT vault_address, \
+                AVG(target_weight_bps::numeric) AS avg_weight_bps, \
+                COUNT(*) AS vote_count \
+         FROM committee_votes \
+         WHERE chain_id = $1 AND verified = TRUE \
+         GROUP BY vault_address \
+         ORDER BY vault_address",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let tilts = rows
+        .into_iter()
+        .map(|(vault, avg, cnt)| CommitteeTilt {
+            vault: format!("0x{}", hex::encode(vault)),
+            avg_weight_bps: avg.to_string(),
+            vote_count: cnt,
+        })
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(CommitteeTiltsResponse { tilts, freshness }))
+}
+
+// (vault_address, avg_weight_bps, vote_count, block_number, indexed_at)
+type RegimeSnapshotRow = (Vec<u8>, BigDecimal, i32, i64, DateTime<Utc>);
+
+/// GET /v1/regime/feed
+///
+/// Returns the latest regime snapshot per vault (most recent block_number).
+async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<RegimeFeedResponse>> {
+    let rows: Vec<RegimeSnapshotRow> = sqlx::query_as(
+        "SELECT DISTINCT ON (vault_address) \
+                vault_address, avg_weight_bps, vote_count, block_number, indexed_at \
+         FROM regime_snapshots \
+         WHERE chain_id = $1 \
+         ORDER BY vault_address, block_number DESC",
+    )
+    .bind(state.chain_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let snapshots = rows
+        .into_iter()
+        .map(|(vault, avg, cnt, block, indexed_at)| RegimeSnapshot {
+            vault: format!("0x{}", hex::encode(vault)),
+            avg_weight_bps: avg.to_string(),
+            vote_count: cnt,
+            block_number: block,
+            indexed_at,
+        })
+        .collect();
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(RegimeFeedResponse {
+        snapshots,
+        freshness,
+    }))
 }

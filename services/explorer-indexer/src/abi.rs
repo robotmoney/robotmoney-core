@@ -334,6 +334,42 @@ sol! {
         /// Returns the number of registered vaults (all statuses).
         function vaultCount() external view returns (uint256);
     }
+
+    /// Event surface from `InvestmentCommitteePolicy`.
+    ///
+    /// Signatures match `contracts/gateway/InvestmentCommitteePolicy.sol` and
+    /// `contracts/gateway/interfaces/IInvestmentCommitteePolicy.sol` exactly.
+    /// See `docs/architecture.md §5.4` and issue #1053.
+    ///
+    /// Three events are indexed:
+    ///   AgentRegistered  — upserts committee_agents row.
+    ///   AgentRevoked     — sets committee_agents.active = false.
+    ///   VoteSubmitted    — stores commitment; memo hash-verification sets verified.
+    #[allow(missing_docs)]
+    interface IInvestmentCommitteePolicyEvents {
+        /// Emitted when ADMIN_ROLE registers a committee agent.
+        /// InvestmentCommitteePolicy.sol:104
+        event AgentRegistered(address indexed agent, string agentId);
+
+        /// Emitted when ADMIN_ROLE revokes a committee agent.
+        /// InvestmentCommitteePolicy.sol:107
+        event AgentRevoked(address indexed agent);
+
+        /// Emitted when an allowlisted agent submits a signed vote.
+        /// InvestmentCommitteePolicy.sol:110
+        /// Stance ABI-encodes as uint8: Overweight=0, Neutral=1, Underweight=2.
+        event VoteSubmitted(
+            uint256 indexed voteId,
+            address indexed agent,
+            address indexed vault,
+            uint8   stance,
+            uint16  targetWeightBps,
+            uint8   confidence,
+            string  rationaleUri,
+            bytes32 voteJsonHash,
+            uint64  timestamp
+        );
+    }
 }
 
 /// Topic-0 hashes the indexer matches on `eth_getLogs`. Computed once
@@ -373,6 +409,16 @@ pub struct Topics {
     pub erc4626_deposit: B256,
     /// ERC-4626 Withdraw event emitted by any vault on every redemption.
     pub erc4626_withdraw: B256,
+    // InvestmentCommitteePolicy events — docs/architecture.md §5.4, issue #1053.
+    /// Emitted when ADMIN_ROLE registers a committee agent.
+    /// InvestmentCommitteePolicy.sol:104
+    pub ic_agent_registered: B256,
+    /// Emitted when ADMIN_ROLE revokes a committee agent.
+    /// InvestmentCommitteePolicy.sol:107
+    pub ic_agent_revoked: B256,
+    /// Emitted when an allowlisted agent submits a signed vote.
+    /// InvestmentCommitteePolicy.sol:110
+    pub ic_vote_submitted: B256,
 }
 
 impl Topics {
@@ -416,6 +462,12 @@ impl Topics {
             default_weights_set: keccak256(b"DefaultWeightsSet(address[],uint256[])"),
             erc4626_deposit: keccak256(b"Deposit(address,address,uint256,uint256)"),
             erc4626_withdraw: keccak256(b"Withdraw(address,address,address,uint256,uint256)"),
+            // InvestmentCommitteePolicy — issue #1053.
+            ic_agent_registered: keccak256(b"AgentRegistered(address,string)"),
+            ic_agent_revoked: keccak256(b"AgentRevoked(address)"),
+            ic_vote_submitted: keccak256(
+                b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
+            ),
         }
     }
 
@@ -445,6 +497,10 @@ impl Topics {
             self.default_weights_set,
             self.erc4626_deposit,
             self.erc4626_withdraw,
+            // InvestmentCommitteePolicy — issue #1053.
+            self.ic_agent_registered,
+            self.ic_agent_revoked,
+            self.ic_vote_submitted,
         ]
     }
 }
@@ -536,6 +592,19 @@ mod tests {
         // ERC-4626 standard events.
         assert_eq!(t.erc4626_deposit, IVaultEvents::Deposit::SIGNATURE_HASH);
         assert_eq!(t.erc4626_withdraw, IVaultEvents::Withdraw::SIGNATURE_HASH);
+        // InvestmentCommitteePolicy — issue #1053.
+        assert_eq!(
+            t.ic_agent_registered,
+            IInvestmentCommitteePolicyEvents::AgentRegistered::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.ic_agent_revoked,
+            IInvestmentCommitteePolicyEvents::AgentRevoked::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.ic_vote_submitted,
+            IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH
+        );
     }
 
     /// CI ABI drift gate — compares `sol!`-derived SIGNATURE_HASH constants
@@ -654,6 +723,23 @@ mod tests {
                 "Withdraw",
                 b"Withdraw(address,address,address,uint256,uint256)",
                 IVaultEvents::Withdraw::SIGNATURE_HASH,
+            ),
+            // InvestmentCommitteePolicy.sol:104,107,110 — issue #1053.
+            // Stance ABI-encodes as uint8.
+            (
+                "AgentRegistered",
+                b"AgentRegistered(address,string)",
+                IInvestmentCommitteePolicyEvents::AgentRegistered::SIGNATURE_HASH,
+            ),
+            (
+                "IC AgentRevoked",
+                b"AgentRevoked(address)",
+                IInvestmentCommitteePolicyEvents::AgentRevoked::SIGNATURE_HASH,
+            ),
+            (
+                "VoteSubmitted",
+                b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
+                IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH,
             ),
         ];
 
