@@ -153,7 +153,7 @@ pub fn run_register(args: RegisterArgs) -> i32 {
         }
     };
 
-    let ic_addr = match resolve_ic_address(&cfg, "register") {
+    let ic_addr = match resolve_ic_address(&cfg, "register", args.pretty) {
         Ok(a) => a,
         Err(code) => return code,
     };
@@ -318,7 +318,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         }
     };
 
-    let ic_addr = match resolve_ic_address(&cfg, "vote-submit") {
+    let ic_addr = match resolve_ic_address(&cfg, "vote-submit", args.pretty) {
         Ok(a) => a,
         Err(code) => return code,
     };
@@ -472,11 +472,23 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
         Ok(h) => h,
         Err(e) => {
             log::error!("rmpc committee vote-submit: broadcast failed: {e}");
+            // When the RPC node simulates the tx and finds the agent is not on
+            // the allowlist, it returns `execution reverted` (with or without
+            // the ABI-encoded AgentNotAllowlisted selector). Surface this as
+            // the named ErrNotAllowlisted variant so callers can match on it.
+            let err_str = format!("{e}");
+            let (error_name, message) = if err_str.contains("revert") {
+                ("ErrNotAllowlisted", Some(format!(
+                    "transaction reverted — caller is not an allowlisted committee agent: {err_str}"
+                )))
+            } else {
+                ("ErrBroadcastFailed", Some(err_str))
+            };
             emit_failure(
                 &CommitteeFailure {
                     ok: false,
-                    error: "ErrBroadcastFailed".to_string(),
-                    message: Some(format!("{e}")),
+                    error: error_name.to_string(),
+                    message,
                 },
                 args.pretty,
             );
@@ -519,7 +531,7 @@ pub fn run_vote_submit(args: VoteSubmitArgs) -> i32 {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn resolve_ic_address(cfg: &Config, subcommand: &str) -> Result<Address, i32> {
+fn resolve_ic_address(cfg: &Config, subcommand: &str, pretty: bool) -> Result<Address, i32> {
     match cfg.ic_policy_address.as_deref() {
         Some(s) => Address::from_str(s).map_err(|e| {
             log::error!("rmpc committee {subcommand}: ic_policy_address parse error: {e}");
@@ -529,6 +541,18 @@ fn resolve_ic_address(cfg: &Config, subcommand: &str) -> Result<Address, i32> {
             log::error!(
                 "rmpc committee {subcommand}: ic_policy_address not set in config; \
                  add `ic_policy_address = \"0x...\"` to the operator TOML"
+            );
+            emit_failure(
+                &CommitteeFailure {
+                    ok: false,
+                    error: "ErrIcContractNotConfigured".to_string(),
+                    message: Some(
+                        "ic_policy_address is not set in the operator config; \
+                         add `ic_policy_address = \"0x...\"` to the TOML"
+                            .to_string(),
+                    ),
+                },
+                pretty,
             );
             Err(EXIT_STARTUP_FAIL)
         }
