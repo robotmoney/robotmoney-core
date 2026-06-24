@@ -1,5 +1,5 @@
 # BasketVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/5f3ed0a39e045bd3fe3f3f4a024d482bf1b89ff8/contracts/vaults/BasketVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/d4e061fc698a91b57b77eff38896e3a0f0dbbbdc/contracts/vaults/BasketVault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, Pausable, ReentrancyGuard
@@ -273,6 +273,27 @@ uint256 public navDeviationGuardBps
 ```
 
 
+### _lastMintedShares
+AZ-BSK-2: scratch slots set by _deposit/_withdraw so that the
+overridden deposit()/redeem() can return the ACTUAL minted/withdrawn
+amounts instead of OZ's pre-computed preview values. The reentrancy
+guard on _deposit/_withdraw ensures these are single-writer.
+`internal` (no public getter) to save bytecode on the EIP-170-tight
+vault family.
+
+
+```solidity
+uint256 internal _lastMintedShares
+```
+
+
+### _lastWithdrawnAssets
+
+```solidity
+uint256 internal _lastWithdrawnAssets
+```
+
+
 ## Functions
 ### _grantRole
 
@@ -377,6 +398,26 @@ checks before delegating to this base implementation.
 function totalAssets() public view virtual override returns (uint256);
 ```
 
+### deposit
+
+AZ-BSK-2: override OZ ERC4626.deposit() to return the ACTUAL
+minted share count rather than OZ's pre-computed previewDeposit
+estimate.
+OZ ERC4626.deposit() computes `shares = previewDeposit(assets)`
+before calling _deposit() and returns that pre-computed value.
+BasketVault._deposit() discards the precomputed shares and mints
+post-swap realizedDelta shares instead, so OZ's return value is
+overstated when realized NAV > slippage floor. PortfolioRouter
+compares minSharesPerLeg against the deposit() return value; an
+overstated return makes the per-leg slippage guard ineffective.
+This override reads _lastMintedShares written by _deposit() and
+returns that instead.
+
+
+```solidity
+function deposit(uint256 assets, address receiver) public override returns (uint256);
+```
+
 ### _deposit
 
 Deposit `assets` USDC and mint shares on the REALIZED swap
@@ -388,23 +429,23 @@ the realized spot proceeds diverge from the TWAP mark, the minted
 share count no longer matches the value the vault actually captured:
 if spot beats TWAP the depositor's own swap surplus inflates their
 share value so `previewRedeem(previewDeposit(x)) > x` becomes
-reachable (a farmable round-trip leak). We override `deposit` to
+reachable (a farmable round-trip leak). We override `_deposit` to
 swap FIRST, measure the realized TWAP-valued NAV delta the vault
-gained, and mint against that — capped at the slippage-discounted
-deposit floor so the depositor is never credited more than the
-worst-case `previewDeposit` floor. This makes the round trip
-`previewRedeem(previewDeposit(x)) <= x` hold for every realized
-execution price (SUP-3), and removes the mint-vs-haircut asymmetry
-that transferred value to incumbents (NC-6).
+gained, and mint against the FULL realized delta — closing the
+AZ-BSK-1 value-extraction vector where the slippage floor was used as
+a credit cap instead of a revert guard. The slippage floor now acts
+only as a revert guard (AZ-BSK-1 fix). SUP-3 is preserved because
+`previewRedeem(previewDeposit(x)) <= x` holds: `previewDeposit`
+returns the slippage-discounted floor (a lower bound on actual minted
+shares) and `previewRedeem` discounts by slippage again on exit.
 
 Deposit core (the OZ `deposit`/`mint` entrypoints route here). The
 `shares` arg OZ pre-computed from `previewDeposit`/`previewMint` is
 DISCARDED: we mint on the REALIZED post-swap NAV delta instead, so
 the minted count reflects the value the vault actually captured —
 not a pre-swap TWAP mark — closing the SUP-3/F-16/NC-6 round-trip
-leak. The realized credit is capped at the slippage-discounted
-deposit floor, which equals the OZ preview floor in the normal
-(capped) case, so `deposit`/`mint` return values stay consistent.
+leak. `deposit()` is overridden to return the actual minted share
+count (AZ-BSK-2 fix) rather than OZ's pre-computed preview value.
 
 
 ```solidity
@@ -430,6 +471,28 @@ Emits a WeightSnapshot event recording the equal-weight allocation applied.
 
 ```solidity
 function _routeDeposit(address caller, uint256 usdcAmount) internal;
+```
+
+### redeem
+
+AZ-BSK-2: override OZ ERC4626.redeem() to return the ACTUAL
+withdrawn USDC amount rather than OZ's pre-computed previewRedeem
+estimate.
+OZ ERC4626.redeem() computes `assets = previewRedeem(shares)` before
+calling _withdraw() and returns that pre-computed value. BasketVault.
+_withdraw() delivers post-swap net USDC (after exit fee), which can
+differ from previewRedeem. PortfolioRouter compares minAssetsPerLeg
+against the redeem() return value; an overstated return makes the
+per-leg slippage guard ineffective.
+This override reads _lastWithdrawnAssets written by _withdraw() and
+returns that instead.
+
+
+```solidity
+function redeem(uint256 shares, address receiver, address owner)
+    public
+    override
+    returns (uint256);
 ```
 
 ### previewRedeem
@@ -1628,6 +1691,18 @@ redeem() instead, which returns actual swap proceeds.
 
 ```solidity
 error RedeemOnly();
+```
+
+### DepositBelowSlippageFloor
+AZ-BSK-1: raised (belt-and-suspenders) when the realized NAV delta
+from the deposit swaps falls below the slippage-discounted floor.
+Under normal operation the swap router's `amountOutMinimum` guard
+fires first; this catches any residual path where total delta is
+nevertheless deficient.
+
+
+```solidity
+error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
 ```
 
 ## Structs
