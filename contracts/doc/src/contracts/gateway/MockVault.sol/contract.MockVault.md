@@ -1,5 +1,5 @@
 # MockVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fb9985be700340695a515ae6d42f97a508023e8d/contracts/gateway/MockVault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/gateway/MockVault.sol)
 
 **Inherits:**
 ERC20, ReentrancyGuard
@@ -11,6 +11,10 @@ Minimal `IERC4626`-shaped vault for gateway tests. Mints `rmUSDC`
 shares 1:1 against deposited USDC and redeems 1:1 with no exit fee.
 Covers the full deposit→redeem round-trip exercised by the dapp e2e
 (issue #257). This contract is a TEST FIXTURE only.
+Implements `IRetirableVault` (retire/unretire) as no-ops so that
+`VaultRegistry.setVaultStatus` can call the deposit-halt hook without
+reverting. The mock has no registry link, so no access-control is
+enforced here — the stubs satisfy the interface only.
 
 
 ## Constants
@@ -38,6 +42,28 @@ uint256 public constant exitFeeBps = 0
 
 ```solidity
 constructor(address asset_) ERC20("Mock Robot Money USDC", "rmUSDC");
+```
+
+### retire
+
+No-op retire stub. Satisfies `IRetirableVault` so
+`VaultRegistry.setVaultStatus(Paused/Retired)` can call the
+deposit-halt hook without reverting. The mock has no registry
+link and no deposit-halt flag; this is a test fixture only.
+
+
+```solidity
+function retire() external;
+```
+
+### unretire
+
+No-op unretire stub. Mirror of `retire()` for the `Active`
+restore path of `VaultRegistry.setVaultStatus`.
+
+
+```solidity
+function unretire() external;
 ```
 
 ### decimals

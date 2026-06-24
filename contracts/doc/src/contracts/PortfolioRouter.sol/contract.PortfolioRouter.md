@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fb9985be700340695a515ae6d42f97a508023e8d/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -543,7 +543,8 @@ function _executeLegs(
     uint256[] memory legAmounts,
     bool[] memory available,
     uint256[] calldata minSharesPerLeg,
-    uint256[] memory sharesPerLeg
+    uint256[] memory sharesPerLeg,
+    uint256 usdcBalanceBefore
 ) internal;
 ```
 
@@ -1053,15 +1054,33 @@ error VaultAssetUnreadable(address vault);
 |`vault`|`address`|The vault address whose `asset()` call reverted.|
 
 ### UsdcCustodyInvariantViolated
-After `_executeLegs` completes the router's USDC balance is
-non-zero, meaning one or more vaults accepted less than their
-allocated `legAmount`. The entire deposit is reverted so no
-USDC is permanently stranded in the router.
+After `_executeLegs` completes the router's USDC balance delta
+(relative to the snapshot taken before any legs ran) is non-zero,
+meaning one or more vaults accepted less than their allocated
+`legAmount`. The entire deposit is reverted so no USDC is
+permanently stranded in the router.
 
 
 ```solidity
 error UsdcCustodyInvariantViolated();
 ```
+
+### UsdcLegTransferFailed
+A vault's ERC-4626 `deposit()` call reverted, indicating a USDC
+blacklist hit or fee-on-transfer failure for this leg. Wraps the
+low-level revert so callers can distinguish this cause from the
+generic `UsdcCustodyInvariantViolated` custody check (FS-RTR-1).
+
+
+```solidity
+error UsdcLegTransferFailed(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`| The vault whose deposit call reverted.|
 
 ### UnauthorizedRedeemer
 Caller is not the shareHolder and has insufficient ERC-20

@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fb9985be700340695a515ae6d42f97a508023e8d/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -205,6 +205,11 @@ function test_deposit_asymmetricWeights() public;
 ```
 
 ### test_deposit_revertsIfAnyLegReverts
+
+FS-RTR-1: when a vault's deposit() reverts (e.g. USDC blacklist
+or fee-on-transfer), the router surfaces a named
+UsdcLegTransferFailed error that identifies the vault, rather
+than the opaque raw revert string from the vault.
 
 
 ```solidity
@@ -609,6 +614,33 @@ happy path without triggering UsdcCustodyInvariantViolated.
 
 ```solidity
 function test_deposit_happyPath_leavesZeroUsdcInRouter() public;
+```
+
+### test_deposit_revertsWithNamedError_whenUsdcBlacklist
+
+FS-RTR-1 / AC#2: when the router's USDC contract reverts on
+transferFrom because the router address is blacklisted, the
+router re-raises UsdcLegTransferFailed (not the opaque
+UsdcCustodyInvariantViolated) so callers can identify the cause.
+Setup: deploy a BlacklistableUSDC + BlacklistableVault, wire a
+fresh router, blacklist the router address, then attempt a
+deposit through that vault.
+
+
+```solidity
+function test_deposit_revertsWithNamedError_whenUsdcBlacklist() public;
+```
+
+### test_deposit_succeedsWithDonatedUsdcInRouter
+
+AZ-RTR-2 / AC#3: a small USDC donation to the router before a
+deposit must not cause the deposit to revert. The post-deposit
+invariant uses a balance delta (snapshot before pulling the
+caller's funds) so the pre-existing donated USDC is excluded.
+
+
+```solidity
+function test_deposit_succeedsWithDonatedUsdcInRouter() public;
 ```
 
 ### test_sweepForeignToken_revertsForUsdc

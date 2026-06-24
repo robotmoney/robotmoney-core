@@ -1,5 +1,5 @@
 # BasketVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/fb9985be700340695a515ae6d42f97a508023e8d/contracts/test/BasketVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/BasketVault.t.sol)
 
 **Inherits:**
 Test
@@ -267,6 +267,28 @@ never a revert, even on a degraded pool.
 
 ```solidity
 function test_LIFE6_reabsorbZeroBalanceIsNoOp() public;
+```
+
+### test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded
+
+AZ-BSK-5: reabsorbRemovedAsset reverts with SlippageExceeded when
+the caller-supplied minUsdcOut exceeds the actual swap output, so
+MEV sandwich attacks on NAV recovery cannot extract value below the
+caller's floor.
+
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded() public;
+```
+
+### test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav
+
+AZ-BSK-5: reabsorbRemovedAsset succeeds and credits NAV when the
+caller-supplied minUsdcOut is at or below the actual swap output.
+
+
+```solidity
+function test_AZ_BSK5_reabsorbRemovedAsset_succeedsAndCreditsNav() public;
 ```
 
 ### test_NC8_addAsset_rejectsActiveDuplicate
@@ -865,7 +887,14 @@ function test_SUP3_roundTripNeverProfits_fuzz(uint256 x, uint16 slip) public;
 SUP-3 (stateful): a real deposit → immediate redeem within the
 deviation band returns no more than was deposited. Exercises the
 mint-on-realized-proceeds accounting (F-16/NC-6): shares are minted
-on the realized post-swap NAV delta, not a pre-swap TWAP mark.
+on the realized post-swap NAV delta (AZ-BSK-1 fix), and
+redeem() returns the actual USDC received (AZ-BSK-2 fix).
+Router mock is set to return the stranger's proportional share at 1:1.
+AZ-BSK-1 fix: stranger is credited realizedDelta shares (not
+just slippageFloor shares). At 1:1 execution on a 10 000 USDC pool,
+stranger's fraction = 1000/(10000+1000) = 1/11, so their sell
+of 1/11 of the basket at 1:1 USDC yields exactly x. The invariant
+got <= x holds (with equality at 1:1).
 
 
 ```solidity
@@ -893,6 +922,123 @@ guard does not block ordinary, market-consistent settlement.
 
 ```solidity
 function test_ORA4_withinBandSettles() public;
+```
+
+### test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor
+
+AZ-BSK-1: when realized NAV > slippage floor (swap beats the TWAP
+worst-case), the depositor is credited realizedDelta shares, not just
+the slippage-discounted floor.  Pre-fix, the floor capped credit even
+when swaps captured extra value; post-fix the full delta is minted.
+
+
+```solidity
+function test_AZBSK1_depositCreditsRealizedDeltaNotSlippageFloor() public;
+```
+
+### test_AZBSK1_depositAtFloorCreditsFloor
+
+AZ-BSK-1: when realized NAV equals the slippage floor (worst-case
+execution), the depositor is still credited the realized delta
+(which equals the floor in this case).
+
+
+```solidity
+function test_AZBSK1_depositAtFloorCreditsFloor() public;
+```
+
+### test_AZBSK2_depositReturnsActualMintedShares
+
+AZ-BSK-2: BasketVault.deposit() returns the ACTUAL minted share
+count, not OZ's previewDeposit estimate. When realized NAV > floor,
+previewDeposit underestimates; the override must return the true count.
+
+
+```solidity
+function test_AZBSK2_depositReturnsActualMintedShares() public;
+```
+
+### test_AZBSK2_redeemReturnsActualWithdrawnAssets
+
+AZ-BSK-2: BasketVault.redeem() returns the ACTUAL USDC withdrawn,
+not OZ's previewRedeem estimate. Confirms PortfolioRouter slippage
+guards are evaluated against accurate amounts.
+
+
+```solidity
+function test_AZBSK2_redeemReturnsActualWithdrawnAssets() public;
+```
+
+### test_AZBSK3_depositExclusionWindowUsesEligibleNAV
+
+AZ-BSK-3: when idle USDC is present (e.g. from an emergency-unwound
+adapter), a new deposit prices shares against the active-adapter-only
+NAV (taBefore − idleUSDC), not the full totalAssets. This prevents a
+new depositor from capturing recovery value that belongs to existing
+holders who bore the original loss.
+Setup: seed the vault at 1:1, inject idle USDC directly to simulate
+the proceeds of an excluded adapter sitting un-deployed, then deposit
+and verify the minted shares match the eligible-NAV formula.
+
+
+```solidity
+function test_AZBSK3_depositExclusionWindowUsesEligibleNAV() public;
+```
+
+### test_AZBSK3_totalAssetsUnchangedByExclusionFix
+
+AZ-BSK-3: totalAssets() accounts for ALL vault USDC (including idle
+proceeds from excluded adapters). The fix only changes how shares are
+priced during deposit — it does not alter the NAV accounting.
+
+
+```solidity
+function test_AZBSK3_totalAssetsUnchangedByExclusionFix() public;
+```
+
+### test_retire_setsDepositsPaused
+
+FS-VLT-19: retire() sets depositsPaused = true and emits Retired.
+
+
+```solidity
+function test_retire_setsDepositsPaused() public;
+```
+
+### test_unretire_clearsDepositsPaused
+
+FS-VLT-19: unretire() clears depositsPaused and emits Unretired.
+
+
+```solidity
+function test_unretire_clearsDepositsPaused() public;
+```
+
+### test_retire_revertsForNonRegistry
+
+retire() reverts when caller is not the linked registry.
+
+
+```solidity
+function test_retire_revertsForNonRegistry() public;
+```
+
+### test_unretire_revertsForNonRegistry
+
+unretire() reverts when caller is not the linked registry.
+
+
+```solidity
+function test_unretire_revertsForNonRegistry() public;
+```
+
+### test_setRegistry_revertsOnSecondCall
+
+setRegistry() is set-once; a second call reverts RegistryAlreadySet.
+
+
+```solidity
+function test_setRegistry_revertsOnSecondCall() public;
 ```
 
 ## Events

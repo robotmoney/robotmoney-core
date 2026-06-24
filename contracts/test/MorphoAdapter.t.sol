@@ -389,9 +389,7 @@ contract MorphoAdapterTest is Test {
 
         vm.prank(vault);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                MorphoAdapter.ExposureCapExceeded.selector, first, second, cap
-            )
+            abi.encodeWithSelector(MorphoAdapter.ExposureCapExceeded.selector, first, second, cap)
         );
         adapter.deploy(second);
     }
