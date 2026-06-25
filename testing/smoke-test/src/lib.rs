@@ -1447,6 +1447,10 @@ impl Fixture {
     /// (`cast call`). Used to confirm an `approve` is visible on-chain before
     /// the dependent `transferFrom`/`deposit` is sent. No signing — a read-only
     /// query against the live chain.
+    ///
+    /// This is the read half of the poll-after-write fix for the Geth
+    /// read-after-write state-lag class; canonical doc:
+    /// `docs/testing/geth-state-lag.md`.
     pub fn erc20_allowance(
         &self,
         token: Address,
@@ -1500,7 +1504,7 @@ impl Fixture {
     /// `ERC20: transfer amount exceeds allowance` revert on the dependent
     /// deposit. Polling the allowance read (>=5 attempts, 200ms apart) closes
     /// that read-after-write window deterministically — a real race fix, not a
-    /// skip.
+    /// skip. Canonical doc: `docs/testing/geth-state-lag.md`.
     fn approve_and_confirm(
         &self,
         private_key_hex: &str,
@@ -2870,6 +2874,8 @@ fn fetch_current_block_number(rpc_url: &str) -> Result<u64, HarnessError> {
 /// after — forks a block that already includes the `registerVault` tx. Avoids
 /// the intermittent `setRouterEligible -> NotRegistered()` race where Geth's
 /// "latest" lags the just-mined registration on a loaded CI runner (issue #880).
+/// This is an instance of the Geth read-after-write state-lag class; canonical
+/// doc: `docs/testing/geth-state-lag.md`.
 fn wait_for_vault_registered(
     rpc_url: &str,
     registry: &str,
