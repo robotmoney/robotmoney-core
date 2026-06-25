@@ -31,11 +31,24 @@
 
 name: explorer-indexer-migrations-reorg
 
+# CI taxonomy (issue #1105): every job here exercises integration/devnet/
+# testcontainer behaviour (migrations against a real Postgres, reorg handling on a
+# real Geth devnet, IC committee/regime endpoints against a Postgres testcontainer)
+# — that is the `system-correctness` class. system-correctness skips drafts and runs
+# from ready_for_review onward, and is bypassed on docs-only changes.
+env:
+  CI_CLASS: system-correctness
+
 on:
-  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
+  # system-correctness: defer until the PR is ready for review (no draft runs),
+  # plus push to dev/dev-phase-* for merged-commit coverage. paths-ignore bypasses
+  # docs-only PRs (no behavioural code to exercise).
   push:
     branches: [dev, "dev-phase-*"]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -50,6 +63,8 @@ jobs:
   fast:
     name: explorer-indexer-fast
     runs-on: ubuntu-latest
+    # system-correctness: never run on a draft PR (push/dispatch events have no PR).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -82,9 +97,53 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --test rpc_failure -- --nocapture
 
+  # EXPLORER-API IC COMMITTEE / REGIME ENDPOINT TESTS (issue #1105)
+  # The clients/explorer-api crate (the read API the dApp queries) shipped IC committee
+  # and regime-feed endpoint integration tests (committee_api.rs, regime_api.rs from
+  # PR #1083) that NO required suite executed — the fast job above runs only
+  # services/explorer-indexer, a different crate. That left the IC endpoint handlers with
+  # zero executed-in-CI coverage (a silent-skip false green). This job runs them so a
+  # regression in any committee/regime endpoint handler turns CI RED.
+  #
+  # Like the fast job, these tests start a Postgres TESTCONTAINER from inside the test code
+  # (not a CI service), so the runner only needs Docker. We verify Docker up front: if it
+  # is absent the testcontainer cannot start and the tests would otherwise fail with a
+  # confusing "connection refused" — the explicit check fails LOUDLY with a clear message
+  # (loud-skip, never silent-skip). The cargo_test_require_executed.sh wrapper additionally
+  # fails RED if zero tests were collected, so "no tests ran" can never be a green pass.
+  explorer-api:
+    name: explorer-api-committee-regime
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify Docker is available (testcontainer Postgres resource)
+        run: |
+          # The committee_api / regime_api tests start a Postgres testcontainer in-process.
+          # Fail loudly here if Docker is missing instead of letting the tests skip/no-op.
+          docker version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: explorer-api committee + regime endpoint tests
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
+            --test committee_api \
+            --test regime_api -- --nocapture
+
   devnet:
     name: explorer-indexer-devnet
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4

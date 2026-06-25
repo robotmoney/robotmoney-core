@@ -15,11 +15,16 @@
 # setup container re-runs against a populated volume and exits 1, hanging the test.
 # The explicit teardown between binaries is load-bearing; do not remove it.
 #
-# WHY skill_docs_parity AND dapp_toml_roundtrip RUN HERE BEFORE THE DOCKER TESTS
+# WHY skill_docs_parity, dapp_toml_roundtrip AND committee RUN HERE BEFORE THE DOCKER TESTS
 # These tests require the rmpc binary but no chain. Running them first means that if
-# the plugin manifest or TOML config drifts, CI fails fast (< 1 min) before paying
-# for the Docker boot. They are in this suite rather than suite 6 because they depend
-# on the release binary being built.
+# the plugin manifest, TOML config, or committee register/vote-submit calldata path
+# drifts, CI fails fast (< 1 min) before paying for the Docker boot. They are in this
+# suite rather than suite 6 because they depend on the release binary being built.
+# The committee test (clients/rust-payment-client/tests/committee.rs, issue #1105) mocks
+# the JSON-RPC server with mockito and drives the real `rmpc committee register` /
+# `vote-submit` binary via assert_cmd — no live chain, so it belongs in the binary-only
+# parity job, not the devnet matrix. It is wrapped in cargo_test_require_executed.sh so a
+# zero-tests-collected run fails RED instead of a silent green.
 #
 # WHY nonce-race-stress IS A SEPARATE JOB (NOT A STEP)
 # The race test runs 100 iterations of concurrent nonce acquisition and is sensitive to
@@ -38,16 +43,25 @@
 
 name: rust-client-devnet-integration
 
+# CI taxonomy (issue #1105): this suite proves rmpc end-to-end against a real
+# devnet plus binary-level integration tests (parity, committee register/vote-submit)
+# — the `system-correctness` class. It defers past drafts to ready_for_review and is
+# bypassed on docs-only changes.
+env:
+  CI_CLASS: system-correctness
+
 on:
-  # HEAVY tier: this devnet integration suite is a merge gate for `dev` — it runs
-  # on every pull_request targeting dev (no path filter, so the gate always
-  # reports for any branch merging to dev) and on push to dev for merged-commit
-  # coverage. This is where cross-feature devnet interactions are proven.
-  # See docs/development/ci-suites.md (CI velocity tiers).
+  # system-correctness: this devnet integration suite is a merge gate for `dev`. It
+  # defers past draft PRs (ready_for_review onward) so drafts are not charged for the
+  # Docker boot, and runs on push to dev for merged-commit coverage. paths-ignore
+  # bypasses docs-only PRs. See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
     branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -65,6 +79,7 @@ jobs:
   parity:
     name: rmpc-parity
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +103,16 @@ jobs:
         working-directory: clients/rust-payment-client
         run: cargo test --test dapp_toml_roundtrip -- --nocapture
 
+      # Investment-Committee register / vote-submit integration test (issue #1105).
+      # mockito-backed, drives the release rmpc binary via assert_cmd. Wrapped in the
+      # executed-count guard so a zero-tests-collected run fails RED, never silent-green.
+      - name: rmpc committee register / vote-submit
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test committee -- --nocapture
+
   # PARALLEL DEVNET MATRIX (issue #600): each e2e binary booted its own Geth+Lighthouse
   # devnet on port 8545, so they were forced to run SERIALLY in one job with a
   # `docker compose down -v` between each (suite wall-clock ~45m). Splitting them into a
@@ -98,6 +123,7 @@ jobs:
   devnet-e2e:
     name: rmpc-e2e-${{ matrix.binary }}
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -142,6 +168,7 @@ jobs:
   nonce-race-stress:
     name: rmpc-nonce-race-stress
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
