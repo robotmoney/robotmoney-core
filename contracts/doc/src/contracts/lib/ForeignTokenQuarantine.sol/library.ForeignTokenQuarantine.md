@@ -1,5 +1,5 @@
 # ForeignTokenQuarantine
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/lib/ForeignTokenQuarantine.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/lib/ForeignTokenQuarantine.sol)
 
 **Title:**
 ForeignTokenQuarantine

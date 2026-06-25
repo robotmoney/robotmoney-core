@@ -1,5 +1,5 @@
 # MorphoAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/adapters/MorphoAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/adapters/MorphoAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
@@ -42,6 +42,17 @@ address public immutable VAULT
 ```
 
 
+## State Variables
+### maxExposure
+Maximum USDC that may be deployed into Morpho at one time.
+Zero means uncapped (default). Set via `setMaxExposure`.
+
+
+```solidity
+uint256 public maxExposure
+```
+
+
 ## Functions
 ### onlyVault
 
@@ -56,6 +67,22 @@ modifier onlyVault() ;
 ```solidity
 constructor(address morphoVault_, address usdc_, address vault_) ;
 ```
+
+### setMaxExposure
+
+Set the governance-configurable per-adapter max-exposure cap.
+Only callable by the `VAULT` address.
+
+
+```solidity
+function setMaxExposure(uint256 cap) external onlyVault;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`cap`|`uint256`|Maximum USDC that may be deployed into Morpho at one time. Set to 0 to disable the cap (uncapped, default behavior).|
+
 
 ### deploy
 
@@ -168,4 +195,20 @@ Constructor passed `address(0)` for one of the immutable addresses.
 ```solidity
 error ZeroAddress();
 ```
+
+### ExposureCapExceeded
+Proposed deployment would push adapter balance above `maxExposure`.
+
+
+```solidity
+error ExposureCapExceeded(uint256 current, uint256 amount, uint256 cap);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`current`|`uint256`|  Current deployed balance (totalAssets) before this deploy.|
+|`amount`|`uint256`|   Amount being deployed.|
+|`cap`|`uint256`|      Configured maxExposure cap.|
 

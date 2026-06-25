@@ -1,5 +1,5 @@
 # NoYieldTestAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/test/helpers/NoYieldTestAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/helpers/NoYieldTestAdapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)

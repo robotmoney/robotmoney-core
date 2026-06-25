@@ -32,6 +32,15 @@ contract MorphoAdapter is IStrategyAdapter {
     error WithdrawShortfall(uint256 requested, uint256 actual);
     /// @notice Constructor passed `address(0)` for one of the immutable addresses.
     error ZeroAddress();
+    /// @notice Proposed deployment would push adapter balance above `maxExposure`.
+    /// @param current   Current deployed balance (totalAssets) before this deploy.
+    /// @param amount    Amount being deployed.
+    /// @param cap       Configured maxExposure cap.
+    error ExposureCapExceeded(uint256 current, uint256 amount, uint256 cap);
+
+    /// @notice Maximum USDC that may be deployed into Morpho at one time.
+    ///         Zero means uncapped (default). Set via `setMaxExposure`.
+    uint256 public maxExposure;
 
     modifier onlyVault() {
         if (msg.sender != VAULT) revert OnlyVault();
@@ -47,8 +56,24 @@ contract MorphoAdapter is IStrategyAdapter {
         VAULT = vault_;
     }
 
+    /// @notice Set the governance-configurable per-adapter max-exposure cap.
+    ///         Only callable by the `VAULT` address.
+    /// @param cap Maximum USDC that may be deployed into Morpho at one time.
+    ///            Set to 0 to disable the cap (uncapped, default behavior).
+    function setMaxExposure(uint256 cap) external onlyVault {
+        maxExposure = cap;
+    }
+
     /// @inheritdoc IStrategyAdapter
     function deploy(uint256 amount) external onlyVault {
+        // FS-VLT-10: enforce governance-configurable exposure cap when non-zero.
+        uint256 cap = maxExposure;
+        if (cap > 0) {
+            uint256 current = MORPHO_VAULT.convertToAssets(MORPHO_VAULT.balanceOf(address(this)));
+            if (current + amount > cap) {
+                revert ExposureCapExceeded(current, amount, cap);
+            }
+        }
         // ADP-5 / NC-12: set the exact allowance with `forceApprove` (which zeroes first for
         // non-standard ERC-20s) rather than the additive, non-zeroing `safeIncreaseAllowance`,
         // then unconditionally reset to zero after the call so no residual allowance can ever
