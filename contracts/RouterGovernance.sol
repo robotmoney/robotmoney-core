@@ -62,6 +62,14 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     ///         users time to inspect outcomes and withdraw before state changes.
     uint64 public constant MIN_EXECUTION_DELAY = 1 hours;
 
+    /// @notice Maximum block depth for getPastVotes history queries. Set to
+    ///         100 000 blocks, which on a 2-second L2 corresponds to ~55 hours —
+    ///         well above MAX_VOTING_PERIOD. The previous 256-block value was
+    ///         shorter than MIN_VOTING_PERIOD (1 hour ≈ 1 800 blocks on 2-second
+    ///         L2), causing the voting UI to revert for all remaining voters once
+    ///         256 blocks had elapsed after proposal creation (AZ-GOV-1).
+    uint256 public constant MAX_HISTORY_BLOCKS = 100_000;
+
     // ─── Proposal state ──────────────────────────────────────────────────────
 
     enum ProposalState {
@@ -234,8 +242,7 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vault The vault address that failed the eligible-AND-Active check.
     error VaultNotEligible(address vault);
     /// @notice Thrown by the external getPastVotes view when the queried block
-    ///         is more than 256 blocks behind the current block — mirrors EVM
-    ///         blockhash depth limits to discourage unbounded historical reads.
+    ///         is more than MAX_HISTORY_BLOCKS behind the current block.
     error CheckpointTooOld();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
@@ -573,10 +580,10 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuard {
     }
 
     /// @notice Return the voting power `voter` held at `blockNumber`.
-    ///         Reverts if blockNumber is more than 256 blocks behind the
-    ///         current tip (EVM checkpoint depth limitation).
+    ///         Reverts with CheckpointTooOld if blockNumber is more than
+    ///         MAX_HISTORY_BLOCKS behind the current tip.
     function getPastVotes(address voter, uint256 blockNumber) external view returns (uint256) {
-        if (block.number > blockNumber + 256) revert CheckpointTooOld();
+        if (block.number > blockNumber + MAX_HISTORY_BLOCKS) revert CheckpointTooOld();
         return _getPastVotes(voter, blockNumber);
     }
 
