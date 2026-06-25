@@ -128,7 +128,7 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     // Deploy.s.sol already authorized `endpoints.agent_addr` at deploy time.
     // Use a fresh, deterministic-but-unused address instead so the reveal
     // transaction does not revert.
-    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000bB01";
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000BB01";
     await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
 

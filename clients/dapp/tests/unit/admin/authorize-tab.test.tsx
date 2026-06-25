@@ -24,6 +24,8 @@ vi.mock("wagmi", () => ({
   useReadContract: () => ({ data: undefined }),
   // AuthorizeTab uses useBlockNumber to poll for block advancement in reveal phase.
   useBlockNumber: () => ({ data: undefined }),
+  // AuthorizeTab uses useWaitForTransactionReceipt to get the commit block number.
+  useWaitForTransactionReceipt: () => ({ data: undefined }),
 }));
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;

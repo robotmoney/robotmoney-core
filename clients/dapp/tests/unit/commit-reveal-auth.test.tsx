@@ -32,11 +32,15 @@ import type { PreviewContext } from "../../src/lib/preview";
 // ---------------------------------------------------------------------------
 
 let capturedWriteArgs: Array<{ functionName: string; args: readonly unknown[] }> = [];
-let writeContractOnSuccessCallback: (() => void) | null = null;
+let writeContractOnSuccessCallback: ((txHash: `0x${string}`) => void) | null = null;
 
 // We expose a mutable object so the useBlockNumber mock can read the current
 // value even after tests mutate it (closure over object property, not bigint).
 const blockState = { current: 100n };
+
+// Receipt state: null means the receipt hasn't arrived yet (commit still mining).
+// Set to a receipt object to simulate the commit tx having mined at a given block.
+const receiptState: { blockNumber: bigint | null } = { blockNumber: null };
 
 // Partial wagmi mock: spread real exports, override hooks we need to control.
 vi.mock("wagmi", async (importOriginal) => {
@@ -56,10 +60,14 @@ vi.mock("wagmi", async (importOriginal) => {
     useBalance: () => ({ data: { value: 1000n } }),
     useBlockNumber: () => ({ data: blockState.current }),
     useSimulateContract: () => ({ data: undefined }),
+    useWaitForTransactionReceipt: () => ({
+      data:
+        receiptState.blockNumber !== null ? { blockNumber: receiptState.blockNumber } : undefined,
+    }),
     useWriteContract: () => ({
       writeContract: (
         params: { functionName: string; args: readonly unknown[] },
-        opts?: { onSuccess?: () => void },
+        opts?: { onSuccess?: (txHash: `0x${string}`) => void },
       ) => {
         capturedWriteArgs.push({ functionName: params.functionName, args: params.args });
         if (opts?.onSuccess) {
@@ -124,14 +132,19 @@ function advanceWizardToStep3() {
   fireEvent.click(screen.getByTestId("step-2-next"));
 }
 
-// Simulate commit onSuccess and advance mock block so reveal is ready.
+// Simulate commit onSuccess: call the callback with a mock tx hash, set the
+// receipt block number to 100n (the commit mined at block 100), and advance
+// the current block to 101n so revealReady = 101n > 100n = true.
 async function simulateCommitConfirmedAndBlockAdvanced() {
   await waitFor(() => expect(writeContractOnSuccessCallback).not.toBeNull());
-  // Advance the block number past the commit block (commit block = blockState.current = 100n,
-  // reveal requires currentBlock > commitBlockNumber, so set current to 101n).
+  // Set the mocked receipt: commit mined at block 100.
+  receiptState.blockNumber = 100n;
+  // Advance the current block past the commit block.
   blockState.current = 101n;
+  const MOCK_COMMIT_TX_HASH =
+    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const;
   await act(async () => {
-    writeContractOnSuccessCallback!();
+    writeContractOnSuccessCallback!(MOCK_COMMIT_TX_HASH);
   });
 }
 
@@ -144,6 +157,7 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     capturedWriteArgs = [];
     writeContractOnSuccessCallback = null;
     blockState.current = 100n;
+    receiptState.blockNumber = null;
     vi.clearAllMocks();
   });
 
@@ -232,24 +246,24 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     expect(revealPolicy).toBeTruthy();
   });
 
-  it("reveal button is disabled before a block has advanced past commit block", async () => {
-    // blockState.current = 100n; commit will store commitBlockNumber = 100n.
-    // We do NOT advance blockState after commit, so currentBlock stays at 100n.
-    // revealReady = 100n > 100n = false → button disabled.
+  it("reveal button is disabled before the commit receipt arrives (still mining)", async () => {
+    // receiptState.blockNumber stays null — receipt has not arrived yet.
+    // revealReady requires commitBlockNumber !== null, so button stays disabled.
     renderWizard();
     advanceWizardToStep3();
 
     fireEvent.click(screen.getByTestId("wizard-commit-submit"));
 
-    // Trigger onSuccess without advancing block number.
+    // Trigger onSuccess (tx hash returned) but do NOT set receiptState — receipt pending.
     await waitFor(() => expect(writeContractOnSuccessCallback).not.toBeNull());
+    const MOCK_TX = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
     await act(async () => {
-      writeContractOnSuccessCallback!();
+      writeContractOnSuccessCallback!(MOCK_TX);
     });
 
     await waitFor(() => expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument());
 
-    // currentBlock = 100n, commitBlockNumber = 100n → not ready
+    // commitBlockNumber = null (receipt not yet arrived) → revealReady = false
     const revealBtn = screen.getByTestId("wizard-reveal-submit");
     expect(revealBtn).toBeDisabled();
   });
@@ -264,6 +278,7 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
     capturedWriteArgs = [];
     writeContractOnSuccessCallback = null;
     blockState.current = 100n;
+    receiptState.blockNumber = null;
     vi.clearAllMocks();
   });
 

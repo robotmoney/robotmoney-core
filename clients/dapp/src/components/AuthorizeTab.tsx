@@ -1,7 +1,7 @@
 // Canonical: docs/architecture.md §5.2 — Agent Permissions Gateway
 
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { useAccount, useBlockNumber, useWriteContract } from "wagmi";
+import { useAccount, useBlockNumber, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi } from "../lib/abi";
 import {
@@ -32,7 +32,10 @@ export function AuthorizeTab(props: Props) {
 
   const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
   const [salt, setSalt] = useState<Hex | null>(null);
-  const [commitBlockNumber, setCommitBlockNumber] = useState<bigint | null>(null);
+  // commitTxHash is set when the commit tx hash comes back from the wallet.
+  // We wait for its receipt to get the actual on-chain block number, which
+  // is used to gate the reveal (must be in a strictly later block).
+  const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
 
   const [validUntil, setValidUntil] = useState(() =>
     Math.floor(props.now / 1000 + 86400).toString(),
@@ -71,6 +74,17 @@ export function AuthorizeTab(props: Props) {
       : null;
 
   const preview = action ? buildPreview(action, props.ctx) : null;
+
+  // Wait for the commit tx receipt to learn the exact block it mined in.
+  // This is needed to correctly gate the reveal: the contract rejects reveals
+  // in the same block as the commit (CommitmentTooRecent).
+  const { data: commitReceipt } = useWaitForTransactionReceipt({
+    hash: commitTxHash ?? undefined,
+    query: { enabled: commitTxHash !== null },
+  });
+
+  // The block the commit actually mined in (from the receipt).
+  const commitBlockNumber = commitReceipt?.blockNumber ?? null;
 
   // Current block number — polled while in reveal phase to detect when
   // at least one block has passed since the commit.
@@ -120,9 +134,9 @@ export function AuthorizeTab(props: Props) {
         args: [actualHash],
       },
       {
-        onSuccess: () => {
+        onSuccess: (txHash) => {
           setSalt(newSalt);
-          setCommitBlockNumber(currentBlock ?? 0n);
+          setCommitTxHash(txHash);
           setAuthPhase("reveal");
         },
       },
@@ -152,9 +166,13 @@ export function AuthorizeTab(props: Props) {
       <form data-testid="authorize-reveal-form" onSubmit={onReveal}>
         <h2>Authorize agent — step 2 of 2: reveal</h2>
         <p>
-          Commitment confirmed. Waiting for one block to pass before the reveal can be submitted.{" "}
+          {commitBlockNumber === null
+            ? "Commit transaction submitted — waiting for it to mine…"
+            : "Commitment confirmed. Waiting for one block to pass before the reveal can be submitted."}
           {!revealReady && (
-            <span data-testid="authorize-reveal-waiting">Waiting for next block…</span>
+            <span data-testid="authorize-reveal-waiting">
+              {commitBlockNumber === null ? "Mining…" : "Waiting for next block…"}
+            </span>
           )}
         </p>
         <button

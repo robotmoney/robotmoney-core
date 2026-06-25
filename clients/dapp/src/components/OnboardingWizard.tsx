@@ -36,6 +36,7 @@ import {
   useBlockNumber,
   useChainId,
   useReadContract,
+  useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
@@ -252,7 +253,9 @@ export function OnboardingWizard(props: Props) {
 
   // Commit/reveal state — persisted between the two sub-steps of step 3.
   const [salt, setSalt] = useState<Hex | null>(null);
-  const [commitBlockNumber, setCommitBlockNumber] = useState<bigint | null>(null);
+  // commitTxHash is set when the commit tx hash comes back from the wallet.
+  // We wait for its receipt to get the actual on-chain block number.
+  const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
 
   // strict: false — some wallets and rmpc print lowercase addresses without
   // EIP-55 checksum casing. The default strict check rejected those and left
@@ -286,6 +289,17 @@ export function OnboardingWizard(props: Props) {
       : null;
 
   const preview = action ? buildPreview(action, props.ctx) : null;
+
+  // Wait for the commit tx receipt to learn the exact block it mined in.
+  // This is needed to correctly gate the reveal: the contract rejects reveals
+  // in the same block as the commit (CommitmentTooRecent).
+  const { data: commitReceipt } = useWaitForTransactionReceipt({
+    hash: commitTxHash ?? undefined,
+    query: { enabled: commitTxHash !== null },
+  });
+
+  // The block the commit actually mined in (from the receipt).
+  const commitBlockNumber = commitReceipt?.blockNumber ?? null;
 
   // Current block number — polled while on step 3 reveal phase to detect
   // when at least one block has passed since the commit.
@@ -337,14 +351,9 @@ export function OnboardingWizard(props: Props) {
         args: [actualHash],
       },
       {
-        onSuccess: () => {
+        onSuccess: (txHash) => {
           setSalt(newSalt);
-          // Record the block we submitted in so reveal can wait for block+1.
-          // We store currentBlock at commit time; the chain will advance.
-          // Note: currentBlock may be undefined here if the subscription
-          // hasn't fired yet — we use 0n as a safe lower bound (reveal will
-          // wait for currentBlock > 0n, which is always true after 1 block).
-          setCommitBlockNumber(currentBlock ?? 0n);
+          setCommitTxHash(txHash);
           setAuthPhase("reveal");
         },
       },
@@ -569,9 +578,13 @@ export function OnboardingWizard(props: Props) {
         <section data-testid="wizard-step-3-reveal">
           <h2>Authorize the agent on-chain — step 2 of 2: reveal</h2>
           <p>
-            Commitment confirmed. Waiting for one block to pass before the reveal can be submitted.{" "}
+            {commitBlockNumber === null
+              ? "Commit transaction submitted — waiting for it to mine…"
+              : "Commitment confirmed. Waiting for one block to pass before the reveal can be submitted."}
             {!revealReady && (
-              <span data-testid="wizard-reveal-waiting">Waiting for next block…</span>
+              <span data-testid="wizard-reveal-waiting">
+                {commitBlockNumber === null ? "Mining…" : "Waiting for next block…"}
+              </span>
             )}
           </p>
           <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
