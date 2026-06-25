@@ -40,12 +40,18 @@
 //! **Invariant:** a successful (mined, status == 1) deposit/withdrawal leaves
 //! the entry in place so that a genuine operator retry is refused locally.
 //!
-//! ## `remove` — finalize-on-failure rollback
+//! ## `remove` / `remove_op` — finalize-on-confirmed-failure rollback
 //!
-//! Called when the receipt later shows `status == 0` (revert), or when the
-//! receipt wait times out (RPC-2 / AZ-RPC-1).  Clears the optimistic entry so
-//! that a legitimate retry with the same paymentId inputs is NOT permanently
-//! refused by a poisoned entry pointing at a failed tx.
+//! Called **only** when the receipt shows `status == 0` (on-chain revert).
+//! Clears the optimistic entry so that a legitimate retry with the same
+//! paymentId inputs is NOT permanently refused by a poisoned entry.
+//!
+//! **AZ-RPC-1**: do NOT call `remove` on a receipt-wait *timeout*.  A timeout
+//! means the tx outcome is unknown — the transaction may still land.  Removing
+//! the entry on timeout would allow a second broadcast for the same paymentId
+//! while the original tx is still in-flight, creating a double-send.  The
+//! entry stays in place; the operator gets `ErrOrderIdAlreadySubmitted` with
+//! the original tx_hash and must inspect it before deciding to re-submit.
 //!
 //! **Invariant:** removing an entry that was never inserted is a no-op success
 //! and must not disturb any other entries.
@@ -57,14 +63,11 @@
 //!
 //! ## Withdraw replay extension (AZ-RPC-2 / issue #1068)
 //!
-//! Downstream work that adds withdraw/withdraw-router replay protection **must
-//! compute its paymentId with `OP_WITHDRAW = 2u8`** (already exported as the
-//! `OP_WITHDRAW` constant) so that withdraw entries are disjoint from deposit
-//! entries even when all other hash inputs are identical.  The `insert`,
-//! `remove`, and `lookup` signatures are unchanged — only the `op_kind` byte in
-//! the paymentId formula differs.  Callers must use [`compute_payment_id`] with
-//! the appropriate prefix constant; do not call `insert` with a deposit-derived
-//! paymentId for a withdrawal.
+//! Withdraw and withdraw-router commands use [`lookup_op`][ReplayCache::lookup_op],
+//! [`insert_op`][ReplayCache::insert_op], and [`remove_op`][ReplayCache::remove_op]
+//! with `OP_WITHDRAW = 2u8` so that withdraw entries are disjoint from deposit
+//! entries even when all other hash inputs are identical.  The existing
+//! deposit-only `insert`, `remove`, and `lookup` methods are unchanged.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -125,11 +128,39 @@ pub fn compute_payment_id(
     amount: U256,
     idempotency_key: B256,
 ) -> B256 {
-    // abi.encode(uint8(OP_DEPOSIT), uint256(chain_id), address(gateway),
+    compute_payment_id_with_op(
+        OP_DEPOSIT,
+        chain_id,
+        gateway,
+        agent,
+        order_id,
+        amount,
+        idempotency_key,
+    )
+}
+
+/// Compute the gateway-equivalent paymentId using an explicit op-kind prefix.
+///
+/// Use [`OP_DEPOSIT`] for deposits and [`OP_WITHDRAW`] for withdrawals so
+/// that entries in the replay cache are disjoint even when all other inputs
+/// are identical (AZ-RPC-2 / PAYMENTID-001).
+///
+/// Formula: `keccak256(abi.encode(op_kind, chain_id, gateway, agent,
+/// order_id, amount, idempotency_key))`.
+pub fn compute_payment_id_with_op(
+    op_kind: u8,
+    chain_id: u64,
+    gateway: Address,
+    agent: Address,
+    order_id: B256,
+    amount: U256,
+    idempotency_key: B256,
+) -> B256 {
+    // abi.encode(uint8(op_kind), uint256(chain_id), address(gateway),
     //            address(agent), bytes32(order_id), uint256(amount),
     //            bytes32(idempotency_key))
     let encoded = (
-        U256::from(OP_DEPOSIT),
+        U256::from(op_kind),
         U256::from(chain_id),
         gateway,
         agent,
@@ -250,10 +281,15 @@ impl ReplayCache {
     ///
     /// RPC-2 (finalize-on-failure): the cache is populated optimistically
     /// right after broadcast, before the receipt is known. When the receipt
-    /// later reverts or the wait times out, the deposit did NOT durably
+    /// later reverts on-chain (status == 0), the deposit did NOT durably
     /// succeed, so the optimistic entry must be removed — otherwise a
     /// legitimate retry with the same paymentId inputs is permanently refused
-    /// by a poisoned cache entry that points at a failed/abandoned tx.
+    /// by a poisoned cache entry that points at a failed tx.
+    ///
+    /// NOTE (AZ-RPC-1): do NOT call this on a receipt-wait timeout. A timeout
+    /// means the tx outcome is unknown — it may still succeed. Removing the
+    /// entry on timeout would allow a retry that broadcasts a second tx for
+    /// the same paymentId while the first is still pending.
     ///
     /// A successful (mined, `status == 1`) deposit leaves the entry in place,
     /// so genuine replays are still caught. Removing a non-existent entry is a
@@ -269,6 +305,109 @@ impl ReplayCache {
     ) -> Result<()> {
         let payment_id =
             compute_payment_id(chain_id, gateway, agent, order_id, amount, idempotency_key);
+        let key = format!("{payment_id:#x}");
+        self.with_locked_file(|file, mut map| {
+            map.remove(&key);
+            write_back(file, &map)
+        })
+    }
+
+    // ── Op-kind–parameterised variants (AZ-RPC-2 / withdraw replay protection) ─
+
+    /// Like [`lookup`][Self::lookup] but uses an explicit op-kind prefix so
+    /// withdraw entries are disjoint from deposit entries.
+    ///
+    /// Pass [`OP_WITHDRAW`] for the withdraw and withdraw-router commands.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lookup_op(
+        &self,
+        op_kind: u8,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
+    ) -> Result<Option<String>> {
+        let payment_id = compute_payment_id_with_op(
+            op_kind,
+            chain_id,
+            gateway,
+            agent,
+            order_id,
+            amount,
+            idempotency_key,
+        );
+        let key = format!("{payment_id:#x}");
+        let map = self.read_locked()?;
+        Ok(map.get(&key).map(|e| e.tx_hash.clone()))
+    }
+
+    /// Like [`insert`][Self::insert] but uses an explicit op-kind prefix.
+    ///
+    /// Pass [`OP_WITHDRAW`] for the withdraw and withdraw-router commands.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_op(
+        &self,
+        op_kind: u8,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
+        deadline: u64,
+        tx_hash: &str,
+    ) -> Result<()> {
+        let payment_id = compute_payment_id_with_op(
+            op_kind,
+            chain_id,
+            gateway,
+            agent,
+            order_id,
+            amount,
+            idempotency_key,
+        );
+        let key = format!("{payment_id:#x}");
+        self.with_locked_file(|file, mut map| {
+            map.insert(
+                key.clone(),
+                Entry {
+                    payment_id: key,
+                    order_id: format!("{order_id:#x}"),
+                    idempotency_key: format!("{idempotency_key:#x}"),
+                    deadline,
+                    tx_hash: tx_hash.to_string(),
+                },
+            );
+            write_back(file, &map)
+        })
+    }
+
+    /// Like [`remove`][Self::remove] but uses an explicit op-kind prefix.
+    ///
+    /// Pass [`OP_WITHDRAW`] for the withdraw and withdraw-router commands.
+    /// Only call on confirmed on-chain failure (status == 0), never on timeout.
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_op(
+        &self,
+        op_kind: u8,
+        chain_id: u64,
+        gateway: Address,
+        agent: Address,
+        order_id: B256,
+        amount: U256,
+        idempotency_key: B256,
+    ) -> Result<()> {
+        let payment_id = compute_payment_id_with_op(
+            op_kind,
+            chain_id,
+            gateway,
+            agent,
+            order_id,
+            amount,
+            idempotency_key,
+        );
         let key = format!("{payment_id:#x}");
         self.with_locked_file(|file, mut map| {
             map.remove(&key);
@@ -624,6 +763,177 @@ mod tests {
                 .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, other_key)
                 .unwrap(),
             None
+        );
+    }
+
+    // ── AZ-RPC-1: timeout vs failure ──────────────────────────────────────
+
+    /// AZ-RPC-1: a receipt-wait *timeout* must NOT remove the replay-cache
+    /// entry. The tx may still be pending and land later; removing the entry
+    /// would allow a second broadcast for the same paymentId while the first
+    /// is in-flight. After a timeout the entry must still be present, so any
+    /// retry is refused with ErrOrderIdAlreadySubmitted.
+    #[test]
+    fn timeout_does_not_remove_replay_cache_entry() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // Simulate optimistic insert at broadcast time.
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        // Do NOT call remove — this is the correct behaviour on timeout.
+        // Verify the entry is still present.
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            Some(TX_HASH.to_string()),
+            "replay cache entry must survive a receipt-wait timeout (AZ-RPC-1)"
+        );
+    }
+
+    /// AZ-RPC-1: a confirmed on-chain *failure* (status == 0) MUST remove the
+    /// replay-cache entry so the operator can retry with the same paymentId
+    /// without being refused by a poisoned entry.
+    #[test]
+    fn confirmed_failure_removes_replay_cache_entry() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // Simulate optimistic insert at broadcast time.
+        cache
+            .insert(
+                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, TX_HASH,
+            )
+            .unwrap();
+        // Confirmed revert: finalize-on-failure removes the entry.
+        cache
+            .remove(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .unwrap();
+        // The operator must now be able to retry without being refused.
+        assert_eq!(
+            cache
+                .lookup(CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+                .unwrap(),
+            None,
+            "confirmed revert must clear the replay cache entry (AZ-RPC-1)"
+        );
+    }
+
+    // ── AZ-RPC-2: withdraw replay protection ──────────────────────────────
+
+    /// AZ-RPC-2: a second withdraw command with the same paymentId inputs
+    /// must hit the replay cache and return Some(prior_tx_hash). The caller
+    /// (withdraw.rs) turns this into ErrOrderIdAlreadySubmitted.
+    #[test]
+    fn withdraw_duplicate_detected_by_lookup_op() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // First withdraw: insert with OP_WITHDRAW.
+        cache
+            .insert_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+                0,
+                "0xwithdrawtx",
+            )
+            .unwrap();
+        // Second attempt with the same inputs: must hit the cache.
+        let hit = cache
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
+            .unwrap();
+        assert_eq!(
+            hit,
+            Some("0xwithdrawtx".to_string()),
+            "second withdraw with same paymentId must be detected (AZ-RPC-2)"
+        );
+    }
+
+    /// AZ-RPC-2: withdraw-router second command with the same paymentId
+    /// inputs must hit the replay cache (same OP_WITHDRAW prefix).
+    #[test]
+    fn withdraw_router_duplicate_detected_by_lookup_op() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        cache
+            .insert_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+                0,
+                "0xroutertx",
+            )
+            .unwrap();
+        let hit = cache
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
+            .unwrap();
+        assert_eq!(
+            hit,
+            Some("0xroutertx".to_string()),
+            "second withdraw-router with same paymentId must be detected (AZ-RPC-2)"
+        );
+    }
+
+    /// AZ-RPC-2: deposit and withdraw entries for identical inputs must NOT
+    /// collide — the OP_DEPOSIT vs OP_WITHDRAW prefix keeps them disjoint.
+    #[test]
+    fn deposit_and_withdraw_entries_are_disjoint() {
+        let dir = TempDir::new().unwrap();
+        let cache = ReplayCache::open(dir.path()).unwrap();
+        // Insert a deposit entry (OP_DEPOSIT via the plain `insert` method).
+        cache
+            .insert(
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+                1,
+                "0xdeposittx",
+            )
+            .unwrap();
+        // Withdraw lookup with the same inputs must miss (different op prefix).
+        let miss = cache
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
+            .unwrap();
+        assert_eq!(
+            miss, None,
+            "deposit entry must not be visible to a withdraw lookup (disjoint namespaces)"
         );
     }
 }

@@ -622,19 +622,14 @@ pub fn run(args: Args) -> i32 {
     let receipt = match receipt_res {
         Ok(r) => r,
         Err(e) => {
-            // RPC-2 (finalize-on-failure): the receipt never confirmed within
-            // the budget, so the deposit did not durably succeed. Clear the
-            // optimistic replay-cache entry so a legitimate retry is allowed
-            // instead of being permanently refused by a poisoned entry.
-            finalize_replay_on_failure(
-                &replay,
-                cfg.chain_id,
-                gateway_addr,
-                agent_address,
-                order_id,
-                amount,
-                idempotency_key,
-            );
+            // AZ-RPC-1 (timeout ≠ failure): the receipt-wait budget exhausted
+            // but the transaction may still be pending and land later.  Do NOT
+            // call finalize_replay_on_failure here — removing the replay-cache
+            // entry on a timeout would allow a second broadcast for the same
+            // paymentId while the first tx is still in-flight.  The entry
+            // stays in place; if the operator retries they get
+            // ErrOrderIdAlreadySubmitted pointing at the original tx_hash,
+            // which they should inspect before re-submitting.
             record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())));
             emit_refusal(
                 &DepositFailure {
