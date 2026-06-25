@@ -62,9 +62,20 @@ export interface AgentPolicyEntry {
    */
   readonly maxWithdrawPerWindow?: string;
   /**
-   * Outstanding `vault.allowance(agent, gateway)`, decimal string.
+   * The address whose vault allowance to the gateway is reported in
+   * `shareAllowance`. For router-withdrawal policies (shareReceiver != agent)
+   * this is `shareReceiver`; for direct-vault policies (shareReceiver ==
+   * agent) this is the agent address. Surfaced so the UI can label the
+   * allowance correctly (AZ-GW-2, issue #1069).
+   */
+  readonly shareAllowanceOwner?: string;
+  /**
+   * Outstanding vault share allowance granted to the gateway by
+   * `shareAllowanceOwner`, decimal string. For direct-vault policies this
+   * is `vault.allowance(agent, gateway)`; for router-withdrawal policies
+   * this is `vault.allowance(shareReceiver, gateway)`.
    * Used together with `withdrawalsEnabled` to flag stale allowances
-   * (issue #429: scope item "revoke stale gateway share allowances").
+   * (issue #429, AZ-GW-2, issue #1069).
    */
   readonly shareAllowance?: string;
 }
@@ -211,7 +222,21 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                     )}
                     {policy.shareAllowance !== undefined && (
                       <>
-                        <dt>Gateway share allowance</dt>
+                        <dt>
+                          Gateway share allowance
+                          {policy.shareAllowanceOwner !== undefined &&
+                          policy.shareAllowanceOwner.toLowerCase() !==
+                            policy.agent.toLowerCase() ? (
+                            <>
+                              {" "}
+                              (shareReceiver:{" "}
+                              <code data-testid="agent-policy-share-allowance-owner">
+                                {policy.shareAllowanceOwner}
+                              </code>
+                              )
+                            </>
+                          ) : null}
+                        </dt>
                         <dd data-testid="agent-policy-share-allowance">{policy.shareAllowance}</dd>
                       </>
                     )}

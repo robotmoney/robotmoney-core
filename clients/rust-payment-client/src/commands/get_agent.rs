@@ -86,11 +86,21 @@ pub struct AgentData {
     /// `true` as a security-relevant signal — an agent-key compromise
     /// can redeem shares up to the per-window cap while this is set.
     pub withdrawals_enabled: bool,
-    /// `vault.allowance(agent, gateway)` — outstanding share allowance
-    /// the agent has granted the gateway. Combined with
-    /// `max_withdraw_per_payment`/`max_withdraw_per_window` this is
-    /// the bound on what a compromised agent can withdraw without
-    /// further on-chain action by the depositor (issue #429).
+    /// The address whose vault allowance to the gateway is reported in
+    /// `share_allowance`. For router-withdrawal policies (`shareReceiver !=
+    /// agent`) the gateway pulls shares from `shareReceiver`, so the
+    /// relevant allowance owner is `shareReceiver`. For direct-vault policies
+    /// (`shareReceiver == agent`) the gateway pulls from the agent, so the
+    /// owner is the agent address. (AZ-GW-2, issue #1069.)
+    pub share_allowance_owner: String,
+    /// Outstanding vault share allowance granted to the gateway by
+    /// `share_allowance_owner`. For direct-vault policies this is
+    /// `vault.allowance(agent, gateway)`; for router-withdrawal policies
+    /// this is `vault.allowance(shareReceiver, gateway)` — the allowance
+    /// the gateway actually spends when `withdrawFromRouter` is called.
+    /// Combined with `max_withdraw_per_payment`/`max_withdraw_per_window`
+    /// this is the bound on what a compromised agent can withdraw without
+    /// further on-chain action by the depositor (issue #429, AZ-GW-2, issue #1069).
     pub share_allowance: DecimalU256,
     /// Calendar window id at the pinned block:
     /// `block_timestamp / WINDOW_SECONDS`. Retained for operator context
@@ -190,6 +200,16 @@ async fn read_agent(
     // policy fields (assetRecipient + maxWithdrawPerPayment +
     // maxWithdrawPerWindow). Issue #429: surface this so operators
     // can see withdrawal-enabled policies in `rmpc get-agent`.
+    //
+    // AZ-GW-2 (issue #1069): after reading the agents tuple we can
+    // determine whether this is a router-withdrawal policy by comparing
+    // shareReceiver to the agent address. The gateway's `withdrawFromRouter`
+    // path pulls shares from `policy.shareReceiver`, so for router-withdrawal
+    // policies the relevant blast-radius allowance is
+    // `vault.allowance(shareReceiver, gateway)`, not `vault.allowance(agent,
+    // gateway)`. The `share_allowance_owner` field surfaces which address was
+    // queried so operators and the dapp can distinguish the two cases.
+    let mut allowance_owner = agent; // default: direct-vault (shareReceiver == agent)
     match call_agents(rpc, gateway, &block_tag, agent).await {
         Ok(t) => {
             b.data_mut().active = t.active;
@@ -205,16 +225,33 @@ async fn read_agent(
             // WithdrawalNotEnabled()`). Derived rather than stored so
             // it can never drift from the canonical field.
             b.data_mut().withdrawals_enabled = !t.max_withdraw_per_payment.is_zero();
+            // AZ-GW-2 / issue #1069: router-withdrawal policies hold shares
+            // at `shareReceiver` (not the agent). The single-vault `withdraw`
+            // path requires `shareReceiver == agent` (the contract comment at
+            // RobotMoneyGateway.sol:1057 confirms this), so `shareReceiver !=
+            // agent` is the reliable indicator of a router-withdrawal policy.
+            if t.share_receiver != agent {
+                allowance_owner = t.share_receiver;
+            }
+            b.data_mut().share_allowance_owner = format!("{:#x}", allowance_owner);
         }
-        Err(e) => b.record_err("agents", e),
+        Err(e) => {
+            // agents() call failed — record the share_allowance_owner as the
+            // agent address so the partial output is still meaningful.
+            b.data_mut().share_allowance_owner = format!("{agent:#x}");
+            b.record_err("agents", e);
+        }
     }
 
-    // share allowance(agent, gateway) on the pinned vault. Read even
-    // when withdrawals are disabled — a leftover non-zero allowance
-    // with a future re-enable is still part of the blast radius
-    // operators need to see (issue #429: "revoke stale gateway share
-    // allowances").
-    match call_share_allowance(rpc, vault, &block_tag, agent, gateway).await {
+    // Share allowance on the pinned vault. Read even when withdrawals are
+    // disabled — a leftover non-zero allowance with a future re-enable is
+    // still part of the blast radius operators need to see (issue #429:
+    // "revoke stale gateway share allowances").
+    //
+    // AZ-GW-2 / issue #1069: use `allowance_owner` (shareReceiver for
+    // router-withdrawal policies, agent for direct-vault) so the reported
+    // allowance matches what the gateway actually spends.
+    match call_share_allowance(rpc, vault, &block_tag, allowance_owner, gateway).await {
         Ok(v) => b.data_mut().share_allowance = DecimalU256(v),
         Err(e) => b.record_err("share_allowance", e),
     }
