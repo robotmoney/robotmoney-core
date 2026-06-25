@@ -116,6 +116,15 @@ jobs:
       - name: Canonical-header staleness — retired-plan phrase and impl-plan links (issue #823)
         run: python3 .github/scripts/check_canonical_header_staleness.py
 
+      - name: Self-test adapter/router doc-symbol guard
+        # Confirms the guard fires for every missing required symbol BEFORE
+        # running the real check, so a silent regression in the guard cannot
+        # let a dropped maxExposure / UsdcLegTransferFailed symbol ship.
+        run: python3 .github/scripts/check_adapter_router_doc_symbols.py --self-test
+
+      - name: Adapter/router contract-surface doc-symbol invariant
+        run: python3 .github/scripts/check_adapter_router_doc_symbols.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest

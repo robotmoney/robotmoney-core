@@ -156,6 +156,24 @@ Protected tokens:
 - USDC.
 - The configured Morpho vault share token.
 
+Exposure cap:
+
+- `MorphoAdapter` exposes a governance-configurable per-adapter
+  `maxExposure` cap (`uint256 public maxExposure`) that bounds the USDC
+  which may be deployed into the Morpho venue.
+- The cap is set via `setMaxExposure(uint256 cap)`, restricted to the
+  owning vault by the `onlyVault` modifier — the same authority gate as
+  `deploy` and `withdraw`.
+- A cap of `0` means uncapped (the default), so a deployment keeps its
+  prior behavior until a vault sets a non-zero cap.
+- When the cap is non-zero, `deploy(amount)` reads the adapter's live
+  Morpho-denominated balance with
+  `MORPHO_VAULT.convertToAssets(MORPHO_VAULT.balanceOf(address(this)))`
+  and reverts `ExposureCapExceeded(current, amount, cap)` when
+  `current + amount` would exceed the cap. The check uses the live
+  converted balance rather than a stored counter, so accrued yield is
+  reflected in the exposure measurement.
+
 ## 5. Vault Controls
 
 Adapters are controlled by `RobotMoneyVault`, not by users or agents.
