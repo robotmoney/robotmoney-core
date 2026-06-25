@@ -1,5 +1,5 @@
 # MorphoAdapterTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/test/MorphoAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/MorphoAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -157,6 +157,63 @@ function test_sweepForeignToken_zeroBalanceIsNoop() public;
 
 ```solidity
 function test_sweepForeignToken_permissionlessToQuarantine() public;
+```
+
+### test_deploy_uncappedByDefault
+
+Default maxExposure is 0 (uncapped); deploy succeeds for any amount.
+
+
+```solidity
+function test_deploy_uncappedByDefault() public;
+```
+
+### test_setMaxExposure_storesCap
+
+setMaxExposure stores the cap and can be read back.
+
+
+```solidity
+function test_setMaxExposure_storesCap() public;
+```
+
+### test_setMaxExposure_revertsForNonVault
+
+setMaxExposure reverts when called by a non-VAULT address.
+
+
+```solidity
+function test_setMaxExposure_revertsForNonVault() public;
+```
+
+### test_deploy_revertsWhenCapExceeded
+
+deploy() with maxExposure set below the attempted amount reverts
+with ExposureCapExceeded (FS-VLT-10 AC).
+
+
+```solidity
+function test_deploy_revertsWhenCapExceeded() public;
+```
+
+### test_deploy_zeroCapIsUncapped
+
+deploy() with maxExposure = 0 succeeds regardless of amount
+(backward-compatible uncapped path, FS-VLT-10 AC).
+
+
+```solidity
+function test_deploy_zeroCapIsUncapped() public;
+```
+
+### test_deploy_revertsWhenCumulative_exceedsCap
+
+deploy() that would push the adapter's running balance above cap
+also reverts with ExposureCapExceeded.
+
+
+```solidity
+function test_deploy_revertsWhenCumulative_exceedsCap() public;
 ```
 
 ### test_harvestRewards_isPermissionlessNoopForMorpho

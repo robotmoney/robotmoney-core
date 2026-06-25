@@ -1,5 +1,5 @@
 # MockBasketLikeVault
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/174c53454088cd318240a18aade465c225fdb078/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/VaultRegistry.t.sol)
 
 Simulates the registry-gated retire pattern implemented by BasketVault
 (FS-VLT-19): retire()/unretire() are only callable by the linked
