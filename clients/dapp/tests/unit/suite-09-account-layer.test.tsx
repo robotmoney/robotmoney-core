@@ -571,4 +571,72 @@ describe("AgentPoliciesPanel", () => {
       expect(queryByTestId("agent-policy-stale-allowance")).toBeNull();
     });
   });
+
+  // AZ-GW-2 / issue #1069 — shareReceiver allowance display for router-withdrawal policies.
+  describe("shareReceiver allowance display (AZ-GW-2, issue #1069)", () => {
+    const SHARE_RECEIVER = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    it("shows shareReceiver label when shareAllowanceOwner differs from agent (router-withdrawal)", () => {
+      // Router-withdrawal policy: shareAllowanceOwner == shareReceiver != agent.
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: true,
+          maxWithdrawPerWindow: "5000000",
+          assetRecipient: "0xdeadbeef00000000000000000000000000000001",
+          shareAllowance: "9999999",
+          shareAllowanceOwner: SHARE_RECEIVER,
+        },
+      ];
+      const { getByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      // The allowance value must be rendered.
+      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("9999999");
+      // The shareReceiver label must be surfaced (AZ-GW-2 fix).
+      expect(getByTestId("agent-policy-share-allowance-owner").textContent).toContain(
+        SHARE_RECEIVER,
+      );
+    });
+
+    it("does not show shareReceiver label when shareAllowanceOwner equals agent (direct-vault)", () => {
+      // Direct-vault policy: shareAllowanceOwner == agent (no router label needed).
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: true,
+          maxWithdrawPerWindow: "5000000",
+          assetRecipient: "0xdeadbeef00000000000000000000000000000001",
+          shareAllowance: "7654321",
+          shareAllowanceOwner: AGENT_1, // same as agent → direct-vault
+        },
+      ];
+      const { getByTestId, queryByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      // The allowance value must be rendered.
+      expect(getByTestId("agent-policy-share-allowance").textContent).toContain("7654321");
+      // No shareReceiver label for direct-vault policies.
+      expect(queryByTestId("agent-policy-share-allowance-owner")).toBeNull();
+    });
+
+    it("does not show shareReceiver label when shareAllowanceOwner is omitted", () => {
+      // Backward-compat: shareAllowanceOwner may be absent in older API responses.
+      const policies = [
+        {
+          agent: AGENT_1,
+          authorized: true,
+          withdrawalsEnabled: false,
+          shareAllowance: "12345",
+          // shareAllowanceOwner intentionally omitted
+        },
+      ];
+      const { queryByTestId } = render(
+        <AgentPoliciesPanel ownerAddress={WATCHED} policies={policies} />,
+      );
+      expect(queryByTestId("agent-policy-share-allowance-owner")).toBeNull();
+    });
+  });
 });

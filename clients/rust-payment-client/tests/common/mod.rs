@@ -174,6 +174,32 @@ pub fn match_eth_call_selector(selector: &str) -> Matcher {
     ])
 }
 
+/// Match an `eth_call` whose `data` field begins with `selector` (0x-prefixed)
+/// followed immediately by `first_arg` (an ABI-padded 32-byte word, hex-encoded
+/// without `0x`). Used to verify the exact `owner` address in
+/// `vault.allowance(owner, gateway)` calls (AZ-GW-2 / issue #1069).
+///
+/// The JSON body encodes the calldata as `"data":"0x<selector_bytes><arg_bytes>…"`.
+/// This matcher ensures the method is `eth_call` and that the data starts with the
+/// exact selector + first argument bytes.
+pub fn match_eth_call_selector_with_first_arg(selector: &str, first_arg_hex: &str) -> Matcher {
+    // The JSON field is `"data":"0x<hex>"`. Strip 0x from selector to get raw bytes.
+    let sel = selector.strip_prefix("0x").unwrap_or(selector);
+    let arg = first_arg_hex.strip_prefix("0x").unwrap_or(first_arg_hex);
+    Matcher::AllOf(vec![
+        Matcher::PartialJson(json!({"method": "eth_call"})),
+        Matcher::Regex(format!(r#""data":"0x{sel}{arg}"#)),
+    ])
+}
+
+/// Encode an `Address` as a 32-byte ABI word (zero-padded on the left),
+/// returned as a lowercase hex string without the `0x` prefix.
+pub fn abi_addr_hex(a: Address) -> String {
+    let mut w = [0u8; 32];
+    w[12..].copy_from_slice(a.as_slice());
+    ahex::encode(w)
+}
+
 /// Wire the full happy-path JSON-RPC response set for the preflight.
 /// `agent_address` controls which address the `agents()` view appears to
 /// be keyed on — all callers happen to use the same software-signer
