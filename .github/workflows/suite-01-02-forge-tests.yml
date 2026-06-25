@@ -238,13 +238,13 @@ jobs:
         # tracing overhead multiplies gas ~100x and exhausts the block gas limit
         # (issue #944). The invariant still runs in the unit job above; only the
         # coverage instrumentation pass is excluded.
-        # `test_getPastVotes_returnsHistoricalPower` is excluded too: it relies on
-        # `vm.roll` to create a historical voting-power checkpoint, but under
+        # `^test_getPastVotes_` tests are excluded: they all rely on `vm.roll` to
+        # create historical voting-power checkpoints, but under
         # `forge coverage --ir-minimum` the roll does not take effect, so
-        # getPastVotes returns the latest value instead of the historical one and
-        # the assertion fails (1e18 != ALICE_POWER). It passes in the forge test
-        # (unit) job; only the coverage pass is affected.
-        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_returnsHistoricalPower" --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest"
+        # getPastVotes either returns the latest value instead of the historical
+        # one, or does not revert when it should (AZ-GOV-1). All pass in the
+        # forge test (unit) job; only the coverage instrumentation pass is affected.
+        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_" --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info
