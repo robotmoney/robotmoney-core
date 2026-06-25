@@ -50,8 +50,7 @@ vi.mock("wagmi", async (importOriginal) => {
     useChainId: () => 918453,
     useReadContract: ({ functionName }: { functionName: string }) => {
       // Return a USDC address for gateway.usdc() call; non-zero balance for others.
-      if (functionName === "usdc")
-        return { data: "0x4444444444444444444444444444444444444444" };
+      if (functionName === "usdc") return { data: "0x4444444444444444444444444444444444444444" };
       return { data: 1000n };
     },
     useBalance: () => ({ data: { value: 1000n } }),
@@ -93,14 +92,7 @@ const NOW = 1_893_456_000_000;
 // ---------------------------------------------------------------------------
 
 function renderWizard() {
-  return render(
-    <OnboardingWizard
-      gatewayAddress={GATEWAY}
-      ctx={ctx}
-      env={{}}
-      now={NOW}
-    />,
-  );
+  return render(<OnboardingWizard gatewayAddress={GATEWAY} ctx={ctx} env={{}} now={NOW} />);
 }
 
 function renderAuthorizeTab() {
@@ -216,9 +208,7 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     await simulateCommitConfirmedAndBlockAdvanced();
 
     // Now in reveal phase
-    await waitFor(() =>
-      expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument());
 
     // Clear captured calls to isolate reveal call
     capturedWriteArgs = [];
@@ -235,11 +225,7 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
     const revealCall = capturedWriteArgs[0];
     expect(revealCall.functionName).toBe("revealAuthorization");
     // args: [agent, salt, policy]
-    const [revealAgent, revealSalt, revealPolicy] = revealCall.args as [
-      string,
-      string,
-      unknown,
-    ];
+    const [revealAgent, revealSalt, revealPolicy] = revealCall.args as [string, string, unknown];
     expect(revealAgent.toLowerCase()).toBe(AGENT.toLowerCase());
     // salt must be a 32-byte hex string
     expect(revealSalt).toMatch(/^0x[0-9a-f]{64}$/i);
@@ -261,9 +247,7 @@ describe("OnboardingWizard — commit/reveal authorization flow (AZ-DAPP-1)", ()
       writeContractOnSuccessCallback!();
     });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId("wizard-step-3-reveal")).toBeInTheDocument());
 
     // currentBlock = 100n, commitBlockNumber = 100n → not ready
     const revealBtn = screen.getByTestId("wizard-reveal-submit");
@@ -324,9 +308,7 @@ describe("AuthorizeTab — commit/reveal authorization flow (AZ-DAPP-1)", () => 
     await simulateCommitConfirmedAndBlockAdvanced();
 
     // Reveal form should now appear
-    await waitFor(() =>
-      expect(screen.getByTestId("authorize-reveal-form")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId("authorize-reveal-form")).toBeInTheDocument());
 
     // Reveal
     capturedWriteArgs = [];

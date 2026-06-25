@@ -40,7 +40,12 @@ import {
 } from "wagmi";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi, erc20Abi } from "../lib/abi";
-import { buildPreview, type AdminAction, type AgentPolicy, type PreviewContext } from "../lib/preview";
+import {
+  buildPreview,
+  type AdminAction,
+  type AgentPolicy,
+  type PreviewContext,
+} from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
@@ -311,7 +316,10 @@ export function OnboardingWizard(props: Props) {
   function generateSalt(): Hex {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
-    return ("0x" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
+    return ("0x" +
+      Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")) as Hex;
   }
 
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
@@ -561,8 +569,7 @@ export function OnboardingWizard(props: Props) {
         <section data-testid="wizard-step-3-reveal">
           <h2>Authorize the agent on-chain — step 2 of 2: reveal</h2>
           <p>
-            Commitment confirmed. Waiting for one block to pass before the reveal can be
-            submitted.{" "}
+            Commitment confirmed. Waiting for one block to pass before the reveal can be submitted.{" "}
             {!revealReady && (
               <span data-testid="wizard-reveal-waiting">Waiting for next block…</span>
             )}

@@ -4,7 +4,12 @@ import { useState, type Dispatch, type FormEvent, type SetStateAction } from "re
 import { useAccount, useBlockNumber, useWriteContract } from "wagmi";
 import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi } from "../lib/abi";
-import { buildPreview, type AdminAction, type AgentPolicy, type PreviewContext } from "../lib/preview";
+import {
+  buildPreview,
+  type AdminAction,
+  type AgentPolicy,
+  type PreviewContext,
+} from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { TxPreview } from "./TxPreview";
 import { PolicyFields } from "./PolicyFields";
@@ -96,7 +101,10 @@ export function AuthorizeTab(props: Props) {
   function generateSalt(): Hex {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
-    return ("0x" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
+    return ("0x" +
+      Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")) as Hex;
   }
 
   const onCommit = (e: FormEvent<HTMLFormElement>) => {
