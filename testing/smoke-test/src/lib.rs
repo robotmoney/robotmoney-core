@@ -1443,6 +1443,97 @@ impl Fixture {
         Ok(if high_nonzero { u128::MAX } else { low_val })
     }
 
+    /// Read `token.allowance(owner, spender)` via a plain `eth_call`
+    /// (`cast call`). Used to confirm an `approve` is visible on-chain before
+    /// the dependent `transferFrom`/`deposit` is sent. No signing — a read-only
+    /// query against the live chain.
+    pub fn erc20_allowance(
+        &self,
+        token: Address,
+        owner: Address,
+        spender: Address,
+    ) -> Result<u128, HarnessError> {
+        // allowance(address,address) selector 0xdd62ed3e, owner then spender
+        // each left-padded to 32 bytes.
+        let data = format!(
+            "0xdd62ed3e000000000000000000000000{}000000000000000000000000{}",
+            format!("{owner:#x}").trim_start_matches("0x"),
+            format!("{spender:#x}").trim_start_matches("0x"),
+        );
+        let out = Command::new("cast")
+            .args([
+                "call",
+                "--rpc-url",
+                &self.rpc_url,
+                &format!("{token:#x}"),
+                &data,
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast call allowance({owner:#x},{spender:#x}) on {token:#x} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let s = raw.trim().trim_start_matches("0x");
+        if s.is_empty() || s.chars().all(|c| c == '0') {
+            return Ok(0);
+        }
+        // Same up-to-256-bit decode as `erc20_balance_of`: saturate when the
+        // high half is non-zero so the visibility check stays honest.
+        let low = &s[s.len().saturating_sub(32)..];
+        let high_nonzero = s.len() > 32 && s[..s.len() - 32].chars().any(|c| c != '0');
+        let low_val = u128::from_str_radix(low, 16).unwrap_or(u128::MAX);
+        Ok(if high_nonzero { u128::MAX } else { low_val })
+    }
+
+    /// `approve(spender, amount)` on `token` from `private_key_hex`, then poll
+    /// `allowance(owner, spender)` until the on-chain read reflects the
+    /// approved amount before returning.
+    ///
+    /// On the Geth devnet, `cast send` exits as soon as the approve tx mines,
+    /// but Geth's state-read can briefly race the state-update so an immediate
+    /// `eth_call`/`transferFrom` still sees the pre-approve (zero) allowance —
+    /// the same state-lag fixed for the registry harness in issue #1081 / PR
+    /// #1094. That surfaced here as an intermittent
+    /// `ERC20: transfer amount exceeds allowance` revert on the dependent
+    /// deposit. Polling the allowance read (>=5 attempts, 200ms apart) closes
+    /// that read-after-write window deterministically — a real race fix, not a
+    /// skip.
+    fn approve_and_confirm(
+        &self,
+        private_key_hex: &str,
+        token: Address,
+        owner: Address,
+        spender: Address,
+        amount: u128,
+    ) -> Result<String, HarnessError> {
+        let spender_hex = format!("{spender:#x}");
+        let tx = self.cast_send(
+            private_key_hex,
+            token,
+            "approve(address,uint256)",
+            &[&spender_hex, &amount.to_string()],
+        )?;
+
+        const ATTEMPTS: u32 = 5;
+        const INTERVAL: Duration = Duration::from_millis(200);
+        for attempt in 0..ATTEMPTS {
+            let allowance = self.erc20_allowance(token, owner, spender)?;
+            if allowance >= amount {
+                return Ok(tx);
+            }
+            if attempt + 1 < ATTEMPTS {
+                thread::sleep(INTERVAL);
+            }
+        }
+        Err(HarnessError::other(format!(
+            "approve({spender_hex}, {amount}) on {token:#x} not visible to {owner:#x} after \
+             {ATTEMPTS} attempts ({INTERVAL:?} apart): Geth state-lag did not settle (tx={tx})"
+        )))
+    }
+
     /// Estimate gas for a `cast send` and return a 1.5x-buffered limit.
     ///
     /// A failing estimate means the transaction would revert on-chain (the node
@@ -1669,19 +1760,15 @@ impl Fixture {
         // Run each depositor's deposit sequence on its own scoped thread. The
         // sequences are signed by distinct keys, so they neither share nonces
         // nor depend on one another; the chain mines them in parallel.
-        let router_hex = format!("{:#x}", self.router());
-        let rwa_hex = format!("{:#x}", self.rwa_vault());
-        let protocol_hex = format!("{:#x}", self.demo_protocol_vault());
-        let agent_hex = format!("{:#x}", self.demo_agent_vault());
+        // `primary_hex` is interpolated into the zero-shares error message
+        // below. Approve targets (router/vaults) are now passed to
+        // `approve_and_confirm` as typed `Address`es, so their hex forms are no
+        // longer materialised here.
         let primary_hex = format!("{:#x}", self.vault());
         let results = thread::scope(|s| -> Result<Vec<(Address, String)>, HarnessError> {
             let handles: Vec<_> = keys
                 .iter()
                 .map(|(pk_hex, depositor)| {
-                    let router_hex = &router_hex;
-                    let rwa_hex = &rwa_hex;
-                    let protocol_hex = &protocol_hex;
-                    let agent_hex = &agent_hex;
                     let primary_hex = &primary_hex;
                     s.spawn(move || -> Result<(Address, String), HarnessError> {
                         let depositor_hex = format!("{depositor:#x}");
@@ -1691,11 +1778,12 @@ impl Fixture {
                         // router-eligible vaults by the on-chain weight vector
                         // and mints shares to the depositor (msg.sender). Empty
                         // minSharesPerLeg skips slippage protection (demo stubs).
-                        self.cast_send(
+                        self.approve_and_confirm(
                             pk_hex,
                             self.usdc(),
-                            "approve(address,uint256)",
-                            &[router_hex, &per_user_usdc.to_string()],
+                            *depositor,
+                            self.router(),
+                            per_user_usdc,
                         )?;
                         let router_tx = self.cast_send(
                             pk_hex,
@@ -1719,11 +1807,12 @@ impl Fixture {
                         // cast_send and re-read the post-deposit share balance so a
                         // mis-minted deposit surfaces the true on-chain failure
                         // here rather than as a downstream per-depositor flake.
-                        self.cast_send(
+                        self.approve_and_confirm(
                             pk_hex,
                             self.usdc(),
-                            "approve(address,uint256)",
-                            &[primary_hex, &per_user_usdc.to_string()],
+                            *depositor,
+                            self.vault(),
+                            per_user_usdc,
                         )?;
                         self.cast_send(
                             pk_hex,
@@ -1748,11 +1837,12 @@ impl Fixture {
                         // Approve and deposit directly into the §11.4 RWA vault,
                         // which is Active but not router-eligible. Shares go to
                         // the depositor.
-                        self.cast_send(
+                        self.approve_and_confirm(
                             pk_hex,
                             self.usdc(),
-                            "approve(address,uint256)",
-                            &[rwa_hex, &per_user_usdc.to_string()],
+                            *depositor,
+                            self.rwa_vault(),
+                            per_user_usdc,
                         )?;
                         self.cast_send(
                             pk_hex,
@@ -1766,11 +1856,12 @@ impl Fixture {
                         // weighted split can under-fund a basket leg on a busy
                         // chain (issue #882); a direct deposit guarantees non-zero
                         // TVL. Each swaps USDC -> basket via the demo stub routers.
-                        self.cast_send(
+                        self.approve_and_confirm(
                             pk_hex,
                             self.usdc(),
-                            "approve(address,uint256)",
-                            &[protocol_hex, &per_user_usdc.to_string()],
+                            *depositor,
+                            self.demo_protocol_vault(),
+                            per_user_usdc,
                         )?;
                         self.cast_send(
                             pk_hex,
@@ -1778,11 +1869,12 @@ impl Fixture {
                             "deposit(uint256,address)",
                             &[&per_user_usdc.to_string(), &depositor_hex],
                         )?;
-                        self.cast_send(
+                        self.approve_and_confirm(
                             pk_hex,
                             self.usdc(),
-                            "approve(address,uint256)",
-                            &[agent_hex, &per_user_usdc.to_string()],
+                            *depositor,
+                            self.demo_agent_vault(),
+                            per_user_usdc,
                         )?;
                         self.cast_send(
                             pk_hex,
