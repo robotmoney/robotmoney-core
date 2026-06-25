@@ -1,5 +1,5 @@
 # RouterGovernance
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/RouterGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/565d7a4ab968179b6f0a1db9f9fe724a77abadce/contracts/RouterGovernance.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -81,6 +81,20 @@ users time to inspect outcomes and withdraw before state changes.
 
 ```solidity
 uint64 public constant MIN_EXECUTION_DELAY = 1 hours
+```
+
+
+### MAX_HISTORY_BLOCKS
+Maximum block depth for getPastVotes history queries. Set to
+100 000 blocks, which on a 2-second L2 corresponds to ~55 hours —
+well above MAX_VOTING_PERIOD. The previous 256-block value was
+shorter than MIN_VOTING_PERIOD (1 hour ≈ 1 800 blocks on 2-second
+L2), causing the voting UI to revert for all remaining voters once
+256 blocks had elapsed after proposal creation (AZ-GOV-1).
+
+
+```solidity
+uint256 public constant MAX_HISTORY_BLOCKS = 100_000
 ```
 
 
@@ -430,8 +444,8 @@ function proposalVoteSnapshot(uint256 proposalId) external view returns (uint256
 ### getPastVotes
 
 Return the voting power `voter` held at `blockNumber`.
-Reverts if blockNumber is more than 256 blocks behind the
-current tip (EVM checkpoint depth limitation).
+Reverts with CheckpointTooOld if blockNumber is more than
+MAX_HISTORY_BLOCKS behind the current tip.
 
 
 ```solidity
@@ -728,8 +742,7 @@ error VaultNotEligible(address vault);
 
 ### CheckpointTooOld
 Thrown by the external getPastVotes view when the queried block
-is more than 256 blocks behind the current block — mirrors EVM
-blockhash depth limits to discourage unbounded historical reads.
+is more than MAX_HISTORY_BLOCKS behind the current block.
 
 
 ```solidity

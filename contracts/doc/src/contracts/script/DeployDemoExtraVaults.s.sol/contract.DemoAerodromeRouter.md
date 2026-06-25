@@ -1,5 +1,5 @@
 # DemoAerodromeRouter
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/script/DeployDemoExtraVaults.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/565d7a4ab968179b6f0a1db9f9fe724a77abadce/contracts/script/DeployDemoExtraVaults.s.sol)
 
 Minimal Aerodrome router stub for demo purposes. Records swaps at
 a 1:1 rate, minting output token to the recipient. Demo-only.

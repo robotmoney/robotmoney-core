@@ -1,5 +1,5 @@
 # RouterGovernanceTest
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/ff7f6357fae66fafd4ea43a7ad5248daf223b17f/contracts/test/RouterGovernance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/565d7a4ab968179b6f0a1db9f9fe724a77abadce/contracts/test/RouterGovernance.t.sol)
 
 **Inherits:**
 Test
@@ -359,6 +359,36 @@ latest assignment.
 
 ```solidity
 function test_getPastVotes_returnsHistoricalPower() public;
+```
+
+### test_getPastVotes_300BlocksInPastDoesNotRevert
+
+getPastVotes for a snapshot 300 blocks in the past does not
+revert (AZ-GOV-1). The old 256-block cap would revert here.
+
+
+```solidity
+function test_getPastVotes_300BlocksInPastDoesNotRevert() public;
+```
+
+### test_getPastVotes_1800BlocksInPastDoesNotRevert
+
+getPastVotes for a snapshot 1800 blocks in the past (beyond
+MIN_VOTING_PERIOD on a 2s L2) does not revert (AZ-GOV-1).
+
+
+```solidity
+function test_getPastVotes_1800BlocksInPastDoesNotRevert() public;
+```
+
+### test_getPastVotes_revertsWhenTooOld
+
+getPastVotes for a snapshot more than MAX_HISTORY_BLOCKS behind
+the tip reverts with CheckpointTooOld.
+
+
+```solidity
+function test_getPastVotes_revertsWhenTooOld() public;
 ```
 
 ### test_vote_success
