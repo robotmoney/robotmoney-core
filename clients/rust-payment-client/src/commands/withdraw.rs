@@ -297,6 +297,56 @@ pub fn run(args: Args) -> i32 {
         }
     };
 
+    // -- Replay cache (AZ-RPC-2) -----------------------------------------
+    // Look up the paymentId in the client-side replay cache before signing.
+    // Uses OP_WITHDRAW so withdraw entries are disjoint from deposit entries
+    // even when all other hash inputs are identical (PAYMENTID-001).
+    // `shares` is the cache amount field (mirrors the on-chain formula).
+    let replay = match crate::replay_cache::ReplayCache::open(&state_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("rmpc withdraw: replay cache open failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    };
+    match replay.lookup_op(
+        crate::replay_cache::OP_WITHDRAW,
+        cfg.chain_id,
+        gateway_addr,
+        agent_address,
+        order_id,
+        shares,
+        idempotency_key,
+    ) {
+        Ok(Some(prior_tx)) => {
+            let err = RmpcError::ErrOrderIdAlreadySubmitted {
+                tx_hash: prior_tx.clone(),
+            };
+            record_audit(&audit.build(
+                AuditDecision::Refused,
+                Some("ErrOrderIdAlreadySubmitted".to_string()),
+            ));
+            emit_refusal(
+                &WithdrawFailure {
+                    status: "refused",
+                    error: "ErrOrderIdAlreadySubmitted".to_string(),
+                    message: Some(format!("{err}")),
+                    agent: Some(format!("{agent_address:#x}")),
+                    order_id: Some(format!("{order_id:#x}")),
+                    tx_hash: Some(prior_tx),
+                    checks: None,
+                },
+                args.pretty,
+            );
+            return EXIT_REFUSAL;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::error!("rmpc withdraw: replay cache lookup failed: {e}");
+            return EXIT_STARTUP_FAIL;
+        }
+    }
+
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -497,6 +547,24 @@ pub fn run(args: Args) -> i32 {
     let tx_hash_hex = format!("{tx_hash:#x}");
     audit.tx_hash = Some(tx_hash_hex.clone());
 
+    // Insert into replay cache immediately after broadcast (optimistic).
+    // deadline = 0 here because the withdraw deadline was derived from the
+    // block timestamp inside the tokio runtime; store 0 as audit metadata
+    // since the on-chain paymentId formula excludes the deadline anyway.
+    if let Err(e) = replay.insert_op(
+        crate::replay_cache::OP_WITHDRAW,
+        cfg.chain_id,
+        gateway_addr,
+        agent_address,
+        order_id,
+        shares,
+        idempotency_key,
+        0,
+        &tx_hash_hex,
+    ) {
+        log::warn!("rmpc withdraw: replay cache insert failed (non-fatal): {e}");
+    }
+
     // -- Receipt ----------------------------------------------------------
     let max_attempts = args.receipt_timeout_secs.min(u32::MAX as u64) as u32;
     let receipt_res = rt.block_on(async {
@@ -505,6 +573,9 @@ pub fn run(args: Args) -> i32 {
     let receipt = match receipt_res {
         Ok(r) => r,
         Err(e) => {
+            // AZ-RPC-1: timeout ≠ failure — do NOT remove the replay-cache
+            // entry. The tx may still land; the operator must inspect the
+            // original tx_hash before re-submitting.
             record_audit(&audit.build(AuditDecision::Refused, Some(error_name(&e).to_string())));
             emit_refusal(
                 &WithdrawFailure {
@@ -523,6 +594,17 @@ pub fn run(args: Args) -> i32 {
     };
 
     if !receipt.inner.status() {
+        // Confirmed on-chain failure (status == 0): remove the optimistic
+        // replay-cache entry so the operator can retry with the same paymentId.
+        withdraw_finalize_on_failure(
+            &replay,
+            cfg.chain_id,
+            gateway_addr,
+            agent_address,
+            order_id,
+            shares,
+            idempotency_key,
+        );
         let err = RmpcError::ErrTxReverted {
             tx_hash: tx_hash_hex.clone(),
         };
@@ -602,6 +684,34 @@ pub fn run(args: Args) -> i32 {
     };
     emit(&out, args.pretty);
     EXIT_OK
+}
+
+/// AZ-RPC-2 finalize-on-confirmed-failure: remove the optimistic withdraw
+/// replay-cache entry when the on-chain receipt shows status == 0. Only
+/// call this on a confirmed revert, never on a receipt-wait timeout.
+#[allow(clippy::too_many_arguments)]
+fn withdraw_finalize_on_failure(
+    replay: &crate::replay_cache::ReplayCache,
+    chain_id: u64,
+    gateway: Address,
+    agent: Address,
+    order_id: B256,
+    shares: U256,
+    idempotency_key: B256,
+) {
+    if let Err(e) = replay.remove_op(
+        crate::replay_cache::OP_WITHDRAW,
+        chain_id,
+        gateway,
+        agent,
+        order_id,
+        shares,
+        idempotency_key,
+    ) {
+        log::warn!(
+            "rmpc withdraw: replay cache finalize-on-failure remove failed (non-fatal): {e}"
+        );
+    }
 }
 
 /// Withdraw-specific vault preflight checks:
