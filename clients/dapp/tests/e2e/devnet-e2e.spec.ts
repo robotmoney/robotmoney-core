@@ -123,23 +123,35 @@ test.describe("devnet E2E — full-stack Geth+Lighthouse", () => {
     await connectInjectedWallet(page);
     await dismissOnboardingIfPresent(page);
 
-    await page.getByTestId("agent-input").fill(endpoints.agent_addr);
+    // Per issue #269, `authorizeAgent` reverts with `AgentAlreadyOwned` if
+    // called twice for the same agent address. The smoke-test devnet's
+    // Deploy.s.sol already authorized `endpoints.agent_addr` at deploy time.
+    // Use a fresh, deterministic-but-unused address instead so the reveal
+    // transaction does not revert.
+    const FRESH_AGENT_ADDR = "0x000000000000000000000000000000000000bB01";
+    await page.getByTestId("agent-input").fill(FRESH_AGENT_ADDR);
     await page.getByTestId("shareReceiver-input").fill(endpoints.share_receiver_addr);
 
     const authorizePreview = page.locator('[data-testid="tx-preview"][data-ok="true"]').first();
     await expect(authorizePreview).toBeVisible({ timeout: 30_000 });
 
+    // Step 1 of 2: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
     await page.getByTestId("authorize-submit").click();
+
+    // Step 2 of 2: reveal — enabled once currentBlock > commitBlockNumber (~12s on Geth).
+    const revealSubmit = page.getByTestId("authorize-reveal-submit");
+    await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
+    await revealSubmit.click();
 
     console.log(
       `devnet-e2e: polling for AGENT_ROLE on ${endpoints.rpc_url}, ` +
-        `gateway=${endpoints.gateway_addr}, agent=${endpoints.agent_addr}`,
+        `gateway=${endpoints.gateway_addr}, agent=${FRESH_AGENT_ADDR}`,
     );
     await waitForRole(
       endpoints.rpc_url,
       endpoints.gateway_addr,
       AGENT_ROLE,
-      endpoints.agent_addr,
+      FRESH_AGENT_ADDR,
       true,
     );
     console.log("devnet-e2e: AGENT_ROLE confirmed on-chain.");
