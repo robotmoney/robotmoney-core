@@ -461,6 +461,8 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 | Slippage protection | `minSharesPerLeg[]` parameter to `deposit()` | Revert if any leg returns fewer shares than specified. |
 | Asset verification | `VaultAssetMismatch` error | Revert if a vault's `asset()` is not the router's USDC. |
 | Vault status check | `VaultNotActive` error | Revert if any leg is not `Active` in the registry. |
+| Per-leg transfer failure | `UsdcLegTransferFailed(address vault)` error | Wrap a reverting `vault.deposit()` (e.g. a USDC blacklist hit or fee-on-transfer failure) in a named per-leg error so callers can distinguish it from the generic custody check. |
+| Donation-DoS snapshot | `usdcBalanceBefore` balance snapshot | Snapshot the router's USDC balance before pulling the caller's deposit so pre-existing donated USDC cannot trigger a false custody-invariant revert. |
 
 ### 9.1.4 Key functions
 
@@ -477,7 +479,8 @@ The router never deposits into an ineligible vault: before each leg, it checks `
 ### 9.1.5 Key invariants
 
 - **Weight normalization**: Both voted and default vectors must sum exactly to `BPS_DENOMINATOR` (10000). `setWeights` and `setDefaultWeights` revert if not.
-- **All-or-revert**: No USDC is permanently stranded in the router; if any leg undershoots its target, the entire deposit reverts with `UsdcCustodyInvariantViolated`.
+- **All-or-revert / custody invariant**: No USDC is permanently stranded in the router. The router snapshots its USDC balance into `usdcBalanceBefore` before pulling the caller's deposit, then after all legs run requires the balance to return to that snapshot — reverting `UsdcCustodyInvariantViolated` if any leg accepted less than its allocated `legAmount`. Because the snapshot is taken before the caller's funds are pulled, any pre-existing donated USDC appears in both the before and after snapshots and cannot trigger a false revert (donation-DoS hardening).
+- **Per-leg transfer failure**: When a single `vault.deposit()` reverts (e.g. a USDC blacklist hit or a fee-on-transfer failure), the router surfaces the named error `UsdcLegTransferFailed(address vault)` rather than the opaque `UsdcCustodyInvariantViolated` custody check, so off-chain handlers and auditors can decode the specific failing leg.
 - **Vault asset consistency**: All weighted vaults must have `asset() == USDC` (the router's configured USDC address). Checked before each deposit.
 - **No implicit fees**: The router charges no fees; all fees (exit fees on vaults, protocol fees) are handled at the vault layer.
 
