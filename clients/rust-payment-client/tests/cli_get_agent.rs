@@ -5,8 +5,9 @@
 mod common;
 
 use crate::common::{
-    enc_agents, enc_agents_with_withdrawal, enc_u256, jrpc_result, jrpc_result_raw,
-    match_eth_call_selector, selector_hex_of, Fixture, SHARE_RECEIVER,
+    abi_addr_hex, enc_agents, enc_agents_with_withdrawal, enc_u256, jrpc_result, jrpc_result_raw,
+    match_eth_call_selector, match_eth_call_selector_with_first_arg, selector_hex_of, Fixture,
+    SHARE_RECEIVER,
 };
 use alloy_primitives::{address, Address, U256};
 use assert_cmd::Command;
@@ -492,4 +493,284 @@ fn get_agent_rejects_malformed_address() {
         ])
         .assert()
         .failure();
+}
+
+/// AZ-GW-2 / issue #1069 — router-withdrawal policy: get-agent must query
+/// `vault.allowance(shareReceiver, gateway)`, NOT `vault.allowance(agent, gateway)`.
+///
+/// The router withdrawal path (`withdrawFromRouter`) pulls shares from
+/// `policy.shareReceiver`, so the operator-visible blast-radius allowance is
+/// the shareReceiver's allowance to the gateway. When shareReceiver != agent
+/// the policy is a router-withdrawal policy.
+///
+/// This test mocks the allowance call only when called with shareReceiver as
+/// the owner. A call with the agent address as owner is mocked separately to
+/// return a different value; reporting that value would be a regression.
+#[tokio::test]
+async fn get_agent_router_withdrawal_queries_sharereceiver_allowance() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let block_no = 0x123u64;
+    let block_ts = 1_700_000_000u64;
+
+    // The agent address (target of the get-agent command)
+    let agent_addr: Address = address!("00000000000000000000000000000000000000aa");
+    // A distinct shareReceiver (router-withdrawal: shareReceiver != agent)
+    let router_share_receiver: Address = address!("00000000000000000000000000000000000000ee");
+    assert_ne!(router_share_receiver, agent_addr, "shareReceiver must differ from agent");
+
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{chain_id:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{block_no:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getBlockByNumber"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result_raw(&format!(
+            r#"{{"timestamp":"0x{ts:x}","number":"0x{block_no:x}"}}"#,
+            ts = block_ts,
+            block_no = block_no
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // agents() returns shareReceiver = router_share_receiver (≠ agent)
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_agents_with_withdrawal(
+            true,
+            u64::MAX,
+            U256::from(1_000_000u64),
+            U256::from(100_000_000u64),
+            router_share_receiver, // shareReceiver ≠ agent → router-withdrawal policy
+            address!("00000000000000000000000000000000000000bb"), // assetRecipient
+            U256::from(500_000u64),
+            U256::from(5_000_000u64),
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::effectiveDepositWindowGrossCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(0u64))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+
+    // Allowance call with shareReceiver as owner → returns the router allowance.
+    // The selector for allowanceCall is the same for any owner; we distinguish
+    // by matching the full calldata prefix (selector + ABI-padded owner address).
+    let allowance_selector = selector_hex_of::<Erc20::allowanceCall>();
+    let sharereceiver_first_arg = abi_addr_hex(router_share_receiver);
+    let sharereceiver_allowance: u64 = 9_999_999;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector_with_first_arg(
+            &allowance_selector,
+            &sharereceiver_first_arg,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(sharereceiver_allowance))))
+        .expect_at_least(1) // must be called
+        .create_async()
+        .await;
+    // Allowance call with agent as owner → returns a DIFFERENT value.
+    // This mock must NOT be hit; if it is, the reported share_allowance
+    // will be wrong and the assertion below will catch the regression.
+    let agent_first_arg = abi_addr_hex(agent_addr);
+    let wrong_agent_allowance = server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector_with_first_arg(
+            &allowance_selector,
+            &agent_first_arg,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(1u64)))) // wrong value
+        .expect(0) // must NOT be called
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let target = format!("{agent_addr:#x}");
+    let out = rmpc()
+        .args([
+            "get-agent",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--agent",
+            &target,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &v["data"];
+
+    // share_allowance must reflect the shareReceiver's allowance.
+    assert_eq!(
+        d["share_allowance"],
+        sharereceiver_allowance.to_string(),
+        "share_allowance should be the shareReceiver's allowance"
+    );
+    // share_allowance_owner must be the shareReceiver, not the agent.
+    assert_eq!(
+        d["share_allowance_owner"].as_str().unwrap().to_lowercase(),
+        format!("{router_share_receiver:#x}").to_lowercase(),
+        "share_allowance_owner should be shareReceiver for router-withdrawal policy"
+    );
+
+    // Hard proof: the agent-address allowance query was never issued.
+    wrong_agent_allowance.assert_async().await;
+}
+
+/// AZ-GW-2 / issue #1069 — direct-vault policy: get-agent must query
+/// `vault.allowance(agent, gateway)` (unchanged behaviour).
+///
+/// For a direct-vault withdrawal policy the gateway's `withdraw` path pulls
+/// shares from the agent (`msg.sender`). When `shareReceiver == agent` the
+/// policy is a direct-vault policy and the blast-radius allowance is the
+/// agent's own allowance to the gateway.
+#[tokio::test]
+async fn get_agent_direct_vault_queries_agent_allowance() {
+    let mut server = mockito::Server::new_async().await;
+    let chain_id = 31337u64;
+    let block_no = 0x123u64;
+    let block_ts = 1_700_000_000u64;
+
+    // The agent address is also the shareReceiver (direct-vault policy).
+    let agent_addr: Address = address!("00000000000000000000000000000000000000aa");
+    let direct_share_receiver = agent_addr; // shareReceiver == agent → direct-vault
+
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_chainId"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{chain_id:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(json!({"method": "eth_blockNumber"})))
+        .with_status(200)
+        .with_body(jrpc_result(&format!("0x{block_no:x}")))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(Matcher::PartialJson(
+            json!({"method": "eth_getBlockByNumber"}),
+        ))
+        .with_status(200)
+        .with_body(jrpc_result_raw(&format!(
+            r#"{{"timestamp":"0x{ts:x}","number":"0x{block_no:x}"}}"#,
+            ts = block_ts,
+            block_no = block_no
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    // agents() returns shareReceiver == agent (direct-vault policy)
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::agentsCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_agents_with_withdrawal(
+            true,
+            u64::MAX,
+            U256::from(1_000_000u64),
+            U256::from(100_000_000u64),
+            direct_share_receiver, // shareReceiver == agent → direct-vault policy
+            address!("00000000000000000000000000000000000000bb"), // assetRecipient
+            U256::from(500_000u64),
+            U256::from(5_000_000u64),
+        )))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector(&selector_hex_of::<
+            RobotMoneyGateway::effectiveDepositWindowGrossCall,
+        >()))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(0u64))))
+        .expect_at_least(0)
+        .create_async()
+        .await;
+
+    let allowance_selector = selector_hex_of::<Erc20::allowanceCall>();
+    let agent_first_arg_direct = abi_addr_hex(agent_addr);
+    let expected_agent_allowance: u64 = 7_654_321;
+    // Allowance call with agent as owner must be called and return the expected value.
+    server
+        .mock("POST", "/")
+        .match_body(match_eth_call_selector_with_first_arg(
+            &allowance_selector,
+            &agent_first_arg_direct,
+        ))
+        .with_status(200)
+        .with_body(jrpc_result(&enc_u256(U256::from(expected_agent_allowance))))
+        .expect_at_least(1) // must be called
+        .create_async()
+        .await;
+
+    let fix = Fixture::build(&server.url(), chain_id);
+    let target = format!("{agent_addr:#x}");
+    let out = rmpc()
+        .args([
+            "get-agent",
+            "--config",
+            fix.config_path.to_str().unwrap(),
+            "--agent",
+            &target,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &v["data"];
+
+    // share_allowance must reflect the agent's own allowance.
+    assert_eq!(
+        d["share_allowance"],
+        expected_agent_allowance.to_string(),
+        "share_allowance should be the agent's allowance for direct-vault policy"
+    );
+    // share_allowance_owner must be the agent address.
+    assert_eq!(
+        d["share_allowance_owner"].as_str().unwrap().to_lowercase(),
+        format!("{agent_addr:#x}").to_lowercase(),
+        "share_allowance_owner should be agent for direct-vault policy"
+    );
 }
