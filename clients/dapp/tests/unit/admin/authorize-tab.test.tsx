@@ -22,6 +22,8 @@ vi.mock("wagmi", () => ({
   useWriteContract: () => ({ writeContract: vi.fn(), isPending: false }),
   // useVaultRegistration.ts (imported transitively) statically imports useReadContract.
   useReadContract: () => ({ data: undefined }),
+  // AuthorizeTab uses useBlockNumber to poll for block advancement in reveal phase.
+  useBlockNumber: () => ({ data: undefined }),
 }));
 
 const GATEWAY = "0x1111111111111111111111111111111111111111" as const;
