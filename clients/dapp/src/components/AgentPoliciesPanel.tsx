@@ -228,7 +228,8 @@ export function AgentPoliciesPanel(props: AgentPoliciesPanelProps) {
                           policy.shareAllowanceOwner.toLowerCase() !==
                             policy.agent.toLowerCase() ? (
                             <>
-                              {" "}(shareReceiver:{" "}
+                              {" "}
+                              (shareReceiver:{" "}
                               <code data-testid="agent-policy-share-allowance-owner">
                                 {policy.shareAllowanceOwner}
                               </code>

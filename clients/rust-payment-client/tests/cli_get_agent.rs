@@ -517,7 +517,10 @@ async fn get_agent_router_withdrawal_queries_sharereceiver_allowance() {
     let agent_addr: Address = address!("00000000000000000000000000000000000000aa");
     // A distinct shareReceiver (router-withdrawal: shareReceiver != agent)
     let router_share_receiver: Address = address!("00000000000000000000000000000000000000ee");
-    assert_ne!(router_share_receiver, agent_addr, "shareReceiver must differ from agent");
+    assert_ne!(
+        router_share_receiver, agent_addr,
+        "shareReceiver must differ from agent"
+    );
 
     server
         .mock("POST", "/")
