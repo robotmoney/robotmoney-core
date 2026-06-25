@@ -24,6 +24,47 @@
 //! Storage shape: a single JSON file at `<state_dir>/submitted_order_ids.json`.
 //! Concurrent access is serialised with `fs2` advisory locks (already a
 //! dependency for `nonce::AgentLock`).
+//!
+//! # Public API contract (stable — downstream issues #1068 depend on this)
+//!
+//! The three public methods form a well-defined insert/remove contract that
+//! downstream deposit-timeout and withdraw-replay hardening PRs (#1068,
+//! AZ-RPC-1 / AZ-RPC-2) must follow **without changing this contract**:
+//!
+//! ## `insert` — optimistic write at broadcast time
+//!
+//! Called immediately after a deposit or withdrawal transaction is broadcast
+//! to the RPC node, before the receipt is confirmed.  Key = gateway-equivalent
+//! `paymentId`; value = `tx_hash` returned by `eth_sendRawTransaction`.
+//!
+//! **Invariant:** a successful (mined, status == 1) deposit/withdrawal leaves
+//! the entry in place so that a genuine operator retry is refused locally.
+//!
+//! ## `remove` — finalize-on-failure rollback
+//!
+//! Called when the receipt later shows `status == 0` (revert), or when the
+//! receipt wait times out (RPC-2 / AZ-RPC-1).  Clears the optimistic entry so
+//! that a legitimate retry with the same paymentId inputs is NOT permanently
+//! refused by a poisoned entry pointing at a failed tx.
+//!
+//! **Invariant:** removing an entry that was never inserted is a no-op success
+//! and must not disturb any other entries.
+//!
+//! ## `lookup` — pre-broadcast duplicate check
+//!
+//! Called before broadcast.  Returns `Some(tx_hash)` on a cache hit (duplicate
+//! refused) or `None` on a miss (safe to proceed).
+//!
+//! ## Withdraw replay extension (AZ-RPC-2 / issue #1068)
+//!
+//! Downstream work that adds withdraw/withdraw-router replay protection **must
+//! compute its paymentId with `OP_WITHDRAW = 2u8`** (already exported as the
+//! `OP_WITHDRAW` constant) so that withdraw entries are disjoint from deposit
+//! entries even when all other hash inputs are identical.  The `insert`,
+//! `remove`, and `lookup` signatures are unchanged — only the `op_kind` byte in
+//! the paymentId formula differs.  Callers must use [`compute_payment_id`] with
+//! the appropriate prefix constant; do not call `insert` with a deposit-derived
+//! paymentId for a withdrawal.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
