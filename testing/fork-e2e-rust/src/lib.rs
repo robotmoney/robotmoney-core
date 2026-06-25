@@ -786,6 +786,27 @@ impl ForkFixture {
         if self.backend.is_none() {
             // Testnet mode: fund via transfers from the harness holder.
             self.fund_from_harness_holder(addr, eth_wei, usdc_units)?;
+            // Geth devnet: wait_for_receipt confirms the funding TX is mined, but
+            // Geth's tx-pool balance check may race the state-update and see the
+            // pre-funding balance for a brief window (blocker #1090). Poll until
+            // eth_getBalance reflects the funded amount before returning.
+            if eth_wei > U256::ZERO {
+                let start = Instant::now();
+                let timeout = Duration::from_secs(10);
+                loop {
+                    let bal = self.rpc.eth_get_balance(addr)?;
+                    if bal >= eth_wei {
+                        break;
+                    }
+                    if start.elapsed() > timeout {
+                        return Err(HarnessError::Rpc(format!(
+                            "ephemeral: balance of {addr:#x} not visible after {timeout:?}: \
+                             got {bal} want {eth_wei}"
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
         } else {
             // Anvil mode: use admin RPCs.
             self.rpc.set_balance(addr, eth_wei)?;
@@ -1267,6 +1288,15 @@ impl Rpc {
     pub fn get_code(&self, addr: Address) -> Result<Bytes, HarnessError> {
         let s: String = self.rpc("eth_getCode", serde_json::json!([fmt_addr(addr), "latest"]))?;
         decode_hex_bytes(&s)
+    }
+
+    pub fn eth_get_balance(&self, addr: Address) -> Result<U256, HarnessError> {
+        let s: String = self.rpc(
+            "eth_getBalance",
+            serde_json::json!([fmt_addr(addr), "latest"]),
+        )?;
+        U256::from_str_radix(s.trim_start_matches("0x"), 16)
+            .map_err(|e| HarnessError::Rpc(format!("eth_getBalance decode: {e}")))
     }
 
     pub fn eth_call(&self, from: Address, to: Address, data: Bytes) -> Result<Bytes, HarnessError> {
