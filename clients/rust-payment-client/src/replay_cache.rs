@@ -846,7 +846,15 @@ mod tests {
             .unwrap();
         // Second attempt with the same inputs: must hit the cache.
         let hit = cache
-            .lookup_op(OP_WITHDRAW, CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
             .unwrap();
         assert_eq!(
             hit,
@@ -875,7 +883,15 @@ mod tests {
             )
             .unwrap();
         let hit = cache
-            .lookup_op(OP_WITHDRAW, CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
             .unwrap();
         assert_eq!(
             hit,
@@ -893,12 +909,27 @@ mod tests {
         // Insert a deposit entry (OP_DEPOSIT via the plain `insert` method).
         cache
             .insert(
-                CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY, 1, "0xdeposittx",
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+                1,
+                "0xdeposittx",
             )
             .unwrap();
         // Withdraw lookup with the same inputs must miss (different op prefix).
         let miss = cache
-            .lookup_op(OP_WITHDRAW, CHAIN_ID, GATEWAY, AGENT, ORDER_ID, AMOUNT, IDEM_KEY)
+            .lookup_op(
+                OP_WITHDRAW,
+                CHAIN_ID,
+                GATEWAY,
+                AGENT,
+                ORDER_ID,
+                AMOUNT,
+                IDEM_KEY,
+            )
             .unwrap();
         assert_eq!(
             miss, None,
