@@ -125,6 +125,16 @@ jobs:
       - name: Adapter/router contract-surface doc-symbol invariant
         run: python3 .github/scripts/check_adapter_router_doc_symbols.py
 
+      - name: Self-test Geth state-lag doc/back-link guard
+        # Confirms the guard fires for a missing section heading and for each
+        # dropped helper back-link BEFORE running the real check, so a silent
+        # regression in the guard cannot let the read-after-write state-lag
+        # class lose its canonical documentation.
+        run: python3 .github/scripts/check_geth_state_lag_docs.py --self-test
+
+      - name: Geth read-after-write state-lag doc/back-link invariant
+        run: python3 .github/scripts/check_geth_state_lag_docs.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest
