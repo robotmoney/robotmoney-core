@@ -18,9 +18,13 @@
  *
  *   2. Paste the agent's address + shareReceiver + policy caps.
  *
- *   3. Preview and sign the on-chain `authorizeAgent` transaction.
- *      On success we mark this wallet registered (see useVaultRegistration)
- *      and unmount — AgentsPanel then renders the full AdminFlow.
+ *   3. Two-step permissionless authorization (commit/reveal):
+ *      a. Commit — generates a random salt, computes
+ *         commitHash = keccak256(abi.encode(agent, caller, salt)), and calls
+ *         commitAuthorization(commitHash). This does NOT require ADMIN_ROLE.
+ *      b. Reveal — after at least one block has passed, calls
+ *         revealAuthorization(agent, salt, policy). On success we mark this
+ *         wallet registered (see useVaultRegistration) and unmount.
  *
  * Browser-side keypair generation is intentionally NOT a supported path;
  * see docs/technical/dapp-credential-decisions.md §3.1.
@@ -29,14 +33,20 @@ import { useState, type FormEvent } from "react";
 import {
   useAccount,
   useBalance,
+  useBlockNumber,
   useChainId,
   useReadContract,
-  useSimulateContract,
+  useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { isAddress, type Address, type Hex } from "viem";
+import { isAddress, keccak256, encodeAbiParameters, type Address, type Hex } from "viem";
 import { gatewayAbi, erc20Abi } from "../lib/abi";
-import { buildPreview, type AdminAction, type PreviewContext } from "../lib/preview";
+import {
+  buildPreview,
+  type AdminAction,
+  type AgentPolicy,
+  type PreviewContext,
+} from "../lib/preview";
 import { markRegistered } from "../lib/useVaultRegistration";
 import { BOOTSTRAP_PROMPT, BOOTSTRAP_DOC_URL } from "../lib/bootstrapPrompts";
 import { seedOnboardingUsdc, type SeedResult } from "../lib/onboardingSeed";
@@ -87,6 +97,7 @@ type Props = Readonly<{
 }>;
 
 type Step = 1 | 2 | 3;
+type AuthPhase = "commit" | "reveal";
 
 export function OnboardingWizard(props: Props) {
   const { address, isConnected } = useAccount();
@@ -231,6 +242,7 @@ export function OnboardingWizard(props: Props) {
   };
 
   const [step, setStep] = useState<Step>(1);
+  const [authPhase, setAuthPhase] = useState<AuthPhase>("commit");
   const [agent, setAgent] = useState("");
   const [shareReceiver, setShareReceiver] = useState("");
   const [validUntil, setValidUntil] = useState(() =>
@@ -239,62 +251,143 @@ export function OnboardingWizard(props: Props) {
   const [maxPerPayment, setMaxPerPayment] = useState("100000000");
   const [maxPerWindow, setMaxPerWindow] = useState("1000000000");
 
+  // Commit/reveal state — persisted between the two sub-steps of step 3.
+  const [salt, setSalt] = useState<Hex | null>(null);
+  // commitTxHash is set when the commit tx hash comes back from the wallet.
+  // We wait for its receipt to get the actual on-chain block number.
+  const [commitTxHash, setCommitTxHash] = useState<Hex | null>(null);
+
   // strict: false — some wallets and rmpc print lowercase addresses without
   // EIP-55 checksum casing. The default strict check rejected those and left
   // "Next: review & sign" silently disabled.
   const validAgent = isAddress(agent, { strict: false });
   const validReceiver = isAddress(shareReceiver, { strict: false });
 
-  const action: AdminAction | null =
+  const policy: AgentPolicy | null =
     validAgent && validReceiver
+      ? {
+          active: true,
+          validUntil: BigInt(validUntil),
+          maxPerPayment: BigInt(maxPerPayment),
+          maxPerWindow: BigInt(maxPerWindow),
+          shareReceiver: shareReceiver as Address,
+          allowedDestinations: [],
+          assetRecipient: "0x0000000000000000000000000000000000000000" as Address,
+          maxWithdrawPerPayment: 0n,
+          maxWithdrawPerWindow: 0n,
+          allowedSourceVaults: [],
+        }
+      : null;
+
+  const action: AdminAction | null =
+    validAgent && validReceiver && policy
       ? {
           kind: "authorizeAgent",
           agent: agent as Address,
-          policy: {
-            active: true,
-            validUntil: BigInt(validUntil),
-            maxPerPayment: BigInt(maxPerPayment),
-            maxPerWindow: BigInt(maxPerWindow),
-            shareReceiver: shareReceiver as Address,
-            allowedDestinations: [],
-            assetRecipient: "0x0000000000000000000000000000000000000000" as Address,
-            maxWithdrawPerPayment: 0n,
-            maxWithdrawPerWindow: 0n,
-            allowedSourceVaults: [],
-          },
+          policy,
         }
       : null;
 
   const preview = action ? buildPreview(action, props.ctx) : null;
 
-  const { data: sim } = useSimulateContract({
-    address: props.gatewayAddress,
-    abi: gatewayAbi,
-    functionName: "authorizeAgent",
-    args: action ? [action.agent, action.policy] : undefined,
-    query: { enabled: step === 3 && isConnected && preview?.ok === true },
+  // Wait for the commit tx receipt to learn the exact block it mined in.
+  // This is needed to correctly gate the reveal: the contract rejects reveals
+  // in the same block as the commit (CommitmentTooRecent).
+  const { data: commitReceipt } = useWaitForTransactionReceipt({
+    hash: commitTxHash ?? undefined,
+    query: { enabled: commitTxHash !== null },
   });
 
-  const onAuthorize = (e: FormEvent<HTMLFormElement>) => {
+  // The block the commit actually mined in (from the receipt).
+  const commitBlockNumber = commitReceipt?.blockNumber ?? null;
+
+  // Current block number — polled while on step 3 reveal phase to detect
+  // when at least one block has passed since the commit.
+  const { data: currentBlock } = useBlockNumber({
+    watch: step === 3 && authPhase === "reveal",
+    query: { enabled: step === 3 && authPhase === "reveal" },
+  });
+
+  // Reveal is safe once block.number > commitBlockNumber (at least one block).
+  const revealReady =
+    authPhase === "reveal" &&
+    commitBlockNumber !== null &&
+    currentBlock !== undefined &&
+    currentBlock > commitBlockNumber;
+
+  // Compute commitHash = keccak256(abi.encode(agent, caller, salt)).
+  // Matches the on-chain computation in revealAuthorization.
+  function computeCommitHash(agentAddr: Address, caller: Address, saltHex: Hex): Hex {
+    return keccak256(
+      encodeAbiParameters(
+        [{ type: "address" }, { type: "address" }, { type: "bytes32" }],
+        [agentAddr, caller, saltHex],
+      ),
+    );
+  }
+
+  // Generate a fresh random salt for use in the commit/reveal pair.
+  function generateSalt(): Hex {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return ("0x" +
+      Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")) as Hex;
+  }
+
+  const onCommit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!sim) return;
-    writeContract(sim.request, {
-      onSuccess: () => {
-        if (!address) return;
-        markRegistered(address);
-        // Testnet/devnet only — seedOnboardingUsdc itself classifies the
-        // active chain and returns `skipped-mainnet` on canonical mainnet
-        // IDs, so this call is safe to issue unconditionally here.
-        if (!usdcAddress || !isAddress(usdcAddress)) return;
-        void seedOnboardingUsdc({
-          chainId,
-          recipient: address,
-          usdcAddress,
-          env: props.env,
-          provider: getInjectedProvider(),
-        }).then(setSeedResult);
+    if (!address || !validAgent) return;
+    const newSalt = generateSalt();
+    // Capture newSalt in closure so onSuccess can set it even before React
+    // re-renders (React state updates are async).
+    const actualHash = computeCommitHash(agent as Address, address, newSalt);
+    writeContract(
+      {
+        address: props.gatewayAddress,
+        abi: gatewayAbi,
+        functionName: "commitAuthorization",
+        args: [actualHash],
       },
-    });
+      {
+        onSuccess: (txHash) => {
+          setSalt(newSalt);
+          setCommitTxHash(txHash);
+          setAuthPhase("reveal");
+        },
+      },
+    );
+  };
+
+  const onReveal = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!salt || !action) return;
+    writeContract(
+      {
+        address: props.gatewayAddress,
+        abi: gatewayAbi,
+        functionName: "revealAuthorization",
+        args: [action.agent, salt, action.policy],
+      },
+      {
+        onSuccess: () => {
+          if (!address) return;
+          markRegistered(address);
+          // Testnet/devnet only — seedOnboardingUsdc itself classifies the
+          // active chain and returns `skipped-mainnet` on canonical mainnet
+          // IDs, so this call is safe to issue unconditionally here.
+          if (!usdcAddress || !isAddress(usdcAddress)) return;
+          void seedOnboardingUsdc({
+            chainId,
+            recipient: address,
+            usdcAddress,
+            env: props.env,
+            provider: getInjectedProvider(),
+          }).then(setSeedResult);
+        },
+      },
+    );
   };
 
   return (
@@ -455,25 +548,53 @@ export function OnboardingWizard(props: Props) {
         </section>
       )}
 
-      {step === 3 && (
+      {step === 3 && authPhase === "commit" && (
         <section data-testid="wizard-step-3">
-          <h2>Authorize the agent on-chain</h2>
+          <h2>Authorize the agent on-chain — step 1 of 2: commit</h2>
           <p>
-            This grants <code>AGENT_ROLE</code> on the gateway. Review the decoded transaction
-            below, then sign with your wallet.
+            This permissionless two-step flow does not require admin access. First, submit a
+            commitment transaction. After it confirms, you will sign the reveal transaction in the
+            next step.
           </p>
-          <form data-testid="wizard-authorize-form" onSubmit={onAuthorize}>
-            {preview && <TxPreview preview={preview} />}
+          {preview && <TxPreview preview={preview} />}
+          <form data-testid="wizard-commit-form" onSubmit={onCommit}>
             <div className="wizard-nav">
               <button type="button" data-testid="step-3-back" onClick={() => setStep(2)}>
                 Back
               </button>
               <button
                 type="submit"
-                data-testid="wizard-authorize-submit"
-                disabled={!isConnected || !sim || isPending}
+                data-testid="wizard-commit-submit"
+                disabled={!isConnected || isPending || !validAgent || !validReceiver}
               >
-                Sign authorizeAgent with wallet
+                Sign commit transaction
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {step === 3 && authPhase === "reveal" && (
+        <section data-testid="wizard-step-3-reveal">
+          <h2>Authorize the agent on-chain — step 2 of 2: reveal</h2>
+          <p>
+            {commitBlockNumber === null
+              ? "Commit transaction submitted — waiting for it to mine…"
+              : "Commitment confirmed. Waiting for one block to pass before the reveal can be submitted."}
+            {!revealReady && (
+              <span data-testid="wizard-reveal-waiting">
+                {commitBlockNumber === null ? "Mining…" : "Waiting for next block…"}
+              </span>
+            )}
+          </p>
+          <form data-testid="wizard-reveal-form" onSubmit={onReveal}>
+            <div className="wizard-nav">
+              <button
+                type="submit"
+                data-testid="wizard-reveal-submit"
+                disabled={!isConnected || isPending || !revealReady || !salt || !action}
+              >
+                Sign reveal transaction
               </button>
             </div>
           </form>

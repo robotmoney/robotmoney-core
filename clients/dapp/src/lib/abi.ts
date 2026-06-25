@@ -140,6 +140,42 @@ export const gatewayAbi = [
     ],
     outputs: [],
   },
+  // Permissionless two-step commit/reveal authorization (AZ-DAPP-1).
+  // commitAuthorization takes keccak256(abi.encode(agent, caller, salt));
+  // revealAuthorization re-derives the hash and authorizes the agent.
+  {
+    type: "function",
+    name: "commitAuthorization",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "commitHash", type: "bytes32" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "revealAuthorization",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "agent", type: "address" },
+      { name: "salt", type: "bytes32" },
+      {
+        name: "p",
+        type: "tuple",
+        components: [
+          { name: "active", type: "bool" },
+          { name: "validUntil", type: "uint64" },
+          { name: "maxPerPayment", type: "uint256" },
+          { name: "maxPerWindow", type: "uint256" },
+          { name: "shareReceiver", type: "address" },
+          { name: "allowedDestinations", type: "address[]" },
+          { name: "assetRecipient", type: "address" },
+          { name: "maxWithdrawPerPayment", type: "uint256" },
+          { name: "maxWithdrawPerWindow", type: "uint256" },
+          { name: "allowedSourceVaults", type: "address[]" },
+        ],
+      },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 export type AdminActionName =

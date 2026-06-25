@@ -116,15 +116,22 @@ test.describe("onboarding USDC seed — testnet/devnet drip", () => {
     await page.getByTestId("wizard-shareReceiver-input").fill(endpoints.share_receiver_addr);
     await page.getByTestId("step-2-next").click();
 
-    // Step 3: sign authorize.
+    // Step 3: commit/reveal authorize (two-step flow, AZ-DAPP-1).
     const baseline = await usdcBalanceOf(
       endpoints.rpc_url,
       endpoints.usdc_addr,
       endpoints.admin_addr,
     );
-    const submit = page.getByTestId("wizard-authorize-submit");
-    await expect(submit).toBeEnabled({ timeout: 30_000 });
-    await submit.click();
+
+    // Step 3a: commit — signs commitAuthorization(keccak256(agent,caller,salt)).
+    const commitSubmit = page.getByTestId("wizard-commit-submit");
+    await expect(commitSubmit).toBeEnabled({ timeout: 30_000 });
+    await commitSubmit.click();
+
+    // Step 3b: reveal — enabled once currentBlock > commitBlockNumber (~12s on Geth).
+    const revealSubmit = page.getByTestId("wizard-reveal-submit");
+    await expect(revealSubmit).toBeEnabled({ timeout: 60_000 });
+    await revealSubmit.click();
 
     // The seed handler runs after the authorize tx is broadcast. Poll
     // on-chain balance — the wizard surfaces a `wizard-seed-result`

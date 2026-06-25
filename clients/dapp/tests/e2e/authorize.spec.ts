@@ -10,6 +10,10 @@
  * Asserts the human walkthrough never surfaces a raw-calldata-only
  * signing prompt: every preview section either renders the structured
  * fields OR emits an explicit refusal — there is no third path.
+ *
+ * The authorize flow uses a two-step commit/reveal scheme (AZ-DAPP-1):
+ * the commit phase shows TxPreview for the upcoming authorizeAgent effect
+ * before the user signs the commitAuthorization transaction.
  */
 import { test, expect } from "./helpers/fixtures";
 import { loadEndpoints, type DevnetEndpoints } from "./helpers/devnet";
