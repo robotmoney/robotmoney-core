@@ -1,5 +1,5 @@
 # IComet
-[Git Source](https://github.com/robotmoney/robotmoney-monorepo/blob/565d7a4ab968179b6f0a1db9f9fe724a77abadce/contracts/interfaces/IComet.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/interfaces/IComet.sol)
 
 Minimal Compound V3 Comet interface used by CompoundV3Adapter.
 

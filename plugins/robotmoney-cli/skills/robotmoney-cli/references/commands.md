@@ -223,3 +223,63 @@ weight-bps, confidence, rationale-uri, vote-json-hash, prompt-hash,
 inputs-digest, timestamp.
 Common options: schema-version, gas-limit, fee-cap,
 receipt-timeout-secs, pretty.
+
+## Investment Committee MCP identity commands
+
+`rmpc committee-identity` manages a local Ed25519 signing identity for the
+`robotmoney-frontend` Investment Committee **demo**'s MCP flow (public apply
+-> admin activation -> MCP OAuth -> `get_signing_payload` ->
+`submit_recommendation`). It is a distinct identity type from the on-chain
+EVM signer used by `rmpc committee register` / `vote-submit` above — no
+on-chain write, no RPC, no operator config TOML. The private key never
+leaves the local keystore file.
+
+All three subcommands take a shared `--path <FILE>` (the keystore file) at
+the `rmpc committee-identity` level, e.g.
+`rmpc committee-identity --path identity.json create`.
+
+The keystore passphrase is read from
+`RMPC_COMMITTEE_IDENTITY_PASSPHRASE`; it is never accepted on argv or
+prompted on stdin.
+
+### `rmpc committee-identity create`
+
+Generate a fresh Ed25519 identity and write an encrypted keystore
+(Argon2id + AES-256-GCM) at `--path`. Refuses to overwrite an existing
+file. Requires `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`.
+
+```
+rmpc committee-identity --path <FILE> create
+```
+
+Prints `{"ok":true,"path":"...","public_key":"<base64>"}` on success.
+
+### `rmpc committee-identity show-public-key`
+
+Print the identity's base64 (standard, padded) raw 32-byte Ed25519 public
+key — the exact value `POST /api/committee/apply`'s `publicKey` field
+expects. Reads the keystore's cleartext `public_key` field; no passphrase
+required.
+
+```
+rmpc committee-identity --path <FILE> show-public-key
+```
+
+### `rmpc committee-identity sign`
+
+Sign the exact canonical payload string returned by MCP
+`get_signing_payload` and print the base64 (standard, padded) raw 64-byte
+Ed25519 signature `submit_recommendation` expects. Deterministic: signing
+the same payload twice yields the same signature. Requires
+`RMPC_COMMITTEE_IDENTITY_PASSPHRASE`.
+
+```
+rmpc committee-identity --path <FILE> sign ...
+```
+
+Pass `rmpc committee-identity --path <FILE> sign --help` for the full flag
+list. Exactly one of two mutually exclusive flags is required: an inline
+payload flag taking the canonical JSON string directly, or a payload-file
+flag taking a path whose exact bytes (no trimming) are signed — prefer the
+file form for payloads with shell-sensitive characters. Prints
+`{"ok":true,"public_key":"<base64>","signature":"<base64>"}` on success.

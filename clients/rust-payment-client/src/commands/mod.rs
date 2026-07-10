@@ -6,6 +6,7 @@
 //! code. JSON output goes on stdout; logs/warnings go on stderr.
 
 pub mod committee;
+pub mod committee_identity;
 pub mod deposit;
 pub mod get_agent;
 pub mod get_allowance;

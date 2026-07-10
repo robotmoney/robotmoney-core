@@ -6,9 +6,11 @@ description: >
   (get-vault, get-gateway, get-agent, get-roles, get-balance, get-allowance,
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
-  commands (propose, vote), and Investment Committee commands (committee
-  register, committee vote-submit). Covers all flags, output shapes, preflight
-  rules, and the get-governance → propose → vote example trace.
+  commands (propose, vote), Investment Committee commands (committee
+  register, committee vote-submit), and the Investment Committee MCP
+  identity commands (committee-identity create, show-public-key, sign).
+  Covers all flags, output shapes, preflight rules, and the get-governance
+  → propose → vote example trace.
 ---
 
 # robotmoney-cli (`rmpc`)
@@ -31,7 +33,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   subcommand: `deposit`, `withdraw`, `status`, `self-check`, `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `propose`, `vote`, `committee`.
+  `get-tx`, `propose`, `vote`, `committee`, `committee-identity`.
 
 ## Command surface
 
@@ -57,6 +59,7 @@ rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: register agents and submit signed allocation votes
+rmpc committee-identity  Investment Committee MCP demo: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
 ## Governance write commands
@@ -214,3 +217,27 @@ See `rmpc committee vote-submit --help` for the full flag list (vault,
 stance, weight-bps, confidence, rationale-uri, vote-json-hash,
 prompt-hash, inputs-digest, timestamp, schema-version, gas-limit,
 fee-cap, receipt-timeout-secs, pretty).
+
+## Investment Committee MCP identity commands
+
+`rmpc committee-identity` is the local Ed25519 signing identity for the
+`robotmoney-frontend` Investment Committee **demo**'s MCP flow (public
+apply → admin activation → MCP OAuth → `get_signing_payload` →
+`submit_recommendation`). It is a separate identity type from the
+`rmpc committee` on-chain EVM signer above: no RPC, no operator config
+TOML, no on-chain write. Use it so a prospective agent never has to
+hand-roll Ed25519 code.
+
+```bash
+# 1. Generate the identity (requires RMPC_COMMITTEE_IDENTITY_PASSPHRASE)
+rmpc committee-identity --path identity.json create
+
+# 2. Export the base64 public key for POST /api/committee/apply
+rmpc committee-identity --path identity.json show-public-key
+
+# 3. Sign the canonical payload from MCP get_signing_payload
+rmpc committee-identity --path identity.json sign ...
+```
+
+See `references/commands.md` for the full flag list (`--path`, `create`,
+`show-public-key`, `sign`, `--pretty`).
