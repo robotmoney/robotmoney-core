@@ -420,6 +420,59 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
+    /// Manage a local Investment Committee **MCP** signing identity
+    /// (`robotmoney-frontend` demo). Ed25519 keypair, encrypted at rest —
+    /// distinct from the on-chain EVM signer used by `rmpc committee
+    /// register` / `vote-submit`. Exports a base64 public key for `POST
+    /// /api/committee/apply` and signs the exact canonical payload
+    /// returned by MCP `get_signing_payload` for `submit_recommendation`,
+    /// so a prospective agent never has to hand-roll Ed25519 code.
+    /// Implements: issue #1111.
+    ///
+    /// The keystore passphrase is read from
+    /// `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`; it is never accepted on argv
+    /// or prompted on stdin.
+    CommitteeIdentity {
+        /// Path to the committee MCP identity keystore file.
+        #[arg(long, short = 'p')]
+        path: PathBuf,
+        #[command(subcommand)]
+        subcommand: CommitteeIdentitySubcommand,
+        /// Pretty-print the JSON output.
+        #[arg(long, global = true)]
+        pretty: bool,
+    },
+}
+
+/// Subcommands for `rmpc committee-identity`.
+#[derive(Debug, Subcommand)]
+pub enum CommitteeIdentitySubcommand {
+    /// Generate a fresh Ed25519 committee MCP signing identity and write
+    /// an encrypted keystore at `--path`. Refuses to overwrite an
+    /// existing file.
+    Create,
+    /// Print the identity's base64 (standard, padded) Ed25519 public
+    /// key — the exact value `POST /api/committee/apply`'s `publicKey`
+    /// field expects. Reads the keystore's cleartext `public_key` field;
+    /// no passphrase required.
+    ShowPublicKey,
+    /// Sign the exact canonical payload string returned by MCP
+    /// `get_signing_payload` and print the base64 (standard, padded)
+    /// Ed25519 signature `submit_recommendation` expects. Deterministic:
+    /// signing the same payload twice yields the same signature.
+    Sign {
+        /// The exact canonical payload string to sign, passed inline.
+        /// Mutually exclusive with `--payload-file`.
+        #[arg(long, conflicts_with = "payload_file")]
+        payload: Option<String>,
+        /// Path to a file holding the exact canonical payload bytes to
+        /// sign (every byte in the file is signed verbatim, no
+        /// trimming). Mutually exclusive with `--payload`. Prefer this
+        /// over `--payload` for payloads containing shell-sensitive
+        /// characters.
+        #[arg(long = "payload-file", conflicts_with = "payload")]
+        payload_file: Option<PathBuf>,
+    },
 }
 
 /// Subcommands for `rmpc committee`.
