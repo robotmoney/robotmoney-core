@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use clap::Parser;
-use rust_payment_client::cli::{Cli, Command, CommitteeSubcommand};
+use rust_payment_client::cli::{Cli, Command, CommitteeIdentitySubcommand, CommitteeSubcommand};
 use rust_payment_client::commands;
 use rust_payment_client::config::Config;
 use rust_payment_client::logging;
@@ -42,6 +42,9 @@ fn main() {
         Command::Withdraw { config, .. } => Some(config.as_path()),
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
         Command::Committee { config, .. } => Some(config.as_path()),
+        // No operator config TOML — this is a local-only Ed25519 identity
+        // helper with no RPC/chain surface (issue #1111).
+        Command::CommitteeIdentity { .. } => None,
     };
     init_logging_best_effort(config_path);
 
@@ -282,6 +285,35 @@ fn main() {
                     fee_cap_wei: fee_cap,
                     pretty,
                 })
+            }
+        },
+        Command::CommitteeIdentity {
+            path,
+            subcommand,
+            pretty,
+        } => match subcommand {
+            CommitteeIdentitySubcommand::Create => {
+                commands::committee_identity::run_create(&path, pretty)
+            }
+            CommitteeIdentitySubcommand::ShowPublicKey => {
+                commands::committee_identity::run_show_public_key(&path, pretty)
+            }
+            CommitteeIdentitySubcommand::Sign {
+                payload,
+                payload_file,
+            } => {
+                let source = match (payload, payload_file) {
+                    (Some(p), None) => commands::committee_identity::PayloadSource::Inline(p),
+                    (None, Some(f)) => commands::committee_identity::PayloadSource::File(f),
+                    _ => {
+                        eprintln!(
+                            "rmpc committee-identity sign: exactly one of --payload or \
+                             --payload-file is required"
+                        );
+                        std::process::exit(3);
+                    }
+                };
+                commands::committee_identity::run_sign(&path, source, pretty)
             }
         },
     };
