@@ -224,6 +224,29 @@ Key architectural characteristics:
   rebalancing model are certified. `RwaVault` is marked Active — real
   asset, seeded, Router-eligible per `docs/prd.md` §11.4.
 
+#### Target architecture (ADR-0010, Proposed)
+
+[ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (status:
+Proposed) unifies the two vault families described above into a single
+`Vault` contract composed with an `IPositionAdapter` interface — the
+`RobotMoneyVault` adapter architecture taken as the general case. Under
+that model the abstract `BasketVault` base and its
+`ProtocolAssetVault`/`AgentTokenVault`/`RwaVault` subclasses stop being
+contract subclasses: each basket asset becomes a per-asset
+`AssetPositionAdapter` that custodies the token, executes swaps through
+the existing `IBasketSwapAdapter` venue seam, and self-prices via TWAP
+or Chronicle. Themes (stable-yield, protocol-asset, agent-token, RWA)
+become deployments plus configuration, not subclasses. Migration
+follows [ADR-0009](adr/ADR-0009-vault-retirement-no-assisted-migration.md):
+deploy v2, shift router weights, retire v1 — the v1 contracts described
+in this section stay untouched, so the current-state text above remains
+accurate for the deployed contracts. Once v2 ships, the description of
+a distinct basket-vault subclass family (and per-subclass certification
+framing) becomes historical; the registry-eligibility model
+(`isRouterEligible`), the lifecycle in §4.7, and the
+single-production-codebase principle carry over unchanged. Canonical
+spec: `docs/technical/unified-vault-spec.md`.
+
 ### 4.2 Portfolio Router
 
 The Portfolio Router is the outer allocation contract. It accepts USDC
@@ -309,6 +332,36 @@ Current basket-vault swap adapters (implement `IBasketSwapAdapter` for
   for deSPXA where DEX liquidity is insufficient for a manipulation-resistant
   TWAP. Staleness enforcement (heartbeat check) is delegated to the owning
   vault, keeping the adapter stateless.
+
+#### Target architecture (ADR-0010, Proposed)
+
+Under [ADR-0010](adr/ADR-0010-unified-vault-architecture.md) (Proposed),
+the adapter seam described above becomes the general case for every
+vault: a single `Vault` contract routes through `IPositionAdapter`
+implementations, collapsing the current split between stable-yield
+`IStrategyAdapter`s (vault-internal lending positions) and basket-vault
+`IBasketSwapAdapter`s (vault-held tokens priced by the vault). Key
+deltas from the current state:
+
+- Basket assets are held by per-asset `AssetPositionAdapter` contracts
+  that custody the token, execute swaps via the existing
+  `IBasketSwapAdapter` venue seam (Aerodrome, Uniswap V4,
+  Chronicle-priced Aerodrome), and self-price via TWAP or Chronicle —
+  custody and pricing move out of the vault and into the adapter.
+- The vault mints on realized NAV delta, which degenerates to the
+  exact-amount accounting the lending adapters already exhibit.
+- `withdraw()` is permitted iff every active adapter reports
+  `isExact()`; otherwise the vault is redeem-only.
+- Governance controls apply uniformly per adapter: allowlist plus
+  codehash pinning, `capBps`, ADP-2 NAV exclusion, rebalance throttles,
+  and registry retire/unretire.
+
+`IBasketSwapAdapter` (ADR-0005) survives as the venue seam inside
+`AssetPositionAdapter`. The adapter descriptions above remain accurate
+for the deployed v1 contracts (which stay untouched per ADR-0009); the
+statement that swap adapters serve "`BasketVault` subclasses" becomes
+historical once v2 ships. Canonical spec:
+`docs/technical/unified-vault-spec.md`.
 
 ### 4.4 Synchronous Redemption
 

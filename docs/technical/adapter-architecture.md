@@ -270,3 +270,30 @@ Therefore:
 - RM-token governance currently controls Portfolio Router weights only.
 - RM-token governance does not currently control adapter selection,
   adapter caps, or per-vault strategy internals.
+
+## 9. Forward reference: unified vault architecture (ADR-0010)
+
+The adapter layer described above is being generalized. The accepted
+direction (rationale in `docs/adr/ADR-0010-unified-vault-architecture.md`;
+build-from specification in `docs/technical/unified-vault-spec.md`) unifies
+`RobotMoneyVault` and the `BasketVault` subclasses into a single `Vault`
+contract composed with `IPositionAdapter` implementations:
+
+- `IStrategyAdapter` is superseded by `IPositionAdapter`, a superset that
+  adds min-out parameters, a realized-value return on `deploy`, and an
+  `isExact()` self-declaration. The lending adapters documented in §4
+  (Aave V3, Compound V3, Morpho) are retrofitted with `isExact() == true`
+  and otherwise unchanged behavior.
+- Basket assets become `AssetPositionAdapter` instances (one per asset)
+  that custody the token, execute swaps through the existing
+  `IBasketSwapAdapter` venue seam, and price via TWAP or Chronicle oracle —
+  absorbing the per-asset configuration that today lives on `BasketVault`.
+- The vault flow in §3 and the controls in §5 carry into the unified
+  vault; the deposit path adopts `BasketVault`'s route-first
+  mint-on-realized-delta model, and ERC-4626 `withdraw()` is gated on all
+  active adapters being exact.
+
+This document remains accurate for the deployed v1 `RobotMoneyVault` until
+the v1 vaults are retired per
+`docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md`. New adapter
+work should target `IPositionAdapter` per the unified spec.

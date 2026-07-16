@@ -6,6 +6,12 @@
 **Prototype source:** `contracts/vaults/BasketVault.sol`, `contracts/vaults/ProtocolAssetVault.sol`, `contracts/vaults/AgentTokenVault.sol`  
 **Canonical docs:** `docs/prd.md` §11.2, §11.3; `docs/development/open-questions.md` §3.15; `docs/architecture.md` §4.1, §4.4, §8, §10
 
+> Planned evolution: see `docs/adr/ADR-0010-unified-vault-architecture.md`
+> (Proposed) — the `BasketVault` subclass family this report audits is
+> replaced in v2 by a single `Vault` with per-asset `AssetPositionAdapter`
+> contracts; the eligibility gates below remain the bar, applied to the
+> unified vault's adapters rather than to subclasses.
+
 ---
 
 ## Purpose

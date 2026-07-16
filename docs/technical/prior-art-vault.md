@@ -38,6 +38,11 @@ security design. Veda (BoringVault) was evaluated as an off-the-shelf
 provider for the Portfolio Router layer; the team chose to build in-house,
 diverging from Veda primarily by not issuing an outer share token.
 
+Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md`
+(Proposed) extends this vault-plus-adapter pattern to every vault — basket
+vaults become a single unified `Vault` holding per-asset position adapters
+instead of `BasketVault` subclasses.
+
 **Enzyme Finance** uses a two-contract model per fund: `VaultProxy` (persistent
 asset holder, ERC-20 shares) and `ComptrollerProxy` (accounting, fee accrual,
 share minting). An `IntegrationManager` routes strategies to integrated DeFi
