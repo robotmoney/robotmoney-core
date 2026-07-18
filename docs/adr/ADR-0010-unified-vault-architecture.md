@@ -307,6 +307,11 @@ foreclosing it. The spec resolves them before engineering.
   Solidity subclasses.
 - ERC-4626 behavior is uniform and predicate-driven: exact mode when all
   adapters are attested exact, redeem-only otherwise.
+- Resolving the open decisions retires the machinery that exists only for
+  keeper rebalancing and admin-armed emergencies — the keeper throttle, the
+  withdrawal-side pause, per-adapter runtime setters, and the second-oracle
+  deviation guard. See "Simplifications enabled" in
+  `docs/technical/unified-vault-open-questions-resolution.md`.
 
 **Negative / accepted risks.**
 

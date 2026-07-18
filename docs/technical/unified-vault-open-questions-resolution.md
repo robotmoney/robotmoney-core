@@ -372,6 +372,123 @@ absent-safe.
   unconditionally, since an empty vector sums to 0) — the empty-vector
   alternative must relax both.
 
+## Simplifications enabled
+
+The resolved design lets the implementation retire code and architecture whose
+only purpose is to make keeper-driven rebalancing and admin-armed emergencies
+safe. Each removable member below is grounded in the current sources; the list
+is organized by the driving decision, then by what falls away.
+
+### From flow-only rebalancing + self-funded `forceRebalance` — the keeper throttle apparatus
+
+A NAV-non-decreasing `forceRebalance` is protected by an invariant, not by
+rate-limiting, so the throttle machinery has nothing left to bound. Removable
+from `contracts/RobotMoneyVault.sol`:
+
+- `KEEPER_ROLE` (`:42`, admin wired at `:347`) — it exists solely for
+  rebalancing.
+- The throttle state and bounds: `maxRebalanceBpsPerCall` (`:126`),
+  `minRebalanceInterval` (`:128`), `lastRebalanceAt` (`:130`),
+  `MAX_REBALANCE_BPS_CEILING` (`:55`), `MIN_REBALANCE_INTERVAL_FLOOR` (`:57`),
+  `isRebalanceAvailable()` (`:1287`), the setters `setMaxRebalanceBpsPerCall`
+  (`:871`) and `setMinRebalanceInterval` (`:880`) with their events, and the
+  errors `RebalanceTooSoon` (`:283`) and `UnauthorizedRebalancer` (`:285`).
+- Both rebalance entry points collapse into the single `forceRebalance`: the
+  keeper/admin `rebalance()` (`:791`) **and** `adminRebalance(uint256[])`
+  (`:831`). `adminRebalance` must also be removed or converted — it is a second
+  socialized-cost path (it is the mirror writer of `lastRebalanceAt` at `:865`,
+  the counterpart to `rebalance()` at `:799`). If it survives, realized cost can
+  still be socialized onto NAV around the invariant-protected `forceRebalance`.
+
+### From "never gate the exit path" — the withdrawal half of split pause
+
+Redemption is always reachable, so the withdrawal-side pause has nothing to
+guard. Removable from `contracts/RobotMoneyVault.sol`:
+
+- `withdrawalsPaused` state (`:121`), the `WithdrawalsPaused` error (`:289`),
+  `_setWithdrawalsPaused` (`:1143`) with its `WithdrawalsPausedChanged` event
+  (`:235`), and the three exit-gating branches `if (withdrawalsPaused) …` in
+  `maxWithdraw` (`:542`), `maxRedeem` (`:553`), and `_withdraw` (`:596`).
+- Only a deposit-side halt remains, and it is the condition-driven breaker.
+
+### From "adapters own their config, set once (immutable)" — per-asset runtime knobs
+
+Per-asset parameters move into adapter constructors as immutable values: no
+vault state, no setter, no event, no timelocked governance action. Removable
+from `contracts/vaults/BasketVault.sol`:
+
+- `twapWindow` mapping (`:195`) + `setTwapWindow` (`:1481`).
+- `emergencyUnwindGuard` mapping (`:190`) + `setEmergencyUnwindGuard` (`:1458`).
+- `maxSlippageBps` (`:179`) + `setMaxSlippageBps` (`:1423`), with
+  `SlippageBelowPoolFeeFloor` (`:348`) and `MaxSlippageUpdated` (`:258`).
+- `navDeviationGuardBps` (`:213`) + `setNavDeviationGuardBps` (`:1412`) +
+  `MAX_NAV_DEVIATION_BPS` (`:219`).
+
+### From "residual price check = NAV-growth-rate breaker" — the second-oracle deviation apparatus
+
+The breaker (checkpoint-and-compare in the deposit path) is strictly less code
+than a slot0-vs-TWAP deviation check plus a governance-registered pool.
+Removable:
+
+- `BasketViews.checkNavDeviation` (definition `contracts/lib/BasketViews.sol:82`,
+  invocation `contracts/vaults/BasketVault.sol:565`) and its supporting vault
+  state `navDeviationGuardBps`, error `NavMarketDeviationExceeded` (`:324`), and
+  event `NavDeviationGuardUpdated` (`:290`).
+
+This is a behavior change, not only a deletion: the NAV-growth-rate breaker is
+the **sole** vault-side price check. Reviewers should not expect both a
+second-oracle deviation guard and the breaker — the design carries one, and it
+bounds the speed of a mark discontinuity rather than an absolute deviation from
+a second reference.
+
+### From the ADR-0010 core — one Vault, positions behind `IPositionAdapter`
+
+- Five vault contracts — `RobotMoneyVault`, `BasketVault`, `ProtocolAssetVault`,
+  `AgentTokenVault`, `RwaVault` — collapse to one implementation.
+- `BasketVault`'s inline swap/TWAP code and its delegatecall-linked libraries —
+  `TickMath` (`contracts/lib/TickMath.sol`), `TwapTickMath`
+  (`contracts/lib/TwapTickMath.sol`), `BasketViews`
+  (`contracts/lib/BasketViews.sol`), `BasketAssetConfigGuard`
+  (`contracts/lib/BasketAssetConfigGuard.sol`) — leave the vault for adapters,
+  dissolving the EIP-170 pressure the basket family fights.
+- The two divergent deposit routings — `RobotMoneyVault._routeDeposit`
+  fill-toward-target (`contracts/RobotMoneyVault.sol:449-500`) and
+  `BasketVault._routeDeposit` even-split (`contracts/vaults/BasketVault.sol:621`)
+  — unify to one path, and redemption unifies to one surplus-first drawdown
+  path. The `WeightSnapshot` event
+  (`contracts/vaults/BasketVault.sol:296`, emitted at `:663`) — nothing
+  off-chain consumes it — drops.
+
+### Architecture and off-chain
+
+- No keeper service: no rebalance bot, no scheduling, no drift monitoring, no
+  MEV protection for scheduled rebalances. Rebalancing has no off-chain
+  component.
+- Fewer steady-state governance operations: per-adapter config is set once at
+  deploy.
+- One ABI and one audit surface for the indexer, gateway, rmpc, and dapp.
+
+### Honest caveats
+
+- **`EMERGENCY_ROLE` shrinks but is not deleted.** Drains, force-removes, and
+  NAV-exclusion become permissionless-on-condition, and withdrawals are never
+  pausable, but a thin EMERGENCY hot key is retained to halt the **entry** path
+  on contract-failure intervention, preserving the pause/unpause trust
+  asymmetry. The role gates `pause` (`contracts/RobotMoneyVault.sol:890`),
+  `emergencyWithdraw` (`:906`), `emergencyWithdrawAdapter` (`:936`),
+  `forceRemoveAdapter` (`:966`), and `shutdownVault` (`:1038`); it contracts to
+  the entry-path halt. Role count goes three (ADMIN, KEEPER, EMERGENCY) to
+  effectively ADMIN plus a thin EMERGENCY.
+- **`adminRebalance` must be removed or converted, not only `rebalance()`.** It
+  is the second writer of `lastRebalanceAt`
+  (`contracts/RobotMoneyVault.sol:865`); the only other write is `rebalance()`
+  at `:799`. If it survives, cost can still be socialized around
+  `forceRebalance`.
+- **The breaker replacing the deviation guard is a real behavior change** (see
+  the residual-price-check simplification above): the growth-rate breaker is the
+  sole vault-side price check, and it bounds the speed of a mis-mark rather than
+  an absolute deviation from a second oracle.
+
 ## Impact on ADR-0010 / spec
 
 Edits a follow-up makes (this document changes neither file):
