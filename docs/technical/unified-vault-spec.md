@@ -277,7 +277,7 @@ inspection, replacing `AssetInfo.venue`.
 | `SlippageBelowPoolFeeFloor` / `minSlippageFloorBps` (L-17 brick guard) | Adapter exposes `minOutFloorBps() view` (its pool fee in bps; lending adapters return 0); `Vault.setMaxSlippageBps` takes the max over active adapters | Vault `ADMIN_ROLE` | Same invariant: a single admin write can never make every swap unsatisfiable. |
 | `adapterCodeHashAllowed` for swap adapters (ADP-2/NC-2) | Unchanged concept, one level down: the **vault** pins the `AssetPositionAdapter` codehash (which bakes in the venue-executor address and linked `TickMath`); the AssetPositionAdapter's venue executor is a constructor immutable | Vault `ADMIN_ROLE` | Codehash pinning subsumes hot-swap protection exactly as today. |
 | `reabsorbRemovedAsset` (LIFE-6, AZ-BSK-5) | Adapter `reabsorb(uint256 minUsdcOut)` — permissionless; swaps a reappeared/donated token balance on a **retired-from-registry** adapter back to USDC delivered to the vault, TWAP-floored, `SlippageExceeded` on caller-floor breach, quarantine fallback when the TWAP read reverts | Permissionless | Same never-revert-and-strand contract. |
-| Chronicle heartbeat (`oracleHeartbeat`, `MAX_HEARTBEAT`, `StalePriceFeed`), stale-unwind override (ACL-5/F-08 two-key split) | deSPXA adapter variant (§4.4) | Heartbeat setter and stale-override arm: vault-admin-derived; unwind execution: vault emergency path | Carried verbatim from `RwaVault`. |
+| Chronicle heartbeat (`oracleHeartbeat`, `MAX_HEARTBEAT`, `StalePriceFeed`), stale-unwind override (ACL-5/F-08) | deSPXA adapter variant (§4.4) | Heartbeat setter: vault-admin-derived (ADMIN timelock); stale-override + unwind: **atomic `EMERGENCY_ROLE` arm+execute** on the vault emergency path (M-S5) | Heartbeat bounds carried verbatim from `RwaVault`; the arm/execute split collapses to one EMERGENCY action. |
 | `maxAssets()` (subclass constant; 1 for RwaVault) | Vault constructor param `maxActiveAdapters_` (§8) | Deploy-time | rmRWA's single-asset constraint becomes an adapter-count cap. |
 
 **"Vault-admin-derived" authority:** adapters carry no independent role tree.
@@ -285,12 +285,13 @@ Config setters are gated by a `onlyVaultAdmin` modifier that queries
 `AccessControl(VAULT).hasRole(ADMIN_ROLE, msg.sender)` — the vault's
 timelock-held admin governs its adapters transitively, preserving INV-3
 (fee/guard/quarantine parameters change only via the timelock) without
-duplicating role bookkeeping per adapter. Incident-critical *arming* actions
-(Chronicle stale-override arm, emergency-unwind guard) additionally accept a
-**direct vault-EMERGENCY grant / shorter delay class** so a fresh arm is not
-blocked by the 48h ADMIN timelock mid-incident (§5.5, M-S5). Residual
-questions on this model (blast radius, exact delay-class boundaries) are in
-§10.
+duplicating role bookkeeping per adapter. Incident-critical emergency actions
+(Chronicle stale-override, emergency-unwind guard) are **atomic
+`EMERGENCY_ROLE` arm+execute** — the responder arms and executes them in a
+single hot-key action with no intervening ADMIN timelock, so a fresh arm is
+never blocked by the 48h ADMIN latency mid-incident (§5.5, M-S5). Routine
+per-adapter config stays on the full ADMIN timelock. Residual questions on this
+model (blast radius, exact set of atomic actions) are in §10.
 
 ### 4.3a Residual vault-side price sanity check (C3)
 
@@ -308,27 +309,32 @@ FEE-2 guards only the withdraw-fee path, nothing on deposit where over-marking
 dilutes holders (last-out bank-run).
 
 The unified vault therefore keeps a **residual, adapter-INDEPENDENT vault-side
-price sanity check** on the `deploy`/entry path, structurally outside the
-adapter's own pricing code. Specify one of (governance picks per adapter at
-`addAdapter`):
+price sanity check** on the `deploy`/entry path, structurally outside every
+adapter's own pricing code. The check is a **single global cap on how fast the
+vault's aggregate NAV may grow between observations**:
 
-- **(a) Per-adapter NAV-growth-rate bound between blocks (default):** the
-  vault records each counted adapter's last `totalAssets()` and block, and
-  rejects a deploy whose implied NAV growth rate exceeds a governance
-  `maxNavGrowthRateBps` per unit time (a jump no honest venue produces). This
-  is fully adapter-independent — it needs no external pool address — and
+- The vault holds **one checkpoint for the whole vault** — the last aggregate
+  `totalAssets()` and the timestamp it was observed — not one checkpoint per
+  adapter.
+- On a deposit, the vault computes the implied growth rate of aggregate NAV
+  since the checkpoint and **rejects the deposit** when it exceeds a governance
+  `maxNavGrowthRateBps` per unit time (a jump no honest set of venues
+  produces), then updates the checkpoint. This is fully adapter-independent, it
+  needs **no governance-registered per-adapter reference pools**, and it
   catches the mis-scale/over-mark class without a second oracle.
-- **(b) Vault-side `checkNavDeviation` against a governance-registered pool
-  address** (not the adapter's self-reported pool): the vault re-derives a
-  market reference from a pool address it stores at `addAdapter` and compares
-  to the adapter's `totalAssets()` contribution. Stronger, but reintroduces a
-  vault-side pool dependency for each inexact adapter.
 
-*Decision note:* option (a) is specified as the default because it keeps the
-vault asset-agnostic (no per-adapter pool registration) and is the minimal
-independent check; option (b) is the stronger residual for high-value themes
-and is left available. This check is **entry-side only** — it does not run on
-withdraw (§5.3, M-A1). It is also a rebalance-safety precondition (§5.6, C3a).
+Because the checkpoint is aggregate, the limiter bounds the **speed** of a
+mis-mark but **cannot identify which adapter moved**. It is therefore an
+aggregate deposit circuit-breaker, **not** a per-adapter drain trigger:
+localizing a failing adapter is the EMERGENCY responder's job, driven by the
+per-adapter failure conditions (oracle stale past heartbeat, adapter calls
+reverting), not by this check (§4.4, §5.5).
+
+This check is **entry-side only** — it does not run on withdraw (§5.3, M-A1),
+and redemptions are never gated by it. It is also a rebalance-safety
+precondition (§5.6, C3a). A single vault-wide checkpoint is strictly smaller
+than a per-adapter checkpoint set and than a registered-pool deviation check;
+both of those variants are rejected in favor of the one global checkpoint.
 
 ### 4.4 Emergency and oracle semantics
 
@@ -382,10 +388,14 @@ withdraw (§5.3, M-A1). It is also a rebalance-safety precondition (§5.6, C3a).
   `totalAssets`/floors from the Chronicle feed with the heartbeat check
   (default 24 h, cap `MAX_HEARTBEAT` 48 h), fails closed on staleness while
   the token balance is non-zero (ORA-2), short-circuits at zero balance
-  (SUP-5/NC-1), and keeps the F-08 two-key split: the stale-price override is
-  armed by vault-admin authority, executed by the vault's emergency path.
-  ADR-0006's constraints (no ERC-7540 primary redemption, Aerodrome
-  secondary market only, issuer freeze-control risk) carry unchanged.
+  (SUP-5/NC-1). The stale-price override is an **atomic `EMERGENCY_ROLE`
+  arm+execute** action on the vault's emergency path — armed and executed in
+  one hot-key action with no intervening ADMIN timelock (M-S5), so an incident
+  is never blocked by the 48h ADMIN latency; the fast-EMERGENCY /
+  timelocked-ADMIN asymmetry the F-08 posture protects is preserved by keeping
+  routine config on the ADMIN timelock. ADR-0006's constraints (no ERC-7540
+  primary redemption, Aerodrome secondary market only, issuer freeze-control
+  risk) carry unchanged.
 
 ### 4.5 Read-only reentrancy enumeration (M-S6)
 
@@ -570,12 +580,14 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
    (**AZ-BSK-2**) so `PortfolioRouter.minSharesPerLeg` compares against
    reality, not OZ's precomputed preview.
 8. Residual vault-side price sanity (C3): before crediting the delta the vault
-   runs an **adapter-independent** NAV sanity check on any inexact adapter it
-   routed into (§4.3 "Residual vault-side price check"). The per-asset
-   ORA-4 NAV-vs-market deviation guard *also* runs inside each asset adapter's
-   `deploy`, but that guard is adapter-self-computed; the vault-side residual
-   is the independent second opinion. This check is **entry-side only** (see
-   §5.3 for why it is not added to the withdraw path).
+   runs the **adapter-independent global aggregate** NAV sanity check — the
+   single vault-wide checkpoint that caps how fast `totalAssets()` may grow
+   between observations (§4.3a). The per-asset ORA-4 NAV-vs-market deviation
+   guard *also* runs inside each asset adapter's `deploy`, but that guard is
+   adapter-self-computed; the vault-side global limiter is the independent
+   second opinion. It gates the deposit (entry) only and does not localize
+   which adapter moved. This check is **entry-side only** (see §5.3 for why it
+   is not added to the withdraw path).
 
 **Underflow / liveness (A-H2, resolved).** The corrected denominator
 `taBefore − revokedIdle + 1` can no longer underflow on an unrouted deposit:
@@ -750,19 +762,23 @@ flags):**
 
 **Adapter emergency-arming authority (M-S5).** ACL-5's two-key split (ADMIN
 arms a guard, EMERGENCY executes the unwind) is atomic on one contract today
-(`RwaVault`). Split across vault+adapter, arming is an adapter write that must
-clear the ≥48h ADMIN timelock while execution comes from the vault EMERGENCY
-surface — so vault EMERGENCY **cannot atomically** reach an adapter action
-that needs a fresh arm (e.g. arming the Chronicle stale-override mid-incident).
-The spec therefore allows a **direct EMERGENCY grant (or a shorter enumerated
-delay class) for incident-critical adapter arming only** — the stale-override
-arm and the emergency-unwind guard — so the 48h ADMIN latency cannot block an
-in-progress incident response. All other adapter config (TWAP window, deviation
-guard, cap, fee) stays on the full ADMIN timelock (INV-3). *Blast-radius review
-requirement:* because per-adapter `onlyVaultAdmin` already multiplies one ADMIN
-compromise across N adapters × guard params, the auditors MUST review the
-EMERGENCY-armable surface before Phase 2 (§9); the direct grant is scoped as
-narrowly as the incident-response runbook allows.
+(`RwaVault`). A naive vault+adapter split would make arming an adapter write
+that must clear the ≥48h ADMIN timelock while execution comes from the vault
+EMERGENCY surface — so vault EMERGENCY **could not atomically** reach an adapter
+action that needs a fresh arm (e.g. arming the Chronicle stale-override
+mid-incident). The spec therefore makes **incident-critical emergency actions
+atomic `EMERGENCY_ROLE` arm+execute** — the stale-override and the
+emergency-unwind guard are armed **and** executed in a single EMERGENCY hot-key
+action with no intervening ADMIN timelock, so the 48h ADMIN latency cannot
+block an in-progress incident response. This solves the latency by collapsing
+arm and execute, not by making the action permissionless: the action stays
+`EMERGENCY_ROLE`-gated. All other adapter config (TWAP window, deviation guard,
+cap, fee) stays on the full ADMIN timelock (INV-3), preserving the
+fast-EMERGENCY / timelocked-ADMIN asymmetry. *Blast-radius review requirement:*
+because per-adapter `onlyVaultAdmin` already multiplies one ADMIN compromise
+across N adapters × guard params, the auditors MUST review the atomic-EMERGENCY
+surface before Phase 2 (§9); the atomic action set is scoped as narrowly as the
+incident-response runbook allows.
 
 ### 5.6 Rebalancing — supersedes the ADR-0003 stub
 
@@ -876,11 +892,11 @@ that lands the locus).
 | AZ-BSK-5 | Caller `minUsdcOut` honored on reabsorption (`SlippageExceeded`) | Adapter `reabsorb(minUsdcOut)` | `BasketVault.t.sol::test_LIFE6_*`/AZ-BSK-5 tests re-pointed to adapter |
 | ORA-3 / F-09 | TWAP pool == execution pool | `AssetPositionAdapter` constructor (`requireExecutionPoolMatchesTwap`) | `DeployAssertions.t.sol::test_ORA3_*` re-pointed to adapter construction |
 | ORA-4 / F-10 | No settlement beyond NAV-vs-market deviation band | Adapter-level check in **`deploy` only (entry-side, C3/M-A1)** (`NavMarketDeviationExceeded`); **NOT on `withdraw` — redemption liveness (§5.3)** | `BasketVault.t.sol::test_ORA4_*` re-pointed to `deploy`; NEW: `redeem` does NOT revert on deviation (exit-liveness) |
-| ORA-7 (C3) | Deviation/slippage floor not derived solely from the pricing oracle | **Residual adapter-INDEPENDENT vault-side price check on `deploy`** (per-adapter NAV-growth-rate bound, default; or registered-pool `checkNavDeviation`) — §4.3a | NEW: mis-scaling/over-marking adapter rejected by the vault-side residual even when it passes its own probe |
+| ORA-7 (C3) | Deviation/slippage floor not derived solely from the pricing oracle | **Residual adapter-INDEPENDENT vault-side price check on `deploy`** — a single global cap on aggregate `totalAssets()` growth rate, one vault-wide checkpoint, gating deposits only (§4.3a) | NEW: aggregate mis-scale/over-mark that grows NAV too fast is rejected on deposit even when the adapter passes its own probe |
 | SUP-3 / F-16 / NC-6 | Round trip never profits | Route-first mint-on-realized-delta `_deposit` (C1 idle-inclusive denominator) + slippage-discounted `previewDeposit` on inexact sets | `test_SUP3_roundTripNeverProfits_fuzz` + stateful variants re-pointed — **gated in Phase 3 (M-A6)**; NEW: no-round-trip-profit with pre-existing third-party idle |
 | SUP-5 / NC-1 | Idle-USDC redemption survives stale oracle | Adapter `totalAssets` zero-balance short-circuit | `StaleOracleRedemption.t.sol::test_SUP5_*` re-pointed to Chronicle adapter composition |
 | ACL-3 / F-06 | Last-admin floor | Vault `_grantRole`/`_revokeRole` hooks (`adminCount`, `LastAdminFloor`) — now also covering the lending theme | `BasketVault.t.sol` last-admin-floor tests re-pointed; NEW rmUSDC-composition case |
-| ACL-5 / F-08 (M-S5) | Stale-price override needs a higher tier than the unwind executor; arming not blocked by 48h latency mid-incident | Stale-override/unwind-guard **arming** accepts a direct vault-EMERGENCY grant / shorter delay class; unwind runs via vault EMERGENCY path; all other config on full ADMIN timelock | `RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency` re-pointed; NEW: EMERGENCY can arm the stale-override without the ADMIN timelock; blast-radius review (Phase 1) |
+| ACL-5 / F-08 (M-S5) | Stale-price override armed by EMERGENCY, not blocked by 48h latency mid-incident | Stale-override/unwind-guard is an **atomic `EMERGENCY_ROLE` arm+execute** (armed and executed in one hot-key action, no intervening ADMIN timelock); all other config on full ADMIN timelock; fast-EMERGENCY / timelocked-ADMIN asymmetry preserved | `RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency` re-pointed to the atomic path; NEW: EMERGENCY can arm+execute the stale-override without the ADMIN timelock; blast-radius review (Phase 1) |
 | LIFE-3 / LIFE-4 (M-A4) | Withdrawals never pausable by hot key; no permanent freeze; incident state off-chain-visible | `pause()` = deposits-only; `withdrawalsPaused` ADMIN-only; `paused()` redefined to `depositsPaused \|\| withdrawalsPaused`; `depositsPaused`/`withdrawalsPaused` first-class views; last-admin floor guarantees reversal authority | `BasketVault.t.sol::test_pause_doesNotFreezeWithdrawals` re-pointed; NEW: EMERGENCY cannot set `withdrawalsPaused`; NEW: deposits-only pause is visible via split views |
 | LIFE-6 | Reabsorption never reverts-and-strands | Adapter `reabsorb` try/catch → quarantine fallback | `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` re-pointed |
 | DI-2 | Unified governance retire (registry flip + deposit halt, atomic) | `setRegistry`/`retire`/`unretire` carried verbatim; `retired` flag distinct from `shutdown` | `FvInvariants.t.sol::test_LIFE1_retireSyncsRegistryAndVaultFlag` re-pointed |
@@ -999,8 +1015,9 @@ capBps, isExact)`** per position (the `isExact` bool is vault-attested here,
 §5.1/C2); `setRegistry`; rebalance throttles (defaults 2 500 bps / 12 h) plus
 the inexact-set `rebalanceDriftBandBps` / `maxRebalanceCostPerEpochBps`
 (§5.6); adapter-level `setTwapWindow`, `setEmergencyUnwindGuard` (vault-side
-floor, §4.4), `setNavDeviationGuardBps`, the vault-side residual price-check
-bound (`maxNavGrowthRateBps` or registered pool, §4.3a), Chronicle heartbeat.
+floor, §4.4), `setNavDeviationGuardBps`; the single vault-level residual
+price-check bound (`maxNavGrowthRateBps` — one global aggregate cap, §4.3a),
+Chronicle heartbeat.
 `quarantineAddress` defaults to `ForeignTokenQuarantine.QUARANTINE`.
 
 ---
@@ -1084,22 +1101,23 @@ specifies them.
 
 **Still open:**
 
-1. **Blast-radius boundary for the EMERGENCY-armable adapter surface (Phase 1).**
-   §4.3/§5.5/M-S5 resolve *that* incident-critical arming (stale-override,
-   emergency-unwind guard) gets a direct EMERGENCY grant / shorter delay
-   class. Still open: the exact enumerated set of EMERGENCY-armable actions and
-   the delay-class values, pending the auditors' blast-radius review of one
-   ADMIN/EMERGENCY compromise reaching N adapters × guard params.
+1. **Blast-radius boundary for the atomic-EMERGENCY adapter surface (Phase 1).**
+   §4.3/§5.5/M-S5 resolve *that* incident-critical actions (stale-override,
+   emergency-unwind guard) are atomic `EMERGENCY_ROLE` arm+execute — armed and
+   executed in one hot-key action with no intervening ADMIN timelock. Still
+   open: the exact enumerated set of atomic-EMERGENCY actions, pending the
+   auditors' blast-radius review of one ADMIN/EMERGENCY compromise reaching N
+   adapters × guard params.
 2. **Who drains a compromised *venue executor*?** An `AssetPositionAdapter`
    whose venue executor turns hostile can only exit through that executor.
    Secondary admin-swappable venue-executor slot vs `forceRemoveAdapter` + loss
    acceptance (as for lending venues). Interacts with the M-S2 venue-independent
    reabsorb path (§4.4) but the "alternate executor" mechanism is unspecified.
-3. **Residual price-check option per theme (§4.3a).** The C3 residual is
-   specified (NAV-growth-rate bound default; registered-pool `checkNavDeviation`
-   alternative), but *which* option each theme uses — and the concrete
-   `maxNavGrowthRateBps` values — is a per-theme governance/tuning decision for
-   Phase 3/4.
+3. **Residual price-check bound value (§4.3a).** The C3 residual is fully
+   specified as a single global cap on aggregate NAV growth (one vault-wide
+   checkpoint, no per-theme or per-adapter variant). What remains open is only
+   the concrete `maxNavGrowthRateBps` value — one global vault-level cap — as a
+   governance/tuning decision for Phase 3/4.
 4. **Inexact rebalancing tuning (§5.6).** The drift-band + per-epoch
    cumulative-cost-cap *mechanism* is specified (M-E3), but the concrete
    `rebalanceDriftBandBps` / `maxRebalanceCostPerEpochBps` values, and whether

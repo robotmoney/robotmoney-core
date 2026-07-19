@@ -6,11 +6,16 @@ findings (C1/C2/C3/C3a, H-A1, H-A2, M-E3, M-S2, M-S5). The forcing-function is
 the governance constraint the protocol operates under: **the system runs
 without active human admins**. Admins implement timelocked governance
 decisions (add/remove adapters, set caps and weights) and intervene only on
-smart-contract failure — never as routine operators. Any resolution that
-depends on a human reacting in time — arming an override, draining within a
-window, tuning a knob to market conditions — is disqualified. Every question
-below is resolved for autonomy and fail-safe defaults, with the fewest
-components and the fewest interventions.
+smart-contract failure — never as routine operators. The line the design draws
+is between routine **operation** and failure **response**: any resolution whose
+*routine operation* depends on a human reacting in time — tuning a knob to
+market conditions, arming a timed override on a schedule, a keeper draining
+within a window to keep the vault healthy — is disqualified. Failure
+**response** to a smart-contract failure (a failing adapter) is the one human
+intervention the constraint permits, and it is made latency-safe by an atomic
+EMERGENCY arm+execute rather than a timed arming window. Every question below is
+resolved for autonomy of operation and fail-safe defaults, with the fewest
+components and the fewest routine interventions.
 
 ## Design principles
 
@@ -45,8 +50,8 @@ No monitoring, no runtime check, no registry flag to keep in sync.
 
 ### Principle 2 — Fail-closed on entry, never on exit
 
-All safety checks — the NAV-deviation guard, the price breaker (below),
-oracle-staleness checks — gate **deposits only**. Redemption always proceeds
+All safety checks — the NAV-deviation guard, the global NAV-growth-rate
+limiter (below), oracle-staleness checks — gate **deposits only**. Redemption always proceeds
 and settles at realized proceeds, per the ADR-0007 haircut model: the redeemer
 receives what the positions actually return, so a mis-mark harms the redeemer
 of the mis-marked share, not the remaining holders. No check can freeze user
@@ -60,37 +65,51 @@ new capital (the only party a mis-mark can advantage) and everyone can still
 leave. This upholds ADR-0009's redemption-never-revoked commitment
 structurally rather than operationally.
 
-### Principle 3 — Safety is permissionless and condition-triggered, not admin-armed
+### Principle 3 — Failure response is EMERGENCY-gated; routine operation is autonomous
 
-Adapter drain, force-remove, and NAV-exclusion fire on **objective on-chain
-conditions** — oracle stale past its heartbeat, the price breaker tripped, the
-adapter reverting — and are callable by **anyone**. Proceeds go to the vault;
-the caller earns nothing, so there is no griefing incentive: if the condition
-holds, draining is the correct action regardless of who triggers it, and if
-the condition does not hold the call reverts. Drains use skip-and-continue
-semantics — one failing adapter never blocks draining the others.
+Adapter drain, force-remove, and NAV-exclusion are **`EMERGENCY_ROLE`-gated**
+actions a human responder performs on **objective per-adapter failure
+conditions** — an oracle stale past its heartbeat, an adapter's calls
+reverting. They are not permissionless and not anyone-can-call. Proceeds go to
+the vault. Drains use skip-and-continue semantics — one failing adapter never
+blocks draining the others — as an `EMERGENCY_ROLE` action.
 
-There is no `EMERGENCY_ROLE` arming step, no arming latency, and no
-admin-swappable escape hatch (in particular, no secondary venue-executor
-slot). Value stranded in a dead or frozen venue (e.g. a deSPXA transfer
-freeze) is recovered later by ordinary governance: deploy a new adapter for
-the same asset and reabsorb the tokens into it — a set-and-forget timelocked
-config change, not an incident response.
+The distinction the design draws is between routine **operation** and failure
+**response**. Routine operation — rebalancing — is autonomous and flow-based
+(see the rebalancing rule): it needs no operator. Failure response stays with
+a human, because a failing adapter **is** a smart-contract failure, and
+intervening on smart-contract failure is precisely the one thing the
+governance constraint keeps admins for. Autonomy applies to operation, not to
+incident response.
 
-**Autonomy rationale.** The shipped emergency surface assumes a responder:
-`emergencyWithdraw`/`emergencyWithdrawAdapter`/`forceRemoveAdapter` are
-`EMERGENCY_ROLE`-gated (`contracts/RobotMoneyVault.sol:906,934,966`), and
-M-S5 showed the arm-then-execute split adds a ≥48h latency gap on top. Under
-the no-admin constraint that surface is dead weight: a condition that needs a
-human to notice it is a condition that goes unhandled. Binding the drain to
-the same on-chain signal that already gates deposits (Principle 2) means one
-mechanism serves both jobs, and the "who watches" question has the answer
-"anyone, because watching is verifiable on-chain".
+Arming latency (M-S5) is solved by **atomic arm+execute**: incident-critical
+emergency actions are `EMERGENCY_ROLE` hot-key actions the responder can arm
+**and** execute in a single action, with no intervening ADMIN timelock delay.
+This preserves the fast-EMERGENCY / timelocked-ADMIN asymmetry the deployed
+contracts already carry — the emergency responder acts at once, while
+ADMIN-scoped config remains behind the timelock.
+
+Value stranded in a dead or frozen venue (e.g. a deSPXA transfer freeze) is
+recovered by ordinary governance: deploy a new adapter for the same asset and
+reabsorb the tokens into it — a timelocked config change, unchanged from the
+emergency drain path.
+
+**Rationale.** The forcing constraint reserves human intervention for
+smart-contract failure. A failing adapter is exactly that failure, so its
+drain, removal, and NAV-exclusion are the responder's job — `EMERGENCY_ROLE`
+holds that authority (`emergencyWithdraw`/`emergencyWithdrawAdapter`/
+`forceRemoveAdapter` at `contracts/RobotMoneyVault.sol:906,934,966`). What the
+constraint disqualifies is not the emergency surface but any *routine*
+dependence on a human reacting in time; rebalancing therefore becomes
+flow-based while incident response remains a hot-key action. The
+arm-then-execute latency M-S5 flagged is closed by collapsing arm and execute
+into one EMERGENCY action, not by removing the human.
 
 ### Supporting rule — adapters own their configuration, set once
 
-`isExact`, the per-adapter slippage bound, the price-breaker threshold, and
-the pricing source are all fixed at adapter deploy / `addAdapter`. Each
+`isExact`, the per-adapter slippage bound, and the pricing source are all
+fixed at adapter deploy / `addAdapter` (the residual price check is a single
+vault-level parameter, not a per-adapter one — see below). Each
 adapter entry is immutable; there are no runtime tuning knobs. Changing a
 parameter means governance adds a replacement adapter entry — the same
 lifecycle as any other adapter change, behind the same timelock.
@@ -100,9 +119,10 @@ Consequences:
 - **Per-adapter slippage** (spec Q5): each adapter carries its own bound,
   suited to its venue's liquidity; the vault enforces a global ceiling so no
   adapter can attest a bound looser than protocol policy.
-- **Per-theme price-check selection** (spec Q3): "which check a theme uses"
-  is simply which adapter contracts its governance adds — a deploy parameter,
-  not a vault mode.
+- **Price check is one global vault parameter** (spec Q3): the residual price
+  check is a single vault-level aggregate NAV-growth-rate cap, not a per-theme
+  or per-adapter selection. There is one bound per vault, set by governance at
+  vault level — no per-theme variation and no per-adapter reference pool.
 - **Pricing source** (spec Q7): one pricing source per contract. Chronicle
   pricing lives in a separate `ChronicleAssetPositionAdapter` rather than a
   pricing-strategy field on a multi-mode adapter — each contract has one
@@ -113,7 +133,7 @@ intervention. Immutable per-entry config turns every parameter change into
 the one admin action the constraint permits: a timelocked governance config
 change.
 
-### The residual price check (C3) — a per-adapter NAV-growth-rate breaker
+### The residual price check (C3) — a global aggregate NAV-growth-rate limiter
 
 The C3 finding requires an adapter-independent check on adapter-reported
 value. The vault-side-oracle option (a `checkNavDeviation` against
@@ -122,34 +142,39 @@ infrastructure ADR-0010 pushes into adapters, and its pool registry is
 exactly the kind of governance-maintained, market-condition-sensitive state
 the autonomy constraint disqualifies.
 
-Instead the vault checkpoints each adapter's reported `totalAssets()` and
-trips a **per-adapter growth-rate bound** (bps per second, set at
-`addAdapter`) when the reported value moves faster than the bound. No
-external price reference is needed: the breaker detects the
-**discontinuity** a mis-mark produces, in either direction. Because
-`totalAssets()` is a `view` (`contracts/RobotMoneyVault.sol:414`), the
-checkpoint write lives in the mutating deposit path — `_deposit` →
-`_routeDeposit` already reads each adapter's `totalAssets()` while routing
-(`contracts/RobotMoneyVault.sol:433-500`, adapter reads at lines 473 and
-487), so the snapshot-compare-update adds one storage slot read/write per
-adapter to a loop that already makes the external calls. The permissionless
-drain entry point (Principle 3) evaluates and checkpoints the same condition.
+Instead the vault holds a **single global checkpoint** — the last aggregate
+NAV (`totalAssets()`) and the timestamp it was observed — and trips a
+**global cap on how fast aggregate NAV may grow between observations** when the
+vault's total reported value moves faster than the bound. There is one
+checkpoint for the whole vault, not one per adapter, and it needs no
+governance-registered per-adapter reference pools. No external price reference
+is needed: the limiter detects the **discontinuity** an aggregate mis-mark
+produces. Because `totalAssets()` is a `view`
+(`contracts/RobotMoneyVault.sol:414`), the checkpoint write lives in the
+mutating deposit path — `_deposit` already reads the aggregate NAV while
+routing (`contracts/RobotMoneyVault.sol:433-500`), so the
+snapshot-compare-update adds one storage-slot read/write to the deposit path,
+not a per-adapter loop cost.
 
-A tripped breaker does two jobs with one mechanism:
+The limiter does exactly one job: it **fails closed on entry**. A deposit
+reverts while aggregate NAV is growing faster than the bound (Principle 2
+keeps redemption open at realized proceeds; redemptions are never gated). It
+is purely an aggregate deposit circuit-breaker.
 
-1. **Fails closed on entry** — deposits into the vault revert while the
-   adapter's reported value is outside the bound (Principle 2 keeps
-   redemption open at realized proceeds).
-2. **Authorizes the permissionless drain** — the tripped breaker *is* the
-   objective condition of Principle 3 for that adapter.
+It is **not** the drain trigger. A global aggregate signal cannot identify
+*which* adapter mis-marked, so it cannot authorize a per-adapter drain;
+localizing the culprit is the emergency responder's job, driven by the
+per-adapter failure conditions of Principle 3 (oracle stale past heartbeat,
+adapter calls reverting).
 
-**Honest limit** (stated, not hidden): the breaker bounds the *speed* of a
-mis-mark, not slow adversarial drift. An adapter that lies by a few bps per
-checkpoint interval stays under any usable bound. Slow drift, however,
-requires adversarially authored pinned code — and codehash pinning plus audit
-of the adapter is the primary control for that threat. The breaker is
+**Honest limit** (stated, not hidden): a global cap bounds the *speed* of an
+aggregate mis-mark. It localizes nothing — it cannot name the misbehaving
+adapter — and, like any rate cap, it bounds speed, not slow drift. An adapter
+that lies by a few bps per observation interval stays under any usable bound.
+Slow drift requires adversarially authored pinned code, and codehash pinning
+plus adapter audit is the primary control for that threat. The limiter is
 defense-in-depth against bugs and oracle faults (the class ORA-6/F-17
-represents), not a substitute for adapter review.
+represents), not a substitute for adapter review, and not a localizer.
 
 ### Rebalancing — one isomorphic flow mechanism, with an optional self-funded admin lever
 
@@ -262,14 +287,14 @@ the primary choice.
 |---|---|---|---|
 | D1 | Inexact rebalancing: enable (gated) vs no-rebalance (ADR) | Isomorphic flow-based rebalancing for **every** vault type: deposits fill largest deficits, withdrawals draw down largest surpluses (per-swap slippage floor bounds each leg). Optional NAV-non-decreasing admin `forceRebalance` (caller funds the cost). No keeper, drift band, or cost cap; not gated on exactness. | Rebalancing rule; ADR-0007 |
 | D2 | `isExact` attestation site (ADR) | Vault-attested: `addAdapter` parameter, immutable on `AdapterInfo`; `allExact()` a derived view; no registry state. | Principle 1 |
-| D3 | Residual price-check mechanism (ADR) | Per-adapter NAV-growth-rate breaker, checkpointed in the deposit path; registered-pool option rejected. | Price-check rule; Principle 3 |
+| D3 | Residual price-check mechanism (ADR) | Single global aggregate NAV-growth-rate cap, one checkpoint (last aggregate NAV + timestamp) written in the deposit path; gates deposits only, is not the drain trigger; registered-pool option rejected. | Price-check rule; Principle 2 |
 | D4 | Exit-side deviation guard (ADR) | Entry-side only. Redemption always proceeds at realized proceeds; no override needed because nothing gates exit. | Principle 2 |
-| Q1 | EMERGENCY-armable surface / blast radius (spec §10.1, M-S5) | Surface eliminated: no arming, no `EMERGENCY_ROLE` drain path. Permissionless condition-triggered drain; blast-radius question dissolves. | Principle 3 |
-| Q2 | Who drains a compromised venue executor (spec §10.2) | Permissionless `forceRemove` on the objective condition + governance redeploy of a replacement adapter + reabsorb. No hot-swap executor slot. Also the M-S2 stranded-token answer. | Principle 3 |
-| Q3 | Per-theme price-check option (spec §10.3) | Uniform mechanism (growth-rate breaker); per-theme variation is a deploy parameter (`maxNavGrowthRateBps` per adapter). Value is a deploy-time governance parameter, not an intervention. | Supporting rule |
+| Q1 | EMERGENCY-armable surface / blast radius (spec §10.1, M-S5) | `EMERGENCY_ROLE` retains drain/removal/NAV-exclusion authority; arming latency solved by atomic EMERGENCY arm+execute (arm and execute in one hot-key action, no ADMIN timelock in between). Blast radius bounded by scoping the atomic actions to incident-critical ones. | Principle 3 |
+| Q2 | Who drains a compromised venue executor (spec §10.2) | `EMERGENCY_ROLE` `forceRemove` on the objective per-adapter failure condition + governance redeploy of a replacement adapter + reabsorb. No hot-swap executor slot. Also the M-S2 stranded-token answer. | Principle 3 |
+| Q3 | Per-theme price-check option (spec §10.3) | Dissolved: the residual price check is a single global vault-level aggregate NAV-growth-rate cap, not a per-theme or per-adapter selection. One bound per vault, set by governance — not an intervention. | Supporting rule; Principle 2 |
 | Q4 | Inexact rebalancing tuning (spec §10.4, M-E3) | Dissolved: rebalancing is uniform flow-based, not a tuned trading loop. No `rebalanceDriftBandBps`, no `maxRebalanceCostPerEpochBps`, no keeper bounty; `forceRebalance` has no tuning knobs — its only bound is NAV-non-decreasing. | Rebalancing rule |
 | Q5 | Per-adapter slippage (spec §10.5) | Per-adapter bound set at `addAdapter`, immutable; vault enforces a global ceiling. | Supporting rule |
-| Q6 | Drain: all-or-nothing vs skip-and-continue (spec §10.6) | Skip-and-continue, permissionless, condition-triggered. `BasketVault.emergencyUnwind`'s all-or-nothing revert (`EmergencyFloorUnavailable`, `contracts/vaults/BasketVault.sol:1250-1269`) does not carry over. | Principle 3 |
+| Q6 | Drain: all-or-nothing vs skip-and-continue (spec §10.6) | Skip-and-continue, an `EMERGENCY_ROLE` action on objective per-adapter failure conditions. `BasketVault.emergencyUnwind`'s all-or-nothing revert (`EmergencyFloorUnavailable`, `contracts/vaults/BasketVault.sol:1250-1269`) does not carry over. | Principle 3 |
 | Q7 | Chronicle adapter shape (spec §10.7) | Separate `ChronicleAssetPositionAdapter`: one pricing source per contract, one codehash per pricing path. | Supporting rule |
 | T2 | Migration deadlock (H-A1) | Atomic registry entry point flipping eligibility + default weights in one call; smaller alternative: empty-vector-accepting `setDefaultWeights`. | Interlock fix |
 
@@ -288,37 +313,49 @@ Per-item notes beyond the table:
   — the exact/inexact split, the drift band, the per-epoch cost cap, and the
   keeper all disappear, and with the keeper goes M-E3's predictable-schedule
   MEV surface.
-- **D3/Q3.** The breaker is the same signal on both sides of Principle 2/3:
-  it closes the deposit gate and opens the drain gate. `maxNavGrowthRateBps`
-  per adapter is a deploy-time governance parameter.
-- **Q1/Q2/Q6.** Together these replace the entire role-gated emergency
-  surface (`emergencyWithdraw`/`emergencyWithdrawAdapter`/
-  `forceRemoveAdapter` on the unified vault) with one permissionless,
-  condition-gated drain plus governance redeploy for stranded value. The
-  shipped skip-and-continue try/catch semantics
-  (`contracts/RobotMoneyVault.sol:906-961`) carry over; the role gate does
-  not.
+- **D3/Q3.** The global limiter serves Principle 2 only: it closes the deposit
+  gate on an aggregate mis-mark and does nothing else. It is not the drain
+  gate — a global aggregate signal cannot localize the culprit adapter, so the
+  drain condition of Principle 3 is the per-adapter failure signal the
+  emergency responder acts on, not the limiter. The cap is a single
+  vault-level governance parameter.
+- **Q1/Q2/Q6.** Together these keep the role-gated emergency surface
+  (`emergencyWithdraw`/`emergencyWithdrawAdapter`/`forceRemoveAdapter` on the
+  unified vault) as `EMERGENCY_ROLE` actions on objective per-adapter failure
+  conditions, plus governance redeploy for stranded value. The
+  skip-and-continue try/catch semantics
+  (`contracts/RobotMoneyVault.sol:906-961`) carry over **with** the role gate;
+  the arm-then-execute latency is closed by atomic EMERGENCY arm+execute, not
+  by removing the gate.
 - **Q5.** The vault-level ceiling also answers L-E5 (a mixed set's aggregate
   floor masking a bad leg): the per-adapter bound *is* the per-leg floor.
 
 ## Residual admin surface
 
-Everything admins do is a timelocked governance config change:
+Routine governance is a timelocked config change:
 
 - `addAdapter` (binds instance, codehash, `capBps`, `isExact`, slippage
-  bound, breaker bound — one call, all immutable per entry).
+  bound — one call, all immutable per entry).
 - `removeAdapter` / allowlist and codehash-pin changes.
 - Weights and caps: default weight vector (via the atomic entry point when
-  eligibility changes), TVL/per-deposit/router/vault caps.
+  eligibility changes), TVL/per-deposit/router/vault caps, and the single
+  vault-level aggregate NAV-growth-rate cap.
 - Lifecycle: registry retire/unretire, router-eligibility flips (atomic entry
   point).
 - Recovery-by-redeploy: adding a replacement adapter and reabsorbing stranded
   tokens (the same `addAdapter` machinery, not a special path).
 
-Nothing on this list is time-critical, market-condition-sensitive, or
-incident-triggered. There is no arming step, no keeper, no emergency drain
-role on the routine path, and no parameter whose safety depends on being
-retuned.
+Nothing on the routine list is time-critical, market-condition-sensitive, or
+incident-triggered: no keeper, and no parameter whose safety depends on being
+retuned. The global NAV-growth-rate cap needs no retuning to conditions — it
+auto-halts deposits when aggregate NAV moves faster than the bound.
+
+Separate from that routine surface, `EMERGENCY_ROLE` retains its fast
+drain / force-remove / NAV-exclusion authority for incident response. Those
+actions are hot-key actions the responder arms and executes atomically (no
+ADMIN timelock in between), preserving the fast-EMERGENCY / timelocked-ADMIN
+asymmetry: routine config stays behind the timelock, failure response does
+not.
 
 Beyond timelocked config, admins hold one discretionary lever, `forceRebalance`.
 It is not a config change and needs no timelock because it cannot harm holders:
@@ -329,19 +366,30 @@ absent-safe.
 
 ## Honest residuals and limits
 
-- **The breaker bounds speed, not drift.** A slow adversarial mis-mark stays
-  under any usable growth-rate bound. The control for that threat is codehash
-  pinning plus adapter audit; the breaker is defense-in-depth for bugs and
-  oracle faults, and the design must not be described as detecting arbitrary
-  mis-marks.
-- **Checkpoint cadence.** The bound is evaluated against elapsed time since
-  the last checkpoint; long gaps between mutating interactions widen the
-  allowed move. The permissionless drain entry point also checkpoints, which
-  narrows but does not eliminate the effect.
-- **Values from the Phase-2 cost spike.** `maxNavGrowthRateBps` per adapter and
-  the per-adapter slippage bounds and vault ceiling are deploy-time parameters
-  whose numbers come from the spec's Phase-2 gas/cost spike. These are
-  parameters, not interventions — set once at governance time.
+- **The global limiter bounds speed and localizes nothing.** It bounds the
+  *speed* of an aggregate mis-mark, not slow adversarial drift, and it cannot
+  name the misbehaving adapter — localizing the culprit is the emergency
+  responder's job via the per-adapter failure conditions, not the limiter's.
+  A slow adversarial mis-mark stays under any usable bound; the control for
+  that threat is codehash pinning plus adapter audit. The limiter is
+  defense-in-depth for bugs and oracle faults, and the design must not be
+  described as detecting arbitrary mis-marks or as identifying which adapter
+  moved.
+- **Arming latency is solved by atomic arm+execute, not by removing the human.**
+  Incident-critical emergency actions are `EMERGENCY_ROLE` hot-key actions the
+  responder arms and executes in one action; the ADMIN timelock never sits in
+  between. The residual is that the surface still assumes a responder who
+  notices the per-adapter failure condition — that is inherent to keeping
+  failure response human, and the atomic path removes the latency, not the
+  observation requirement.
+- **Checkpoint cadence.** The global cap is evaluated against elapsed time
+  since the last checkpoint; long gaps between deposits widen the allowed
+  aggregate move. The single checkpoint is written on every deposit, so
+  deposit activity narrows but does not eliminate the effect.
+- **Values are governance parameters.** The vault-level `maxNavGrowthRateBps`
+  cap and the per-adapter slippage bounds and vault ceiling are deploy-time
+  parameters. These are parameters, not interventions — set once at governance
+  time.
 - **Surplus-first withdrawal drawdown needs precise spec.** The rule
   "withdrawals draw down the largest surpluses first" and its fairness bound
   (each leg capped by the per-swap slippage floor) is fixed in shape, but the
@@ -375,9 +423,11 @@ absent-safe.
 ## Simplifications enabled
 
 The resolved design lets the implementation retire code and architecture whose
-only purpose is to make keeper-driven rebalancing and admin-armed emergencies
-safe. Each removable member below is grounded in the current sources; the list
-is organized by the driving decision, then by what falls away.
+only purpose is to make keeper-driven rebalancing safe and to plumb a
+second-oracle deviation check. The `EMERGENCY_ROLE` drain/removal surface is
+**retained** (Principle 3) — the simplifications below do not touch it. Each
+removable member is grounded in the current sources; the list is organized by
+the driving decision, then by what falls away.
 
 ### From flow-only rebalancing + self-funded `forceRebalance` — the keeper throttle apparatus
 
@@ -409,7 +459,8 @@ guard. Removable from `contracts/RobotMoneyVault.sol`:
   `_setWithdrawalsPaused` (`:1143`) with its `WithdrawalsPausedChanged` event
   (`:235`), and the three exit-gating branches `if (withdrawalsPaused) …` in
   `maxWithdraw` (`:542`), `maxRedeem` (`:553`), and `_withdraw` (`:596`).
-- Only a deposit-side halt remains, and it is the condition-driven breaker.
+- Only a deposit-side halt remains: the `EMERGENCY_ROLE` hot-key deposit pause
+  and the global limiter's automatic deposit halt.
 
 ### From "adapters own their config, set once (immutable)" — per-asset runtime knobs
 
@@ -424,22 +475,25 @@ from `contracts/vaults/BasketVault.sol`:
 - `navDeviationGuardBps` (`:213`) + `setNavDeviationGuardBps` (`:1412`) +
   `MAX_NAV_DEVIATION_BPS` (`:219`).
 
-### From "residual price check = NAV-growth-rate breaker" — the second-oracle deviation apparatus
+### From "residual price check = global aggregate NAV-growth-rate limiter" — the second-oracle deviation apparatus
 
-The breaker (checkpoint-and-compare in the deposit path) is strictly less code
-than a slot0-vs-TWAP deviation check plus a governance-registered pool.
-Removable:
+The global limiter (a single checkpoint-and-compare on aggregate NAV in the
+deposit path) is strictly less code than a slot0-vs-TWAP deviation check plus
+a governance-registered pool — and smaller still than a per-adapter checkpoint
+set, since it holds one checkpoint for the whole vault rather than one per
+adapter. Removable:
 
 - `BasketViews.checkNavDeviation` (definition `contracts/lib/BasketViews.sol:82`,
   invocation `contracts/vaults/BasketVault.sol:565`) and its supporting vault
   state `navDeviationGuardBps`, error `NavMarketDeviationExceeded` (`:324`), and
   event `NavDeviationGuardUpdated` (`:290`).
 
-This is a behavior change, not only a deletion: the NAV-growth-rate breaker is
-the **sole** vault-side price check. Reviewers should not expect both a
-second-oracle deviation guard and the breaker — the design carries one, and it
-bounds the speed of a mark discontinuity rather than an absolute deviation from
-a second reference.
+This is a behavior change, not only a deletion: the global aggregate
+NAV-growth-rate limiter is the **sole** vault-side price check. Reviewers
+should not expect both a second-oracle deviation guard and the limiter — the
+design carries one, and it bounds the speed of an aggregate mark discontinuity
+rather than an absolute deviation from a second reference. It gates deposits
+only and does not localize which adapter moved.
 
 ### From the ADR-0010 core — one Vault, positions behind `IPositionAdapter`
 
@@ -470,24 +524,28 @@ a second reference.
 
 ### Honest caveats
 
-- **`EMERGENCY_ROLE` shrinks but is not deleted.** Drains, force-removes, and
-  NAV-exclusion become permissionless-on-condition, and withdrawals are never
-  pausable, but a thin EMERGENCY hot key is retained to halt the **entry** path
-  on contract-failure intervention, preserving the pause/unpause trust
-  asymmetry. The role gates `pause` (`contracts/RobotMoneyVault.sol:890`),
-  `emergencyWithdraw` (`:906`), `emergencyWithdrawAdapter` (`:936`),
-  `forceRemoveAdapter` (`:966`), and `shutdownVault` (`:1038`); it contracts to
-  the entry-path halt. Role count goes three (ADMIN, KEEPER, EMERGENCY) to
-  effectively ADMIN plus a thin EMERGENCY.
+- **`EMERGENCY_ROLE` retains full emergency authority.** Drains,
+  force-removes, and NAV-exclusion stay `EMERGENCY_ROLE`-gated actions on
+  objective per-adapter failure conditions, and the role also halts the
+  **entry** path — preserving the pause/unpause trust asymmetry. The role gates
+  `pause` (`contracts/RobotMoneyVault.sol:890`), `emergencyWithdraw` (`:906`),
+  `emergencyWithdrawAdapter` (`:936`), `forceRemoveAdapter` (`:966`), and
+  `shutdownVault` (`:1038`) — all retained, none reduced to a deposit-halt-only
+  key. Incident-critical actions gain atomic arm+execute so the ADMIN timelock
+  never blocks a live response. Role count drops **KEEPER** (rebalancing is
+  flow-based, Principle above), going from three (ADMIN, KEEPER, EMERGENCY) to
+  ADMIN plus a full-authority EMERGENCY.
 - **`adminRebalance` must be removed or converted, not only `rebalance()`.** It
   is the second writer of `lastRebalanceAt`
   (`contracts/RobotMoneyVault.sol:865`); the only other write is `rebalance()`
   at `:799`. If it survives, cost can still be socialized around
   `forceRebalance`.
-- **The breaker replacing the deviation guard is a real behavior change** (see
-  the residual-price-check simplification above): the growth-rate breaker is the
-  sole vault-side price check, and it bounds the speed of a mis-mark rather than
-  an absolute deviation from a second oracle.
+- **The global limiter replacing the deviation guard is a real behavior
+  change** (see the residual-price-check simplification above): the global
+  aggregate NAV-growth-rate limiter is the sole vault-side price check, it
+  bounds the speed of an aggregate mis-mark rather than an absolute deviation
+  from a second oracle, and it gates deposits only — it does not localize
+  which adapter moved.
 
 ## Impact on ADR-0010 / spec
 
@@ -499,21 +557,22 @@ Edits a follow-up makes (this document changes neither file):
   `forceRebalance`, reconciling ADR-0007 without a cost cap or keeper and
   decoupled from exactness; D2 → vault-attested confirmed,
   registry-attested alternative dropped (no registry state); D3 →
-  NAV-growth-rate breaker chosen, registered-pool option dropped; D4 →
+  global aggregate NAV-growth-rate cap chosen, registered-pool and per-adapter
+  options dropped; D4 →
   entry-side only, the "exit-side with emergency override" consequence bullet
   deleted.
 - **ADR-0010 §5/§6** — replace the drift-band + per-epoch-cost-cap
   rebalancing text and the keeper references with isomorphic flow-based
   rebalancing (deficit-first deposits, surplus-first withdrawals) and the
-  self-funded NAV-non-decreasing `forceRebalance`; record that the breaker
-  doubles as the drain condition.
-- **Spec §4.3a** — pin the breaker as the sole residual check; add the
-  checkpoint placement (deposit path + drain entry point) and the
-  speed-not-drift limit.
-- **Spec §4.4 / §5.5** — replace the `EMERGENCY_ROLE`-gated drain and the
-  M-S5 direct-EMERGENCY-grant mitigation with the permissionless
-  condition-triggered drain; fold Q1/Q2/Q6 answers in; keep
-  skip-and-continue.
+  self-funded NAV-non-decreasing `forceRebalance`; record that the global
+  limiter gates deposits only and is not the drain condition.
+- **Spec §4.3a** — pin the global aggregate limiter as the sole residual
+  check; add the single-checkpoint placement (deposit path) and the
+  speed-not-drift / localizes-nothing limit.
+- **Spec §4.4 / §5.5** — keep the `EMERGENCY_ROLE`-gated drain and replace the
+  M-S5 arm-then-execute latency mitigation with atomic EMERGENCY arm+execute;
+  fold Q1/Q2/Q6 answers in; keep skip-and-continue as an `EMERGENCY_ROLE`
+  action.
 - **Spec §5.6** — replace the rebalance mechanism with surplus-first
   withdrawal drawdown (bounded by the per-swap slippage floor) and the
   NAV-non-decreasing self-funded `forceRebalance`; delete the exact/inexact
@@ -529,13 +588,16 @@ Edits a follow-up makes (this document changes neither file):
 
 **Summary.** Exactness is attested once at `addAdapter` and gates the withdraw
 surface and the deposit accounting mode — a separate axis from rebalancing;
-safety checks gate deposits only and never exits; drains are permissionless and
-condition-triggered with proceeds to the vault; all adapter config is immutable
-per entry. A per-adapter NAV-growth-rate breaker is both the deposit gate and
-the drain trigger. Rebalancing is isomorphic across every vault type: deposit
-and withdrawal flow tends composition toward target (deficit-first deposits,
+safety checks gate deposits only and never exits; emergency drains,
+force-removes, and NAV-exclusion are `EMERGENCY_ROLE` actions on objective
+per-adapter failure conditions, armed and executed atomically; all adapter
+config is immutable per entry. A single global aggregate NAV-growth-rate
+limiter gates deposits only — it is not the drain trigger and localizes no
+adapter. Rebalancing is isomorphic across every vault type: deposit and
+withdrawal flow tends composition toward target (deficit-first deposits,
 surplus-first withdrawals bounded by the per-swap slippage floor), with an
 optional NAV-non-decreasing admin `forceRebalance` the only lever — no keeper,
 drift band, or cost cap. One atomic registry call fixes the H-A1 migration
 deadlock. Admins retain timelocked config changes plus the single self-funded
-`forceRebalance` lever.
+`forceRebalance` lever; `EMERGENCY_ROLE` retains its fast drain/removal
+authority for incident response.

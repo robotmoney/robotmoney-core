@@ -166,10 +166,15 @@ into the adapter — but pricing is **not wholly delegated** to the adapter (see
   wholly delegated to the self-pricing adapter that also self-checks its own
   deviation (a mis-scaling or mis-configured adapter passes its own probe with
   the same buggy code, and collapses the ORA-7 "floor never derived solely
-  from the oracle that prices the trade" principle). The concrete mechanism is
-  a spec decision (see Open decisions) — e.g. a per-adapter NAV-growth-rate
-  bound between blocks, or a vault-side deviation check against a
-  governance-registered pool address rather than the adapter's self-report.
+  from the oracle that prices the trade" principle). The mechanism is a
+  **single global cap on how fast the vault's aggregate NAV (`totalAssets()`)
+  may grow between observations**, held as one vault-wide checkpoint (last
+  aggregate NAV + timestamp) written in the deposit path. It gates **deposits
+  only** and needs no governance-registered per-adapter reference pools. Being
+  an aggregate signal, it bounds the speed of a mis-mark but does not identify
+  which adapter moved — so it is a deposit circuit-breaker, not a per-adapter
+  drain trigger; localizing a failing adapter is the EMERGENCY responder's job
+  (§6, Open decisions).
 
 - **Rebalancing consumes valuation as its setpoint (C3a, M-E3):**
   `rebalance()` moves capital toward **valuation-derived** targets
@@ -274,10 +279,12 @@ foreclosing it. The spec resolves them before engineering.
   (flag maintained in `VaultRegistry`) is the alternative; both remove the
   per-call self-report, and the choice affects where the timelock transition
   lives.
-- **Residual price-check mechanism (C3).** Per-adapter NAV-growth-rate bound
-  between blocks, vs. vault-side deviation against a governance-registered
-  pool. Either satisfies the adapter-independence requirement; the spec picks
-  one.
+- **Residual price-check mechanism (C3).** A single global cap on aggregate
+  NAV (`totalAssets()`) growth rate, held as one vault-wide checkpoint in the
+  deposit path. It satisfies the adapter-independence requirement with no
+  per-adapter reference pools, gates deposits only, and does not localize the
+  misbehaving adapter. The per-adapter-checkpoint and registered-pool variants
+  are rejected in favor of the single global checkpoint.
 - **Exit-side deviation guard (C3/M-A1).** Whether the NAV-deviation guard is
   entry-side only, or also gates `redeem()` (introducing a redeem-can-revert
   behavior). This ADR keeps the guard but requires the exit-side case carry an
@@ -308,9 +315,11 @@ foreclosing it. The spec resolves them before engineering.
 - ERC-4626 behavior is uniform and predicate-driven: exact mode when all
   adapters are attested exact, redeem-only otherwise.
 - Resolving the open decisions retires the machinery that exists only for
-  keeper rebalancing and admin-armed emergencies — the keeper throttle, the
-  withdrawal-side pause, per-adapter runtime setters, and the second-oracle
-  deviation guard. See "Simplifications enabled" in
+  keeper rebalancing and for a second-oracle deviation check — the keeper
+  throttle, the withdrawal-side pause, per-adapter runtime setters, and the
+  second-oracle deviation guard (replaced by the single global aggregate
+  NAV-growth-rate cap). The `EMERGENCY_ROLE` drain/removal surface is
+  retained, not retired. See "Simplifications enabled" in
   `docs/technical/unified-vault-open-questions-resolution.md`.
 
 **Negative / accepted risks.**
@@ -352,11 +361,16 @@ foreclosing it. The spec resolves them before engineering.
     a venue-independent NAV-recount / reabsorb path for a revoked token
     adapter.
   - **Adapter emergency arming-latency vs. vault EMERGENCY (ACL-5 / M-S5).**
-    Two-key arming is atomic on one contract today; unified, arming is an
-    adapter write behind a ≥48h timelock while execution comes from the vault
-    EMERGENCY surface, which cannot atomically reach a fresh adapter arm. A
-    direct EMERGENCY grant (or shorter delay class) for incident-critical
-    adapter arming, plus a blast-radius review, is required before Phase 2.
+    Two-key arming is atomic on one contract today; unified, a naive split
+    would make arming an adapter write behind a ≥48h ADMIN timelock while
+    execution comes from the vault EMERGENCY surface, which cannot atomically
+    reach a fresh adapter arm. The resolution is **atomic EMERGENCY
+    arm+execute**: incident-critical emergency actions are `EMERGENCY_ROLE`
+    hot-key actions the responder arms and executes in a single action, with no
+    intervening ADMIN timelock — preserving the fast-EMERGENCY / timelocked-ADMIN
+    asymmetry. A blast-radius review scoping which actions are atomic is
+    required before Phase 2. The latency is closed by collapsing arm and
+    execute, not by making the action permissionless.
   - **Read-only-reentrancy enumeration (M-S6).** The per-asset deposit call
     graph is now vault → adapter → router → (V4 hook / Aerodrome callback);
     `nonReentrant` blocks re-entry into `_deposit`/`_withdraw` but not **view**
