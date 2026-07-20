@@ -107,6 +107,11 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
         onlyVault
         returns (uint256 usdcOut)
     {
+        // slither-disable-start reentrancy-balance
+        // Justification: the `A_TOKEN.balanceOf` clamp read precedes the
+        // `POOL.withdraw` external call, but this function is `onlyVault` and the
+        // `VAULT` is `nonReentrant` at the call site, so the read cannot be
+        // exploited via reentrancy (same rationale as the v1 balance-delta paths).
         uint256 amount = usdcWanted;
         if (amount != type(uint256).max) {
             // Clamp the target at the liquidatable balance so an over-ask
@@ -116,6 +121,7 @@ contract AaveV3Adapter is IStrategyAdapter, IPositionAdapter {
         }
         // `type(uint256).max` withdraws the full aToken balance (Aave native).
         usdcOut = amount == 0 ? 0 : POOL.withdraw(USDC, amount, VAULT);
+        // slither-disable-end reentrancy-balance
         // Shortfall against the min-out floor reverts (spec §2.2).
         if (usdcOut < minUsdcOut) revert SlippageExceeded();
     }
