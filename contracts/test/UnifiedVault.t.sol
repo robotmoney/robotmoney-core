@@ -20,6 +20,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {Vault} from "../Vault.sol";
 import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
@@ -452,5 +453,219 @@ contract UnifiedVaultRedemptionModeTest is UnifiedVaultBase {
         // previewWithdraw — reverts RedeemOnly.
         vm.expectRevert(Vault.RedeemOnly.selector);
         vault.previewWithdraw(1 * ONE_USDC);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FlowRebalanceTest — isomorphic flow-based rebalancing (#1122, spec §5.6):
+//   deficit-first deposit routing and surplus-first withdrawal drawdown, on both
+//   exact and inexact adapter sets. Composition is created imbalanced (a direct
+//   USDC donation into one adapter), then a deposit/withdrawal is shown to move
+//   composition TOWARD the equal-weight target — deposits fill the largest
+//   deficit first, withdrawals draw the largest surplus first, and the opposite
+//   (correctly-weighted) leg is left untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+contract FlowRebalanceTest is UnifiedVaultBase {
+    uint256 internal constant HAIRCUT_BPS = 100; // 1% realized slippage (< maxSlippage)
+
+    function setUp() public {
+        _deployVault(0); // zero exit fee to isolate the routing ordering
+    }
+
+    /// @notice AC: a deposit routes entirely to the adapter furthest BELOW target
+    ///         (largest deficit first); the overweight adapter receives none.
+    function test_deposit_fillsLargestDeficitFirst_exact() public {
+        ExactHoldAdapter a = _registerExact(uint16(MAX_BPS));
+        ExactHoldAdapter b = _registerExact(uint16(MAX_BPS));
+        _deposit(alice, 1_000 * ONE_USDC); // routes 500 / 500
+
+        // Donate directly into A so A is overweight and B is the largest deficit.
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500, NAV = 2000
+        uint256 aBefore = a.totalAssets();
+
+        _deposit(bob, 200 * ONE_USDC);
+
+        assertEq(a.totalAssets(), aBefore, "overweight adapter gets no deposit flow");
+        assertEq(b.totalAssets(), 700 * ONE_USDC, "deficit adapter filled first");
+    }
+
+    /// @notice AC: deficit-first routing is IDENTICAL on an inexact set (deposit
+    ///         ordering is not gated on exactness).
+    function test_deposit_fillsLargestDeficitFirst_inexact() public {
+        InexactSellAdapter a = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        InexactSellAdapter b = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        _deposit(alice, 1_000 * ONE_USDC); // deploy-at-par => 500 / 500
+
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500
+        uint256 aBefore = a.totalAssets();
+
+        _deposit(bob, 200 * ONE_USDC);
+
+        assertEq(a.totalAssets(), aBefore, "overweight adapter untouched (inexact)");
+        assertEq(b.totalAssets(), 700 * ONE_USDC, "deficit adapter filled first (inexact)");
+    }
+
+    /// @notice AC: an EXACT-mode withdrawal draws from the adapter furthest ABOVE
+    ///         target (largest surplus first); the underweight adapter is untouched.
+    function test_withdraw_drawsLargestSurplusFirst_exact() public {
+        ExactHoldAdapter a = _registerExact(uint16(MAX_BPS));
+        ExactHoldAdapter b = _registerExact(uint16(MAX_BPS));
+        _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
+
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500 surplus, B = 500 deficit
+        uint256 bBefore = b.totalAssets();
+
+        vm.prank(alice);
+        vault.withdraw(400 * ONE_USDC, alice, alice);
+
+        assertEq(b.totalAssets(), bBefore, "underweight adapter untouched on withdrawal");
+        assertEq(a.totalAssets(), 1_100 * ONE_USDC, "surplus adapter drawn down first");
+        assertEq(usdc.balanceOf(alice), 400 * ONE_USDC, "redeemer funded from the surplus leg");
+    }
+
+    /// @notice AC: an INEXACT-mode redemption sources the redeemer's pro-rata
+    ///         slice surplus-first, each leg bounded by the per-swap slippage
+    ///         floor; the underweight adapter is left untouched.
+    function test_redeem_drawsLargestSurplusFirst_inexact() public {
+        InexactSellAdapter a = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        InexactSellAdapter b = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
+
+        usdc.mint(address(a), 500 * ONE_USDC); // A = 1000 surplus, B = 500 deficit, NAV = 1500
+        uint256 bBefore = b.totalAssets();
+
+        // Redeem ~20% of supply => sellTarget ≈ 1500 * 20% = 300, entirely within
+        // A's surplus, so B (the deficit leg) is never touched.
+        uint256 shares = vault.balanceOf(alice) / 5;
+        vm.prank(alice);
+        vault.redeem(shares, alice, alice);
+
+        assertEq(b.totalAssets(), bBefore, "underweight adapter untouched (inexact surplus-first)");
+        assertLt(a.totalAssets(), 1_000 * ONE_USDC, "surplus adapter drawn down first");
+        assertApproxEqAbs(
+            a.totalAssets(), 700 * ONE_USDC, 2 * ONE_USDC, "~sellTarget drawn from the surplus leg"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ForceRebalanceNavTest — self-funded, NAV-non-decreasing admin `forceRebalance`
+//   (#1122, spec §5.6): the ONLY rebalance lever. It is admin-gated, ~free on an
+//   exact set, and on an inexact set REVERTS unless the caller tops up the USDC
+//   covering realized slippage — so aggregate NAV is non-decreasing and a holder
+//   can never lose value. The socialized `rebalance()`/`adminRebalance()` pair and
+//   the keeper throttles are gone.
+// ─────────────────────────────────────────────────────────────────────────────
+
+contract ForceRebalanceNavTest is UnifiedVaultBase {
+    uint256 internal constant HAIRCUT_BPS = 100; // 1% realized slippage (< maxSlippage)
+
+    function setUp() public {
+        _deployVault(0);
+    }
+
+    function _imbalancedExact() internal returns (ExactHoldAdapter a, ExactHoldAdapter b) {
+        a = _registerExact(uint16(MAX_BPS));
+        b = _registerExact(uint16(MAX_BPS));
+        _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500, NAV = 2000
+    }
+
+    function _imbalancedInexact() internal returns (InexactSellAdapter a, InexactSellAdapter b) {
+        a = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        b = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
+        _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500, NAV = 2000
+    }
+
+    /// @notice On an exact set the top-up is ~zero: `forceRebalance(0)` succeeds,
+    ///         leaves NAV EXACTLY unchanged (1:1 moves, no realized cost), and
+    ///         converges composition toward the equal-weight target.
+    function test_forceRebalance_exactSet_freeAndNavNonDecreasing() public {
+        (ExactHoldAdapter a, ExactHoldAdapter b) = _imbalancedExact();
+        uint256 navBefore = vault.totalAssets();
+
+        vm.prank(admin);
+        vault.forceRebalance(0);
+
+        assertGe(vault.totalAssets(), navBefore, "NAV non-decreasing");
+        assertEq(vault.totalAssets(), navBefore, "exact set: no realized cost");
+        assertApproxEqAbs(a.totalAssets(), b.totalAssets(), 1, "converged to equal weight");
+    }
+
+    /// @notice On an inexact set with NO top-up the realized swap slippage would
+    ///         drop NAV, so the whole call REVERTS (holders never lose value) and
+    ///         composition is left untouched.
+    function test_forceRebalance_inexactSet_revertsWithoutTopUp() public {
+        _imbalancedInexact();
+        uint256 navBefore = vault.totalAssets();
+
+        // Realized-slippage-only drop: 2000 -> 1995 (5 USDC burned on the pull leg).
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Vault.NavWouldDecrease.selector, 2_000 * ONE_USDC, 1_995 * ONE_USDC
+            )
+        );
+        vault.forceRebalance(0);
+
+        assertEq(vault.totalAssets(), navBefore, "reverted rebalance leaves NAV untouched");
+    }
+
+    /// @notice With a self-funded top-up covering realized slippage the inexact
+    ///         `forceRebalance` succeeds: NAV is non-decreasing, the holder's
+    ///         pro-rata value cannot fall, and composition moves toward target.
+    function test_forceRebalance_inexactSet_selfFundedTopUp_holderNoLoss() public {
+        (InexactSellAdapter a, InexactSellAdapter b) = _imbalancedInexact();
+        uint256 aliceShares = vault.balanceOf(alice);
+        uint256 navBefore = vault.totalAssets();
+        uint256 holderValueBefore = vault.convertToAssets(aliceShares);
+        uint256 gapBefore = a.totalAssets() - b.totalAssets(); // 1000
+
+        uint256 topUp = 50 * ONE_USDC; // comfortably covers the ~5 USDC realized slippage
+        usdc.mint(admin, topUp);
+        vm.startPrank(admin);
+        usdc.approve(address(vault), topUp);
+        vault.forceRebalance(topUp);
+        vm.stopPrank();
+
+        assertGe(vault.totalAssets(), navBefore, "NAV non-decreasing with self-funded top-up");
+        assertGe(vault.convertToAssets(aliceShares), holderValueBefore, "holder cannot lose value");
+        assertLt(a.totalAssets(), 1_500 * ONE_USDC, "surplus adapter drawn down");
+        assertGt(b.totalAssets(), 500 * ONE_USDC, "deficit adapter filled");
+        assertLt(
+            a.totalAssets() - b.totalAssets(), gapBefore / 5, "composition converged toward target"
+        );
+    }
+
+    /// @notice `forceRebalance` is ADMIN-gated — a non-admin caller reverts.
+    function test_forceRebalance_onlyAdmin() public {
+        _imbalancedExact();
+        bytes32 adminRole = vault.ADMIN_ROLE(); // resolve BEFORE the prank
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, bob, adminRole
+            )
+        );
+        vault.forceRebalance(0);
+    }
+
+    /// @notice AC: the socialized `rebalance()` / `adminRebalance()` pair and the
+    ///         keeper throttles no longer exist — `forceRebalance` is the sole
+    ///         rebalance entry point (§5.6). Non-existent selectors revert.
+    function test_socializedRebalanceAndThrottlesRemoved() public {
+        _imbalancedExact();
+        (bool r1,) = address(vault).call(abi.encodeWithSignature("rebalance()"));
+        assertFalse(r1, "socialized rebalance() removed");
+        (bool r2,) = address(vault).call(abi.encodeWithSignature("adminRebalance()"));
+        assertFalse(r2, "adminRebalance() removed");
+        (bool r3,) = address(vault)
+            .call(abi.encodeWithSignature("setRebalanceDriftBandBps(uint256)", uint256(100)));
+        assertFalse(r3, "drift-band throttle removed");
+        (bool r4,) = address(vault)
+            .call(abi.encodeWithSignature("setMaxRebalanceCostPerEpochBps(uint256)", uint256(100)));
+        assertFalse(r4, "per-epoch cost-cap throttle removed");
     }
 }

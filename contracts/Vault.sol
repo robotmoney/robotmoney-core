@@ -299,8 +299,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     //   address adapter)` — emitted on an exact↔inexact composition-class flip
     //   through `addAdapter`, gated by the ADMIN timelock. Owned by #1123; the
     //   insertion point is marked in `addAdapter`.
-    // SEAM (#1122): `Rebalanced(uint256 totalMoved)` fires on an admin
-    //   `forceRebalance`. Owned by #1122.
+    /// @notice Emitted by the self-funded admin `forceRebalance` (§5.6):
+    ///         `totalMoved` is the USDC value actually drawn from overweight
+    ///         adapters and re-routed deficit-first toward target. The call is
+    ///         NAV-non-decreasing — the caller funds any realized slippage/fees.
+    event Rebalanced(uint256 totalMoved);
 
     // ─── Errors ────────────────────────────────────────────────────────
 
@@ -340,6 +343,10 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Active adapters cannot deliver the USDC required for an EXACT-mode
     ///         withdrawal (raised before any transfer, spec §5.3).
     error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+    /// @notice A `forceRebalance` would leave aggregate NAV below where it started
+    ///         (the caller's top-up did not cover realized slippage + fees). The
+    ///         whole call reverts so holders can never lose value (§5.6).
+    error NavWouldDecrease(uint256 navBefore, uint256 navAfter);
 
     // ─── Constructor ──────────────────────────────────────────────────
 
@@ -591,10 +598,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///      emits `UnroutedDeposit`. This is the deposit half of flow-based
     ///      rebalancing.
     ///
-    ///      SEAM (#1122): the surplus-first / deficit-first FLOW refinement of
-    ///      the ordering lives here and in `_pullProportional`/`_sellProportional`
-    ///      — this two-pass fill is the baseline it reorders. Keep this the sole
-    ///      deposit routing entrypoint.
+    ///      Flow-based rebalancing (#1122, §5.6): this deficit-first fill is the
+    ///      deposit half; the surplus-first drawdown is in `_pullProportional` /
+    ///      `_sellProportional`, ordered via `_surplusFirstOrder`. This stays the
+    ///      sole deposit routing entrypoint (also reused by `redeployRevokedIdle`
+    ///      and the `forceRebalance` re-route leg).
     function _routeDeposit(uint256 amount) internal returns (uint256 remainingOut) {
         if (amount == 0) return 0;
 
@@ -853,19 +861,17 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///      under-delivery. Over-delivery is clamped so surplus stays idle for
     ///      all holders. Only eligible-and-active adapters are pulled from (ADP-2).
     ///
-    ///      SEAM (#1122): surplus-first drawdown ordering reorders this
-    ///      proportional pass; the shortfall-revert semantics stay.
+    ///      Surplus-first drawdown (§5.6): the adapters furthest ABOVE target are
+    ///      drained first, moving composition toward the weights. Ordering is
+    ///      orthogonal to exactness — the shortfall-revert and over-delivery-clamp
+    ///      semantics are unchanged.
     function _pullProportional(uint256 assetsNeeded) internal returns (uint256) {
         if (assetsNeeded == 0) return 0;
 
         uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
         if (idleBalance >= assetsNeeded) return assetsNeeded;
 
-        uint256 totalInAdapters;
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (_isAdapterCounted(i)) totalInAdapters += adapters[i].adapter.totalAssets();
-        }
+        (uint256[] memory order, uint256 n, uint256 totalInAdapters) = _surplusFirstOrder();
 
         uint256 remainingNeeded = assetsNeeded - idleBalance;
         if (remainingNeeded > totalInAdapters) {
@@ -875,14 +881,12 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 remaining = remainingNeeded;
         uint256 pulled;
 
-        // Pass 1: proportional pulls, capped at each adapter's reported balance.
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!_isAdapterCounted(i)) continue;
+        // Pass 1: greedy surplus-first pulls, capped at each adapter's balance.
+        for (uint256 k = 0; k < n && remaining > 0; k++) {
+            uint256 i = order[k];
             IPositionAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
-            if (pull > remaining) pull = remaining;
-            if (pull > adapterBalance) pull = adapterBalance;
+            uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
             if (pull == 0) continue;
             uint256 actual = adpt.withdraw(pull, 0); // 0 ⇒ adapter's own floor
             pulled += actual;
@@ -890,9 +894,9 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             emit Pulled(i, address(adpt), actual);
         }
 
-        // Pass 2: rounding-sweep, capping each pull at min(remaining, balance).
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!_isAdapterCounted(i)) continue;
+        // Pass 2: under-delivery sweep in the same surplus-first order.
+        for (uint256 k = 0; k < n && remaining > 0; k++) {
+            uint256 i = order[k];
             IPositionAdapter adpt = adapters[i].adapter;
             uint256 adapterBalance = adpt.totalAssets();
             uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
@@ -920,8 +924,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///      floor)` reverts `SlippageExceeded` only below the floor. Proceeds
     ///      accrue as realized; no socialization.
     ///
-    ///      SEAM (#1122): surplus-first sell ordering reorders this
-    ///      share-proportional pass.
+    ///      Surplus-first sell (§5.6): the redeemer's pro-rata slice of the
+    ///      adapter pool (`totalInAdapters × shares / supplyBefore`) is raised by
+    ///      selling from the adapters furthest ABOVE target first, moving
+    ///      composition toward the weights. Each leg keeps its `minUsdcOut` floor,
+    ///      so the no-revert-above-floor semantics are unchanged.
     function _sellProportional(uint256 shares, uint256 supplyBefore)
         internal
         returns (uint256 usdcOut)
@@ -931,20 +938,70 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             usdcOut += idleBefore.mulDiv(shares, supplyBefore);
         }
 
-        uint256 len = adapters.length;
-        for (uint256 i = 0; i < len; i++) {
-            if (!_isAdapterCounted(i)) continue;
+        (uint256[] memory order, uint256 n, uint256 totalInAdapters) = _surplusFirstOrder();
+        if (totalInAdapters == 0) return usdcOut;
+
+        // The redeemer's pro-rata slice of the adapter-held value, sourced
+        // surplus-first rather than evenly across every leg.
+        uint256 remaining = totalInAdapters.mulDiv(shares, supplyBefore);
+
+        for (uint256 k = 0; k < n && remaining > 0; k++) {
+            uint256 i = order[k];
             IPositionAdapter adpt = adapters[i].adapter;
             uint256 bal = adpt.totalAssets();
             if (bal == 0) continue;
 
-            uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
+            uint256 sellAmount = bal < remaining ? bal : remaining;
             if (sellAmount == 0) continue;
 
             uint256 minUsdcOut = sellAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
             uint256 received = adpt.withdraw(sellAmount, minUsdcOut);
             emit Pulled(i, address(adpt), received);
             usdcOut += received;
+            remaining -= sellAmount;
+        }
+    }
+
+    /// @dev The counted-adapter indices ordered by DESCENDING surplus
+    ///      (`currentBalance − equal-weight target`) — the surplus-first drawdown
+    ///      order shared by `_pullProportional`, `_sellProportional`, and
+    ///      `forceRebalance` (§5.6). Only registered-active-and-eligible adapters
+    ///      (`_isAdapterCounted`) are included. `n` is the count of populated
+    ///      entries in `order`; `totalInAdapters` is their summed balance (returned
+    ///      so callers reuse the single balance loop). A small selection sort
+    ///      (n ≤ `MAX_ADAPTERS` = 20) — no external calls, view-only.
+    function _surplusFirstOrder()
+        internal
+        view
+        returns (uint256[] memory order, uint256 n, uint256 totalInAdapters)
+    {
+        uint256 len = adapters.length;
+        order = new uint256[](len);
+        int256[] memory surplus = new int256[](len);
+
+        uint256 total = totalAssets();
+        uint256 targetBps = _targetBpsFor();
+        uint256 targetBalance = (total * targetBps) / MAX_BPS;
+
+        for (uint256 i = 0; i < len; i++) {
+            if (!_isAdapterCounted(i)) continue;
+            uint256 bal = adapters[i].adapter.totalAssets();
+            totalInAdapters += bal;
+            order[n] = i;
+            surplus[n] = int256(bal) - int256(targetBalance);
+            n++;
+        }
+
+        // Selection sort by descending surplus (stable enough for a ≤20 set).
+        for (uint256 a = 0; a < n; a++) {
+            uint256 best = a;
+            for (uint256 b = a + 1; b < n; b++) {
+                if (surplus[b] > surplus[best]) best = b;
+            }
+            if (best != a) {
+                (order[a], order[best]) = (order[best], order[a]);
+                (surplus[a], surplus[best]) = (surplus[best], surplus[a]);
+            }
         }
     }
 
@@ -1196,6 +1253,74 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             emit RevokedIdleUpdated(old, revokedIdle);
         }
     }
+
+    // slither-disable-start reentrancy-balance
+    // `forceRebalance` is `ADMIN_ROLE`-gated and `nonReentrant`; the `navBefore`
+    // read is taken before any adapter call and the `navAfter` read after all of
+    // them, so the pre/post NAV snapshots the invariant compares are protected —
+    // the stale-balance warning on the surrounding withdraw/deploy legs is a
+    // false positive (mirrors the `_deposit` / `_withdraw` cores).
+    /// @notice Move composition toward the per-instance target weights at any time
+    ///         (the ONLY rebalance lever — there is no keeper/scheduled rebalance).
+    ///         Overweight adapters are drawn down surplus-first and the recovered
+    ///         USDC is re-routed deficit-first, isomorphically across exact and
+    ///         inexact sets. The call MUST leave aggregate NAV NON-DECREASING: the
+    ///         caller pre-funds `topUp` USDC covering realized slippage + fees, or
+    ///         the whole call reverts (`NavWouldDecrease`). Holders can NEVER lose
+    ///         value to it — on an exact set the top-up is ~zero (1:1 moves), on an
+    ///         inexact set the admin pays the swap slippage out of pocket (§5.6).
+    /// @param topUp USDC the caller supplies up front to cover realized cost. Any
+    ///        excess stays as vault NAV (a donation to holders); nothing is
+    ///        refunded, so the caller SHOULD size `topUp` to the expected cost.
+    /// @dev `ADMIN_ROLE` (timelock) — a discretionary lever, not an emergency one.
+    function forceRebalance(uint256 topUp) external onlyRole(ADMIN_ROLE) nonReentrant {
+        if (_activeAdapterCount() == 0) revert NoActiveAdapters();
+
+        uint256 navBefore = totalAssets();
+
+        // Self-funding: pull the caller's top-up into idle BEFORE measuring the
+        // post-rebalance NAV, so it offsets realized slippage/fees one-for-one.
+        if (topUp > 0) {
+            IERC20(asset()).safeTransferFrom(msg.sender, address(this), topUp);
+        }
+
+        // Draw each overweight adapter down to target (surplus-first), then
+        // re-route exactly the recovered USDC deficit-first. `revokedIdle` and any
+        // pre-existing idle are untouched — only `moved` USDC is redeployed.
+        uint256 moved = _drawSurplusToIdle();
+        if (moved > 0) _routeDeposit(moved);
+
+        uint256 navAfter = totalAssets();
+        if (navAfter < navBefore) revert NavWouldDecrease(navBefore, navAfter);
+
+        emit Rebalanced(moved);
+    }
+
+    /// @dev Withdraw the ABOVE-target surplus of every counted adapter into idle,
+    ///      returning the USDC actually recovered. Each leg is bounded by the
+    ///      vault per-swap slippage floor (`minUsdcOut`), the same bound the
+    ///      redemption paths use — so a thin venue cannot turn a rebalance into a
+    ///      catastrophic-slippage extraction. Only used by `forceRebalance`.
+    function _drawSurplusToIdle() internal returns (uint256 moved) {
+        uint256 total = totalAssets();
+        uint256 targetBps = _targetBpsFor();
+        uint256 targetBalance = (total * targetBps) / MAX_BPS;
+
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (!_isAdapterCounted(i)) continue;
+            IPositionAdapter adpt = adapters[i].adapter;
+            uint256 bal = adpt.totalAssets();
+            if (bal <= targetBalance) continue;
+            uint256 surplus = bal - targetBalance;
+            uint256 minUsdcOut = surplus.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
+            uint256 received = adpt.withdraw(surplus, minUsdcOut);
+            emit Pulled(i, address(adpt), received);
+            moved += received;
+        }
+    }
+
+    // slither-disable-end reentrancy-balance
 
     /// @notice Force-remove an adapter without withdrawing its assets (last
     ///         resort). Assets in the adapter are treated as lost.
