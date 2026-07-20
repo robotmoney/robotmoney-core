@@ -201,16 +201,20 @@ address public quarantineAddress
 
 ### revokedIdle
 USDC recovered into idle from a revoked/excluded adapter (an
-ADP-2 exclusion drained via `emergencyWithdrawAdapter`) and
-therefore NOT backing counted shares. Subtracted from the deposit
-mint denominator so recovered idle stays with existing holders and
-is not repriced onto new depositors. NORMALLY ZERO.
+ADP-2 exclusion drained via `emergencyWithdrawAdapter` /
+`emergencyDrainAndExclude`) and therefore NOT backing counted
+shares. Subtracted from the deposit mint denominator so recovered
+idle is not repriced onto new depositors. NORMALLY ZERO.
 
 #1121 (emergency-model refinements) owns the full lifecycle of
-this accumulator — incrementing it when a revoked adapter is
-drained and decrementing it as the recovered idle is re-deployed.
-The #1119 core wires it into the denominator (the C1-correct
-formula) and leaves it at zero; see `_deposit`.
+this accumulator: it is INCREMENTED when a NOT-counted (ADP-2
+ineligible) adapter is drained on the EMERGENCY path — the
+recovered USDC that was outside NAV becomes idle inside NAV — and
+DECREMENTED by `redeployRevokedIdle` when that recovered idle is
+routed back into the (healthy) active adapter set. The #1119 core
+wired it into the denominator (the C1-correct formula); see
+`_deposit`. Draining a still-counted (eligible) adapter leaves it
+at zero — those funds already backed shares.
 
 
 ```solidity
@@ -529,7 +533,7 @@ deposit routing entrypoint.
 
 
 ```solidity
-function _routeDeposit(uint256 amount) internal;
+function _routeDeposit(uint256 amount) internal returns (uint256 remainingOut);
 ```
 
 ### _allocateTo
@@ -855,6 +859,63 @@ function emergencyWithdrawAdapter(uint256 index)
     onlyRole(EMERGENCY_ROLE)
     nonReentrant;
 ```
+
+### emergencyDrainAndExclude
+
+Atomic EMERGENCY arm+execute (M-S5): drain AND exclude a set of
+adapters in a SINGLE `EMERGENCY_ROLE` action, with no intervening
+ADMIN timelock. Each listed adapter is drained best-effort and then
+deactivated (excluded from NAV) regardless of whether the drain
+reverted — skip-and-continue, so one failing adapter never blocks
+the rest. Recovered USDC from a NOT-counted (ADP-2 ineligible)
+adapter is credited to `revokedIdle`. Invalid / already-inactive
+indices are skipped. Pauses deposits (LIFE-3: withdrawals stay open).
+
+
+```solidity
+function emergencyDrainAndExclude(uint256[] calldata indices)
+    external
+    onlyRole(EMERGENCY_ROLE)
+    nonReentrant;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`indices`|`uint256[]`|The adapter indices to drain and exclude.|
+
+
+### _creditRevokedIdle
+
+Accumulate `amount` of recovered-but-not-counted USDC into the
+`revokedIdle` exclusion. Single writer used by every EMERGENCY drain.
+
+
+```solidity
+function _creditRevokedIdle(uint256 amount) internal;
+```
+
+### redeployRevokedIdle
+
+Re-deploy recovered revoked-idle USDC back into the (now-healthy)
+active adapter set and DECREMENT `revokedIdle` by the amount that
+was actually routed. This is the recovery side of the ADP-2
+lifecycle: once governance has registered a trustworthy replacement
+adapter, the recovered idle stops being excluded and rejoins the
+counted NAV backing new mints. `ADMIN_ROLE` (timelock) — a recovery
+action, not an emergency hot-key one. Reverts if `amount` exceeds
+the outstanding `revokedIdle`.
+
+
+```solidity
+function redeployRevokedIdle(uint256 amount) external onlyRole(ADMIN_ROLE) nonReentrant;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`amount`|`uint256`|The revoked-idle USDC to redeploy (<= `revokedIdle`).|
+
 
 ### forceRemoveAdapter
 
@@ -1289,6 +1350,30 @@ Emitted per-adapter during an emergency withdrawal.
 event EmergencyWithdrawAdapterCalled(
     uint256 indexed index, address indexed adapter, uint256 amount, bool success
 );
+```
+
+### AdapterDrainedAndExcluded
+Emitted per-adapter by the atomic EMERGENCY arm+execute
+`emergencyDrainAndExclude`: the adapter was drained (best-effort)
+and excluded (deactivated) from NAV in a single action. `recovered`
+is the USDC pulled back; `drainSucceeded` is false when the drain
+reverted but the adapter was still excluded (skip-and-continue).
+
+
+```solidity
+event AdapterDrainedAndExcluded(
+    uint256 indexed index, address indexed adapter, uint256 recovered, bool drainSucceeded
+);
+```
+
+### RevokedIdleUpdated
+Emitted whenever the `revokedIdle` accumulator changes — credited
+when a not-counted adapter's recovered USDC lands in idle, and
+decremented when that recovered idle is re-deployed (#1121).
+
+
+```solidity
+event RevokedIdleUpdated(uint256 oldValue, uint256 newValue);
 ```
 
 ### Shutdown
