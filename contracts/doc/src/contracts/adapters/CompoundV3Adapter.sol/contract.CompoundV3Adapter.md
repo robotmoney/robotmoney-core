@@ -1,8 +1,8 @@
 # CompoundV3Adapter
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/adapters/CompoundV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a62dd56cbffd67a73d39db63c0ae20c0a7cc71f/contracts/adapters/CompoundV3Adapter.sol)
 
 **Inherits:**
-[IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
+[IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md), [IPositionAdapter](/contracts/interfaces/IPositionAdapter.sol/interface.IPositionAdapter.md)
 
 **Title:**
 CompoundV3Adapter
@@ -15,15 +15,24 @@ So this adapter must FORWARD withdrawn USDC to the vault.
 `COMET.balanceOf(account)` returns live underlying USDC with interest applied.
 Deployed: 0x8247da22a59fce074c102431048d0ce7294c2652 (Base mainnet)
 Compiler: v0.8.24+commit.e11b9ed9, optimized 200 runs, EVM Cancun, viaIR=true
+ADR-0010 retrofit: implements BOTH the v1 `IStrategyAdapter` (still
+called by the deployed RobotMoneyVault) and the unified-vault
+`IPositionAdapter`. The v2 `deploy`/`withdraw` add min-out slippage
+floors and a realized-value return; Comet USDC supply/redemption is
+exact (1:1), so the floors are trivially satisfied but still enforced
+(revert `SlippageExceeded` below the floor). `isExact()` returns true.
 
 
 ## Constants
 ### USDC
 USDC token address used for deposits and withdrawals.
 
+Stored as `address` so the auto-generated getter satisfies the
+`IPositionAdapter.USDC()` identity view (returns `address`).
+
 
 ```solidity
-IERC20 public immutable USDC
+address public immutable USDC
 ```
 
 
@@ -60,6 +69,15 @@ modifier onlyVault() ;
 constructor(address comet_, address usdc_, address vault_) ;
 ```
 
+### _supply
+
+Shared supply choreography for the v1 and v2 `deploy` entry points.
+
+
+```solidity
+function _supply(uint256 amount) private;
+```
+
 ### deploy
 
 Receive `amount` USDC from the vault and deploy it into the underlying protocol.
@@ -73,6 +91,36 @@ function deploy(uint256 amount) external onlyVault;
 |Name|Type|Description|
 |----|----|-----------|
 |`amount`|`uint256`|Amount of USDC (6-decimal units) to deploy into the protocol.|
+
+
+### deploy
+
+Convert `usdcIn` USDC (transferred to the adapter first, same
+choreography as v1 `_allocateTo`) into the adapter's position.
+
+`onlyVault` (reverts `OnlyVault`). Also reverts on venue failure,
+the oracle staleness/deviation guard (asset adapters), and the
+implementation exposure cap (e.g. `MorphoAdapter.maxExposure`).
+
+
+```solidity
+function deploy(uint256 usdcIn, uint256 minValueOut)
+    external
+    onlyVault
+    returns (uint256 valueAdded);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`usdcIn`|`uint256`|USDC (6-decimal units) the vault has already `safeTransfer`ed.|
+|`minValueOut`|`uint256`|Slippage floor; the adapter MUST revert `SlippageExceeded` when the realized USDC-denominated value added is below this (no clamp on the deploy path).|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`valueAdded`|`uint256`|USDC-denominated increase in `totalAssets()` from this call. Exact adapters MUST return exactly `usdcIn`.|
 
 
 ### withdraw
@@ -96,40 +144,89 @@ function withdraw(uint256 amount) external onlyVault returns (uint256);
 |`<none>`|`uint256`|actual The amount of USDC actually withdrawn (may be ≤ amount on shortfall).|
 
 
-### totalAssets
+### withdraw
 
-Live USDC value held by this adapter (principal + accrued interest).
+Liquidate position back to USDC and deliver it to the vault.
 
-
-```solidity
-function totalAssets() external view returns (uint256);
-```
-
-### sweepForeignToken
-
-Permissionlessly sweep a NON-protected foreign token to the fixed
-quarantine address (custody invariants INV-1/INV-2). Anyone may
-call; the destination is a hardcoded constant, never caller-supplied.
-Reverts when `token` is USDC or the adapter's strategy/share token.
+`onlyVault` (reverts `OnlyVault`).
 
 
 ```solidity
-function sweepForeignToken(address token) external;
+function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
+    external
+    onlyVault
+    returns (uint256 usdcOut);
 ```
 **Parameters**
 
 |Name|Type|Description|
 |----|----|-----------|
-|`token`|`address`|Address of the foreign ERC-20 to quarantine.|
+|`usdcWanted`|`uint256`|Target USDC; `type(uint256).max` means "withdraw all" (emergency drains, adapter retirement). Clamped at liquidatable balance — shortfall against `usdcWanted` clamps.|
+|`minUsdcOut`|`uint256`|Effective floor is `max(minUsdcOut, adapterInternalFloor)`; shortfall against the floor REVERTS `SlippageExceeded`. `0` means "adapter's own floor" (not "no floor"). Shortfall against `usdcWanted` above the floor CLAMPS (returns the realized `usdcOut`).|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`usdcOut`|`uint256`|Realized USDC delivered to the vault.|
+
+
+### totalAssets
+
+Live USDC-denominated value of the position (principal + accrued
+interest for lending; TWAP/oracle-priced balance for assets).
+Spot (`slot0`) is never read here (ORA-1). MAY revert fail-closed
+when the price source is unusable; MUST return 0 (without touching
+the oracle) on a zero balance (SUP-5).
+
+
+```solidity
+function totalAssets()
+    external
+    view
+    override(IStrategyAdapter, IPositionAdapter)
+    returns (uint256);
+```
+
+### isExact
+
+Bytecode-level exactness declaration: `true` iff `deploy`/`withdraw`
+are 1:1 and `totalAssets()` is a hard redemption claim (lending),
+`false` for slippage-priced asset adapters.
+
+Comet USDC supply/redemption is 1:1 exact. Registration cross-check +
+monitoring only — never a per-call gate.
+
+
+```solidity
+function isExact() external pure returns (bool);
+```
+
+### sweepForeignToken
+
+Permissionlessly sweep a NON-protected foreign token to the fixed
+quarantine address (INV-1/INV-2). Protected set: USDC, the venue
+receipt/share token, and the custodied basket token — reverts on
+those; they stay in NAV and accrue pro-rata.
+
+
+```solidity
+function sweepForeignToken(address token)
+    external
+    override(IStrategyAdapter, IPositionAdapter);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`token`|`address`|Foreign ERC-20 to quarantine.|
 
 
 ### harvestRewards
 
-Claim any underlying-protocol reward tokens and forward them as
-USDC to the owning vault (custody invariant INV-2 — no emissions
-stranded on the adapter or router). Permissionless: anyone may
-trigger the harvest; the destination is always the vault, never a
-caller-supplied address (INV-1).
+Permissionlessly claim venue rewards, convert to USDC, and credit
+the vault (never a caller-supplied address, INV-1; never stranded,
+INV-2). MUST NOT revert when there is nothing to claim.
 
 Compound V3 (Comet) interest accrues continuously in the principal
 balance — there are no discrete claimable reward tokens on the USDC
@@ -137,18 +234,10 @@ supply market. This function is a no-op and always succeeds.
 
 
 ```solidity
-function harvestRewards() external;
+function harvestRewards() external override(IStrategyAdapter, IPositionAdapter);
 ```
 
 ## Errors
-### OnlyVault
-Caller is not the configured `VAULT` address.
-
-
-```solidity
-error OnlyVault();
-```
-
 ### ZeroAddress
 Constructor passed `address(0)` for one of the immutable addresses.
 
