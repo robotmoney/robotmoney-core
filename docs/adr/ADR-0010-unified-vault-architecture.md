@@ -22,7 +22,7 @@
   - `docs/adr/ADR-0005-basketvault-multi-dex-routing.md` (venue seam retained)
   - `docs/adr/ADR-0006-despxa-rwa-vault-design.md` (rmRWA constraints retained)
   - `docs/adr/ADR-0007-basketvault-no-socialized-rebalance-costs.md`
-    (reconciled — see Decision §6 and Open decisions)
+    (reconciled — see Decision §5 and §6)
   - `docs/adr/ADR-0009-vault-retirement-no-assisted-migration.md` (migration
     model applied to v1 → v2)
 
@@ -58,9 +58,10 @@ is just another yield-bearing position** — deposit USDC in, report a
 USDC-denominated value, return USDC out. The one semantic difference from a
 lending position is that the conversion is **inexact** (slippage), and — as
 the design review of this ADR made explicit — that single difference forks the
-vault's accounting, redemption, pricing-integrity, and rebalancing behavior in
-ways that must be pinned before engineering starts. This revision folds those
-findings in.
+vault's accounting, redemption, and pricing-integrity behavior in ways that
+must be pinned before engineering starts. Rebalancing is **not** among the
+forked behaviors: it is isomorphic across every vault type and decoupled from
+exactness (§5). This revision folds those findings in.
 
 ## Decision
 
@@ -176,41 +177,53 @@ into the adapter — but pricing is **not wholly delegated** to the adapter (see
   drain trigger; localizing a failing adapter is the EMERGENCY responder's job
   (§6, Open decisions).
 
-- **Rebalancing consumes valuation as its setpoint (C3a, M-E3):**
-  `rebalance()` moves capital toward **valuation-derived** targets
-  (`targetBalance = totalAssets() × targetWeight`; each `currentBalance =
-  adapter.totalAssets()`), so valuation is the control input that decides which
-  adapters are sold/bought and by how much. For **exact** adapters valuation ==
-  redeemable USDC, so the decided metric equals the realized metric and moving
-  capital is free — which is why ADR-0003's `NotImplemented` posture was fine.
-  For **inexact** adapters the **setpoint** is a TWAP/oracle *mark* while the
-  **executable price** is an AMM *spot* paying fee + slippage, and the **same
-  untrusted adapter supplies both** — so a mis-mark does not merely dilute
-  shares statically, it **mis-directs real capital** (an over-marked adapter
-  reads over-weight, gets sold, realizes below its mark, socializes the loss).
-  Inexact rebalancing is therefore **gated on a drift band** (wide enough that
-  the correction's realized cost is justified by the mark-measured drift it
-  closes) **plus a per-epoch cumulative-cost cap**; the residual price check
-  above is a rebalance-safety precondition, not only a share-price one.
+- **Rebalancing is flow-based and isomorphic (C3a, M-E3):** composition tends
+  toward a per-instance **target allocation** (governance-set weights,
+  equal-weight default) through deposit and withdrawal flow, by the same
+  mechanism for every vault type. Deposits fill the **largest deficits first**
+  — new capital routes to the adapters furthest below target. Withdrawals draw
+  down the **largest surpluses first** — a redemption pulls (lending) or sells
+  (basket) from the adapters furthest above target, each leg bounded by the
+  existing per-swap slippage floor, which is the redeemer's protection. There
+  is no scheduled, automatic, or keeper rebalance, no drift band, and no
+  per-epoch cost cap; no valuation-driven trading loop consumes an adapter's
+  mark to decide which position to sell. C3a's valuation-mis-directs-capital
+  hazard is therefore closed structurally: no mechanism trades on an adapter's
+  mark to socialize a cost onto holders. Exactness does **not** gate
+  rebalancing — it is a separate axis governing the withdraw surface and the
+  deposit accounting mode (§2/§5), not how composition is corrected.
+- **Optional admin `forceRebalance` — self-funded, NAV-non-decreasing:** an
+  admin MAY move composition toward target at any time, but the call **MUST
+  leave NAV non-decreasing** — the vault measures aggregate NAV before and
+  after and requires the caller to supply the USDC covering realized slippage
+  and fees, or the call reverts. Holders can never lose value to a
+  `forceRebalance`. On an exact (lending) set the top-up is ~zero (positions
+  move 1:1); on an inexact (basket) set the admin pays the swap slippage out of
+  pocket. One function, isomorphic across vault types, replacing the socialized
+  role-gated `rebalance()` / `adminRebalance()` pair. The residual price check
+  above stays a deposit-entry circuit-breaker; with no valuation-driven trading
+  loop it is not a rebalance-safety precondition.
 
 ### 6. Governance and lifecycle carry over — with two recorded changes
 
 `adapterAllowed` instance allowlist + `adapterCodeHashAllowed` codehash
 pinning, per-adapter `capBps`, ADP-2 NAV exclusion of revoked adapters,
-keeper rebalance throttles, registry `retire()`/`unretire()`, and
-shutdown/restore apply uniformly across themes. Two carry-overs change and are
-recorded here rather than presented as parity:
+registry `retire()`/`unretire()`, and shutdown/restore apply uniformly across
+themes. Two carry-overs change and are recorded here rather than presented as
+parity:
 
-- **Rebalancing for basket themes (supersedes ADR-0003, reconciles ADR-0007):**
-  basket themes gain `rebalance()` through the shared allocator, which
-  supersedes the ADR-0003 `NotImplemented()` stub and lifts its
-  new-deposits-only restriction. But ADR-0007's "no socialized rebalance
-  costs" rationale is *not* free for inexact themes — every inexact rebalance
-  is a two-swap round-trip paying fee + slippage socialized to NAV, and a
-  scheduled keeper is a predictable sandwich target. This ADR reconciles
-  ADR-0007 via the §5 drift-band + per-epoch cost cap, and flags "rebalance vs.
-  keep no-rebalance for inexact themes" as an Open decision rather than
-  silently overriding ADR-0007.
+- **Rebalancing supersedes ADR-0003, reconciles ADR-0007:** ADR-0003's
+  `NotImplemented()` basket-rebalance stub resolves to the flow-based model
+  (§5) — not a keeper rebalancer — so basket themes correct composition by
+  deposit and withdrawal flow toward the target allocation, isomorphically
+  with the lending themes, and the stub's new-deposits-only restriction falls
+  away. ADR-0007's "no socialized rebalance costs" is **upheld, not
+  overridden**: flow-based correction is free, and the optional `forceRebalance`
+  is self-funded (the caller covers realized slippage and fees under the
+  NAV-non-decreasing invariant), so no realized cost is socialized to holders
+  either way. There is no keeper, drift band, or per-epoch cost cap to
+  reconcile against ADR-0007 — the socialized-cost surface those constructs
+  were meant to bound does not exist under flow-based rebalancing.
 - **Split pause is not identical (LIFE-3, M-A4):** narrowing `pause()` to
   deposits-only changes the LIFE-3 authority/semantics, and `paused()`
   observability changes for off-chain consumers — after an EMERGENCY deposits
@@ -269,11 +282,16 @@ These are genuine design choices the review surfaced; each folds in the
 review's recommended option but records the alternative rather than
 foreclosing it. The spec resolves them before engineering.
 
-- **Rebalancing for inexact themes — enable (gated) vs. keep no-rebalance.**
-  This ADR takes the gated-rebalance option (§5/§6 drift band + per-epoch cost
-  cap). The alternative — retain ADR-0007/ADR-0003's no-rebalance posture for
-  inexact themes — remains available if the cost cap cannot be made tight
-  enough to beat the socialized bleed.
+- **Rebalancing model — resolved to isomorphic flow-based correction.**
+  Rebalancing is not gated on exactness and has no scheduled or keeper
+  component: deposits fill the largest deficits, withdrawals draw down the
+  largest surpluses (each leg bounded by the per-swap slippage floor), and an
+  optional NAV-non-decreasing admin `forceRebalance` (§5/§6), self-funded by
+  its caller, is the only lever. The earlier gated-rebalance framing (drift
+  band + per-epoch cost cap) and the no-rebalance alternative are both
+  dissolved: flow-based correction has no tuning surface and socializes no
+  cost, so neither a cost cap nor a keeper is needed, and no exact/inexact
+  rebalance split remains.
 - **`isExact` attestation — vault-attested (chosen) vs. registry-attested.**
   This ADR pins vault-attested at `addAdapter`. A registry-level attestation
   (flag maintained in `VaultRegistry`) is the alternative; both remove the
@@ -314,9 +332,9 @@ foreclosing it. The spec resolves them before engineering.
   Solidity subclasses.
 - ERC-4626 behavior is uniform and predicate-driven: exact mode when all
   adapters are attested exact, redeem-only otherwise.
-- Resolving the open decisions retires the machinery that exists only for
-  keeper rebalancing and for a second-oracle deviation check — the keeper
-  throttle, the withdrawal-side pause, per-adapter runtime setters, and the
+- The flow-based rebalancing model retires the machinery that existed only for
+  keeper rebalancing and for a second-oracle deviation check — the keeper role
+  and throttle, the withdrawal-side pause, per-adapter runtime setters, and the
   second-oracle deviation guard (replaced by the single global aggregate
   NAV-growth-rate cap). The `EMERGENCY_ROLE` drain/removal surface is
   retained, not retired. See "Simplifications enabled" in
