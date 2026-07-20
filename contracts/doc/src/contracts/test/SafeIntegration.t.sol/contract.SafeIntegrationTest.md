@@ -1,5 +1,5 @@
 # SafeIntegrationTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/test/SafeIntegration.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e0ffd960dbf5acf379aa898a70abd876323a935d/contracts/test/SafeIntegration.t.sol)
 
 **Inherits:**
 Test
@@ -11,9 +11,8 @@ Fork-based integration tests proving that a 2-of-3 Safe proxy deployed via
 `SafeProxyFactory` enforces quorum for all ADMIN_ROLE operations on the five
 governed Robot Money contracts.
 
-Tests run against a Base mainnet fork.  They are skipped when `FORK_RPC_URL` /
-`RMPC_FORK_RPC_URL` is absent so that contributor laptops without an archive RPC
-remain green.  CI sets `RMPC_FORK_RPC_URL` (same variable used by suite-05).
+CI starts Anvil from the checked-in Base fixture at localhost:8545. A
+live fork remains available locally through `FORK_RPC_URL`.
 To run locally:
 FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
 forge test --match-contract SafeIntegration -vvv
@@ -47,7 +46,7 @@ This is the SafeL2.sol variant that emits extra events for L2 indexers.
 
 
 ```solidity
-address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762
+address internal constant SAFE_SINGLETON_L2 = 0x41675C099F32341bf84BFc5382aF534df5C7461a
 ```
 
 
@@ -193,8 +192,7 @@ uint256 internal _snap
 ## Functions
 ### _trySelectFork
 
-Read the fork URL from environment, create + select fork.
-Returns false when no URL is configured (caller should skip).
+Select an override URL or the offline golden-fixture RPC.
 
 
 ```solidity
@@ -296,16 +294,6 @@ mine the delay and execute. Returns when the operation is done.
 
 ```solidity
 function _scheduleAndExecute(address target, bytes memory callData) internal;
-```
-
-### _forkAvailable
-
-Returns true if the fork was successfully selected (setUp ran).
-If not, the caller should return immediately (skip).
-
-
-```solidity
-function _forkAvailable() internal view returns (bool);
 ```
 
 ### test_happyPath_vaultRegistry_registerVault
@@ -427,7 +415,7 @@ function test_sadPath_directAdminBypass_vault() public withSnap;
 
 ### test_sadPath_directAdminBypass_gateway
 
-AC6e: Direct ADMIN_ROLE call on RobotMoneyGateway reverts.
+AC6e: Direct root-admin call on RobotMoneyGateway reverts.
 
 
 ```solidity

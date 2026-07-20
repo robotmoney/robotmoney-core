@@ -1,5 +1,5 @@
 # DeploySeedDeposit
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/test/DeploySeedDeposit.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e0ffd960dbf5acf379aa898a70abd876323a935d/contracts/test/DeploySeedDeposit.t.sol)
 
 **Inherits:**
 Test
@@ -13,15 +13,12 @@ satisfies the seed deposit precondition required by the deploy runbook:
 - vault.totalSupply() > 0
 before any simulated public deposit.
 
-These tests run against a live Base mainnet fork.  They skip cleanly
-when neither `FORK_RPC_URL` nor `RMPC_FORK_RPC_URL` is set so that
-contributor laptops without an archive RPC remain green.
+CI boots the checked-in Base golden fixture at localhost:8545. A local
+live fork remains possible by overriding `FORK_RPC_URL`.
 To run locally:
 FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
 forge test --match-contract DeploySeedDeposit --fork-url $FORK_RPC_URL -vvv
-In CI the secret is `RMPC_FORK_RPC_URL` (same variable used by the
-suite-01-02 fork-regressions job).  The job sets it before calling
-forge test so these tests execute rather than skip.
+CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
 See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
 
 
@@ -74,8 +71,7 @@ Deploy internal script
 ## Functions
 ### _forkRpcUrl
 
-Attempt to read FORK_RPC_URL / RMPC_FORK_RPC_URL.
-Returns "" if neither is set so callers can skip gracefully.
+Use an explicit local override, otherwise the offline fixture RPC.
 
 
 ```solidity

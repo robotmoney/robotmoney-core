@@ -79,7 +79,10 @@ jobs:
         # Modern forge rejects them by name (gas:0 failure) before execution,
         # so excluding them at the runner is the cleanest seam. The 24 vanilla
         # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
-        run: forge test -vvv --no-match-test "^testFail_"
+        run: >-
+          forge test -vvv
+          --no-match-test "^testFail_"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
 
       - name: forge test (four-vault real-TVL pyramid — issue #592)
         # Explicit, named guard for the four-vault real-TVL end state so it
