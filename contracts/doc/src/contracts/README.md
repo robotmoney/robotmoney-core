@@ -14,6 +14,7 @@
 - [RobotMoneyVault](RobotMoneyVault.sol/contract.RobotMoneyVault.md)
 - [RouterGovernance](RouterGovernance.sol/contract.RouterGovernance.md)
 - [UniswapV3PoolSlot0Stub](UniswapV3PoolSlot0Stub.sol/contract.UniswapV3PoolSlot0Stub.md)
+- [Vault](Vault.sol/contract.Vault.md)
 - [IRouterDefaultWeights](VaultRegistry.sol/interface.IRouterDefaultWeights.md)
 - [IRetirableVault](VaultRegistry.sol/interface.IRetirableVault.md)
 - [VaultRegistry](VaultRegistry.sol/contract.VaultRegistry.md)
