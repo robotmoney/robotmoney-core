@@ -139,6 +139,46 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     // slither-disable-next-line uninitialized-state
     uint256 public revokedIdle;
 
+    // ─── Global NAV-growth-rate limiter (§4.3a, C3 / ORA-7) ────────────
+
+    /// @notice The residual, adapter-INDEPENDENT vault-side price check: a SINGLE
+    ///         GLOBAL cap on how fast the vault's AGGREGATE `totalAssets()` may
+    ///         grow between observations, expressed in basis points of the last
+    ///         checkpoint NAV permitted per `NAV_GROWTH_RATE_PERIOD` of elapsed
+    ///         time. The allowed budget scales LINEARLY with elapsed time, so long
+    ///         gaps between deposits widen the permitted aggregate move (§4.3a
+    ///         checkpoint cadence). Governed by `ADMIN_ROLE` (a deploy-time
+    ///         parameter, not an intervention).
+    /// @dev    HONEST LIMIT: this bounds the *speed* of an aggregate mis-mark, not
+    ///         slow drift. Because the checkpoint is aggregate it cannot identify
+    ///         *which* adapter moved — it is a deposit circuit-breaker, NOT a
+    ///         per-adapter drain trigger (localizing a bad adapter is the EMERGENCY
+    ///         responder's job, §4.4/§5.5). It is defense-in-depth against the
+    ///         ORA-6/F-17 bug/oracle-fault class, never a substitute for the
+    ///         codehash-pinning + adapter audit that guards adversarial slow drift.
+    uint256 public maxNavGrowthRateBps;
+
+    /// @notice The reference interval the `maxNavGrowthRateBps` rate is quoted per.
+    ///         The allowed aggregate-NAV growth budget over an elapsed interval is
+    ///         `maxNavGrowthRateBps * elapsed / NAV_GROWTH_RATE_PERIOD` bps.
+    uint256 public constant NAV_GROWTH_RATE_PERIOD = 1 hours;
+
+    /// @notice The SINGLE vault-wide NAV checkpoint: the last aggregate
+    ///         `totalAssets()` observed on the deposit path. Zero means the
+    ///         checkpoint is uninitialized (bootstrapped on the first deposit and
+    ///         never gated). Deliberately one slot for the WHOLE vault — never one
+    ///         per adapter, and no governance-registered reference pools (§4.3a).
+    /// @dev    Written only inside `_deposit` (`totalAssets()` is a `view`), so the
+    ///         snapshot-compare-update is one storage read/write on the entry path,
+    ///         not a per-adapter loop. Starts at the zero sentinel until the first
+    ///         deposit initializes it — a documented seam default, not a bug.
+    // slither-disable-next-line uninitialized-state
+    uint256 public lastNavCheckpoint;
+
+    /// @notice The `block.timestamp` at which `lastNavCheckpoint` was written.
+    // slither-disable-next-line uninitialized-state
+    uint64 public lastNavCheckpointTime;
+
     /// @notice Whether the vault has been permanently shut down (EMERGENCY entry
     ///         hard-stop; recoverable only by `ADMIN_ROLE` via `restoreVault`).
     bool public shutdown;
@@ -214,6 +254,8 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     /// @notice Emitted when the max-slippage bound is updated.
     event MaxSlippageBpsUpdated(uint256 oldBps, uint256 newBps);
+    /// @notice Emitted when the global NAV-growth-rate cap is updated (§4.3a).
+    event MaxNavGrowthRateBpsUpdated(uint256 oldBps, uint256 newBps);
     /// @notice Emitted when the fee recipient is updated.
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     /// @notice Emitted when the quarantine address is updated.
@@ -274,6 +316,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     error RedeemOnly();
     /// @notice Realized NAV delta on a deposit fell below the slippage floor.
     error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
+    /// @notice The global NAV-growth-rate limiter (§4.3a) tripped: aggregate NAV
+    ///         grew faster than `maxNavGrowthRateBps` allows since the last
+    ///         checkpoint. Fails the deposit closed. `elapsed` is the seconds since
+    ///         the checkpoint (the allowed budget scales with it).
+    error NavGrowthRateExceeded(uint256 observedNav, uint256 checkpointNav, uint256 elapsed);
     error AdapterNotAllowed(address adapter);
     error AdapterCodeHashNotAllowed(address adapter, bytes32 codeHash);
     error AdapterCompatibilityCheckFailed(address adapter);
@@ -292,6 +339,9 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     /// @param perDepositCap_  Maximum single-deposit amount.
     /// @param exitFeeBps_     Exit fee in basis points (≤ `MAX_EXIT_FEE_BPS`).
     /// @param maxSlippageBps_ Worst-case per-leg slippage bound (< `MAX_BPS`).
+    /// @param maxNavGrowthRateBps_ Global aggregate NAV-growth-rate cap in bps of
+    ///        the checkpoint NAV per `NAV_GROWTH_RATE_PERIOD` (§4.3a). The residual
+    ///        vault-side price check; deposit-entry only, never gates redemptions.
     /// @param feeRecipient_   Recipient of collected exit fees.
     /// @param admin_          `ADMIN_ROLE` holder (TimelockController in production).
     /// @param emergency_      `EMERGENCY_ROLE` holder.
@@ -303,6 +353,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 perDepositCap_,
         uint256 exitFeeBps_,
         uint256 maxSlippageBps_,
+        uint256 maxNavGrowthRateBps_,
         address feeRecipient_,
         address admin_,
         address emergency_
@@ -312,12 +363,14 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         }
         if (exitFeeBps_ > MAX_EXIT_FEE_BPS) revert InvalidFee();
         if (maxSlippageBps_ >= MAX_BPS) revert InvalidParam();
+        if (maxNavGrowthRateBps_ == 0) revert InvalidParam();
         if (tvlCap_ > 0 && perDepositCap_ > tvlCap_) revert InvalidParam();
 
         tvlCap = tvlCap_;
         perDepositCap = perDepositCap_;
         exitFeeBps = exitFeeBps_;
         maxSlippageBps = maxSlippageBps_;
+        maxNavGrowthRateBps = maxNavGrowthRateBps_;
         feeRecipient = feeRecipient_;
         quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
@@ -448,14 +501,22 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         // Route into adapters (deficit-first two-pass allocator, §5.2 step 4).
         _routeDeposit(assets);
 
+        // Post-route aggregate NAV — read ONCE and reused for both the realized
+        // delta and the NAV-growth checkpoint (one `totalAssets()` sweep, not two).
+        uint256 taAfter = totalAssets();
+
         // SEAM (#1120): the adapter-independent global aggregate NAV-growth-rate
-        // limiter (the sole vault-side price check, §4.3a) is an ENTRY-side gate
-        // that runs here, after routing and before crediting the delta. Owned by
-        // #1120; wire it in at this point.
+        // limiter (the sole vault-side price check, §4.3a) — an ENTRY-side gate,
+        // fail-closed, that runs here after routing and before crediting the
+        // delta. It compares the PRE-deposit aggregate NAV (`taBefore`, which
+        // reflects the adapters' marks BEFORE this deposit's fresh capital) against
+        // the single vault-wide checkpoint, and moves the checkpoint to `taAfter`.
+        // Deposit-only: it is NEVER on the withdraw/redeem path (§5.3, M-A1).
+        _enforceNavGrowthLimit(taBefore, taAfter);
 
         // Realized delta the vault actually captured. The slippage floor is a
         // REVERT guard, never a credit cap (AZ-BSK-1).
-        uint256 realizedDelta = totalAssets() - taBefore;
+        uint256 realizedDelta = taAfter - taBefore;
         uint256 floor = assets.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
         if (realizedDelta < floor) revert DepositBelowSlippageFloor(realizedDelta, floor);
 
@@ -482,6 +543,35 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     // slither-disable-end reentrancy-balance
+
+    /// @dev The global NAV-growth-rate limiter (§4.3a). Compares the pre-deposit
+    ///      aggregate NAV (`navBefore`) against the single vault-wide checkpoint
+    ///      and reverts `NavGrowthRateExceeded` when the aggregate grew faster than
+    ///      `maxNavGrowthRateBps` per `NAV_GROWTH_RATE_PERIOD` allows since the
+    ///      checkpoint, then advances the checkpoint to the post-route NAV
+    ///      (`navAfter`). Entry-side only — this is called ONLY from `_deposit`, so
+    ///      redemptions are structurally never gated by it. Growth is measured in
+    ///      bps of the checkpoint NAV so no overflow-prone absolute cap is formed;
+    ///      NAV DECREASES are never gated (a drop cannot exceed a positive budget).
+    ///      The zero checkpoint bootstraps on the first deposit without gating.
+    function _enforceNavGrowthLimit(uint256 navBefore, uint256 navAfter) internal {
+        uint256 checkpointNav = lastNavCheckpoint;
+
+        // Bootstrap: the first observation has nothing to compare against. The
+        // zero sentinel also makes the bps division below division-by-zero-safe.
+        if (checkpointNav != 0 && navBefore > checkpointNav) {
+            uint256 elapsed = block.timestamp - lastNavCheckpointTime;
+            // Allowed budget over the interval, in bps of the checkpoint NAV.
+            uint256 budgetBps = maxNavGrowthRateBps.mulDiv(elapsed, NAV_GROWTH_RATE_PERIOD);
+            uint256 grownBps = (navBefore - checkpointNav).mulDiv(MAX_BPS, checkpointNav);
+            if (grownBps > budgetBps) {
+                revert NavGrowthRateExceeded(navBefore, checkpointNav, elapsed);
+            }
+        }
+
+        lastNavCheckpoint = navAfter;
+        lastNavCheckpointTime = uint64(block.timestamp);
+    }
 
     /// @dev Deficit-first two-pass allocator: fill toward `min(equal-target,
     ///      capBps)` first, then spread leftover into remaining cap headroom.
@@ -1088,6 +1178,18 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 old = maxSlippageBps;
         maxSlippageBps = newBps;
         emit MaxSlippageBpsUpdated(old, newBps);
+    }
+
+    /// @notice Update the global NAV-growth-rate cap (§4.3a). A governance
+    ///         parameter, not an intervention: raising it loosens the residual
+    ///         price check, lowering it tightens the deposit circuit-breaker. Must
+    ///         be non-zero (zero would gate every deposit); set very high to make
+    ///         the limiter effectively inert. Never affects redemptions.
+    function setMaxNavGrowthRateBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
+        if (newBps == 0) revert InvalidParam();
+        uint256 old = maxNavGrowthRateBps;
+        maxNavGrowthRateBps = newBps;
+        emit MaxNavGrowthRateBpsUpdated(old, newBps);
     }
 
     function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE) {
