@@ -166,6 +166,10 @@ abstract contract UnifiedVaultBase is Test {
     uint256 internal constant ONE_USDC = 1_000_000; // 6-decimal
     uint256 internal constant MAX_BPS = 10_000;
     uint256 internal constant MAX_SLIPPAGE_BPS = 200; // 2%
+    // Generous finite NAV-growth cap so the #1120 limiter is effectively inert for
+    // these accounting-focused tests (the limiter has its own suite,
+    // NavGrowthLimiterTest). Finite so `rate * elapsed / period` never overflows.
+    uint256 internal constant MAX_NAV_GROWTH_RATE_BPS = 1e30;
 
     function _deployVault(uint256 exitFeeBps) internal {
         usdc = new TestERC20();
@@ -177,6 +181,7 @@ abstract contract UnifiedVaultBase is Test {
             type(uint256).max, // perDepositCap
             exitFeeBps,
             MAX_SLIPPAGE_BPS,
+            MAX_NAV_GROWTH_RATE_BPS, // effectively inert for accounting tests
             feeRecipient,
             admin,
             emergency
@@ -205,6 +210,11 @@ abstract contract UnifiedVaultBase is Test {
     }
 
     function _deposit(address who, uint256 assets) internal returns (uint256 shares) {
+        // Advance time so the #1120 NAV-growth budget (which scales with elapsed
+        // time and is zero over zero elapsed) is non-zero across back-to-back
+        // deposits; combined with the huge `MAX_NAV_GROWTH_RATE_BPS` this keeps the
+        // limiter inert for these accounting tests without special-casing it.
+        vm.warp(block.timestamp + 1 hours);
         usdc.mint(who, assets);
         vm.startPrank(who);
         usdc.approve(address(vault), assets);

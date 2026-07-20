@@ -1,5 +1,5 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3d0125a0ee72af9f51ed36ec0b328a085a948116/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e4716d1394020bd77778319680836787fed90d2d/contracts/Vault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -86,6 +86,17 @@ from `BpsMath.BPS_DENOMINATOR` to preserve call-site arithmetic.
 
 ```solidity
 uint16 public constant MAX_BPS = uint16(BpsMath.BPS_DENOMINATOR)
+```
+
+
+### NAV_GROWTH_RATE_PERIOD
+The reference interval the `maxNavGrowthRateBps` rate is quoted per.
+The allowed aggregate-NAV growth budget over an elapsed interval is
+`maxNavGrowthRateBps * elapsed / NAV_GROWTH_RATE_PERIOD` bps.
+
+
+```solidity
+uint256 public constant NAV_GROWTH_RATE_PERIOD = 1 hours
 ```
 
 
@@ -207,6 +218,57 @@ uint256 public revokedIdle
 ```
 
 
+### maxNavGrowthRateBps
+The residual, adapter-INDEPENDENT vault-side price check: a SINGLE
+GLOBAL cap on how fast the vault's AGGREGATE `totalAssets()` may
+grow between observations, expressed in basis points of the last
+checkpoint NAV permitted per `NAV_GROWTH_RATE_PERIOD` of elapsed
+time. The allowed budget scales LINEARLY with elapsed time, so long
+gaps between deposits widen the permitted aggregate move (§4.3a
+checkpoint cadence). Governed by `ADMIN_ROLE` (a deploy-time
+parameter, not an intervention).
+
+HONEST LIMIT: this bounds the *speed* of an aggregate mis-mark, not
+slow drift. Because the checkpoint is aggregate it cannot identify
+*which* adapter moved — it is a deposit circuit-breaker, NOT a
+per-adapter drain trigger (localizing a bad adapter is the EMERGENCY
+responder's job, §4.4/§5.5). It is defense-in-depth against the
+ORA-6/F-17 bug/oracle-fault class, never a substitute for the
+codehash-pinning + adapter audit that guards adversarial slow drift.
+
+
+```solidity
+uint256 public maxNavGrowthRateBps
+```
+
+
+### lastNavCheckpoint
+The SINGLE vault-wide NAV checkpoint: the last aggregate
+`totalAssets()` observed on the deposit path. Zero means the
+checkpoint is uninitialized (bootstrapped on the first deposit and
+never gated). Deliberately one slot for the WHOLE vault — never one
+per adapter, and no governance-registered reference pools (§4.3a).
+
+Written only inside `_deposit` (`totalAssets()` is a `view`), so the
+snapshot-compare-update is one storage read/write on the entry path,
+not a per-adapter loop. Starts at the zero sentinel until the first
+deposit initializes it — a documented seam default, not a bug.
+
+
+```solidity
+uint256 public lastNavCheckpoint
+```
+
+
+### lastNavCheckpointTime
+The `block.timestamp` at which `lastNavCheckpoint` was written.
+
+
+```solidity
+uint64 public lastNavCheckpointTime
+```
+
+
 ### shutdown
 Whether the vault has been permanently shut down (EMERGENCY entry
 hard-stop; recoverable only by `ADMIN_ROLE` via `restoreVault`).
@@ -304,6 +366,7 @@ constructor(
     uint256 perDepositCap_,
     uint256 exitFeeBps_,
     uint256 maxSlippageBps_,
+    uint256 maxNavGrowthRateBps_,
     address feeRecipient_,
     address admin_,
     address emergency_
@@ -320,6 +383,7 @@ constructor(
 |`perDepositCap_`|`uint256`| Maximum single-deposit amount.|
 |`exitFeeBps_`|`uint256`|    Exit fee in basis points (≤ `MAX_EXIT_FEE_BPS`).|
 |`maxSlippageBps_`|`uint256`|Worst-case per-leg slippage bound (< `MAX_BPS`).|
+|`maxNavGrowthRateBps_`|`uint256`|Global aggregate NAV-growth-rate cap in bps of the checkpoint NAV per `NAV_GROWTH_RATE_PERIOD` (§4.3a). The residual vault-side price check; deposit-entry only, never gates redemptions.|
 |`feeRecipient_`|`address`|  Recipient of collected exit fees.|
 |`admin_`|`address`|         `ADMIN_ROLE` holder (TimelockController in production).|
 |`emergency_`|`address`|     `EMERGENCY_ROLE` holder.|
@@ -430,6 +494,24 @@ function _deposit(
     internal
     override
     nonReentrant;
+```
+
+### _enforceNavGrowthLimit
+
+The global NAV-growth-rate limiter (§4.3a). Compares the pre-deposit
+aggregate NAV (`navBefore`) against the single vault-wide checkpoint
+and reverts `NavGrowthRateExceeded` when the aggregate grew faster than
+`maxNavGrowthRateBps` per `NAV_GROWTH_RATE_PERIOD` allows since the
+checkpoint, then advances the checkpoint to the post-route NAV
+(`navAfter`). Entry-side only — this is called ONLY from `_deposit`, so
+redemptions are structurally never gated by it. Growth is measured in
+bps of the checkpoint NAV so no overflow-prone absolute cap is formed;
+NAV DECREASES are never gated (a drop cannot exceed a positive budget).
+The zero checkpoint bootstraps on the first deposit without gating.
+
+
+```solidity
+function _enforceNavGrowthLimit(uint256 navBefore, uint256 navAfter) internal;
 ```
 
 ### _routeDeposit
@@ -860,6 +942,19 @@ function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
 ```
 
+### setMaxNavGrowthRateBps
+
+Update the global NAV-growth-rate cap (§4.3a). A governance
+parameter, not an intervention: raising it loosens the residual
+price check, lowering it tightens the deposit circuit-breaker. Must
+be non-zero (zero would gate every deposit); set very high to make
+the limiter effectively inert. Never affects redemptions.
+
+
+```solidity
+function setMaxNavGrowthRateBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+
 ### setFeeRecipient
 
 
@@ -1146,6 +1241,14 @@ Emitted when the max-slippage bound is updated.
 event MaxSlippageBpsUpdated(uint256 oldBps, uint256 newBps);
 ```
 
+### MaxNavGrowthRateBpsUpdated
+Emitted when the global NAV-growth-rate cap is updated (§4.3a).
+
+
+```solidity
+event MaxNavGrowthRateBpsUpdated(uint256 oldBps, uint256 newBps);
+```
+
 ### FeeRecipientUpdated
 Emitted when the fee recipient is updated.
 
@@ -1376,6 +1479,17 @@ Realized NAV delta on a deposit fell below the slippage floor.
 
 ```solidity
 error DepositBelowSlippageFloor(uint256 realizedDelta, uint256 floor);
+```
+
+### NavGrowthRateExceeded
+The global NAV-growth-rate limiter (§4.3a) tripped: aggregate NAV
+grew faster than `maxNavGrowthRateBps` allows since the last
+checkpoint. Fails the deposit closed. `elapsed` is the seconds since
+the checkpoint (the allowed budget scales with it).
+
+
+```solidity
+error NavGrowthRateExceeded(uint256 observedNav, uint256 checkpointNav, uint256 elapsed);
 ```
 
 ### AdapterNotAllowed
