@@ -395,7 +395,7 @@ Rationale: even with `_decimalsOffset() == 18`, a fresh vault with `totalSupply 
 
 The seed deposit is not recoverable through normal channels (it is locked as vault shares). Consider it a permanent operational cost of the deployment. The seeding admin receives rmUSDC shares proportional to the seed and can participate in future withdrawals.
 
-**CI enforcement:** `contracts/script/Deploy.s.sol` encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`.
+**CI enforcement:** `contracts/script/Deploy.s.sol` encodes this runbook step as code: the `run()` (broadcast) entrypoint performs the seed deposit inline after adapter registration, and the new `runInProcessWithSeed()` variant does the same for fork tests. `contracts/test/DeploySeedDeposit.t.sol` (`DeploySeedDeposit`) is the fork-level CI gate — it asserts `vault.totalAssets() >= 1_000_000_000` and `vault.totalSupply() > 0` before any public deposit and is wired into the `forge-fork-vault-regressions` job in `.github/workflows/suite-01-02-forge-tests.yml`. (This is the current live-fork gate; ADR-0011 is the target model — merge-time fork tests run against a checked-in golden fixture with a non-blocking nightly live-drift alarm.)
 
 ---
 

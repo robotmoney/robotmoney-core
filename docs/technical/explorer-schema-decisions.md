@@ -176,7 +176,7 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 - **`Source::Indexer` variant in `rmpc`.** `rmpc-read-output-contract.md` §5 anticipates a future variant. When that lands, the explorer API must expose a "data lineage" field on every response that names the JSON-RPC endpoint family used (e.g. `"alchemy_base_archive"`) and the tip-lag at indexed-at time. Out of scope for Phase 5 implementation; track when `Source::Indexer` is filed.
 - **Multi-chain readiness.** Every PK starts with `chain_id`, but the watched-contract list and event-decoder registration are per-chain. Phase 5 ships single-chain (Base mainnet, chain id 8453); multi-chain expansion is a schema-compatible additive change but requires new ADRs for cross-chain query semantics.
 - **Reorg storm alerting.** The `indexer_runs.reorg_count` column is the primary signal. Operators should set an alert on `reorg_count > 3 in 1 h`. Out of scope here; flag for the Phase 5 operations runbook.
-- **Snapshot-test fixtures.** When the indexer is built, snapshot tests should pin one canonical fork-block and assert exact row contents. The fork-block ADR (`fork-e2e-decisions.md` §3.2) already has the env-var pattern (`RMPC_FORK_BLOCK`, `RMPC_FORK_RPC_URL`); reuse it.
+- **Snapshot-test fixtures.** When the indexer is built, snapshot tests should pin one canonical fork-block and assert exact row contents. The fork harness (`docs/development/testing-strategy-ethereum.md` § Forked Base mainnet harness) already has the block-pin env-var pattern (`RMPC_FORK_BLOCK`, `RMPC_FORK_RPC_URL`); reuse it.
 - **`rmpc status` migration.** `rmpc-read-output-contract.md` §5 already lists the `rmpc status` migration as deferred. No interaction with this ADR; mentioned for completeness.
 - **Phase 6 dapp coupling.** Phase 6 (Human Dapp) reads from this API for display. The API contract (decimal-string `uint256`, block-pinned, indexed-at time) must land before Phase 6 implementation begins or Phase 6 will hand-roll its own RPC reads and the explorer becomes vestigial.
 
@@ -185,7 +185,7 @@ A one-line cross-link is added to §11 directing readers to this ADR.
 - `Plan tracking issue #109` §11 — Phase 5 — Simple Web Explorer API and Database (constraints this ADR resolves).
 - `Plan tracking issue #109` §12 — Phase 6 Human Dapp (downstream consumer).
 - `docs/technical/rmpc-read-output-contract.md` — §3.3 (`source: "json_rpc"` lock) and §5 (future `Source::Indexer` variant).
-- `docs/technical/fork-e2e-decisions.md` — §3.2 fork-block env-var pattern (reused by indexer integration tests).
+- `docs/development/testing-strategy-ethereum.md` § Forked Base mainnet harness — the fork-block env-var pattern (reused by indexer integration tests).
 - `docs/technical/security-model.md` — explorer-is-not-source-of-truth boundary.
 - `contracts/gateway/interfaces/IGateway.sol` — `AgentAuthorized`, `AgentRevoked`, `AgentDeposit`, `Paused`, `Unpaused` events (the watched event set in §3.5).
 - `contracts/RobotMoneyVault.sol` — `Allocated`, `Pulled`, `Rebalanced`, `ExitFeeCharged`, `EmergencyWithdraw*` events.
