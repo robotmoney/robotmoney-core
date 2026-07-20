@@ -34,6 +34,15 @@ pub fn vault_read_u256<C: SolCall>(
     decode_u256(&bytes)
 }
 
+pub fn vault_read_u256_at<C: SolCall>(
+    caller: &Account<'_>,
+    vault: Address,
+    call: &C,
+) -> Result<U256, HarnessError> {
+    let bytes: Bytes = caller.call(vault, call)?;
+    decode_u256(&bytes)
+}
+
 /// Read a `uint256`-returning view function on USDC. See
 /// [`vault_read_u256`] for the rationale on the unbounded
 /// `SolCall` parameter.
@@ -114,6 +123,16 @@ pub fn vault_deposit(
     account.send(crate::addresses::VAULT, &call, U256::ZERO, 800_000)
 }
 
+pub fn vault_deposit_at(
+    account: &Account<'_>,
+    vault: Address,
+    assets: U256,
+    receiver: Address,
+) -> Result<Receipt, HarnessError> {
+    let call = IRobotMoneyVault::depositCall { assets, receiver };
+    account.send(vault, &call, U256::ZERO, 800_000)
+}
+
 /// Redeem `shares` from the vault.
 pub fn vault_redeem(
     account: &Account<'_>,
@@ -127,6 +146,21 @@ pub fn vault_redeem(
         owner,
     };
     account.send(crate::addresses::VAULT, &call, U256::ZERO, 1_200_000)
+}
+
+pub fn vault_redeem_at(
+    account: &Account<'_>,
+    vault: Address,
+    shares: U256,
+    receiver: Address,
+    owner: Address,
+) -> Result<Receipt, HarnessError> {
+    let call = IRobotMoneyVault::redeemCall {
+        shares,
+        receiver,
+        owner,
+    };
+    account.send(vault, &call, U256::ZERO, 1_200_000)
 }
 
 // ──────────────────────────────────────────────────────────────────────

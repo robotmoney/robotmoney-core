@@ -12,17 +12,12 @@
 //! without re-reading the test (acceptance criterion: "actionable
 //! errors").
 
-use alloy_primitives::U256;
-use rmpc_fork_e2e::{
-    addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
-};
+use alloy_primitives::{Address, U256};
+use rmpc_fork_e2e::{addresses, scenarios, ForkFixture, IRobotMoneyVault, IERC20};
 
 #[test]
 fn abi_address_sanity() {
-    // Requires a live forked Base block: reads storage from production Base
-    // contracts (asset(), symbol(), exitFeeBps()). The checked-in fixture
-    // has bytecode but not the storage of live Base contracts.
-    skip_if_no_devnet_fork!();
+    // The golden contains the production contract storage read below.
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[abi_address_sanity] {}", fx.summary_line());
 
@@ -40,6 +35,7 @@ fn abi_address_sanity() {
     let acct = fx
         .ephemeral(U256::from(10u64).pow(U256::from(17u64)), U256::ZERO)
         .expect("ephemeral funded with ETH");
+    let vault = fixture_vault();
 
     // USDC.decimals() == 6, USDC.symbol() == "USDC".
     let bytes = acct
@@ -56,7 +52,7 @@ fn abi_address_sanity() {
 
     // Vault.asset() == USDC; Vault.decimals() exists; Vault.symbol() == "rmUSDC".
     let asset_bytes = acct
-        .call(addresses::VAULT, &IRobotMoneyVault::assetCall {})
+        .call(vault, &IRobotMoneyVault::assetCall {})
         .expect("Vault.asset()");
     let asset_addr = alloy_primitives::Address::from_slice(&asset_bytes[12..32]);
     assert_eq!(
@@ -66,14 +62,14 @@ fn abi_address_sanity() {
     );
 
     let vsym_bytes = acct
-        .call(addresses::VAULT, &IRobotMoneyVault::symbolCall {})
+        .call(vault, &IRobotMoneyVault::symbolCall {})
         .expect("Vault.symbol()");
     let vsym = decode_string(&vsym_bytes).expect("decode vault symbol");
     assert_eq!(vsym, "rmUSDC", "Vault symbol drift: got {vsym}");
 
     // ExitFeeBps must respect the documented 100-bps ceiling.
     let efee_bytes = acct
-        .call(addresses::VAULT, &IRobotMoneyVault::exitFeeBpsCall {})
+        .call(vault, &IRobotMoneyVault::exitFeeBpsCall {})
         .expect("Vault.exitFeeBps()");
     let efee = scenarios::decode_u256(&efee_bytes).expect("decode exitFeeBps");
     assert!(
@@ -85,8 +81,24 @@ fn abi_address_sanity() {
     // paused vault is a legitimate pin if EMERGENCY_ROLE has paused
     // it; we just assert the selector exists and decodes).
     let _ = acct
-        .call(addresses::VAULT, &IRobotMoneyVault::pausedCall {})
+        .call(vault, &IRobotMoneyVault::pausedCall {})
         .expect("Vault.paused()");
+}
+
+fn fixture_vault() -> Address {
+    if let Ok(value) = std::env::var("RMPC_FIXTURE_VAULT") {
+        return value.parse().expect("RMPC_FIXTURE_VAULT address");
+    }
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployments/full-stack.json");
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("read full-stack deployment"))
+            .expect("parse full-stack deployment");
+    value["vault"]
+        .as_str()
+        .expect("deployment vault")
+        .parse()
+        .expect("deployment vault address")
 }
 
 /// Minimal ABI string decoder — bytes32 offset, bytes32 length,

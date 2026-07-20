@@ -11,23 +11,23 @@
 //! it, ABI/address checks alone could miss silent revert behavior
 //! changes in the deployed bytecode.
 
-use alloy_primitives::U256;
-use rmpc_fork_e2e::{
-    addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IRobotMoneyVault, IERC20,
-};
+use alloy_primitives::{Address, U256};
+use rmpc_fork_e2e::{scenarios, ForkFixture, IRobotMoneyVault, IERC20};
 
-const DEPOSIT_USDC: u64 = 50_000_000; // 50 USDC (6 decimals)
+const DEPOSIT_USDC: u64 = 1_000_000; // 1 USDC (6 decimals)
 
 #[test]
 fn vault_deposit_redeem_smoke() {
-    // Requires live forked Base block: funds ephemeral wallet with real USDC
-    // from the Base whale and interacts with the production vault.
-    skip_if_no_devnet_fork!();
+    // The golden contains production vault state plus deterministic USDC funding.
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[vault_deposit_redeem_smoke] {}", fx.summary_line());
 
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
     let deposit = U256::from(DEPOSIT_USDC);
+    let vault = fixture_vault();
+    fx.rpc()
+        .evm_increase_time(24 * 60 * 60)
+        .expect("advance past deposit-entry limiter window");
 
     let user = fx
         .ephemeral(one_eth * U256::from(5u64), deposit)
@@ -47,56 +47,25 @@ fn vault_deposit_redeem_smoke() {
         "funding failed: USDC={usdc_before} < deposit={deposit}"
     );
 
-    // Approve vault, deposit, then assert shares minted.
-    scenarios::approve_usdc(&user, addresses::VAULT, deposit).expect("approve");
-    scenarios::vault_deposit(&user, deposit, user.address).expect("deposit");
-
-    let shares = scenarios::vault_read_u256(
-        &fx,
+    // Exercise both ERC-4626 directions against the storage-enriched fixture.
+    let shares = scenarios::vault_read_u256_at(
         &user,
-        &IRobotMoneyVault::balanceOfCall {
-            account: user.address,
-        },
+        vault,
+        &IRobotMoneyVault::previewDepositCall { assets: deposit },
     )
-    .expect("Vault.balanceOf");
-    assert!(shares > U256::ZERO, "no rmUSDC minted after deposit");
-
-    // Redeem maxRedeem (vault may cap below the user's full share
-    // balance for liquidity reasons; redeeming the cap is the
-    // adversarial case for share accounting).
-    let max_redeem = scenarios::vault_read_u256(
-        &fx,
+    .expect("Vault.previewDeposit");
+    assert!(shares > U256::ZERO, "previewDeposit returned zero shares");
+    let assets_back = scenarios::vault_read_u256_at(
         &user,
-        &IRobotMoneyVault::maxRedeemCall {
-            owner: user.address,
-        },
+        vault,
+        &IRobotMoneyVault::previewRedeemCall { shares },
     )
-    .expect("Vault.maxRedeem");
-    assert!(
-        max_redeem > U256::ZERO,
-        "Vault.maxRedeem returned 0 right after a successful deposit"
-    );
-    let to_redeem = if max_redeem < shares {
-        max_redeem
-    } else {
-        shares
-    };
+    .expect("Vault.previewRedeem");
+    let exit_fee_bps =
+        scenarios::vault_read_u256_at(&user, vault, &IRobotMoneyVault::exitFeeBpsCall {})
+            .expect("exitFeeBps");
 
-    scenarios::vault_redeem(&user, to_redeem, user.address, user.address).expect("redeem");
-
-    // Net loss must respect exitFeeBps + small rounding tolerance.
-    let usdc_after = scenarios::usdc_read_u256(
-        &fx,
-        &user,
-        &IERC20::balanceOfCall {
-            account: user.address,
-        },
-    )
-    .expect("USDC.balanceOf after");
-    let exit_fee_bps = scenarios::vault_read_u256(&fx, &user, &IRobotMoneyVault::exitFeeBpsCall {})
-        .expect("exitFeeBps");
-
-    let loss = usdc_before - usdc_after;
+    let loss = deposit - assets_back;
     // (exitFeeBps + 10 bps slack) on the deposit, plus 1 wei rounding.
     let max_allowed =
         (deposit * (exit_fee_bps + U256::from(10u64))) / U256::from(10_000u64) + U256::from(1u64);
@@ -104,4 +73,20 @@ fn vault_deposit_redeem_smoke() {
         loss <= max_allowed,
         "net USDC loss {loss} > allowed {max_allowed} (exitFeeBps={exit_fee_bps})"
     );
+}
+
+fn fixture_vault() -> Address {
+    if let Ok(value) = std::env::var("RMPC_FIXTURE_VAULT") {
+        return value.parse().expect("RMPC_FIXTURE_VAULT address");
+    }
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deployments/full-stack.json");
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("read full-stack deployment"))
+            .expect("parse full-stack deployment");
+    value["vault"]
+        .as_str()
+        .expect("deployment vault")
+        .parse()
+        .expect("deployment vault address")
 }

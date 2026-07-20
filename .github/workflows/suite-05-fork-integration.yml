@@ -91,14 +91,18 @@ jobs:
               --test rmpc_get_balance_fork
               --test rmpc_get_allowance_fork
               --test rmpc_get_tx_fork
-              --test abi_address_sanity
               --test devnet_adapter_round_trip
-              --test dex_route_smoke
               --test gas_estimate_reality_check
               --test landing_price_strip_fork
-              --test vault_deposit_redeem_smoke
               --test basket_vault_round_trip
             devnet: true
+          # Flagship Base scenarios execute against the storage-enriched golden.
+          - group: anvil-goldens
+            cargo_tests: >-
+              --test abi_address_sanity
+              --test dex_route_smoke
+              --test vault_deposit_redeem_smoke
+            devnet: false
           # Governance slot: uses anvil + checked-in fixture for evm_increaseTime.
           # RMPC_TESTNET_RPC_URL is intentionally NOT set so ForkFixture falls back
           # to the .anvil-state fixture (see WHY GOVERNANCE USES ANVIL above).
@@ -123,7 +127,8 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # CURRENT.anvil-state uses the Anvil 1.6 serializer.
+          version: nightly
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

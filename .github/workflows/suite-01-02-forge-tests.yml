@@ -129,9 +129,8 @@ jobs:
     name: forge-fork-vault-regressions
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Run on push to main/dev so the full suite is always exercised on merged commits.
-    # On PRs the job still runs but the fork tests skip cleanly when the RPC secret is
-    # absent (contributor forks without the secret stay green).
+    # The fork gate is deterministic and offline: every target loads the checked-in
+    # Base state and fails loudly if the fixture or executed test count is missing.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,7 +139,8 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # CURRENT.anvil-state uses the Anvil 1.6 serializer.
+          version: nightly
 
       - name: Cache Foundry build artifacts
         uses: actions/cache@v4
@@ -156,35 +156,25 @@ jobs:
         run: forge build
 
       - name: forge test (fork vault regressions)
-        env:
-          # When RMPC_FORK_RPC_URL is set (secret available), the tests run against a
-          # live Base archive fork.  When the secret is absent (contributor fork / PR),
-          # every test in VaultForkRegressions.t.sol skips cleanly via the _setUp()
-          # guard — the job still passes.
-          FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
+        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"
 
       - name: forge test (deploy seed deposit precondition — issue #656)
-        env:
-          # When RMPC_FORK_RPC_URL is set (secret available), the fork tests in
-          # DeploySeedDeposit.t.sol run against a live Base archive fork.  When the
-          # secret is absent (contributor fork / PR), the fork tests skip cleanly via
-          # the _setUp() guard — the job still passes.  The non-fork constant check
-          # (test_seedDepositConstant_matchesDocumentedMinimum) always runs.
-          FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
-        run: |
-          forge test --match-contract "DeploySeedDeposit" -vvv
+        run: scripts/devnet/run-golden-forge-forks.sh --match-contract "DeploySeedDeposit"
 
       - name: forge test (Safe multisig integration — issue 422)
-        env:
-          # SafeIntegration.t.sol deploys a real Safe proxy via SafeProxyFactory on
-          # Base mainnet. When RMPC_FORK_RPC_URL is set the tests exercise the full
-          # quorum-enforcement path. When the secret is absent they skip cleanly via
-          # the _forkAvailable() guard — the job still passes.
-          FORK_RPC_URL: ${{ secrets.RMPC_FORK_RPC_URL }}
+        run: scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/SafeIntegration.t.sol"
+
+      - name: Assert missing fixture is red
         run: |
-          forge test --match-path "contracts/test/SafeIntegration.t.sol" -vvv
+          mv testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state
+          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
+            echo "missing fixture unexpectedly passed" >&2
+            exit 1
+          fi
+          mv /tmp/CURRENT.anvil-state testing/fixtures/fork-state/CURRENT.anvil-state
+
+      - name: Verify ADR-0011 workflow structure
+        run: scripts/devnet/check-adr0011-ci.sh
 
   coverage:
     name: forge-coverage-gate
