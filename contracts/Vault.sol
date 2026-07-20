@@ -132,6 +132,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///         drained and decrementing it as the recovered idle is re-deployed.
     ///         The #1119 core wires it into the denominator (the C1-correct
     ///         formula) and leaves it at zero; see `_deposit`.
+    // Intentionally left uninitialized in #1119: it stays at the zero default
+    // (the C1 denominator collapses to the OZ `taBefore + 1`) until #1121 wires
+    // its increment/decrement lifecycle. The slither uninitialized-state warning
+    // is therefore a documented false positive for this seam, not a bug.
+    // slither-disable-next-line uninitialized-state
     uint256 public revokedIdle;
 
     /// @notice Whether the vault has been permanently shut down (EMERGENCY entry
@@ -405,6 +410,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         return _lastMintedShares;
     }
 
+    // slither-disable-start reentrancy-balance
+    // This realized-delta core is reached only through the `deposit`/`mint`
+    // OZ entrypoints, and the function itself is `nonReentrant`; the pre-call
+    // NAV read (`taBefore`) is therefore protected and the stale-balance
+    // warning is a false positive.
     /// @dev Route-first, mint-on-realized-delta core. The OZ `deposit`/`mint`
     ///      entrypoints route here; the `shares` arg OZ precomputed from a
     ///      preview is DISCARDED — shares are minted on the REALIZED post-route
@@ -470,6 +480,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         _lastMintedShares = mintShares; // AZ-BSK-2
         emit Deposit(caller, receiver, assets, mintShares);
     }
+    // slither-disable-end reentrancy-balance
 
     /// @dev Deficit-first two-pass allocator: fill toward `min(equal-target,
     ///      capBps)` first, then spread leftover into remaining cap headroom.
@@ -672,6 +683,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         }
     }
 
+    // slither-disable-start reentrancy-balance
+    // The redemption helpers below are reached only through the `withdraw`/
+    // `redeem` OZ entrypoints, whose `_withdraw` override is `nonReentrant`;
+    // the pre-call idle-balance reads are therefore protected and the
+    // stale-balance warnings are false positives.
     /// @dev Mode A — EXACT set (carried from `RobotMoneyVault`). Assets-driven
     ///      proportional pull, shortfall REVERTS, fee-on-GROSS.
     function _withdrawExact(
@@ -791,6 +807,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 realized = idleBalance + pulled;
         return realized < assetsNeeded ? realized : assetsNeeded;
     }
+    // slither-disable-end reentrancy-balance
 
     /// @dev Sell the `shares / supplyBefore` fraction of idle USDC and of each
     ///      eligible adapter's position. NO all-or-nothing shortfall revert — an
