@@ -161,6 +161,8 @@
     - [LeakyRedeemRouterVault](contracts/test/GatewayRouter.t.sol/contract.LeakyRedeemRouterVault.md)
     - [GatewayRouterTest](contracts/test/GatewayRouter.t.sol/contract.GatewayRouterTest.md)
     - [ICGatewayIntegration](contracts/test/ICGatewayIntegration.t.sol/contract.ICGatewayIntegration.md)
+    - [MockPositionAdapter](contracts/test/IPositionAdapter.t.sol/contract.MockPositionAdapter.md)
+    - [IPositionAdapterInterfaceTest](contracts/test/IPositionAdapter.t.sol/contract.IPositionAdapterInterfaceTest.md)
     - [MockGateway](contracts/test/InvestmentCommitteePolicy.t.sol/contract.MockGateway.md)
     - [InvestmentCommitteePolicyTest](contracts/test/InvestmentCommitteePolicy.t.sol/contract.InvestmentCommitteePolicyTest.md)
     - [MockVaultTest](contracts/test/MockVault.t.sol/contract.MockVaultTest.md)

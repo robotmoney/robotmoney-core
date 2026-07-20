@@ -1,20 +1,57 @@
-# IPositionAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/934ea7ee25f9591b4a70b1ae95e9b81b8738767d/contracts/interfaces/IPositionAdapter.sol)
+# MockPositionAdapter
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/934ea7ee25f9591b4a70b1ae95e9b81b8738767d/contracts/test/IPositionAdapter.t.sol)
 
-Position-adapter boundary for the unified Vault (ADR-0010). A
-superset of the v1 `IStrategyAdapter`: it adds min-out parameters, a
-realized-value return on `deploy`, and the `isExact()` /
-`USDC()` / `VAULT()` identity views the vault's eligibility probe
-requires. Every vault theme (rmUSDC/rmPROTO/rmAGENT/rmRWA) is one
-Vault deployment composed with a set of these adapters.
+**Inherits:**
+[IPositionAdapter](/contracts/interfaces/IPositionAdapter.sol/interface.IPositionAdapter.md)
 
-All mutating functions are `onlyVault` inside implementations. The
-normative semantics (choreography, floor-composition, sentinel,
-clamp-vs-revert, protected-token sets) live in
-docs/technical/unified-vault-spec.md §2.2 and are finalized by #1116.
+Minimal exact-style `IPositionAdapter` implementation used only to prove
+the frozen surface is implementable end-to-end. It is a 1:1 USDC holder
+(`isExact() == true`): `deploy` adds exactly `usdcIn`, `withdraw`
+clamps at balance, `totalAssets()` is the held USDC balance. It is a
+TEST FIXTURE — never a production adapter.
+
+
+## Constants
+### USDC
+
+```solidity
+address public immutable USDC
+```
+
+
+### VAULT
+
+```solidity
+address public immutable VAULT
+```
+
+
+### QUARANTINE
+Fixed quarantine sink for swept foreign tokens (INV-1: never
+caller-supplied). A test-local constant mirrors the production
+`ForeignTokenQuarantine.QUARANTINE` pattern without the dependency.
+
+
+```solidity
+address public constant QUARANTINE = address(0xdead)
+```
 
 
 ## Functions
+### constructor
+
+
+```solidity
+constructor(address usdc_, address vault_) ;
+```
+
+### onlyVault
+
+
+```solidity
+modifier onlyVault() ;
+```
+
 ### deploy
 
 Convert `usdcIn` USDC (transferred to the adapter first, same
@@ -26,7 +63,10 @@ implementation exposure cap (e.g. `MorphoAdapter.maxExposure`).
 
 
 ```solidity
-function deploy(uint256 usdcIn, uint256 minValueOut) external returns (uint256 valueAdded);
+function deploy(uint256 usdcIn, uint256 minValueOut)
+    external
+    onlyVault
+    returns (uint256 valueAdded);
 ```
 **Parameters**
 
@@ -50,7 +90,10 @@ Liquidate position back to USDC and deliver it to the vault.
 
 
 ```solidity
-function withdraw(uint256 usdcWanted, uint256 minUsdcOut) external returns (uint256 usdcOut);
+function withdraw(uint256 usdcWanted, uint256 minUsdcOut)
+    external
+    onlyVault
+    returns (uint256 usdcOut);
 ```
 **Parameters**
 
@@ -91,7 +134,7 @@ gate. Share-critical paths read the vault-attested
 
 
 ```solidity
-function isExact() external view returns (bool);
+function isExact() external pure returns (bool);
 ```
 
 ### harvestRewards
@@ -123,46 +166,16 @@ function sweepForeignToken(address token) external;
 |`token`|`address`|Foreign ERC-20 to quarantine.|
 
 
-### USDC
-
-The USDC token address this adapter denominates in. Consumed
-unchanged by the vault's `_isAdapterEligible` asset-match probe.
-
-
-```solidity
-function USDC() external view returns (address);
-```
-
-### VAULT
-
-The single vault this adapter is bound to. Load-bearing identity
-binding that prevents cross-vault authority substitution; MUST NOT
-be relaxed for adapter reuse (spec §2, ADR-0010 §2).
-
-
-```solidity
-function VAULT() external view returns (address);
-```
-
 ## Errors
-### OnlyVault
-The caller of a mutating function (`deploy` / `withdraw`) is not
-the single bound `VAULT()`. Every mutating path is `onlyVault`
-(spec §2.2, INV-1 authority binding).
-
+### ZeroAddress
 
 ```solidity
-error OnlyVault();
+error ZeroAddress();
 ```
 
-### SlippageExceeded
-A min-out slippage floor was breached: `deploy` realized
-`valueAdded < minValueOut`, or `withdraw` realized
-`usdcOut < max(minUsdcOut, adapterInternalFloor)`. Both revert
-(no clamp below the floor) — spec §2.2.
-
+### TokenIsProtected
 
 ```solidity
-error SlippageExceeded();
+error TokenIsProtected(address token);
 ```
 
