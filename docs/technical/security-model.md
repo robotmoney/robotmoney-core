@@ -114,7 +114,10 @@ go through explicit approval.
 ### 5.1 BasketVault TWAP configuration (issue #451)
 
 `BasketVault` is the first contract in the codebase to consume a DEX price
-source. The manipulation-resistance posture is:
+source. (Planned evolution: under `docs/adr/ADR-0010-unified-vault-architecture.md`
+(Proposed), TWAP/Chronicle pricing moves from the vault into per-asset
+`AssetPositionAdapter` contracts; the controls below carry over as adapter
+requirements.) The manipulation-resistance posture is:
 
 - **Price source.** Uniswap V3 `IUniswapV3Pool.observe()` returning the
   cumulative tick over the configured per-asset window. The arithmetic-mean

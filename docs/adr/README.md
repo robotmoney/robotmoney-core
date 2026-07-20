@@ -18,3 +18,4 @@ File names follow `ADR-NNNN-short-kebab-title.md`.
 | 0007 | [Basket-vault drawdown redemption policy — NAV haircut at current per-share NAV](ADR-0007-basket-vault-drawdown-redemption-policy.md) | Accepted |
 | 0008 | [AgentTokenVault trading authority and strategy — deferred indefinitely (non-goal)](ADR-0008-agent-token-vault-trading-authority.md) | Accepted |
 | 0009 | [Vault retirement — no on-chain migration; withdraw-only is the production behavior](ADR-0009-vault-retirement-no-assisted-migration.md) | Accepted |
+| 0010 | [Unified Vault architecture — one Vault class, position adapters for every theme](ADR-0010-unified-vault-architecture.md) | Proposed |

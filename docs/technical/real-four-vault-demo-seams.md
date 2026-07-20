@@ -32,6 +32,11 @@ seeding harness. The four target vaults are:
 | Agent Tokens (rmAGENT) | `AgentTokenVault` | §11.3 | Prototype — eligibility ADRs pending |
 | RWA/Thematic (deSPXA) | `RobotMoneyVault` subclass or new vault | §11.4 | ADR pending; Aerodrome-only enter/exit |
 
+> Planned evolution: see `docs/adr/ADR-0010-unified-vault-architecture.md`
+> (Proposed) — the per-theme vault contracts in this table become
+> deployments of a single unified `Vault` with per-asset position
+> adapters in v2; the v1 contracts this seam map targets stay untouched.
+
 ---
 
 ## 2. Shared hot files by phase

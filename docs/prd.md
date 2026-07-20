@@ -4,8 +4,11 @@
 
 Robot Money helps autonomous agents, machine-operated businesses, and
 human depositors put idle USDC to work without requiring each user to
-manually assemble, monitor, and rebalance treasury exposure across
-multiple venues or strategy categories.
+manually assemble and monitor treasury exposure across multiple
+strategies or product categories. Instead of managing each position by
+hand, users get a hands-off managed allocation across strategies and
+products — chosen and weighted for them — rather than having to select
+and continuously tend each exposure themselves.
 
 Primary users need a treasury product that supports direct vault
 selection, a managed multi-vault allocation, transparent performance and
@@ -115,8 +118,10 @@ Access expectations:
 - As a human depositor, I want to choose a vault or Portfolio Router
   allocation and preview the result before approving so that I
   understand where my funds go and what I receive.
-- As a human depositor, I want to withdraw synchronously from eligible
-  positions so that funds are available when needed.
+- As a human depositor, I want to get funds out in a single transaction
+  with no queue — withdrawing a chosen amount from the stable-yield
+  product, or redeeming my shares for their current value from a basket
+  product — so that funds are available when needed.
 - As an address with admin-assigned voting power, I want to vote on
   Portfolio Router target weights so that I can influence how the
   composite treasury exposure is balanced. (Token-holder voting is a
@@ -155,8 +160,10 @@ Access expectations:
 2. The product previews source, amount, fees, net amount, recipient, and
    any limitations.
 3. The depositor approves the withdrawal.
-4. The product settles the withdrawal synchronously for eligible paths
-   and reports the result.
+4. The product settles the withdrawal in a single transaction with no
+   queue — a chosen amount for the stable-yield product, or shares
+   redeemed for their current value for a basket product — and reports
+   the result.
 
 ### Autonomous Treasury Sweep
 
@@ -272,8 +279,8 @@ Common edge cases:
   signalling-only and never transition product funds or router weights.
 - **Fee schedule.** Proposed -> published -> active -> superseded.
 - **Incident control.** Normal -> paused -> normal; normal or paused ->
-  shutdown when new deposits must stop while preserving withdrawal
-  rights where possible.
+  shutdown. New deposits can be halted for incident response while
+  existing holders can always redeem — withdrawals are never blocked.
 
 ## 7. Integration Needs
 
@@ -322,7 +329,9 @@ Common edge cases:
 ## 9. Constraints
 
 - Deposits and withdrawals must provide a preview before user approval.
-- Eligible withdrawals must settle synchronously.
+- Withdrawals must settle in a single transaction with no queue: the
+  stable-yield product lets a holder withdraw a chosen amount, and basket
+  products let a holder redeem shares for their current value.
 - Product surfaces must expose fees, net amounts, destinations,
   recipients, limits, and refusal reasons in user-facing language.
 - Autonomous-agent access must remain bounded by depositor-defined
@@ -379,11 +388,14 @@ vault and avoids creating a hidden custody layer (see
 Yearn V3 is the architectural reference for the Robot Money vault and
 adapter layer. A Yearn V3 vault accepts deposits into a single ERC-4626
 contract and routes assets across multiple pluggable "strategies"
-(yield venues). The RobotMoneyVault reproduces this pattern: an
-IStrategyAdapter interface normalizes each venue, deposits route across
-active adapters by equal-weight target, and a keeper-triggered rebalance
-corrects drift. The asymmetric pause model (EMERGENCY_ROLE pauses,
-ADMIN_ROLE unpauses) is also borrowed from Yearn's security design.
+(yield venues). The Robot Money stable-yield product reproduces this
+pattern: each strategy is normalized behind a common interface, deposits
+spread across the active strategies toward an equal-weight target, and
+the mix is kept near that target through ordinary deposit and withdrawal
+activity rather than scheduled trading. The asymmetric pause behavior —
+new deposits can be halted for incident response while existing holders
+can always redeem, so withdrawals are never blocked — is also borrowed
+from Yearn's security design.
 
 ### Giza and Zyfai
 
@@ -423,7 +435,7 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | STABLE_YIELD |
 | Exposure | USDC yield across Morpho Gauntlet USDC Prime, Aave V3, Compound V3 on Base |
-| Allocation model | Equal-weight across active adapters; keeper-triggered rebalance |
+| Allocation model | Equal-weight target across strategies; the mix is kept near target through ordinary deposit and withdrawal activity |
 | Exit fee | Configurable 0–1%; 0.1% at launch |
 | Management fee | Not implemented in current phase |
 | Swap-fee share | Not implemented in current phase |
@@ -432,12 +444,13 @@ risk label, fee structure, accepted asset, withdrawal model, and status.
 | Per-deposit cap | Configurable |
 | Status | Deployed on Base mainnet |
 
-The stable-yield vault is the launch vault and the only vault currently
-eligible for Portfolio Router allocation. Its synchronous redemption
-guarantee is met through proportional withdrawal across all active
-adapters in a single transaction. If any adapter cannot fulfil its
-proportional share, the vault attempts to cover the shortfall from the
-remaining adapters before reverting.
+The stable-yield product is the launch product. All products are eligible
+for Portfolio Router allocation — four initially, extensible to more —
+weighted by recommendation, once each passes its readiness review. The
+stable-yield product's single-transaction redemption is met through
+proportional withdrawal across all active strategies in one transaction.
+If any strategy cannot fulfil its proportional share, the product covers
+the shortfall from the remaining strategies before reverting.
 
 ### 11.2 Protocol Asset Vault
 
@@ -448,16 +461,23 @@ remaining adapters before reverting.
 | Accepted asset | USDC (Base, 6 decimals) |
 | Risk label | VOLATILE |
 | Exposure | Basket of protocol assets (wETH, cbBTC, wSOL) via Uniswap V3 swaps |
-| Allocation model | Equal-weight across active basket assets at deposit time |
+| Allocation model | Equal-weight target across basket assets at deposit time; not actively rebalanced |
 | Exit fee | Configurable 0–1% |
-| Withdrawal | Synchronous; depends on swap liquidity |
-| Status | Router-eligible after hardening gates (see below) |
+| Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
+| Status | Router-eligible after readiness review (see below) |
 
-Deposits swap USDC into basket assets; withdrawals swap back. NAV is
-denominated in USDC and priced from a Uniswap V3 TWAP over an
-admin-configured per-asset window; `slot0` is not consulted on hot
-paths. Swap slippage means actual withdrawal proceeds may differ from
-the preview by up to the configured slippage bound.
+Deposits convert USDC into the basket assets; withdrawals convert back.
+The product is valued in USDC using a manipulation-resistant on-chain
+price for each asset held. Because conversions incur slippage, actual
+withdrawal proceeds may differ from the preview by up to the disclosed
+slippage limit.
+
+Composition drift: the basket is set to an equal-weight target at deposit
+time, and the product does not actively trade to restore that target as
+prices move. A holder's exposure therefore changes over time as basket
+asset prices move; holders always own their true pro-rata share of
+whatever is held. No value is lost to this drift — it is a risk
+characteristic to be aware of.
 
 Redemption policy: depositors always redeem at the current per-share NAV.
 Drawdowns are borne pro-rata by the redeeming depositor — the per-share NAV
@@ -466,23 +486,20 @@ cap. There is no forced sale and no withdrawal queue; redemption is synchronous,
 pro-rata, and instant. A redemption that cannot clear within the slippage cap
 reverts rather than settling at a catastrophic price.
 
-Router eligibility is gated on all of the following hardening criteria
-being satisfied and formally certified for a given deployment:
+Router eligibility is gated on a readiness review confirming that the
+product is soundly valued and that a holder can exit within its stated
+limits:
 
-1. **Slippage-preview gate** — `previewWithdraw` returns a bound that
-   includes worst-case Uniswap V3 swap slippage; the Portfolio Router
-   will not route into any vault whose preview deviates from the
-   realised amount by more than the configured tolerance.
-2. **Rebalancing model gate** — the intra-vault rebalancing strategy
-   (drift limits, timing, allowed DEX routes) is specified in a merged
-   ADR and implemented in the contract; open question §3.15 in
-   `docs/development/open-questions.md` is closed.
-3. **Liquidity-proof gate** — per-asset pool cardinality and TWAP
-   window prerequisites are met and verified on-chain; `slot0` is never
-   consulted on hot paths.
+1. **Withdrawal-preview criterion** — the withdrawal preview returns a
+   bound that includes worst-case slippage, and the Portfolio Router
+   will not route into any product whose preview deviates from the
+   realised amount by more than the disclosed tolerance.
+2. **Valuation-and-liquidity criterion** — the product's holdings can be
+   priced with a manipulation-resistant on-chain price and redeemed
+   reliably within the disclosed limits.
 
-Until all three gates are certified for a given deployment, the vault
-subclass must not be added to the Portfolio Router weight vector.
+A product must pass this readiness review before it can receive Portfolio
+Router allocation.
 
 ### 11.3 Agent Token Vault
 
@@ -494,10 +511,10 @@ subclass must not be added to the Portfolio Router weight vector.
 | Risk label | SPECULATIVE |
 | Exposure | Admin-curated basket of agent-economy tokens via per-asset DEX routing (Uniswap V3, Uniswap V4, Aerodrome) — see [ADR-0005](adr/ADR-0005-basketvault-multi-dex-routing.md) |
 | MVP shortlist | BNKR, JUNO, RM (Base-chain only) — hand-picked per [ADR-0001](adr/ADR-0001-mvp-agent-token-shortlist.md); current membership and per-asset swap venue in `config/agent-token-shortlist.json` |
-| Allocation model | Equal-weight across shortlisted tokens at deposit time |
+| Allocation model | Equal-weight target across shortlisted tokens at deposit time; not actively rebalanced |
 | Exit fee | Configurable 0–1% |
-| Withdrawal | Synchronous; depends on swap liquidity |
-| Status | Router-eligible after hardening gates (see below) |
+| Withdrawal | Holders redeem shares for current value in a single transaction, subject to available liquidity within the stated limit |
+| Status | Router-eligible after readiness review (see below) |
 
 Shortlist curation is admin-controlled for the MVP, with a fixed
 three-token equal-weighted basket: BNKR, JUNO, RM (Base-chain
@@ -512,33 +529,36 @@ veto window (see
 [ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md)); there is
 no token-holder vote over shortlist membership in the MVP. The
 production model (bribery-based or RM-token inclusion vote) is deferred
-past MVP. Per-venue TWAP pricing is shipped via the basket-vault base.
+past MVP. Basket products are valued using a manipulation-resistant
+on-chain price for each asset held.
 
-This vault has no in-vault agent trading authority or strategy: it is an
-admin-curated, equal-weight custody-and-rebalance basket, not a discretionary
-trading vehicle. Autonomous on-chain trading (strategy, position-sizing,
-stop-loss, NAV-loss reporting) is an explicit non-goal of this product.
+This product has no in-product agent trading authority or strategy: it is
+an admin-curated, equal-weight target basket whose mix shifts with prices
+and is not actively rebalanced, not a discretionary trading vehicle.
+Autonomous trading (strategy, position-sizing, stop-loss, loss reporting)
+is an explicit non-goal of this product. As prices move, the product's
+exposure changes over time; it does not trade to restore the target
+allocation, and holders always own their true pro-rata share of whatever
+is held. No value is lost to this drift — it is a risk characteristic to
+be aware of.
 
 Redemption policy: identical to rmPROTO (§11.2) — depositors redeem at the
 current per-share NAV, drawdowns are borne pro-rata and bounded by the slippage
 cap, and there is no forced sale or withdrawal queue.
 
-Router eligibility is gated on all of the following hardening criteria
-being satisfied and formally certified for a given deployment:
+Router eligibility is gated on a readiness review confirming that the
+product is soundly valued and that a holder can exit within its stated
+limits:
 
-1. **Slippage-preview gate** — same requirement as rmPROTO (§11.2).
-2. **Rebalancing model gate** — same requirement as rmPROTO (§11.2);
-   open question §3.15 in `docs/development/open-questions.md` is
-   closed.
-3. **Liquidity-proof gate** — same requirement as rmPROTO (§11.2).
-4. **Shortlist-governance gate** — the shortlist governance model (admin
-   path for MVP, deferred on-chain vote for production) is specified in
-   a merged ADR ([ADR-0004](adr/ADR-0004-agent-token-shortlist-governance.md));
-   the deployed shortlist consists exclusively of the Base-chain set
-   {BNKR, JUNO, RM}.
+1. **Withdrawal-preview criterion** — same requirement as rmPROTO (§11.2).
+2. **Valuation-and-liquidity criterion** — same requirement as rmPROTO
+   (§11.2).
+3. **Shortlist-governance criterion** — the process for curating basket
+   membership is specified and in force, and the deployed shortlist
+   consists exclusively of the Base-chain set {BNKR, JUNO, RM}.
 
-Until all four gates are certified for a given deployment, the vault
-subclass must not be added to the Portfolio Router weight vector.
+A product must pass this readiness review before it can receive Portfolio
+Router allocation.
 
 ### 11.4 RWA / Thematic Vault
 
@@ -572,10 +592,12 @@ block vault entry and exit independently of Aerodrome liquidity. This
 risk is disclosed to depositors in the dapp vault detail page and is a
 known, accepted product risk for this vault category.
 
-The vault is registered in `VaultRegistry` as Active. The Portfolio
-Router may allocate to it once the Chronicle oracle integration and
-Aerodrome adapter are deployed and the vault passes the standard Router
-eligibility checks (`isRouterEligible` returns true).
+Holders redeem their shares for current value in a single transaction;
+proceeds reflect the realized value at redemption, bounded by a slippage
+limit, and a redemption that cannot clear within that limit does not
+proceed. The Portfolio Router may allocate to this product once it passes
+the standard readiness review — its holdings can be priced and it can be
+exited within its stated limits.
 
 ## 12. Security invariants
 
@@ -588,45 +610,42 @@ adapters) and is documented in `docs/architecture.md`,
 `docs/technical/smart-contracts.md`, and
 `docs/technical/adapter-architecture.md`.
 
-**INV-1 — No arbitrary admin routing.** No admin-, role-, or vault-gated
-function may route a protocol or depositor asset to a caller-supplied
-recipient. The historical arbitrary-recipient rescue functions
-(`PortfolioRouter.rescueUsdc`, `RobotMoneyVault.rescueTokens`,
-`BasketVault.rescueTokens`, and the Aave/Compound/Morpho adapter
-`rescueTokens`) are deleted, along with `IStrategyAdapter.rescueTokens`. The
-only asset movement an operator can trigger is recovering NON-whitelisted,
-already-quarantined tokens from a separate fixed trash address, and only via
-multisig + offline governance.
+**INV-1 — No arbitrary admin routing.** No admin, operator, or product
+control may route a protocol or depositor asset to a recipient chosen by
+the caller. There is no discretionary "rescue" path that could send held
+assets to an arbitrary address. The only asset movement an operator can
+trigger is recovering non-whitelisted, already-quarantined tokens from a
+fixed quarantine address, and only through multisig-plus-offline
+governance.
 
 **INV-2 — No stranded assets.** Every protocol or depositor asset is always
-redeemable by holders or absorbed into NAV: protocol-asset donations accrue
-pro-rata to all holders (USDC idle balances and active basket-asset balances
-are counted in `totalAssets`, safe from inflation via the 1e18 decimals
-offset); underlying-protocol emissions are harvested to the vault; a balance
-that reappears on a removed (inactive) basket asset is re-absorbed into NAV
-via `BasketVault.reabsorbRemovedAsset` (swapped to USDC, credited to holders),
-never routed to an admin; rounding and dust always favor holders, never the
-router or the fee recipient; and the router holds zero USDC after operations.
-Non-whitelisted foreign tokens cannot be rejected on receipt nor
-returned-to-sender (the sender is not knowable on-chain), so they are inert
-(uncounted, un-redeemable) but additionally get a **deterministic
-permissionless sweep** to a single hardcoded quarantine ("trash") address via
-`sweepForeignToken(token)` — so nothing is permanently stuck. Anyone may
-trigger the sweep; the destination is a compile-time constant, never
-caller-supplied. An offline multisig governance process empties the trash
-address (the reverse-mistakes safety valve).
+redeemable by holders or absorbed into the product's value: donated assets
+accrue pro-rata to all holders (assets a product holds are always reflected
+in its value, and the accounting is protected against share-inflation
+manipulation); underlying-strategy emissions are harvested into the product;
+a balance that reappears on an asset that was removed from a basket is
+re-absorbed into the product's value and credited to holders, never routed to
+an admin; rounding and dust always favor holders, never the router or the fee
+recipient; and the router holds no leftover funds after operations. Foreign
+tokens sent in by mistake cannot be rejected on receipt nor returned to sender
+(the sender is not knowable on-chain), so they are inert (uncounted,
+un-redeemable) and can additionally be swept, by anyone, to a single fixed
+quarantine address so nothing is permanently stuck; the destination is fixed
+in advance, never caller-supplied. An offline multisig governance process
+empties the quarantine address as the reverse-mistakes safety valve.
 
 **INV-3 — Governance-gated fee and quarantine control.** The fee recipient,
-the fee parameters, and the quarantine address change only through the
-`TimelockController` (multisig + timelock); direct non-timelock calls revert.
-This is the same graduated-authority model used for the protocol's deliberate
-value and lifecycle actions: permissionless actions (foreign-token sweep,
-harvest trigger) need no privilege; emergency actions (pause, emergency
-withdraw to the vault only, force-remove adapter) use the hot emergency key
-and can only de-risk, never extract; and governance actions (unpause, restore,
-retire, fee-recipient and fee-parameter changes, adapter add/allowlist/caps,
-quarantine set and recover) require multisig + timelock. Depositor principal
-is moved by the depositor alone.
+the fee parameters, and the quarantine address change only through
+multisig-plus-timelock governance; changes attempted outside that path do not
+take effect. This is the same graduated-authority model used for the
+protocol's deliberate value and lifecycle actions: permissionless actions
+(foreign-token sweep, harvest trigger) need no privilege; emergency actions
+can only de-risk, never extract — new deposits can be halted for incident
+response while existing holders can always redeem, so withdrawals are never
+blocked; and governance actions (unpause, restore, retire, fee-recipient and
+fee-parameter changes, strategy add/allowlist/caps, quarantine set and
+recover) require multisig plus timelock. Depositor principal is moved by the
+depositor alone.
 
 **INV-4 — Committee policy is signalling-only.** The Investment-Committee
 policy contract holds only registered agents, their votes, and aggregated

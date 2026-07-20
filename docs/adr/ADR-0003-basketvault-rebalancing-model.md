@@ -1,6 +1,7 @@
 # ADR-0003: BasketVault rebalancing model — trigger, target weights, cost disclosure
 
 - **Status:** Accepted
+- **Affected by:** [ADR-0010 (Proposed)](ADR-0010-unified-vault-architecture.md) — in the unified `Vault`, basket rebalancing is a vault-level adapter reallocation under uniform rebalance throttles; the `BasketVault` `NotImplemented()` `rebalance()` stub and Phase B plan apply to v1 only.
 - **Date:** 2026-06-02
 - **Deciders:** Product owner
 - **Related:**
