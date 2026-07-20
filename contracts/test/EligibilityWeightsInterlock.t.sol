@@ -30,7 +30,7 @@ contract MockUsdc is ERC20 {
 
 /// @notice Minimal ERC-4626-shaped vault mock exposing `asset()` = USDC, which
 ///         is all the router needs to accept it into a weight vector.
-contract MockVault is ERC20 {
+contract InterlockMockVault is ERC20 {
     IERC20 public immutable assetToken;
 
     constructor(address asset_) ERC20("Mock Vault Shares", "MVS") {
@@ -59,22 +59,22 @@ contract EligibilityWeightsInterlockTest is Test {
 
     // Four vaults form the eligible set with a length-4 default vector; the
     // fifth is the migration target (initially ineligible).
-    MockVault internal vaultA;
-    MockVault internal vaultB;
-    MockVault internal vaultC;
-    MockVault internal vaultD;
-    MockVault internal vaultE;
+    InterlockMockVault internal vaultA;
+    InterlockMockVault internal vaultB;
+    InterlockMockVault internal vaultC;
+    InterlockMockVault internal vaultD;
+    InterlockMockVault internal vaultE;
 
     function setUp() public {
         usdc = new MockUsdc();
         registry = new VaultRegistry(registryAdmin);
         router = new PortfolioRouter(address(usdc), address(registry), routerAdmin);
 
-        vaultA = new MockVault(address(usdc));
-        vaultB = new MockVault(address(usdc));
-        vaultC = new MockVault(address(usdc));
-        vaultD = new MockVault(address(usdc));
-        vaultE = new MockVault(address(usdc));
+        vaultA = new InterlockMockVault(address(usdc));
+        vaultB = new InterlockMockVault(address(usdc));
+        vaultC = new InterlockMockVault(address(usdc));
+        vaultD = new InterlockMockVault(address(usdc));
+        vaultE = new InterlockMockVault(address(usdc));
 
         vm.startPrank(registryAdmin);
         registry.registerVault(address(vaultA), _meta("Vault A"));

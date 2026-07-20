@@ -1,5 +1,5 @@
-# MockVault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a25788704e847c258d9460b66a6534bffb0b77e/contracts/test/EligibilityWeightsInterlock.t.sol)
+# InterlockMockVault
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/590dbe2aba8e8e830c2bf8b19de92807cdd94a33/contracts/test/EligibilityWeightsInterlock.t.sol)
 
 **Inherits:**
 ERC20

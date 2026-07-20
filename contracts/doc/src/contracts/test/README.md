@@ -60,7 +60,7 @@
 - [MockMorpho4626](ERC4626PreconditionChecks.t.sol/contract.MockMorpho4626.md)
 - [ERC4626PreconditionChecks](ERC4626PreconditionChecks.t.sol/contract.ERC4626PreconditionChecks.md)
 - [MockUsdc](EligibilityWeightsInterlock.t.sol/contract.MockUsdc.md)
-- [MockVault](EligibilityWeightsInterlock.t.sol/contract.MockVault.md)
+- [InterlockMockVault](EligibilityWeightsInterlock.t.sol/contract.InterlockMockVault.md)
 - [EligibilityWeightsInterlockTest](EligibilityWeightsInterlock.t.sol/contract.EligibilityWeightsInterlockTest.md)
 - [FeatureFlagsTest](FeatureFlags.t.sol/contract.FeatureFlagsTest.md)
 - [RouterMockVault](GatewayRouter.t.sol/contract.RouterMockVault.md)
