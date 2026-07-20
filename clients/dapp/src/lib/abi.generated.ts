@@ -5631,6 +5631,25 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "isVaultAllExact",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [
+      {
+        name: "exact",
+        type: "bool",
+        internalType: "bool",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "listVaults",
     inputs: [],
     outputs: [
