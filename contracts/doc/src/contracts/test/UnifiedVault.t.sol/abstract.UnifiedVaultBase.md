@@ -1,5 +1,5 @@
 # UnifiedVaultBase
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3d0125a0ee72af9f51ed36ec0b328a085a948116/contracts/test/UnifiedVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e4716d1394020bd77778319680836787fed90d2d/contracts/test/UnifiedVault.t.sol)
 
 **Inherits:**
 Test
@@ -27,6 +27,13 @@ uint256 internal constant MAX_BPS = 10_000
 
 ```solidity
 uint256 internal constant MAX_SLIPPAGE_BPS = 200
+```
+
+
+### MAX_NAV_GROWTH_RATE_BPS
+
+```solidity
+uint256 internal constant MAX_NAV_GROWTH_RATE_BPS = 1e30
 ```
 
 

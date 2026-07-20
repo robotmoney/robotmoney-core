@@ -179,6 +179,8 @@
     - [MockMorphoVault](contracts/test/MorphoAdapter.t.sol/contract.MockMorphoVault.md)
     - [ShortfallMorphoVault](contracts/test/MorphoAdapter.t.sol/contract.ShortfallMorphoVault.md)
     - [MorphoAdapterTest](contracts/test/MorphoAdapter.t.sol/contract.MorphoAdapterTest.md)
+    - [MarkSpikeAdapter](contracts/test/NavGrowthLimiter.t.sol/contract.MarkSpikeAdapter.md)
+    - [NavGrowthLimiterTest](contracts/test/NavGrowthLimiter.t.sol/contract.NavGrowthLimiterTest.md)
     - [NoYieldTestAdapterTest](contracts/test/NoYieldTestAdapter.t.sol/contract.NoYieldTestAdapterTest.md)
     - [MockUSDC](contracts/test/PortfolioRouter.t.sol/contract.MockUSDC.md)
     - [MockRouterVault](contracts/test/PortfolioRouter.t.sol/contract.MockRouterVault.md)
