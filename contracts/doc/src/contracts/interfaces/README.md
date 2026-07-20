@@ -10,6 +10,7 @@
 - [IChronicleOracle](IChronicleOracle.sol/interface.IChronicleOracle.md)
 - [IComet](IComet.sol/interface.IComet.md)
 - [IObservablePool](IObservablePool.sol/interface.IObservablePool.md)
+- [IPositionAdapter](IPositionAdapter.sol/interface.IPositionAdapter.md)
 - [IStrategyAdapter](IStrategyAdapter.sol/interface.IStrategyAdapter.md)
 - [ISwapRouter](ISwapRouter.sol/interface.ISwapRouter.md)
 - [IUniswapV3Pool](IUniswapV3Pool.sol/interface.IUniswapV3Pool.md)

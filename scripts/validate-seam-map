@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Canonical: docs/technical/unified-vault-seam-map.json (the artifact validated),
+#            docs/technical/unified-vault-spec.md, docs/adr/ADR-0010-unified-vault-architecture.md
+# Feature work: issue #1115 (dev-scout — map unified-vault (ADR-0010) implementation seams)
+#
+# ============================================================================
+# UNIFIED-VAULT SEAM-MAP VALIDATOR (issue #1115)
+# ============================================================================
+# Exits 0 ONLY when docs/technical/unified-vault-seam-map.json:
+#   1. exists,
+#   2. parses as JSON, and
+#   3. carries a NON-EMPTY `extraction` array AND a NON-EMPTY `insertion` array
+#      under `.hot_files[<path>]` for EACH of the 8 named hot files below.
+#
+# This is the gate the downstream Unified-Vault feature issues (#1116-#1131)
+# depend on: if a later edit drops a hot file from the seam map (or empties its
+# extraction/insertion list), a parallel feature loses its collision-avoidance
+# contract silently. This validator makes that failure LOUD in CI.
+#
+# Usage:
+#   scripts/validate-seam-map [PATH]     validate PATH (default: the committed map)
+#   scripts/validate-seam-map --self-test  assert the committed map PASSES and the
+#                                          negative fixture FAILS (guard-fires check)
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+DEFAULT_MAP="docs/technical/unified-vault-seam-map.json"
+NEG_FIXTURE="docs/technical/fixtures/unified-vault-seam-map.missing-entry.json"
+
+# The 8 named hot files (ADR-0010 §Related / issue #1115). Each MUST carry a
+# non-empty extraction + insertion entry in the seam map.
+REQUIRED_HOT_FILES=(
+  "contracts/RobotMoneyVault.sol"
+  "contracts/vaults/BasketVault.sol"
+  "contracts/vaults/"
+  "contracts/adapters/"
+  "contracts/interfaces/IStrategyAdapter.sol"
+  "contracts/interfaces/IBasketSwapAdapter.sol"
+  "contracts/PortfolioRouter.sol"
+  "contracts/VaultRegistry.sol"
+)
+
+# Validate one seam-map file. Prints per-failure detail to stderr.
+# Returns 0 iff the file exists, parses, and has non-empty extraction+insertion
+# for every required hot file.
+validate_map() {
+  local map="$1"
+  local status=0
+
+  if [[ ! -f "$map" ]]; then
+    echo "ERROR: seam map not found: $map" >&2
+    return 1
+  fi
+
+  if ! jq empty "$map" >/dev/null 2>&1; then
+    echo "ERROR: $map does not parse as JSON." >&2
+    return 1
+  fi
+
+  for hf in "${REQUIRED_HOT_FILES[@]}"; do
+    if ! jq -e --arg k "$hf" '(.hot_files | has($k))' "$map" >/dev/null 2>&1; then
+      echo "ERROR: $map is missing hot-file entry: .hot_files[\"$hf\"]" >&2
+      status=1
+      continue
+    fi
+    if ! jq -e --arg k "$hf" \
+      '.hot_files[$k].extraction | (type == "array") and (length > 0)' \
+      "$map" >/dev/null 2>&1; then
+      echo "ERROR: $map .hot_files[\"$hf\"].extraction is missing or empty (must be a non-empty array)." >&2
+      status=1
+    fi
+    if ! jq -e --arg k "$hf" \
+      '.hot_files[$k].insertion | (type == "array") and (length > 0)' \
+      "$map" >/dev/null 2>&1; then
+      echo "ERROR: $map .hot_files[\"$hf\"].insertion is missing or empty (must be a non-empty array)." >&2
+      status=1
+    fi
+  done
+
+  return "$status"
+}
+
+# Self-test: prove the validator FIRES on the negative fixture before trusting a
+# green on the real artifact (matches the repo's --self-test guard pattern).
+self_test() {
+  local ok=0
+
+  echo "[self-test] committed seam map must PASS ($DEFAULT_MAP)"
+  if validate_map "$DEFAULT_MAP"; then
+    echo "[self-test] OK: committed seam map passes."
+  else
+    echo "[self-test] FAIL: committed seam map should pass but did not." >&2
+    ok=1
+  fi
+
+  echo "[self-test] negative fixture must FAIL ($NEG_FIXTURE)"
+  if validate_map "$NEG_FIXTURE" >/dev/null 2>&1; then
+    echo "[self-test] FAIL: negative fixture (removed hot-file entry) passed — the validator is not enforcing the schema." >&2
+    ok=1
+  else
+    echo "[self-test] OK: negative fixture correctly rejected."
+  fi
+
+  if [[ "$ok" -eq 0 ]]; then
+    echo "[self-test] PASS: validator fires on the negative fixture and accepts the real artifact."
+  fi
+  return "$ok"
+}
+
+main() {
+  case "${1:-}" in
+    --self-test)
+      self_test
+      ;;
+    "")
+      validate_map "$DEFAULT_MAP"
+      echo "OK: $DEFAULT_MAP carries a non-empty extraction+insertion entry for all ${#REQUIRED_HOT_FILES[@]} named hot files."
+      ;;
+    *)
+      validate_map "$1"
+      echo "OK: $1 carries a non-empty extraction+insertion entry for all ${#REQUIRED_HOT_FILES[@]} named hot files."
+      ;;
+  esac
+}
+
+main "$@"
