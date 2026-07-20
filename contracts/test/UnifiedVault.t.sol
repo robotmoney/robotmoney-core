@@ -206,6 +206,15 @@ abstract contract UnifiedVaultBase is Test {
         vm.startPrank(admin);
         vault.setAdapterAllowed(adapter, true);
         vault.setAdapterCodeHashAllowed(adapter.codehash, true);
+        // #1123: adding the first inexact adapter to an operating all-exact vault
+        // is a share-semantics flip that must be armed + delayed. The dedicated
+        // ExactnessTransitionTimelockTest exercises the guard directly; here the
+        // shared harness transparently arms + warps so mixed-set fixtures keep
+        // registering as before.
+        if (!isExact && vault.activeAdapterCount() > 0 && vault.allExact()) {
+            vault.armExactnessTransition(adapter);
+            vm.warp(block.timestamp + vault.EXACTNESS_TRANSITION_DELAY());
+        }
         vault.addAdapter(adapter, capBps, isExact);
         vm.stopPrank();
     }

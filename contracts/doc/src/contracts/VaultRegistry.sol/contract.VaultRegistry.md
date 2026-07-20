@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a25788704e847c258d9460b66a6534bffb0b77e/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/01b59e20caa97f6392c68e2a81dce4c5d658f622/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -383,6 +383,40 @@ function isRouterEligible(address vault) external view returns (bool eligible);
 |Name|Type|Description|
 |----|----|-----------|
 |`eligible`|`bool`|True iff governance has marked the vault as router-eligible.|
+
+
+### isVaultAllExact
+
+Registry-visible exactness flag for `vault` (ADR-0010 §5.1 / C2).
+Reads the vault's vault-attested `allExact()` through the
+registry so the gateway, router, and dapp can gate
+`withdraw`-shaped flows STATICALLY from a single registry endpoint
+without holding a direct vault reference. This is the "read
+through a registry view" surfacing option the spec sanctions
+(§5.1): no mirrored state, so it can never drift from the vault's
+live composition class — the flip announced by the vault's
+`ExactnessTransition` event is reflected here on the next read.
+Reverts `NotRegistered` for an unknown vault, and propagates the
+underlying call's revert for a registered address that is not a
+unified exactness `Vault` (does not implement `allExact()`) — the
+caller learns the address is not an exactness-gated vault rather
+than receiving a misleading `true`/`false`.
+
+
+```solidity
+function isVaultAllExact(address vault) external view returns (bool exact);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|Address of an already-registered vault.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`exact`|`bool`|True iff every active adapter is vault-attested exact.|
 
 
 ## Events

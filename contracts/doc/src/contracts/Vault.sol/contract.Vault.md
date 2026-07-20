@@ -1,5 +1,5 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a7c54d73d4b5798ab7f0d00b005aecfb79f6376/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/01b59e20caa97f6392c68e2a81dce4c5d658f622/contracts/Vault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -79,6 +79,22 @@ uint256 public constant MAX_ADAPTERS = 20
 ```
 
 
+### EXACTNESS_TRANSITION_DELAY
+Minimum delay an exact→inexact composition-class flip must sit
+armed before it can be executed (§5.1, C2 / #1123). Adding the
+first inexact adapter to an operating all-exact vault reprices
+already-held shares onto the floored preview branch and turns
+`withdraw()` into `RedeemOnly` — a SHARE-SEMANTICS change that
+may not land in one undelayed call. Mirrors the ≥48h ADMIN
+timelock forcing-function so the class flip is announced (the
+`ExactnessTransition` event) and can never surprise a holder.
+
+
+```solidity
+uint256 public constant EXACTNESS_TRANSITION_DELAY = 48 hours
+```
+
+
 ### MAX_BPS
 Basis-points denominator (10 000 = 100%). Narrowed to `uint16`
 from `BpsMath.BPS_DENOMINATOR` to preserve call-site arithmetic.
@@ -107,6 +123,19 @@ Ordered registry of all adapters (active and inactive).
 
 ```solidity
 AdapterInfo[] public adapters
+```
+
+
+### exactnessTransitionReadyAt
+Timestamp at/after which an ADMIN-armed exact→inexact
+composition-class flip may be executed for a given adapter (the
+earliest `addAdapter(adapter, _, false)` that would flip
+`allExact()` true→false is accepted). Zero means unarmed. Set by
+`armExactnessTransition`, consumed by `addAdapter` (§5.1, C2).
+
+
+```solidity
+mapping(address adapter => uint64 readyAt) public exactnessTransitionReadyAt
 ```
 
 
@@ -776,11 +805,18 @@ function _surplusFirstOrder()
 
 Register a new adapter with a vault-attested exactness flag.
 
-SEAM (#1123): when this add flips the composition class (the first
-inexact adapter on an all-exact vault, or vice-versa), #1123 routes
-the transition through the ADMIN timelock and emits
-`ExactnessTransition(wasAllExact, allExact(), adapter_)`. The class
-is observable here via `allExact()` before/after the push.
+#1123: when this add flips the composition class true→false (the
+first inexact adapter on an OPERATING all-exact vault — one with at
+least one active adapter), it is a SHARE-SEMANTICS change: it
+reprices held shares onto the floored branch and turns `withdraw()`
+into `RedeemOnly` for every integrator. That flip may not land in a
+single undelayed call — it must first be ARMED via
+`armExactnessTransition` and sit for `EXACTNESS_TRANSITION_DELAY`,
+and it emits `ExactnessTransition(true, false, adapter_)`. A
+same-class add (exact→exact, inexact→inexact) and the empty-vault
+bootstrap (no active adapters yet, no holders relying on exact mode)
+are unaffected. The class is observable via `allExact()` before/after
+the push.
 
 
 ```solidity
@@ -795,6 +831,27 @@ function addAdapter(address adapter_, uint16 capBps_, bool isExact_)
 |`adapter_`|`address`|`IPositionAdapter`-compatible address (allowlisted + codehash-pinned + identity-bound).|
 |`capBps_`|`uint16`| Maximum allocation cap in basis points (1–10 000).|
 |`isExact_`|`bool`|VAULT-ATTESTED exactness (C2). ADMIN pins this at registration alongside the codehash and allowlist entry; it is immutable on the `AdapterInfo` and is what `allExact()` reads — never `adapter.isExact()` per call.|
+
+
+### armExactnessTransition
+
+Arm an exact→inexact composition-class flip for `adapter_`
+(§5.1, C2 / #1123). Required before `addAdapter(adapter_, _,
+false)` can flip an operating all-exact vault out of exact mode.
+The armed transition may be executed no earlier than
+`block.timestamp + EXACTNESS_TRANSITION_DELAY`, giving holders who
+rely on live `withdraw()` an announced window to exit before the
+vault becomes `RedeemOnly`. `ADMIN_ROLE` (timelock) only.
+
+
+```solidity
+function armExactnessTransition(address adapter_) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`adapter_`|`address`|The inexact adapter that will be added to flip the class.|
 
 
 ### setAdapterAllowed
@@ -1503,6 +1560,31 @@ Emitted when a retired vault is reactivated (governance abort).
 event Unretired();
 ```
 
+### ExactnessTransitionArmed
+Emitted when ADMIN arms an exact→inexact composition-class flip
+(§5.1, C2). `readyAt` is the earliest timestamp the armed
+`adapter` may be added via `addAdapter` to flip the vault out of
+all-exact mode — `block.timestamp + EXACTNESS_TRANSITION_DELAY`.
+
+
+```solidity
+event ExactnessTransitionArmed(address indexed adapter, uint64 readyAt);
+```
+
+### ExactnessTransition
+Emitted when a composition-class flip actually lands through
+`addAdapter` (§5.1, C2). Fires ONLY on the true→false flip — the
+first inexact adapter added to an operating all-exact vault, which
+reprices held shares onto the floored branch and makes the vault
+`RedeemOnly`. A same-class add (exact→exact, inexact→inexact, or
+the improving inexact→exact direction) never fires it. Integrators
+and the indexer observe the class change here.
+
+
+```solidity
+event ExactnessTransition(bool wasAllExact, bool nowAllExact, address indexed adapter);
+```
+
 ### Rebalanced
 Emitted by the self-funded admin `forceRebalance` (§5.6):
 `totalMoved` is the USDC value actually drawn from overweight
@@ -1698,6 +1780,17 @@ whole call reverts so holders can never lose value (§5.6).
 
 ```solidity
 error NavWouldDecrease(uint256 navBefore, uint256 navAfter);
+```
+
+### ExactnessTransitionNotReady
+An `addAdapter` would flip `allExact()` true→false (the first
+inexact adapter on an operating all-exact vault) without a
+matching armed transition whose `EXACTNESS_TRANSITION_DELAY` has
+elapsed (§5.1, C2). `readyAt` is the armed timestamp (0 = unarmed).
+
+
+```solidity
+error ExactnessTransitionNotReady(address adapter, uint64 readyAt);
 ```
 
 ## Structs

@@ -38,6 +38,15 @@ interface IRetirableVault {
     function unretire() external;
 }
 
+/// @dev Minimal view the registry needs to surface a vault's vault-attested
+///      exactness class (unified `Vault`, ADR-0010 §5.1 / C2). Declared as an
+///      interface (not an import) to avoid a circular compile-time dependency
+///      between the registry and the vault.
+interface IExactnessVault {
+    /// @notice True iff every active adapter is vault-attested exact.
+    function allExact() external view returns (bool);
+}
+
 /// @title VaultRegistry
 /// @notice On-chain registry of authorised Robot Money vaults.
 ///
@@ -467,5 +476,27 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///                  router-eligible.
     function isRouterEligible(address vault) external view returns (bool eligible) {
         return _routerEligible[vault];
+    }
+
+    /// @notice Registry-visible exactness flag for `vault` (ADR-0010 §5.1 / C2).
+    ///         Reads the vault's vault-attested `allExact()` through the
+    ///         registry so the gateway, router, and dapp can gate
+    ///         `withdraw`-shaped flows STATICALLY from a single registry endpoint
+    ///         without holding a direct vault reference. This is the "read
+    ///         through a registry view" surfacing option the spec sanctions
+    ///         (§5.1): no mirrored state, so it can never drift from the vault's
+    ///         live composition class — the flip announced by the vault's
+    ///         `ExactnessTransition` event is reflected here on the next read.
+    ///
+    ///         Reverts `NotRegistered` for an unknown vault, and propagates the
+    ///         underlying call's revert for a registered address that is not a
+    ///         unified exactness `Vault` (does not implement `allExact()`) — the
+    ///         caller learns the address is not an exactness-gated vault rather
+    ///         than receiving a misleading `true`/`false`.
+    /// @param vault Address of an already-registered vault.
+    /// @return exact True iff every active adapter is vault-attested exact.
+    function isVaultAllExact(address vault) external view returns (bool exact) {
+        if (!_registered[vault]) revert NotRegistered();
+        return IExactnessVault(vault).allExact();
     }
 }
