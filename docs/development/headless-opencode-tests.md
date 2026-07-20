@@ -66,7 +66,10 @@ The nightly job:
   (`chain_id`, `block_number`, `source`).
 - Asserts `rmpc get-gateway` exit 0 with `partial: true`.
 - Asserts no explorer/dapp HTTP references in the transcript.
-- Skip-cleans when `ANTHROPIC_API_KEY` or `RMPC_FORK_RPC_URL` is absent.
+- Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
+  is absent — current reality; the fork-RPC dependency is not the endorsed
+  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
+  (no secret, loud on missing).
 
 ---
 
@@ -104,7 +107,10 @@ The nightly job:
 - Asserts `final-report.json:outcome == 'deposited'` and `tx_hash` is
   a non-null hex string.
 - Asserts no explorer/dapp HTTP references in the transcript.
-- Skip-cleans when `ANTHROPIC_API_KEY` or `RMPC_FORK_RPC_URL` is absent.
+- Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
+  is absent — current reality; the fork-RPC dependency is not the endorsed
+  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
+  (no secret, loud on missing).
 
 ---
 
@@ -145,7 +151,10 @@ For each case, the job:
 - Asserts `final-report.json:outcome` starts with `refused:` and contains
   the expected reason substring.
 - Asserts no explorer/dapp HTTP references in the transcript.
-- Skip-cleans when `ANTHROPIC_API_KEY` or `RMPC_FORK_RPC_URL` is absent.
+- Skip-cleans when `ANTHROPIC_API_KEY` (model key) or `RMPC_FORK_RPC_URL`
+  is absent — current reality; the fork-RPC dependency is not the endorsed
+  coverage model. ADR-0011 moves fork coverage to an offline golden fixture
+  (no secret, loud on missing).
 
 ---
 

@@ -176,8 +176,8 @@ either a structured success or a hard exit.
 Automated coverage:
 
 - `testing/openclaw-config/test_long_running.sh` — runs the harness
-  against `RMPC_FORK_RPC_URL` (or skips loud-clean if the secret is
-  missing) for N iterations and asserts each captured stdout block is
+  against `RMPC_FORK_RPC_URL` (or skips loud-clean if it is unset)
+  for N iterations and asserts each captured stdout block is
   a JSON envelope with a sane `chain_id`.
 - `testing/openclaw-config/test_mainnet_gate.sh` — asserts the
   refusal sentinel.
@@ -200,14 +200,22 @@ skill directory and at the `rmpc` binary path. The skill's
 harness-portable (no Claude-specific assumptions, no hidden prompt
 state).
 
-## 10. CI secret: `RMPC_FORK_RPC_URL`
+## 10. Fork RPC URL: `RMPC_FORK_RPC_URL`
 
 The long-running test (`testing/openclaw-config/test_long_running.sh`)
 needs a Base-mainnet JSON-RPC URL to actually exercise the monitor
-loop against a fork. CI consumes the URL from the repo secret
-`RMPC_FORK_RPC_URL`.
+loop against a fork. `RMPC_FORK_RPC_URL` carries that URL — a **public
+default** (`https://mainnet.base.org`), **not a secret**: it is a free,
+keyless, read-only Base endpoint, so no repo-admin secret is required.
+Per the no-secret CI model in
+[ADR-0011](../adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md),
+merge-gating fork coverage runs offline against a checked-in golden
+fixture (loud on a missing fixture); a live public RPC like this
+belongs to the non-blocking nightly check and to local runs. See
+[`environments.md` §2](environments.md) for the canonical env-var home.
 
-Behaviour matrix (enforced by `.github/workflows/openclaw-config.yml`):
+Behaviour matrix (current reality; ADR-0011 target is offline goldens),
+enforced by `.github/workflows/openclaw-config.yml`:
 
 | `RMPC_FORK_RPC_URL` | Workflow step result | Artifact `outcome=` | Job exit |
 |---|---|---|---|
@@ -220,21 +228,23 @@ Every run uploads `openclaw-long-running-outcome` (containing
 versus skipped without digging through logs. A subsequent assertion
 step fails the job if the artifact is missing or malformed.
 
-### Setting the secret
+### Overriding the default (optional)
 
-Operator (repo admin) action — one-time per repo:
+Because the value is a public URL, no `gh secret` and no repo-admin
+action is required — CI defaults to `https://mainnet.base.org`
+directly. An operator only overrides it (a public **Actions variable**,
+not a secret) to swap in a paid/keyed endpoint, e.g. per-repo in
+`lucky-tensor/robotmoney-skills`:
 
 ```bash
-# Public Base mainnet RPC — free, read-only, fine for fork-based
-# read-only test traffic. No API key required.
-gh secret set RMPC_FORK_RPC_URL \
+gh variable set RMPC_FORK_RPC_URL \
   --repo lucky-tensor/robotmoney-skills \
   --body "https://mainnet.base.org"
 ```
 
 Or via the GitHub web UI: **Settings → Secrets and variables →
-Actions → New repository secret**. Name `RMPC_FORK_RPC_URL`, value the
-RPC URL.
+Actions → Variables → New repository variable**. Name
+`RMPC_FORK_RPC_URL`, value the RPC URL.
 
 ### RPC URL choices
 
@@ -249,9 +259,9 @@ RPC URL.
 The test only issues read calls (`rmpc get-vault`) so any Base mainnet
 JSON-RPC endpoint that supports `eth_call` and `eth_chainId` works.
 
-### Verifying after the secret is set
+### Verifying
 
-After setting the secret, re-run the `openclaw-config` workflow. The
+Re-run the `openclaw-config` workflow. The
 `Long-running monitor test (fork or skip-clean)` step should print
 `PASS: bounded long-running monitor completed N clean iterations.`
 and the uploaded `openclaw-long-running-outcome` artifact should

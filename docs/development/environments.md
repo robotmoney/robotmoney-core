@@ -13,7 +13,8 @@ data persistence behaviour, and teardown command.
 
 Canonical: Plan tracking issue #109 (formerly `Plan tracking issue #109`). Related design docs:
 `docs/technical/full-stack-devnet.md`, `docs/development/smoke-test-design.md`,
-`docs/technical/fork-e2e-decisions.md`. The principle these modes embody —
+`docs/development/testing-strategy-ethereum.md` (both test stacks — PoS devnet
+and the forked Base harness). The principle these modes embody —
 one production codebase, environments differing only by configuration and
 seeded data — is `docs/development/single-production-codebase.md`.
 
@@ -126,7 +127,7 @@ live-RPC path and manual fixture refresh use:
 
 | Var | Required | Meaning |
 |-----|----------|---------|
-| `RMPC_FORK_RPC_URL` | No (skips tests if absent) | Base mainnet archive endpoint (Alchemy, Infura, or similar). Used when running tests in live-fork mode and when refreshing the checked-in fixture. |
+| `RMPC_FORK_RPC_URL` | No | Base mainnet endpoint. Used only for (a) **optional local** live-fork runs and (b) **fixture regeneration** (archive depth for a pinned historical block). It is **not** a CI secret and gates no merge (ADR-0011); merge-gating CI forks the checked-in fixture offline. The nightly live-drift alarm uses a free public default (`https://base-rpc.publicnode.com`), not a secret. |
 | `RMPC_FORK_BLOCK` | No | Decimal block number pin. CI sets this in the workflow file. Unset → `eth_blockNumber - 50` against the upstream RPC. |
 
 ### Startup command
@@ -181,8 +182,15 @@ pkill -f 'anvil --fork-url'
 
 ### Refreshing the fork-state fixture
 
+Refresh is **developer-owned on change**, not scheduled (ADR-0011): whoever
+adds an adapter, wires a new pool, or changes an integration regenerates the
+fixture in the **same PR**, and a developer refreshes in response to a nightly
+drift-alarm issue. There is no monthly cadence.
+
 ```bash
-# Requires RMPC_FORK_RPC_URL. Run periodically (monthly cadence per ADR §3.2).
+# Requires RMPC_FORK_RPC_URL (archive depth for the pinned block).
+# Run when an integration change requires a new fixture, or in response to a
+# nightly drift-alarm issue — not on a schedule (ADR-0011).
 bash scripts/devnet/snapshot-fork.sh
 # Or via the convenience wrapper:
 bash scripts/devnet/refresh-fork-fixture.sh

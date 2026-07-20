@@ -12,7 +12,7 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 |--------|---------|
 | `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from a pinned mainnet block via `RMPC_FORK_RPC_URL`. Skips loudly when the secret is absent. |
+| `fork` | Anvil forked from the checked-in golden fixture (`testing/fixtures/fork-state/`) at a pinned block — deterministic, offline, no secret, no live RPC (ADR-0011). CI fails loudly if the fixture is missing or zero fork tests run; it never silent-skips. (Live Base-mainnet forking survives only as the non-blocking **nightly drift alarm** via a free public RPC — see suite 5.) |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 ---
@@ -124,8 +124,27 @@ and tears down the Docker Compose stack whenever it needs a clean slate.
 **Environment:** `fork`
 **Tier / triggers:** HEAVY — 4 Geth/Anvil devnet slots, 20-25 min wall-clock. Gates every `pull_request` into `dev` (no path filter) and runs on `push` to `dev`. Feature PRs into phase branches skip this suite; `suite-06` (rmpc-unit) provides fast feedback on those.
 
+**Fixture, not live RPC — golden on the merge gate, live on the nightly (ADR-0011):**
+Merge-gating runs (feature-PR and `dev`-merge) fork the **checked-in golden
+fixture** (`testing/fixtures/fork-state/`, loaded via `anvil --load-state` for
+the Rust layer and via a pinned-block fork of `CURRENT.anvil-state` for the
+Solidity forge tests) — deterministic, offline, **no CI secret, no live RPC**.
+Coverage is **loud** per the repo test-coverage policy: a missing fixture or
+zero executed fork tests fails CI, never silent-skips. (This corrects the
+legacy Solidity fork tests, which called `vm.createSelectFork` against a
+never-provisioned `RMPC_FORK_RPC_URL`/`FORK_RPC_URL` secret and therefore
+silently skip-cleaned to a false green.) A **non-blocking nightly drift alarm**
+forks live **Base mainnet at latest** via a **free public RPC** (public default,
+no secret — e.g. `https://base-rpc.publicnode.com`) and re-runs the suite; on
+failure it opens/updates a tracking issue instead of blocking a merge. That
+nightly is what catches real upstream drift (pool migrations, ABI changes,
+oracle heartbeat changes) a pinned snapshot cannot see. It is dispatched by the
+nightly orchestrator (suite 21).
+
 **Why Anvil here, and why this is not redundant with the Geth+Lighthouse devnet harness:**
-This suite forks **Base mainnet** state (real deployed contracts, real DEX pools, real USDC) and runs the Rust client (`rmpc`) against it. The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes — bugs that only show up against actually-deployed mainnet contracts. The smoke-test devnet (Geth+Lighthouse, see suite 14) cannot do this: it deploys fresh contracts on an empty chain, so it cannot tell you "the calldata `rmpc` generates still matches what is deployed at the real gateway address on Base."
+This suite forks **Base mainnet** state (real deployed contracts, real DEX
+pools, real USDC — committed as the golden fixture, refreshed live only by the
+nightly) and runs the Rust client (`rmpc`) against it. The goal is to catch ABI encoding drift, address-constant mistakes, and real-world RPC error shapes — bugs that only show up against actually-deployed mainnet contracts. The smoke-test devnet (Geth+Lighthouse, see suite 14) cannot do this: it deploys fresh contracts on an empty chain, so it cannot tell you "the calldata `rmpc` generates still matches what is deployed at the real gateway address on Base."
 
 Anvil is used specifically because `anvil --fork-url` is the only ergonomic way to mount mainnet state at a pinned block and let tests mutate it locally (cheat codes like `anvil_setBalance` to fund test accounts on forked USDC). One anvil child per test gives cheap fork-restart-per-test isolation (per the ADR), with no snapshot/revert orchestration. Geth+Lighthouse cannot fork mainnet state this way; that stack is purpose-built for the empty-devnet "boot a real chain locally" scenario.
 
@@ -141,10 +160,11 @@ The two suites are complements, not duplicates. The retired Anvil "OpenClaw demo
 A per-test audit of suite-05's coverage against the alternative suites is recorded in [suite-05-audit.md](./suite-05-audit.md) (issue #248). The audit's recommendation is **keep**, with a follow-up slim of two tests that duplicate suite-6 coverage.
 
 **Jobs:**
-- `pr-smoke` — fast subset; runs on every PR trigger
-- `full-suite` — all scenarios; runs on push to `main` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)
+- `pr-smoke` — fast subset against the **golden fixture** (offline, no secret); runs on every PR trigger
+- `full-suite` — all scenarios against the **golden fixture**; runs on push to `dev` and `workflow_dispatch`; no dependency on `pr-smoke` (different trigger context, not sequential)
+- `live-drift-alarm` — **nightly, non-blocking** (ADR-0011): forks live Base mainnet at latest via a **free public RPC** (public default, no secret) and re-runs the suite as a drift alarm; on failure opens/updates a tracking issue rather than blocking merges. Schedule-only (dispatched by suite 21); never a PR gate.
 
-**Steps (both jobs):**
+**Steps (`pr-smoke` / `full-suite`, golden-fixture path):**
 1. Checkout repository
 2. Install Rust toolchain + clippy
 3. Install Foundry toolchain
@@ -328,7 +348,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 1. Checkout repository
 2. Install Rust + Foundry toolchain
 3. Cargo cache
-4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (skip-cleans without `RMPC_FORK_RPC_URL`)
+4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
 - `refusal` — offline safety assertions, no chain, no model key; runs first
@@ -367,7 +387,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 
 **Jobs:**
 - `safety` — shellcheck, mainnet gate, secret handling; runs immediately; no chain required
-- `walkthrough` — **needs `safety`**; long-running deposit walkthrough against devnet (skip-cleans without `RMPC_FORK_RPC_URL`)
+- `walkthrough` — **needs `safety`**; long-running deposit walkthrough against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Steps — `safety` job:**
 1. Checkout repository
@@ -728,7 +748,8 @@ Every workflow's `name:` and its tier.
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
 | `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
-| `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev` |
+| `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev`; runs against the **golden fixture** — offline, no secret (ADR-0011) |
+| `fork-live-drift-alarm` | nightly | live Base-mainnet fork at latest via free public RPC (no secret); **non-blocking** drift alarm, opens a tracking issue on failure; dispatched by `nightly-full-suite` (ADR-0011) |
 | `rust-client-unit-tests` | quick | |
 | `rust-client-devnet-integration` | heavy | devnet e2e matrix (`smoke`, `scenarios`, `window_cap`, `withdraw`) |
 | `explorer-indexer-migrations-reorg` | quick | |
@@ -760,7 +781,7 @@ Every workflow's `name:` and its tier.
 | 1–2 | `forge-tests.yml` | `unit` \| `invariant` → `coverage` | `anvil` |
 | 3 | `solidity-quality.yml` | `lint` → `slither` | `none` |
 | 4 | `rust-quality.yml` | `lint` → `doc-coverage` | `none` |
-| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (trigger-gated) | `fork` |
+| 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) + `live-drift-alarm` (nightly, non-blocking) | `fork` |
 | 6 | `rmpc-unit.yml` | `unit` | `none` |
 | 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
 | 8 | `explorer-indexer.yml` | `fast` \| `devnet` | `devnet` |

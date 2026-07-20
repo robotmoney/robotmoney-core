@@ -50,17 +50,12 @@ It defines:
 
 ## Fork-state fixture
 
-`testing/fork-e2e-rust` uses a separate checked-in Anvil fork-state
-fixture (`testing/fixtures/fork-state/CURRENT.anvil-state`) for
-fork-based contract tests. This fixture is loaded with `anvil --load-state`
-and requires no live RPC at test time.
-
-To refresh the fixture (developer-run, periodic):
-
-```bash
-# Uses public Base RPC by default; override with RMPC_FORK_RPC_URL.
-bash scripts/devnet/snapshot-fork.sh
-```
+`testing/fork-e2e-rust` loads a separate checked-in Anvil fork-state fixture
+(`testing/fixtures/fork-state/CURRENT.anvil-state`) via `anvil --load-state`,
+requiring no live RPC at test time. For the fixture's purpose, the
+`RMPC_FORK_RPC_URL` regeneration variable, and the developer-owned-on-change
+refresh command (`scripts/devnet/snapshot-fork.sh`), see
+`docs/development/environments.md` §2 ("Fork e2e") and ADR-0011.
 
 ## Troubleshooting
 

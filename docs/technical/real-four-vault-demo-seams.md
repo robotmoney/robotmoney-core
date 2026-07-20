@@ -318,26 +318,13 @@ wETH/USDC, cbBTC/USDC, and wSOL/USDC, plus the Aave/Compound/Morpho adapters.
 | Morpho USDC | `0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca` |
 | Aave aUSDC v3 | `0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB` |
 
-### RMPC_FORK_RPC_URL — archive-RPC dependency
+### RMPC_FORK_RPC_URL — fixture regeneration
 
-`RMPC_FORK_RPC_URL` is referenced in `docs/development/environments.md` as an
-optional environment variable used by `scripts/snapshot-fork.sh` to capture a
-new fork snapshot. It is **not** used at demo boot time; the demo harness loads
-the checked-in `CURRENT.anvil-state` hermetically with no live RPC.
-
-When the Real four-vault demo issues add new pool addresses to
-`ingested_addresses`, a new snapshot must be captured. `snapshot-fork.sh`
-defaults to the public `https://base-rpc.publicnode.com` endpoint, which serves
-`eth_getStorageAt` / `eth_getCode` calls on recent blocks without archive depth.
-Because the fork is pinned to block 46698556 (approximately 4 weeks old at the
-time of this scout), a public RPC may succeed if publicnode's retention covers
-that block, but it is not guaranteed. A private archive endpoint (set via
-`RMPC_FORK_RPC_URL`) removes the retention risk for future snapshot updates.
-
-**Archive RPC is NOT a blocker for CI, the dapp demo, or the fork-e2e suite.**
-All three paths load the checked-in fixture hermetically. The archive RPC is
-only needed when a human operator re-runs `snapshot-fork.sh` to advance the
-pinned block or add new ingested addresses.
+Adding the new pool addresses to `ingested_addresses` requires re-capturing the
+fork snapshot. `RMPC_FORK_RPC_URL` (archive depth for the pinned block) is used
+only for that developer-run regeneration — never at CI, dapp-demo, or fork-e2e
+boot, which all load the checked-in fixture offline. See
+`docs/development/environments.md` §2 and ADR-0011.
 
 ---
 

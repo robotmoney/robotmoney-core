@@ -1,6 +1,6 @@
 # Suite-05 (Anvil mainnet-fork) coverage audit
 
-> Canonical: `docs/development/ci-suites.md` §5, `docs/technical/fork-e2e-decisions.md`,
+> Canonical: `docs/development/ci-suites.md` §5, `docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md`,
 > `Plan tracking issue #109` §8 and §9.
 
 This audit answers a single question: does suite-05 catch regression

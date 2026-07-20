@@ -224,5 +224,5 @@ Prerequisites (out of scope for #839 — flip the suite from "skipped" to
 
 - [docs/prd.md §11](../prd.md) — Vault types and adapter ecosystem
 - [docs/development/smoke-test-design.md](../development/smoke-test-design.md) — Devnet fixture design
-- [docs/technical/fork-e2e-decisions.md](../technical/fork-e2e-decisions.md) — Fork harness design decisions
+- [docs/development/testing-strategy-ethereum.md](../development/testing-strategy-ethereum.md) § Forked Base mainnet harness — Fork harness design
 - Issue #839 — Full Base testnet e2e implementation
