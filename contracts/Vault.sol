@@ -480,6 +480,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         _lastMintedShares = mintShares; // AZ-BSK-2
         emit Deposit(caller, receiver, assets, mintShares);
     }
+
     // slither-disable-end reentrancy-balance
 
     /// @dev Deficit-first two-pass allocator: fill toward `min(equal-target,
@@ -807,6 +808,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 realized = idleBalance + pulled;
         return realized < assetsNeeded ? realized : assetsNeeded;
     }
+
     // slither-disable-end reentrancy-balance
 
     /// @dev Sell the `shares / supplyBefore` fraction of idle USDC and of each
