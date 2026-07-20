@@ -57,28 +57,14 @@ A branch-coverage gate on `RobotMoneyGateway` is enforced by `check_gateway_cove
 
 **Owner domain:** Rust client (`rmpc`) against already-deployed Base contracts  
 **CI workflow:** [`.github/workflows/suite-05-fork-integration.yml`](../.github/workflows/suite-05-fork-integration.yml)  
-**Environment:** `fork` — Anvil forked from a pinned Base block  
-**Required services/secrets:** `RMPC_FORK_RPC_URL` (Base RPC endpoint with archive access). Tests skip loudly when the secret is absent.  
+**Environment:** `fork` — Anvil fork of Base (checked-in `--load-state` fixture, or a live `--fork-url` fork)  
+**Required services/secrets:** No CI secret — the merge gate runs offline against the checked-in `testing/fixtures/fork-state/` fixture. `RMPC_FORK_RPC_URL` is optional and non-secret; the flagship scenarios still need a live fork today (current reality → [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) target).  
 **docs/development/ci-suites.md reference:** [Suite 5](../docs/development/ci-suites.md#5-fork-integration-tests-protocol-adapters)
 
-**Run commands:**
+**Run commands:** see [testing/fork-e2e-rust/README.md](fork-e2e-rust/README.md) and [environments.md](../docs/development/environments.md) §2.
 ```bash
-# Fast PR subset
-cargo test --test abi_address_sanity --test vault_deposit_redeem_smoke \
-  -- --test-threads=1
-
-# Full suite (main / workflow_dispatch only)
-cargo test \
-  --test abi_address_sanity \
-  --test vault_deposit_redeem_smoke \
-  --test dex_route_smoke \
-  --test failure_surface_smoke \
-  --test gas_estimate_reality_check \
-  --test rmpc_get_vault_fork_robotmoney_devnet \
-  --test rmpc_get_balance_fork \
-  --test rmpc_get_allowance_fork \
-  --test rmpc_get_tx_fork \
-  -- --test-threads=1
+# Offline fixture (no RPC).
+cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml
 ```
 
 **Product promise covered:**  
@@ -252,7 +238,7 @@ removed) against real Geth+Lighthouse fork-choice.
 |--------|---------|
 | `devnet` | Geth + Lighthouse Docker Compose stack (`testing/ethereum-testnet/config/`). Lifecycle owned by the test code. |
 | `anvil` | In-process Anvil EVM. No Docker. |
-| `fork` | Anvil forked from a pinned Base block via `RMPC_FORK_RPC_URL`. Skips loudly when the secret is absent. |
+| `fork` | Anvil fork of Base — checked-in `--load-state` fixture (offline, no secret) for the CI merge gate, or a live `--fork-url` fork via optional `RMPC_FORK_RPC_URL`. See [ADR-0011](../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md). |
 | `none` | No chain. Static analysis, pure unit tests, doc checks. |
 
 See [docs/development/ci-suites.md](../docs/development/ci-suites.md) for the full

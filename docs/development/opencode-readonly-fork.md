@@ -200,4 +200,6 @@ a Rust test crate that runs in CI on every PR via
 
 The two fork-driven tests skip cleanly when no archive RPC is
 configured, mirroring [`testing/fork-e2e-rust`](../../testing/fork-e2e-rust)
-— a contributor laptop without an RPC stays green.
+— a contributor laptop without an RPC stays green. This local skip-clean
+is current reality, not the endorsed CI coverage model: ADR-0011 moves
+fork coverage to an offline golden fixture (no secret, loud on missing).
