@@ -15,6 +15,11 @@ bugs FV must pin once fixed).
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests
   (`CustodyInvariantGuard`, `AdapterDelegatecallGuard`, `AccessRoles`, `ERC4626PreconditionChecks`).
+- Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` (Proposed)
+  unifies the vault families into one `Vault` + `IPositionAdapter`. Invariants
+  stated per-family (RobotMoneyVault vs. BasketVault subclasses) apply uniformly
+  to the unified vault and its adapters; per-family "extend the handler to
+  BasketVault/…" notes become single-vault coverage in v2.
 
 ## How to read an entry
 

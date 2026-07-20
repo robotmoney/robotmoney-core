@@ -6,6 +6,8 @@
 
 > Scope: verified source code for all Robot Money smart contracts deployed on Base mainnet. The main production vaults are RobotMoneyVault and the basket-vault family (BasketVault base class with ProtocolAssetVault, AgentTokenVault, and RwaVault subclasses). Allocation and governance infrastructure includes VaultRegistry, PortfolioRouter, and RouterGovernance. All contracts are verified on BaseScan. Source files are in `contracts/` at the repo root. Compiler: `v0.8.24+commit.e11b9ed9`, optimization 200 runs, EVM Cancun. The previous version of this document was a reverse-engineering exercise from ABIs; this version is authoritative from source.
 
+> Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` (Proposed) unifies the two vault families into a single `Vault` + `IPositionAdapter` for v2 (spec: `docs/technical/unified-vault-spec.md`). The v1 contracts documented here stay deployed and untouched; migration is v2-deploy + router-weight shift + retire v1 per ADR-0009.
+
 ---
 
 ## 1. System overview
