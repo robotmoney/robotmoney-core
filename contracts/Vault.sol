@@ -123,20 +123,19 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     address public quarantineAddress;
 
     /// @notice USDC recovered into idle from a revoked/excluded adapter (an
-    ///         ADP-2 exclusion drained via `emergencyWithdrawAdapter`) and
-    ///         therefore NOT backing counted shares. Subtracted from the deposit
-    ///         mint denominator so recovered idle stays with existing holders and
-    ///         is not repriced onto new depositors. NORMALLY ZERO.
+    ///         ADP-2 exclusion drained via `emergencyWithdrawAdapter` /
+    ///         `emergencyDrainAndExclude`) and therefore NOT backing counted
+    ///         shares. Subtracted from the deposit mint denominator so recovered
+    ///         idle is not repriced onto new depositors. NORMALLY ZERO.
     /// @dev    #1121 (emergency-model refinements) owns the full lifecycle of
-    ///         this accumulator — incrementing it when a revoked adapter is
-    ///         drained and decrementing it as the recovered idle is re-deployed.
-    ///         The #1119 core wires it into the denominator (the C1-correct
-    ///         formula) and leaves it at zero; see `_deposit`.
-    // Intentionally left uninitialized in #1119: it stays at the zero default
-    // (the C1 denominator collapses to the OZ `taBefore + 1`) until #1121 wires
-    // its increment/decrement lifecycle. The slither uninitialized-state warning
-    // is therefore a documented false positive for this seam, not a bug.
-    // slither-disable-next-line uninitialized-state
+    ///         this accumulator: it is INCREMENTED when a NOT-counted (ADP-2
+    ///         ineligible) adapter is drained on the EMERGENCY path — the
+    ///         recovered USDC that was outside NAV becomes idle inside NAV — and
+    ///         DECREMENTED by `redeployRevokedIdle` when that recovered idle is
+    ///         routed back into the (healthy) active adapter set. The #1119 core
+    ///         wired it into the denominator (the C1-correct formula); see
+    ///         `_deposit`. Draining a still-counted (eligible) adapter leaves it
+    ///         at zero — those funds already backed shares.
     uint256 public revokedIdle;
 
     // ─── Global NAV-growth-rate limiter (§4.3a, C3 / ORA-7) ────────────
@@ -268,6 +267,18 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     event EmergencyWithdrawAdapterCalled(
         uint256 indexed index, address indexed adapter, uint256 amount, bool success
     );
+    /// @notice Emitted per-adapter by the atomic EMERGENCY arm+execute
+    ///         `emergencyDrainAndExclude`: the adapter was drained (best-effort)
+    ///         and excluded (deactivated) from NAV in a single action. `recovered`
+    ///         is the USDC pulled back; `drainSucceeded` is false when the drain
+    ///         reverted but the adapter was still excluded (skip-and-continue).
+    event AdapterDrainedAndExcluded(
+        uint256 indexed index, address indexed adapter, uint256 recovered, bool drainSucceeded
+    );
+    /// @notice Emitted whenever the `revokedIdle` accumulator changes — credited
+    ///         when a not-counted adapter's recovered USDC lands in idle, and
+    ///         decremented when that recovered idle is re-deployed (#1121).
+    event RevokedIdleUpdated(uint256 oldValue, uint256 newValue);
     /// @notice Emitted when the vault is shut down.
     event Shutdown();
     /// @notice Emitted when a shut-down vault is restored and deposits re-open.
@@ -584,8 +595,8 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     ///      the ordering lives here and in `_pullProportional`/`_sellProportional`
     ///      — this two-pass fill is the baseline it reorders. Keep this the sole
     ///      deposit routing entrypoint.
-    function _routeDeposit(uint256 amount) internal {
-        if (amount == 0) return;
+    function _routeDeposit(uint256 amount) internal returns (uint256 remainingOut) {
+        if (amount == 0) return 0;
 
         uint256 totalAfter = totalAssets(); // already includes the pulled USDC
         uint256 targetBps = _targetBpsFor();
@@ -623,6 +634,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         }
 
         if (remaining > 0) emit UnroutedDeposit(remaining);
+        return remaining;
     }
 
     /// @dev Transfer USDC to an eligible adapter and deploy it with the per-leg
@@ -1005,10 +1017,18 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     }
 
     // ─── Emergency (EMERGENCY_ROLE) ──────────────────────────────────
-    // SEAM (#1121): the EMERGENCY-gated emergency-model refinements (atomic
-    // arm+execute of incident-critical adapter actions, and the `revokedIdle`
-    // accumulator lifecycle for ADP-2 drains) build on these baseline drains.
-    // All EMERGENCY actions pause DEPOSITS only — withdrawals stay open (LIFE-3).
+    // The EMERGENCY-gated emergency model (§4.4/§5.5, resolution Principle 3):
+    // adapter drain / force-remove / NAV-exclusion are EMERGENCY_ROLE hot-key
+    // actions a human responder performs on OBJECTIVE per-adapter failure
+    // conditions (oracle stale past its heartbeat, adapter calls reverting) —
+    // NOT permissionless. `emergencyDrainAndExclude` collapses arm+execute into a
+    // SINGLE action (M-S5): the responder drains AND excludes an adapter with no
+    // intervening ADMIN timelock, preserving the fast-EMERGENCY / timelocked-ADMIN
+    // asymmetry. Drains are skip-and-continue (one failing adapter never blocks
+    // the rest). There is deliberately NO KEEPER_ROLE (rebalancing is flow-based,
+    // §5.6). All EMERGENCY actions pause DEPOSITS only — withdrawals stay open
+    // (LIFE-3). The `revokedIdle` accumulator (credited here, decremented by
+    // `redeployRevokedIdle`) keeps recovered ADP-2 idle out of the mint denominator.
 
     /// @notice Pause DEPOSITS (entry hard-stop). Withdrawals stay open (LIFE-3).
     function pause() external onlyRole(EMERGENCY_ROLE) {
@@ -1033,6 +1053,9 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (!adapters[i].active) continue;
+            // Snapshot counted-status BEFORE draining: only funds that were NOT
+            // in NAV (an ADP-2 ineligible-but-active adapter) become `revokedIdle`.
+            bool wasCounted = _isAdapterCounted(i);
             IPositionAdapter adpt = adapters[i].adapter;
             address adptAddr = address(adpt);
             uint256 balance;
@@ -1044,6 +1067,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             }
             if (balance == 0) continue;
             try adpt.withdraw(balance, 0) returns (uint256 actual) {
+                if (!wasCounted && actual > 0) _creditRevokedIdle(actual);
                 emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
             } catch {
                 emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
@@ -1062,6 +1086,8 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             revert AdapterNotFound();
         }
         _setDepositsPaused(true);
+        // Snapshot counted-status BEFORE draining (see `_creditRevokedIdle`).
+        bool wasCounted = _isAdapterCounted(index);
         IPositionAdapter adpt = adapters[index].adapter;
         address adptAddr = address(adpt);
         uint256 balance;
@@ -1076,15 +1102,98 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             return;
         }
         try adpt.withdraw(balance, 0) returns (uint256 actual) {
-            // SEAM (#1121): when this drained adapter is an ADP-2 EXCLUSION
-            // (allowlist/codehash revoked while still active), the recovered
-            // `actual` USDC is NOT backing counted shares and #1121 credits it to
-            // `revokedIdle` here (and decrements as it is re-deployed), so the
-            // deposit mint denominator excludes it. The #1119 baseline leaves
-            // `revokedIdle` at zero.
+            // When this drained adapter is an ADP-2 EXCLUSION (allowlist/codehash
+            // revoked while still active, so NOT counted in NAV), the recovered
+            // `actual` USDC lands in idle (which IS counted) but was NOT backing
+            // shares — credit it to `revokedIdle` so the mint denominator excludes
+            // it. A still-counted (eligible) adapter's funds already backed shares,
+            // so nothing is credited.
+            if (!wasCounted && actual > 0) _creditRevokedIdle(actual);
             emit EmergencyWithdrawAdapterCalled(index, adptAddr, actual, true);
         } catch {
             emit EmergencyWithdrawAdapterCalled(index, adptAddr, 0, false);
+        }
+    }
+
+    /// @notice Atomic EMERGENCY arm+execute (M-S5): drain AND exclude a set of
+    ///         adapters in a SINGLE `EMERGENCY_ROLE` action, with no intervening
+    ///         ADMIN timelock. Each listed adapter is drained best-effort and then
+    ///         deactivated (excluded from NAV) regardless of whether the drain
+    ///         reverted — skip-and-continue, so one failing adapter never blocks
+    ///         the rest. Recovered USDC from a NOT-counted (ADP-2 ineligible)
+    ///         adapter is credited to `revokedIdle`. Invalid / already-inactive
+    ///         indices are skipped. Pauses deposits (LIFE-3: withdrawals stay open).
+    /// @param indices The adapter indices to drain and exclude.
+    function emergencyDrainAndExclude(uint256[] calldata indices)
+        external
+        onlyRole(EMERGENCY_ROLE)
+        nonReentrant
+    {
+        _setDepositsPaused(true);
+        uint256 n = indices.length;
+        for (uint256 k = 0; k < n; k++) {
+            uint256 index = indices[k];
+            // Skip-and-continue over invalid / already-excluded indices.
+            if (index >= adapters.length || !adapters[index].active) continue;
+            bool wasCounted = _isAdapterCounted(index);
+            IPositionAdapter adpt = adapters[index].adapter;
+            address adptAddr = address(adpt);
+
+            uint256 balance;
+            try adpt.totalAssets() returns (uint256 reported) {
+                balance = reported;
+            } catch {
+                balance = 0;
+            }
+
+            uint256 recovered;
+            bool drainSucceeded;
+            if (balance == 0) {
+                // Nothing to pull (or an unreadable mark): a clean exclusion.
+                drainSucceeded = true;
+            } else {
+                try adpt.withdraw(balance, 0) returns (uint256 actual) {
+                    recovered = actual;
+                    drainSucceeded = true;
+                } catch {
+                    // Drain reverted — still exclude below (skip-and-continue).
+                    drainSucceeded = false;
+                }
+            }
+
+            // Exclude from NAV atomically with the drain (arm+execute).
+            adapters[index].active = false;
+            if (!wasCounted && recovered > 0) _creditRevokedIdle(recovered);
+            emit AdapterDrainedAndExcluded(index, adptAddr, recovered, drainSucceeded);
+        }
+    }
+
+    /// @dev Accumulate `amount` of recovered-but-not-counted USDC into the
+    ///      `revokedIdle` exclusion. Single writer used by every EMERGENCY drain.
+    function _creditRevokedIdle(uint256 amount) internal {
+        uint256 old = revokedIdle;
+        revokedIdle = old + amount;
+        emit RevokedIdleUpdated(old, revokedIdle);
+    }
+
+    /// @notice Re-deploy recovered revoked-idle USDC back into the (now-healthy)
+    ///         active adapter set and DECREMENT `revokedIdle` by the amount that
+    ///         was actually routed. This is the recovery side of the ADP-2
+    ///         lifecycle: once governance has registered a trustworthy replacement
+    ///         adapter, the recovered idle stops being excluded and rejoins the
+    ///         counted NAV backing new mints. `ADMIN_ROLE` (timelock) — a recovery
+    ///         action, not an emergency hot-key one. Reverts if `amount` exceeds
+    ///         the outstanding `revokedIdle`.
+    /// @param amount The revoked-idle USDC to redeploy (<= `revokedIdle`).
+    function redeployRevokedIdle(uint256 amount) external onlyRole(ADMIN_ROLE) nonReentrant {
+        if (amount == 0 || amount > revokedIdle) revert InvalidParam();
+        if (_activeAdapterCount() == 0) revert NoActiveAdapters();
+        uint256 unrouted = _routeDeposit(amount);
+        uint256 routed = amount - unrouted;
+        if (routed > 0) {
+            uint256 old = revokedIdle;
+            revokedIdle = old - routed;
+            emit RevokedIdleUpdated(old, revokedIdle);
         }
     }
 
