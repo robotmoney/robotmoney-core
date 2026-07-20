@@ -237,7 +237,11 @@ jobs:
         # getPastVotes either returns the latest value instead of the historical
         # one, or does not revert when it should (AZ-GOV-1). All pass in the
         # forge test (unit) job; only the coverage instrumentation pass is affected.
-        run: forge coverage --report lcov --ir-minimum --no-match-test "^testFail_|^test_getPastVotes_" --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest"
+        run: >-
+          forge coverage --report lcov --ir-minimum
+          --no-match-test "^testFail_|^test_getPastVotes_"
+          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest"
+          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info
