@@ -27,6 +27,7 @@
     - [IChronicleOracle](contracts/interfaces/IChronicleOracle.sol/interface.IChronicleOracle.md)
     - [IComet](contracts/interfaces/IComet.sol/interface.IComet.md)
     - [IObservablePool](contracts/interfaces/IObservablePool.sol/interface.IObservablePool.md)
+    - [IPositionAdapter](contracts/interfaces/IPositionAdapter.sol/interface.IPositionAdapter.md)
     - [IStrategyAdapter](contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md)
     - [ISwapRouter](contracts/interfaces/ISwapRouter.sol/interface.ISwapRouter.md)
     - [IUniswapV3Pool](contracts/interfaces/IUniswapV3Pool.sol/interface.IUniswapV3Pool.md)

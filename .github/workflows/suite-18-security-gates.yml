@@ -46,6 +46,9 @@ on:
       - "clients/dapp/scripts/check-csp.sh"
       - "scripts/check-audit-ledger.sh"
       - "scripts/check-seam-map-drift.sh"
+      - "scripts/validate-seam-map"
+      - "docs/technical/unified-vault-seam-map.json"
+      - "docs/technical/fixtures/unified-vault-seam-map.missing-entry.json"
       - "services/watchdog/src/scan_residual_seams.rs"
       - "services/explorer-indexer/src/scan_residual_seams.rs"
       - "clients/rust-payment-client/src/scan_residual_seams.rs"
@@ -156,3 +159,28 @@ jobs:
         run: shellcheck scripts/check-seam-map-drift.sh
       - name: Check scan_residual_seams.rs drift
         run: bash scripts/check-seam-map-drift.sh
+
+  # ── Unified-vault seam-map validator ───────────────────────────────────────
+  # Gates the Unified-Vault phase (ADR-0010) extraction/insertion seam map:
+  # docs/technical/unified-vault-seam-map.json MUST exist, parse as JSON, and
+  # carry a non-empty extraction+insertion entry for each of the 8 named hot
+  # files. The downstream feature issues (#1116-#1131) consume this map for
+  # collision-avoidance; dropping a hot file must fail LOUDLY, not silently.
+  # Script: scripts/validate-seam-map (issue #1115). shellcheck runs first
+  # (shell-driven gate). The --self-test asserts the validator FIRES on the
+  # negative fixture (a copy with one hot-file entry removed) before trusting a
+  # green on the committed artifact — a jq schema assertion, both paths.
+  seam-map-validator:
+    name: seam-map-validator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: shellcheck seam-map validator
+        run: shellcheck scripts/validate-seam-map
+      - name: Self-test — committed map passes, negative fixture fails
+        run: bash scripts/validate-seam-map --self-test
+      - name: Validate committed unified-vault seam map
+        run: bash scripts/validate-seam-map
