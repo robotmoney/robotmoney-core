@@ -130,7 +130,7 @@ pub fn vault_deposit_at(
     receiver: Address,
 ) -> Result<Receipt, HarnessError> {
     let call = IRobotMoneyVault::depositCall { assets, receiver };
-    account.send(vault, &call, U256::ZERO, 800_000)
+    account.send(vault, &call, U256::ZERO, 5_000_000)
 }
 
 /// Redeem `shares` from the vault.
@@ -160,7 +160,7 @@ pub fn vault_redeem_at(
         receiver,
         owner,
     };
-    account.send(vault, &call, U256::ZERO, 1_200_000)
+    account.send(vault, &call, U256::ZERO, 5_000_000)
 }
 
 // ──────────────────────────────────────────────────────────────────────

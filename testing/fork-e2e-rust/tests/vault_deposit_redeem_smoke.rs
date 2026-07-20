@@ -47,25 +47,53 @@ fn vault_deposit_redeem_smoke() {
         "funding failed: USDC={usdc_before} < deposit={deposit}"
     );
 
-    // Exercise both ERC-4626 directions against the storage-enriched fixture.
+    // Approve the fixture vault, deposit, then assert shares were actually minted.
+    scenarios::approve_usdc(&user, vault, deposit).expect("approve fixture vault");
+    scenarios::vault_deposit_at(&user, vault, deposit, user.address).expect("deposit");
+
     let shares = scenarios::vault_read_u256_at(
         &user,
         vault,
-        &IRobotMoneyVault::previewDepositCall { assets: deposit },
+        &IRobotMoneyVault::balanceOfCall {
+            account: user.address,
+        },
     )
-    .expect("Vault.previewDeposit");
-    assert!(shares > U256::ZERO, "previewDeposit returned zero shares");
-    let assets_back = scenarios::vault_read_u256_at(
+    .expect("Vault.balanceOf after deposit");
+    assert!(shares > U256::ZERO, "no vault shares minted after deposit");
+
+    let max_redeem = scenarios::vault_read_u256_at(
         &user,
         vault,
-        &IRobotMoneyVault::previewRedeemCall { shares },
+        &IRobotMoneyVault::maxRedeemCall {
+            owner: user.address,
+        },
     )
-    .expect("Vault.previewRedeem");
+    .expect("Vault.maxRedeem");
+    assert!(
+        max_redeem > U256::ZERO,
+        "Vault.maxRedeem returned zero after deposit"
+    );
+    let to_redeem = if max_redeem < shares {
+        max_redeem
+    } else {
+        shares
+    };
+    scenarios::vault_redeem_at(&user, vault, to_redeem, user.address, user.address)
+        .expect("redeem");
+
+    let usdc_after = scenarios::usdc_read_u256(
+        &fx,
+        &user,
+        &IERC20::balanceOfCall {
+            account: user.address,
+        },
+    )
+    .expect("USDC.balanceOf after redeem");
     let exit_fee_bps =
         scenarios::vault_read_u256_at(&user, vault, &IRobotMoneyVault::exitFeeBpsCall {})
             .expect("exitFeeBps");
 
-    let loss = deposit - assets_back;
+    let loss = usdc_before - usdc_after;
     // (exitFeeBps + 10 bps slack) on the deposit, plus 1 wei rounding.
     let max_allowed =
         (deposit * (exit_fee_bps + U256::from(10u64))) / U256::from(10_000u64) + U256::from(1u64);

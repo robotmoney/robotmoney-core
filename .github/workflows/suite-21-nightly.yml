@@ -45,6 +45,8 @@ jobs:
     name: Dispatch all CI suites against dev HEAD
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CI_CLASS: ignore
     steps:
       - name: Dispatch suites
         env:
@@ -89,6 +91,8 @@ jobs:
     name: Non-blocking live Base fork drift alarm
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CI_CLASS: heavy
     steps:
       - uses: actions/checkout@v4
         with:

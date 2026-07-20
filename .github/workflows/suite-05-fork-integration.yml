@@ -45,16 +45,17 @@
 name: fork-protocol-adapter-integration
 
 on:
-  # HEAVY tier: boots 4 isolated Geth/Anvil devnets (20-25 min wall-clock) and is
-  # the merge gate for `dev` — it runs on every pull_request targeting dev (no path
-  # filter, so the gate always reports for any branch merging to dev) and on push to
-  # dev for merged-commit coverage. Feature PRs into phase branches skip this suite
-  # and rely on suite-06 (rmpc-unit) for fast feedback.
+  # System-correctness: boots isolated Geth/Anvil devnets (20-25 min wall-clock)
+  # once a PR is ready for review, and reruns on push to dev for merged-commit
+  # coverage. Draft PRs rely on suite-06 (rmpc-unit) for fast feedback.
   # See docs/development/ci-suites.md (CI velocity tiers).
   push:
     branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
     branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -70,6 +71,9 @@ jobs:
     name: fork-integration-${{ matrix.group }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     strategy:
       fail-fast: false
       matrix:
@@ -194,7 +198,9 @@ jobs:
     name: base-testnet-adapters
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     env:
+      CI_CLASS: system-correctness
       # Live Base Sepolia RPC + faucet-funded EOA key. Absent ⇒ tests skip.
       BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
       BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}

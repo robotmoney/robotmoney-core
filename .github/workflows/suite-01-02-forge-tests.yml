@@ -29,12 +29,15 @@
 name: forge-unit-invariant-coverage
 
 on:
-  # The `unit`/`invariant` jobs are LIGHT tier and run on PRs to any branch and
-  # on push to dev/dev-phase-*. The `coverage` job is HEAVY tier and gates the
-  # `dev` merge boundary via its own `if:` guard (push-to-dev or PR-into-dev).
+  # Unit tests are feature-correctness and run throughout the PR lifecycle.
+  # Stateful invariants, fork regressions, and whole-suite coverage are
+  # system-correctness and start once a PR is ready for review.
   push:
-    branches: [dev, "dev-phase-*"]
+    branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
   workflow_dispatch:
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
@@ -50,6 +53,8 @@ jobs:
     name: forge-unit-tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,6 +107,9 @@ jobs:
     name: forge-invariant-fuzz-tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,6 +140,9 @@ jobs:
     name: forge-fork-vault-regressions
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # The fork gate is deterministic and offline: every target loads the checked-in
     # Base state and fails loudly if the fixture or executed test count is missing.
     steps:
@@ -183,15 +194,15 @@ jobs:
     name: forge-coverage-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CI_CLASS: system-correctness
     needs: [unit, invariant]
-    # HEAVY tier: unit + invariant stay light and run on PRs to any branch, but the
-    # expensive lcov coverage gate is anchored at the `dev` merge boundary — it runs
-    # on push to dev and on pull_requests targeting dev (the dev merge gate), not on
-    # ordinary feature PRs or dev-phase-* pushes.
+    # The expensive lcov coverage gate is system-correctness: it starts at
+    # ready-for-review and also runs after merge on push to dev.
     # See docs/development/ci-suites.md (CI velocity tiers).
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-      (github.event_name == 'pull_request' && github.base_ref == 'dev')
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
         with:
