@@ -17,4 +17,5 @@
 - [Vault](Vault.sol/contract.Vault.md)
 - [IRouterDefaultWeights](VaultRegistry.sol/interface.IRouterDefaultWeights.md)
 - [IRetirableVault](VaultRegistry.sol/interface.IRetirableVault.md)
+- [IExactnessVault](VaultRegistry.sol/interface.IExactnessVault.md)
 - [VaultRegistry](VaultRegistry.sol/contract.VaultRegistry.md)
