@@ -210,6 +210,12 @@ contract UniswapV3AssetPositionAdapter is IPositionAdapter {
             POOL, TOKEN, USDC, window, NAV_DEVIATION_PROBE, navDeviationGuardBps
         );
 
+        // slither-disable-start reentrancy-balance
+        // Justification: `taBefore`/post-swap `totalAssets()` is the standard
+        // balance-delta pattern to measure the realized NAV increase the swap
+        // delivered. Only the `VAULT` (whose deposit entrypoint is `nonReentrant`
+        // at the call site) can call this `onlyVault` function, so re-entry via
+        // `SWAP_ADAPTER.swap` is not reachable; USDC/TOKEN are not ERC777 tokens.
         uint256 taBefore = totalAssets();
 
         // Venue min-out floor = TWAP token estimate haircut by the slippage bound.
@@ -224,6 +230,7 @@ contract UniswapV3AssetPositionAdapter is IPositionAdapter {
 
         // Credit the realized NAV delta (spec §2.2). taBefore/after are TWAP marks.
         valueAdded = totalAssets() - taBefore;
+        // slither-disable-end reentrancy-balance
         if (valueAdded < minValueOut) revert SlippageExceeded();
         emit Deployed(usdcIn, valueAdded);
     }
@@ -241,6 +248,13 @@ contract UniswapV3AssetPositionAdapter is IPositionAdapter {
         onlyVault
         returns (uint256 usdcOut)
     {
+        // slither-disable-start reentrancy-balance
+        // Justification: `tokenBal` is the standard held-balance read used to size
+        // and clamp the liquidation, and `usdcOut` is the swap's realized proceeds.
+        // Only the `VAULT` (whose withdraw entrypoint is `nonReentrant` at the call
+        // site) can call this `onlyVault` function, so re-entry via
+        // `SWAP_ADAPTER.swap`/`twapPrice` is not reachable; TOKEN/USDC are not
+        // ERC777 tokens.
         uint256 tokenBal = IERC20(TOKEN).balanceOf(address(this));
         if (tokenBal == 0) return 0;
         uint32 window = effectiveTwapWindow();
@@ -270,6 +284,7 @@ contract UniswapV3AssetPositionAdapter is IPositionAdapter {
         IERC20(TOKEN).forceApprove(address(SWAP_ADAPTER), 0);
 
         if (usdcOut < effectiveFloor) revert SlippageExceeded();
+        // slither-disable-end reentrancy-balance
         emit Withdrawn(usdcWanted, usdcOut);
     }
 
