@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a25788704e847c258d9460b66a6534bffb0b77e/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -249,6 +249,47 @@ function setRouterEligible(address vault, bool eligible) external onlyRole(ADMIN
 |`eligible`|`bool`|New router-eligibility value.|
 
 
+### migrateEligibility
+
+Atomically flip `vault`'s router-eligibility **and** re-set the
+linked router's default-weight vector in one transaction. This is
+the ADR-0002 migration interlock fix (H-A1, issue #1128).
+The non-atomic path deadlocks once the router carries a
+full-length default vector: `setRouterEligible` reverts
+`StaleDefaultWeightsLength` because the vector length no longer
+matches the new count, while `PortfolioRouter.setDefaultWeights`
+reverts `LengthMismatch` because the count has not moved yet —
+each half is blocked on the other. This call breaks the deadlock
+by moving the count and the vector together, so the
+`routerEligibleCount == defaultWeights.length` invariant is never
+observed in an inconsistent state.
+The eligibility flip is applied to this registry's state first,
+then the router's registry-only
+`applyMigrationDefaultWeights` re-runs the full default-vector
+validation against the updated count. A default vector whose
+length disagrees with the new count is rejected there and reverts
+this whole transaction, so no partial update can persist. Requires
+a linked router. Restricted to `ADMIN_ROLE`.
+
+
+```solidity
+function migrateEligibility(
+    address vault,
+    bool eligible,
+    address[] calldata defaultVaults,
+    uint256[] calldata defaultBps
+) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|        Address of an already-registered vault.|
+|`eligible`|`bool`|     New router-eligibility value for `vault`.|
+|`defaultVaults`|`address[]`|Ordered vault list for the new default vector; its length must equal the post-flip eligible count.|
+|`defaultBps`|`uint256[]`|   Parallel bps weights (must sum to BPS_DENOMINATOR).|
+
+
 ### setRouter
 
 Link the `PortfolioRouter` whose default weight vector length is
@@ -471,6 +512,17 @@ error RouterUnlinkBlocked(uint256 defaultLength);
 |Name|Type|Description|
 |----|----|-----------|
 |`defaultLength`|`uint256`| Current default weight vector length on the router.|
+
+### RouterNotLinked
+`migrateEligibility` was called while no `PortfolioRouter` is
+linked. The atomic eligibility+weights entry point only makes
+sense against a linked router whose default vector it re-sets in
+the same call; with no router, use plain `setRouterEligible`.
+
+
+```solidity
+error RouterNotLinked();
+```
 
 ## Structs
 ### VaultMetadata

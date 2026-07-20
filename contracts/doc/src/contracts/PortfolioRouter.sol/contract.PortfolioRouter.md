@@ -1,5 +1,5 @@
 # PortfolioRouter
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a25788704e847c258d9460b66a6534bffb0b77e/contracts/PortfolioRouter.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md), ReentrancyGuard
@@ -228,6 +228,51 @@ function setDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
 |`vaults`|`address[]`| Ordered list of vault addresses.|
 |`bps`|`uint256[]`|    Parallel weight array in basis points (must sum to 10 000).|
 
+
+### applyMigrationDefaultWeights
+
+Registry-only entry point that writes the default-weight vector
+atomically with a router-eligibility flip. Callable **only** by
+the linked `VaultRegistry` (`VaultRegistry.migrateEligibility`),
+which invokes it after it has already updated
+`routerEligibleCount`, so the shared length check below sees the
+new count and the two contracts never expose a stale
+(count != vector length) state to any external observer. This is
+the ADR-0002 migration interlock fix (H-A1, issue #1128): the
+prior non-atomic `setRouterEligible` → `setDefaultWeights` path
+deadlocks once a full-length default exists, because each half
+reverts on the other's stale length.
+Carries no independent authority: it runs the exact same
+validation as `setDefaultWeights` (length == `routerEligibleCount`,
+every leg Active AND router-eligible, bps sum == BPS_DENOMINATOR),
+so it can never write a vector the admin path could not. A partial
+update — a vector whose length disagrees with the registry's
+freshly-updated count — is rejected here and reverts the whole
+atomic transaction.
+
+
+```solidity
+function applyMigrationDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+    external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vaults`|`address[]`| Ordered list of vault addresses.|
+|`bps`|`uint256[]`|    Parallel weight array in basis points (must sum to 10 000).|
+
+
+### _setDefaultWeights
+
+Shared body for `setDefaultWeights` (ADMIN_ROLE) and
+`applyMigrationDefaultWeights` (registry-only). Enforces the full
+default-vector invariant so both entry points write identical state.
+
+
+```solidity
+function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) internal;
+```
 
 ### clearVotedWeights
 
@@ -1118,6 +1163,19 @@ error VaultNotRouterEligible(address vault);
 |Name|Type|Description|
 |----|----|-----------|
 |`vault`|`address`|The vault address that lacks the eligibility flag.|
+
+### OnlyRegistry
+`applyMigrationDefaultWeights` was called by an address other
+than the linked `VaultRegistry`. That entry point exists solely
+so the registry can set the default-weight vector atomically with
+a router-eligibility flip (the ADR-0002 migration interlock fix,
+issue #1128); it carries no independent authority and is never
+callable directly. Governance sets defaults via `setDefaultWeights`.
+
+
+```solidity
+error OnlyRegistry();
+```
 
 ## Structs
 ### LegPreview
