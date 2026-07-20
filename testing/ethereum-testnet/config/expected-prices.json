@@ -17,7 +17,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1614.65
+      "expected_price": 1905.13
     },
     {
       "id": "weth-usdc",
@@ -27,7 +27,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1614.65
+      "expected_price": 1905.13
     },
     {
       "id": "cbbtc-usdc",
@@ -37,7 +37,7 @@
       "quote_decimals": 6,
       "base_is_token0": false,
       "captured": true,
-      "expected_price": 61312.53
+      "expected_price": 65302.25
     },
     {
       "id": "wsol-usdc",
