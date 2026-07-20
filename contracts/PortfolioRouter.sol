@@ -264,6 +264,14 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
     /// @param vault The vault address that lacks the eligibility flag.
     error VaultNotRouterEligible(address vault);
 
+    /// @notice `applyMigrationDefaultWeights` was called by an address other
+    ///         than the linked `VaultRegistry`. That entry point exists solely
+    ///         so the registry can set the default-weight vector atomically with
+    ///         a router-eligibility flip (the ADR-0002 migration interlock fix,
+    ///         issue #1128); it carries no independent authority and is never
+    ///         callable directly. Governance sets defaults via `setDefaultWeights`.
+    error OnlyRegistry();
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param _usdc      USDC token address.
@@ -340,6 +348,41 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuard {
         external
         onlyRole(ADMIN_ROLE)
     {
+        _setDefaultWeights(vaults, bps);
+    }
+
+    /// @notice Registry-only entry point that writes the default-weight vector
+    ///         atomically with a router-eligibility flip. Callable **only** by
+    ///         the linked `VaultRegistry` (`VaultRegistry.migrateEligibility`),
+    ///         which invokes it after it has already updated
+    ///         `routerEligibleCount`, so the shared length check below sees the
+    ///         new count and the two contracts never expose a stale
+    ///         (count != vector length) state to any external observer. This is
+    ///         the ADR-0002 migration interlock fix (H-A1, issue #1128): the
+    ///         prior non-atomic `setRouterEligible` → `setDefaultWeights` path
+    ///         deadlocks once a full-length default exists, because each half
+    ///         reverts on the other's stale length.
+    ///
+    ///         Carries no independent authority: it runs the exact same
+    ///         validation as `setDefaultWeights` (length == `routerEligibleCount`,
+    ///         every leg Active AND router-eligible, bps sum == BPS_DENOMINATOR),
+    ///         so it can never write a vector the admin path could not. A partial
+    ///         update — a vector whose length disagrees with the registry's
+    ///         freshly-updated count — is rejected here and reverts the whole
+    ///         atomic transaction.
+    /// @param vaults  Ordered list of vault addresses.
+    /// @param bps     Parallel weight array in basis points (must sum to 10 000).
+    function applyMigrationDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+        external
+    {
+        if (msg.sender != address(registry)) revert OnlyRegistry();
+        _setDefaultWeights(vaults, bps);
+    }
+
+    /// @dev Shared body for `setDefaultWeights` (ADMIN_ROLE) and
+    ///      `applyMigrationDefaultWeights` (registry-only). Enforces the full
+    ///      default-vector invariant so both entry points write identical state.
+    function _setDefaultWeights(address[] calldata vaults, uint256[] calldata bps) internal {
         if (vaults.length != bps.length) revert LengthMismatch();
         // The default vector must span exactly the router-eligible vault set so
         // it can never carry a stale length relative to eligibility (the same

@@ -14,6 +14,15 @@ import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 interface IRouterDefaultWeights {
     /// @notice Number of legs in the router's default weight vector.
     function defaultWeightsLength() external view returns (uint256);
+
+    /// @notice Registry-only entry point that sets the router's default-weight
+    ///         vector. Called by `migrateEligibility` after this registry has
+    ///         already updated `routerEligibleCount`, so the router's own
+    ///         length check sees the new count and the eligibility flip + weight
+    ///         write land in one transaction. ADR-0002 migration interlock fix
+    ///         (H-A1, issue #1128).
+    function applyMigrationDefaultWeights(address[] calldata vaults, uint256[] calldata bps)
+        external;
 }
 
 /// @dev Minimal view the registry needs to drive the vault deposit-halt leg of
@@ -173,6 +182,12 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///         re-set `defaultWeights` on the router first, then unlink.
     /// @param defaultLength  Current default weight vector length on the router.
     error RouterUnlinkBlocked(uint256 defaultLength);
+
+    /// @notice `migrateEligibility` was called while no `PortfolioRouter` is
+    ///         linked. The atomic eligibility+weights entry point only makes
+    ///         sense against a linked router whose default vector it re-sets in
+    ///         the same call; with no router, use plain `setRouterEligible`.
+    error RouterNotLinked();
 
     // ─── Constructor ─────────────────────────────────────────────────────────
 
@@ -342,6 +357,58 @@ contract VaultRegistry is AdminFloorAccessControl {
         routerEligibleCount = newCount;
         emit RouterEligibilityChanged(vault, old, eligible);
         _routerEligible[vault] = eligible;
+    }
+
+    /// @notice Atomically flip `vault`'s router-eligibility **and** re-set the
+    ///         linked router's default-weight vector in one transaction. This is
+    ///         the ADR-0002 migration interlock fix (H-A1, issue #1128).
+    ///
+    ///         The non-atomic path deadlocks once the router carries a
+    ///         full-length default vector: `setRouterEligible` reverts
+    ///         `StaleDefaultWeightsLength` because the vector length no longer
+    ///         matches the new count, while `PortfolioRouter.setDefaultWeights`
+    ///         reverts `LengthMismatch` because the count has not moved yet —
+    ///         each half is blocked on the other. This call breaks the deadlock
+    ///         by moving the count and the vector together, so the
+    ///         `routerEligibleCount == defaultWeights.length` invariant is never
+    ///         observed in an inconsistent state.
+    ///
+    ///         The eligibility flip is applied to this registry's state first,
+    ///         then the router's registry-only
+    ///         `applyMigrationDefaultWeights` re-runs the full default-vector
+    ///         validation against the updated count. A default vector whose
+    ///         length disagrees with the new count is rejected there and reverts
+    ///         this whole transaction, so no partial update can persist. Requires
+    ///         a linked router. Restricted to `ADMIN_ROLE`.
+    /// @param vault         Address of an already-registered vault.
+    /// @param eligible      New router-eligibility value for `vault`.
+    /// @param defaultVaults Ordered vault list for the new default vector; its
+    ///                      length must equal the post-flip eligible count.
+    /// @param defaultBps    Parallel bps weights (must sum to BPS_DENOMINATOR).
+    function migrateEligibility(
+        address vault,
+        bool eligible,
+        address[] calldata defaultVaults,
+        uint256[] calldata defaultBps
+    ) external onlyRole(ADMIN_ROLE) {
+        if (!_registered[vault]) revert NotRegistered();
+        if (address(router) == address(0)) revert RouterNotLinked();
+
+        bool old = _routerEligible[vault];
+        uint256 newCount = routerEligibleCount;
+        if (old != eligible) {
+            newCount = eligible ? newCount + 1 : newCount - 1;
+            routerEligibleCount = newCount;
+            _routerEligible[vault] = eligible;
+            emit RouterEligibilityChanged(vault, old, eligible);
+        }
+
+        // Re-set the router's default vector against the now-updated count.
+        // No StaleDefaultWeightsLength guard here — that guard exists to block
+        // the non-atomic path; the router's own length check (vector length ==
+        // routerEligibleCount) enforces the same invariant atomically and
+        // reverts the whole call on any mismatch.
+        router.applyMigrationDefaultWeights(defaultVaults, defaultBps);
     }
 
     /// @notice Link the `PortfolioRouter` whose default weight vector length is

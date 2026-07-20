@@ -5644,6 +5644,34 @@ export const registryAbiGenerated = [
   },
   {
     type: "function",
+    name: "migrateEligibility",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+      {
+        name: "eligible",
+        type: "bool",
+        internalType: "bool",
+      },
+      {
+        name: "defaultVaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "defaultBps",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "reactivate",
     inputs: [
       {
@@ -6053,6 +6081,11 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "RouterNotLinked",
+    inputs: [],
+  },
+  {
+    type: "error",
     name: "RouterUnlinkBlocked",
     inputs: [
       {
@@ -6148,6 +6181,24 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "applyMigrationDefaultWeights",
+    inputs: [
+      {
+        name: "vaults",
+        type: "address[]",
+        internalType: "address[]",
+      },
+      {
+        name: "bps",
+        type: "uint256[]",
+        internalType: "uint256[]",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -7065,6 +7116,11 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "NoWeightsSet",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "OnlyRegistry",
     inputs: [],
   },
   {
