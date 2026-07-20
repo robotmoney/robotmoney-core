@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "phase": "Unified vault (ADR-0010)",
+  "scout_issue": 1115,
+  "description": "NEGATIVE FIXTURE (issue #1115): a deliberately-broken copy of unified-vault-seam-map.json with the contracts/PortfolioRouter.sol hot-file entry REMOVED. scripts/validate-seam-map MUST exit non-zero on this file. Used by the validator self-test so a silent regression in the validator cannot let a seam-map that drops a hot file ship.",
+  "canonical_docs": [
+    "docs/adr/ADR-0010-unified-vault-architecture.md",
+    "docs/technical/unified-vault-spec.md",
+    "docs/technical/unified-vault-open-questions-resolution.md"
+  ],
+  "frozen_surface": "contracts/interfaces/IPositionAdapter.sol",
+  "open_questions_resolved": [
+    {
+      "id": "OQ-A",
+      "question": "TWAP/oracle pricing extraction boundary — does pricing stay vault-side or move into adapters?",
+      "resolution": "Adapters self-price. Each AssetPositionAdapter owns its TWAP window config (or Chronicle NAV + heartbeat) and produces USDC-denominated totalAssets(); the vault only sums Sigma adapter.totalAssets(). Pricing is NOT wholly delegated: the vault retains one adapter-INDEPENDENT residual price sanity check (a single global aggregate-NAV growth-rate cap on the deposit path, spec 4.3a) so a mis-scaling adapter that passes its own probe is still bounded.",
+      "spec_ref": "unified-vault-spec.md 4.1/4.3/4.3a; ADR-0010 5 (residual price sanity check)"
+    },
+    {
+      "id": "OQ-B",
+      "question": "Does BasketVault library-linking (TickMath and friends) carry into the unified Vault under EIP-170?",
+      "resolution": "Flagged as an EIP-170 spike INPUT for #1119, not decided here. ADR-0010 records that EIP-170 pressure MOVES (swap/TWAP code leaves the vault into adapters) but does not disappear (the vault adds the realized-delta core, dual preview math, dual redemption/fee paths, residual price check). Whether library-linking survives into the unified Vault must be PROVEN by the Phase-2 spike; the linked TickMath moves down into the AssetPositionAdapter codehash. #1127 owns the EIP-170 size gate.",
+      "spec_ref": "ADR-0010 Consequences (M-A2); unified-vault-spec.md 4.2 (linked TickMath in adapter codehash)"
+    },
+    {
+      "id": "OQ-C",
+      "question": "Which per-asset guards move to adapters vs stay vault-side?",
+      "resolution": "Per the resolution doc: the GLOBAL residual price limiter (aggregate NAV-growth-rate cap) stays VAULT-side as a deposit circuit-breaker (#1120); per-asset TWAP-derived swap floors, the ORA-4 NAV-deviation guard, per-asset emergency-unwind guards, pool-usability preconditions, and Chronicle heartbeat move INTO the adapters (#1118/#1121/#1126). The vault keeps one maxSlippageBps for preview math + the min-out it passes per call, plus the vault-stored (timelock-set) emergency floor it passes into drains (M-S2). Adapter config setters are gated by onlyVaultAdmin (transitive vault ADMIN), carrying no independent role tree.",
+      "spec_ref": "unified-vault-spec.md 4.3 (moved-controls table), 4.3a, 4.4; ADR-0010 5"
+    }
+  ],
+  "hot_files": {
+    "contracts/RobotMoneyVault.sol": {
+      "role": "The general-case adapter allocator whose architecture the unification is built on. Becomes the unified `Vault` (superset), NOT retired into a subclass.",
+      "unification_direction": "RobotMoneyVault's IStrategyAdapter registry is the general case; basket assets are made to look like adapters. The vault stays pure USDC-in/USDC-out.",
+      "extraction": [
+        "Nothing venue-specific to shed — RobotMoneyVault has no swap/TWAP/oracle code; it is already asset-agnostic (this is why it is the base for unification, not BasketVault)."
+      ],
+      "insertion": [
+        "Realized-delta `_deposit` core (route USDC into adapters first, mint on realized NAV delta with slippage-floor revert) ported from BasketVault AZ-BSK-1, degenerating to exact for lending adapters (#1119).",
+        "Idle-inclusive OZ mint denominator (`taBefore - revokedIdle + 1`); AZ-BSK-3 idle exclusion applies ONLY to recovered USDC from a revoked/excluded adapter (#1119).",
+        "`allExact()`-gated dual accounting/redemption: exact mode keeps `_pullProportional` + `InsufficientAdapterLiquidity` + fee-on-gross; inexact mode uses BasketVault no-revert `_sellProportional` + `_lastWithdrawnAssets` + fee-on-realized (#1119).",
+        "Vault-attested `AdapterInfo.isExact` bool + `allExact()` registry-visible flag + `ExactnessTransition` timelock/event on class flip; `maxWithdraw/maxRedeem == 0` when `!allExact()` (#1123).",
+        "Residual adapter-independent price sanity check: single vault-wide aggregate-NAV growth-rate checkpoint on the deposit path (#1120).",
+        "Atomic `EMERGENCY_ROLE` arm+execute emergency model; split pause (`depositsPaused`/`withdrawalsPaused`) replacing single `paused()`; vault-side emergency floor + `reabsorbRevokedAdapter` (#1121).",
+        "Isomorphic flow-based rebalancing (largest-deficit-first deposit, largest-surplus-first withdrawal) + self-funded NAV-non-decreasing `forceRebalance` (#1122)."
+      ],
+      "shared_state": [
+        "AdapterInfo[] registry (adapter, capBps, active, isExact) — mutated by #1119 (structure), #1123 (isExact field), #1120 (NAV checkpoint neighbor).",
+        "`adapterAllowed` allowlist + `adapterCodeHashAllowed` codehash pinning — carried over uniformly.",
+        "FEE-2 realized-proceeds fee accounting — extended to cover basket themes.",
+        "`totalAssets()` = idle USDC + Sigma eligible adapter.totalAssets() — read by #1119/#1120/#1122 and the router preflight."
+      ],
+      "downstream_issues": [
+        1119,
+        1120,
+        1121,
+        1122,
+        1123
+      ]
+    },
+    "contracts/vaults/BasketVault.sol": {
+      "role": "Donor of the realized-delta accounting core and no-revert sell path; source of nearly all EXTRACTION into adapters. Retired as a class in v2 (themes become Vault deployments).",
+      "extraction": [
+        "Swap execution (`_executeSwap`, inline-V3 `adapter == address(0)` special case) → AssetPositionAdapter via one IBasketSwapAdapter seam; a concrete UniswapV3SwapAdapter replaces the inline path (#1118).",
+        "TWAP config (`twapWindow`, `setTwapWindow`, MIN/MAX/DEFAULT_TWAP_WINDOW, `effectiveTwapWindow`) → adapter storage + setter, bounds/fallback/event verbatim (#1118).",
+        "Pricing / `totalAssets` TWAP math → adapter self-pricing (#1118/#1126).",
+        "ORA-4 NAV-deviation guard (`navDeviationGuardBps`, `setNavDeviationGuardBps`, MAX_NAV_DEVIATION_BPS, `NavMarketDeviationExceeded`) → adapter, entry-side only inside `deploy()` (#1118).",
+        "Per-asset `EmergencyUnwindGuard` + `setEmergencyUnwindGuard` + `emergencyUnwindWithOverride` → adapter, driven by vault atomic-EMERGENCY path (#1121/#1126).",
+        "Pool-usability preconditions (`MIN_POOL_CARDINALITY`, `MIN_POOL_LIQUIDITY`, `InsufficientObservationHistory`, ORA-3 execution==TWAP pool) → adapter CONSTRUCTOR preconditions (#1118).",
+        "`reabsorbRemovedAsset` (LIFE-6, AZ-BSK-5) → adapter `reabsorb(minUsdcOut)` (#1121).",
+        "Chronicle heartbeat (`oracleHeartbeat`, MAX_HEARTBEAT, `StalePriceFeed`), stale-unwind override → deSPXA adapter variant (#1126)."
+      ],
+      "insertion": [
+        "Its realized-delta `_deposit` (AZ-BSK-1/-3), `_sellProportional`, `RedeemOnly`, `_lastMintedShares`/`_lastWithdrawnAssets`, and fee-on-realized semantics are INSERTED into the unified Vault as the inexact-mode branch (#1119).",
+        "AZ-BSK-2 realized-return `deposit()`/`redeem()` overrides move into the unified Vault for router-leg comparison (#1119)."
+      ],
+      "shared_state": [
+        "AssetInfo {token, pool, swapFee, adapter, venue} — decomposed into adapter constructor immutables; registering an asset becomes `Vault.addAdapter` (#1118/#1119).",
+        "`maxSlippageBps` / `MAX_SLIPPAGE_BPS` (500) / `minSlippageFloorBps` (L-17 brick guard) — split: vault keeps preview-math slippage + `minOutFloorBps()` max-over-adapters; adapter enforces venue amountOutMinimum (#1118/#1119)."
+      ],
+      "downstream_issues": [
+        1118,
+        1119,
+        1121,
+        1123,
+        1126
+      ]
+    },
+    "contracts/vaults/": {
+      "role": "The BasketVault subclass family (ProtocolAssetVault/AgentTokenVault/RwaVault) — dissolved: themes become Vault deployments differing only in adapter set + params, not Solidity subclasses.",
+      "extraction": [
+        "`RwaVault.maxAssets()` single-asset constant → Vault constructor param `maxActiveAdapters_` (#1119/#1129).",
+        "`RwaVault.totalAssets` SUP-5 idle-USDC redemption short-circuit → adapter (zero balance returns 0 without oracle read) (#1118/#1126).",
+        "Per-subclass adapter/venue wiring → per-theme deploy scripts (rmPROTO Uniswap V3, rmAGENT mixed V3/V4/Aerodrome, rmRWA Chronicle Aerodrome) (#1129).",
+        "rmAGENT shortlist wiring (`config/agent-token-shortlist.json`) → Phase-4 adapter set, per-theme TimelockController as adapter admin (ADR-0004) (#1124/#1125/#1129)."
+      ],
+      "insertion": [
+        "No new subclass files — the family is REPLACED by parameterized Vault deployments; the only new contracts under this tree are the deployment configs/scripts, not vault classes (#1129).",
+        "Theme matrix (shares, adapter set, isExact, maxSlippageBps, maxActiveAdapters, pricing) becomes deploy-time configuration consumed by #1129."
+      ],
+      "shared_state": [
+        "Shared lifecycle machinery (pause, shutdown/restore, retirement, fee accounting, TVL caps) — unified once on the Vault, no longer duplicated per subclass.",
+        "Theme deployment matrix (spec 8) — read by #1129 deploy scripts and #1127 per-composition conformance suites."
+      ],
+      "downstream_issues": [
+        1119,
+        1124,
+        1125,
+        1126,
+        1127,
+        1129
+      ]
+    },
+    "contracts/adapters/": {
+      "role": "Insertion target for everything extracted from BasketVault. Existing lending adapters retrofit to IPositionAdapter; new AssetPositionAdapters are added per basket asset per venue.",
+      "extraction": [
+        "Nothing leaves this tree — it is the destination. The existing IStrategyAdapter implementations (AaveV3Adapter/CompoundV3Adapter/MorphoAdapter) shed only their old `IStrategyAdapter` signatures (see that file's entry)."
+      ],
+      "insertion": [
+        "Retrofit MorphoAdapter/AaveV3Adapter/CompoundV3Adapter to IPositionAdapter: `deploy(usdcIn,minValueOut) returns valueAdded` (return usdcIn, require >= minValueOut), `withdraw(usdcWanted,minUsdcOut)` (require usdcOut >= minUsdcOut), hardcoded `isExact() => true`; MorphoAdapter.maxExposure unchanged (#1117).",
+        "New `AssetPositionAdapter` base: token custody, swap via IBasketSwapAdapter, TWAP pricing, ORA-4 guard, emergency-unwind guard, `isExact() => false` (#1118).",
+        "New `UniswapV3SwapAdapter` venue executor replacing the inline-V3 special case (#1118).",
+        "Uniswap V4 AssetPositionAdapter with `hooks == address(0)` asserted at construction (M-S6) (#1124).",
+        "Aerodrome AssetPositionAdapter (#1125).",
+        "Chronicle-priced deSPXA AssetPositionAdapter: heartbeat staleness, freeze-safe, zero-balance oracle short-circuit (#1126).",
+        "onlyVaultAdmin modifier querying `AccessControl(VAULT).hasRole(ADMIN_ROLE, .)` — adapters carry no independent role tree (#1118)."
+      ],
+      "shared_state": [
+        "IPositionAdapter frozen surface (contracts/interfaces/IPositionAdapter.sol) — every adapter in this tree implements it; changes coordinate through #1116.",
+        "adapter codehash pinned by the vault (bakes venue-executor address + linked TickMath) — read by #1119 registration.",
+        "Protected-token / foreign-token union set (M-S4/INV-2) — each adapter's custodied token must be in the vault's sweep-protected union (#1118/#1119)."
+      ],
+      "downstream_issues": [
+        1116,
+        1117,
+        1118,
+        1124,
+        1125,
+        1126
+      ]
+    },
+    "contracts/interfaces/IStrategyAdapter.sol": {
+      "role": "The v1 adapter boundary superseded by IPositionAdapter. Frozen-surface origin.",
+      "extraction": [
+        "The v1 signatures `deploy(uint256)`, `withdraw(uint256) returns (actual)`, `totalAssets`, `harvestRewards`, `sweepForeignToken` are superseded by the wider IPositionAdapter signatures; the min-out-less deploy/withdraw shapes leave the adapter surface (#1116/#1117).",
+        "The deployed v1 `RobotMoneyVault` and its live IStrategyAdapter instances are UNTOUCHED and retire per ADR-0009 — this file itself is not deleted while v1 remains referenced."
+      ],
+      "insertion": [
+        "IPositionAdapter (new file, this PR's stub) inserts the superset surface: min-out params, realized-value return on deploy, `isExact()`, and the mandatory `USDC()`/`VAULT()` identity views (#1116).",
+        "`isExact()` cross-check semantics (registration-time only, never per-call gate) are added at the boundary (#1116/#1123)."
+      ],
+      "shared_state": [
+        "harvestRewards / sweepForeignToken semantics carried verbatim into IPositionAdapter — no consumer change.",
+        "`type(uint256).max` withdraw-all sentinel and the `withdraw` clamp-vs-revert contract preserved (relied on by `_pullProportional`)."
+      ],
+      "downstream_issues": [
+        1116,
+        1117
+      ]
+    },
+    "contracts/interfaces/IBasketSwapAdapter.sol": {
+      "role": "The venue-execution seam (ADR-0005). Retained UNCHANGED; consumer moves from the vault to the AssetPositionAdapter.",
+      "extraction": [
+        "Consumption of this seam moves OUT of BasketVault (`_executeSwap`) — the vault no longer calls IBasketSwapAdapter directly (#1118).",
+        "The inline-V3 `adapter == address(0)` path that bypassed this seam is removed; every venue now goes through the seam via a concrete executor (#1118)."
+      ],
+      "insertion": [
+        "AssetPositionAdapter becomes the sole consumer of IBasketSwapAdapter (AerodromeSwapAdapter/UniswapV4SwapAdapter/ChronicleOracleAdapter remain stateless executors) (#1118/#1124/#1125).",
+        "A new `UniswapV3SwapAdapter` executor is added behind this seam (interface itself unchanged) (#1118).",
+        "Approval hygiene (`forceApprove(venue, amount)` / `forceApprove(venue, 0)`, ADP-5) carried verbatim into the adapter's call sites (#1118)."
+      ],
+      "shared_state": [
+        "The IBasketSwapAdapter interface signatures — FROZEN, not modified by this phase; only the caller changes.",
+        "Venue enum (V3/V4/Aerodrome, Chronicle-priced Aerodrome) becomes an adapter immutable, replacing AssetInfo.venue (#1118/#1126)."
+      ],
+      "downstream_issues": [
+        1118,
+        1124,
+        1125
+      ]
+    },
+    "contracts/VaultRegistry.sol": {
+      "role": "Vault registry + router-eligibility gate. Holds the ADR-0002 stale-default-weights interlock (`setRouterEligible` reverts StaleDefaultWeightsLength) that deadlocks Phase-6 migration.",
+      "extraction": [
+        "No behavior is extracted OUT of the registry; the migration seam is the eligibility+weights atomicity fix, added here (#1128)."
+      ],
+      "insertion": [
+        "Atomic eligibility+weights interlock fix (`VaultRegistry.sol:335-340`): an atomic `migrateEligibility` that swaps the eligibility flag + default vector in one call, OR a registry-level attestation home — chosen so registering a v2 vault (moving `routerEligibleCount`) no longer reverts `StaleDefaultWeightsLength` (#1128).",
+        "Optional registry-level `isExact`/`allExact` attestation home (the alternative to vault-attested, spec Open decision) — recorded as an insertion point but this ADR pins vault-attested at addAdapter; registry stays the fallback location (#1123/#1128).",
+        "v1 retire/unretire path exercised for the v1->v2 migration (`retire(v1)` after eligibility migration; withdrawals stay open on v1 indefinitely, ADR-0009) (#1130)."
+      ],
+      "shared_state": [
+        "`routerEligibleCount` + `setRouterEligible` — the deadlock surface co-owned with PortfolioRouter default weights (#1128/#1130).",
+        "retire()/unretire() lifecycle — reused for v1 retirement, unchanged semantics.",
+        "CI four-vault assertions (suite-14 demo_seeding asserts exactly four Active vaults; suite-01 hardcoded subclass names; suite-16 ABI-drift; suite-22 CoverageMap) — must be rewritten for variable v2 vault counts (#1131)."
+      ],
+      "downstream_issues": [
+        1128,
+        1130,
+        1131
+      ]
+    }
+  }
+}
