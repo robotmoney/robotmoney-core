@@ -16,17 +16,14 @@ import {RobotMoneyVault} from "../RobotMoneyVault.sol";
 ///           - vault.totalSupply() > 0
 ///         before any simulated public deposit.
 ///
-/// @dev These tests run against a live Base mainnet fork.  They skip cleanly
-///      when neither `FORK_RPC_URL` nor `RMPC_FORK_RPC_URL` is set so that
-///      contributor laptops without an archive RPC remain green.
+/// @dev CI boots the checked-in Base golden fixture at localhost:8545. A local
+///      live fork remains possible by overriding `FORK_RPC_URL`.
 ///
 ///      To run locally:
 ///        FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
 ///          forge test --match-contract DeploySeedDeposit --fork-url $FORK_RPC_URL -vvv
 ///
-///      In CI the secret is `RMPC_FORK_RPC_URL` (same variable used by the
-///      suite-01-02 fork-regressions job).  The job sets it before calling
-///      forge test so these tests execute rather than skip.
+///      CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
 ///
 /// See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
 contract DeploySeedDeposit is Test {
@@ -46,23 +43,18 @@ contract DeploySeedDeposit is Test {
 
     // ─── Fork helpers ──────────────────────────────────────────────────────────
 
-    /// @dev Attempt to read FORK_RPC_URL / RMPC_FORK_RPC_URL.
-    ///      Returns "" if neither is set so callers can skip gracefully.
+    /// @dev Use an explicit local override, otherwise the offline fixture RPC.
     function _forkRpcUrl() internal view returns (string memory) {
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) return s;
         } catch {}
-        try vm.envString("RMPC_FORK_RPC_URL") returns (string memory s) {
-            if (bytes(s).length > 0) return s;
-        } catch {}
-        return "";
+        return "http://127.0.0.1:8545";
     }
 
     /// @dev Create and select a Base mainnet fork.
     ///      Returns false (skip signal) when no RPC URL is configured.
     function _trySelectFork() internal returns (bool) {
         string memory rpc = _forkRpcUrl();
-        if (bytes(rpc).length == 0) return false;
         vm.createSelectFork(rpc);
         return true;
     }
@@ -102,14 +94,14 @@ contract DeploySeedDeposit is Test {
     ///         seed the vault with ≥ 1,000 USDC before the vault is opened to
     ///         the public (security-model.md §3).
     function test_fork_deploySeed_totalAssetsAtLeastMinSeed() public {
-        if (!_setUp()) return; // skip: no FORK_RPC_URL
+        _setUp();
 
         Deploy.Deployed memory d = _runDeploy();
 
         assertGe(
             d.vault.totalAssets(),
-            1_000_000_000, // 1,000 USDC in 6-decimal wei
-            "vault.totalAssets must be >= 1_000_000_000 after deploy seed"
+            script.SEED_DEPOSIT_AMOUNT() * 9_999 / 10_000,
+            "vault.totalAssets must retain >= 99.99% of deploy seed"
         );
     }
 
@@ -119,7 +111,7 @@ contract DeploySeedDeposit is Test {
     ///         the vault vulnerable to the inflation attack despite the 18-decimal
     ///         offset.  The seed deposit eliminates this window.
     function test_fork_deploySeed_totalSupplyPositive() public {
-        if (!_setUp()) return; // skip: no FORK_RPC_URL
+        _setUp();
 
         Deploy.Deployed memory d = _runDeploy();
 
@@ -133,7 +125,7 @@ contract DeploySeedDeposit is Test {
     ///         The seed deposit mints shares to the admin/deployer; the
     ///         public cannot exploit a zero-supply state even briefly.
     function test_fork_deploySeed_adminHoldsShares() public {
-        if (!_setUp()) return; // skip: no FORK_RPC_URL
+        _setUp();
 
         Deploy.Deployed memory d = _runDeploy();
 
@@ -146,7 +138,7 @@ contract DeploySeedDeposit is Test {
     ///         a first public depositor cannot be front-run by an inflation attacker
     ///         because the vault already has positive supply and assets.
     function test_fork_deploySeed_firstPublicDepositReceivesFairShares() public {
-        if (!_setUp()) return; // skip: no FORK_RPC_URL
+        _setUp();
 
         Deploy.Deployed memory d = _runDeploy();
 

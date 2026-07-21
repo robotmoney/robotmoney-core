@@ -1,10 +1,10 @@
 {
   "$comment": "Canonical: docs/prd.md#112-protocol-asset-vault (issue #482). Expected Uniswap V3 mid prices for the landing-page price strip, pinned to the Base fork point recorded in testing/ethereum-testnet/config/fork-block.json. `fork_block` MUST equal that manifest's `block_number` — the CI guard `fork_block_aligns_with_expected_prices` in testing/smoke-test/src/fork_manifest.rs fails the build if the fork block changes without this fixture being refreshed in the same commit. The fork integration test (testing/fork-e2e-rust/tests/landing_price_strip_fork.rs) reads each pool's slot0 from the running forked-Base devnet, converts via the shared sqrtPriceX96 math, and asserts the result matches `expected_price` within `tolerance_pct`. The Playwright fork test asserts the rendered cells match these same values.",
-  "fork_block": 47170704,
+  "fork_block": 48896605,
   "chain": "base",
   "tolerance_pct": 0.5,
-  "$tolerance_note": "0.5% (issue #890). The Playwright suite-10 dapp-e2e test reads slot0 off the Geth+Lighthouse smoke-test devnet, whose pool state is genesis-ingested from block 46698556 (see $pinned_on_archive_fork_note), NOT the archive fork_block 47170704 that the expected_price magnitudes below were originally captured at. Those two blocks hold slightly different pool reserves, so the genesis-ingest mid prices drift ~0.03–0.08% from the archive-captured magnitudes (ETH/USD is the widest at ~0.078%). The previous 0.01% tolerance was unrealistically tight and never actually ran until the dapp-e2e browser-console gate was cleared in #886/#888; once it ran it failed on that genesis-vs-archive delta. 0.5% comfortably absorbs the genesis-ingest/archive block delta plus normal rounding while still catching gross conversion errors (wrong decimals, inverted base/quote, ~2x magnitude bugs). The expected_price values below are re-pinned to the genesis-ingest devnet slot0 (the state the suite actually exercises); the archive-fork Rust test (skipped in CI without RMPC_FORK_RPC_URL) stays within the same 0.5% band.",
-  "$capture_note": "expected_price values are captured by booting an Anvil fork at fork_block against a Base archive RPC (set RMPC_FORK_RPC_URL to an archive node — public RPCs like publicnode.com prune state older than ~128 blocks and will fail with 'state is pruned'). Run: cast call <pool> 'slot0()(uint160,int24,uint16,uint16,uint16,uint8,bool)' --rpc-url $RMPC_FORK_RPC_URL --block <fork_block> for each pair, decode sqrtPriceX96 using the sqrt_price_x96_to_price logic in testing/fork-e2e-rust/tests/landing_price_strip_fork.rs (rawRatio = (sqrtPriceX96/2^96)^2 * 10^(token0_decimals-token1_decimals), then invert if base_is_token0==false). Update each pair's expected_price and flip its captured flag to true. Also run scripts/devnet/snapshot-fork.sh to refresh the Anvil fork-state fixture when the fork block is bumped. The CI guard fork_block_aligns_with_expected_prices (testing/smoke-test/src/fork_manifest.rs) fails if fork_block drifts. When captured is false the fork integration test reads slot0 and records the live value but does not assert the magnitude (it still asserts the pool exists). NOTE (issue #890): the magnitudes below are pinned to the genesis-ingest devnet (block 46698556) the dapp-e2e suite actually reads, not the archive fork_block; keep tolerance_pct wide enough (0.5%) to also satisfy an archive-fork re-capture at fork_block.",
+  "$tolerance_note": "0.5% (issue #890). Values are captured from the checked-in golden fixture at fork_block. The tolerance absorbs display rounding while still catching wrong decimals, inverted pairs, and material fixture drift.",
+  "$capture_note": "Capture slot0 for every configured pool from CURRENT.anvil-state after scripts/devnet/snapshot-fork.sh refreshes the golden fixture. Decode sqrtPriceX96 with clients/dapp/src/lib/uniswapV3.ts, update expected_price and fork_block together, then run the fork-manifest guards and dapp E2E suite.",
   "captured": true,
   "$pinned_on_archive_fork_note": "When true, the freshness-chip Playwright test asserts block >= fork_block (the devnet is an Anvil or Geth chain that continues from the fork point). When false, only asserts block > 0. The Geth+Lighthouse smoke-test devnet boots from genesis (block 0) even when the fork state is ingested from block 46698556, so the freshness-chip test can only assert block > 0 — set this to false to avoid a spurious >= 46698556 assertion.",
   "pinned_on_archive_fork": false,
@@ -17,7 +17,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1614.65
+      "expected_price": 1905.13
     },
     {
       "id": "weth-usdc",
@@ -27,7 +27,7 @@
       "quote_decimals": 6,
       "base_is_token0": true,
       "captured": true,
-      "expected_price": 1614.65
+      "expected_price": 1905.13
     },
     {
       "id": "cbbtc-usdc",
@@ -37,7 +37,7 @@
       "quote_decimals": 6,
       "base_is_token0": false,
       "captured": true,
-      "expected_price": 61312.53
+      "expected_price": 65302.25
     },
     {
       "id": "wsol-usdc",

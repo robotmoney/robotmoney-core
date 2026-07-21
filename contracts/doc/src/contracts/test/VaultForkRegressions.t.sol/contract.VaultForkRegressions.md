@@ -1,5 +1,5 @@
 # VaultForkRegressions
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3da70a180fe71635ce61a9d127b7f2d7f7b3cbf5/contracts/test/VaultForkRegressions.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e0ffd960dbf5acf379aa898a70abd876323a935d/contracts/test/VaultForkRegressions.t.sol)
 
 **Inherits:**
 Test
@@ -9,15 +9,12 @@ VaultForkRegressions
 
 Fork-level regression suite for vault accounting attack paths.
 
-These tests run against a live Base mainnet fork.  They are skipped
-cleanly when the `FORK_RPC_URL` environment variable is absent so that
-contributor laptops without an archive RPC remain green.
+CI boots the checked-in Base golden fixture at localhost:8545. A local
+live fork remains possible by overriding `FORK_RPC_URL`.
 To run locally:
 FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
 forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
-In CI the secret is `RMPC_FORK_RPC_URL` (same variable used by the
-suite-05 fork workflow).  The job sets it before calling forge test so
-these tests execute rather than skip.
+CI uses `CURRENT.anvil-state`; no live RPC secret is involved.
 Attack paths covered (per issue #209 acceptance criteria):
 AC1  Aave adapter donation cannot make a victim deposit mint zero/unfair shares.
 AC2  Morpho adapter donation cannot make a victim deposit mint zero/unfair shares.
@@ -69,7 +66,7 @@ Compound V3 Comet (cUSDCv3) on Base.
 
 
 ```solidity
-address internal constant COMPOUND_COMET = 0xB125e6687D4313864e53df431d5425969c15eb28
+address internal constant COMPOUND_COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F
 ```
 
 
@@ -154,8 +151,7 @@ address internal attacker
 ## Functions
 ### _forkRpcUrl
 
-Attempt to read FORK_RPC_URL / RMPC_FORK_RPC_URL.
-Returns "" if neither is set so callers can skip gracefully.
+Use an explicit local override, otherwise the offline fixture RPC.
 
 
 ```solidity
@@ -164,8 +160,7 @@ function _forkRpcUrl() internal view returns (string memory url);
 
 ### _trySelectFork
 
-Create and select a Base mainnet fork.  Returns false (skip signal)
-when no RPC URL is configured, so the outer test can skip cleanly.
+Select the already-running offline golden-fixture RPC.
 
 
 ```solidity
@@ -202,7 +197,7 @@ function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal;
 ### _assertDonationAttackFails
 
 Core attack scenario:
-1. Attacker seeds the vault with 1 wei.
+1. Attacker seeds the vault with 1 USDC.
 2. Attacker donates `donationAmt` USDC to the adapter via the protocol
 directly (bypassing the vault minting path), using `deal()` +
 adapter-level deposit.  The donation increases the adapter's
@@ -287,8 +282,7 @@ function test_fork_directTransfer_causesCapEnforcement() public;
 AC5: When adapter caps are exhausted, the unrouted portion stays idle
 in the vault and the UnroutedDeposit event is emitted — not silent.
 
-A single adapter capped at 50% means half of the first deposit is
-unroutable.  The event and idle balance are both verifiable.
+A single adapter capped at 50% leaves half the deposit unrouted.
 
 
 ```solidity

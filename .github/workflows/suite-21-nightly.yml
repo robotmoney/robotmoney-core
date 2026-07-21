@@ -38,12 +38,15 @@ concurrency:
 
 permissions:
   actions: write
+  issues: write
 
 jobs:
   dispatch-all-suites:
     name: Dispatch all CI suites against dev HEAD
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CI_CLASS: ignore
     steps:
       - name: Dispatch suites
         env:
@@ -83,3 +86,40 @@ jobs:
               --field ref="${REF}" || echo "WARNING: failed to dispatch $workflow"
           done
           echo "All dispatches sent."
+
+  live-base-fork-drift:
+    name: Non-blocking live Base fork drift alarm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_CLASS: heavy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+      - name: Run live fork drift suite
+        id: drift
+        continue-on-error: true
+        env:
+          FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL || 'https://base-rpc.publicnode.com' }}
+        run: |
+          forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
+          forge test --match-contract "DeploySeedDeposit" -vvv
+          forge test --match-path "contracts/test/SafeIntegration.t.sol" -vvv
+      - name: Open or update fork drift tracking issue
+        if: steps.drift.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          title="ci: nightly Base fork drift detected"
+          number="$(gh issue list --repo "$REPO" --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          body="Nightly live Base fork drift failed at ${GITHUB_SHA}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body" --label bug
+          fi

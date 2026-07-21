@@ -91,9 +91,8 @@ interface ISafeProxyFactory {
 ///         `SafeProxyFactory` enforces quorum for all ADMIN_ROLE operations on the five
 ///         governed Robot Money contracts.
 ///
-/// @dev Tests run against a Base mainnet fork.  They are skipped when `FORK_RPC_URL` /
-///      `RMPC_FORK_RPC_URL` is absent so that contributor laptops without an archive RPC
-///      remain green.  CI sets `RMPC_FORK_RPC_URL` (same variable used by suite-05).
+/// @dev CI starts Anvil from the checked-in Base fixture at localhost:8545. A
+///      live fork remains available locally through `FORK_RPC_URL`.
 ///
 ///      To run locally:
 ///        FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/<key> \
@@ -118,7 +117,7 @@ contract SafeIntegrationTest is Test {
 
     /// @dev Safe L2 singleton (implementation) on Base mainnet.
     ///      This is the SafeL2.sol variant that emits extra events for L2 indexers.
-    address internal constant SAFE_SINGLETON_L2 = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+    address internal constant SAFE_SINGLETON_L2 = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
 
     /// @dev Safe Compatibility Fallback Handler on Base mainnet.
     address internal constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
@@ -162,19 +161,13 @@ contract SafeIntegrationTest is Test {
 
     // ─── Set-up ────────────────────────────────────────────────────────────────
 
-    /// @dev Read the fork URL from environment, create + select fork.
-    ///      Returns false when no URL is configured (caller should skip).
+    /// @dev Select an override URL or the offline golden-fixture RPC.
     function _trySelectFork() internal returns (bool) {
         string memory rpc;
         try vm.envString("FORK_RPC_URL") returns (string memory s) {
             if (bytes(s).length > 0) rpc = s;
         } catch {}
-        if (bytes(rpc).length == 0) {
-            try vm.envString("RMPC_FORK_RPC_URL") returns (string memory s) {
-                if (bytes(s).length > 0) rpc = s;
-            } catch {}
-        }
-        if (bytes(rpc).length == 0) return false;
+        if (bytes(rpc).length == 0) rpc = "http://127.0.0.1:8545";
         vm.createSelectFork(rpc);
         return true;
     }
@@ -182,7 +175,7 @@ contract SafeIntegrationTest is Test {
     /// @dev Deploy the five governed contracts, wire them to a fresh TimelockController
     ///      whose PROPOSER is the deployed 2-of-3 Safe proxy.
     function setUp() public {
-        if (!_trySelectFork()) return;
+        _trySelectFork();
 
         // Generate 3 deterministic signing keys.
         ownerPk1 = uint256(keccak256("owner1-pk"));
@@ -250,6 +243,12 @@ contract SafeIntegrationTest is Test {
 
         // Deploy TimelockController and wire ADMIN_ROLE on all five contracts.
         DeployTimelock script = new DeployTimelock();
+        IAccessControl(address(vault)).grantRole(ADMIN_ROLE, address(script));
+        IAccessControl(address(gateway)).grantRole(ADMIN_ROLE, address(script));
+        IAccessControl(address(gateway)).grantRole(bytes32(0), address(script));
+        IAccessControl(address(registry)).grantRole(ADMIN_ROLE, address(script));
+        IAccessControl(address(router)).grantRole(ADMIN_ROLE, address(script));
+        IAccessControl(address(governance)).grantRole(ADMIN_ROLE, address(script));
         d = script.runInProcess(
             address(vault),
             address(gateway),
@@ -434,21 +433,12 @@ contract SafeIntegrationTest is Test {
 
     // ─── SKIP guard ───────────────────────────────────────────────────────────
 
-    /// @dev Returns true if the fork was successfully selected (setUp ran).
-    ///      If not, the caller should return immediately (skip).
-    function _forkAvailable() internal view returns (bool) {
-        // If address(safe) is zero, setUp skipped the fork.
-        return address(safe) != address(0);
-    }
-
     // ─────────────────────────────────────────────────────────────────────────
     // Happy-path: Safe → TimelockController → governed contract
     // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice AC1a: Full Safe.execTransaction() → schedule → mine delay → execute on VaultRegistry.
     function test_happyPath_vaultRegistry_registerVault() public withSnap {
-        if (!_forkAvailable()) return;
-
         address newVault = makeAddr("newVault");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Test Vault", asset: address(usdc), registeredAt: block.timestamp
@@ -462,8 +452,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC1b: Full Safe+timelock path on PortfolioRouter (setRouterCap).
     function test_happyPath_portfolioRouter_setRouterCap() public withSnap {
-        if (!_forkAvailable()) return;
-
         bytes memory callData = abi.encodeCall(PortfolioRouter.setRouterCap, (1_000_000e6));
         _scheduleAndExecute(address(router), callData);
 
@@ -472,8 +460,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC1c: Full Safe+timelock path on RouterGovernance (setQuorumThreshold).
     function test_happyPath_routerGovernance_setQuorumThreshold() public withSnap {
-        if (!_forkAvailable()) return;
-
         bytes memory callData = abi.encodeCall(RouterGovernance.setQuorumThreshold, (5));
         _scheduleAndExecute(address(governance), callData);
 
@@ -482,8 +468,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC1d: Full Safe+timelock path on RobotMoneyVault (setExitFeeBps).
     function test_happyPath_vault_setExitFeeBps() public withSnap {
-        if (!_forkAvailable()) return;
-
         bytes memory callData = abi.encodeCall(RobotMoneyVault.setExitFeeBps, (50));
         _scheduleAndExecute(address(vault), callData);
 
@@ -492,8 +476,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC1e: Full Safe+timelock path on RobotMoneyGateway (ADMIN_ROLE grant).
     function test_happyPath_gateway_adminRoleGrant() public withSnap {
-        if (!_forkAvailable()) return;
-
         address newAdmin = makeAddr("newAdmin");
         bytes memory callData = abi.encodeCall(IAccessControl.grantRole, (ADMIN_ROLE, newAdmin));
         _scheduleAndExecute(address(gateway), callData);
@@ -510,8 +492,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC2: One signature from a 2-of-3 Safe reverts inside execTransaction.
     function test_sadPath_quorumNotMet_oneSignerReverts() public withSnap {
-        if (!_forkAvailable()) return;
-
         bytes memory callData = abi.encodeCall(
             VaultRegistry.registerVault,
             (
@@ -554,8 +534,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC3: Two signatures from addresses not in the Safe owner set revert.
     function test_sadPath_wrongSigners_revert() public withSnap {
-        if (!_forkAvailable()) return;
-
         bytes memory callData = abi.encodeCall(
             VaultRegistry.registerVault,
             (
@@ -596,8 +574,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC4: TimelockController.execute() before min delay elapses reverts.
     function test_sadPath_preDelayExecute_reverts() public withSnap {
-        if (!_forkAvailable()) return;
-
         address newVault = makeAddr("vaultForDelay");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Delay Test", asset: address(usdc), registeredAt: block.timestamp
@@ -676,8 +652,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC5: Replaying an already-executed Safe+timelock operation reverts.
     function test_sadPath_replay_reverts() public withSnap {
-        if (!_forkAvailable()) return;
-
         address newVault = makeAddr("vaultForReplay");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Replay Test", asset: address(usdc), registeredAt: block.timestamp
@@ -782,8 +756,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC6a: Direct ADMIN_ROLE call on VaultRegistry reverts.
     function test_sadPath_directAdminBypass_vaultRegistry() public withSnap {
-        if (!_forkAvailable()) return;
-
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), ADMIN_ROLE
@@ -800,8 +772,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC6b: Direct ADMIN_ROLE call on PortfolioRouter reverts.
     function test_sadPath_directAdminBypass_portfolioRouter() public withSnap {
-        if (!_forkAvailable()) return;
-
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), ADMIN_ROLE
@@ -813,8 +783,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC6c: Direct ADMIN_ROLE call on RouterGovernance reverts.
     function test_sadPath_directAdminBypass_routerGovernance() public withSnap {
-        if (!_forkAvailable()) return;
-
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), ADMIN_ROLE
@@ -826,8 +794,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC6d: Direct ADMIN_ROLE call on RobotMoneyVault reverts.
     function test_sadPath_directAdminBypass_vault() public withSnap {
-        if (!_forkAvailable()) return;
-
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), ADMIN_ROLE
@@ -837,13 +803,11 @@ contract SafeIntegrationTest is Test {
         vault.setExitFeeBps(10);
     }
 
-    /// @notice AC6e: Direct ADMIN_ROLE call on RobotMoneyGateway reverts.
+    /// @notice AC6e: Direct root-admin call on RobotMoneyGateway reverts.
     function test_sadPath_directAdminBypass_gateway() public withSnap {
-        if (!_forkAvailable()) return;
-
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), ADMIN_ROLE
+                IAccessControl.AccessControlUnauthorizedAccount.selector, address(safe), bytes32(0)
             )
         );
         vm.prank(address(safe));
@@ -852,8 +816,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC6f: Direct ADMIN_ROLE call from random EOA reverts (all contracts).
     function test_sadPath_directAdminBypass_stranger() public withSnap {
-        if (!_forkAvailable()) return;
-
         address stranger = makeAddr("stranger");
 
         vm.expectRevert(
@@ -876,8 +838,6 @@ contract SafeIntegrationTest is Test {
 
     /// @notice AC7: A cancelled timelock operation cannot be executed after cancellation.
     function test_sadPath_cancelledOperation_cannotExecute() public withSnap {
-        if (!_forkAvailable()) return;
-
         address newVault = makeAddr("vaultForCancel");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Cancel Test", asset: address(usdc), registeredAt: block.timestamp
