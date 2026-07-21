@@ -49,7 +49,7 @@ ANVIL_CONTAINER_NAME="rm-snapshot-anvil-$$"
 FIXTURE_DIR="testing/fixtures/fork-state"
 mkdir -p "$FIXTURE_DIR"
 
-for tool in cast forge jq curl docker; do
+for tool in cast forge cargo jq curl docker; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "ERROR: required tool '$tool' not on PATH" >&2
     exit 1
@@ -467,6 +467,27 @@ for pool in "${PRICE_STRIP_POOLS[@]}"; do
     "$ANVIL_RPC" >/dev/null
   echo "[snapshot]   $pool: slot0=$SLOT0"
 done
+
+# 3d. Execute the flagship Rust scenarios directly against this live fork.
+# Every account/slot they touch is consequently part of the dirty working set
+# serialized below, making the checked-in state sufficient for offline replay.
+HARNESS_HOLDER="0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5"
+HARNESS_BAL_SLOT=$(cast index address "$HARNESS_HOLDER" 9)
+HARNESS_USDC_HEX=$(cast to-uint256 1000000000000)
+curl -sS -X POST -H 'content-type: application/json' \
+  --data "$(jq -n --arg a "$USDC_ADDRESS" --arg s "$HARNESS_BAL_SLOT" --arg v "$HARNESS_USDC_HEX" \
+    '{jsonrpc:"2.0",id:1,method:"anvil_setStorageAt",params:[$a,$s,$v]}')" \
+  "$ANVIL_RPC" >/dev/null
+curl -sS -X POST -H 'content-type: application/json' \
+  --data "$(jq -n --arg a "$HARNESS_HOLDER" \
+    '{jsonrpc:"2.0",id:1,method:"anvil_setBalance",params:[$a,"0x3635c9adc5dea00000"]}')" \
+  "$ANVIL_RPC" >/dev/null
+
+echo "[snapshot] warming flagship Rust scenarios against live fork"
+RMPC_TESTNET_RPC_URL="$ANVIL_RPC" RMPC_FIXTURE_VAULT="$VAULT_ADDR" \
+  cargo test --manifest-path testing/fork-e2e-rust/Cargo.toml --release \
+  --test abi_address_sanity --test dex_route_smoke --test vault_deposit_redeem_smoke \
+  -- --test-threads=1 --nocapture
 
 # 4. Trigger Anvil's on-shutdown --dump-state by sending SIGINT to the
 #    container's PID 1, then waiting for the dump file to appear on the

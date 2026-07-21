@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Convenience wrapper around scripts/devnet/snapshot-fork.sh.
 #
-# Refresh cadence: monthly is fine for the devnet's fork-state fixture.
+# Refresh is developer-owned whenever an integration changes or nightly drift fires.
 # Bump it whenever:
 #   - upstream contracts the fork interacts with change at a known block, OR
 #   - more than ~6 months have elapsed since CURRENT.json's captured_at.

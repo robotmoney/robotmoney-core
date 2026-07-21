@@ -233,7 +233,7 @@ macro_rules! parameterized_e2e {
 }
 
 /// Path to the checked-in Anvil state snapshot relative to the workspace root.
-const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
+const FIXTURE_STATE_REL: &str = "testing/fixtures/fork-state/CURRENT.anvil-state";
 const FIXTURE_META_REL: &str = "testing/fixtures/fork-state/CURRENT.json";
 
 /// Private key for the harness USDC holder EOA. Test-only — this key is also
@@ -602,7 +602,7 @@ impl ForkFixture {
         let admin_before = self
             .rpc
             .get_storage_at(addresses::USDC, USDC_PROXY_ADMIN_SLOT)?;
-        if admin_before != B256::ZERO {
+        if self.rpc_label != "fixture" && admin_before != B256::ZERO {
             return Ok(());
         }
 

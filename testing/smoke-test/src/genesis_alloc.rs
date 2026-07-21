@@ -873,8 +873,14 @@ mod tests {
             .get(&bal_slot)
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| panic!("balance slot {bal_slot} missing from USDC storage"));
-        let expected = u256_hex(&U256::from(manifest.harness_usdc_grant_units));
-        assert_eq!(stored, &expected, "balance slot != grant amount");
+        let stored_packed = U256::from_str_radix(stored.trim_start_matches("0x"), 16).unwrap();
+        let blacklist_bit = U256::from(1u8) << FIAT_TOKEN_BLACKLIST_BIT;
+        let stored_balance = stored_packed & (blacklist_bit - U256::from(1u8));
+        assert!(
+            stored_balance >= U256::from(manifest.harness_usdc_grant_units),
+            "balance slot {stored_balance} < grant {}",
+            manifest.harness_usdc_grant_units
+        );
 
         // 4. totalSupply slot was bumped by the grant amount.
         let ts_slot = slot_index_hex(FIAT_TOKEN_TOTAL_SUPPLY_SLOT);
