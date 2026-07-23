@@ -1,5 +1,5 @@
 # ForceRebalanceNavTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a7c54d73d4b5798ab7f0d00b005aecfb79f6376/contracts/test/UnifiedVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/UnifiedVault.t.sol)
 
 **Inherits:**
 [UnifiedVaultBase](/contracts/test/UnifiedVault.t.sol/abstract.UnifiedVaultBase.md)
@@ -66,6 +66,24 @@ pro-rata value cannot fall, and composition moves toward target.
 
 ```solidity
 function test_forceRebalance_inexactSet_selfFundedTopUp_holderNoLoss() public;
+```
+
+### test_forceRebalance_reRoute_fillsLargestDeficitFirst
+
+AC: forceRebalance's re-route leg fills the LARGEST deficit first
+via `_fillDeficitFirst` — after drawing the surplus adapter down
+to target, the recovered USDC lands on the deficit adapters in
+proportion to how far EACH is from target, converging every
+adapter (including the formerly-overweight one) to the SAME
+equal-weight balance. A flat/equal split of the recovered USDC
+across all three adapters — the ordinary `_routeDeposit` behavior
+— would instead overshoot the formerly-overweight adapter and
+leave the two deficit adapters at unequal, still-below-target
+balances, since it never looks at deficits at all.
+
+
+```solidity
+function test_forceRebalance_reRoute_fillsLargestDeficitFirst() public;
 ```
 
 ### test_forceRebalance_onlyAdmin

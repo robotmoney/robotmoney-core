@@ -1,5 +1,5 @@
 # MockUsdc
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a25788704e847c258d9460b66a6534bffb0b77e/contracts/test/EligibilityWeightsInterlock.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/EligibilityWeightsInterlock.t.sol)
 
 **Inherits:**
 ERC20

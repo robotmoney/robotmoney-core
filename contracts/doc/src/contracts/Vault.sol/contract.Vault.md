@@ -1,5 +1,5 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/01b59e20caa97f6392c68e2a81dce4c5d658f622/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/Vault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -27,8 +27,8 @@ round-trip on a vault holding pre-existing idle USDC can never profit.
 This contract owns the vault CORE (issue #1119). Documented insertion
 seams are left for the serialized downstream issues that build on it:
 the global NAV-growth-rate limiter (#1120), the EMERGENCY-gated
-emergency-model refinements (#1121), the isomorphic surplus-first
-flow-based rebalancing + `forceRebalance` (#1122), and the exactness-
+emergency-model refinements (#1121), the `forceRebalance`-only,
+composition-blind rebalancing model (#1122, §5.6), and the exactness-
 transition timelock + `ExactnessTransition` event (#1123).
 
 Every theme (rmUSDC/rmPROTO/rmAGENT/rmRWA) is one deployment of this
@@ -549,21 +549,41 @@ function _enforceNavGrowthLimit(uint256 navBefore, uint256 navAfter) internal;
 
 ### _routeDeposit
 
-Deficit-first two-pass allocator: fill toward `min(equal-target,
-capBps)` first, then spread leftover into remaining cap headroom.
-Ineligible-but-active adapters are SKIPPED, not reverted (audit L-4);
-any unrouted remainder stays idle (counted by `totalAssets`) and
-emits `UnroutedDeposit`. This is the deposit half of flow-based
-rebalancing.
-Flow-based rebalancing (#1122, §5.6): this deficit-first fill is the
-deposit half; the surplus-first drawdown is in `_pullProportional` /
-`_sellProportional`, ordered via `_surplusFirstOrder`. This stays the
-sole deposit routing entrypoint (also reused by `redeployRevokedIdle`
-and the `forceRebalance` re-route leg).
+Flat, composition-blind two-pass allocator (§5.6, mirroring
+pre-unification `BasketVault._routeDeposit`'s `perAsset = usdcAmount
+n` split): pass 1 gives every active+eligible adapter an EQUAL
+share of `amount`, capped at its `capBps` headroom; pass 2 spreads
+any leftover into adapters that still have headroom. No adapter's
+current balance or deviation from target is ever consulted here —
+an overweight adapter gets exactly the same equal/capped share as
+every other eligible adapter. Ineligible-but-active adapters are
+SKIPPED, not reverted (audit L-4); any unrouted remainder stays idle
+(counted by `totalAssets`) and emits `UnroutedDeposit`. This is the
+ordinary deposit routing entrypoint (also reused by
+`redeployRevokedIdle`); `forceRebalance`'s self-funded re-route leg
+uses the separate deficit-first `_fillDeficitFirst` instead — no
+deficit is ever fixed by an ordinary deposit.
 
 
 ```solidity
 function _routeDeposit(uint256 amount) internal returns (uint256 remainingOut);
+```
+
+### _fillDeficitFirst
+
+Deficit-first two-pass allocator: fill toward `min(equal-target,
+capBps)` first, then spread leftover into remaining cap headroom.
+Ineligible-but-active adapters are SKIPPED, not reverted (audit L-4);
+any unrouted remainder stays idle (counted by `totalAssets`) and
+emits `UnroutedDeposit`. Used ONLY by `forceRebalance`'s self-funded
+re-route leg (§5.6) — its caller pays for realized slippage via the
+existing top-up, so it is the one path that may still target the
+worst deficit. Ordinary deposit flow never calls this; see
+`_routeDeposit` for the composition-blind path ordinary deposits use.
+
+
+```solidity
+function _fillDeficitFirst(uint256 amount) internal returns (uint256 remainingOut);
 ```
 
 ### _allocateTo
@@ -751,10 +771,10 @@ proportional pass; then a rounding-sweep pass.
 `InsufficientAdapterLiquidity` is raised early and on residual
 under-delivery. Over-delivery is clamped so surplus stays idle for
 all holders. Only eligible-and-active adapters are pulled from (ADP-2).
-Surplus-first drawdown (§5.6): the adapters furthest ABOVE target are
-drained first, moving composition toward the weights. Ordering is
-orthogonal to exactness — the shortfall-revert and over-delivery-clamp
-semantics are unchanged.
+Proportional-by-balance drawdown (§5.6): composition-blind — every
+counted adapter is pulled in proportion to its CURRENT balance, never
+by its deviation from target. No surplus is ever fixed by an ordinary
+withdrawal; only an explicit `forceRebalance` moves composition.
 
 
 ```solidity
@@ -769,36 +789,17 @@ inexact adapter systematically delivers `realized ≈ wanted ×
 (1 − slippage)`; each leg's `minUsdcOut = max(caller floor, adapter
 floor)` reverts `SlippageExceeded` only below the floor. Proceeds
 accrue as realized; no socialization.
-Surplus-first sell (§5.6): the redeemer's pro-rata slice of the
-adapter pool (`totalInAdapters × shares / supplyBefore`) is raised by
-selling from the adapters furthest ABOVE target first, moving
-composition toward the weights. Each leg keeps its `minUsdcOut` floor,
-so the no-revert-above-floor semantics are unchanged.
+Proportional-by-balance sell (§5.6): composition-blind — each
+counted adapter sells the same `shares / supplyBefore` fraction of
+its CURRENT balance, never by its deviation from target. No surplus
+is ever fixed by an ordinary withdrawal; only an explicit
+`forceRebalance` moves composition.
 
 
 ```solidity
 function _sellProportional(uint256 shares, uint256 supplyBefore)
     internal
     returns (uint256 usdcOut);
-```
-
-### _surplusFirstOrder
-
-The counted-adapter indices ordered by DESCENDING surplus
-(`currentBalance − equal-weight target`) — the surplus-first drawdown
-order shared by `_pullProportional`, `_sellProportional`, and
-`forceRebalance` (§5.6). Only registered-active-and-eligible adapters
-(`_isAdapterCounted`) are included. `n` is the count of populated
-entries in `order`; `totalInAdapters` is their summed balance (returned
-so callers reuse the single balance loop). A small selection sort
-(n ≤ `MAX_ADAPTERS` = 20) — no external calls, view-only.
-
-
-```solidity
-function _surplusFirstOrder()
-    internal
-    view
-    returns (uint256[] memory order, uint256 n, uint256 totalInAdapters);
 ```
 
 ### addAdapter
@@ -1002,14 +1003,16 @@ function redeployRevokedIdle(uint256 amount) external onlyRole(ADMIN_ROLE) nonRe
 ### forceRebalance
 
 Move composition toward the per-instance target weights at any time
-(the ONLY rebalance lever — there is no keeper/scheduled rebalance).
-Overweight adapters are drawn down surplus-first and the recovered
-USDC is re-routed deficit-first, isomorphically across exact and
-inexact sets. The call MUST leave aggregate NAV NON-DECREASING: the
-caller pre-funds `topUp` USDC covering realized slippage + fees, or
-the whole call reverts (`NavWouldDecrease`). Holders can NEVER lose
-value to it — on an exact set the top-up is ~zero (1:1 moves), on an
-inexact set the admin pays the swap slippage out of pocket (§5.6).
+(the ONLY rebalance lever — there is no keeper/scheduled/flow-based
+rebalance; ordinary deposits/withdrawals stay composition-blind).
+Overweight adapters are drawn down to target and the recovered
+USDC is re-routed deficit-first via `_fillDeficitFirst`, the same
+mechanism across exact and inexact sets. The call MUST leave
+aggregate NAV NON-DECREASING: the caller pre-funds `topUp` USDC
+covering realized slippage + fees, or the whole call reverts
+(`NavWouldDecrease`). Holders can NEVER lose value to it — on an
+exact set the top-up is ~zero (1:1 moves), on an inexact set the
+admin pays the swap slippage out of pocket (§5.6).
 
 `ADMIN_ROLE` (timelock) — a discretionary lever, not an emergency one.
 

@@ -1,5 +1,5 @@
 # IPositionAdapter
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/934ea7ee25f9591b4a70b1ae95e9b81b8738767d/contracts/interfaces/IPositionAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/interfaces/IPositionAdapter.sol)
 
 Position-adapter boundary for the unified Vault (ADR-0010). A
 superset of the v1 `IStrategyAdapter`: it adds min-out parameters, a

@@ -1,5 +1,5 @@
 # IExactnessVault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/01b59e20caa97f6392c68e2a81dce4c5d658f622/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/VaultRegistry.sol)
 
 Minimal view the registry needs to surface a vault's vault-attested
 exactness class (unified `Vault`, ADR-0010 §5.1 / C2). Declared as an
