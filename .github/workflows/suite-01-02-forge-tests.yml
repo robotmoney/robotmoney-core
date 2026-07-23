@@ -150,6 +150,12 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Fork-state digest helper round-trip self-test (issue #1152)
+        # Offline, no network/Docker: exercises scripts/devnet/fork-state-digest.sh
+        # write+verify against a throwaway temp blob before anything below relies
+        # on it against the real fixture.
+        run: scripts/devnet/check-fork-state-digest-selftest.sh
+
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -186,6 +192,38 @@ jobs:
             exit 1
           fi
           mv /tmp/CURRENT.anvil-state testing/fixtures/fork-state/CURRENT.anvil-state
+
+      - name: Assert tampered fixture is red
+        # ADR-0011 addendum (issue #1152): a byte-flipped blob must fail the
+        # sha256 integrity check in check-fork-manifest.sh, not silently load.
+        run: |
+          cp testing/fixtures/fork-state/CURRENT.anvil-state /tmp/CURRENT.anvil-state.bak
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("testing/fixtures/fork-state/CURRENT.anvil-state")
+          data = bytearray(p.read_bytes())
+          data[0] ^= 0xFF
+          p.write_bytes(data)
+          PY
+          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
+            echo "tampered fixture unexpectedly passed" >&2
+            mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
+            exit 1
+          fi
+          mv /tmp/CURRENT.anvil-state.bak testing/fixtures/fork-state/CURRENT.anvil-state
+
+      - name: Assert missing digest is red
+        # ADR-0011 addendum (issue #1152): a manifest lacking state_sha256 must
+        # fail loudly, not warn-and-continue.
+        run: |
+          cp testing/fixtures/fork-state/CURRENT.json /tmp/CURRENT.json.bak
+          jq 'del(.state_sha256)' /tmp/CURRENT.json.bak > testing/fixtures/fork-state/CURRENT.json
+          if scripts/devnet/run-golden-forge-forks.sh --match-path "contracts/test/VaultForkRegressions.t.sol"; then
+            echo "missing digest unexpectedly passed" >&2
+            mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
+            exit 1
+          fi
+          mv /tmp/CURRENT.json.bak testing/fixtures/fork-state/CURRENT.json
 
       - name: Verify ADR-0011 workflow structure
         run: scripts/devnet/check-adr0011-ci.sh

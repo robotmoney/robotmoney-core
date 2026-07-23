@@ -3,5 +3,6 @@
   "state_file": "base-48896605.anvil-state",
   "fork_block": 48896605,
   "chain_id": 8453,
-  "captured_at": "2026-07-20T21:26:50Z"
+  "captured_at": "2026-07-20T21:26:50Z",
+  "state_sha256": "530c5903c91f8c663bbd83f2628f8059b1c7b193210384b82094f92881d8d3fc"
 }

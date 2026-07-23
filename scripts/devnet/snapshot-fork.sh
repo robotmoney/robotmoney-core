@@ -541,6 +541,12 @@ jq -n \
     deployment: $deployment
   }' > "$FIXTURE_FILE"
 
+# 5a. Bind the fixture manifest to the blob it references (ADR-0011
+#     addendum, issue #1152): record sha256(ANVIL_STATE_FILE) as
+#     state_sha256 in FIXTURE_FILE so a hand-edited blob is a loud CI
+#     failure instead of an unreviewable silent change.
+"$REPO_ROOT/scripts/devnet/fork-state-digest.sh" write "$ANVIL_STATE_FILE" "$FIXTURE_FILE"
+
 # 6. Update the stable pointers. Consumers (compose, k3d, CI) read
 #    CURRENT.anvil-state directly via `anvil --load-state`. CURRENT.json
 #    carries the metadata for humans + CI guards.
@@ -561,6 +567,9 @@ jq -n \
     chain_id: ($chain_id | tonumber),
     captured_at: $captured_at
   }' > "$CURRENT_FILE"
+
+# 6a. Same digest binding for the CURRENT.json pointer (issue #1152).
+"$REPO_ROOT/scripts/devnet/fork-state-digest.sh" write "$CURRENT_STATE_FILE" "$CURRENT_FILE"
 
 # 7. Persist a copy of the deployment artifact at the canonical path so
 #    the indexer (and CI smoke jobs) can read it without re-running the
