@@ -1,5 +1,20 @@
 # Unified vault — resolution of open questions
 
+> **Superseded (rebalancing model) — see
+> `docs/adr/ADR-0010-unified-vault-architecture.md`.** The isomorphic
+> flow-based rebalancing decision this document records — question **D1**
+> below, and the **Q4** tuning-dissolved resolution that depended on it — was
+> reversed: the team rejected flow-based correction after it proved not to
+> work in practice. Composition correction is now **`forceRebalance`-only**:
+> ordinary deposit and withdrawal flow is composition-blind (no deficit is
+> ever fixed by a deposit, no surplus by a withdrawal); the explicit,
+> caller-funded `forceRebalance` call is the sole lever that ever moves
+> composition toward target. ADR-0010 is the corrected, authoritative source
+> for the rebalancing model. This document is a dated historical decision
+> record and is **not** rewritten to match — its flow-based framing is kept
+> as-is below and marked inline `(superseded — see banner)` at each
+> occurrence; nothing else in this document is affected.
+
 Resolves the four ADR-0010 "Open decisions" and the seven still-open items in
 `unified-vault-spec.md` §10, incorporating the ADR-0010 critical-review
 findings (C1/C2/C3/C3a, H-A1, H-A2, M-E3, M-S2, M-S5). The forcing-function is
@@ -76,8 +91,9 @@ blocks draining the others — as an `EMERGENCY_ROLE` action.
 
 The distinction the design draws is between routine **operation** and failure
 **response**. Routine operation — rebalancing — is autonomous and flow-based
-(see the rebalancing rule): it needs no operator. Failure response stays with
-a human, because a failing adapter **is** a smart-contract failure, and
+*(superseded — see banner)* (see the rebalancing rule): it needs no operator.
+Failure response stays with a human, because a failing adapter **is** a
+smart-contract failure, and
 intervening on smart-contract failure is precisely the one thing the
 governance constraint keeps admins for. Autonomy applies to operation, not to
 incident response.
@@ -101,8 +117,9 @@ holds that authority (`emergencyWithdraw`/`emergencyWithdrawAdapter`/
 `forceRemoveAdapter` at `contracts/RobotMoneyVault.sol:906,934,966`). What the
 constraint disqualifies is not the emergency surface but any *routine*
 dependence on a human reacting in time; rebalancing therefore becomes
-flow-based while incident response remains a hot-key action. The
-arm-then-execute latency M-S5 flagged is closed by collapsing arm and execute
+flow-based *(superseded — see banner)* while incident response remains a
+hot-key action. The arm-then-execute latency M-S5 flagged is closed by
+collapsing arm and execute
 into one EMERGENCY action, not by removing the human.
 
 ### Supporting rule — adapters own their configuration, set once
@@ -285,14 +302,14 @@ the primary choice.
 
 | # | Question (source) | Resolution | Driven by |
 |---|---|---|---|
-| D1 | Inexact rebalancing: enable (gated) vs no-rebalance (ADR) | Isomorphic flow-based rebalancing for **every** vault type: deposits fill largest deficits, withdrawals draw down largest surpluses (per-swap slippage floor bounds each leg). Optional NAV-non-decreasing admin `forceRebalance` (caller funds the cost). No keeper, drift band, or cost cap; not gated on exactness. | Rebalancing rule; ADR-0007 |
+| D1 | Inexact rebalancing: enable (gated) vs no-rebalance (ADR) | *(superseded — see banner)* Isomorphic flow-based rebalancing for **every** vault type: deposits fill largest deficits, withdrawals draw down largest surpluses (per-swap slippage floor bounds each leg). Optional NAV-non-decreasing admin `forceRebalance` (caller funds the cost). No keeper, drift band, or cost cap; not gated on exactness. | Rebalancing rule; ADR-0007 |
 | D2 | `isExact` attestation site (ADR) | Vault-attested: `addAdapter` parameter, immutable on `AdapterInfo`; `allExact()` a derived view; no registry state. | Principle 1 |
 | D3 | Residual price-check mechanism (ADR) | Single global aggregate NAV-growth-rate cap, one checkpoint (last aggregate NAV + timestamp) written in the deposit path; gates deposits only, is not the drain trigger; registered-pool option rejected. | Price-check rule; Principle 2 |
 | D4 | Exit-side deviation guard (ADR) | Entry-side only. Redemption always proceeds at realized proceeds; no override needed because nothing gates exit. | Principle 2 |
 | Q1 | EMERGENCY-armable surface / blast radius (spec §10.1, M-S5) | `EMERGENCY_ROLE` retains drain/removal/NAV-exclusion authority; arming latency solved by atomic EMERGENCY arm+execute (arm and execute in one hot-key action, no ADMIN timelock in between). Blast radius bounded by scoping the atomic actions to incident-critical ones. | Principle 3 |
 | Q2 | Who drains a compromised venue executor (spec §10.2) | `EMERGENCY_ROLE` `forceRemove` on the objective per-adapter failure condition + governance redeploy of a replacement adapter + reabsorb. No hot-swap executor slot. Also the M-S2 stranded-token answer. | Principle 3 |
 | Q3 | Per-theme price-check option (spec §10.3) | Dissolved: the residual price check is a single global vault-level aggregate NAV-growth-rate cap, not a per-theme or per-adapter selection. One bound per vault, set by governance — not an intervention. | Supporting rule; Principle 2 |
-| Q4 | Inexact rebalancing tuning (spec §10.4, M-E3) | Dissolved: rebalancing is uniform flow-based, not a tuned trading loop. No `rebalanceDriftBandBps`, no `maxRebalanceCostPerEpochBps`, no keeper bounty; `forceRebalance` has no tuning knobs — its only bound is NAV-non-decreasing. | Rebalancing rule |
+| Q4 | Inexact rebalancing tuning (spec §10.4, M-E3) | *(superseded — see banner)* Dissolved: rebalancing is uniform flow-based, not a tuned trading loop. No `rebalanceDriftBandBps`, no `maxRebalanceCostPerEpochBps`, no keeper bounty; `forceRebalance` has no tuning knobs — its only bound is NAV-non-decreasing. | Rebalancing rule |
 | Q5 | Per-adapter slippage (spec §10.5) | Per-adapter bound set at `addAdapter`, immutable; vault enforces a global ceiling. | Supporting rule |
 | Q6 | Drain: all-or-nothing vs skip-and-continue (spec §10.6) | Skip-and-continue, an `EMERGENCY_ROLE` action on objective per-adapter failure conditions. `BasketVault.emergencyUnwind`'s all-or-nothing revert (`EmergencyFloorUnavailable`, `contracts/vaults/BasketVault.sol:1250-1269`) does not carry over. | Principle 3 |
 | Q7 | Chronicle adapter shape (spec §10.7) | Separate `ChronicleAssetPositionAdapter`: one pricing source per contract, one codehash per pricing path. | Supporting rule |
@@ -300,10 +317,11 @@ the primary choice.
 
 Per-item notes beyond the table:
 
-- **D1/Q4.** Rebalancing is one mechanism for every vault type, decoupled from
-  exactness. Deposit flow fills the largest deficits, withdrawal flow draws
-  down the largest surpluses, and each drawdown leg is bounded by the per-swap
-  slippage floor already present in both vaults (`_slippageFloor` on the basket
+- **D1/Q4.** *(superseded — see banner)* Rebalancing is one mechanism for
+  every vault type, decoupled from exactness. Deposit flow fills the largest
+  deficits, withdrawal flow draws down the largest surpluses, and each
+  drawdown leg is bounded by the per-swap slippage floor already present in
+  both vaults (`_slippageFloor` on the basket
   sell path, the 1:1 move on the exact lending pull). The optional
   `forceRebalance` is the only admin lever, and its NAV-non-decreasing
   invariant makes it holder-safe by construction: the admin supplies the USDC
@@ -533,8 +551,9 @@ only and does not localize which adapter moved.
   `shutdownVault` (`:1038`) — all retained, none reduced to a deposit-halt-only
   key. Incident-critical actions gain atomic arm+execute so the ADMIN timelock
   never blocks a live response. Role count drops **KEEPER** (rebalancing is
-  flow-based, Principle above), going from three (ADMIN, KEEPER, EMERGENCY) to
-  ADMIN plus a full-authority EMERGENCY.
+  flow-based, Principle above) *(superseded — see banner; KEEPER stays
+  dropped under `forceRebalance`-only correction too)*, going from three
+  (ADMIN, KEEPER, EMERGENCY) to ADMIN plus a full-authority EMERGENCY.
 - **`adminRebalance` must be removed or converted, not only `rebalance()`.** It
   is the second writer of `lastRebalanceAt`
   (`contracts/RobotMoneyVault.sol:865`); the only other write is `rebalance()`
@@ -551,7 +570,9 @@ only and does not localize which adapter moved.
 
 Edits a follow-up makes (this document changes neither file):
 
-- **ADR-0010 "Open decisions"** — all four bullets close: D1 →
+- **ADR-0010 "Open decisions"** *(superseded — see banner; D1's rebalancing
+  model per this bullet was later reversed to `forceRebalance`-only)* — all
+  four bullets close: D1 →
   isomorphic flow-based rebalancing for every vault type (deficit-first
   deposits, surplus-first withdrawals) plus an optional NAV-non-decreasing
   `forceRebalance`, reconciling ADR-0007 without a cost cap or keeper and
@@ -561,11 +582,12 @@ Edits a follow-up makes (this document changes neither file):
   options dropped; D4 →
   entry-side only, the "exit-side with emergency override" consequence bullet
   deleted.
-- **ADR-0010 §5/§6** — replace the drift-band + per-epoch-cost-cap
-  rebalancing text and the keeper references with isomorphic flow-based
-  rebalancing (deficit-first deposits, surplus-first withdrawals) and the
-  self-funded NAV-non-decreasing `forceRebalance`; record that the global
-  limiter gates deposits only and is not the drain condition.
+- **ADR-0010 §5/§6** *(superseded — see banner)* — replace the drift-band +
+  per-epoch-cost-cap rebalancing text and the keeper references with
+  isomorphic flow-based rebalancing (deficit-first deposits, surplus-first
+  withdrawals) and the self-funded NAV-non-decreasing `forceRebalance`;
+  record that the global limiter gates deposits only and is not the drain
+  condition.
 - **Spec §4.3a** — pin the global aggregate limiter as the sole residual
   check; add the single-checkpoint placement (deposit path) and the
   speed-not-drift / localizes-nothing limit.
