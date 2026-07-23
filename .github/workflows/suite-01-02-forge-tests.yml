@@ -84,10 +84,18 @@ jobs:
         # Modern forge rejects them by name (gas:0 failure) before execution,
         # so excluding them at the runner is the cleanest seam. The 24 vanilla
         # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
+        #
+        # `--no-match-contract "UniV3AssetPositionAdapterForkTest"`: that contract
+        # is a LOUD-SKIP fork test (issue #1118) — its setUp reverts when no fork
+        # RPC is configured (never a silent skip). This light unit job has no fork
+        # RPC, so it excludes the fork contract; the fork contract executes in the
+        # `fork-regressions` job below, which supplies one. The non-fork
+        # `UniV3AssetPositionAdapterTest` mock harness still runs here.
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
+          --no-match-contract "UniV3AssetPositionAdapterForkTest"
 
       - name: forge test (four-vault real-TVL pyramid — issue #592)
         # Explicit, named guard for the four-vault real-TVL end state so it
@@ -228,6 +236,33 @@ jobs:
       - name: Verify ADR-0011 workflow structure
         run: scripts/devnet/check-adr0011-ci.sh
 
+      - name: forge test (Uniswap V3 AssetPositionAdapter fork — issue #1118)
+        env:
+          # UniV3AssetPositionAdapterForkTest swaps USDC<->wETH through a REAL Base
+          # Uniswap V3 pool via the concrete UniswapV3SwapAdapter venue seam,
+          # asserting TWAP-priced totalAssets, the composed slippage-floor revert,
+          # and the ORA-4 NAV-deviation guard on a manipulated spot. It cannot run
+          # against the offline golden fixture above (run-golden-forge-forks.sh):
+          # that snapshot only carries the state touched while generating the
+          # vault/adapter deployment fixtures, which never touched the Uniswap V3
+          # factory/pool — `getPool` has no code to call there. It genuinely needs
+          # a live RPC, same as the `live-base-fork-drift` job in
+          # suite-21-nightly.yml, so it uses the same `vars.RMPC_FORK_RPC_URL`
+          # (repo/org variable, not secret) with the same public-RPC fallback —
+          # no repo secret named RMPC_FORK_RPC_URL exists (`gh api
+          # repos/.../actions/secrets` returns zero), so leaving this pinned to
+          # `secrets.*` made the job loud-fail on every run, not just when
+          # genuinely misconfigured.
+          #
+          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
+          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
+          # non-empty string — it never silent-skips. The public-RPC fallback
+          # means that never happens in practice; if the fallback endpoint is ever
+          # deleted, the job goes red rather than green-skipping.
+          FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL || 'https://base-rpc.publicnode.com' }}
+        run: |
+          forge test --match-contract "UniV3AssetPositionAdapterForkTest" -vvv
+
   coverage:
     name: forge-coverage-gate
     runs-on: ubuntu-latest
@@ -286,10 +321,13 @@ jobs:
         # getPastVotes either returns the latest value instead of the historical
         # one, or does not revert when it should (AZ-GOV-1). All pass in the
         # forge test (unit) job; only the coverage instrumentation pass is affected.
+        # `UniV3AssetPositionAdapterForkTest` is excluded: it is a LOUD-SKIP fork
+        # test (issue #1118) whose setUp reverts without a fork RPC, which this
+        # coverage job does not set. It executes in `fork-regressions` above.
         run: >-
           forge coverage --report lcov --ir-minimum
           --no-match-test "^testFail_|^test_getPastVotes_"
-          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest"
+          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest|UniV3AssetPositionAdapterForkTest"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
 
       - name: Enforce branch-coverage gate
