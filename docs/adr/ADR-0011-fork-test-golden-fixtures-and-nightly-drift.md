@@ -218,6 +218,47 @@ The change is therefore along the **authority / determinism** axis (remove the
 external secret, make every run reproducible), not the speed-vs-realism axis the
 constraint governs.
 
+## Addendum (issue #1152): sha256 integrity binding for the checked-in blob
+
+The 2.8 MB single-line `.anvil-state` blobs this ADR moved every merge-gating
+fork suite onto are the sole state source for those suites, and they are not
+meaningfully reviewable in a PR diff — a hand-edited blob (malicious PR or
+misbehaving automation) could alter balances or bytecode the regression tests
+assert against while CI stayed green. This addendum closes that gap without
+adding a new dependency or changing the decision above.
+
+- Every `.anvil-state` blob under `testing/fixtures/fork-state/` has its
+  sha256 recorded as `state_sha256` in its manifest (`CURRENT.json` and every
+  committed `base-<block>.json`).
+- `scripts/devnet/fork-state-digest.sh write <state_file> <manifest_json>`
+  computes the digest and writes/overwrites `state_sha256` in place;
+  `scripts/devnet/snapshot-fork.sh` calls it for both the dated
+  `base-<block>.json` fixture and the `CURRENT.json` pointer at capture time,
+  so `refresh-fork-fixture.sh` (which execs into `snapshot-fork.sh`) inherits
+  it automatically.
+- `scripts/devnet/fork-state-digest.sh verify <state_file> <manifest_json>`
+  recomputes the digest and compares it to the recorded one. Per this ADR's
+  loud-fail semantics, a missing field or a mismatch exits non-zero — never a
+  warn-and-continue.
+- `scripts/devnet/check-fork-manifest.sh` runs `verify` against
+  `CURRENT.anvil-state` / `CURRENT.json` before anything downstream consumes
+  the fixture; `run-golden-forge-forks.sh` already calls it ahead of
+  `anvil --load-state`, so every suite-01-02 forge fork target is covered.
+  The suite-05 `anvil-goldens` and `anvil-governance` matrix groups load
+  `CURRENT.anvil-state` directly via `ForkFixture` and so bypass
+  `check-fork-manifest.sh`; the workflow runs `fork-state-digest.sh verify`
+  directly for those two groups before `cargo test`.
+- Regeneration workflow is unchanged from Decision §3 (developer-owned on
+  change): `snapshot-fork.sh` / `refresh-fork-fixture.sh` writes the new
+  digest alongside the new blob, so a legitimate refresh shows up in review
+  as an intentional manifest+digest diff — the reviewable proxy for the
+  unreviewable blob — while a silent blob edit with no matching digest change
+  becomes a red CI failure.
+- Scope: sha256 of the raw file bytes only. No signing, no provenance chain,
+  no change to `genesis-alloc.json` / `usdc-storage-seed.json` integrity
+  (separate surfaces), no GitHub branch-protection changes. The nightly
+  live-drift job (§2) does not consume the fixture and is out of scope.
+
 ## Out of scope of this decision
 
 - The Base fork target, the Rust harness driver, per-test isolation, and the

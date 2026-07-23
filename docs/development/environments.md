@@ -196,7 +196,11 @@ bash scripts/devnet/snapshot-fork.sh
 bash scripts/devnet/refresh-fork-fixture.sh
 ```
 
-Validates the fixture manifest before use:
+Validates the fixture manifest before use — including the sha256 integrity
+check (`state_sha256` in `CURRENT.json`, ADR-0011 addendum, issue #1152):
+`snapshot-fork.sh` writes the digest, so a legitimate refresh always updates
+it; a hand-edited blob with a stale or missing digest fails loudly here
+instead of loading silently:
 
 ```bash
 bash scripts/devnet/check-fork-manifest.sh

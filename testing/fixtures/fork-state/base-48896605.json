@@ -20,5 +20,6 @@
     "registry": "0xde69cCdDa3272e58C7DA1f2a42Cb350De466065d",
     "portfolio_router": "0x435A545C7F96C6ebf6d2754B354ECC8E6C8eC454",
     "router_governance": "0x3B33fb914D624f8087a2B43A40e5F2a9C78b8109"
-  }
+  },
+  "state_sha256": "530c5903c91f8c663bbd83f2628f8059b1c7b193210384b82094f92881d8d3fc"
 }

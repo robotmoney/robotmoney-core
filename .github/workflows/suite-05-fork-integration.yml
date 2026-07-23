@@ -169,6 +169,18 @@ jobs:
         working-directory: testing/fork-e2e-rust
         run: cargo test --no-run --release
 
+      - name: Verify fork-state blob integrity (ADR-0011 sha256 binding, issue #1152)
+        # anvil-goldens and anvil-governance load CURRENT.anvil-state directly
+        # via ForkFixture (matrix.devnet == false) and so bypass
+        # check-fork-manifest.sh's verification entirely. Recompute the digest
+        # here, before cargo test consumes the fixture, so a tampered or
+        # digest-less blob is a loud red instead of a silent load.
+        if: ${{ matrix.devnet == false }}
+        run: >-
+          scripts/devnet/fork-state-digest.sh verify
+          testing/fixtures/fork-state/CURRENT.anvil-state
+          testing/fixtures/fork-state/CURRENT.json
+
       - name: Fork integration tests (${{ matrix.group }})
         working-directory: testing/fork-e2e-rust
         env:

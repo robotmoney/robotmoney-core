@@ -14,5 +14,6 @@
     "share_receiver": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
     "usdc": "0xdd45294c154B0c1f6D9F8D63e895E5bc61C3b0bd",
     "vault": "0xE54289902B3D4d9557E244efea7eaEC865B771Ce"
-  }
+  },
+  "state_sha256": "0fa01d8bf5d47032b27e0aca3f58bc63a19870bed7505800cc1e87047f9171bf"
 }

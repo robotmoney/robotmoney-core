@@ -31,6 +31,15 @@ fi
 
 MANIFEST="$REPO_ROOT/testing/ethereum-testnet/config/fork-block.json"
 SNAPSHOT="$REPO_ROOT/testing/fixtures/fork-state/CURRENT.anvil-state"
+STATE_MANIFEST="$REPO_ROOT/testing/fixtures/fork-state/CURRENT.json"
+
+# sha256 integrity binding (ADR-0011 addendum, issue #1152): recompute the
+# digest of the raw blob bytes and compare against the manifest's
+# state_sha256 field before anything downstream (the ingester, then any fork
+# suite via run-golden-forge-forks.sh) consumes the fixture. Missing field or
+# mismatch is a loud, non-zero failure — never a warn-and-continue.
+echo "[check-fork-manifest] verifying fork-state blob integrity (state_sha256)"
+"$REPO_ROOT/scripts/devnet/fork-state-digest.sh" verify "$SNAPSHOT" "$STATE_MANIFEST"
 
 # Build the validator + ingester binaries once. Reuses the smoke-test
 # crate's existing cargo cache.
