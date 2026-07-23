@@ -1,5 +1,5 @@
 # PosConfAavePool
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a62dd56cbffd67a73d39db63c0ae20c0a7cc71f/contracts/test/AdapterPositionConformance.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/AdapterPositionConformance.t.sol)
 
 1:1 Aave V3 Pool mock. `supply` pulls USDC and mints aTokens; `withdraw`
 supports the type(uint256).max full-balance sentinel and returns actual.

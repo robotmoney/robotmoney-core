@@ -141,7 +141,7 @@
 - [UnifiedVaultBase](UnifiedVault.t.sol/abstract.UnifiedVaultBase.md)
 - [UnifiedVaultDepositTest](UnifiedVault.t.sol/contract.UnifiedVaultDepositTest.md)
 - [UnifiedVaultRedemptionModeTest](UnifiedVault.t.sol/contract.UnifiedVaultRedemptionModeTest.md)
-- [FlowRebalanceTest](UnifiedVault.t.sol/contract.FlowRebalanceTest.md)
+- [CompositionBlindRoutingTest](UnifiedVault.t.sol/contract.CompositionBlindRoutingTest.md)
 - [ForceRebalanceNavTest](UnifiedVault.t.sol/contract.ForceRebalanceNavTest.md)
 - [VaultCodeSizeGuard](VaultCodeSizeGuard.t.sol/contract.VaultCodeSizeGuard.md)
 - [VaultForkRegressions](VaultForkRegressions.t.sol/contract.VaultForkRegressions.md)
