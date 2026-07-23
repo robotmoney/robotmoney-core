@@ -331,10 +331,12 @@ reverting), not by this check (§4.4, §5.5).
 
 This check is **entry-side only** — it does not run on withdraw (§5.3, M-A1),
 and redemptions are never gated by it. It is a deposit circuit-breaker, not a
-rebalance-safety precondition: rebalancing is flow-based and does not trade on
-an adapter's mark, so there is no valuation-driven trading loop for this check
-to precondition (§5.6, C3a). A single vault-wide checkpoint is strictly smaller
-than a per-adapter checkpoint set and than a registered-pool deviation check;
+rebalance-safety precondition: ordinary rebalancing flow is composition-blind
+and does not trade on an adapter's mark, and the one mechanism that does
+(`forceRebalance`) is caller-funded, so there is no valuation-driven trading
+loop for this check to precondition (§5.6, C3a). A single vault-wide
+checkpoint is strictly smaller than a per-adapter checkpoint set and than a
+registered-pool deviation check;
 both of those variants are rejected in favor of the one global checkpoint.
 
 ### 4.4 Emergency and oracle semantics
@@ -471,14 +473,15 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
   neither prices NAV nor receives/returns withdrawal flow;
   exclusion-not-confiscation (EMERGENCY can still drain, eligibility is
   restorable).
-- Target allocation weights (governance-set, equal-weight default) that
-  deposit/withdrawal flow tends composition toward, plus the admin
-  `forceRebalance` lever (§5.6). `forceRebalance` is NAV-non-decreasing: the
-  caller supplies USDC covering realized slippage and fees or the call reverts,
-  so no cost is socialized. There is **no** `rebalance()` /
-  `adminRebalance()`, **no** `KEEPER_ROLE` rebalancer, and **no** rebalance
-  throttles — `maxRebalanceBpsPerCall` / `minRebalanceInterval` are removed;
-  correction is flow-based (§5.6).
+- Target allocation weights (governance-set, equal-weight default) that only
+  an explicit admin `forceRebalance` call ever moves composition toward
+  (§5.6) — ordinary deposit/withdrawal flow is composition-blind.
+  `forceRebalance` is NAV-non-decreasing: the caller supplies USDC covering
+  realized slippage and fees or the call reverts, so no cost is socialized.
+  There is **no** `rebalance()` / `adminRebalance()`, **no** `KEEPER_ROLE`
+  rebalancer, and **no** rebalance throttles — `maxRebalanceBpsPerCall` /
+  `minRebalanceInterval` are removed; correction is `forceRebalance`-only
+  (§5.6).
 - Split pause flags `depositsPaused` / `withdrawalsPaused` (authority changes
   in §5.5), `shutdownVault`/`restoreVault(newTvlCap)`, registry-driven
   `retire()`/`unretire()` with the set-once `setRegistry` link (DI-2).
@@ -508,8 +511,8 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
 - Share scale: `decimals() == 6`, `_decimalsOffset() == 18` (CUST-5).
 - Roles: `ADMIN_ROLE` (self-admin) and `EMERGENCY_ROLE`, with the
   pause/unpause and shutdown/restore trust asymmetry. There is no
-  `KEEPER_ROLE` — rebalancing is flow-based (§5.6), so no keeper is granted or
-  wired.
+  `KEEPER_ROLE` — rebalancing is `forceRebalance`-only (§5.6), so no keeper is
+  granted or wired.
 - **Plus, imported from `BasketVault`:** the ACL-3/F-06 last-admin floor
   (`adminCount` counter in `_grantRole`/`_revokeRole` hooks,
   `LastAdminFloor`) — `RobotMoneyVault` lacks this today; the unified vault
@@ -557,15 +560,17 @@ semantics unless a row in §4.3 or a subsection below says otherwise):
    denominator must reflect the idle that already backs existing shares, not
    the caller's incoming deposit and not the post-route residual.
 3. Pull USDC from the caller. **No shares minted yet.**
-4. Route via the two-pass `_routeDeposit` allocator, filling the **largest
-   deficits first** toward the target allocation (governance-set weights,
-   equal-weight default) min'd with `capBps`, then spreading any leftover into
-   remaining cap headroom (`RobotMoneyVault.sol:449-500`; ineligible-but-active
-   adapters skipped, not reverted — audit L-4; `UnroutedDeposit` on
-   leftover). The basket path adopts this deficit-first allocator in place of
-   its weight-neutral even split — the deposit half of flow-based rebalancing
-   (§5.6). Each `_allocateTo(i, amount)` transfers USDC and calls
-   `adapter.deploy(amount, amount × (MAX_BPS − maxSlippageBps) / MAX_BPS)`.
+4. Route via the two-pass `_routeDeposit` allocator: a flat,
+   **composition-blind** equal split across active+eligible adapters, min'd
+   with each adapter's `capBps` headroom, then a second pass spreading any
+   leftover into remaining cap headroom (ineligible-but-active adapters
+   skipped, not reverted — audit L-4; `UnroutedDeposit` on leftover). This
+   mirrors the pre-unification `BasketVault._routeDeposit` weight-neutral even
+   split — an ordinary deposit does **not** fill the largest deficit first
+   (§5.6); only an explicit `forceRebalance` call ever does, via its own
+   internal deficit-first re-route leg. Each `_allocateTo(i, amount)`
+   transfers USDC and calls `adapter.deploy(amount, amount × (MAX_BPS −
+   maxSlippageBps) / MAX_BPS)`.
 5. `realizedDelta = totalAssets() − taBefore`. Revert
    `DepositBelowSlippageFloor(realizedDelta, floor)` when `realizedDelta <
    assets × (MAX_BPS − maxSlippageBps) / MAX_BPS` (**AZ-BSK-1**: the floor is
@@ -653,21 +658,20 @@ pull loop, shortfall semantics, fee base, and all four previews.
   the override returns `_lastWithdrawnAssets` (**AZ-BSK-2**) — actual net
   USDC, not `previewRedeem`'s precomputed value.
 
-**Drawdown ordering — surplus-first (flow-based rebalancing, §5.6).** In both
-modes the pull draws down the **largest surpluses first**: a redemption pulls
-(Mode A) or sells (Mode B) from the adapters furthest **above** their target
-allocation, so capital leaving moves composition toward the target weights —
-the withdrawal half of the flow-based rebalancing model. Each leg is bounded by
-the existing per-swap slippage floor (§2.2), the redeemer's protection: the
-floor caps how much a thin venue can cost them on any one leg, so surplus-first
-drawdown cannot be turned into a catastrophic-slippage extraction against the
-redeemer. This replaces the weight-neutral proportional drawdown the two source
-contracts carry (`RobotMoneyVault._pullProportional`,
-`BasketVault._sellProportional`). Surplus-first ordering is **orthogonal to
-exactness**: exactness (Mode A vs Mode B) governs the shortfall rule
-(revert vs clamp), the fee base, and the preview branch — never which adapters
-are drawn down. The precise ordering, tie-breaking, and interaction with the
-proportional idle-USDC pass are specified per §5.6 and §10 item 4.
+**Drawdown ordering — proportional-by-balance, composition-blind (§5.6).** In
+both modes the pull draws down adapters **proportionally to their current
+balance**, not by deviation from target: a redemption pulls (Mode A) `pull =
+remainingNeeded × adapterBalance / totalInAdapters` or sells (Mode B)
+`adapterTokenBalance × shares / supplyBefore` of each active/eligible adapter
+— the weight-neutral proportional drawdown both source contracts already
+carry (`RobotMoneyVault._pullProportional`, `BasketVault._sellProportional`),
+undoing the surplus-first reordering of that base algorithm. An ordinary
+withdrawal does **not** fix a surplus preferentially — the only mechanism
+that ever targets a deviation from target is the admin `forceRebalance` lever
+(§5.6). Each leg is bounded by the existing per-swap slippage floor (§2.2),
+the redeemer's protection. This ordering is **orthogonal to exactness**:
+exactness (Mode A vs Mode B) governs the shortfall rule (revert vs clamp),
+the fee base, and the preview branch — never which adapters are drawn down.
 
 **Mode A — exact set (`allExact()`), carried from `RobotMoneyVault`.**
 
@@ -678,11 +682,10 @@ proportional idle-USDC pass are specified per §5.6 and §10 item 4.
   raised early (`remainingNeeded > totalInAdapters`) and on residual
   under-delivery; over-delivery clamped to `assetsNeeded` so surplus stays
   idle for all holders.
-- Per-adapter sizing: **surplus-first** — draw from adapters above target
-  before the assets-proportional balance pass (§5.3 drawdown ordering), each
-  `pull` capped at `min(remaining, adapterBalance)`; `_pullProportional`'s
-  proportional pass is the base being reordered toward surplus-first (precise
-  ordering per §10 item 4).
+- Per-adapter sizing: **proportional-by-balance** (§5.3 drawdown ordering) —
+  `pull = remainingNeeded × adapterBalance / totalInAdapters`, each `pull`
+  capped at `min(remaining, adapterBalance)`; this is `_pullProportional`'s
+  base algorithm, unreordered by target deviation.
 - Shortfall rule: **revert.** An exact adapter that under-delivers is a fault,
   not a slippage event; `require(realized >= grossAssets)` holds because
   `_pullProportional` reverts `InsufficientAdapterLiquidity` before the
@@ -702,10 +705,10 @@ Proportional` (`BasketVault.sol:839-872`).**
   an inexact adapter systematically delivers `realized ≈ wanted × (1 −
   slippage)`, so the exact-mode require would make every inexact redeem
   revert. Instead proceeds accumulate as realized.
-- Per-adapter sizing: **surplus-first** — sell from adapters above target
-  before the share-proportional `shares / supplyBefore` of *that adapter's*
-  token balance (§5.3 drawdown ordering; precise ordering per §10 item 4),
-  independent of the other adapters' marks.
+- Per-adapter sizing: **share-proportional** (§5.3 drawdown ordering) — each
+  adapter sells `adapterTokenBalance × shares / supplyBefore` of its own
+  position, independent of the other adapters' marks; this is
+  `_sellProportional`'s base algorithm, unreordered by target deviation.
 - Shortfall/clamp rule: each adapter enforces `minUsdcOut = max(caller floor,
   adapter TWAP floor)` per §2.2 and reverts only if realized `< minUsdcOut`
   (`SlippageExceeded`); a delivery below the *wanted* USDC but above the floor
@@ -816,70 +819,78 @@ across N adapters × guard params, the auditors MUST review the atomic-EMERGENCY
 surface before Phase 2 (§9); the atomic action set is scoped as narrowly as the
 incident-response runbook allows.
 
-### 5.6 Rebalancing — flow-based, isomorphic, with an optional self-funded admin lever
+### 5.6 Rebalancing — `forceRebalance`-only, composition-blind ordinary flow
 
 Rebalancing is **isomorphic across every vault type** and is **not** gated on
-exactness. Composition tends toward a per-instance **target allocation**
-(governance-set weights; equal-weight default) through deposit and withdrawal
-flow, by the same mechanism for lending themes and heterogeneous baskets. There
-is no scheduled, automatic, or keeper rebalance, no drift band, no per-epoch
-cost cap, and no keeper bounty; rebalancing has **no off-chain component**.
-Exactness governs the withdraw surface and the deposit accounting mode
-(§5.3) — a **separate axis** that says nothing about how composition is
-corrected.
+exactness. **No deficit is ever fixed by an ordinary deposit, and no surplus
+is ever fixed by an ordinary withdrawal** — ordinary deposit and withdrawal
+flow is composition-blind with respect to the per-instance **target
+allocation** (governance-set weights; equal-weight default), by the same
+mechanism for lending themes and heterogeneous baskets. The **only**
+mechanism that ever moves composition toward target is an explicit admin
+`forceRebalance` call. There is no scheduled, automatic, or keeper rebalance,
+no drift band, no per-epoch cost cap, and no keeper bounty; rebalancing has
+**no off-chain component**. Exactness governs the withdraw surface and the
+deposit accounting mode (§5.3) — a **separate axis** that says nothing about
+how composition is corrected.
 
-**Deposit flow — fill the largest deficits first.** New capital routes to the
-adapters furthest below target, moving composition toward the weights. This is
-the two-pass `_routeDeposit` allocator (§5.2, step 4); the basket path adopts
-the same fill-toward-target allocator in place of the weight-neutral even split
-`BasketVault._routeDeposit` uses today.
+**Deposit flow — composition-blind.** New capital routes without regard to
+any adapter's deviation from target — the two-pass `_routeDeposit` allocator
+(§5.2, step 4) does a flat, weight-neutral equal split across active+eligible
+adapters min'd with `capBps`, mirroring the pre-unification
+`BasketVault._routeDeposit` behavior. An ordinary deposit never fills a
+deficit preferentially.
 
-**Withdrawal flow — draw down the largest surpluses first.** A redemption pulls
-(exact) or sells (inexact) from the adapters furthest above target, moving
-composition toward the weights (§5.3). Each leg is bounded by the existing
-per-swap slippage floor (§2.2), the redeemer's protection; the floor caps the
-cost of any single leg, so surplus-first drawdown cannot be turned into a
-catastrophic-slippage extraction against the redeemer. This replaces the
-weight-neutral proportional drawdown the source contracts carry.
+**Withdrawal flow — composition-blind.** A redemption pulls (exact) or sells
+(inexact) proportionally to current balances (§5.3) — the weight-neutral
+proportional drawdown both source contracts already carry
+(`RobotMoneyVault._pullProportional`, `BasketVault._sellProportional`). Each
+leg is bounded by the existing per-swap slippage floor (§2.2), the redeemer's
+protection. An ordinary withdrawal never draws down a surplus preferentially.
 
-**Optional admin `forceRebalance` — self-funded, NAV-non-decreasing.** An admin
-MAY move composition toward target at any time, but the call **MUST leave NAV
-non-decreasing**: the vault measures aggregate NAV before and after and
-`require`s the caller to supply the USDC covering realized slippage and fees (a
-top-up), or the whole call reverts. Holders can **never** lose value to a
-`forceRebalance` — the admin buys tighter tracking with their own funds. On an
-exact (lending) set the top-up is ~zero (positions move 1:1, no slippage); on
-an inexact (basket) set the admin pays the swap slippage out of pocket. One
-function, isomorphic across vault types, replacing the socialized role-gated
-`rebalance()` / `adminRebalance()` pair.
+**The only lever: admin `forceRebalance` — self-funded, NAV-non-decreasing.**
+An admin MAY move composition toward target at any time, but the call **MUST
+leave NAV non-decreasing**: the vault measures aggregate NAV before and after
+and `require`s the caller to supply the USDC covering realized slippage and
+fees (a top-up), or the whole call reverts. Holders can **never** lose value
+to a `forceRebalance` — the admin buys tighter tracking with their own funds.
+On an exact (lending) set the top-up is ~zero (positions move 1:1, no
+slippage); on an inexact (basket) set the admin pays the swap slippage out of
+pocket. `forceRebalance`'s internal re-route leg still fills the largest
+deficit first (the pre-reversal `_routeDeposit` logic, retained as an
+internal `forceRebalance`-only helper) even though ordinary deposit flow no
+longer does. One function, isomorphic across vault types, replacing the
+socialized role-gated `rebalance()` / `adminRebalance()` pair.
 
-**No socialized cost either way (C3a, reconciles ADR-0007).** Flow-based
-correction is free, and `forceRebalance` is self-funded, so no realized cost is
-ever socialized to holders. C3a's hazard — an adapter's mark mis-directing real
-capital (an over-marked adapter read as over-weight, sold, realizing below its
-mark, the loss socialized) — is closed structurally: no mechanism trades on an
-adapter's mark to decide which position to sell, so no valuation-driven trade
-socializes a cost. ADR-0007's "no socialized rebalance costs" is upheld, not
-overridden, and needs no drift band or cost cap to bound a socialized-cost
-surface that does not exist. The residual vault-side price sanity check (§4.3a)
-stays a deposit-entry circuit-breaker; with no valuation-driven trading loop it
-is **not** a rebalance-safety precondition.
+**No socialized cost either way (C3a, reconciles ADR-0007).**
+`forceRebalance` is the **only** thing that ever trades between adapters, and
+it is self-funded, so no realized cost is ever socialized to holders. C3a's
+hazard — an adapter's mark mis-directing real capital (an over-marked adapter
+read as over-weight, sold, realizing below its mark, the loss socialized) —
+is closed structurally: ordinary flow never trades on an adapter's mark, and
+the one mechanism that does is caller-funded. ADR-0007's "no socialized
+rebalance costs" is upheld, not overridden, and needs no drift band or cost
+cap to bound a socialized-cost surface that does not exist. The residual
+vault-side price sanity check (§4.3a) stays a deposit-entry circuit-breaker;
+with no valuation-driven trading loop on ordinary flow it is **not** a
+rebalance-safety precondition.
 
-**Under thin or one-directional flow, composition drifts and is not forced
-back.** With little deposit/withdrawal flow and no `forceRebalance` call,
-composition wanders from target — risk exposure drifts, but no value leaks:
-ADR-0007 NAV-haircut redemption gives each holder their true pro-rata slice at
+**Absent `forceRebalance` activity, composition drifts and is not forced
+back.** With no `forceRebalance` call, composition wanders from target under
+ordinary flow alone — risk exposure drifts, but no value leaks: ADR-0007
+NAV-haircut redemption gives each holder their true pro-rata slice at
 realized proceeds at any composition. This is an accepted, disclosed
 characteristic, not a condition engineered against. `forceRebalance` degrades
-gracefully to absent — never called, correction reduces to pure flow.
+gracefully to absent — never called, composition simply does not correct.
 
 This supersedes ADR-0003's `NotImplemented()` basket-rebalance stub with the
-flow-based model, not a keeper rebalancer. The precise surplus-first drawdown
-ordering / tie-breaking (the `_pullProportional` / `_sellProportional`
-replacement) and the `forceRebalance` before-vs-after NAV measurement, admin
-top-up accounting, and shortfall-revert atomicity are specified per §10 item 4.
-Cost disclosure on a `forceRebalance`: realized swap costs are bounded per leg
-by the min-out floors and emitted via `Pulled` / `Allocated` / `Rebalanced`.
+`forceRebalance`-only model, not a keeper rebalancer, and not by reordering
+`_pullProportional` / `_sellProportional` — ordinary withdrawal flow keeps
+the same weight-neutral proportional drawdown both source contracts already
+specify. The `forceRebalance` before-vs-after NAV measurement, admin top-up
+accounting, and shortfall-revert atomicity are specified per §10 item 4. Cost
+disclosure on a `forceRebalance`: realized swap costs are bounded per leg by
+the min-out floors and emitted via `Pulled` / `Allocated` / `Rebalanced`.
 
 ### 5.7 Event / view off-chain compatibility (M-A5, replaces old Q3)
 
@@ -1166,18 +1177,20 @@ specifies them.
    checkpoint, no per-theme or per-adapter variant). What remains open is only
    the concrete `maxNavGrowthRateBps` value — one global vault-level cap — as a
    governance/tuning decision for Phase 3/4.
-4. **Flow-based rebalancing — precise ordering and `forceRebalance` accounting
-   (§5.6).** The *model* is settled: isomorphic flow-based correction toward the
-   target allocation (deficit-first deposits, surplus-first withdrawals bounded
-   by the per-swap slippage floor) plus an optional NAV-non-decreasing admin
+4. **`forceRebalance`-only rebalancing — `forceRebalance` accounting (§5.6).**
+   The *model* is settled: `forceRebalance`-only correction toward the target
+   allocation — ordinary deposit and withdrawal flow stays composition-blind
+   (the weight-neutral `_routeDeposit` split and the `_pullProportional` /
+   `_sellProportional` proportional drawdown both source contracts already
+   specify, unchanged) — plus an optional NAV-non-decreasing admin
    `forceRebalance`. There is **no tuning surface** — the drift-band /
-   per-epoch-cost-cap tuning question is dissolved (flow-based rebalancing has
-   no knobs), and no exact/inexact rebalance split remains. What is open is the
-   precise specification: the surplus-first drawdown ordering and tie-breaking
-   in the `_pullProportional` / `_sellProportional` replacement (and its
-   interaction with the proportional idle-USDC pass), and the `forceRebalance`
-   before-vs-after NAV measurement, admin top-up accounting, and shortfall-revert
-   atomicity that make "NAV after ≥ NAV before" hold within a single call.
+   per-epoch-cost-cap tuning question is dissolved (`forceRebalance`-only
+   correction has no knobs), and no exact/inexact rebalance split remains.
+   The ordinary-flow ordering is **not** open (it is the unchanged,
+   already-specified weight-neutral behavior); what is open is only the
+   `forceRebalance` before-vs-after NAV measurement, admin top-up accounting,
+   and shortfall-revert atomicity that make "NAV after ≥ NAV before" hold
+   within a single call.
 5. **Per-adapter slippage.** One vault-level `maxSlippageBps` today; a
    mixed-liquidity basket may want per-adapter bounds (adapter-local, vault
    value as ceiling). Defer or include in Phase 2/4.

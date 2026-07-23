@@ -43,7 +43,7 @@
         "Vault-attested `AdapterInfo.isExact` bool + `allExact()` registry-visible flag + `ExactnessTransition` timelock/event on class flip; `maxWithdraw/maxRedeem == 0` when `!allExact()` (#1123).",
         "Residual adapter-independent price sanity check: single vault-wide aggregate-NAV growth-rate checkpoint on the deposit path (#1120).",
         "Atomic `EMERGENCY_ROLE` arm+execute emergency model; split pause (`depositsPaused`/`withdrawalsPaused`) replacing single `paused()`; vault-side emergency floor + `reabsorbRevokedAdapter` (#1121).",
-        "Isomorphic flow-based rebalancing (largest-deficit-first deposit, largest-surplus-first withdrawal) + self-funded NAV-non-decreasing `forceRebalance` (#1122)."
+        "`forceRebalance`-only composition correction: ordinary deposit and withdrawal flow is composition-blind (never targets a deficit or surplus); self-funded NAV-non-decreasing `forceRebalance` is the sole lever that ever moves composition toward target (#1122, rebalancing model corrected by #1154/#1155)."
       ],
       "shared_state": [
         "AdapterInfo[] registry (adapter, capBps, active, isExact) — mutated by #1119 (structure), #1123 (isExact field), #1120 (NAV checkpoint neighbor).",
