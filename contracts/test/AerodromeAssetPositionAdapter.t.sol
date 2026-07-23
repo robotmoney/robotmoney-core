@@ -565,10 +565,16 @@ contract AerodromeAssetPositionAdapterForkTest is Test {
         adapter.setNavDeviationGuardBps(20); // 0.20%
 
         // Push spot away from the lagging 30-min TWAP with a real swap against the
-        // deep Aerodrome pool. Sized generously (this pool carries far deeper
-        // liquidity than a typical V3 fee tier) so it crosses enough ticks to trip
-        // a low guard threshold, while staying archive-friendly.
-        uint256 manipUsdc = 8_000_000 * ONE_USDC;
+        // Aerodrome pool. Empirically calibrated against live Base mainnet state
+        // (2026-07): 1M USDC moves this pool ~200bps — a 10x safety margin over
+        // the 20bps threshold — while staying far smaller than a manipulation
+        // large enough to matter for archive-node RPC cost. An earlier 8M-USDC
+        // size (a much larger safety margin, ~2900bps) crossed enough ticks to
+        // trip the public RPC's 429 rate limit in CI (issue #1125 review), since
+        // this step runs immediately after the sibling V3 fork test in the same
+        // job and shares its rate budget; 1M keeps the same guard-tripping
+        // behavior with a fraction of the storage-slot RPC calls.
+        uint256 manipUsdc = 1_000_000 * ONE_USDC;
         deal(BASE_USDC, address(this), manipUsdc);
         IERC20(BASE_USDC).forceApprove(SLIPSTREAM_ROUTER, manipUsdc);
         IAerodromeSlipstreamRouter(SLIPSTREAM_ROUTER)
