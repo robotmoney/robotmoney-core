@@ -375,12 +375,43 @@ fn registry_status_change() {
         .expect("registerVault");
 
     // Verify initial status via getVault — status 0 = Active.
+    // Retry loop: on Geth devnet there is a brief window after wait_for_receipt
+    // returns where eth_call "latest" may still reflect pre-TX state, causing
+    // getVault to revert with NotRegistered() (same class of race as blocker
+    // #1081, closed for listVaults in registry_register_list). Poll up to 5
+    // times with 200 ms backoff before failing.
     let get_call = IOnchainVaultRegistry::getVaultCall { vault: fake_vault };
-    let raw = deployer
-        .call(registry_addr, &get_call)
-        .expect("getVault before pause");
-    let decoded = IOnchainVaultRegistry::getVaultCall::abi_decode_returns(&raw, true)
-        .expect("decode getVault returns");
+    let decoded = {
+        let mut last_err = String::new();
+        let mut result = None;
+        for attempt in 0..5u32 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            match deployer.call(registry_addr, &get_call) {
+                Err(e) => {
+                    last_err = format!("getVault before pause attempt {attempt}: {e}");
+                    eprintln!("[registry_status_change] {last_err}");
+                }
+                Ok(raw) => {
+                    match IOnchainVaultRegistry::getVaultCall::abi_decode_returns(&raw, true) {
+                        Ok(decoded) => {
+                            result = Some(decoded);
+                            break;
+                        }
+                        Err(e) => {
+                            last_err =
+                                format!("getVault before pause attempt {attempt}: decode: {e}");
+                            eprintln!("[registry_status_change] {last_err}");
+                        }
+                    }
+                }
+            }
+        }
+        result.unwrap_or_else(|| {
+            panic!("getVault before pause never succeeded after registerVault: {last_err}")
+        })
+    };
     assert_eq!(
         decoded.status as u8, 0u8,
         "initial status must be Active (0)"
@@ -430,11 +461,47 @@ fn registry_status_change() {
     );
 
     // Verify getVault now returns Paused (status=1).
-    let raw2 = deployer
-        .call(registry_addr, &get_call)
-        .expect("getVault after pause");
-    let decoded2 = IOnchainVaultRegistry::getVaultCall::abi_decode_returns(&raw2, true)
-        .expect("decode getVault returns after pause");
+    // Same Geth eth_call/"latest" visibility race as the pre-pause read above:
+    // retry until the decoded status reflects the just-mined setVaultStatus TX
+    // rather than failing on a stale-but-decodable pre-TX read.
+    let decoded2 = {
+        let mut last_err = String::new();
+        let mut result = None;
+        for attempt in 0..5u32 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            match deployer.call(registry_addr, &get_call) {
+                Err(e) => {
+                    last_err = format!("getVault after pause attempt {attempt}: {e}");
+                    eprintln!("[registry_status_change] {last_err}");
+                }
+                Ok(raw) => {
+                    match IOnchainVaultRegistry::getVaultCall::abi_decode_returns(&raw, true) {
+                        Ok(decoded) if decoded.status as u8 == 1u8 => {
+                            result = Some(decoded);
+                            break;
+                        }
+                        Ok(decoded) => {
+                            last_err = format!(
+                                "getVault after pause attempt {attempt}: status={} (not yet Paused)",
+                                decoded.status as u8
+                            );
+                            eprintln!("[registry_status_change] {last_err}");
+                        }
+                        Err(e) => {
+                            last_err =
+                                format!("getVault after pause attempt {attempt}: decode: {e}");
+                            eprintln!("[registry_status_change] {last_err}");
+                        }
+                    }
+                }
+            }
+        }
+        result.unwrap_or_else(|| {
+            panic!("getVault after pause never reflected Paused status after setVaultStatus: {last_err}")
+        })
+    };
     assert_eq!(
         decoded2.status as u8, 1u8,
         "status must be Paused (1) after setVaultStatus"
