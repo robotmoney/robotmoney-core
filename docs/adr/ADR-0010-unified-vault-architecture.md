@@ -177,19 +177,22 @@ into the adapter — but pricing is **not wholly delegated** to the adapter (see
   drain trigger; localizing a failing adapter is the EMERGENCY responder's job
   (§6, Open decisions).
 
-- **Rebalancing is flow-based and isomorphic (C3a, M-E3):** composition tends
-  toward a per-instance **target allocation** (governance-set weights,
-  equal-weight default) through deposit and withdrawal flow, by the same
-  mechanism for every vault type. Deposits fill the **largest deficits first**
-  — new capital routes to the adapters furthest below target. Withdrawals draw
-  down the **largest surpluses first** — a redemption pulls (lending) or sells
-  (basket) from the adapters furthest above target, each leg bounded by the
-  existing per-swap slippage floor, which is the redeemer's protection. There
-  is no scheduled, automatic, or keeper rebalance, no drift band, and no
-  per-epoch cost cap; no valuation-driven trading loop consumes an adapter's
-  mark to decide which position to sell. C3a's valuation-mis-directs-capital
-  hazard is therefore closed structurally: no mechanism trades on an adapter's
-  mark to socialize a cost onto holders. Exactness does **not** gate
+- **Rebalancing is `forceRebalance`-only; ordinary flow is composition-blind
+  (C3a, M-E3):** no deficit is ever fixed by an ordinary deposit, and no
+  surplus is ever fixed by an ordinary withdrawal. Deposits and withdrawals
+  route without regard to any adapter's deviation from the per-instance
+  **target allocation** (governance-set weights, equal-weight default) — the
+  same weight-neutral mechanism for every vault type, unchanged from the two
+  source contracts (`RobotMoneyVault._pullProportional`,
+  `BasketVault._sellProportional`, and each contract's weight-neutral deposit
+  split). The **only** mechanism that ever moves composition toward target is
+  an explicit admin `forceRebalance` call. There is no scheduled, automatic,
+  or keeper rebalance, no drift band, and no per-epoch cost cap; no
+  valuation-driven trading loop consumes an adapter's mark to decide which
+  position to sell on ordinary flow. C3a's valuation-mis-directs-capital
+  hazard is therefore closed structurally: no mechanism other than the
+  explicitly caller-funded `forceRebalance` ever trades on an adapter's mark,
+  so no cost is socialized onto holders. Exactness does **not** gate
   rebalancing — it is a separate axis governing the withdraw surface and the
   deposit accounting mode (§2/§5), not how composition is corrected.
 - **Optional admin `forceRebalance` — self-funded, NAV-non-decreasing:** an
@@ -213,17 +216,19 @@ themes. Two carry-overs change and are recorded here rather than presented as
 parity:
 
 - **Rebalancing supersedes ADR-0003, reconciles ADR-0007:** ADR-0003's
-  `NotImplemented()` basket-rebalance stub resolves to the flow-based model
-  (§5) — not a keeper rebalancer — so basket themes correct composition by
-  deposit and withdrawal flow toward the target allocation, isomorphically
-  with the lending themes, and the stub's new-deposits-only restriction falls
-  away. ADR-0007's "no socialized rebalance costs" is **upheld, not
-  overridden**: flow-based correction is free, and the optional `forceRebalance`
-  is self-funded (the caller covers realized slippage and fees under the
-  NAV-non-decreasing invariant), so no realized cost is socialized to holders
-  either way. There is no keeper, drift band, or per-epoch cost cap to
-  reconcile against ADR-0007 — the socialized-cost surface those constructs
-  were meant to bound does not exist under flow-based rebalancing.
+  `NotImplemented()` basket-rebalance stub resolves to the `forceRebalance`-only
+  model (§5) — not a keeper rebalancer — so basket themes correct composition
+  only through an explicit admin `forceRebalance` call, isomorphically with
+  the lending themes; ordinary deposit and withdrawal flow stays
+  composition-blind for basket themes exactly as for lending themes, and the
+  stub's new-deposits-only restriction falls away. ADR-0007's "no socialized
+  rebalance costs" is **upheld, not overridden**: `forceRebalance` is the only
+  thing that ever trades between adapters, and it is self-funded (the caller
+  covers realized slippage and fees under the NAV-non-decreasing invariant),
+  so no realized cost is socialized to holders either way. There is no
+  keeper, drift band, or per-epoch cost cap to reconcile against ADR-0007 —
+  the socialized-cost surface those constructs were meant to bound does not
+  exist under `forceRebalance`-only correction.
 - **Split pause is not identical (LIFE-3, M-A4):** narrowing `pause()` to
   deposits-only changes the LIFE-3 authority/semantics, and `paused()`
   observability changes for off-chain consumers — after an EMERGENCY deposits
@@ -282,14 +287,16 @@ These are genuine design choices the review surfaced; each folds in the
 review's recommended option but records the alternative rather than
 foreclosing it. The spec resolves them before engineering.
 
-- **Rebalancing model — resolved to isomorphic flow-based correction.**
+- **Rebalancing model — resolved to `forceRebalance`-only correction.**
   Rebalancing is not gated on exactness and has no scheduled or keeper
-  component: deposits fill the largest deficits, withdrawals draw down the
-  largest surpluses (each leg bounded by the per-swap slippage floor), and an
-  optional NAV-non-decreasing admin `forceRebalance` (§5/§6), self-funded by
-  its caller, is the only lever. The earlier gated-rebalance framing (drift
-  band + per-epoch cost cap) and the no-rebalance alternative are both
-  dissolved: flow-based correction has no tuning surface and socializes no
+  component: ordinary deposit and withdrawal flow is composition-blind (no
+  deficit is ever fixed by a deposit, no surplus by a withdrawal), and the
+  only lever that ever moves composition toward target is the optional
+  NAV-non-decreasing admin `forceRebalance` (§5/§6), self-funded by its
+  caller. The earlier gated-rebalance framing (drift band + per-epoch cost
+  cap), the no-rebalance alternative, and the flow-based (deficit-first
+  deposit / surplus-first withdrawal) alternative are all dissolved:
+  `forceRebalance`-only correction has no tuning surface and socializes no
   cost, so neither a cost cap nor a keeper is needed, and no exact/inexact
   rebalance split remains.
 - **`isExact` attestation — vault-attested (chosen) vs. registry-attested.**
@@ -332,13 +339,13 @@ foreclosing it. The spec resolves them before engineering.
   Solidity subclasses.
 - ERC-4626 behavior is uniform and predicate-driven: exact mode when all
   adapters are attested exact, redeem-only otherwise.
-- The flow-based rebalancing model retires the machinery that existed only for
-  keeper rebalancing and for a second-oracle deviation check — the keeper role
-  and throttle, the withdrawal-side pause, per-adapter runtime setters, and the
-  second-oracle deviation guard (replaced by the single global aggregate
-  NAV-growth-rate cap). The `EMERGENCY_ROLE` drain/removal surface is
-  retained, not retired. See "Simplifications enabled" in
-  `docs/technical/unified-vault-open-questions-resolution.md`.
+- The `forceRebalance`-only rebalancing model retires the machinery that
+  existed only for keeper rebalancing and for a second-oracle deviation check
+  — the keeper role and throttle, the withdrawal-side pause, per-adapter
+  runtime setters, and the second-oracle deviation guard (replaced by the
+  single global aggregate NAV-growth-rate cap). The `EMERGENCY_ROLE`
+  drain/removal surface is retained, not retired. See "Simplifications
+  enabled" in `docs/technical/unified-vault-open-questions-resolution.md`.
 
 **Negative / accepted risks.**
 
