@@ -9,6 +9,14 @@ if grep -n 'secrets\.RMPC_FORK_RPC_URL' "$FORGE"; then
   echo "merge-gating fork workflow still references the RPC secret" >&2
   exit 1
 fi
+if ! grep -q 'Assert tampered fixture is red' "$FORGE"; then
+  echo "suite-01-02 fork-regressions job is missing the ADR-0011 sha256 tamper self-test step (issue #1152)" >&2
+  exit 1
+fi
+if ! grep -q 'Assert missing digest is red' "$FORGE"; then
+  echo "suite-01-02 fork-regressions job is missing the ADR-0011 sha256 missing-digest self-test step (issue #1152)" >&2
+  exit 1
+fi
 grep -q '^  schedule:' "$NIGHTLY"
 grep -q '^  workflow_dispatch:' "$NIGHTLY"
 if grep -Eq '^  (push|pull_request):' "$NIGHTLY"; then
