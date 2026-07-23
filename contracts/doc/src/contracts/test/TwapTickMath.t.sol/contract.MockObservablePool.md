@@ -1,5 +1,5 @@
 # MockObservablePool
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/TwapTickMath.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d740448a2c3c14fa0c325f99c0cf5fb21593c110/contracts/test/TwapTickMath.t.sol)
 
 **Inherits:**
 [IObservablePool](/contracts/interfaces/IObservablePool.sol/interface.IObservablePool.md)
@@ -38,6 +38,13 @@ int56 private _cum1
 ```
 
 
+### _spotTick
+
+```solidity
+int24 private _spotTick
+```
+
+
 ## Functions
 ### constructor
 
@@ -53,6 +60,13 @@ constructor(address token0_, address token1_) ;
 function setCumulatives(int56 cum0, int56 cum1) external;
 ```
 
+### setSpotTick
+
+
+```solidity
+function setSpotTick(int24 tick) external;
+```
+
 ### token0
 
 
@@ -65,6 +79,16 @@ function token0() external view returns (address);
 
 ```solidity
 function token1() external view returns (address);
+```
+
+### slot0
+
+Truncated to the 4-field `IObservablePool.slot0()` surface (issue
+#1125) — unused here beyond satisfying the interface.
+
+
+```solidity
+function slot0() external view returns (uint160, int24, uint16, uint16);
 ```
 
 ### observe

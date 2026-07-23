@@ -16,6 +16,7 @@ contract MockObservablePool is IObservablePool {
     address private _token1;
     int56 private _cum0;
     int56 private _cum1;
+    int24 private _spotTick;
 
     constructor(address token0_, address token1_) {
         _token0 = token0_;
@@ -27,12 +28,22 @@ contract MockObservablePool is IObservablePool {
         _cum1 = cum1;
     }
 
+    function setSpotTick(int24 tick) external {
+        _spotTick = tick;
+    }
+
     function token0() external view returns (address) {
         return _token0;
     }
 
     function token1() external view returns (address) {
         return _token1;
+    }
+
+    /// @dev Truncated to the 4-field `IObservablePool.slot0()` surface (issue
+    ///      #1125) — unused here beyond satisfying the interface.
+    function slot0() external view returns (uint160, int24, uint16, uint16) {
+        return (0, _spotTick, 0, 0);
     }
 
     function observe(uint32[] calldata)

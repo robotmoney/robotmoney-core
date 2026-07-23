@@ -2,6 +2,7 @@
 
 # Contents
 - [AaveV3Adapter](AaveV3Adapter.sol/contract.AaveV3Adapter.md)
+- [AerodromeAssetPositionAdapter](AerodromeAssetPositionAdapter.sol/contract.AerodromeAssetPositionAdapter.md)
 - [AerodromeSwapAdapter](AerodromeSwapAdapter.sol/contract.AerodromeSwapAdapter.md)
 - [ChronicleOracleAdapter](ChronicleOracleAdapter.sol/contract.ChronicleOracleAdapter.md)
 - [CompoundV3Adapter](CompoundV3Adapter.sol/contract.CompoundV3Adapter.md)

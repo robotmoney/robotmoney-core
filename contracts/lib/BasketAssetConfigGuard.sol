@@ -5,6 +5,7 @@ pragma solidity ^0.8.24;
 
 import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {IAerodromePool} from "../interfaces/IAerodromePool.sol";
+import {IObservablePool} from "../interfaces/IObservablePool.sol";
 
 /// @title BasketAssetConfigGuard
 /// @notice The config-validation interface the 2026-06-19 audit recommended for
@@ -67,7 +68,11 @@ library BasketAssetConfigGuard {
         if (!((t0 == token && t1 == usdc) || (t1 == token && t0 == usdc))) {
             revert PoolTokenMismatch();
         }
-        (,,, uint16 cardinality,,,) = IUniswapV3Pool(pool).slot0();
+        // IObservablePool.slot0() decodes only the 4 leading fields, which is
+        // ABI-compatible with both the 7-field Uniswap V3 layout and the
+        // 6-field Aerodrome Slipstream layout (issue #1125) — see that
+        // interface's NatSpec for why a shorter-prefix decode is safe here.
+        (,,, uint16 cardinality) = IObservablePool(pool).slot0();
         if (cardinality < minCardinality) {
             revert InsufficientPoolCardinality(pool, minCardinality, cardinality);
         }
