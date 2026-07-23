@@ -85,18 +85,19 @@ jobs:
         # so excluding them at the runner is the cleanest seam. The 24 vanilla
         # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
         #
-        # `--no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest"`:
-        # those contracts are LOUD-SKIP fork tests (issues #1118 / #1124) — their
-        # setUp reverts when no fork RPC is configured (never a silent skip). This
-        # light unit job has no fork RPC, so it excludes the fork contracts; they
-        # execute in the `fork-regressions` job below, which supplies one. The
-        # non-fork `UniV3AssetPositionAdapterTest` / `UniV4AssetPositionAdapterTest`
+        # `--no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"`:
+        # those contracts are LOUD-SKIP fork tests (issues #1118 / #1124 / #1125) —
+        # their setUp reverts when no fork RPC is configured (never a silent
+        # skip). This light unit job has no fork RPC, so it excludes the fork
+        # contracts; they execute in the `fork-regressions` job below, which
+        # supplies one. The non-fork `UniV3AssetPositionAdapterTest` /
+        # `UniV4AssetPositionAdapterTest` / `AerodromeAssetPositionAdapterTest`
         # mock harnesses still run here.
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
-          --no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest"
+          --no-match-contract "UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
 
       - name: forge test (four-vault real-TVL pyramid — issue #592)
         # Explicit, named guard for the four-vault real-TVL end state so it
@@ -286,6 +287,25 @@ jobs:
         run: |
           forge test --match-contract "UniV4AssetPositionAdapterForkTest" -vvv
 
+      - name: forge test (Aerodrome AssetPositionAdapter fork — issue #1125)
+        env:
+          # AerodromeAssetPositionAdapterForkTest swaps USDC<->wETH through a REAL
+          # Base Aerodrome Slipstream CL pool via the concrete AerodromeSwapAdapter
+          # venue seam, asserting TWAP-priced totalAssets, the composed
+          # slippage-floor revert, and the ORA-4 NAV-deviation guard on a
+          # manipulated spot — invariant parity with the sibling Uniswap V3 fork
+          # test above. It cannot run against the offline golden fixture
+          # (run-golden-forge-forks.sh): that snapshot never touched the Aerodrome
+          # Slipstream factory/pool. Same public-RPC-fallback rationale as the V3
+          # fork job above.
+          #
+          # LOUD-SKIP (test-coverage-policy invariant 1): this contract's setUp
+          # REVERTS when neither RMPC_FORK_RPC_URL nor FORK_RPC_URL resolves to a
+          # non-empty string — it never silent-skips.
+          FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL || 'https://base-rpc.publicnode.com' }}
+        run: |
+          forge test --match-contract "AerodromeAssetPositionAdapterForkTest" -vvv
+
   coverage:
     name: forge-coverage-gate
     runs-on: ubuntu-latest
@@ -344,14 +364,15 @@ jobs:
         # getPastVotes either returns the latest value instead of the historical
         # one, or does not revert when it should (AZ-GOV-1). All pass in the
         # forge test (unit) job; only the coverage instrumentation pass is affected.
-        # `UniV3AssetPositionAdapterForkTest` / `UniV4AssetPositionAdapterForkTest`
-        # are excluded: they are LOUD-SKIP fork tests (issues #1118 / #1124) whose
+        # `UniV3AssetPositionAdapterForkTest` / `UniV4AssetPositionAdapterForkTest` /
+        # `AerodromeAssetPositionAdapterForkTest` are excluded: all three are
+        # LOUD-SKIP fork tests (issues #1118 / #1124 / #1125) whose
         # setUp reverts without a fork RPC, which this coverage job does not set.
         # They execute in `fork-regressions` above.
         run: >-
           forge coverage --report lcov --ir-minimum
           --no-match-test "^testFail_|^test_getPastVotes_"
-          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest"
+          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
 
       - name: Enforce branch-coverage gate
