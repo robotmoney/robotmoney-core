@@ -9,4 +9,5 @@
 - [MorphoAdapter](MorphoAdapter.sol/contract.MorphoAdapter.md)
 - [UniswapV3AssetPositionAdapter](UniswapV3AssetPositionAdapter.sol/contract.UniswapV3AssetPositionAdapter.md)
 - [UniswapV3SwapAdapter](UniswapV3SwapAdapter.sol/contract.UniswapV3SwapAdapter.md)
+- [UniswapV4AssetPositionAdapter](UniswapV4AssetPositionAdapter.sol/contract.UniswapV4AssetPositionAdapter.md)
 - [UniswapV4SwapAdapter](UniswapV4SwapAdapter.sol/contract.UniswapV4SwapAdapter.md)
