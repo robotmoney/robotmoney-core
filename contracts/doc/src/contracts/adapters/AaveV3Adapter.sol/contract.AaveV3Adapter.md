@@ -1,5 +1,5 @@
 # AaveV3Adapter
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/1a62dd56cbffd67a73d39db63c0ae20c0a7cc71f/contracts/adapters/AaveV3Adapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/adapters/AaveV3Adapter.sol)
 
 **Inherits:**
 [IStrategyAdapter](/contracts/interfaces/IStrategyAdapter.sol/interface.IStrategyAdapter.md), [IPositionAdapter](/contracts/interfaces/IPositionAdapter.sol/interface.IPositionAdapter.md)

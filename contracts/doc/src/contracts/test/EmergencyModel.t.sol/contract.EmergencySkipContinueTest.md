@@ -1,5 +1,5 @@
 # EmergencySkipContinueTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dcd5dd028ae8ed6525d5aefde4cddc6dea610c0/contracts/test/EmergencyModel.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/EmergencyModel.t.sol)
 
 **Inherits:**
 [EmergencyModelBase](/contracts/test/EmergencyModel.t.sol/abstract.EmergencyModelBase.md)
@@ -27,7 +27,9 @@ function test_drainSet_skipsRevertingAdapter_processesRest() public;
 
 AC: KEEPER_ROLE no longer exists — no address holds it and its
 admin role is unconfigured (DEFAULT_ADMIN_ROLE == 0x00), i.e. the
-role was never wired into the vault. Rebalancing is flow-based (§5.6).
+role was never wired into the vault. Rebalancing is
+`forceRebalance`-only (§5.6) — no keeper, scheduled, or flow-based
+rebalance exists.
 
 
 ```solidity

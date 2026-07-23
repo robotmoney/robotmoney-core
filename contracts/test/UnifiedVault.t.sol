@@ -466,25 +466,30 @@ contract UnifiedVaultRedemptionModeTest is UnifiedVaultBase {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FlowRebalanceTest — isomorphic flow-based rebalancing (#1122, spec §5.6):
-//   deficit-first deposit routing and surplus-first withdrawal drawdown, on both
-//   exact and inexact adapter sets. Composition is created imbalanced (a direct
-//   USDC donation into one adapter), then a deposit/withdrawal is shown to move
-//   composition TOWARD the equal-weight target — deposits fill the largest
-//   deficit first, withdrawals draw the largest surplus first, and the opposite
-//   (correctly-weighted) leg is left untouched.
+// CompositionBlindRoutingTest — ordinary flow is composition-blind (#1155,
+//   spec §5.6): no deficit is ever fixed by an ordinary deposit, and no surplus
+//   is ever fixed by an ordinary withdrawal. Composition is created imbalanced
+//   (a direct USDC donation into one adapter), then a deposit/withdrawal is
+//   shown to treat every eligible adapter identically regardless of its current
+//   deviation from target — deposits split flat/capped-equal across ALL
+//   eligible adapters (the overweight one included, not skipped), and
+//   withdrawals pull/sell proportionally to each adapter's CURRENT balance (the
+//   underweight one included, not left untouched). The only mechanism that ever
+//   moves composition toward target is an explicit `forceRebalance` call (see
+//   `ForceRebalanceNavTest`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-contract FlowRebalanceTest is UnifiedVaultBase {
+contract CompositionBlindRoutingTest is UnifiedVaultBase {
     uint256 internal constant HAIRCUT_BPS = 100; // 1% realized slippage (< maxSlippage)
 
     function setUp() public {
-        _deployVault(0); // zero exit fee to isolate the routing ordering
+        _deployVault(0); // zero exit fee to isolate the routing math
     }
 
-    /// @notice AC: a deposit routes entirely to the adapter furthest BELOW target
-    ///         (largest deficit first); the overweight adapter receives none.
-    function test_deposit_fillsLargestDeficitFirst_exact() public {
+    /// @notice AC: a deposit into an imbalanced set gives the OVERWEIGHT adapter
+    ///         its equal/capped share instead of skipping it in favor of the
+    ///         deficit adapter.
+    function test_deposit_givesOverweightAdapterItsEqualShare_exact() public {
         ExactHoldAdapter a = _registerExact(uint16(MAX_BPS));
         ExactHoldAdapter b = _registerExact(uint16(MAX_BPS));
         _deposit(alice, 1_000 * ONE_USDC); // routes 500 / 500
@@ -492,79 +497,104 @@ contract FlowRebalanceTest is UnifiedVaultBase {
         // Donate directly into A so A is overweight and B is the largest deficit.
         usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500, NAV = 2000
         uint256 aBefore = a.totalAssets();
+        uint256 bBefore = b.totalAssets();
 
-        _deposit(bob, 200 * ONE_USDC);
+        _deposit(bob, 200 * ONE_USDC); // flat split: 100 / 100, deficit ignored
 
-        assertEq(a.totalAssets(), aBefore, "overweight adapter gets no deposit flow");
-        assertEq(b.totalAssets(), 700 * ONE_USDC, "deficit adapter filled first");
+        assertEq(
+            a.totalAssets(),
+            aBefore + 100 * ONE_USDC,
+            "overweight adapter STILL gets its equal share"
+        );
+        assertEq(
+            b.totalAssets(), bBefore + 100 * ONE_USDC, "deficit adapter gets the same equal share"
+        );
     }
 
-    /// @notice AC: deficit-first routing is IDENTICAL on an inexact set (deposit
-    ///         ordering is not gated on exactness).
-    function test_deposit_fillsLargestDeficitFirst_inexact() public {
+    /// @notice AC: the equal-share deposit routing is IDENTICAL on an inexact
+    ///         set (deposit ordering is not gated on exactness).
+    function test_deposit_givesOverweightAdapterItsEqualShare_inexact() public {
         InexactSellAdapter a = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
         InexactSellAdapter b = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
         _deposit(alice, 1_000 * ONE_USDC); // deploy-at-par => 500 / 500
 
         usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500, B = 500
         uint256 aBefore = a.totalAssets();
+        uint256 bBefore = b.totalAssets();
 
         _deposit(bob, 200 * ONE_USDC);
 
-        assertEq(a.totalAssets(), aBefore, "overweight adapter untouched (inexact)");
-        assertEq(b.totalAssets(), 700 * ONE_USDC, "deficit adapter filled first (inexact)");
+        assertEq(
+            a.totalAssets(),
+            aBefore + 100 * ONE_USDC,
+            "overweight adapter STILL gets its equal share (inexact)"
+        );
+        assertEq(
+            b.totalAssets(),
+            bBefore + 100 * ONE_USDC,
+            "deficit adapter gets the same equal share (inexact)"
+        );
     }
 
-    /// @notice AC: an EXACT-mode withdrawal draws from the adapter furthest ABOVE
-    ///         target (largest surplus first); the underweight adapter is untouched.
-    function test_withdraw_drawsLargestSurplusFirst_exact() public {
+    /// @notice AC: an EXACT-mode withdrawal pulls proportionally to each
+    ///         adapter's CURRENT balance — the underweight adapter is pulled
+    ///         from too, not left untouched.
+    function test_withdraw_pullsProportionallyByBalance_exact() public {
         ExactHoldAdapter a = _registerExact(uint16(MAX_BPS));
         ExactHoldAdapter b = _registerExact(uint16(MAX_BPS));
         _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
 
-        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500 surplus, B = 500 deficit
-        uint256 bBefore = b.totalAssets();
+        usdc.mint(address(a), 1_000 * ONE_USDC); // A = 1500 (75%), B = 500 (25%)
 
         vm.prank(alice);
         vault.withdraw(400 * ONE_USDC, alice, alice);
 
-        assertEq(b.totalAssets(), bBefore, "underweight adapter untouched on withdrawal");
-        assertEq(a.totalAssets(), 1_100 * ONE_USDC, "surplus adapter drawn down first");
-        assertEq(usdc.balanceOf(alice), 400 * ONE_USDC, "redeemer funded from the surplus leg");
+        // pull_i = 400 * balance_i / totalInAdapters(=2000): A -> 300, B -> 100.
+        assertEq(a.totalAssets(), 1_200 * ONE_USDC, "surplus adapter pulled proportionally");
+        assertEq(b.totalAssets(), 400 * ONE_USDC, "underweight adapter ALSO pulled proportionally");
+        assertEq(usdc.balanceOf(alice), 400 * ONE_USDC, "redeemer funded proportionally");
     }
 
-    /// @notice AC: an INEXACT-mode redemption sources the redeemer's pro-rata
-    ///         slice surplus-first, each leg bounded by the per-swap slippage
-    ///         floor; the underweight adapter is left untouched.
-    function test_redeem_drawsLargestSurplusFirst_inexact() public {
+    /// @notice AC: an INEXACT-mode redemption sells proportionally to each
+    ///         adapter's CURRENT balance, each leg bounded by the per-swap
+    ///         slippage floor; the underweight adapter is sold from too.
+    function test_redeem_sellsProportionallyByBalance_inexact() public {
         InexactSellAdapter a = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
         InexactSellAdapter b = _registerInexact(uint16(MAX_BPS), HAIRCUT_BPS);
         _deposit(alice, 1_000 * ONE_USDC); // 500 / 500
 
-        usdc.mint(address(a), 500 * ONE_USDC); // A = 1000 surplus, B = 500 deficit, NAV = 1500
+        usdc.mint(address(a), 500 * ONE_USDC); // A = 1000 (66.7%), B = 500 (33.3%)
+        uint256 aBefore = a.totalAssets();
         uint256 bBefore = b.totalAssets();
 
-        // Redeem ~20% of supply => sellTarget ≈ 1500 * 20% = 300, entirely within
-        // A's surplus, so B (the deficit leg) is never touched.
+        // Redeem ~20% of supply — proportional-by-balance sells ~20% of EACH
+        // adapter's own current balance, not a surplus-first sweep of A alone.
         uint256 shares = vault.balanceOf(alice) / 5;
         vm.prank(alice);
         vault.redeem(shares, alice, alice);
 
-        assertEq(b.totalAssets(), bBefore, "underweight adapter untouched (inexact surplus-first)");
-        assertLt(a.totalAssets(), 1_000 * ONE_USDC, "surplus adapter drawn down first");
+        assertLt(a.totalAssets(), aBefore, "larger-balance adapter sold from");
+        assertLt(b.totalAssets(), bBefore, "smaller-balance adapter ALSO sold from (not skipped)");
         assertApproxEqAbs(
-            a.totalAssets(), 700 * ONE_USDC, 2 * ONE_USDC, "~sellTarget drawn from the surplus leg"
+            a.totalAssets(), 800 * ONE_USDC, 2 * ONE_USDC, "~20% of A's own balance sold"
+        );
+        assertApproxEqAbs(
+            b.totalAssets(), 400 * ONE_USDC, 2 * ONE_USDC, "~20% of B's own balance sold"
         );
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ForceRebalanceNavTest — self-funded, NAV-non-decreasing admin `forceRebalance`
-//   (#1122, spec §5.6): the ONLY rebalance lever. It is admin-gated, ~free on an
+//   (spec §5.6): the ONLY mechanism that ever moves composition toward target —
+//   ordinary deposit/withdrawal flow stays composition-blind (see
+//   `CompositionBlindRoutingTest`). `forceRebalance` is admin-gated, ~free on an
 //   exact set, and on an inexact set REVERTS unless the caller tops up the USDC
 //   covering realized slippage — so aggregate NAV is non-decreasing and a holder
-//   can never lose value. The socialized `rebalance()`/`adminRebalance()` pair and
-//   the keeper throttles are gone.
+//   can never lose value. Its internal re-route leg still fills the largest
+//   deficit first via `_fillDeficitFirst`, unlike ordinary deposits' flat
+//   `_routeDeposit` split. The socialized `rebalance()`/`adminRebalance()` pair
+//   and the keeper throttles are gone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 contract ForceRebalanceNavTest is UnifiedVaultBase {
@@ -645,6 +675,50 @@ contract ForceRebalanceNavTest is UnifiedVaultBase {
         assertGt(b.totalAssets(), 500 * ONE_USDC, "deficit adapter filled");
         assertLt(
             a.totalAssets() - b.totalAssets(), gapBefore / 5, "composition converged toward target"
+        );
+    }
+
+    /// @notice AC: forceRebalance's re-route leg fills the LARGEST deficit first
+    ///         via `_fillDeficitFirst` — after drawing the surplus adapter down
+    ///         to target, the recovered USDC lands on the deficit adapters in
+    ///         proportion to how far EACH is from target, converging every
+    ///         adapter (including the formerly-overweight one) to the SAME
+    ///         equal-weight balance. A flat/equal split of the recovered USDC
+    ///         across all three adapters — the ordinary `_routeDeposit` behavior
+    ///         — would instead overshoot the formerly-overweight adapter and
+    ///         leave the two deficit adapters at unequal, still-below-target
+    ///         balances, since it never looks at deficits at all.
+    function test_forceRebalance_reRoute_fillsLargestDeficitFirst() public {
+        ExactHoldAdapter a = _registerExact(uint16(MAX_BPS));
+        ExactHoldAdapter b = _registerExact(uint16(MAX_BPS));
+        ExactHoldAdapter c = _registerExact(uint16(MAX_BPS));
+        _deposit(alice, 3_000 * ONE_USDC); // 1000 / 1000 / 1000
+
+        // A hugely overweight; B and C UNEQUALLY underweight (C less than B).
+        usdc.mint(address(a), 3_000 * ONE_USDC); // A = 4000
+        usdc.mint(address(c), 300 * ONE_USDC); // C = 1300, B stays at 1000
+        // NAV = 6300, target ~2100 each: A surplus ~1900, B deficit ~1100, C deficit ~800.
+
+        vm.prank(admin);
+        vault.forceRebalance(0);
+
+        assertApproxEqAbs(
+            a.totalAssets(),
+            b.totalAssets(),
+            2 * ONE_USDC,
+            "formerly-overweight A converges to target, not overshot by a flat share"
+        );
+        assertApproxEqAbs(
+            b.totalAssets(),
+            c.totalAssets(),
+            2 * ONE_USDC,
+            "B and C both converge to target despite unequal starting deficits"
+        );
+        assertApproxEqAbs(
+            a.totalAssets(),
+            c.totalAssets(),
+            2 * ONE_USDC,
+            "all three converge to the same equal-weight balance"
         );
     }
 

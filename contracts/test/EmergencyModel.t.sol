@@ -318,7 +318,9 @@ contract EmergencySkipContinueTest is EmergencyModelBase {
 
     /// @notice AC: KEEPER_ROLE no longer exists — no address holds it and its
     ///         admin role is unconfigured (DEFAULT_ADMIN_ROLE == 0x00), i.e. the
-    ///         role was never wired into the vault. Rebalancing is flow-based (§5.6).
+    ///         role was never wired into the vault. Rebalancing is
+    ///         `forceRebalance`-only (§5.6) — no keeper, scheduled, or flow-based
+    ///         rebalance exists.
     function test_keeperRole_doesNotExist() public view {
         bytes32 keeper = keccak256("KEEPER_ROLE");
         assertFalse(vault.hasRole(keeper, admin), "admin has no KEEPER_ROLE");
