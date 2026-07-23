@@ -1,5 +1,5 @@
 # UniV3AssetPositionAdapterForkTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/cd218849ca46daf6891cc2b350fd6bac2d9f644b/contracts/test/UniswapV3AssetPositionAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e68602cd2f886d639bdf541965cd9f19129eb315/contracts/test/UniswapV3AssetPositionAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -95,8 +95,9 @@ address internal admin = makeAddr("admin")
 ### _rpc
 
 LOUD-SKIP: return the fork RPC, or REVERT when none is configured.
-Never silently skips — the CI fork job sets RMPC_FORK_RPC_URL so these
-tests execute with a non-zero count.
+Never silently skips — the CI fork job sets FORK_RPC_URL (from the
+`vars.RMPC_FORK_RPC_URL` repo variable, falling back to a public Base
+RPC) so these tests execute with a non-zero count.
 
 
 ```solidity
