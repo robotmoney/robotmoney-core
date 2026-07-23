@@ -5,7 +5,6 @@ pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IObservablePool} from "../interfaces/IObservablePool.sol";
-import {IUniswapV3Pool} from "../interfaces/IUniswapV3Pool.sol";
 import {TickMath} from "./TickMath.sol";
 
 /// @title TwapTickMath
@@ -82,7 +81,11 @@ library TwapTickMath {
         if (probeAmount == 0) return 0;
         uint256 twapVal = priceFromTick(meanTick(pool, window), token, quote, probeAmount);
         if (twapVal == 0) return 0;
-        (, int24 spotTick,,,,,) = IUniswapV3Pool(pool).slot0();
+        // IObservablePool.slot0() decodes only the 4 leading fields, which is
+        // ABI-compatible with both the 7-field Uniswap V3 layout and the
+        // 6-field Aerodrome Slipstream layout (issue #1125) — see that
+        // interface's NatSpec for why a shorter-prefix decode is safe here.
+        (, int24 spotTick,,) = IObservablePool(pool).slot0();
         uint256 spotVal = priceFromTick(spotTick, token, quote, probeAmount);
         uint256 diff = twapVal > spotVal ? twapVal - spotVal : spotVal - twapVal;
         bps = diff.mulDiv(10_000, twapVal);

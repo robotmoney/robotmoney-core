@@ -1,10 +1,11 @@
 # IAerodromePool
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/interfaces/IAerodromePool.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d740448a2c3c14fa0c325f99c0cf5fb21593c110/contracts/interfaces/IAerodromePool.sol)
 
 Minimal Aerodrome concentrated-liquidity (CL) pool interface for TWAP reads
 and pool-token discovery.  Aerodrome CL pools (SlipstreamPool) follow the
-Uniswap V3 observe() / slot0() ABI, so this interface is structurally
-identical to IUniswapV3Pool and can be consumed by the same TWAP math.
+Uniswap V3 `observe()` ABI, so `token0`/`token1`/`observe()` here are
+structurally identical to `IUniswapV3Pool` and can be consumed by the
+same TWAP math.
 Classic (v2-style) Aerodrome stable/volatile pools do NOT expose observe();
 for TWAP-based pricing those pools must use a separate oracle path.
 The AerodromeSwapAdapter only supports CL pools for TWAP reads.
@@ -35,8 +36,17 @@ function tickSpacing() external view returns (int24);
 ### slot0
 
 Returns sqrtPriceX96 and tick from the pool's slot0.
-Aerodrome Slipstream (CL) pools use the same slot0 ABI as Uniswap V3.
-Also returns observationCardinality to verify TWAP feasibility.
+
+Aerodrome Slipstream (`CLPool`) `slot0` is a 6-field public struct —
+`(sqrtPriceX96, tick, observationIndex, observationCardinality,
+observationCardinalityNext, unlocked)` — with NO `feeProtocol` member,
+unlike the 7-field Uniswap V3 `slot0()` (issue #1125; verified
+on-chain against the Base wETH/USDC Slipstream pool and the upstream
+`aerodrome-finance/slipstream` `CLPool.sol` source). Declaring 7
+fields here would decode past the actual 6-word return and revert on
+every real call. `BasketAssetConfigGuard`/`TwapTickMath` read
+cardinality/spot-tick through the venue-agnostic, further-truncated
+`IObservablePool.slot0()` (4 leading fields) instead of this member.
 
 
 ```solidity
@@ -49,7 +59,6 @@ function slot0()
         uint16 observationIndex,
         uint16 observationCardinality,
         uint16 observationCardinalityNext,
-        uint8 feeProtocol,
         bool unlocked
     );
 ```
