@@ -48,4 +48,67 @@ contract VaultCodeSizeGuard is Test {
     function test_AgentTokenVault_underEip170() public {
         _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
     }
+
+    // ─── Unified Vault + adapter set (ADR-0010, issue #1127, M-A2) ─────────
+    //
+    // The unified `Vault` is the single non-abstract ERC-4626 allocator every
+    // theme (rmUSDC/rmPROTO/rmAGENT/rmRWA) deploys composed with a set of
+    // `IPositionAdapter`s (spec §5). Its natspec promises it "stays a thin
+    // allocator well within the EIP-170 runtime-size limit" — that fit MUST be
+    // proven per M-A2, not assumed. Every adapter below is a direct on-chain
+    // deployment (lending retrofit, asset-position, and the swap/oracle venue
+    // seams they compose), so each must independently fit EIP-170 or it is
+    // undeployable on Base mainnet exactly like RwaVault/AgentTokenVault were
+    // (issue #865). Stacking the phase features (#1120–#1123) onto the core
+    // (#1119) pushed the deployed `Vault` bytecode over the limit with no gate
+    // watching; this guard is that gate. It runs in the required `forge-unit-tests`
+    // job (suite-01-02-forge-tests.yml) with a non-zero executed count.
+
+    function test_UnifiedVault_underEip170() public {
+        _assertUnderLimit("Vault.sol:Vault");
+    }
+
+    function test_AaveV3Adapter_underEip170() public {
+        _assertUnderLimit("AaveV3Adapter.sol:AaveV3Adapter");
+    }
+
+    function test_CompoundV3Adapter_underEip170() public {
+        _assertUnderLimit("CompoundV3Adapter.sol:CompoundV3Adapter");
+    }
+
+    function test_MorphoAdapter_underEip170() public {
+        _assertUnderLimit("MorphoAdapter.sol:MorphoAdapter");
+    }
+
+    function test_UniswapV3AssetPositionAdapter_underEip170() public {
+        _assertUnderLimit("UniswapV3AssetPositionAdapter.sol:UniswapV3AssetPositionAdapter");
+    }
+
+    function test_UniswapV4AssetPositionAdapter_underEip170() public {
+        _assertUnderLimit("UniswapV4AssetPositionAdapter.sol:UniswapV4AssetPositionAdapter");
+    }
+
+    function test_AerodromeAssetPositionAdapter_underEip170() public {
+        _assertUnderLimit("AerodromeAssetPositionAdapter.sol:AerodromeAssetPositionAdapter");
+    }
+
+    function test_DeSpxaAssetPositionAdapter_underEip170() public {
+        _assertUnderLimit("DeSpxaAssetPositionAdapter.sol:DeSpxaAssetPositionAdapter");
+    }
+
+    function test_UniswapV3SwapAdapter_underEip170() public {
+        _assertUnderLimit("UniswapV3SwapAdapter.sol:UniswapV3SwapAdapter");
+    }
+
+    function test_UniswapV4SwapAdapter_underEip170() public {
+        _assertUnderLimit("UniswapV4SwapAdapter.sol:UniswapV4SwapAdapter");
+    }
+
+    function test_AerodromeSwapAdapter_underEip170() public {
+        _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
+    }
+
+    function test_ChronicleOracleAdapter_underEip170() public {
+        _assertUnderLimit("ChronicleOracleAdapter.sol:ChronicleOracleAdapter");
+    }
 }

@@ -368,6 +368,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     /// @notice Active adapters cannot deliver the USDC required for an EXACT-mode
     ///         withdrawal (raised before any transfer, spec §5.3).
     error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+    /// @notice Defensive: the exact-mode exit fee could not be covered by the
+    ///         proceeds `_pullProportional` actually realized. Unreachable on a
+    ///         clean shortfall (`_pullProportional` reverts
+    ///         `InsufficientAdapterLiquidity` first) — kept as a fail-closed guard.
+    error FeeNotCovered();
     /// @notice A `forceRebalance` would leave aggregate NAV below where it started
     ///         (the caller's top-up did not cover realized slippage + fees). The
     ///         whole call reverts so holders can never lose value (§5.6).
@@ -644,9 +649,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
 
         uint256 n = 0;
         for (uint256 i = 0; i < len; i++) {
-            if (!adapters[i].active) continue;
-            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-            n++;
+            if (_isAdapterCounted(i)) n++;
         }
 
         if (n == 0) {
@@ -659,8 +662,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         // Pass 1: equal share, capped at each adapter's absolute cap headroom.
         if (equalShare > 0) {
             for (uint256 i = 0; i < len && remaining > 0; i++) {
-                if (!adapters[i].active) continue;
-                if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
+                if (!_isAdapterCounted(i)) continue;
                 uint256 currentBalance = adapters[i].adapter.totalAssets();
                 uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
                 if (currentBalance >= capBalance) continue;
@@ -674,21 +676,30 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
 
         // Pass 2: spread any leftover (the equal-split remainder, or headroom
         // exhausted for some adapters in pass 1) into adapters with headroom.
-        if (remaining > 0) {
-            for (uint256 i = 0; i < len && remaining > 0; i++) {
-                if (!adapters[i].active) continue;
-                if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-                uint256 currentBalance = adapters[i].adapter.totalAssets();
-                uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
-                if (currentBalance >= capBalance) continue;
-                uint256 headroom = capBalance - currentBalance;
-                uint256 allocation = headroom < remaining ? headroom : remaining;
-                _allocateTo(i, allocation);
-                remaining -= allocation;
-            }
-        }
+        remaining = _spreadCapHeadroom(remaining, totalAfter);
 
         if (remaining > 0) emit UnroutedDeposit(remaining);
+        return remaining;
+    }
+
+    /// @dev Shared "pass 2" of both allocators: spread `remaining` USDC into
+    ///      every active+eligible adapter that still has absolute cap headroom,
+    ///      in registry order, capping each leg at its headroom, and return the
+    ///      still-unrouted remainder. Extracted verbatim from the identical
+    ///      leftover-spread pass `_routeDeposit` and `_fillDeficitFirst` each
+    ///      carried so the shared loop is coded once (EIP-170 fit — issue #1127).
+    function _spreadCapHeadroom(uint256 remaining, uint256 totalAfter) internal returns (uint256) {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len && remaining > 0; i++) {
+            if (!_isAdapterCounted(i)) continue;
+            uint256 currentBalance = adapters[i].adapter.totalAssets();
+            uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
+            if (currentBalance >= capBalance) continue;
+            uint256 headroom = capBalance - currentBalance;
+            uint256 allocation = headroom < remaining ? headroom : remaining;
+            _allocateTo(i, allocation);
+            remaining -= allocation;
+        }
         return remaining;
     }
 
@@ -711,8 +722,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
 
         // Pass 1: fill toward min(equal target, capBps).
         for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!adapters[i].active) continue;
-            if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
+            if (!_isAdapterCounted(i)) continue;
             uint256 effectiveTarget =
                 adapters[i].capBps < targetBps ? adapters[i].capBps : targetBps;
             uint256 currentBalance = adapters[i].adapter.totalAssets();
@@ -725,19 +735,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         }
 
         // Pass 2: spread leftover into adapters with absolute cap headroom.
-        if (remaining > 0) {
-            for (uint256 i = 0; i < len && remaining > 0; i++) {
-                if (!adapters[i].active) continue;
-                if (!_isAdapterEligible(address(adapters[i].adapter))) continue;
-                uint256 currentBalance = adapters[i].adapter.totalAssets();
-                uint256 capBalance = (totalAfter * adapters[i].capBps) / MAX_BPS;
-                if (currentBalance >= capBalance) continue;
-                uint256 headroom = capBalance - currentBalance;
-                uint256 allocation = headroom < remaining ? headroom : remaining;
-                _allocateTo(i, allocation);
-                remaining -= allocation;
-            }
-        }
+        remaining = _spreadCapHeadroom(remaining, totalAfter);
 
         if (remaining > 0) emit UnroutedDeposit(remaining);
         return remaining;
@@ -915,7 +913,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         // shortfall, so an over-reporting adapter can never socialize its
         // shortfall onto other holders' idle USDC.
         uint256 realizedGross = _pullProportional(grossAssets);
-        require(realizedGross >= grossAssets, "fee not covered by realised proceeds");
+        if (realizedGross < grossAssets) revert FeeNotCovered();
 
         _burn(owner, shares);
 
@@ -986,29 +984,25 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         // Pass 1: proportional pulls, capped at each adapter's reported balance.
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!_isAdapterCounted(i)) continue;
-            IPositionAdapter adpt = adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
+            uint256 adapterBalance = adapters[i].adapter.totalAssets();
             uint256 pull = (remainingNeeded * adapterBalance) / totalInAdapters;
             if (pull > remaining) pull = remaining;
             if (pull > adapterBalance) pull = adapterBalance;
             if (pull == 0) continue;
-            uint256 actual = adpt.withdraw(pull, 0); // 0 ⇒ adapter's own floor
+            uint256 actual = _executePull(i, pull, 0); // 0 ⇒ adapter's own floor
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
-            emit Pulled(i, address(adpt), actual);
         }
 
         // Pass 2: rounding-sweep, capping each pull at min(remaining, balance).
         for (uint256 i = 0; i < len && remaining > 0; i++) {
             if (!_isAdapterCounted(i)) continue;
-            IPositionAdapter adpt = adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
+            uint256 adapterBalance = adapters[i].adapter.totalAssets();
             uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
             if (pull == 0) continue;
-            uint256 actual = adpt.withdraw(pull, 0);
+            uint256 actual = _executePull(i, pull, 0);
             pulled += actual;
             remaining = actual >= remaining ? 0 : remaining - actual;
-            emit Pulled(i, address(adpt), actual);
         }
 
         if (remaining > 0) {
@@ -1017,6 +1011,19 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
 
         uint256 realized = idleBalance + pulled;
         return realized < assetsNeeded ? realized : assetsNeeded;
+    }
+
+    /// @dev Withdraw `amount` (min-out `minOut`) from adapter `i` back to the
+    ///      vault and emit `Pulled`, returning the realized USDC. Shared by the
+    ///      exact pull, the inexact sell, and the rebalance surplus-draw so the
+    ///      withdraw+emit leg is coded once (EIP-170 fit — issue #1127).
+    function _executePull(uint256 i, uint256 amount, uint256 minOut)
+        internal
+        returns (uint256 received)
+    {
+        IPositionAdapter adpt = adapters[i].adapter;
+        received = adpt.withdraw(amount, minOut);
+        emit Pulled(i, address(adpt), received);
     }
 
     // slither-disable-end reentrancy-balance
@@ -1053,9 +1060,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             if (sellAmount == 0) continue;
 
             uint256 minUsdcOut = sellAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
-            uint256 received = adpt.withdraw(sellAmount, minUsdcOut);
-            emit Pulled(i, address(adpt), received);
-            usdcOut += received;
+            usdcOut += _executePull(i, sellAmount, minUsdcOut);
         }
     }
 
@@ -1204,25 +1209,11 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; i++) {
             if (!adapters[i].active) continue;
-            // Snapshot counted-status BEFORE draining: only funds that were NOT
-            // in NAV (an ADP-2 ineligible-but-active adapter) become `revokedIdle`.
-            bool wasCounted = _isAdapterCounted(i);
-            IPositionAdapter adpt = adapters[i].adapter;
-            address adptAddr = address(adpt);
-            uint256 balance;
-            try adpt.totalAssets() returns (uint256 reported) {
-                balance = reported;
-            } catch {
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
-                continue;
-            }
-            if (balance == 0) continue;
-            try adpt.withdraw(balance, 0) returns (uint256 actual) {
-                if (!wasCounted && actual > 0) _creditRevokedIdle(actual);
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, actual, true);
-            } catch {
-                emit EmergencyWithdrawAdapterCalled(i, adptAddr, 0, false);
-            }
+            // `emitOnEmpty=false`: a zero-balance active adapter is silently
+            // skipped in the bulk sweep (no per-adapter event), matching the
+            // single-adapter path's `true`-on-empty only where it is called
+            // directly. See `_emergencyDrainToIdle`.
+            _emergencyDrainToIdle(i, false);
         }
         emit EmergencyWithdrawCalled();
     }
@@ -1237,7 +1228,19 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             revert AdapterNotFound();
         }
         _setDepositsPaused(true);
-        // Snapshot counted-status BEFORE draining (see `_creditRevokedIdle`).
+        _emergencyDrainToIdle(index, true);
+    }
+
+    /// @dev Best-effort drain of one ACTIVE adapter into idle USDC, shared by
+    ///      `emergencyWithdraw` (bulk) and `emergencyWithdrawAdapter` (single) so
+    ///      the try/catch drain + `revokedIdle` credit + event is coded once
+    ///      (EIP-170 fit — issue #1127). Snapshots counted-status BEFORE draining:
+    ///      only funds that were NOT in NAV (an ADP-2 ineligible-but-active
+    ///      adapter) become `revokedIdle`; a still-counted adapter's funds already
+    ///      backed shares, so nothing is credited. `emitOnEmpty` controls whether a
+    ///      zero-balance adapter emits a success event (single path) or is silently
+    ///      skipped (bulk sweep) — preserving each caller's original semantics.
+    function _emergencyDrainToIdle(uint256 index, bool emitOnEmpty) internal {
         bool wasCounted = _isAdapterCounted(index);
         IPositionAdapter adpt = adapters[index].adapter;
         address adptAddr = address(adpt);
@@ -1249,16 +1252,10 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             return;
         }
         if (balance == 0) {
-            emit EmergencyWithdrawAdapterCalled(index, adptAddr, 0, true);
+            if (emitOnEmpty) emit EmergencyWithdrawAdapterCalled(index, adptAddr, 0, true);
             return;
         }
         try adpt.withdraw(balance, 0) returns (uint256 actual) {
-            // When this drained adapter is an ADP-2 EXCLUSION (allowlist/codehash
-            // revoked while still active, so NOT counted in NAV), the recovered
-            // `actual` USDC lands in idle (which IS counted) but was NOT backing
-            // shares — credit it to `revokedIdle` so the mint denominator excludes
-            // it. A still-counted (eligible) adapter's funds already backed shares,
-            // so nothing is credited.
             if (!wasCounted && actual > 0) _creditRevokedIdle(actual);
             emit EmergencyWithdrawAdapterCalled(index, adptAddr, actual, true);
         } catch {
@@ -1411,9 +1408,7 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
             if (bal <= targetBalance) continue;
             uint256 surplus = bal - targetBalance;
             uint256 minUsdcOut = surplus.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
-            uint256 received = adpt.withdraw(surplus, minUsdcOut);
-            emit Pulled(i, address(adpt), received);
-            moved += received;
+            moved += _executePull(i, surplus, minUsdcOut);
         }
     }
 

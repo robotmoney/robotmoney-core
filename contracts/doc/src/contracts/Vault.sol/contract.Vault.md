@@ -1,5 +1,5 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98e21fa6ee5c881534f0ec43b14cc042ef89ab9c/contracts/Vault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -569,6 +569,20 @@ deficit is ever fixed by an ordinary deposit.
 function _routeDeposit(uint256 amount) internal returns (uint256 remainingOut);
 ```
 
+### _spreadCapHeadroom
+
+Shared "pass 2" of both allocators: spread `remaining` USDC into
+every active+eligible adapter that still has absolute cap headroom,
+in registry order, capping each leg at its headroom, and return the
+still-unrouted remainder. Extracted verbatim from the identical
+leftover-spread pass `_routeDeposit` and `_fillDeficitFirst` each
+carried so the shared loop is coded once (EIP-170 fit — issue #1127).
+
+
+```solidity
+function _spreadCapHeadroom(uint256 remaining, uint256 totalAfter) internal returns (uint256);
+```
+
 ### _fillDeficitFirst
 
 Deficit-first two-pass allocator: fill toward `min(equal-target,
@@ -781,6 +795,20 @@ withdrawal; only an explicit `forceRebalance` moves composition.
 function _pullProportional(uint256 assetsNeeded) internal returns (uint256);
 ```
 
+### _executePull
+
+Withdraw `amount` (min-out `minOut`) from adapter `i` back to the
+vault and emit `Pulled`, returning the realized USDC. Shared by the
+exact pull, the inexact sell, and the rebalance surplus-draw so the
+withdraw+emit leg is coded once (EIP-170 fit — issue #1127).
+
+
+```solidity
+function _executePull(uint256 i, uint256 amount, uint256 minOut)
+    internal
+    returns (uint256 received);
+```
+
 ### _sellProportional
 
 Sell the `shares / supplyBefore` fraction of idle USDC and of each
@@ -941,6 +969,23 @@ function emergencyWithdrawAdapter(uint256 index)
     external
     onlyRole(EMERGENCY_ROLE)
     nonReentrant;
+```
+
+### _emergencyDrainToIdle
+
+Best-effort drain of one ACTIVE adapter into idle USDC, shared by
+`emergencyWithdraw` (bulk) and `emergencyWithdrawAdapter` (single) so
+the try/catch drain + `revokedIdle` credit + event is coded once
+(EIP-170 fit — issue #1127). Snapshots counted-status BEFORE draining:
+only funds that were NOT in NAV (an ADP-2 ineligible-but-active
+adapter) become `revokedIdle`; a still-counted adapter's funds already
+backed shares, so nothing is credited. `emitOnEmpty` controls whether a
+zero-balance adapter emits a success event (single path) or is silently
+skipped (bulk sweep) — preserving each caller's original semantics.
+
+
+```solidity
+function _emergencyDrainToIdle(uint256 index, bool emitOnEmpty) internal;
 ```
 
 ### emergencyDrainAndExclude
@@ -1773,6 +1818,17 @@ withdrawal (raised before any transfer, spec §5.3).
 
 ```solidity
 error InsufficientAdapterLiquidity(uint256 requested, uint256 available);
+```
+
+### FeeNotCovered
+Defensive: the exact-mode exit fee could not be covered by the
+proceeds `_pullProportional` actually realized. Unreachable on a
+clean shortfall (`_pullProportional` reverts
+`InsufficientAdapterLiquidity` first) — kept as a fail-closed guard.
+
+
+```solidity
+error FeeNotCovered();
 ```
 
 ### NavWouldDecrease

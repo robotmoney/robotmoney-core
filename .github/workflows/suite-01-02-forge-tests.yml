@@ -113,6 +113,34 @@ jobs:
           forge test -vvv --match-path "contracts/test/DeployDemoExtraVaults.t.sol"
           forge test -vvv --match-contract 'Rwa|DeSPXA|Despxa|BasketVault|AgentTokenVault'
 
+      - name: forge test (unified-vault ERC-4626 conformance per composition + EIP-170 size gate — issue #1127)
+        # Explicit, named guard so the ADR-0010 unified-vault deliverables cannot
+        # silently regress (the unit suite above already runs these; a dedicated
+        # step gives a discrete, required CI signal — M-A2/M-A3):
+        #   - UnifiedVaultConformanceTest{Exact,RedeemOnly}: ERC-4626 conformance
+        #     re-verified PER COMPOSITION — lending-only EXACT mode (live withdraw,
+        #     non-zero max*, fee-on-gross) vs basket REDEEM-ONLY mode (withdraw
+        #     reverts RedeemOnly, max*==0, fee-on-realized, floored previews). The
+        #     two modes expose different withdraw/redeem/preview/fee-base semantics
+        #     that integrators branch on, so one pass over one mode is insufficient.
+        #   - VaultCodeSizeGuard: asserts the unified `Vault` AND every deployable
+        #     adapter fit under the EIP-170 24576-byte runtime limit and fails the
+        #     build otherwise — undeployable-on-Base bytecode caught in CI, not on
+        #     broadcast (cf. issue #865). Runs OUTSIDE `forge coverage` (which
+        #     instruments bytecode and inflates every contract past the limit).
+        run: |
+          forge test -vvv --match-contract "UnifiedVaultConformanceTest"
+          forge test -vvv --match-contract "VaultCodeSizeGuard"
+
+      - name: forge test (unified-vault per-composition gas measurement — issue #1127)
+        # Gas MEASUREMENT for the two compositions (M-A3). The per-composition
+        # NUMERIC gas budget is set after the Phase-2 spike (out of scope here), so
+        # this step measures and reports rather than asserting a threshold; the
+        # EIP-170 size gate above is the gating budget check in this PR. Emitting
+        # the gas report in CI keeps the measurement running so a regression is
+        # visible in the log the moment the numeric budget lands.
+        run: forge test --match-contract "UnifiedVaultConformanceTest" --gas-report
+
   invariant:
     name: forge-invariant-fuzz-tests
     runs-on: ubuntu-latest
