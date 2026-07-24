@@ -348,8 +348,22 @@ contract VaultForkRegressions is Test {
         deal(BASE_USDC, address(tightVault), 4_000 * ONE_USDC + usdc.balanceOf(address(tightVault)));
 
         // totalAssets must now reflect adapter balance + idle.
+        //
+        // The idle 4 000 USDC is exact (set via deal), but the 15 000 supplied to
+        // Aave is read back through the aToken's ray-math (rayDiv on supply,
+        // rayMul on balanceOf), which rounds down by a few wei. That round-trip
+        // loss grows with the *live* Aave liquidity index: the pinned golden
+        // fixture saw <=1 wei, but live Base drifted to 2 wei and flapped this
+        // non-blocking nightly drift alarm (issue #1157). A small fixed dust
+        // tolerance absorbs the benign Aave rounding while still catching a real
+        // "idle not counted" regression — that would miss the whole 4 000e6 idle,
+        // ~7 orders of magnitude larger than this tolerance.
+        uint256 aaveRayDust = 100; // wei of 6-decimal USDC == $0.0001
         assertApproxEqAbs(
-            tightVault.totalAssets(), 19_000 * ONE_USDC, 1, "totalAssets must include idle"
+            tightVault.totalAssets(),
+            19_000 * ONE_USDC,
+            aaveRayDust,
+            "totalAssets must include idle"
         );
 
         // A further 2 000 would push total beyond 20 000 → must revert.
