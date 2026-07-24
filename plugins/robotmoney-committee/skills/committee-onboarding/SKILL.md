@@ -40,19 +40,31 @@ Ask the owner for that UUID. If they don't have one, send them to the apply
 page first and stop. **Never invent or guess identifying information or the
 UUID** — a real person stands behind every member.
 
-## Step 1 — agent runtime
+## Step 1 — agent runtime + day-one skills
 
-This skill runs inside the owner's own coding agent. Any of these work:
+This skill runs inside the owner's own coding agent, and it does not travel
+alone: install the member's **day-one skill set** now, so the agent can do
+committee duty from its first session:
 
-- **Claude Code** — install this plugin (`robotmoney-committee`) or place
-  this file under `~/.claude/skills/committee-onboarding/SKILL.md`.
+- **`robotmoney-committee`** (this plugin, both skills) — this onboarding
+  skill plus the `robotmoney-committee` vote skill, which forms per-vault
+  tilts and submits signed committee votes.
+- **`robotmoney-analyst`** (sibling plugin, `plugins/robotmoney-analyst/`) —
+  reads the current Robot Money macro + on-chain regime snapshot; the
+  committee vote skill extends it and informed takes depend on it.
+
+Per runtime:
+
+- **Claude Code** — install both plugins, or place each plugin's
+  `skills/<name>/SKILL.md` under `~/.claude/skills/<name>/SKILL.md`.
 - **OpenClaw** — same skill-file layout; point the workspace skills dir at
-  this file.
-- **Codex** — fetch this file and follow it directly as instructions.
-- **OpenCode** — install via the plugin manifest (`plugin.json` at
-  `plugins/robotmoney-committee/`), which registers this skill.
+  the same files.
+- **Codex** — fetch each SKILL.md and follow them directly as instructions.
+- **OpenCode** — install via each plugin's manifest (`plugin.json`), which
+  registers its skills.
 
-If you are reading this, this step is done — continue.
+If you are reading this, the onboarding skill itself is in place — make sure
+the other two skills are too, then continue.
 
 ## Step 2 — install Robot Money MCP access
 
@@ -69,18 +81,23 @@ runtimes: use their MCP registration equivalent. Committee participation
 ## Step 3 — install rmpc
 
 `rmpc` is the Robot Money client binary from
-[`robotmoney/robotmoney-core`](https://github.com/robotmoney/robotmoney-core)
-(`clients/rust-payment-client`, binary name `rmpc`). It manages committee
-keygen and every signature. Install one of:
+[`robotmoney/robotmoney-core`](https://github.com/robotmoney/robotmoney-core).
+It manages committee keygen and every signature. **Always install the
+released binary for this machine — never build from source.** Assets are
+published per OS/arch as `rmpc-<tag>-{linux,macos}-{amd64,arm64}.tar.gz` on
+the [releases page](https://github.com/robotmoney/robotmoney-core/releases):
 
-- a prebuilt binary from the
-  [releases page](https://github.com/robotmoney/robotmoney-core/releases), or
-- from source:
-  `cargo install --path clients/rust-payment-client --bin rmpc`
-  (requires a Rust toolchain).
+```bash
+OS=$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
+ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}/rmpc-${TAG}-${OS}-${ARCH}.tar.gz" | tar xz
+install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
+```
 
 Verify with `rmpc --help` — you should see the `committee-identity`
-subcommand.
+subcommand. If no asset matches this machine's OS/arch, stop and surface
+that to the owner; do not fall back to a source build.
 
 ## Step 4 — generate the identity (local keygen)
 
