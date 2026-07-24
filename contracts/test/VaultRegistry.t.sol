@@ -394,6 +394,112 @@ contract VaultRegistryTest is Test {
         );
     }
 
+    // ─── retire: router-eligibility strand guard (issue #1173) ───────────────
+    //
+    // A Retired vault must never remain counted in `routerEligibleCount`: it can
+    // never be an Active leg, so the router's default weight vector (length ==
+    // routerEligibleCount, every leg Active AND eligible) could no longer be set,
+    // stranding the default vector. `retire()` and `setVaultStatus(_, Retired)`
+    // therefore revert while the vault is still router-eligible, forcing the
+    // documented make-ineligible-before-retire ordering in-contract (ADR-0002).
+
+    function test_retire_revertsWhileRouterEligible() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.setRouterEligible(address(mockVault), true);
+        assertEq(registry.routerEligibleCount(), 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VaultRegistry.RetireWhileRouterEligible.selector, address(mockVault)
+            )
+        );
+        registry.retire(address(mockVault));
+        vm.stopPrank();
+
+        // The transition was fully aborted: status stays Active, the count is
+        // untouched, and the vault's deposit-halt leg was never invoked.
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "status must remain Active when retire is blocked"
+        );
+        assertEq(registry.routerEligibleCount(), 1, "count must be unchanged");
+        assertFalse(mockVault.retiredCalled(), "vault deposit-halt leg must not run");
+    }
+
+    function test_setVaultStatus_revertsRetireWhileRouterEligible() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.setRouterEligible(address(mockVault), true);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VaultRegistry.RetireWhileRouterEligible.selector, address(mockVault)
+            )
+        );
+        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Active),
+            "status must remain Active when setVaultStatus(Retired) is blocked"
+        );
+        assertFalse(mockVault.retiredCalled(), "vault deposit-halt leg must not run");
+    }
+
+    /// @notice Positive path: dropping the vault from `routerEligibleCount`
+    ///         first (the documented ordering) lets `retire()` proceed, leaving
+    ///         no Retired vault counted in `routerEligibleCount`.
+    function test_retire_succeedsAfterMadeIneligible() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.setRouterEligible(address(mockVault), true);
+        // Make ineligible first (count → 0), then retire.
+        registry.setRouterEligible(address(mockVault), false);
+        assertEq(registry.routerEligibleCount(), 0);
+        registry.retire(address(mockVault));
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Retired),
+            "status must be Retired after the ineligible-then-retire ordering"
+        );
+        assertTrue(mockVault.retiredCalled(), "vault deposit-halt leg must run");
+        assertEq(
+            registry.routerEligibleCount(),
+            0,
+            "no Retired vault may remain counted in routerEligibleCount"
+        );
+    }
+
+    /// @notice The guard is scoped to the Retired transition only: `Paused` is a
+    ///         transient, reversible state, so `setVaultStatus(_, Paused)` is NOT
+    ///         blocked while the vault is still router-eligible.
+    function test_setVaultStatus_pausedNotBlockedWhileRouterEligible() public {
+        MockRetirableVault mockVault = new MockRetirableVault();
+        vm.startPrank(admin);
+        registry.registerVault(address(mockVault), meta1);
+        registry.setRouterEligible(address(mockVault), true);
+        registry.setVaultStatus(address(mockVault), VaultRegistry.VaultStatus.Paused);
+        vm.stopPrank();
+
+        (, VaultRegistry.VaultStatus status) = registry.getVault(address(mockVault));
+        assertEq(
+            uint256(status),
+            uint256(VaultRegistry.VaultStatus.Paused),
+            "Paused transition must not be blocked by the retire strand guard"
+        );
+    }
+
     // ─── getVault ────────────────────────────────────────────────────────────
 
     function test_getVault_revertsForNotRegistered() public {

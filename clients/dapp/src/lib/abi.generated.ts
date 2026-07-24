@@ -6100,6 +6100,17 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
+    name: "RetireWhileRouterEligible",
+    inputs: [
+      {
+        name: "vault",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+  },
+  {
+    type: "error",
     name: "RouterNotLinked",
     inputs: [],
   },
