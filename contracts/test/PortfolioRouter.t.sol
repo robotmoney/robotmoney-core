@@ -569,9 +569,14 @@ contract PortfolioRouterTest is Test {
     function test_previewDeposit_marksUnavailableForRetiredVault() public {
         _setEqualWeights();
 
-        // Retire vaultB.
-        vm.prank(admin);
+        // Retire vaultB. Per the #1173 invariant a vault must be dropped from
+        // router eligibility before it can be retired (make-ineligible-before-
+        // retire); it stays in the already-set weight vector, so the router must
+        // still mark it unavailable and skip it.
+        vm.startPrank(admin);
+        registry.setRouterEligible(address(vaultB), false);
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
 
         uint256 amount = 1000 * ONE_USDC;
         PortfolioRouter.LegPreview[] memory legs = router.previewDeposit(amount);
@@ -670,9 +675,13 @@ contract PortfolioRouterTest is Test {
     function test_deposit_skipsRegistryRetiredVault() public {
         _setEqualWeights();
 
-        // Retire vaultB in the registry; the vault contract still accepts deposits.
-        vm.prank(admin);
+        // Retire vaultB in the registry; the vault contract still accepts
+        // deposits. Per the #1173 invariant, drop router eligibility first
+        // (make-ineligible-before-retire); vaultB stays in the weight vector.
+        vm.startPrank(admin);
+        registry.setRouterEligible(address(vaultB), false);
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
 
         uint256 amount = 1000 * ONE_USDC;
 
@@ -698,8 +707,12 @@ contract PortfolioRouterTest is Test {
     function test_deposit_revertsWhenAllLegsUnavailable() public {
         _setEqualWeights();
 
+        // vaultB must be dropped from router eligibility before it can be
+        // retired (#1173 make-ineligible-before-retire); it stays in the weight
+        // vector so the all-legs-unavailable path is still exercised.
         vm.startPrank(admin);
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        registry.setRouterEligible(address(vaultB), false);
         registry.setVaultStatus(address(vaultB), VaultRegistry.VaultStatus.Retired);
         vm.stopPrank();
 
@@ -867,20 +880,38 @@ contract PortfolioRouterTest is Test {
         assertFalse(router.isRouterEligible(address(0)));
     }
 
-    /// @notice Router eligibility is distinct from registry status — a vault
-    ///         that is Paused in the registry is still router-eligible from
-    ///         an asset-compatibility standpoint. Clients must read both
-    ///         signals to compose accurate UI state.
+    /// @notice Router eligibility is distinct from a *transient* registry status
+    ///         — a vault that is Paused in the registry is still router-eligible
+    ///         from an asset-compatibility standpoint. Clients must read both
+    ///         signals to compose accurate UI state. Retirement, however, is
+    ///         coupled to eligibility (#1173): a Retired vault must never remain
+    ///         counted in `routerEligibleCount`, so eligibility must be dropped
+    ///         before the vault can be retired.
     function test_isRouterEligible_independentOfRegistryStatus() public {
-        // Pause vaultA in the registry. Router eligibility should not change.
+        // Pause vaultA in the registry. Router eligibility should not change —
+        // Paused is transient and does not touch the eligibility flag.
         vm.prank(admin);
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
         assertTrue(router.isRouterEligible(address(vaultA)));
 
-        // Retire as well.
+        // Retiring a still-eligible vault reverts (#1173 make-ineligible-before-
+        // retire): the strand guard forbids leaving a Retired vault counted in
+        // routerEligibleCount.
         vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VaultRegistry.RetireWhileRouterEligible.selector, address(vaultA)
+            )
+        );
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
-        assertTrue(router.isRouterEligible(address(vaultA)));
+
+        // Following the documented ordering — drop eligibility, then retire —
+        // leaves the vault ineligible and no longer counted.
+        vm.startPrank(admin);
+        registry.setRouterEligible(address(vaultA), false);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
+        assertFalse(router.isRouterEligible(address(vaultA)));
     }
 
     // ─── Fuzz: weight sum must equal 10000 ───────────────────────────────────
@@ -1655,9 +1686,13 @@ contract PortfolioRouterTest is Test {
         uint256 amount = 1000 * ONE_USDC;
         uint256[] memory sharesToRedeem = _depositAndApproveForRedeem(amount);
 
-        // Retire vaultA in the registry.
-        vm.prank(admin);
+        // Retire vaultA in the registry. Per the #1173 invariant, drop router
+        // eligibility first (make-ineligible-before-retire); redemption of a
+        // Retired vault stays open regardless (ADR-0009).
+        vm.startPrank(admin);
+        registry.setRouterEligible(address(vaultA), false);
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
+        vm.stopPrank();
 
         vm.prank(depositor);
         uint256[] memory assetsOut = router.redeemFor(

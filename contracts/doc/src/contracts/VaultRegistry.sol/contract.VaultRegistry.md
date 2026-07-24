@@ -1,5 +1,5 @@
 # VaultRegistry
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/VaultRegistry.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/8aa8bf86095eff0c4a492e6cb49db08fc1ebd579/contracts/VaultRegistry.sol)
 
 **Inherits:**
 [AdminFloorAccessControl](/contracts/lib/AdminFloorAccessControl.sol/abstract.AdminFloorAccessControl.md)
@@ -557,6 +557,32 @@ the same call; with no router, use plain `setRouterEligible`.
 ```solidity
 error RouterNotLinked();
 ```
+
+### RetireWhileRouterEligible
+A retirement transition (`retire()` or
+`setVaultStatus(_, Retired)`) was attempted while `vault` is
+still router-eligible. A Retired vault must never remain counted
+in `routerEligibleCount`: it can never be an Active leg, so the
+`PortfolioRouter` default weight vector — whose length must equal
+`routerEligibleCount` with every leg Active and eligible — could
+no longer be set, stranding the default vector (ADR-0002). Drop
+the vault from `routerEligibleCount` first via
+`setRouterEligible(vault, false)` (or atomically together with a
+re-set default vector via `migrateEligibility(vault, false, ...)`),
+then retire. This makes the documented
+make-ineligible-before-retire ordering an in-contract invariant
+rather than a convention.
+
+
+```solidity
+error RetireWhileRouterEligible(address vault);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`vault`|`address`|The still-router-eligible vault the caller tried to retire.|
 
 ## Structs
 ### VaultMetadata

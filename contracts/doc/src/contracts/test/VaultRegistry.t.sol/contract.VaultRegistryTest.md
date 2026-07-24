@@ -1,5 +1,5 @@
 # VaultRegistryTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/VaultRegistry.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/8aa8bf86095eff0c4a492e6cb49db08fc1ebd579/contracts/test/VaultRegistry.t.sol)
 
 **Inherits:**
 Test
@@ -259,6 +259,42 @@ deposit-halt flag is unset.
 
 ```solidity
 function test_setVaultStatus_revertsWhenRetireHookReverts() public;
+```
+
+### test_retire_revertsWhileRouterEligible
+
+
+```solidity
+function test_retire_revertsWhileRouterEligible() public;
+```
+
+### test_setVaultStatus_revertsRetireWhileRouterEligible
+
+
+```solidity
+function test_setVaultStatus_revertsRetireWhileRouterEligible() public;
+```
+
+### test_retire_succeedsAfterMadeIneligible
+
+Positive path: dropping the vault from `routerEligibleCount`
+first (the documented ordering) lets `retire()` proceed, leaving
+no Retired vault counted in `routerEligibleCount`.
+
+
+```solidity
+function test_retire_succeedsAfterMadeIneligible() public;
+```
+
+### test_setVaultStatus_pausedNotBlockedWhileRouterEligible
+
+The guard is scoped to the Retired transition only: `Paused` is a
+transient, reversible state, so `setVaultStatus(_, Paused)` is NOT
+blocked while the vault is still router-eligible.
+
+
+```solidity
+function test_setVaultStatus_pausedNotBlockedWhileRouterEligible() public;
 ```
 
 ### test_getVault_revertsForNotRegistered
