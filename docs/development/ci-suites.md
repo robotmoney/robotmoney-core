@@ -320,7 +320,7 @@ extension. The harness supplies the real expected code hash. See
 Split into two files because the structural/offline checks are cheap, keyless, and should run on every PR, while the headless runs are expensive, require a model key, and should run nightly or on `workflow_dispatch` only.
 
 **Environment:** `none` (smoke); `devnet` (headless)
-**Trigger:** `opencode-smoke.yml` on every PR; `opencode-headless.yml` nightly + `workflow_dispatch`
+**Trigger:** `opencode-smoke.yml` on every PR; `opencode-headless.yml` nightly + `workflow_dispatch` for the live jobs, plus `pull_request` for its offline `asserter-tests` job only (issue #1151)
 
 **Jobs — `opencode-smoke.yml`:**
 - `plugin-validate` — manifest and binary checks; runs immediately
@@ -351,9 +351,12 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
-- `refusal` — offline safety assertions, no chain, no model key; runs first
+- `asserter-tests` — offline, keyless pytest of the transcript asserters and the issue #1151 live-fail guard; runs on **every** trigger, including `pull_request` (the live jobs below are gated `if: github.event_name != 'pull_request'`, so a PR touching the asserters/guard runs only this job — proving the guard executes in CI, not just at nightly time). pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
+- `refusal` — offline safety assertions, no chain, no model key; runs first (nightly/dispatch)
 - `deposit` — **needs `refusal`**; full headless deposit run against devnet
 - `read` — **needs `refusal`**; runs in parallel with `deposit`
+
+**Model path (issue #1151).** The hosted zen model is an external, rotated dependency: the free `opencode/big-pickle` pin 400ed from 2026-07-01, and `opencode run` exits 0 on that dead session, so a **loud-fail guard** (`assert_headless_live_transcript.py`) now reds the "Headless … run" step itself on an empty / error-only / zero-rmpc transcript. The opencode version and model resolve from `workflow_dispatch` input → repo variable (`OPENCODE_HEADLESS_VERSION` / `OPENCODE_HEADLESS_MODEL`) → default (opencode `1.18.4`, `opencode/north-mini-code-free` — an empirically-verified no-credential path); an optional `OPENCODE_API_KEY` secret upgrades to an authenticated model with no workflow change. See `docs/technical/opencode-headless-invocation.md` §12.6.
 
 **Steps — `refusal` job:**
 1. Checkout repository
@@ -367,7 +370,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 3. Deploy `MockUSDC` + `MockVault` + `RobotMoneyGateway` via `Deploy.s.sol` on devnet
 4. Generate fresh agent EOA; write keystore via `rmpc-keystore-import`
 5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval via impersonation
-6. `opencode run <deposit-prompt> --format json` against devnet
+6. `opencode run <deposit-prompt> --format json` against devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / error-only / zero-rmpc transcript (issue #1151)
 7. `assert_headless_deposit_transcript.py` — asserts tool-call order (get-vault → get-agent → get-balance → get-allowance → self-check → deposit), `final-report.json` outcome, tx_hash non-null hex
 
 **Steps — `read` job:**
@@ -375,7 +378,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 2. Install OpenCode at pinned version + Rust + Foundry
 3. Deploy contracts + fund agent on devnet
 4. **Safety step**: read-only isolation assertions — agent in read-only config cannot invoke state-changing tools
-5. `opencode run <read-prompt> --format json` against devnet
+5. `opencode run <read-prompt> --format json` against devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / error-only / zero-rmpc transcript (issue #1151)
 6. `assert_headless_read_transcript.py` — asserts vault state, balance, and allowance queries match JSON schema
 
 ---
@@ -766,7 +769,7 @@ Every workflow's `name:` and its tier.
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
 | `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
-| `opencode-headless-deposit-read` | nightly | schedule-only; not PR-triggered |
+| `opencode-headless-deposit-read` | nightly | live `refusal`/`deposit`/`read` jobs are schedule + dispatch only (gated `if: github.event_name != 'pull_request'`); the offline keyless `asserter-tests` job also runs on `pull_request` for the transcript-asserter/live-guard paths (issue #1151) |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
@@ -787,7 +790,7 @@ Every workflow's `name:` and its tier.
 | 8 | `explorer-indexer.yml` | `fast` \| `devnet` | `devnet` |
 | 9 | `dapp-quality.yml` | `lint-build` | `none` |
 | 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
-| 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `refusal` → `deposit` \| `read` | `none` / `devnet` |
+| 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| (`refusal` → `deposit` \| `read`) (nightly/dispatch) | `none` / `devnet` |
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
