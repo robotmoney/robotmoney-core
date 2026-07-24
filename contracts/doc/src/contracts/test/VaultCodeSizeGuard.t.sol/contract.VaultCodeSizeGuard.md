@@ -1,5 +1,5 @@
 # VaultCodeSizeGuard
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98e21fa6ee5c881534f0ec43b14cc042ef89ab9c/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:**
 Test
@@ -63,5 +63,89 @@ function test_RwaVault_underEip170() public;
 
 ```solidity
 function test_AgentTokenVault_underEip170() public;
+```
+
+### test_UnifiedVault_underEip170
+
+
+```solidity
+function test_UnifiedVault_underEip170() public;
+```
+
+### test_AaveV3Adapter_underEip170
+
+
+```solidity
+function test_AaveV3Adapter_underEip170() public;
+```
+
+### test_CompoundV3Adapter_underEip170
+
+
+```solidity
+function test_CompoundV3Adapter_underEip170() public;
+```
+
+### test_MorphoAdapter_underEip170
+
+
+```solidity
+function test_MorphoAdapter_underEip170() public;
+```
+
+### test_UniswapV3AssetPositionAdapter_underEip170
+
+
+```solidity
+function test_UniswapV3AssetPositionAdapter_underEip170() public;
+```
+
+### test_UniswapV4AssetPositionAdapter_underEip170
+
+
+```solidity
+function test_UniswapV4AssetPositionAdapter_underEip170() public;
+```
+
+### test_AerodromeAssetPositionAdapter_underEip170
+
+
+```solidity
+function test_AerodromeAssetPositionAdapter_underEip170() public;
+```
+
+### test_DeSpxaAssetPositionAdapter_underEip170
+
+
+```solidity
+function test_DeSpxaAssetPositionAdapter_underEip170() public;
+```
+
+### test_UniswapV3SwapAdapter_underEip170
+
+
+```solidity
+function test_UniswapV3SwapAdapter_underEip170() public;
+```
+
+### test_UniswapV4SwapAdapter_underEip170
+
+
+```solidity
+function test_UniswapV4SwapAdapter_underEip170() public;
+```
+
+### test_AerodromeSwapAdapter_underEip170
+
+
+```solidity
+function test_AerodromeSwapAdapter_underEip170() public;
+```
+
+### test_ChronicleOracleAdapter_underEip170
+
+
+```solidity
+function test_ChronicleOracleAdapter_underEip170() public;
 ```
 
