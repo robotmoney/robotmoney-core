@@ -1,5 +1,5 @@
 # PortfolioRouterTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/PortfolioRouter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/8aa8bf86095eff0c4a492e6cb49db08fc1ebd579/contracts/test/PortfolioRouter.t.sol)
 
 **Inherits:**
 Test
@@ -445,10 +445,13 @@ function test_isRouterEligible_falseForZeroAddress() public view;
 
 ### test_isRouterEligible_independentOfRegistryStatus
 
-Router eligibility is distinct from registry status — a vault
-that is Paused in the registry is still router-eligible from
-an asset-compatibility standpoint. Clients must read both
-signals to compose accurate UI state.
+Router eligibility is distinct from a *transient* registry status
+— a vault that is Paused in the registry is still router-eligible
+from an asset-compatibility standpoint. Clients must read both
+signals to compose accurate UI state. Retirement, however, is
+coupled to eligibility (#1173): a Retired vault must never remain
+counted in `routerEligibleCount`, so eligibility must be dropped
+before the vault can be retired.
 
 
 ```solidity

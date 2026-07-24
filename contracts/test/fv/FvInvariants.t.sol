@@ -289,8 +289,11 @@ contract FvInvariantsTest is Test {
         assertEq(sharesA, amount, "deposited 1:1 into vaultA");
 
         // Router reweights 100% onto vaultB and RETIRES vaultA — the holder's
-        // vaultA position is now entirely outside the live weight vector.
+        // vaultA position is now entirely outside the live weight vector. Per the
+        // #1173 invariant, vaultA is dropped from router eligibility before it is
+        // retired (make-ineligible-before-retire).
         _setSingleWeight(router, address(vaultB));
+        registry.setRouterEligible(address(vaultA), false);
         registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Retired);
         (, VaultRegistry.VaultStatus sA) = registry.getVault(address(vaultA));
         assertEq(uint256(sA), uint256(VaultRegistry.VaultStatus.Retired), "vaultA Retired");
@@ -426,6 +429,12 @@ contract FvInvariantsTest is Test {
     ///         `retire()`/`reactivate()` paths still sync both.
     function test_LIFE1_retireSyncsRegistryAndVaultFlag() public {
         (VaultRegistry registry,, FvUSDC usdc, FvRetirableVault vault) = _deployRouterStack();
+
+        // LIFE-1 proves registry status ↔ vault deposit-halt flag sync, which is
+        // orthogonal to router eligibility. Drop eligibility up front so the
+        // Retired transitions below are permitted (#1173 make-ineligible-before-
+        // retire); the vault is never placed in a weight vector here.
+        registry.setRouterEligible(address(vault), false);
 
         // Direct deposit works while Active and the flag is clear.
         assertFalse(vault.retired(), "vault starts un-retired");

@@ -457,7 +457,7 @@ in `contracts/VaultRegistry.sol`); the `shut-down` overlay is the
 |---|---|---|---|---|
 | **Active** | registry | `VaultStatus.Active` | — | Router routes new deposits (if also router-eligible); direct deposits open. |
 | **Paused** | registry / vault | `VaultStatus.Paused`; vault `pause()` | `setVaultStatus`: governance · `pause()`: emergency (hot key) | Reversible halt. Router stops routing; vault `pause()` halts deposits and withdrawals. `unpause()` is governance. |
-| **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. |
+| **Active → Retired** (unified) | registry + vault | `VaultRegistry.retire(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic in one call: sets registry status `Retired` **and** halts **direct** vault deposits (`IRetirableVault.retire()`, sets the vault `retired` flag → `VaultRetired()`). Withdraw-only thereafter; existing depositors keep unconditional `redeem`. Emits `VaultStatusChanged` + `Retired`. The two enforcement layers can no longer drift. **Precondition (#1173):** reverts `RetireWhileRouterEligible` if the vault is still router-eligible — drop it from `routerEligibleCount` first (see the retire strand invariant below). |
 | **shut-down** (overlay) | vault | `shutdownVault()` (sets `shutdown = true`, zeroes `tvlCap`) | emergency (`EMERGENCY_ROLE`, hot key) | Hard-stops **direct** vault deposits (`VaultShutdown()`); withdrawals continue. Vault-level only — makes no lifecycle/registry decision. Emits `Shutdown`. |
 | **shut-down → reopened** | vault | `restoreVault(newTvlCap)` | governance (`ADMIN_ROLE`) | Clears `shutdown`, sets a fresh `tvlCap`, re-opens deposits. Emits `VaultRestored`. Deliberately asymmetric with the fast emergency shutdown. |
 | **Retired → Active** (abort) | registry + vault | `VaultRegistry.reactivate(vault)` | governance (`ADMIN_ROLE` = timelock) | Atomic abort: sets registry status `Active` **and** re-opens direct vault deposits (`IRetirableVault.unretire()`). The vault returns to normal routing. Emits `VaultStatusChanged` + `Unretired`. |
@@ -503,6 +503,21 @@ registry/lifecycle change — the hot key never makes a lifecycle decision.
 A direct hot-key `ADMIN_ROLE` EOA call to `retire()` reverts; it is
 reachable only via the timelock schedule → delay → execute path
 (`contracts/test/DeployTimelock.t.sol`).
+
+**Retire strand invariant (make-ineligible-before-retire, #1173).** A
+`Retired` vault must never remain counted in `routerEligibleCount`. The
+`PortfolioRouter` default weight vector must span exactly
+`routerEligibleCount` legs, all Active and router-eligible (ADR-0002); a
+still-eligible vault flipped to `Retired` can never again be an Active leg,
+so no valid default vector could be set — the default vector would be
+*stranded*. Both doors to the `Retired` state therefore enforce the ordering
+in-contract rather than by convention: `VaultRegistry.retire(vault)` **and**
+`setVaultStatus(vault, Retired)` revert `RetireWhileRouterEligible(vault)`
+while `isRouterEligible(vault)` is true. Governance must first drop the vault
+from `routerEligibleCount` — `setRouterEligible(vault, false)`, or atomically
+with a re-set default vector via `migrateEligibility(vault, false, …)` — then
+retire. (`Paused` is transient and reversible via `unpause`, so it is not
+gated; only the terminal `Retired` transition is.)
 
 **Authority tier.** Transitions follow the graduated-authority model
 (see §4.5 and the authority tier below): permissionless actions need no

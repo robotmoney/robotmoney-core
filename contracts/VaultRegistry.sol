@@ -198,6 +198,22 @@ contract VaultRegistry is AdminFloorAccessControl {
     ///         the same call; with no router, use plain `setRouterEligible`.
     error RouterNotLinked();
 
+    /// @notice A retirement transition (`retire()` or
+    ///         `setVaultStatus(_, Retired)`) was attempted while `vault` is
+    ///         still router-eligible. A Retired vault must never remain counted
+    ///         in `routerEligibleCount`: it can never be an Active leg, so the
+    ///         `PortfolioRouter` default weight vector — whose length must equal
+    ///         `routerEligibleCount` with every leg Active and eligible — could
+    ///         no longer be set, stranding the default vector (ADR-0002). Drop
+    ///         the vault from `routerEligibleCount` first via
+    ///         `setRouterEligible(vault, false)` (or atomically together with a
+    ///         re-set default vector via `migrateEligibility(vault, false, ...)`),
+    ///         then retire. This makes the documented
+    ///         make-ineligible-before-retire ordering an in-contract invariant
+    ///         rather than a convention.
+    /// @param vault The still-router-eligible vault the caller tried to retire.
+    error RetireWhileRouterEligible(address vault);
+
     // ─── Constructor ─────────────────────────────────────────────────────────
 
     /// @param admin Address that receives `ADMIN_ROLE` at deploy time.
@@ -257,6 +273,13 @@ contract VaultRegistry is AdminFloorAccessControl {
     /// @param vault Address of an already-registered vault.
     function retire(address vault) external onlyRole(ADMIN_ROLE) {
         if (!_registered[vault]) revert NotRegistered();
+        // A Retired vault must never remain counted in `routerEligibleCount`: it
+        // can never be an Active leg, so the router's default weight vector
+        // (length == routerEligibleCount, every leg Active AND eligible) could no
+        // longer be set — stranding the default vector. Force the documented
+        // make-ineligible-before-retire ordering in-contract (issue #1173,
+        // ADR-0002) instead of relying on convention.
+        if (_routerEligible[vault]) revert RetireWhileRouterEligible(vault);
         _status[vault] = VaultStatus.Retired;
         IRetirableVault(vault).retire();
         emit VaultStatusChanged(vault, VaultStatus.Retired, block.timestamp);
@@ -301,6 +324,16 @@ contract VaultRegistry is AdminFloorAccessControl {
     /// @param newStatus  New lifecycle status (Active, Paused, or Retired).
     function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(ADMIN_ROLE) {
         if (!_registered[vault]) revert NotRegistered();
+        // Same retirement invariant as `retire()` (issue #1173): a Retired vault
+        // must never remain counted in `routerEligibleCount`, or the router's
+        // default weight vector strands. `setVaultStatus(_, Retired)` is the
+        // other door to the Retired state, so it enforces the same
+        // make-ineligible-before-retire ordering. (Paused is transient and
+        // reversible via unpause, so it is not gated here — only the Retired
+        // transition is.)
+        if (newStatus == VaultStatus.Retired && _routerEligible[vault]) {
+            revert RetireWhileRouterEligible(vault);
+        }
         _status[vault] = newStatus;
 
         // Drive the vault's deposit-halt flag so it can never disagree with the
