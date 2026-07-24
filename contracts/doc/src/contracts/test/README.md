@@ -110,6 +110,8 @@
 - [MarkSpikeAdapter](NavGrowthLimiter.t.sol/contract.MarkSpikeAdapter.md)
 - [NavGrowthLimiterTest](NavGrowthLimiter.t.sol/contract.NavGrowthLimiterTest.md)
 - [NoYieldTestAdapterTest](NoYieldTestAdapter.t.sol/contract.NoYieldTestAdapterTest.md)
+- [ThemeRegAdapter](PerThemeDeploy.t.sol/contract.ThemeRegAdapter.md)
+- [PerThemeDeployTest](PerThemeDeploy.t.sol/contract.PerThemeDeployTest.md)
 - [MockUSDC](PortfolioRouter.t.sol/contract.MockUSDC.md)
 - [MockRouterVault](PortfolioRouter.t.sol/contract.MockRouterVault.md)
 - [PartialAcceptVault](PortfolioRouter.t.sol/contract.PartialAcceptVault.md)
