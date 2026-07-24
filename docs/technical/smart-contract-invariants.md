@@ -15,11 +15,19 @@ bugs FV must pin once fixed).
 - Implementing code is in `contracts/`; current FV lives in `contracts/test/*Invariant*.t.sol`
   (Foundry `StdInvariant` handler-driven) plus the static guard tests
   (`CustodyInvariantGuard`, `AdapterDelegatecallGuard`, `AccessRoles`, `ERC4626PreconditionChecks`).
-- Planned evolution: `docs/adr/ADR-0010-unified-vault-architecture.md` (Proposed)
-  unifies the vault families into one `Vault` + `IPositionAdapter`. Invariants
-  stated per-family (RobotMoneyVault vs. BasketVault subclasses) apply uniformly
-  to the unified vault and its adapters; per-family "extend the handler to
-  BasketVault/…" notes become single-vault coverage in v2.
+- Unified-vault re-homing (ADR-0010, landed): the per-family vault contracts
+  (`RobotMoneyVault`, `BasketVault` and its `RwaVault`/`AgentTokenVault`/
+  `ProtocolAssetVault` subclasses) are subsumed by one `contracts/Vault.sol` +
+  `IPositionAdapter` set (`contracts/adapters/*AssetPositionAdapter.sol` for
+  priced-asset themes; the retrofitted `MorphoAdapter`/`AaveV3Adapter`/
+  `CompoundV3Adapter` for the lending theme). Every invariant below is stated
+  against those unified homes; the old→new enforcement mapping is the
+  **invariant-preservation matrix** in
+  [`docs/technical/unified-vault-spec.md` §6](unified-vault-spec.md), and the
+  test re-pointing (fixture swap, no invariant deleted) is spec §7. Where a
+  property is now split across the vault shell and an adapter, both loci are
+  named. The legacy per-family `.t.sol` suites still run against the matching
+  composition until each is ported.
 
 ## How to read an entry
 
@@ -64,7 +72,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `CustodyInvariant.t.sol` donation case · stateful-invariant.
 
 > **`CUST-5` — The first depositor can never manipulate share price to steal later deposits (ERC-4626 inflation).**
-> 🟢 HOLDS · `_decimalsOffset() == 18` on every vault (`RobotMoneyVault`, `BasketVault` and descendants) · fuzz/symbolic recommended.
+> 🟢 HOLDS · `_decimalsOffset() == 18` on the unified `Vault` (one shell for every theme composition) · fuzz/symbolic recommended.
 
 > **`CUST-6` — Underlying-protocol emissions are always harvested to the vault, never left on the adapter.**
 > 🟢 HOLDS · `IStrategyAdapter` INV-2; `MorphoAdapter.t.sol` emission case · stateful-invariant.
@@ -74,19 +82,19 @@ Sub-invariants that decompose the above and are individually worth proving:
 ## 2. Share & supply accounting (SUP)
 
 > **`SUP-1` — The sum of all holders' redeemable assets never exceeds `totalAssets()` (accounting never over-promises).**
-> ✅ PROVEN · `CustodyInvariant.t.sol` · stateful-invariant. (Same property as INV-2 redeemability; cross-listed because it is the core solvency check for every vault family, not just RobotMoneyVault — extend the handler to BasketVault/RwaVault/AgentTokenVault/ProtocolAssetVault.)
+> ✅ PROVEN · `CustodyInvariant.t.sol` · stateful-invariant. (Same property as INV-2 redeemability; cross-listed because it is the core solvency check for every theme, not just the lending composition — the handler is extended to the unified `Vault` under each composition, `spec §6/§7`, rather than per legacy subclass.)
 
 > **`SUP-2` — `totalSupply` always equals the sum of ERC-20 balances, and shares are never minted without a corresponding asset inflow.**
 > 🟢 HOLDS (OZ ERC-4626) · symbolic recommended (zero-asset mint, rounding-to-zero shares).
 
 > **`SUP-3` — A deposit-then-immediate-redeem round trip never returns more than was put in: `previewRedeem(previewDeposit(x)) <= x` for every vault.**
-> ✅ HOLDS (fixed #969, NC-6/F-16) · `BasketVault.deposit`/`mint` now mint shares on the REALIZED post-swap NAV delta (capped at the slippage-discounted deposit floor), not a pre-swap TWAP mark, so the mint-vs-haircut asymmetry that let a round trip farm value back out is closed; the NAV-vs-market deviation guard (`ORA-4`) keeps execution inside the band the proof assumes · fuzz (BasketVault.t.sol::test_SUP3_roundTripNeverProfits_fuzz; stateful proof BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits; FvInvariants.t.sol::test_SUP3_roundTripNeverProfits).
+> ✅ HOLDS (fixed #969, NC-6/F-16) · unified `Vault._deposit` (inexact composition) mints shares on the REALIZED post-swap NAV delta over the C1 idle-inclusive denominator (capped at the slippage-discounted `previewDeposit` floor), not a pre-swap TWAP mark, so the mint-vs-haircut asymmetry that let a round trip farm value back out is closed; the NAV-vs-market deviation guard (`ORA-4`) keeps execution inside the band the proof assumes · fuzz (BasketVault.t.sol::test_SUP3_roundTripNeverProfits_fuzz + stateful proof BasketVault.t.sol::test_SUP3_statefulDepositRedeemNeverProfits, re-pointed to `Vault` per spec §7; FvInvariants.t.sol::test_SUP3_roundTripNeverProfits).
 
 > **`SUP-4` — Rounding always favors the vault (remaining holders), never the transacting account.**
 > 🟢 HOLDS (OZ rounding directions) · symbolic recommended; watch the BasketVault `_sellProportional` dust path and cross-asset NAV summation bias.
 
 > **`SUP-5` — A redeem never reverts solely because the vault is paused/retired/shut down when the underlying is already idle USDC (no liveness trap on already-safe funds).**
-> ✅ HOLDS (fixed #966, NC-1) · `RwaVault.totalAssets` short-circuits `_checkOracleFreshness` when no priced RWA is held, so idle-USDC redeem survives a stale feed while priced reads still fail closed (ORA-2) · stateful-invariant (StaleOracleRedemption.t.sol::test_SUP5_*; RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives).
+> ✅ HOLDS (fixed #966, NC-1) · the priced-asset `AssetPositionAdapter.totalAssets` (deSPXA Chronicle composition) short-circuits its freshness check on a zero adapter balance, so a unified `Vault` holding only idle USDC still redeems under a stale feed while priced reads fail closed (ORA-2) · stateful-invariant (StaleOracleRedemption.t.sol::test_SUP5_* re-pointed to the Chronicle-adapter composition per spec §6; RwaVault.t.sol::test_staleFeed_idleUsdcRedeemSurvives).
 
 > **`SUP-6` — `RmToken` total supply is fixed after deploy (no post-deploy mint).**
 > 🟢 HOLDS · dev/testnet only · static-guard. *(Not a mainnet surface; documented for completeness.)*
@@ -96,16 +104,16 @@ Sub-invariants that decompose the above and are individually worth proving:
 ## 3. Oracle & pricing (ORA)
 
 > **`ORA-1` — Spot (`slot0`) is never used for NAV or share pricing; only a TWAP over the configured window is.**
-> 🟢 HOLDS · `BasketVault._twapUsdcValue`, PRD §11 · static-guard (assert no `slot0` price read on the NAV path) + symbolic.
+> 🟢 HOLDS · the `AssetPositionAdapter` TWAP pricing path (`_twapUsdcValue` on the V3/V4/Aerodrome executors), PRD §11 · static-guard (assert no `slot0` price read on the NAV path) + symbolic.
 
 > **`ORA-2` — A price-sensitive operation never executes against a Chronicle feed older than the heartbeat (fail-closed).**
-> 🟢 HOLDS · `RwaVault._checkOracleFreshness` · stateful-invariant. *Tension:* this is correct for *pricing* but over-applies to user `redeem` — see `SUP-5`/NC-1; the fix must preserve ORA-2 for priced assets while exempting idle-USDC redemption.
+> 🟢 HOLDS · the Chronicle `AssetPositionAdapter` heartbeat check (`_checkOracleFreshness`, deSPXA composition) · stateful-invariant. *Tension:* this is correct for *pricing* but must not over-apply to user `redeem` — see `SUP-5`/NC-1; the adapter's zero-balance short-circuit preserves ORA-2 for priced assets while exempting idle-USDC redemption.
 
 > **`ORA-3` — The pool used to derive the pricing TWAP is always the same pool trades execute against (same fee/tickSpacing/hooks).**
-> ✅ HOLDS (fixed #966, F-09) · `BasketVault.addAsset` → `BasketAssetConfigGuard.requireExecutionPoolMatchesTwap` reverts `ExecutionPoolMismatch` when the registered TWAP pool's fee tier (V3/V4) or tickSpacing (Aerodrome) does not equal `swapFee_` · deploy-assertion + static-guard (DeployAssertions.t.sol::test_ORA3_addAssetRevertsOnPoolMismatch).
+> ✅ HOLDS (fixed #966, F-09) · the `AssetPositionAdapter` constructor → `BasketAssetConfigGuard.requireExecutionPoolMatchesTwap` reverts `ExecutionPoolMismatch` when the registered TWAP pool's fee tier (V3/V4) or tickSpacing (Aerodrome) does not equal `swapFee_`; the equality is now pinned at adapter construction rather than at a per-asset `addAsset` call · deploy-assertion + static-guard (DeployAssertions.t.sol::test_ORA3_addAssetRevertsOnPoolMismatch re-pointed to adapter construction per spec §6).
 
 > **`ORA-4` — Deposits/redemptions never settle when the oracle NAV deviates from the executable market price beyond a bounded threshold.**
-> ✅ HOLDS (fixed #969, F-10) · `BasketVault` carries a timelock-configured `navDeviationGuardBps` threshold and reverts `NavMarketDeviationExceeded` on the deposit/redeem hot path when the executable market (Aerodrome/Uniswap spot) price diverges from the NAV-pricing TWAP beyond it, halting settlement on a stale/manipulated mark · stateful-invariant (BasketVault.t.sol::test_ORA4_deviationGuardBlocksSettlement; FvInvariants.t.sol::test_ORA4_deviationGuardBlocksSettlement).
+> ✅ HOLDS (fixed #969, F-10) · the `AssetPositionAdapter.deploy` (entry-side only, C3/M-A1) reverts `NavMarketDeviationExceeded` when the executable market (Aerodrome/Uniswap spot) price diverges from the NAV-pricing TWAP beyond the timelock-configured `navDeviationGuardBps`, halting a deposit against a stale/manipulated mark. The guard is deliberately NOT on `withdraw` — redemption stays live (§5.3 exit-liveness) · stateful-invariant (BasketVault.t.sol::test_ORA4_deviationGuardBlocksSettlement re-pointed to `deploy`; FvInvariants.t.sol::test_ORA4_deviationGuardBlocksSettlement).
 
 > **`ORA-5` — A reported oracle price is always within sane absolute bounds.**
 > 🟢 HOLDS (weakly) · `ChronicleOracleAdapter` `MIN_NAV`/`MAX_NAV` (1e12…1e24 — 12 orders wide; catches zero/garbage, not economic deviation) · fuzz.
@@ -114,7 +122,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟡 TRUSTED (deSPXA = 18) · `ChronicleOracleAdapter` hardcodes `1e12`; no `decimals()` read — see **F-17** · deploy-assertion (constructor should assert `decimals()==18 && usdc.decimals()==6`).
 
 > **`ORA-7` — The internal slippage floor on a swap is never derived solely from the same oracle/TWAP that prices the trade (the floor must be an independent backstop).**
-> ✅ HOLDS (fixed #966, F-09/F-11/F-16) · with the ORA-3 pool-equality enforced (execution pool == TWAP pool) and the codehash-pinned adapter, realized loss under TWAP manipulation is bounded by the configured, TWAP-independent `maxSlippageBps`/pool-fee floor rather than the co-manipulable NAV TWAP alone · fuzz (TwapManipulation.t.sol::test_ORA7_independentFloorBoundsLossUnderManipulation).
+> ✅ HOLDS (fixed #966, F-09/F-11/F-16) · with the ORA-3 pool-equality enforced (execution pool == TWAP pool) and the codehash-pinned adapter, realized loss under TWAP manipulation is bounded by the configured, TWAP-independent `maxSlippageBps`/pool-fee floor rather than the co-manipulable NAV TWAP alone; the unified `Vault` adds a residual adapter-INDEPENDENT vault-side backstop on `deploy` — a single global cap on aggregate `totalAssets()` growth rate (`DEFAULT_MAX_NAV_GROWTH_RATE_BPS`, §4.3a), one vault-wide checkpoint gating deposits only · fuzz (TwapManipulation.t.sol::test_ORA7_independentFloorBoundsLossUnderManipulation).
 
 ---
 
@@ -127,13 +135,13 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `AccessRoles._grantRole` separation override; `AccessRoles.t.sol` · symbolic recommended. *Watch:* this same override enables a grant-DoS during handover — see **NC-10** (`ACL-7`).
 
 > **`ACL-3` — `ADMIN_ROLE` membership on any fund-holding contract never reaches zero (no permanent governance brick).**
-> ✅ HOLDS (fixed #966, F-06) · `BasketVault` (→ `RwaVault`/`AgentTokenVault`/`ProtocolAssetVault`) enforces a manual last-admin floor in its `_grantRole`/`_revokeRole` hooks; the gateway enforces the same floor for both `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE`. (Lightweight counters, not `AccessControlEnumerable`, to respect the vaults' EIP-170 limit and the gateway's storage layout.) · symbolic (BasketVault.t.sol / RobotMoneyGateway.t.sol last-admin-floor tests).
+> ✅ HOLDS (fixed #966, F-06) · the unified `Vault` enforces a manual last-admin floor (`adminCount`, `LastAdminFloor`) in its `_grantRole`/`_revokeRole` hooks — one shell now covering the lending theme as well as the basket themes; the gateway enforces the same floor for both `ADMIN_ROLE` and `DEFAULT_ADMIN_ROLE`. (Lightweight counters, not `AccessControlEnumerable`, to respect the vault's EIP-170 limit and the gateway's storage layout.) · symbolic (BasketVault.t.sol last-admin-floor tests re-pointed to `Vault` per spec §6 + a NEW rmUSDC-composition case; RobotMoneyGateway.t.sol).
 
 > **`ACL-4` — An agent's owner is never reassigned; no caller can hijack an existing agent.**
 > ✅ PROVEN-by-code · `_authorizeAgentInternal` reverts `AgentAlreadyOwned`; `setPolicy`/`revokeAgent` require `agentOwner[agent]==msg.sender` · symbolic recommended.
 
 > **`ACL-5` — An emergency-role action can only de-risk; it never moves value to an external party or settles at an unverifiable price.**
-> ✅ HOLDS (fixed #966, F-08) · `RwaVault.setEmergencyUnwindStaleOverride` is now `ADMIN_ROLE` (a higher tier) while `emergencyUnwind` stays `EMERGENCY_ROLE`, so a single emergency hot key can no longer both arm stale pricing and dump the basket against it · static-guard + stateful-invariant (RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency).
+> ✅ HOLDS (fixed #966, F-08; M-S5) · on the unified `Vault` + Chronicle composition the stale-price override + unwind is an **atomic `EMERGENCY_ROLE` arm+execute** (one hot-key action, no intervening ADMIN timelock so a mid-incident 48h latency cannot trap it) while every other config stays on the full ADMIN timelock — an emergency key can de-risk but never both arm stale pricing for profit and settle at an unverifiable price outside the incident path · static-guard + stateful-invariant (RwaVault.t.sol::test_emergencyUnwindStaleOverride_requiresAdminNotEmergency re-pointed to the atomic path per spec §6).
 
 > **`ACL-6` — Depositor principal is only ever moved by the depositor (or her authorized agent on her behalf); no privileged role can move a third party's funds.**
 > ✅ PROVEN · every gateway flow pulls USDC from `msg.sender`; this is why F-01 is governance-capture, not theft · stateful-invariant (already implied by GW-1/GW-3).
@@ -152,16 +160,16 @@ Sub-invariants that decompose the above and are individually worth proving:
 > 🟢 HOLDS · `VaultRegistry._vaults` is append-only (no deregister) · static-guard + stateful-invariant.
 
 > **`LIFE-3` — Vault shutdown never blocks withdrawals (it disables deposits only).**
-> ✅ HOLDS (fixed #966, NC-3/F-06) · `BasketVault._withdraw` is no longer `whenNotPaused`; `pause()` is a deposits-only freeze (matching `RobotMoneyVault`'s separate flag), so a low-trust `EMERGENCY_ROLE` key can never freeze withdrawals · stateful-invariant (BasketVault.t.sol::test_pause_doesNotFreezeWithdrawals).
+> ✅ HOLDS (fixed #966, NC-3/F-06; M-A4) · the unified `Vault._withdraw` is not gated by the deposit pause: `pause()` is a deposits-only freeze, `withdrawalsPaused` is a separate ADMIN-only flag, and `paused()` is redefined as `depositsPaused || withdrawalsPaused` with both surfaced as first-class views — a low-trust `EMERGENCY_ROLE` key can never freeze withdrawals · stateful-invariant (BasketVault.t.sol::test_pause_doesNotFreezeWithdrawals re-pointed to `Vault`; NEW: EMERGENCY cannot set `withdrawalsPaused`, deposits-only pause visible via split views).
 
 > **`LIFE-4` — Depositor funds are never *permanently* frozen: any state that blocks withdrawal is always reversible by a still-available authority.**
-> ✅ HOLDS (fixed #966, F-06 + NC-3) · withdrawals are never paused (LIFE-3) and the last-admin floor (ACL-3) guarantees a still-available `ADMIN_ROLE` authority, so no reachable state freezes withdrawals forever · symbolic. *(`shutdownVault` reversibility, F-07: `BasketVault.restoreVault(newTvlCap)` — ADMIN_ROLE only, the strictly higher-trust tier than the EMERGENCY hot key that can `shutdownVault` — clears `shutdown` and re-opens deposits, fixed #971; RwaVault inherits it. BasketVault.t.sol::test_F07_restoreVaultReopensDeposits.)*
+> ✅ HOLDS (fixed #966, F-06 + NC-3) · withdrawals are never paused (LIFE-3) and the last-admin floor (ACL-3) guarantees a still-available `ADMIN_ROLE` authority, so no reachable state freezes withdrawals forever · symbolic. *(`shutdownVault` reversibility, F-07: the unified `Vault.restoreVault(newTvlCap)` — ADMIN_ROLE only, the strictly higher-trust tier than the EMERGENCY hot key that can `shutdownVault` — clears `shutdown` and re-opens deposits, fixed #971; every theme composition inherits the one shell. BasketVault.t.sol::test_F07_restoreVaultReopensDeposits re-pointed to `Vault`.)*
 
 > **`LIFE-5` — A reweight/removal of a vault never makes an existing holder's position unredeemable through the protocol.**
 > ✅ HOLDS (fixed #967, F-03) · `redeemFor` (and `gateway.withdrawFromRouter`) drive redeem legs from an explicit caller-supplied `vaults[]`, not the live weight vector, and `_redeemLeg` permits Active OR Retired (only Paused blocks) — a reweighted-out or Retired position stays redeemable through the router · stateful-invariant — `FvInvariants.t.sol::test_LIFE5_expectedFail_reweightKeepsPositionRedeemable`.
 
 > **`LIFE-6` — `reabsorbRemovedAsset` never reverts-and-strands a reappeared balance (INV-2 must survive a degraded pool).**
-> ✅ PROVEN · `reabsorbRemovedAsset` now wraps the TWAP floor read in a try/catch: on a degraded pool whose `observe()` reverts, the reappeared balance is permissionlessly swept to the governed quarantine safety valve instead of being stranded, so the call can never revert-and-strand; `addAsset` also reuses an inactive entry on re-add (no duplicate `AssetInfo`) — fixed by **NC-8 (#970)** · `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` / `test_NC8_addAsset_*` · fuzz/behavioural.
+> ✅ PROVEN · the `AssetPositionAdapter.reabsorb` now wraps the TWAP floor read in a try/catch: on a degraded pool whose `observe()` reverts, the reappeared balance is permissionlessly swept to the governed quarantine safety valve instead of being stranded, so the call can never revert-and-strand; the unified `Vault.addAdapter` reuses an inactive entry on re-add (no duplicate registry slot) — fixed by **NC-8 (#970)** · `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` / `test_NC8_addAsset_*` re-pointed to the adapter per spec §6 · fuzz/behavioural.
 
 ---
 
@@ -234,7 +242,7 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `AdapterDelegatecallGuard.t.sol` / `AdapterBytecodeGuard` · static-guard (bytecode scan).
 
 > **`ADP-2` — Only an eligible adapter (allowlisted + codehash-pinned) ever contributes to `totalAssets` or receives/returns funds.**
-> ✅ HOLDS (fixed #966, NC-2; NAV side fixed #971, F-14) · onboarding: `BasketVault.addAsset` → `BasketAssetConfigGuard.requireAllowedAdapter` rejects any non-zero adapter whose runtime codehash is not on the ADMIN-approved allowlist (codehash pinning subsumes the no-hot-swap-proxy guarantee; the basket swap adapters legitimately DELEGATECALL the linked `TickMath`, so the deploy-time no-proxy scan stays in `AdapterBytecodeGuard`). NAV/withdrawal side (F-14): `RobotMoneyVault.totalAssets` and `_pullProportional` now gate on `_isAdapterCounted` (active AND currently eligible), so an adapter whose allowlist/codehash eligibility was revoked while still registered-active no longer contributes to NAV nor receives/returns withdrawal flow — the funds stay drainable by EMERGENCY (`emergencyWithdrawAdapter`) and eligibility is restorable, so this is exclusion-not-confiscation · static-guard (BasketVault.t.sol::test_addAsset_revertsForUnvettedAdapter) + behavioural (RobotMoneyVault.t.sol::test_ADP2_revokedAdapterExcludedFromNavAndPulls).
+> ✅ HOLDS (fixed #966, NC-2; NAV side fixed #971, F-14) · onboarding: the unified `Vault.addAdapter` → `BasketAssetConfigGuard.requireAllowedAdapter` rejects any non-zero adapter whose runtime codehash is not on the ADMIN-approved allowlist (codehash pinning subsumes the no-hot-swap-proxy guarantee and now also pins each `AssetPositionAdapter`'s venue executor + linked libs; the swap/asset adapters legitimately DELEGATECALL the linked `TickMath`, so the deploy-time no-proxy scan stays in `AdapterBytecodeGuard`). NAV/withdrawal side (F-14): `Vault.totalAssets` and `_pullProportional` gate on `_isAdapterCounted` (active AND currently eligible), so an adapter whose allowlist/codehash eligibility was revoked while still registered-active no longer contributes to NAV nor receives/returns withdrawal flow — the funds stay drainable by EMERGENCY (`emergencyWithdrawAdapter`) and eligibility is restorable, so this is exclusion-not-confiscation · static-guard (BasketVault.t.sol::test_addAsset_revertsForUnvettedAdapter) + behavioural (RobotMoneyVault.t.sol::test_ADP2_revokedAdapterExcludedFromNavAndPulls re-pointed to `Vault` + a NEW asset-adapter variant per spec §6).
 
 > **`ADP-3` — Adapter emissions/yield always reach the vault and are never stranded on the adapter or routed to an admin.**
 > 🟢 HOLDS · `IStrategyAdapter` INV-2; `MorphoAdapter.t.sol` · stateful-invariant.
@@ -243,17 +251,17 @@ Sub-invariants that decompose the above and are individually worth proving:
 > ✅ PROVEN · `CustodyInvariantGuard.t.sol` (adapter `rescueTokens` deleted) · static-guard.
 
 > **`ADP-5` — Any ERC-20 approval granted to an adapter/router for a swap is always reset to zero after the call.**
-> ✅ HOLDS (fixed #971, NC-12) · BasketVault/gateway/router zero approvals; `AaveV3Adapter`/`MorphoAdapter`/`CompoundV3Adapter` now use `forceApprove(_, amount)` (exact, zeroing) followed by an unconditional `forceApprove(_, 0)` rather than the additive, non-zeroing `safeIncreaseAllowance` — no residual allowance can linger across deploys · static-guard (assert `forceApprove(_,0)` convention) + fuzz (post-call allowance == 0) — AaveV3Adapter.t.sol / MorphoAdapter.t.sol post-deploy allowance assertions.
+> ✅ HOLDS (fixed #971, NC-12) · unified `Vault`/gateway/router zero approvals; every adapter — the lending `AaveV3Adapter`/`MorphoAdapter`/`CompoundV3Adapter` and each `AssetPositionAdapter` — uses `forceApprove(_, amount)` (exact, zeroing) followed by an unconditional `forceApprove(_, 0)` rather than the additive, non-zeroing `safeIncreaseAllowance`, so no residual allowance can linger across calls · static-guard (assert `forceApprove(_,0)` convention) + fuzz (post-call allowance == 0) — AaveV3Adapter.t.sol / MorphoAdapter.t.sol post-call allowance assertions.
 
 ---
 
 ## 10. Fees (FEE)
 
 > **`FEE-1` — A charged fee never exceeds the configured maximum (`MAX_EXIT_FEE`, etc.).**
-> 🟢 HOLDS · per-vault `MAX_*_BPS` clamps · fuzz.
+> 🟢 HOLDS · the unified `Vault`'s `MAX_*_BPS` clamps (one shell per theme) · fuzz.
 
 > **`FEE-2` — A fee is always charged on realized proceeds, never on a share-implied gross that can socialize loss to remaining holders.**
-> ✅ HOLDS (fixed #971, NC-11) · `RobotMoneyVault._withdraw` only disburses the exit fee out of proceeds the withdrawal ACTUALLY realises: `_pullProportional` returns the realised USDC (idle applied + genuinely pulled) and reverts (`InsufficientAdapterLiquidity`) if it cannot source the full share-implied gross, and `_withdraw` requires `realised >= grossAssets` before paying the fee — so the fee can never be funded from other holders' idle USDC by an over-reporting adapter. NAV (hence `grossAssets`) already excludes revoked adapters (ADP-2 / F-14), closing the inflated-share-count vector; ERC-4626 payout parity (`receiver` gets exactly `assets`) is preserved · fuzz (over-reporting-adapter handler) — `FvInvariants.t.sol::test_FEE2_expectedFail_feeChargedOnRealizedProceeds`; deep proofs `RobotMoneyVault.t.sol::test_FEE2_exitFeeOnRealizedProceeds` / `test_FEE2_overReportingAdapterCannotSocializeLoss`.
+> ✅ HOLDS (fixed #971, NC-11) · the unified `Vault._withdraw` has two pinned modes (§5.3/§5.4): **Mode A (exact composition)** requires `realised >= grossAssets` and charges the fee on gross — `_pullProportional` returns the realised USDC (idle applied + genuinely pulled) and reverts (`InsufficientAdapterLiquidity`) if it cannot source the full share-implied gross, so the fee can never be funded from other holders' idle USDC by an over-reporting adapter; **Mode B (inexact composition)** charges the fee on the realised swap proceeds only, with no shortfall-revert. NAV (hence `grossAssets`) already excludes revoked adapters (ADP-2 / F-14), closing the inflated-share-count vector; ERC-4626 payout parity (`receiver` gets exactly `assets`) is preserved · fuzz (over-reporting-adapter handler) — `FvInvariants.t.sol::test_FEE2_expectedFail_feeChargedOnRealizedProceeds`; deep proofs `RobotMoneyVault.t.sol::test_FEE2_*` (Mode A) / BasketVault.t.sol fee-on-realized tests (Mode B), re-pointed to `Vault` per spec §6.
 
 > **`FEE-3` — Fees never reach any address other than the configured `feeRecipient` (INV-1/INV-3).**
 > 🟢 HOLDS · single recipient, timelock-gated · static-guard.
@@ -262,11 +270,12 @@ Sub-invariants that decompose the above and are individually worth proving:
 
 ## Open items for the FV stack
 
-1. **Extend the custody stateful-invariant handler beyond `RobotMoneyVault`** to
-   `BasketVault`, `RwaVault`, `AgentTokenVault`, `ProtocolAssetVault` (covers SUP-1,
-   CUST-4/5).
-2. **Add a stale-oracle handler** for RwaVault to pin `SUP-5`/`ORA-2` (NC-1) once the
-   freshness short-circuit lands.
+1. **Extend the custody stateful-invariant handler across every unified-`Vault`
+   composition** (lending exact-set + each basket theme), not just the lending
+   composition (covers SUP-1, CUST-4/5) — one handler parameterised by adapter
+   set per spec §7, replacing the old per-subclass handler list.
+2. **Add a stale-oracle handler** for the deSPXA Chronicle `AssetPositionAdapter`
+   composition to pin `SUP-5`/`ORA-2` (NC-1).
 3. **Add a TWAP-manipulation harness** (move spot/observation, assert `ORA-7` floor
    still bounds loss) — the single highest-leverage symbolic property.
 4. **Add deploy-assertions** for `ACL-1` (EOA holds no role) and `ORA-3`/`ORA-6`

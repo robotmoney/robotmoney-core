@@ -195,9 +195,10 @@ jobs:
       # The four-vault real-TVL gate (issue #592) IS the `demo_seeding` matrix
       # binary: `cargo test --release --test demo_seeding` asserts the
       # VaultRegistry lists exactly four Active vaults (PRD §11.1–§11.4), the
-      # router weights cover the three router-eligible vaults summing to 10000
-      # bps (the deSPXA RWA vault is direct-seed-only, never weighted —
-      # ADR-0006 §1), and that **all four** vaults report non-zero on-chain
+      # router weights cover all four router-eligible vaults summing to 10000
+      # bps with the 8500/500/500/500 split (the deSPXA RWA vault is
+      # router-eligible at 500 bps — ADR-0006 §1 amended 2026-06-05 / issue
+      # #621), and that **all four** vaults report non-zero on-chain
       # totalAssets after seeding. It therefore runs exactly once across this
       # matrix — on the `demo_seeding` binary — and is NOT re-appended as an
       # unconditional final step on every binary (issue #915): that previously

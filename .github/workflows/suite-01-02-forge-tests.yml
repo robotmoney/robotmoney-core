@@ -103,9 +103,10 @@ jobs:
         # Explicit, named guard for the four-vault real-TVL end state so it
         # cannot silently regress (the suite above already runs these, but a
         # dedicated step gives a discrete CI signal):
-        #   - DeployDemoExtraVaults.t.sol — four vaults Active, three router-
-        #     eligible + the direct-seed deSPXA RWA vault, all with non-zero
-        #     totalAssets after a routed + direct deposit.
+        #   - DeployDemoExtraVaults.t.sol — four vaults Active and all four
+        #     router-eligible (8500/500/500/500 bps split, rmRWA at 500 per
+        #     issue #621), all with non-zero totalAssets after a routed +
+        #     direct deposit.
         #   - RwaVault.t.sol — deSPXA deposit/redeem round-trip and stale-oracle
         #     halt (PRD §11.4, ADR-0006).
         #   - BasketVault / AgentTokenVault — per-vault basket composition.
