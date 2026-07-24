@@ -1,5 +1,5 @@
 # Vault
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/98e21fa6ee5c881534f0ec43b14cc042ef89ab9c/contracts/Vault.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/efa707be563fbb6d1823fd15d523cb09e2f05d55/contracts/Vault.sol)
 
 **Inherits:**
 ERC4626, AccessControl, ReentrancyGuard
@@ -123,6 +123,27 @@ Ordered registry of all adapters (active and inactive).
 
 ```solidity
 AdapterInfo[] public adapters
+```
+
+
+### maxActiveAdapters
+Per-theme cap on how many adapters may be simultaneously `active`
+(spec §8, Q7/L4). Distinct from the bytecode `MAX_ADAPTERS` ceiling
+on the monotonically-growing `adapters` array: `MAX_ADAPTERS` bounds
+total registry entries, `maxActiveAdapters` bounds the ACTIVE subset.
+Defaults to `MAX_ADAPTERS` at construction (the rmUSDC/rmPROTO/rmAGENT
+common case) and is narrowed post-deploy by `setMaxActiveAdapters`
+(ADMIN/timelock) for a theme with a tighter bound — it is the
+`RwaVault.maxAssets()==1` single-asset constraint expressed as an
+active-adapter-count cap (rmRWA sets `1`). Counting ACTIVE adapters
+(not total entries) is load-bearing: it permits the remove-then-add
+deSPXA migration under a cap of 1 (drain+deactivate the outgoing
+adapter — freeing the active slot — before adding the replacement),
+which a total-entry cap would wedge permanently (§8).
+
+
+```solidity
+uint256 public maxActiveAdapters
 ```
 
 
@@ -921,6 +942,19 @@ Update the allocation cap for an existing adapter.
 function setAdapterCap(uint256 index, uint16 newCapBps) external onlyRole(ADMIN_ROLE);
 ```
 
+### setMaxActiveAdapters
+
+Set the per-theme active-adapter-count cap (§8). ADMIN/timelock
+only. Bounded to `1..MAX_ADAPTERS` and never below the CURRENT
+active-adapter count (tightening can only apply to future adds, it
+never silently invalidates already-active adapters). rmRWA narrows
+this to `1` at deploy; the default is `MAX_ADAPTERS`.
+
+
+```solidity
+function setMaxActiveAdapters(uint256 newCap) external onlyRole(ADMIN_ROLE);
+```
+
 ### pause
 
 Pause DEPOSITS (entry hard-stop). Withdrawals stay open (LIFE-3).
@@ -1452,6 +1486,14 @@ Emitted when the per-deposit cap is updated.
 
 ```solidity
 event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
+```
+
+### MaxActiveAdaptersUpdated
+Emitted when the active-adapter-count cap is updated (§8).
+
+
+```solidity
+event MaxActiveAdaptersUpdated(uint256 oldCap, uint256 newCap);
 ```
 
 ### ExitFeeUpdated
