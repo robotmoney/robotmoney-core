@@ -29,3 +29,4 @@
 - [IRetirableVaultLink](DeployTimelock.s.sol/interface.IRetirableVaultLink.md)
 - [DeployTimelock](DeployTimelock.s.sol/contract.DeployTimelock.md)
 - [DeployVaultRegistry](DeployVaultRegistry.s.sol/contract.DeployVaultRegistry.md)
+- [DeployVaultThemes](DeployVaultThemes.s.sol/contract.DeployVaultThemes.md)

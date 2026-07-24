@@ -102,6 +102,20 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
 
     /// @notice Ordered registry of all adapters (active and inactive).
     AdapterInfo[] public adapters;
+    /// @notice Per-theme cap on how many adapters may be simultaneously `active`
+    ///         (spec §8, Q7/L4). Distinct from the bytecode `MAX_ADAPTERS` ceiling
+    ///         on the monotonically-growing `adapters` array: `MAX_ADAPTERS` bounds
+    ///         total registry entries, `maxActiveAdapters` bounds the ACTIVE subset.
+    ///         Defaults to `MAX_ADAPTERS` at construction (the rmUSDC/rmPROTO/rmAGENT
+    ///         common case) and is narrowed post-deploy by `setMaxActiveAdapters`
+    ///         (ADMIN/timelock) for a theme with a tighter bound — it is the
+    ///         `RwaVault.maxAssets()==1` single-asset constraint expressed as an
+    ///         active-adapter-count cap (rmRWA sets `1`). Counting ACTIVE adapters
+    ///         (not total entries) is load-bearing: it permits the remove-then-add
+    ///         deSPXA migration under a cap of 1 (drain+deactivate the outgoing
+    ///         adapter — freeing the active slot — before adding the replacement),
+    ///         which a total-entry cap would wedge permanently (§8).
+    uint256 public maxActiveAdapters;
     /// @notice Timestamp at/after which an ADMIN-armed exact→inexact
     ///         composition-class flip may be executed for a given adapter (the
     ///         earliest `addAdapter(adapter, _, false)` that would flip
@@ -265,6 +279,8 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     event TvlCapUpdated(uint256 oldCap, uint256 newCap);
     /// @notice Emitted when the per-deposit cap is updated.
     event PerDepositCapUpdated(uint256 oldCap, uint256 newCap);
+    /// @notice Emitted when the active-adapter-count cap is updated (§8).
+    event MaxActiveAdaptersUpdated(uint256 oldCap, uint256 newCap);
     /// @notice Emitted when the exit fee is updated.
     event ExitFeeUpdated(uint256 oldBps, uint256 newBps);
     /// @notice Emitted when the max-slippage bound is updated.
@@ -424,6 +440,12 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         exitFeeBps = exitFeeBps_;
         maxSlippageBps = maxSlippageBps_;
         maxNavGrowthRateBps = maxNavGrowthRateBps_;
+        // Default the per-theme active-adapter cap to the bytecode ceiling; a theme
+        // that needs a tighter bound (rmRWA = 1, §8) narrows it post-deploy via the
+        // ADMIN-gated `setMaxActiveAdapters`. Kept OUT of the constructor arg list
+        // deliberately: a 12th value parameter overflows the non-`via_ir` ABI
+        // decoder ("stack too deep") this repo compiles under.
+        maxActiveAdapters = MAX_ADAPTERS;
         feeRecipient = feeRecipient_;
         quarantineAddress = ForeignTokenQuarantine.QUARANTINE;
 
@@ -1092,7 +1114,9 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
     {
         if (adapter_ == address(0)) revert ZeroAddress();
         if (capBps_ == 0 || capBps_ > MAX_BPS) revert InvalidCap();
-        if (_activeAdapterCount() >= MAX_ADAPTERS) revert MaxAdaptersReached();
+        // Per-theme active-adapter cap (§8). `maxActiveAdapters` is `1..MAX_ADAPTERS`,
+        // so this is at most the bytecode ceiling and at least 1 (rmRWA = 1).
+        if (_activeAdapterCount() >= maxActiveAdapters) revert MaxAdaptersReached();
         _requireAdapterEligible(adapter_);
 
         // Exactness-transition guard (§5.1, C2): detect the true→false flip
@@ -1170,6 +1194,19 @@ contract Vault is ERC4626, AccessControl, ReentrancyGuard {
         uint16 old = adapters[index].capBps;
         adapters[index].capBps = newCapBps;
         emit AdapterCapUpdated(index, old, newCapBps);
+    }
+
+    /// @notice Set the per-theme active-adapter-count cap (§8). ADMIN/timelock
+    ///         only. Bounded to `1..MAX_ADAPTERS` and never below the CURRENT
+    ///         active-adapter count (tightening can only apply to future adds, it
+    ///         never silently invalidates already-active adapters). rmRWA narrows
+    ///         this to `1` at deploy; the default is `MAX_ADAPTERS`.
+    function setMaxActiveAdapters(uint256 newCap) external onlyRole(ADMIN_ROLE) {
+        if (newCap == 0 || newCap > MAX_ADAPTERS) revert InvalidParam();
+        if (newCap < _activeAdapterCount()) revert InvalidParam();
+        uint256 old = maxActiveAdapters;
+        maxActiveAdapters = newCap;
+        emit MaxActiveAdaptersUpdated(old, newCap);
     }
 
     // ─── Emergency (EMERGENCY_ROLE) ──────────────────────────────────
