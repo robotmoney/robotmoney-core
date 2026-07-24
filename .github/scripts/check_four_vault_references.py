@@ -2,9 +2,10 @@
 """Four-vault reference invariant (issue #479).
 
 PRD §11 names four vault categories — Stable Yield, Protocol Asset, Agent
-Token, and RWA/Thematic — and the deployed set now matches: three Active
-router vaults plus a non-Active RWA/Thematic placeholder registered in
-`VaultRegistry`. Product- and architecture-level docs must not claim a
+Token, and RWA/Thematic — and the deployed set now matches: four **Active**
+vaults registered in `VaultRegistry`, all four router-eligible (rmRWA at 500
+bps, ADR-0006 §1 amended 2026-06-05 / issue #621, gives the 8500/500/500/500
+default weight split). Product- and architecture-level docs must not claim a
 "three vault" shape that contradicts this, or the dapp, the public allocation
 surface, and the docs drift apart.
 
@@ -52,10 +53,11 @@ FORBIDDEN = [
 ]
 
 # Allowlist of substrings: a line containing any of these is a historical /
-# closed-question / Router-weight-vector context and is permitted to mention a
-# three-vault shape. The Portfolio Router weight vector legitimately holds
-# exactly three (Active, Router-eligible) vaults — the RWA placeholder is never
-# weighted — so lines that describe the *router weight split* are allowed.
+# closed-question / router-weight-vector context and is permitted to mention a
+# three-vault shape. NOTE: as of issue #621 all four vaults are router-eligible
+# (8500/500/500/500), so the current router weight vector holds FOUR legs, not
+# three; the router-weight allowlist entries below now only cover legitimate
+# HISTORICAL descriptions of the earlier three-way split, not the live shape.
 ALLOWLIST_SUBSTRINGS = [
     "#465",  # verbatim title of the closed demo-seeding issue
     "router weight",  # the router weight vector is a legitimate 3-way split

@@ -179,6 +179,25 @@ roster, and that each signer has acknowledged the playbook.
 
 ---
 
+## 5. Retired v1 vault — indefinite feed + pool-liquidity maintenance
+
+**What.** After a v1 vault is retired during the unified-Vault (ADR-0010)
+migration, keep every dependency its redemptions need — the Chronicle deSPXA feed
+and the Aerodrome/execution-pool liquidity — funded and live until that vault's
+`totalSupply()` reaches zero.
+
+**Why.** Retirement (ADR-0009) halts new deposits but leaves redemption open
+**indefinitely**, and there is no assisted migration — the only exit is a
+depositor's own signed `redeem`, which they may take at any time. A retired
+priced-asset vault therefore cannot have its feed decommissioned or its execution
+pool drained while any share is outstanding without stranding a still-redeemable
+holder (invariants `INV-2`, `SUP-5`, `ORA-2`).
+
+**Steps, monitoring, and the `totalSupply() == 0` decommission checklist are in
+the dedicated runbook:** [`retired-v1-vault-maintenance.md`](retired-v1-vault-maintenance.md).
+
+---
+
 ## Closing note
 
 This document covers **only the manual actions** above. Automatable *gates* —

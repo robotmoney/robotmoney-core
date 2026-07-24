@@ -4,12 +4,12 @@
 //! Asserts the smoke-test devnet boots in the four-vault shape:
 //!   1. `VaultRegistry.listVaults()` returns four **Active** vaults — the
 //!      primary `RobotMoneyVault` (§11.1), `ProtocolAssetVault` (§11.2),
-//!      `AgentTokenVault` (§11.3) and the deSPXA `RwaVault` (§11.4). The first
-//!      three are router-eligible; rmRWA is Active but not router-eligible
-//!      (ADR-0006 §1) and is seeded by a direct deposit.
-//!   2. `PortfolioRouter.getWeights()` returns three weight entries — the
-//!      router-eligible vaults — summing to exactly 10 000 bps. rmRWA is never
-//!      weighted.
+//!      `AgentTokenVault` (§11.3) and the deSPXA `RwaVault` (§11.4). All four
+//!      are router-eligible (rmRWA at 500 bps, ADR-0006 §1 amended 2026-06-05
+//!      / issue #621) and each is also seeded by a direct deposit.
+//!   2. `PortfolioRouter.getWeights()` returns four weight entries — all four
+//!      router-eligible vaults — summing to exactly 10 000 bps with the
+//!      8500/500/500/500 split (primary / rmRWA / rmPROTO / rmAGENT).
 //!   3. After `Fixture::seed_demo_depositors`, **all four** vaults report
 //!      non-zero `totalAssets` and each simulated depositor holds receipt-share
 //!      balances across the seeded vaults.
@@ -207,7 +207,8 @@ fn registry_lists_four_active_vaults() {
     );
 
     // All four PRD §11 vaults must be present and report Active (status=0):
-    // the three router-eligible vaults plus the directly-seeded RWA vault.
+    // all four are router-eligible (rmRWA at 500 bps, issue #621) and each is
+    // also seeded by a direct deposit.
     let mut expected = fx.all_demo_vaults().to_vec();
     expected.push(fx.rwa_vault());
     for v in expected {
@@ -294,8 +295,9 @@ fn router_weights_cover_four_eligible_vaults() {
 /// `totalAssets` and every depositor holds a non-zero receipt-share balance
 /// across the seeded vaults.
 ///
-/// The router deposit funds the three router-eligible vaults (§11.1/§11.2/
-/// §11.3); a direct deposit funds the §11.4 RWA vault. Basket and RWA legs run
+/// The router deposit funds all four router-eligible vaults (§11.1/§11.2/
+/// §11.3/§11.4, issue #621); a direct deposit additionally tops up each vault.
+/// Basket and RWA legs run
 /// real USDC → token swaps, so the depositor's per-vault share count is not a
 /// clean linear function of the deposit amount — we assert non-zero TVL and
 /// non-zero depositor shares (the invariant the dapp tiles depend on), not an

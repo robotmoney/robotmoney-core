@@ -169,8 +169,9 @@ fn explorer_api_shows_four_active_nonzero_vaults_after_boot() {
 }
 
 /// AC (issue #615): After DappStack::boot, GET /v1/router/weights must return
-/// non-empty current_weights with the three router-eligible vault entries summing
-/// to exactly 10 000 bps.  This proves the indexer ingests WeightsSet /
+/// non-empty current_weights with the four router-eligible vault entries summing
+/// to exactly 10 000 bps (8500/500/500/500, rmRWA weighted per issue #621).
+/// This proves the indexer ingests WeightsSet /
 /// DefaultWeightsSet events emitted by the demo seed's direct admin calls to
 /// PortfolioRouter.setWeights() / setDefaultWeights().
 ///
