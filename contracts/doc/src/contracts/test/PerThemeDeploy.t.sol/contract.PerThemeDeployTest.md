@@ -1,5 +1,5 @@
 # PerThemeDeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/efa707be563fbb6d1823fd15d523cb09e2f05d55/contracts/test/PerThemeDeploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f0d5e0cc4ed74e32f7ff690ebf3edb2b2848abdd/contracts/test/PerThemeDeploy.t.sol)
 
 **Inherits:**
 Test
@@ -129,6 +129,84 @@ function test_rmAgent_deploysMixedSetWithTimelockAdmin() public;
 
 ```solidity
 function test_rmRwa_deploysSingleAdapterAndEnforcesCapOfOne() public;
+```
+
+### _assertWireCountMatchesExpected
+
+After a correctly-counted wiring, the vault's active adapter count
+equals the theme's `expectedAdapters` — the field is now read and
+enforced, not a write-only doc aid.
+
+
+```solidity
+function _assertWireCountMatchesExpected(DeployVaultThemes.Theme t) internal;
+```
+
+### test_rmUsdc_wireCountMatchesExpected
+
+
+```solidity
+function test_rmUsdc_wireCountMatchesExpected() public;
+```
+
+### test_rmProto_wireCountMatchesExpected
+
+
+```solidity
+function test_rmProto_wireCountMatchesExpected() public;
+```
+
+### test_rmAgent_wireCountMatchesExpected
+
+
+```solidity
+function test_rmAgent_wireCountMatchesExpected() public;
+```
+
+### test_rmRwa_wireCountMatchesExpected
+
+
+```solidity
+function test_rmRwa_wireCountMatchesExpected() public;
+```
+
+### _assertWireWrongCountReverts
+
+A wiring whose adapter count differs from `expectedAdapters` reverts
+`AdapterCountMismatch` — the documented spec §8 MUST-invariant is now
+an in-code guarantee for every theme, not just rmRWA's incidental cap.
+
+
+```solidity
+function _assertWireWrongCountReverts(DeployVaultThemes.Theme t, uint256 wrong) internal;
+```
+
+### test_rmUsdc_wireWrongCountReverts
+
+
+```solidity
+function test_rmUsdc_wireWrongCountReverts() public;
+```
+
+### test_rmProto_wireWrongCountReverts
+
+
+```solidity
+function test_rmProto_wireWrongCountReverts() public;
+```
+
+### test_rmAgent_wireWrongCountReverts
+
+
+```solidity
+function test_rmAgent_wireWrongCountReverts() public;
+```
+
+### test_rmRwa_wireWrongCountReverts
+
+
+```solidity
+function test_rmRwa_wireWrongCountReverts() public;
 ```
 
 ### test_weightArrayLengthVariesPerTheme

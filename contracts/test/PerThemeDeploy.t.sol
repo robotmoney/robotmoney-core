@@ -257,6 +257,85 @@ contract PerThemeDeployTest is Test {
         vm.stopPrank();
     }
 
+    // ─── expectedAdapters count invariant (issue #1179) ─────────────────────
+
+    /// @dev After a correctly-counted wiring, the vault's active adapter count
+    ///      equals the theme's `expectedAdapters` — the field is now read and
+    ///      enforced, not a write-only doc aid.
+    function _assertWireCountMatchesExpected(DeployVaultThemes.Theme t) internal {
+        Vault v = _deployVault(t);
+        uint256 expected = deployer.themeParams(t).expectedAdapters;
+
+        uint16[] memory caps = new uint16[](expected);
+        bool[] memory exacts = new bool[](expected);
+        for (uint256 i = 0; i < expected; i++) {
+            caps[i] = uint16(10_000 / expected);
+        }
+        DeployVaultThemes.AdapterSpec[] memory specs = _specs(v, caps, exacts);
+        deployer.wireTheme(v, t, admin, specs);
+
+        assertEq(v.activeAdapterCount(), expected, "active count == expectedAdapters");
+    }
+
+    function test_rmUsdc_wireCountMatchesExpected() public {
+        _assertWireCountMatchesExpected(DeployVaultThemes.Theme.RM_USDC);
+    }
+
+    function test_rmProto_wireCountMatchesExpected() public {
+        _assertWireCountMatchesExpected(DeployVaultThemes.Theme.RM_PROTO);
+    }
+
+    function test_rmAgent_wireCountMatchesExpected() public {
+        _assertWireCountMatchesExpected(DeployVaultThemes.Theme.RM_AGENT);
+    }
+
+    function test_rmRwa_wireCountMatchesExpected() public {
+        _assertWireCountMatchesExpected(DeployVaultThemes.Theme.RM_RWA);
+    }
+
+    /// @dev A wiring whose adapter count differs from `expectedAdapters` reverts
+    ///      `AdapterCountMismatch` — the documented spec §8 MUST-invariant is now
+    ///      an in-code guarantee for every theme, not just rmRWA's incidental cap.
+    function _assertWireWrongCountReverts(DeployVaultThemes.Theme t, uint256 wrong) internal {
+        Vault v = _deployVault(t);
+        uint256 expected = deployer.themeParams(t).expectedAdapters;
+
+        uint16[] memory caps = new uint16[](wrong);
+        bool[] memory exacts = new bool[](wrong);
+        for (uint256 i = 0; i < wrong; i++) {
+            caps[i] = 1000;
+        }
+        DeployVaultThemes.AdapterSpec[] memory specs = _specs(v, caps, exacts);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployVaultThemes.AdapterCountMismatch.selector, t, expected, wrong
+            )
+        );
+        deployer.wireTheme(v, t, admin, specs);
+    }
+
+    function test_rmUsdc_wireWrongCountReverts() public {
+        // expectedAdapters == 3; wire one too few.
+        _assertWireWrongCountReverts(DeployVaultThemes.Theme.RM_USDC, 2);
+    }
+
+    function test_rmProto_wireWrongCountReverts() public {
+        // expectedAdapters == 3; wire one too many.
+        _assertWireWrongCountReverts(DeployVaultThemes.Theme.RM_PROTO, 4);
+    }
+
+    function test_rmAgent_wireWrongCountReverts() public {
+        // expectedAdapters == 3; wire one too few.
+        _assertWireWrongCountReverts(DeployVaultThemes.Theme.RM_AGENT, 2);
+    }
+
+    function test_rmRwa_wireWrongCountReverts() public {
+        // expectedAdapters == 1; wire one too many — the count check reverts
+        // BEFORE the active-adapter cap is even touched.
+        _assertWireWrongCountReverts(DeployVaultThemes.Theme.RM_RWA, 2);
+    }
+
     // ─── Variable-length weight arrays across the four themes (not fixed-4) ──
 
     function test_weightArrayLengthVariesPerTheme() public {

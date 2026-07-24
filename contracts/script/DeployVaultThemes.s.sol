@@ -80,9 +80,18 @@ contract DeployVaultThemes is Script {
         string symbol; // ERC-20 share symbol
         uint256 maxSlippageBps; // worst-case per-leg slippage bound
         uint256 maxActiveAdapters; // active-adapter-count cap (rmRWA = 1)
-        uint256 expectedAdapters; // how many adapters the theme wires (doc/assert aid)
+        uint256 expectedAdapters; // exact adapter count the theme wires; ENFORCED in `_wireInner`
         bool allExact; // true only for the all-lending rmUSDC composition
     }
+
+    /// @notice Thrown by `_wireInner` when the supplied adapter set does not have
+    ///         exactly `themeParams(t).expectedAdapters` entries — the spec §8
+    ///         count invariant that prevents a mis-composed theme vault (e.g. a
+    ///         governed `wireThemeBroadcast` with the wrong number of adapters).
+    /// @param theme    The theme being wired.
+    /// @param expected The theme's required adapter count (`expectedAdapters`).
+    /// @param got      The `specs.length` actually supplied.
+    error AdapterCountMismatch(Theme theme, uint256 expected, uint256 got);
 
     /// @notice Default TVL cap: 10M USDC (6 decimals).
     uint256 public constant DEFAULT_TVL_CAP = 10_000_000 * 1e6;
@@ -180,7 +189,8 @@ contract DeployVaultThemes is Script {
     /// @dev    In-process / test path: pranks as `admin` so the vault sees the
     ///         ADMIN caller. Production wiring inside a broadcast uses
     ///         `wireThemeBroadcast` instead. `specs.length` MUST equal the theme's
-    ///         expected adapter count and (for rmRWA) not exceed the cap of 1.
+    ///         expected adapter count (rmUSDC/rmPROTO/rmAGENT = 3, rmRWA = 1);
+    ///         `_wireInner` reverts `AdapterCountMismatch` otherwise.
     function wireTheme(Vault vault, Theme t, address admin, AdapterSpec[] memory specs) public {
         vm.startPrank(admin);
         _wireInner(vault, t, specs);
@@ -196,8 +206,18 @@ contract DeployVaultThemes is Script {
     }
 
     /// @dev The raw wiring — assumes the current caller context holds `ADMIN_ROLE`.
+    ///      Enforces the spec §8 per-theme adapter-count invariant before touching
+    ///      the vault, so a mis-counted set reverts rather than composing the wrong
+    ///      theme vault.
     function _wireInner(Vault vault, Theme t, AdapterSpec[] memory specs) internal {
         ThemeParams memory p = themeParams(t);
+
+        // Count invariant (spec §8): the adapter set MUST have exactly
+        // `expectedAdapters` entries for the theme. Guards a governed
+        // `wireThemeBroadcast` from silently mis-composing a theme vault.
+        if (specs.length != p.expectedAdapters) {
+            revert AdapterCountMismatch(t, p.expectedAdapters, specs.length);
+        }
 
         // Narrow the active-adapter cap to the theme bound (rmRWA → 1). Skip the
         // no-op when the theme keeps the default ceiling.

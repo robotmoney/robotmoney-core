@@ -1,5 +1,5 @@
 # DeployVaultThemes
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/efa707be563fbb6d1823fd15d523cb09e2f05d55/contracts/script/DeployVaultThemes.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/f0d5e0cc4ed74e32f7ff690ebf3edb2b2848abdd/contracts/script/DeployVaultThemes.s.sol)
 
 **Inherits:**
 Script
@@ -87,7 +87,8 @@ holder). Each adapter is put through the full eligibility gate:
 In-process / test path: pranks as `admin` so the vault sees the
 ADMIN caller. Production wiring inside a broadcast uses
 `wireThemeBroadcast` instead. `specs.length` MUST equal the theme's
-expected adapter count and (for rmRWA) not exceed the cap of 1.
+expected adapter count (rmUSDC/rmPROTO/rmAGENT = 3, rmRWA = 1);
+`_wireInner` reverts `AdapterCountMismatch` otherwise.
 
 
 ```solidity
@@ -107,6 +108,9 @@ function wireThemeBroadcast(Vault vault, Theme t, AdapterSpec[] memory specs) pu
 ### _wireInner
 
 The raw wiring — assumes the current caller context holds `ADMIN_ROLE`.
+Enforces the spec §8 per-theme adapter-count invariant before touching
+the vault, so a mis-counted set reverts rather than composing the wrong
+theme vault.
 
 
 ```solidity
@@ -203,6 +207,26 @@ function _envUintOrDefault(string memory key, uint256 fallback_)
     returns (uint256);
 ```
 
+## Errors
+### AdapterCountMismatch
+Thrown by `_wireInner` when the supplied adapter set does not have
+exactly `themeParams(t).expectedAdapters` entries — the spec §8
+count invariant that prevents a mis-composed theme vault (e.g. a
+governed `wireThemeBroadcast` with the wrong number of adapters).
+
+
+```solidity
+error AdapterCountMismatch(Theme theme, uint256 expected, uint256 got);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`theme`|`Theme`|   The theme being wired.|
+|`expected`|`uint256`|The theme's required adapter count (`expectedAdapters`).|
+|`got`|`uint256`|     The `specs.length` actually supplied.|
+
 ## Structs
 ### AdapterSpec
 One adapter to register: its (pre-deployed, vault-bound) address,
@@ -248,7 +272,7 @@ struct ThemeParams {
     string symbol; // ERC-20 share symbol
     uint256 maxSlippageBps; // worst-case per-leg slippage bound
     uint256 maxActiveAdapters; // active-adapter-count cap (rmRWA = 1)
-    uint256 expectedAdapters; // how many adapters the theme wires (doc/assert aid)
+    uint256 expectedAdapters; // exact adapter count the theme wires; ENFORCED in `_wireInner`
     bool allExact; // true only for the all-lending rmUSDC composition
 }
 ```
