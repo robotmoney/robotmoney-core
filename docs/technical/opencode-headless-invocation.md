@@ -387,3 +387,48 @@ These are independent of OpenCode and were missing from the original workflow:
   vault `total_assets` delta, and `assert_headless_deposit_sender.py` confirms
   the deposit tx `from` equals the generated agent key — both updated only to
   read `tx_hash`/`amount` out of the real `part.state.output` JSON.
+
+### 12.6 Live-transcript loud-fail guard + volatile model path (issue #1151)
+
+**The failure.** From 2026-07-01 the nightly was red every day: the pinned free
+zen model `opencode/big-pickle` on `opencode-ai@1.14.29` began 400ing. First the
+provider (DeepSeek) rejected opencode 1.14.29's tool-schema serialization
+(`tools[0].function: missing field \`name\``); later the provider 400ed outright
+(`Upstream request failed`). The `opencode run` transcript was then a **single
+`{"type":"error", ...}` APIError event with zero tool calls** — the agent died
+before issuing any `rmpc` command. Everything upstream of the agent (rmpc build,
+fork-state Anvil, deploy, on-chain authorization asserts) still passed.
+
+**Loud-fail guard.** `opencode run` **exits 0** even on that dead session, and the
+error-only transcript is non-empty, so the previous `test -s <transcript>` guard
+green-lit it and the outage only surfaced three steps later at the transcript
+asserter — reading as an assertion failure rather than a model outage. The read
+and deposit "Headless … run" steps now run
+[`assert_headless_live_transcript.py`](../../.github/scripts/assert_headless_live_transcript.py)
+immediately after `opencode run`. It reds **that step** when the transcript is
+empty, contains any `error` event, or contains **zero `rmpc …` bash tool
+invocations** — a broken model path fails loudly at the agent step
+(loud-skip policy), never silent-green. It deliberately does **not** re-check
+command order / exit codes / envelopes; those remain the transcript asserters'
+job, unchanged (the order and exit-code checks were not weakened).
+
+**Volatile model path.** The free zen model is an external, rotated dependency
+(`big-pickle` was rotated out from under the pin). The workflow no longer
+hardcodes it: the opencode version and model resolve from
+`workflow_dispatch` input → repo variable (`OPENCODE_HEADLESS_VERSION` /
+`OPENCODE_HEADLESS_MODEL`) → default. Defaults are an empirically-verified
+no-credential path — **opencode `1.18.4`** (the 1.14.29 tool-schema serialization
+bug is fixed) and **`opencode/north-mini-code-free`** (a currently-advertised free
+zen model that tool-calls anonymously). An operator can re-point the nightly to a
+working free model without a code+merge cycle, prove the guard by dispatching an
+invalid model name, or — if `secrets.OPENCODE_API_KEY` is ever provisioned —
+upgrade to an authenticated, reliable model with no workflow change.
+
+**Executed-in-CI proof.** The guard and the (previously CI-orphaned) transcript
+asserters are pinned by offline unit tests
+(`.github/scripts/tests/test_live_guard.py`,
+`test_transcript_asserter_provenance.py`) run by the keyless
+`opencode-headless-asserter-tests` job on every trigger — including
+`pull_request`, so a change to the guard or asserters is proven to execute rather
+than silent-skipped. The live `refusal` / `deposit` / `read` jobs stay
+schedule/dispatch-only and never gate a PR.
