@@ -936,9 +936,12 @@ Architecture constraints:
 ### 5.5 Agent Runtime Integration
 
 OpenCode, OpenClaw, and other agent harnesses invoke `rmpc` as a
-process-per-call command. MCP is deferred; any future MCP surface must
-inherit `rmpc`'s command schema, chain/config pinning, and refusal
-semantics rather than becoming a new signing authority.
+process-per-call command. **Robot Money does not support MCP — in this repo or
+any other** (org-wide decision, 2026-07; see `docs/technical/mcp-decision.md`
+and robotmoney-frontend `docs/decisions.md` D21). There is no MCP surface and
+none is planned: agents always shell out to `rmpc`, and the Investment
+Committee is reached over its REST API directly. An earlier posture *deferred*
+the question with re-evaluation triggers; that door is now closed.
 
 **Committee agent skill.** The published committee-agent
 skill/plugin is an extension of `robotmoney-analyst`: it reuses the
@@ -1240,6 +1243,6 @@ this architecture:
 | `docs/technical/explorer-schema-decisions.md` | Postgres, JSON-RPC-only ingestion, poll cadence, reorg handling, single-chain scoping, read-only API boundary. | Optional later tables and future multi-chain expansion. |
 | `docs/technical/dapp-credential-decisions.md` | Dapp credential boundary, wallet-signing previews, config export, unsafe software credential marker. | Frontend framework choice was later resolved by the existing dapp package. |
 | `docs/technical/dapp-browser-keygen-review.md` | Fork/devnet-only browser keygen gate and no-go conditions. | Mainnet production credential generation. |
-| `docs/technical/mcp-decision.md` | MCP deferred; agent harnesses invoke `rmpc` as process-per-call. | A future MCP implementation. |
+| `docs/technical/mcp-decision.md` | MCP is **not supported** in Robot Money (org-wide decision, 2026-07); agent harnesses invoke `rmpc` as process-per-call. | — (decision closed, not deferred; no MCP implementation). |
 | `docs/development/testing-strategy-ethereum.md` and the testing docs under `docs/development/` (ci-suites, smoke-test-design, suite-05-audit, headless-opencode-tests) | Devnet, fork, smoke, CI, and dapp test boundaries. | Product behavior and vendor selection beyond tests. |
 | Plan tracking issue #109 (GitHub) | Shipped component status and phase sequencing used as implementation context only. Delivery order is intentionally not reproduced here; the live plan is the canonical source. | Implementation-plan file references; those were retired 2026-06-09. |

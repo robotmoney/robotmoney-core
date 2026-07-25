@@ -6,7 +6,36 @@
 
 ---
 
+## Update — 2026-07: superseded, MCP is not supported (org-wide)
+
+**Robot Money will not support MCP in any repository.** This ADR originally
+**deferred** the `rmpc`-wrapping MCP question (§1) behind a set of
+re-evaluation triggers (§3.3) that kept the door open. That posture is
+superseded: the decision is now a firm **no** — no MCP server (`rmpc`-wrapping
+or otherwise) will be built, and the §3.3 re-evaluation triggers no longer
+apply.
+
+Concrete precedent, now generalized org-wide: robotmoney-frontend built a
+*separate* member-facing committee MCP server — one that wrapped the committee
+**REST API**, not `rmpc` — and then retired it. See robotmoney-frontend
+`docs/decisions.md` **D21**: it had no customer, an API service plus a
+maintained skill covers the same ground with far less to run and secure, and
+the "agents need a bespoke protocol to call an API" premise did not
+materialize. That reasoning applies across Robot Money. Committee onboarding
+and participation are REST-only; this repo's `committee-onboarding` skill
+(`plugins/robotmoney-committee/skills/`) teaches the REST flow with no MCP.
+
+The original "defer" analysis below is retained as the historical record; only
+its **status** changes (defer → not supported).
+
+---
+
 ## 1. Status
+
+> **Superseded (2026-07):** hardened from *defer* to **not supported** —
+> org-wide, all repos. See the update note above. The analysis below is the
+> historical Phase-4 record.
+
 
 **Decision:** **Defer.** No MCP server is built in Phase 4. Both OpenCode and OpenClaw execute `rmpc` as a process-per-call shell command, consuming the stable JSON output contract (`docs/technical/rmpc-read-output-contract.md`) and the Robot Money skill (`Plan tracking issue #109` §10 "Skill loading").
 
