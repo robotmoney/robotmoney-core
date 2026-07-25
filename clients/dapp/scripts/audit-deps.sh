@@ -61,6 +61,14 @@ ACCEPTED_ADVISORIES=(
   # origin left at its wildcard default while sending credentials; the dApp never
   # runs hono itself — hono is only reachable through the pinned porto wallet SDK.
   "GHSA-88fw-hqm2-52qc" # hono: CORS middleware reflects any Origin with credentials on wildcard default. expires: 2026-12-01
+  # brace-expansion (build-time dev tooling only, transitive via minimatch under
+  # eslint's @eslint/eslintrc, eslint-plugin-react, and @typescript-eslint's
+  # typescript-estree). The DoS requires attacker-controlled glob patterns; eslint
+  # and tsc only ever expand the repo's own committed config/source globs, never
+  # untrusted input, and none of this ships in the production bundle. No patched
+  # 1.x exists (1.1.16 is the newest 1.x line, which eslint 8's minimatch@3 pins),
+  # and brace-expansion 5.x's CJS export shape breaks that minimatch@3.
+  "GHSA-mh99-v99m-4gvg" # brace-expansion: DoS via unbounded expansion length. expires: 2026-12-01
 )
 
 ignore_args=()
