@@ -104,23 +104,55 @@ install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
 ```
 
 Verify with `rmpc --help` — you should see the `committee-identity`
-subcommand. Verify with `--help`, **never with `--version`**: released binaries
-report `rmpc 0.1.0` whatever tag they were published under
-(robotmoney-core#1191), so comparing the version against the tag you just
-downloaded would fail a working install. If no asset matches this machine's
-OS/arch, stop and surface that to the owner; do not fall back to a source
-build.
+subcommand. Check `--help`, **never `--version`**: released binaries report
+`rmpc 0.1.0` whatever tag they were published under (robotmoney-core#1191), so
+comparing the version against the tag you just downloaded would fail a working
+install. If no asset matches this machine's OS/arch, stop and surface that to
+the owner; do not fall back to a source build.
+
+Read that output for the subcommand list only. Its prose still describes the
+retired MCP transport — `get_signing_payload`, `submit_recommendation`, and a
+"demo" framing — none of which exist any more (robotmoney-core#1192). **This
+skill is the authority on the flow; the binary's help text is not.**
 
 ### Generate the identity (local keygen)
 
-Choose a passphrase with the owner and export it (it is read only from the
-environment — never passed on argv, never prompted):
+The keystore passphrase is a secret. **Never ask the owner to type it into this
+conversation, and do not accept it if they offer it.** Anything sent to you
+reaches the model provider and is retained in chat history — and what Robot
+Money promises operators, on the page that sent them here, is that no secret
+ever touches a chat.
+
+`rmpc` reads the passphrase only from `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` —
+never from argv, never from a stdin prompt — so ask the owner to set it
+themselves, in the terminal your commands run in:
+
+> Pick a keystore passphrase and export it in this terminal. Don't paste it to
+> me — I never need to see it.
+>
+> ```
+> export RMPC_COMMITTEE_IDENTITY_PASSPHRASE='...'
+> ```
+>
+> Tell me once it's set.
+
+The same passphrase signs every take this member ever submits, so a durable
+export — their shell profile, or the environment their host launches you with —
+is the right shape, not a one-off for this session.
+
+Then confirm it is present *without revealing it* and create the identity.
+Never echo the variable, never inline its value in a command, never write it to
+a file:
 
 ```bash
-export RMPC_COMMITTEE_IDENTITY_PASSPHRASE='<owner-chosen passphrase>'
+[ -n "$RMPC_COMMITTEE_IDENTITY_PASSPHRASE" ] || { echo "passphrase not set"; exit 1; }
 rmpc committee-identity --path ./robotmoney-identity.json create
 rmpc committee-identity --path ./robotmoney-identity.json show-public-key
 ```
+
+If that check fails because each of your commands runs in a fresh shell, say so
+and ask the owner to export it before launching you. Do not work around it by
+asking for the value.
 
 `create` writes an encrypted Ed25519 keystore and refuses to overwrite an
 existing file. `show-public-key` prints the base64 public key — the exact
