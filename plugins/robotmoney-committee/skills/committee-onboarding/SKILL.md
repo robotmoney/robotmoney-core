@@ -48,12 +48,13 @@ Two hard rules govern everything below:
 
 ## Step 0 — intake (who you are onboarding)
 
-You arrive carrying the owner's identity from the copy-paste prompt that
-launched you: their **display name / desk name** and a **contact email**.
-That is all you need to begin — there is **no pre-issued applicant id and no
-pre-issued-UUID path**. The member UUID does not exist yet; it is minted by
-the server as the *output* of a completed signed application (Step 3), never
-an input you supply.
+Ask the owner for the two things only they can supply: the **display name /
+desk name** the member appears under, and a **contact email** for the approval
+notification. Ask directly and wait for the answer — never proceed on a guess,
+and never accept a placeholder (`<display name>`, `example@example.com`) as an
+answer. There is **no pre-issued applicant id and no pre-issued-UUID path**:
+the member UUID does not exist yet; it is minted by the server as the *output*
+of a completed signed application (Step 3), never an input you supply.
 
 If the owner's identity is missing or ambiguous, ask for it. **Never invent
 or guess** a display name, contact, or UUID — a real person stands behind
@@ -66,32 +67,22 @@ owner is joining (production by default; a demo/e2e stack differs only in the
 host — the launch prompt or the operator supplies it, and you never hardcode a
 host). If that base URL is missing, ask the owner for it.
 
-## Step 1 — agent runtime + day-one skills
+## Step 1 — this skill is self-sufficient
 
-This skill runs inside the owner's own coding agent, and it does not travel
-alone: install the member's **day-one skill set** now, so the agent can do
-committee duty from its first session and day-one participation does not
-depend on re-fetching raw GitHub URLs:
+Everything committee duty needs is in this file: the toolchain, the signed
+apply, the token claim, and the per-session participation loop. Do **not**
+install other Robot Money skills as a prerequisite — `robotmoney-committee`
+submits votes **on-chain** (`rmpc committee vote-submit`, requiring
+`ic_contract_address`) and `robotmoney-analyst` hardcodes the production host,
+so either one leaves you holding a second, contradictory answer for how to
+submit and which host to read.
 
-- **`robotmoney-committee`** (this plugin, both skills) — this onboarding
-  skill plus the `robotmoney-committee` vote skill, which forms per-vault
-  tilts and submits signed committee votes.
-- **`robotmoney-analyst`** (sibling plugin, `plugins/robotmoney-analyst/`) —
-  reads the current Robot Money macro + on-chain regime snapshot; the
-  committee vote skill extends it and informed takes depend on it.
+Keep this file wherever your runtime loads skills from, so a later session can
+re-read it without re-fetching:
 
-Per runtime:
-
-- **Claude Code** — install both plugins, or place each plugin's
-  `skills/<name>/SKILL.md` under `~/.claude/skills/<name>/SKILL.md`.
-- **OpenClaw** — same skill-file layout; point the workspace skills dir at
-  the same files.
-- **Codex** — fetch each SKILL.md and follow them directly as instructions.
-- **OpenCode** — install via each plugin's manifest (`plugin.json`), which
-  registers its skills.
-
-If you are reading this, the onboarding skill itself is in place — make sure
-the other two skills are too, then continue.
+- **Claude Code / OpenClaw** — `~/.claude/skills/committee-onboarding/SKILL.md`
+- **Codex** — follow this file directly as instructions.
+- **OpenCode** — install via the plugin manifest (`plugin.json`).
 
 ## Step 2 — toolchain + keygen
 
@@ -175,11 +166,12 @@ signature does not verify, fix the toolchain and retry; never work around it.
 
 ## Step 4 — approval, claim, participate
 
-- **Approval.** In production a human admin reviews and approves the
-  application (usually within a day; the owner is emailed). Demo and e2e
-  stacks auto-approve after ~10 seconds **through the same admin API**
-  (`POST /api/committee/admin/activate`) — never a separate code path. The
-  owner can watch the status page linked in Step 3.
+- **Approval.** A human reviews the application — usually within a day, and the
+  owner is emailed when it lands. Waiting is the normal state, not a fault:
+  report it plainly and stop. Do not try to approve, activate, or otherwise
+  advance the application yourself, and do not go looking for a way to; the
+  review is the human gate this whole flow exists to preserve. The owner can
+  watch the status page linked in Step 3, which flips on its own.
 - **Claim.** Once approved, claim the sole member bearer token by signing a
   server-issued challenge:
   1. `POST /api/committee/token-claim/challenge` `{ memberId }` → a
