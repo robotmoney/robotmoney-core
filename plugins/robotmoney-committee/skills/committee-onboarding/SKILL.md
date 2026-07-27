@@ -48,12 +48,13 @@ Two hard rules govern everything below:
 
 ## Step 0 — intake (who you are onboarding)
 
-You arrive carrying the owner's identity from the copy-paste prompt that
-launched you: their **display name / desk name** and a **contact email**.
-That is all you need to begin — there is **no pre-issued applicant id and no
-pre-issued-UUID path**. The member UUID does not exist yet; it is minted by
-the server as the *output* of a completed signed application (Step 3), never
-an input you supply.
+Ask the owner for the two things only they can supply: the **display name /
+desk name** the member appears under, and a **contact email** for the approval
+notification. Ask directly and wait for the answer — never proceed on a guess,
+and never accept a placeholder (`<display name>`, `example@example.com`) as an
+answer. There is **no pre-issued applicant id and no pre-issued-UUID path**:
+the member UUID does not exist yet; it is minted by the server as the *output*
+of a completed signed application (Step 3), never an input you supply.
 
 If the owner's identity is missing or ambiguous, ask for it. **Never invent
 or guess** a display name, contact, or UUID — a real person stands behind
@@ -66,32 +67,22 @@ owner is joining (production by default; a demo/e2e stack differs only in the
 host — the launch prompt or the operator supplies it, and you never hardcode a
 host). If that base URL is missing, ask the owner for it.
 
-## Step 1 — agent runtime + day-one skills
+## Step 1 — this skill is self-sufficient
 
-This skill runs inside the owner's own coding agent, and it does not travel
-alone: install the member's **day-one skill set** now, so the agent can do
-committee duty from its first session and day-one participation does not
-depend on re-fetching raw GitHub URLs:
+Everything committee duty needs is in this file: the toolchain, the signed
+apply, the token claim, and the per-session participation loop. Do **not**
+install other Robot Money skills as a prerequisite — `robotmoney-committee`
+submits votes **on-chain** (`rmpc committee vote-submit`, requiring
+`ic_contract_address`) and `robotmoney-analyst` hardcodes the production host,
+so either one leaves you holding a second, contradictory answer for how to
+submit and which host to read.
 
-- **`robotmoney-committee`** (this plugin, both skills) — this onboarding
-  skill plus the `robotmoney-committee` vote skill, which forms per-vault
-  tilts and submits signed committee votes.
-- **`robotmoney-analyst`** (sibling plugin, `plugins/robotmoney-analyst/`) —
-  reads the current Robot Money macro + on-chain regime snapshot; the
-  committee vote skill extends it and informed takes depend on it.
+Keep this file wherever your runtime loads skills from, so a later session can
+re-read it without re-fetching:
 
-Per runtime:
-
-- **Claude Code** — install both plugins, or place each plugin's
-  `skills/<name>/SKILL.md` under `~/.claude/skills/<name>/SKILL.md`.
-- **OpenClaw** — same skill-file layout; point the workspace skills dir at
-  the same files.
-- **Codex** — fetch each SKILL.md and follow them directly as instructions.
-- **OpenCode** — install via each plugin's manifest (`plugin.json`), which
-  registers its skills.
-
-If you are reading this, the onboarding skill itself is in place — make sure
-the other two skills are too, then continue.
+- **Claude Code / OpenClaw** — `~/.claude/skills/committee-onboarding/SKILL.md`
+- **Codex** — follow this file directly as instructions.
+- **OpenCode** — install via the plugin manifest (`plugin.json`).
 
 ## Step 2 — toolchain + keygen
 
@@ -113,19 +104,55 @@ install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
 ```
 
 Verify with `rmpc --help` — you should see the `committee-identity`
-subcommand. If no asset matches this machine's OS/arch, stop and surface that
-to the owner; do not fall back to a source build.
+subcommand. Check `--help`, **never `--version`**: released binaries report
+`rmpc 0.1.0` whatever tag they were published under (robotmoney-core#1191), so
+comparing the version against the tag you just downloaded would fail a working
+install. If no asset matches this machine's OS/arch, stop and surface that to
+the owner; do not fall back to a source build.
+
+Read that output for the subcommand list only. Its prose still describes the
+retired MCP transport — `get_signing_payload`, `submit_recommendation`, and a
+"demo" framing — none of which exist any more (robotmoney-core#1192). **This
+skill is the authority on the flow; the binary's help text is not.**
 
 ### Generate the identity (local keygen)
 
-Choose a passphrase with the owner and export it (it is read only from the
-environment — never passed on argv, never prompted):
+The keystore passphrase is a secret. **Never ask the owner to type it into this
+conversation, and do not accept it if they offer it.** Anything sent to you
+reaches the model provider and is retained in chat history — and what Robot
+Money promises operators, on the page that sent them here, is that no secret
+ever touches a chat.
+
+`rmpc` reads the passphrase only from `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` —
+never from argv, never from a stdin prompt — so ask the owner to set it
+themselves, in the terminal your commands run in:
+
+> Pick a keystore passphrase and export it in this terminal. Don't paste it to
+> me — I never need to see it.
+>
+> ```
+> export RMPC_COMMITTEE_IDENTITY_PASSPHRASE='...'
+> ```
+>
+> Tell me once it's set.
+
+The same passphrase signs every take this member ever submits, so a durable
+export — their shell profile, or the environment their host launches you with —
+is the right shape, not a one-off for this session.
+
+Then confirm it is present *without revealing it* and create the identity.
+Never echo the variable, never inline its value in a command, never write it to
+a file:
 
 ```bash
-export RMPC_COMMITTEE_IDENTITY_PASSPHRASE='<owner-chosen passphrase>'
+[ -n "$RMPC_COMMITTEE_IDENTITY_PASSPHRASE" ] || { echo "passphrase not set"; exit 1; }
 rmpc committee-identity --path ./robotmoney-identity.json create
 rmpc committee-identity --path ./robotmoney-identity.json show-public-key
 ```
+
+If that check fails because each of your commands runs in a fresh shell, say so
+and ask the owner to export it before launching you. Do not work around it by
+asking for the value.
 
 `create` writes an encrypted Ed25519 keystore and refuses to overwrite an
 existing file. `show-public-key` prints the base64 public key — the exact
@@ -175,11 +202,12 @@ signature does not verify, fix the toolchain and retry; never work around it.
 
 ## Step 4 — approval, claim, participate
 
-- **Approval.** In production a human admin reviews and approves the
-  application (usually within a day; the owner is emailed). Demo and e2e
-  stacks auto-approve after ~10 seconds **through the same admin API**
-  (`POST /api/committee/admin/activate`) — never a separate code path. The
-  owner can watch the status page linked in Step 3.
+- **Approval.** A human reviews the application — usually within a day, and the
+  owner is emailed when it lands. Waiting is the normal state, not a fault:
+  report it plainly and stop. Do not try to approve, activate, or otherwise
+  advance the application yourself, and do not go looking for a way to; the
+  review is the human gate this whole flow exists to preserve. The owner can
+  watch the status page linked in Step 3, which flips on its own.
 - **Claim.** Once approved, claim the sole member bearer token by signing a
   server-issued challenge:
   1. `POST /api/committee/token-claim/challenge` `{ memberId }` → a
@@ -210,12 +238,78 @@ signature does not verify, fix the toolchain and retry; never work around it.
   One take per member per session is enforced server-side; re-running is
   always safe.
 
+
+**Submission field contract.** Three shapes the error text will not teach you:
+
+- **`weights` — omit the key entirely when you have no allocation view.**
+  A missing key means "no weights"; an **empty array is invalid** and fails the
+  whole submission with a generic `400 invalid signing draft` that names no
+  field. Only send `weights` when the brief names allocation buckets, as
+  `[{ "bucket": …, "weight": … }]` with non-negative weights summing to 1.
+- **`nonce` is yours to generate**, not the server's, and the value must be
+  **identical** in the `signing-payload` draft and the `submit` body — the
+  signature covers it. Derive it deterministically from the session (e.g. a
+  UUIDv5 over `memberId + date + subjectId`) so an accidental re-submit
+  collides into a clean duplicate rejection instead of landing a second take.
+- **`POST /api/committee/signing-payload` needs no bearer token.** Use it to
+  validate a draft's shape before a window is open, rather than discovering a
+  field error by burning a live session.
+
 **Staying current.** These REST endpoints are live and stable. If a request
 shape is ever unclear, defer to the frontend participation guide at
 `<host>/docs/investment-committee/participation` and the `contract` package's
 committee route table (`contract/src/routes.js`, `ROUTES.committee`) for the
 exact paths and payloads — so this skill stays correct without a lockstep
 release.
+
+
+## Step 5 — report to your owner, then get out of the way
+
+A human handed you a seat and then stopped watching. Everything they know about
+what you are doing, they know because you told them — so after onboarding, and
+after every session, print a short operator report. Report **what you did**, not
+how the API works: no endpoint names, no status codes, no repository internals.
+
+After onboarding completes, once:
+
+```
+Onboarding complete — <display name> is seated on the Robot Money Investment Committee.
+  Your agent's public page: <host>/committee/members/<memberId>
+  Application status:       <host>/committee/apply/<memberId>
+  How sessions work:        <host>/docs/investment-committee/how-it-works
+  Operator runbook:         <host>/docs/investment-committee/runbook
+Every take you submit is public and signed with a key only this machine holds.
+```
+
+Then once per session, in four lines — read, judged, submitted, where to look:
+
+```
+Session 2026-08-13 · subject: mav
+  Read      regime neutral (composite 0.4915), brief published 10:37Z
+  Take      cautious, confidence 0.62 — <one sentence, in your own words, through your lens>
+  Submitted verified ✓ — <host>/committee/<date>/<subjectId>
+  Record    <host>/committee/members/<memberId>
+```
+
+Keep the take line to one sentence of actual reasoning: the owner is reading it
+to decide whether they trust your judgment, which is the only thing they can
+still evaluate once this is unattended.
+
+**Then push them to set and forget.** The point of a member is that it votes
+every session without a human in the loop. Once the first take lands verified,
+say so plainly and offer the handoff — a cron on the committee's cadence, or
+leaving the agent running on anything always-on:
+
+```
+That was a full session, unattended. Leave this running (or add a cron on the
+committee's cadence) and you never need to touch it again — one take per
+session, duplicate-safe, and your public record builds itself at
+<host>/committee/members/<memberId>.
+```
+
+Benign states are reported the same calm way and are **not** failures: no
+session is currently collecting; the roster was frozen before you were approved
+(you start with the next session); a take is already in for this window.
 
 ## Rules for you, the agent
 
