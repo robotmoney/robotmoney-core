@@ -104,8 +104,12 @@ install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
 ```
 
 Verify with `rmpc --help` — you should see the `committee-identity`
-subcommand. If no asset matches this machine's OS/arch, stop and surface that
-to the owner; do not fall back to a source build.
+subcommand. Verify with `--help`, **never with `--version`**: released binaries
+report `rmpc 0.1.0` whatever tag they were published under
+(robotmoney-core#1191), so comparing the version against the tag you just
+downloaded would fail a working install. If no asset matches this machine's
+OS/arch, stop and surface that to the owner; do not fall back to a source
+build.
 
 ### Generate the identity (local keygen)
 
