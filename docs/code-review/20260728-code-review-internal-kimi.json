@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "review": "review-security",
+  "repository": "git@github.com:robotmoney/robotmoney-core.git",
+  "branch": "dev",
+  "commit": "43694310dff645a7bdf473de82dd340c41a86e34",
+  "reviewed_at": "2026-07-28",
+  "scope": [
+    "contracts/",
+    "services/",
+    "clients/",
+    "config/",
+    ".github/workflows/",
+    "plugins/",
+    "docs/prd.md §12",
+    "docs/architecture.md §8",
+    "docs/technical/security-model.md",
+    "docs/technical/smart-contract-invariants.md",
+    "prior docs/code-review/"
+  ],
+  "verdict": "Strong security architecture with two findings blocking mainnet deployment of specific vaults; seven high-severity findings violate documented invariants or create exploitable gaps. Audits.md ledger stale for 8 already-fixed critical/high findings.",
+  "findings": [
+    {
+      "id": "review-security-h-001",
+      "review": "review-security",
+      "classification": "SECURITY_INVARIANT_VIOLATION",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/prd.md:604-648",
+      "evidence": [
+        "contracts/RobotMoneyVault.sol:890-893"
+      ],
+      "impact": "EMERGENCY_ROLE pause() blocks all withdrawals — contradicts INV-3 (withdrawals never blocked). Fix exists in Vault.sol (ADR-0010) but not backported to deployed v1 RobotMoneyVault.",
+      "recommendation": "Backport: make RobotMoneyVault.pause() deposits-only; make withdrawalsPaused ADMIN_ROLE-only.",
+      "owner": "code",
+      "related_findings": [
+        "PekShield F-06",
+        "review-security-h-007"
+      ]
+    },
+    {
+      "id": "review-security-h-002",
+      "review": "review-security",
+      "classification": "SECURITY_DEPLOY_BLOCKER",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/prd.md:472-473",
+      "evidence": [
+        "contracts/interfaces/ISwapRouter.sol:8-16",
+        "contracts/vaults/BasketVault.sol:1666-1679"
+      ],
+      "impact": "ISwapRouter.ExactInputSingleParams has 7 fields (no deadline); real SwapRouter02 on Base uses 8-field struct. Every default-V3-path call (ProtocolAssetVault, AgentTokenVault BNKR leg) would either revert or route corrupted amounts on mainnet.",
+      "recommendation": "Add deadline field and pass block.timestamp. Add fork test against real SwapRouter02 address.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-m-010"
+      ]
+    },
+    {
+      "id": "review-security-h-003",
+      "review": "review-security",
+      "classification": "SECURITY_ORACLE_MANIPULATION",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/prd.md:470-471",
+      "evidence": [
+        "contracts/vaults/BasketVault.sol:1174",
+        "contracts/test/fv/TwapManipulation.t.sol:11-16"
+      ],
+      "impact": "Slippage floor derived from same TWAP that prices NAV — no independent backstop. Sustained manipulation across >=600s moves both mark and floor in lockstep. Basket vaults router-ineligible at HEAD limits to direct depositors.",
+      "recommendation": "Implement independent floor (e.g., secondary oracle, pool fee tier absolute floor). Tracked as #966.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-m-007",
+        "review-security-m-010",
+        "review-security-h-004"
+      ]
+    },
+    {
+      "id": "review-security-h-004",
+      "review": "review-security",
+      "classification": "SECURITY_INVARIANT_VIOLATION",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/prd.md:604-648",
+      "evidence": [
+        "contracts/vaults/RwaVault.sol:209-214"
+      ],
+      "impact": "RwaVault redemptions blocked when Chronicle feed stale (>24h no update). ADR-0006 §2 documents this; PRD INV-3 says 'withdrawals never blocked' — direct contradiction. Escape hatch requires two non-colluding parties. RWA is Router-eligible per PRD §11.4, compounding impact.",
+      "recommendation": "Resolve documentation conflict between PRD §12 INV-3 and ADR-0006 §2. Consider partial redemption returning idle USDC without oracle read.",
+      "owner": "architecture",
+      "related_findings": [
+        "review-security-h-003",
+        "review-security-m-009"
+      ]
+    },
+    {
+      "id": "review-security-h-005",
+      "review": "review-security",
+      "classification": "SECURITY_PRIVILEGE_ESCALATION",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/technical/smart-contract-invariants.md ACL-3",
+      "evidence": [
+        "contracts/RobotMoneyVault.sol:26"
+      ],
+      "impact": "RobotMoneyVault imports AccessControl without last-admin-floor guard. Sole ADMIN can renounceRole, permanently bricking all admin functions (cap changes, adapter management, unpause, restore). PortfolioRouter and Vault.sol (v2) enforce this correctly.",
+      "recommendation": "Backport AdminFloorAccessControl to RobotMoneyVault.",
+      "owner": "code",
+      "related_findings": [
+        "ACL-3"
+      ]
+    },
+    {
+      "id": "review-security-h-006",
+      "review": "review-security",
+      "classification": "SECURITY_OPERATIONS_FAILURE",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:300-307",
+      "evidence": [
+        "contracts/script/DeployTimelock.s.sol:311-321"
+      ],
+      "impact": "DeployTimelock grants ADMIN_ROLE on PortfolioRouter to TimelockController and revokes deployer, but NEVER grants ADMIN_ROLE to RouterGovernance. Governance.execute() calls router.setWeights() which reverts. All governance weight updates are bricked after handover.",
+      "recommendation": "Add router.grantRole(ADMIN_ROLE, address(governance)) inside _deployAndWire() before revoking deployer.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-m-001"
+      ]
+    },
+    {
+      "id": "review-security-h-007",
+      "review": "review-security",
+      "classification": "SECURITY_PROCESS_GAP",
+      "severity": "high",
+      "confidence": "high",
+      "requirement": "docs/audits.md §9",
+      "evidence": [
+        "docs/audits.md:386-402"
+      ],
+      "impact": "8 Critical/High findings from AZ-0623 and FS-0619 audits listed as 'accepted-with-rationale' with no remediation PR, yet all 8 are code-fixed at HEAD (PRs #1084, #1093, #1098, #1099, #1092). Stale ledger misleads future reviewers.",
+      "recommendation": "Update docs/audits.md: change dispositions to 'fixed', populate 'Remediated by (PR)' for AZ-GW-1, AZ-BSK-1, AZ-RTR-2, AZ-BSK-2, AZ-BSK-3, AZ-BSK-5, AZ-REG-1, FS-RTR-1.",
+      "owner": "security",
+      "related_findings": [
+        "AZ-GW-1",
+        "AZ-BSK-1",
+        "AZ-RTR-2",
+        "AZ-BSK-2",
+        "AZ-BSK-3",
+        "AZ-BSK-5",
+        "AZ-REG-1",
+        "FS-RTR-1"
+      ]
+    },
+    {
+      "id": "review-security-m-001",
+      "review": "review-security",
+      "classification": "SECURITY_PRIVILEGE_ESCALATION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:109-111",
+      "evidence": [
+        "contracts/script/DeployTimelock.s.sol:300-307"
+      ],
+      "impact": "Timelock holds ADMIN_ROLE on PortfolioRouter. Safe (PROPOSER+EXECUTOR) can schedule operation calling router.setWeights() bypassing governance voting. Undocumented escape path.",
+      "recommendation": "Document as deliberate escalation path in architecture.md, or revoke ADMIN_ROLE from timelock on router.",
+      "owner": "decision",
+      "related_findings": [
+        "review-security-h-006"
+      ]
+    },
+    {
+      "id": "review-security-m-002",
+      "review": "review-security",
+      "classification": "SECURITY_INVARIANT_VIOLATION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/prd.md:621-635",
+      "evidence": [
+        "contracts/interfaces/IPositionAdapter.sol",
+        "contracts/Vault.sol:1584-1589"
+      ],
+      "impact": "IPositionAdapter missing custodiedTokens(). Vault sweepForeignToken relies on ADMIN-maintained mapping. Between addAdapter and setProtectedToken call, any caller can sweep basket token to quarantine — INV-2 violation window.",
+      "recommendation": "Add custodiedTokens() to IPositionAdapter and call inside addAdapter to auto-protect each token.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-security-m-003",
+      "review": "review-security",
+      "classification": "SECURITY_ARCHITECTURE_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/adr/ADR-0010-unified-vault-architecture.md §4.4",
+      "evidence": [
+        "contracts/Vault.sol:1295",
+        "contracts/Vault.sol:1340"
+      ],
+      "impact": "Vault emergency drain passes hardcoded 0 minUsdcOut. No vault-stored emergency floor parameter (spec assigns to #1121). Emergency drain may execute near spot price with no vault-enforced safety margin.",
+      "recommendation": "Implement vault-stored emergencyFloorBps (timelock-set) and pass non-zero minUsdcOut.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-security-m-004",
+      "review": "review-security",
+      "classification": "SECURITY_ARCHITECTURE_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:316-335",
+      "evidence": [
+        "contracts/interfaces/IUniswapV4Pool.sol",
+        "contracts/test/UniswapV4AssetPositionAdapter.t.sol:17-35"
+      ],
+      "impact": "IUniswapV4Pool defines standalone-contract interface; real V4 pools live inside singleton PoolManager. Adapter cannot route swaps or read TWAP from real V4 pool. AgentTokenVault JUNO leg undeployable.",
+      "recommendation": "Design PoolManager wrapper contract or restrict to Base-chain-compatible V4 fork.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-m-005"
+      ]
+    },
+    {
+      "id": "review-security-m-005",
+      "review": "review-security",
+      "classification": "TEST_CI_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "test-coverage-policy.md invariants 1-4",
+      "evidence": [
+        "contracts/test/UniswapV4AssetPositionAdapter.t.sol:25-34"
+      ],
+      "impact": "V4 adapter fork test deploys mock pool harness, not genuine PoolManager. Core functionality (TWAP, swap against real V4) never exercised in CI.",
+      "recommendation": "Deploy PoolManager-based test harness or defer until production V4 pool exists on Base.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-m-004"
+      ]
+    },
+    {
+      "id": "review-security-m-006",
+      "review": "review-security",
+      "classification": "SECURITY_GRIEFING",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/architecture.md:455-465",
+      "evidence": [
+        "contracts/VaultRegistry.sol:349-355"
+      ],
+      "impact": "setVaultStatus silently skips vault hook when vault.code.length == 0 (EOA/selfdestructed). registerVault does not check code length. Registry status says Retired but deposits not halted.",
+      "recommendation": "Add require(vault.code.length > 0) to registerVault().",
+      "owner": "code",
+      "related_findings": [
+        "AZ-REG-1"
+      ]
+    },
+    {
+      "id": "review-security-m-007",
+      "review": "review-security",
+      "classification": "SECURITY_ORACLE_MANIPULATION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/technical/smart-contract-invariants.md ORA-4",
+      "evidence": [
+        "contracts/vaults/BasketVault.sol:207-213"
+      ],
+      "impact": "navDeviationGuardBps defaults to 0 (disabled) — deposits proceed regardless of spot-vs-TWAP divergence. Flash loan manipulation can inflate NAV before TWAP converges.",
+      "recommendation": "Set non-zero navDeviationGuardBps in deploy scripts. Add deploy-time assert for mainnet.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-h-003"
+      ]
+    },
+    {
+      "id": "review-security-m-008",
+      "review": "review-security",
+      "classification": "SECURITY_OPERATIONS",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/adr/ADR-0004",
+      "evidence": [
+        "contracts/vaults/BasketVault.sol:1097-1102"
+      ],
+      "impact": "removeAsset reverts AssetStillHeld if balance > 0. No admin function sells single basket asset. Degraded pool (observe reverts) bricks totalAssets() for entire vault.",
+      "recommendation": "Add governance-gated adminSellAsset(index, minUsdcOut) with TWAP-derived slippage floor.",
+      "owner": "code",
+      "related_findings": []
+    },
+    {
+      "id": "review-security-m-009",
+      "review": "review-security",
+      "classification": "TEST_CI_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "test-coverage-policy.md invariants 1-2",
+      "evidence": [
+        "contracts/test/fv/CustodyMultiVault.t.sol:96",
+        "contracts/test/fv/CustodyMultiVault.t.sol:108"
+      ],
+      "impact": "Formal verification CI includes vm.skip(true) on 2 of 3 SUP-1 sub-invariants. CI reports green despite zero behavior execution. Depends on #966.",
+      "recommendation": "Close #966 paths or revert on skip so CI is provably red until fix lands.",
+      "owner": "code",
+      "related_findings": [
+        "#966"
+      ]
+    },
+    {
+      "id": "review-security-m-010",
+      "review": "review-security",
+      "classification": "TEST_CI_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "test-coverage-policy.md invariants 1-4",
+      "evidence": [
+        "contracts/test/fv/TwapManipulation.t.sol:91"
+      ],
+      "impact": "No fork test exercises BasketVault TWAP-manipulation with live pool. BasketVault.t.sol uses mock pools; TwapManipulation.t.sol is scout stub without assertion. Slot0 regression passes CI.",
+      "recommendation": "Add BasketVaultForkTest with real pool on forked Base asserting deposit/redeem at TWAP-bounded prices.",
+      "owner": "code",
+      "related_findings": [
+        "review-security-h-003",
+        "review-security-m-005"
+      ]
+    },
+    {
+      "id": "review-security-m-011",
+      "review": "review-security",
+      "classification": "TEST_CI_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "test-coverage-policy.md invariants 1-4",
+      "evidence": [
+        ".github/workflows/suite-03-solidity-quality.yml:124",
+        "slither.config.json"
+      ],
+      "impact": "Slither configured with fail_on: high only. Medium-severity static-analysis findings pass CI silently.",
+      "recommendation": "Add --fail-on medium to slither config; suppress accepted mediums with dated comments.",
+      "owner": "operations",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    "Custody invariants INV-1..4: well-tested, no arbitrary-recipient path exists at HEAD",
+    "Pause asymmetry on Vault.sol (v2): deposit/withdrawal split; correct in v2, known gap in v1",
+    "Gateway role separation: pairwise disjoint ADMIN/PAUSER/AGENT; last-admin floor on all five protocol contracts",
+    "Gateway window accounting: rolling-window ring buffer; nonReentrant protected; fuzz-tested for deposits",
+    "Gateway idempotency: op-kind discriminators namespace paymentIds; cross-chain replay impossible",
+    "Governance parameter isolation: snapshotQuorum captured at propose time; no retroactive effects",
+    "Router preview consistency: single shared predicate for preview and execute; divergence impossible",
+    "Router ALL-OR-REVERT: delta-balance check after each leg; donation-DoS tested",
+    "Retire/reactivate atomicity: registry enforces !routerEligible before Retired; vault hooks propagate",
+    "TWAP arithmetic (TwapTickMath): safe via Math.mulDiv; byte-identical to extracted inline code",
+    "First-deposit inflation protection: _decimalsOffset() == 18 on all vaults",
+    "Approval hygiene: forceApprove pattern on all adapters; no infinite approvals",
+    "Codehash pinning: addAsset/addAdapter verifies allowlist + codehash + identity",
+    "Watchdog SLA enforcement: zero threshold rejected at startup; pause key is PAUSER_ROLE-only",
+    "SECURITY.md exists at repo root",
+    "CI loud-skip discipline: fork tests revert loudly without RPC; skipped paths documented"
+  ],
+  "unresolved_decisions": [
+    "V4 adapter wrapper or PoolManager integration (TBD #1124) — blocks JUNO leg",
+    "Independent slippage floor — ORA-7 fix (TBD #966)",
+    "Vault-side emergency floor (TBD #1121)",
+    "MAX cap on governance votingPeriod/executionDelay (not decided)",
+    "RouterGovernance as sole setWeights caller (not enforced architecturally)"
+  ],
+  "limitations": [
+    "Static/source-only analysis — no fuzz or symbolic verification execution logs",
+    "Fork-test CI state at HEAD unknown — nightly red per 5f8d8cd, 2c581122",
+    "Principal checkout 20 commits behind origin/dev; PRD/architecture docs read from principal checkout",
+    "Investment Committee contract not yet shipped at HEAD",
+    "Production deployment manifest not reviewed (deployments/full-stack.json is devnet)",
+    "Watchdog pause tx uses legacy EIP-155 envelope (no EIP-1559 support)",
+    "Upstream venue risk accepted per docs (Aave, Compound, Morpho, Aerodrome, Uniswap)"
+  ],
+  "unreviewed_surfaces": [
+    "Lending adapter retrofit implementations (Morpho/Aave/Compound for ADR-0010 — #1117)",
+    "UniswapV3/V4/Aerodrome/Chronicle venue executors in full",
+    "BasketViews.sol pricing library",
+    "ForeignTokenQuarantine.sol (assumed correct from v1 audit)",
+    "Rust rmpc replay cache",
+    "Dapp source beyond CSP and credential boundary",
+    "Indexer SQL queries beyond parameterization check",
+    "lib/forge-std vendored dependency"
+  ]
+}
