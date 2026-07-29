@@ -22,8 +22,8 @@ The codebase demonstrates a strong security architecture with well-enforced cust
 |----------|-------|-----------|
 | Critical | 0 | — |
 | High | 7 | Withdrawals blocked by pause (v1), V4 arch incompatibility, RouterGovernance loses `setWeights` authority after deploy, ORA-7 same-source TWAP floor, RWA stale-oracle blocks redemptions, missing last-admin-floor (v1), audits.md stale for 8 fixed Critical/High findings |
-| Medium | 12 | Missing `custodiedTokens()` INV-2 risk, emergency floor unimpl, RouterGovernance not sole setWeights caller, empty-code vault skip, no admin single-asset sell, navDeviationGuard disabled, V4 fork test mock-only, CI vm.skip() in formal verification, slither `fail_on: high` only, no BasketVault TWAP fork test, cross-endpoint RPC consensus deferred, code-hash missing vault/router addresses |
-| Low | 12 | CompoundV3 allowance pattern, no duplicate-adapter guard, removeAdapter lying-adapter, exit-fee rounding, EMERGENCY pause overreach (subsumed by High), no MAX governance params, deploy-script EOA admin, TwapTickMath boundary test, config placeholders, watchdog pause-tx receipt, timeline expiry/encode gaps, `scope` determination |
+| Medium | 13 | Missing `custodiedTokens()` INV-2 risk, emergency floor unimpl, RouterGovernance not sole setWeights caller, empty-code vault skip, no admin single-asset sell, navDeviationGuard disabled, V4 fork test mock-only, CI vm.skip() in formal verification, slither `fail_on: high` only, no BasketVault TWAP fork test, cross-endpoint RPC consensus deferred, code-hash missing vault/router addresses, MorphoAdapter theoretical NAV overstated |
+| Low | 13 | CompoundV3 allowance pattern, no duplicate-adapter guard, removeAdapter lying-adapter, exit-fee rounding, EMERGENCY pause overreach (subsumed by High), no MAX governance params, deploy-script EOA admin, TwapTickMath boundary test, config placeholders, watchdog pause-tx receipt, timeline expiry/encode gaps, `scope` determination, BasketVault no caller-specified min-out |
 | Informational | 8 | sweepForeignToken docs, harvest gap, maxRedeem 0, quarantine burn default, RmToken devnet-only, agent-token-shortlist TODOs, revealAuthorization admin-race, watchdog key config example |
 
 ---
@@ -284,6 +284,20 @@ The codebase demonstrates a strong security architecture with well-enforced cust
 - **Owner:** operations
 - **Related findings:** None
 
+#### SEC-M-012 — MorphoAdapter `totalAssets()` returns theoretical NAV — `isExact()=true` overstates lendable value under market stress (FS-VLT-10)
+
+- **Classification:** SECURITY_ORACLE_MANIPULATION
+- **Confidence:** High
+- **Requirement:** `docs/technical/unified-vault-spec.md §2.2` (exactness attestation); INV-1 (NAV integrity)
+- **Evidence:** `MorphoAdapter.totalAssets()` (line 170-171) returns `MORPHO_VAULT.convertToAssets(shares)` — the theoretical share-of-totalAssets NAV. `isExact()` (line 177) returns `true`, telling the vault to trust this NAV without margin. `MORPHO_VAULT.withdraw()` (line 144-145) also uses `convertToAssets` to determine redeemable amount. When the Morpho vault holds bad debt (e.g., a defaulted lending market), `totalAssets()` includes the unrecoverable amount, inflating NAV. The `maxExposure` cap (line 86-91) limits the total at risk but does not correct the NAV. This affects vault share price, deposit/redeem fairness, and PortfolioRouter weight calculations.
+- **Exploitability:** Requires a Morpho market default or manipulation of the Morpho vault's `totalAssets` — upstream venue risk outside protocol control.
+- **Prerequisites:** Morpho Gauntlet USDC Prime vault holds assets that become unrecoverable.
+- **Impact:** Overstated NAV — existing holders overpay for redemptions while new depositors overpay for shares. Router weight misallocation to this adapter.
+- **Recommendation:** (a) Document in architecture.md that lending adapters with `isExact()=true` assume upstream-venue solvency. (b) Consider a per-adapter NAV discount parameter applied in `totalAssets()` for non-instant venues. (c) Monitor Morpho vault health off-chain and set `maxExposure` to 0 to disable the adapter if health degrades.
+- **Missing test:** No test asserts `totalAssets() ≈ vault.USDC.balanceOf(adapter) + adapter.withdraw(shares, 0)` under simulated market stress (e.g., forked Morpho vault with frozen market).
+- **Owner:** architecture/code
+- **Related findings:** None
+
 ---
 
 ## Clean Areas (Adequately Covered)
@@ -323,6 +337,7 @@ The codebase demonstrates a strong security architecture with well-enforced cust
 | L-010 | rmpc | Deferred cross-endpoint RPC consensus; code-hash vault/router not checked | Documented risk |
 | L-011 | Dapp browser keygen | Chain-ID classifier + build-time key absent = fail-closed | Verified |
 | L-012 | revealAuthorization | Admin can front-run user's reveal in same block | Admin is trusted |
+| L-013 | BasketVault | `deposit()` and `redeem()` lack caller-specified min-out params — all users share admin-configured `maxSlippageBps`. Router path has per-leg min via `minAssetsPerLeg`. | Admin floor bounds worst case; per-caller tightening is a UX gap |
 
 ---
 

@@ -336,6 +336,22 @@
       "recommendation": "Add --fail-on medium to slither config; suppress accepted mediums with dated comments.",
       "owner": "operations",
       "related_findings": []
+    },
+    {
+      "id": "review-security-m-012",
+      "review": "review-security",
+      "classification": "SECURITY_ORACLE_MANIPULATION",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": "docs/technical/unified-vault-spec.md §2.2",
+      "evidence": [
+        "contracts/adapters/MorphoAdapter.sol:170-171",
+        "contracts/adapters/MorphoAdapter.sol:177"
+      ],
+      "impact": "MorphoAdapter.totalAssets() returns MORPHO_VAULT.convertToAssets(shares) — theoretical NAV. isExact()=true means vault trusts without margin. Bad debt in Morpho vault inflates NAV, affecting share price and router weights. maxExposure cap limits exposure but does not correct NAV.",
+      "recommendation": "Document upstream-venue solvency assumption. Consider per-adapter NAV discount parameter. Monitor off-chain and disable via maxExposure=0 if health degrades.",
+      "owner": "architecture",
+      "related_findings": []
     }
   ],
   "clean_areas": [

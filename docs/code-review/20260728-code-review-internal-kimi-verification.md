@@ -11,7 +11,7 @@
 
 | Verdict | Count | Findings |
 |---------|-------|----------|
-| CONFIRMED | 17 | All HIGH and 10 of 11 MEDIUM |
+| CONFIRMED | 18 | All HIGH, 10 of 11 original MEDIUM, 1 new MEDIUM (review-security-m-012) |
 | REFUTED | 1 | review-security-m-006 (VaultRegistry empty-code skip) |
 | PARTIALLY CONFIRMED | 0 | — |
 
@@ -316,6 +316,35 @@
 
 ---
 
+### review-security-m-012: MorphoAdapter totalAssets() theoretical NAV — CONFIRMED
+
+**Claim:** `totalAssets()` returns `MORPHO_VAULT.convertToAssets(shares)` which can overstate NAV during market stress. `isExact()` returns `true` misleading callers.
+
+**Evidence:**
+- `contracts/adapters/MorphoAdapter.sol:170-171`:
+  ```solidity
+  uint256 shares = MORPHO_VAULT.balanceOf(address(this));
+  return MORPHO_VAULT.convertToAssets(shares);
+  ```
+  Returns theoretical NAV = `totalAssets * shares / totalSupply`. If the Morpho vault holds bad debt (defaulted market), `totalAssets` is inflated and `convertToAssets` overstates the true withdrawable value.
+- `contracts/adapters/MorphoAdapter.sol:177`:
+  ```solidity
+  function isExact() external pure returns (bool) { return true; }
+  ```
+  The vault trusts this adapter's `totalAssets()` value without margin. Router weight calculations use it directly.
+- `contracts/adapters/MorphoAdapter.sol:86-91`: The `maxExposure` cap limits total at-risk amount but does not correct NAV — it prevents additional deposits into the adapter but does not discount the existing balance.
+- `contracts/adapters/MorphoAdapter.sol:144-145`:
+  ```solidity
+  uint256 redeemable = MORPHO_VAULT.convertToAssets(shares);
+  ```
+  The v2 `withdraw()` also uses the same theoretical NAV to determine the redeemable amount. If NAV is overstated, the `withdraw()` would attempt to request more USDC than Morpho can deliver, reverting at the Morpho vault.
+
+**Impact analysis:** Under normal conditions this is accurate — Morpho Gauntlet USDC Prime is designed to maintain 1:1 USDC convertibility. The finding is a forward-looking risk: if a Morpho market defaults, bad debt propagates into the vault's NAV. `isExact()=true` amplifies the impact because the vault applies no NAV discount.
+
+**Verdict:** CONFIRMED. Theoretical NAV is standard for lending adapters but `isExact()=true` means the vault has no defensive margin. Documented upstream-venue risk.
+
+---
+
 ## Summary of Changes from Original Review
 
 | Finding | Original Verdict | Verified Verdict | Change |
@@ -338,5 +367,6 @@
 | review-security-m-009 | Medium | Medium (CONFIRMED) | — |
 | review-security-m-010 | Medium | Medium (CONFIRMED) | — |
 | review-security-m-011 | Medium | Medium (CONFIRMED) | — |
+| review-security-m-012 | **New (Medium)** | Medium (CONFIRMED) | Added post-review: MorphoAdapter theoretical NAV |
 
-**17 of 18 findings CONFIRMED. 1 REFUTED.**
+**18 of 19 findings CONFIRMED. 1 REFUTED.**
