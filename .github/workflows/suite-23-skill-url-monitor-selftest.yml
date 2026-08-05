@@ -1,0 +1,92 @@
+# Canonical: scripts/check-skill-url-reachability.sh
+#
+# WHY THIS SUITE EXISTS (robotmoney-core#1199)
+# suite-23-skill-url-reachability.yml is the live monitor for the raw SKILL.md
+# URLs that robotmoney-frontend hardcodes. It is `heavy` (live network, checks
+# the dev ref), so it is sweep-only and never runs on a PR. That leaves its
+# alert path untested on the change that would break it.
+#
+# A monitor nobody has ever seen fail is not a monitor, it is a green light —
+# and a green light is exactly what let #1199 ship a 404 to every operator. This
+# suite runs the same script on every PR and asserts BOTH directions:
+#
+#   RED   — against a git ref that cannot exist, every published URL 404s. The
+#           script must exit NON-ZERO, must name the broken URLs, and must count
+#           them. If it ever exits 0 here, the monitor is decorative and this
+#           job says so.
+#   GREEN — against the PR branch's own ref, every published URL (including the
+#           two deprecation compat stubs at the old committee paths) must
+#           return 200. This is the pre-merge form of the acceptance criterion:
+#           delete or rename a shipped SKILL.md and this goes red on the PR that
+#           did it, not on a schedule days later.
+#
+# Same shape as suite-18-upstream-monitoring.yml's `mock-tests` job, which
+# proves the venue/governance/USDC monitors fire before trusting their silence.
+#
+# WHY NO paths-ignore FOR **.md (CI-taxonomy warning, deliberately kept)
+# The artifacts under test ARE markdown — the published SKILL.md files and the
+# compat stubs. A docs-only PR that deletes or moves one is precisely the change
+# that must go red here, so a **.md bypass would reintroduce the #1199 false
+# green through the other door.
+#
+# LOUD FAILURE, NEVER SILENT SKIP
+# No secret, no credential, no optional resource. Network access to
+# raw.githubusercontent.com is a hard requirement of both directions; there is
+# no code path here that skips or no-ops.
+
+name: skill-url-monitor-selftest
+
+on:
+  push:
+    branches: [dev, "dev-phase-*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  reachability-selftest:
+    name: reachability-selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Unit test of a shipped operational script's alert path.
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: RED path — a ref that cannot exist must fail the check
+        run: |
+          set -euo pipefail
+          out=""
+          rc=0
+          out=$(REPO='${{ github.repository }}' \
+                REF='refs-do-not-exist-1199-selftest' \
+                bash scripts/check-skill-url-reachability.sh 2>&1) || rc=$?
+
+          echo "$out"
+          echo "--- exit code: $rc ---"
+
+          if [[ "$rc" -eq 0 ]]; then
+            echo "::error::check-skill-url-reachability.sh exited 0 against a ref where every URL 404s — the monitor cannot detect the outage it exists to detect"
+            exit 1
+          fi
+          if ! grep -q 'did not return 200' <<<"$out"; then
+            echo "::error::the failure output does not name the non-200 URLs, so an operator reading a red run learns nothing"
+            exit 1
+          fi
+          if ! grep -q 'SKILL_URLS_FAILED=4' <<<"$out"; then
+            echo "::error::expected all 4 published URLs to be reported failed against a bogus ref"
+            exit 1
+          fi
+          echo "OK: the monitor fails red, names the broken URLs, and counts them."
+
+      - name: GREEN path — this branch's own ref must pass the check
+        env:
+          # The head repo/branch is pushed, so raw.githubusercontent serves it.
+          # Falls back to the pushed ref outside pull_request.
+          REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          REF: ${{ github.head_ref || github.ref_name }}
+        run: bash scripts/check-skill-url-reachability.sh

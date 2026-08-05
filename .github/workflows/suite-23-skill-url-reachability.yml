@@ -1,0 +1,66 @@
+# Canonical: scripts/check-skill-url-reachability.sh
+#
+# WHY THIS SUITE EXISTS (robotmoney-core#1199)
+# robotmoney-frontend ships SWARM_ONBOARDING_SKILL_URL as a literal
+# raw.githubusercontent.com URL into this repo. Nothing verified it. When the
+# plugin directory here was named robotmoney-committee while the frontend
+# shipped the robotmoney-swarm path, every operator who started onboarding got a
+# 404 — and no CI job anywhere went red, because renaming a directory looks like
+# a local refactor and is actually a breaking change to another repo's shipped
+# constant. This suite fetches the published URLs and fails when one stops
+# returning 200. It also covers the deprecation compat stubs at the old
+# committee paths, since consumers shipped those URLs too.
+#
+# WHY IT IS SWEEP-ONLY (no pull_request trigger)
+# It is an external-dependency check against live raw.githubusercontent.com over
+# the network — `heavy` in the CI taxonomy, so it must not gate a PR. It also
+# checks the `dev` ref, which by definition does not yet contain an unmerged
+# PR's paths; running it on a PR would report a failure that is not one. It runs
+# daily on schedule, on push to dev, and on demand.
+#
+# WHERE THE PR-VISIBLE COVERAGE LIVES
+# suite-23-skill-url-monitor-selftest.yml runs the same script on every PR and
+# proves both of its directions — that a broken URL makes it exit non-zero, and
+# that the PR branch's own URLs resolve. A monitor nobody has seen fail is a
+# green light, not a monitor.
+#
+# LOUD FAILURE, NEVER SILENT SKIP
+# There is no secret and no credential to be missing, so there is no legitimate
+# reason for this check to no-op. The script exits non-zero on a missing curl,
+# on an empty URL list, and on any non-200 — it never skips.
+
+name: skill-url-reachability
+
+on:
+  push:
+    branches: [dev]
+  schedule:
+    # Daily at 05:00 UTC.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to check the raw URLs against (must be pushed). Defaults to dev, the ref the frontend pins."
+        required: false
+        default: "dev"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  skill-url-reachability:
+    name: skill-url-reachability
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # External live-network dependency check; sweep-only, never a PR gate.
+      CI_CLASS: heavy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check published raw SKILL.md URLs return 200
+        env:
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.inputs.ref || 'dev' }}
+        run: bash scripts/check-skill-url-reachability.sh
