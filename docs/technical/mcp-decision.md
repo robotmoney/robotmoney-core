@@ -21,9 +21,9 @@ Concrete precedent, now generalized org-wide: robotmoney-frontend built a
 `docs/decisions.md` **D21**: it had no customer, an API service plus a
 maintained skill covers the same ground with far less to run and secure, and
 the "agents need a bespoke protocol to call an API" premise did not
-materialize. That reasoning applies across Robot Money. Committee onboarding
-and participation are REST-only; this repo's `committee-onboarding` skill
-(`plugins/robotmoney-committee/skills/`) teaches the REST flow with no MCP.
+materialize. That reasoning applies across Robot Money. Swarm onboarding
+and participation are REST-only; this repo's `swarm-onboarding` skill
+(`plugins/robotmoney-swarm/skills/`) teaches the REST flow with no MCP.
 
 The original "defer" analysis below is retained as the historical record; only
 its **status** changes (defer → not supported).

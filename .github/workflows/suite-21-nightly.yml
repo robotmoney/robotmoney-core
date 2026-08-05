@@ -73,6 +73,7 @@ jobs:
             suite-14-smoke-test.yml
             suite-15-regime-classifier.yml
             suite-16-abi-drift.yml
+            suite-17-swarm-plugin.yml
             suite-18-secrets-scan.yml
             suite-18-security-gates.yml
             suite-18-upstream-monitoring.yml

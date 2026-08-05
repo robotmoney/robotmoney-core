@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-preflight.sh — preflight guards before rmpc committee vote-submit.
 #
-# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 #
 # Runs three preflight guards in order, aborting before any on-chain write:
 #   1. MissingICConfig   — ic_contract_address absent from the rmpc TOML config

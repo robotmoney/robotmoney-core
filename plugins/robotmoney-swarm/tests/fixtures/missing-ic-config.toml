@@ -1,6 +1,6 @@
 # Committee agent rmpc config fixture — ic_contract_address intentionally absent.
 # Used to test the MissingICConfig fail-closed path.
-# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 
 [chain]
 rpc_url = "http://127.0.0.1:8545"
