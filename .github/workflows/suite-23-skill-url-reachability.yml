@@ -13,14 +13,16 @@
 #
 # WHY IT IS SWEEP-ONLY (no pull_request trigger)
 # It is an external-dependency check against live raw.githubusercontent.com over
-# the network — `heavy` in the CI taxonomy, so it must not gate a PR. It runs
+# the network — `heavy` in the CI taxonomy, so it must not gate a PR. It also
+# checks the `dev` ref, which by definition does not yet contain an unmerged
+# PR's paths; running it on a PR would report a failure that is not one. It runs
 # daily on schedule, on push to dev, and on demand.
 #
-# WHY THE SCHEDULE CHECKS dev
-# `dev` is the ref the frontend's constant is pinned to, so `dev` is the ref that
-# has to keep answering. The workflow_dispatch `ref` input exists to validate a
-# branch before merge: the branch ref must be pushed for raw.githubusercontent
-# to serve it.
+# WHERE THE PR-VISIBLE COVERAGE LIVES
+# suite-23-skill-url-monitor-selftest.yml runs the same script on every PR and
+# proves both of its directions — that a broken URL makes it exit non-zero, and
+# that the PR branch's own URLs resolve. A monitor nobody has seen fail is a
+# green light, not a monitor.
 #
 # LOUD FAILURE, NEVER SILENT SKIP
 # There is no secret and no credential to be missing, so there is no legitimate

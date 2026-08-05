@@ -79,6 +79,7 @@ jobs:
             suite-18-upstream-monitoring.yml
             suite-19-erc4626-demo-tvl-matrix.yml
             suite-20-watchdog.yml
+            suite-23-skill-url-monitor-selftest.yml
           )
           for workflow in "${SUITES[@]}"; do
             echo "Dispatching $workflow..."
