@@ -43,7 +43,7 @@ BASE="https://raw.githubusercontent.com/${REPO}/${REF}"
 #   2. the live vote-submission skill
 #   3-4. the deprecation compat stubs at the pre-#1199 paths
 SKILL_PATHS=(
-  "plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md"
+  "plugins/robotmoney-swarm/skills/swarm-onboardingTYPO/SKILL.md"
   "plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md"
   "plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md"
   "plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md"
