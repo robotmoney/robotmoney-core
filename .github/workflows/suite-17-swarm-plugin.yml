@@ -1,0 +1,122 @@
+# Canonical: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
+#
+# WHY THIS SUITE EXISTS
+# The robotmoney-swarm plugin is the Robot Money Swarm agent skill bundle that
+# extends robotmoney-analyst. It forms per-vault tilt votes, posts rationale
+# memos, and calls rmpc committee vote-submit. The plugin has no contract or
+# Rust dependencies but must be tested against offline fixtures to guarantee:
+# (a) plugin.json is valid and correctly named (robotmoney-swarm) and declares
+#     the two renamed skills, which exist on disk with matching front-matter,
+# (b) form-vote.sh produces schema-conformant vote JSON (ajv-validated against
+#     schemas/committee-vote.json) for all three regime stances,
+# (c) check-preflight.sh fails closed with MissingICConfig when
+#     ic_contract_address is absent from config,
+# (d) check-preflight.sh fails closed with RationaleURIUnreachable when the
+#     rationale URI is not reachable,
+# (e) check-preflight.sh fails closed with AgentNotRegistered when rmpc
+#     returns that error variant,
+# (f) no restricted paths (contracts/, crates/, clients/, services/) are
+#     touched by the plugin, and
+# (g) the deprecation compat stubs still exist at the OLD committee skill paths
+#     and still name their robotmoney-swarm replacement (issue #1199) — the
+#     already-shipped raw URLs must keep returning 200.
+#
+# WHY THERE IS NO paths: FILTER (changed in #1199)
+# The predecessor of this suite was scoped to plugins/robotmoney-committee/**.
+# That is exactly the failure mode issue #1199 was opened about: rename the tree
+# and the filter silently matches nothing, the suite runs zero tests, and the
+# job reports success. A suite whose whole job is to notice a rename must not be
+# gated on a hardcoded copy of the pre-rename path. It is a ~1 minute job; it
+# runs on every PR.
+#
+# WHY OFFLINE / MOCKED APPROACH
+# CI has no network access to robotmoney.net, no rmpc binary, and no live
+# IC contract. Tests use fixture files and a fake rmpc shell script to cover
+# all four acceptance criteria deterministically.
+#
+# WHY ajv IS USED INSIDE THE TEST
+# The vote JSON schema (schemas/committee-vote.json) is the canonical contract
+# between rmpc vote-submit, the swarm agent skill, and the explorer indexer.
+# Validating form-vote.sh output against it inside the CI test suite guarantees
+# that any schema drift breaks CI immediately.
+#
+# WHY THERE IS NO paths-ignore FOR **.md (CI-taxonomy warning, deliberately kept)
+# The taxonomy nudges code checks to bypass docs-only PRs. Not this one: the
+# artifacts under test ARE markdown — the two SKILL.md front-matter names and
+# the two compat stubs at the old committee paths. A docs-only PR that deletes a
+# stub or renames a skill is precisely the change that must go red here, so a
+# **.md bypass would reintroduce the #1199 false green through the other door.
+#
+# WHY THE EXECUTED-ASSERTION COUNT IS ASSERTED
+# Per the test-coverage policy, exit 0 is not evidence anything ran. run-tests.sh
+# prints ROBOTMONEY_SWARM_TESTS_EXECUTED=<n> and refuses to exit 0 below its
+# minimum; the final step re-checks that line so a suite that degrades to zero
+# assertions is red here too, not a false green.
+
+name: robotmoney-swarm-plugin-checks
+
+on:
+  # LIGHT tier: runs on pull_requests to any branch and on push to dev/dev-phase-*.
+  push:
+    branches: [dev, "dev-phase-*"]
+  pull_request:
+  workflow_dispatch:
+
+# CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
+# not pile up duplicate suites. push:main/dev runs are exempt.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  robotmoney-swarm:
+    name: robotmoney-swarm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Scoped offline unit tests of one plugin's helpers and manifests.
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (jq, shellcheck)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq shellcheck
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Assert the renamed test entrypoint exists
+        # Fails loudly if the tree moves again without this workflow following.
+        # Without this, a missing script would be a confusing bash error; with
+        # it, the reason is named.
+        run: |
+          test -f plugins/robotmoney-swarm/tests/run-tests.sh \
+            || { echo "::error::plugins/robotmoney-swarm/tests/run-tests.sh is missing — the plugin tree moved without this workflow following it"; exit 1; }
+
+      - name: Run robotmoney-swarm tests
+        # pipefail is mandatory: without it `tee` masks a non-zero exit from
+        # run-tests.sh and the job goes green on a failing suite.
+        run: |
+          set -euo pipefail
+          bash plugins/robotmoney-swarm/tests/run-tests.sh | tee swarm-tests.log
+
+      - name: Assert a non-zero number of assertions executed
+        # "Exit 0 != tested." Independently re-check the executed count from the
+        # captured log so a silently-degraded run cannot pass this job.
+        run: |
+          set -euo pipefail
+          line=$(grep -o 'ROBOTMONEY_SWARM_TESTS_EXECUTED=[0-9]\+' swarm-tests.log | tail -1 || true)
+          if [[ -z "$line" ]]; then
+            echo "::error::run-tests.sh printed no ROBOTMONEY_SWARM_TESTS_EXECUTED line — treating as zero tests executed"
+            exit 1
+          fi
+          count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
+          echo "executed assertions: $count"
+          if [[ "$count" -lt 20 ]]; then
+            echo "::error::only $count assertions executed (expected >= 20) — a suite that asserts nothing is a false green"
+            exit 1
+          fi

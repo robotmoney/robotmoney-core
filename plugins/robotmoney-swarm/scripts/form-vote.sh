@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # form-vote.sh — form a committee-vote JSON from regime + vault inputs.
 #
-# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 # Vote schema:    schemas/committee-vote.json
 #
 # Usage:

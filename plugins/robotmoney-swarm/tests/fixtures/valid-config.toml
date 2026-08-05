@@ -1,5 +1,5 @@
 # Committee agent rmpc config fixture — all required fields present.
-# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 
 [chain]
 rpc_url = "http://127.0.0.1:8545"

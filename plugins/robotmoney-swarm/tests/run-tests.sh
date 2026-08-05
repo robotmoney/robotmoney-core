@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# run-tests.sh — offline CI tests for the robotmoney-committee plugin.
+# run-tests.sh — offline CI tests for the robotmoney-swarm plugin.
 #
-# Canonical docs: plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 # Vote schema:    schemas/committee-vote.json
 #
 # Runs without network access. All four acceptance criteria are exercised:
@@ -10,7 +10,15 @@
 #   AC-3: skill aborts before calling rmpc when rationale_uri is unreachable
 #   AC-4: skill aborts and surfaces AgentNotRegistered when rmpc returns that error
 #
-# Exit code 0 iff all tests pass.
+# TEST-COVERAGE POLICY (loud-skip, never silent-skip; exit 0 != tested)
+# Every prerequisite this suite needs — jq, shellcheck, node/npm, python3 — is a
+# HARD requirement. When one is absent the suite FAILS; it never prints "SKIP"
+# and exits 0, because a suite that silently degrades to zero assertions is a
+# false green. The suite also refuses to exit 0 when fewer than
+# MIN_EXPECTED_ASSERTIONS assertions actually executed, so a rename (or a CI
+# path filter that stops matching this tree) turns the job red instead of green.
+#
+# Exit code 0 iff all assertions pass AND at least MIN_EXPECTED_ASSERTIONS ran.
 
 set -euo pipefail
 
@@ -23,11 +31,36 @@ CHECK_PREFLIGHT="$PLUGIN_DIR/scripts/check-preflight.sh"
 FIXTURES="$SCRIPT_DIR/fixtures"
 SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
+# Minimum number of assertions this suite must execute for a green result.
+# Bump it when you add assertions; never lower it to make a run pass.
+MIN_EXPECTED_ASSERTIONS=20
+
 PASS=0
 FAIL=0
 
 pass() { echo "  PASS: $1"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+
+# require_tool — loud-skip guard. A missing prerequisite is a hard failure, not
+# a silent skip that would let the suite exit 0 having asserted nothing.
+require_tool() {
+  local tool="$1" why="$2"
+  if ! command -v "$tool" &>/dev/null; then
+    echo "FATAL: required tool '$tool' is not installed ($why)." >&2
+    echo "       Refusing to skip — install it in the CI job. See" >&2
+    echo "       .github/workflows/suite-17-swarm-plugin.yml." >&2
+    exit 1
+  fi
+}
+
+echo "--- prerequisites (hard requirements, never skipped) ---"
+require_tool jq         "parses plugin.json and the generated vote JSON"
+require_tool shellcheck "statically checks form-vote.sh / check-preflight.sh"
+require_tool node       "runs the ajv schema validator"
+require_tool npm        "installs ajv + ajv-formats for the validator"
+require_tool python3    "serves the local HTTP fixture used by AC-4"
+require_tool curl       "probes the fixture HTTP server"
+echo "  OK: jq, shellcheck, node, npm, python3, curl all present"
 
 # Shared test inputs
 VAULT="0x1111111111111111111111111111111111111111"
@@ -36,29 +69,70 @@ RATIONALE_URI="https://gist.github.com/robotmoney/abc123def456"
 PROMPT_HASH="0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 INPUTS_DIGEST="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
-echo "=== robotmoney-committee tests ==="
+echo "=== robotmoney-swarm tests ==="
 
 # ---------- 1. plugin.json valid JSON with correct name ----------
 echo ""
-echo "--- test: plugin.json valid JSON and name=robotmoney-committee ---"
+echo "--- test: plugin.json valid JSON and name=robotmoney-swarm ---"
 plugin_name=$(jq -r '.name' "$PLUGIN_DIR/plugin.json" 2>/dev/null) || { fail "plugin.json does not parse as JSON"; }
-if [[ "$plugin_name" == "robotmoney-committee" ]]; then
-  pass "plugin name is 'robotmoney-committee'"
+if [[ "$plugin_name" == "robotmoney-swarm" ]]; then
+  pass "plugin name is 'robotmoney-swarm'"
 else
-  fail "plugin name is '$plugin_name', expected 'robotmoney-committee'"
+  fail "plugin name is '$plugin_name', expected 'robotmoney-swarm'"
 fi
+
+# ---------- 1b. the plugin ships exactly the two renamed skills ----------
+echo ""
+echo "--- test: plugin.json declares the swarm skills and they exist on disk ---"
+declared_skills=$(jq -r '.skills | sort | join(",")' "$PLUGIN_DIR/plugin.json")
+if [[ "$declared_skills" == "robotmoney-swarm,swarm-onboarding" ]]; then
+  pass "plugin.json skills are [robotmoney-swarm, swarm-onboarding]"
+else
+  fail "plugin.json skills are '$declared_skills', expected 'robotmoney-swarm,swarm-onboarding'"
+fi
+
+for skill in robotmoney-swarm swarm-onboarding; do
+  if [[ -f "$PLUGIN_DIR/skills/$skill/SKILL.md" ]]; then
+    pass "skills/$skill/SKILL.md exists"
+  else
+    fail "skills/$skill/SKILL.md is missing"
+  fi
+  fm_name=$(sed -n '2s/^name: //p' "$PLUGIN_DIR/skills/$skill/SKILL.md")
+  if [[ "$fm_name" == "$skill" ]]; then
+    pass "skills/$skill front-matter name is '$skill'"
+  else
+    fail "skills/$skill front-matter name is '$fm_name', expected '$skill'"
+  fi
+done
+
+# ---------- 1c. compat stubs still answer at the old skill paths ----------
+# The frontend shipped the old raw URLs; deleting them outright would 404 every
+# already-deployed consumer. These stubs must keep existing until the
+# deprecation window closes, and must point at the new path.
+echo ""
+echo "--- test: compat stubs exist at the old committee skill paths ---"
+for old in committee-onboarding robotmoney-committee; do
+  stub="$REPO_ROOT/plugins/robotmoney-committee/skills/$old/SKILL.md"
+  if [[ -f "$stub" ]]; then
+    pass "compat stub present at plugins/robotmoney-committee/skills/$old/SKILL.md"
+  else
+    fail "compat stub MISSING at plugins/robotmoney-committee/skills/$old/SKILL.md"
+    continue
+  fi
+  if grep -q 'plugins/robotmoney-swarm/skills/' "$stub"; then
+    pass "compat stub $old points at the robotmoney-swarm replacement path"
+  else
+    fail "compat stub $old does not name its robotmoney-swarm replacement path"
+  fi
+done
 
 # ---------- 2. shellcheck ----------
 echo ""
 echo "--- test: shellcheck form-vote.sh and check-preflight.sh ---"
-if command -v shellcheck &>/dev/null; then
-  if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT"; then
-    pass "shellcheck passed"
-  else
-    fail "shellcheck reported issues"
-  fi
+if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT"; then
+  pass "shellcheck passed"
 else
-  echo "  SKIP: shellcheck not available"
+  fail "shellcheck reported issues"
 fi
 
 # ---------- AC-1: tilt-formation → valid schema-conformant JSON ----------
@@ -313,7 +387,10 @@ if [[ "$HTTP_UP" == "true" ]]; then
 else
   kill "$HTTP_PID" 2>/dev/null || true
   rm -f "$FAKE_RMPC_ANR"
-  echo "  SKIP: could not start local HTTP server for AC-4 (non-blocking)"
+  # Loud-skip policy: AC-4 must never silently opt out. python3 is a hard
+  # prerequisite (checked above), so a server that will not come up is a real
+  # failure of this environment, not a reason to declare the AC untested.
+  fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
 fi
 
 # ---------- 3. no restricted paths touched ----------
@@ -328,6 +405,18 @@ else
 fi
 
 # ---------- summary ----------
+# "Exit 0 != tested": a run that asserted nothing is a false green, so the
+# executed-assertion count is itself an assertion. This line is the machine
+# -readable proof the CI job greps for.
 echo ""
+TOTAL=$((PASS + FAIL))
 echo "=== Results: $PASS passed, $FAIL failed ==="
+echo "ROBOTMONEY_SWARM_TESTS_EXECUTED=$TOTAL"
+
+if [[ $TOTAL -lt $MIN_EXPECTED_ASSERTIONS ]]; then
+  echo "FATAL: only $TOTAL assertions executed, expected at least $MIN_EXPECTED_ASSERTIONS." >&2
+  echo "       Zero (or too few) executed assertions is a false green — failing." >&2
+  exit 1
+fi
+
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

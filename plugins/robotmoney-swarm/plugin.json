@@ -1,0 +1,10 @@
+{
+  "name": "robotmoney-swarm",
+  "version": "0.1.0",
+  "description": "Robot Money Swarm agent skills extending robotmoney-analyst. Reads the regime feed and vault holdings, forms per-vault tilts (overweight/neutral/underweight), posts a rationale memo, and submits a signed Investment Committee vote via rmpc committee vote-submit.",
+  "author": "Robot Money",
+  "homepage": "https://robotmoney.net/regime",
+  "repository": "https://github.com/robotmoney/robotmoney-skills",
+  "license": "Apache-2.0",
+  "skills": ["robotmoney-swarm", "swarm-onboarding"]
+}
