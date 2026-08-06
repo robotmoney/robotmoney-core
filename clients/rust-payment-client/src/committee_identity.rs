@@ -117,6 +117,11 @@ pub enum CommitteeIdentityError {
     /// Underlying Ed25519/AEAD error.
     #[error("ErrSign: {0}")]
     ErrSign(String),
+    /// A payload file has bytes that cannot be part of the compact canonical
+    /// JSON payload emitted by the committee API. Refuse rather than signing
+    /// an almost-correct file whose signature the API will reject.
+    #[error("ErrPayloadFormat: {0}")]
+    ErrPayloadFormat(String),
 }
 
 /// On-disk keystore document.
