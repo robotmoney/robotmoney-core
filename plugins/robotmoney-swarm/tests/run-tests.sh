@@ -33,7 +33,7 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
 # Minimum number of assertions this suite must execute for a green result.
 # Bump it when you add assertions; never lower it to make a run pass.
-MIN_EXPECTED_ASSERTIONS=20
+MIN_EXPECTED_ASSERTIONS=33
 
 PASS=0
 FAIL=0
@@ -70,6 +70,60 @@ PROMPT_HASH="0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 INPUTS_DIGEST="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
 echo "=== robotmoney-swarm tests ==="
+
+# ---------- 0. onboarding canonical application payload contract ----------
+echo ""
+echo "--- test: onboarding skill states the canonical application payload inline ---"
+ONBOARDING_SKILL="$PLUGIN_DIR/skills/swarm-onboarding/SKILL.md"
+onboarding_contains() {
+  local pattern="$1"
+  local description="$2"
+  if grep -Fq "$pattern" "$ONBOARDING_SKILL"; then
+    pass "$description"
+  else
+    fail "$description missing from swarm-onboarding skill"
+  fi
+}
+
+onboarding_contains 'fixed order: `name`, `contact`, `lens`' \
+  'canonical payload key order starts name, contact, lens'
+onboarding_contains 'then `publicKey`' \
+  'canonical payload key order ends publicKey'
+onboarding_contains 'omit the `lens` key entirely' \
+  'canonical payload omits absent lens'
+onboarding_contains 'never send `lens: null` or `lens: ""`' \
+  'canonical payload forbids null and empty lens'
+onboarding_contains 'compact JSON with no whitespace and no' \
+  'canonical payload requires compact JSON'
+onboarding_contains 'trailing newline' \
+  'canonical payload forbids trailing newline'
+onboarding_contains '`{"name":"Nova Desk","contact":"nova@example.com","publicKey":"<base64>"}`' \
+  'canonical payload includes a no-lens worked example'
+onboarding_contains 'POST "<host>/api/swarm/apply"' \
+  'onboarding includes a copyable apply POST request'
+
+# ---------- 0b. spelling regression guard: no stale committee-spelled surfaces ----------
+# Web/REST/docs surfaces are spelled `swarm` (the forms the frontend actually
+# serves). The deliberate committee identifiers — `rmpc committee-identity`,
+# `rmpc committee vote-submit`, RMPC_COMMITTEE_IDENTITY_PASSPHRASE,
+# schemas/committee-vote.json — must NOT trip this guard, so the banned
+# patterns below are anchored on the URL/file forms only.
+echo ""
+echo "--- test: swarm-onboarding skill contains no stale committee-spelled surfaces ---"
+BANNED_SPELLINGS=(
+  '/api/committee/'
+  '/docs/investment-committee'
+  'committee-application.js'
+  'ROUTES.committee'
+  '<host>/committee/'
+)
+for banned in "${BANNED_SPELLINGS[@]}"; do
+  if grep -Fq "$banned" "$ONBOARDING_SKILL"; then
+    fail "stale committee spelling '$banned' present in swarm-onboarding skill (frontend serves the swarm form)"
+  else
+    pass "no stale spelling '$banned' in swarm-onboarding skill"
+  fi
+done
 
 # ---------- 1. plugin.json valid JSON with correct name ----------
 echo ""
