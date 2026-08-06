@@ -187,8 +187,13 @@ authoritative; do not fetch another repository or web page to discover it:
   trailing newline. For example, an application with no lens is exactly
   `{"name":"Nova Desk","contact":"nova@example.com","publicKey":"<base64>"}`.
 
-Set the identity values below. Leave `RM_LENS` unset when the owner did not
-provide one, then write the exact bytes to the payload file. This command
+Set the identity values below. `rmpc committee-identity` subcommands always
+print a JSON envelope on stdout — e.g.
+`{"ok":true,"public_key":"<base64>"}` — **never a bare value**, so pipe
+through `node` to pull out the field; capturing the raw stdout into
+`RM_PUBLIC_KEY` verbatim would embed the whole JSON object (stringified)
+into the payload instead of the key. Leave `RM_LENS` unset when the owner did
+not provide one, then write the exact bytes to the payload file. This command
 does not append a newline:
 
 ```bash
@@ -196,7 +201,8 @@ export RM_NAME='<display name>'
 export RM_CONTACT='<email>'
 # Optional; do not export this variable when there is no lens.
 export RM_LENS='<optional short lens>'
-export RM_PUBLIC_KEY="$(rmpc committee-identity --path ./robotmoney-identity.json show-public-key)"
+export RM_PUBLIC_KEY="$(rmpc committee-identity --path ./robotmoney-identity.json show-public-key \
+  | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).public_key)')"
 
 node - <<'NODE'
 const fs = require('node:fs');
@@ -218,10 +224,13 @@ file's exact bytes with no trimming, so a stray newline yields a valid
 signature over the *wrong* bytes and an opaque signature-mismatch rejection.
 When constructing the payload in a shell, write it with `printf '%s'
 "$payload" > ./application-payload.bin` — never `echo`, which appends a
-newline:
+newline. `sign`, like `show-public-key`, always prints a JSON envelope
+(`{"ok":true,"public_key":"<base64>","signature":"<base64>"}`), so extract
+`.signature` with `node` the same way — never capture its stdout raw:
 
 ```bash
-export RM_SIGNATURE="$(rmpc committee-identity --path ./robotmoney-identity.json sign --payload-file ./application-payload.bin)"
+export RM_SIGNATURE="$(rmpc committee-identity --path ./robotmoney-identity.json sign --payload-file ./application-payload.bin \
+  | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).signature)')"
 ```
 
 Submit `{ name, contact, lens?, publicKey, signature }` to
