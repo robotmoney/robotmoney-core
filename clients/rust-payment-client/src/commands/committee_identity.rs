@@ -34,7 +34,9 @@ pub enum PayloadSource {
     /// The payload string passed inline via `--payload`. Signed as its
     /// UTF-8 bytes exactly as given.
     Inline(String),
-    /// A file whose exact bytes (no trimming) are signed.
+    /// A file whose exact bytes (no trimming) are signed. Files ending in
+    /// ASCII whitespace are refused: canonical committee JSON never has it,
+    /// and `echo` would otherwise create an unverifiable signature.
     File(PathBuf),
 }
 
@@ -116,6 +118,15 @@ pub fn run_sign(path: &Path, source: PayloadSource, pretty: bool) -> i32 {
     let payload: Vec<u8> = match source {
         PayloadSource::Inline(s) => s.into_bytes(),
         PayloadSource::File(f) => match std::fs::read(&f) {
+            Ok(b) if b.last().is_some_and(u8::is_ascii_whitespace) => {
+                return emit_error(
+                    &CommitteeIdentityError::ErrPayloadFormat(format!(
+                        "--payload-file {} ends in whitespace; rmpc signs file bytes exactly, so write canonical JSON with printf '%s' rather than echo",
+                        f.display()
+                    )),
+                    pretty,
+                )
+            }
             Ok(b) => b,
             Err(e) => {
                 return emit_error(
@@ -175,6 +186,7 @@ fn classify(e: &CommitteeIdentityError) -> (i32, &'static str) {
         CommitteeIdentityError::ErrPassphrase(_) => (EXIT_REFUSAL, "ErrPassphrase"),
         CommitteeIdentityError::ErrKeystoreIo(_) => (EXIT_STARTUP_FAIL, "ErrKeystoreIo"),
         CommitteeIdentityError::ErrKeystoreFormat(_) => (EXIT_STARTUP_FAIL, "ErrKeystoreFormat"),
+        CommitteeIdentityError::ErrPayloadFormat(_) => (EXIT_REFUSAL, "ErrPayloadFormat"),
         CommitteeIdentityError::ErrSign(_) => (EXIT_STARTUP_FAIL, "ErrSign"),
     }
 }

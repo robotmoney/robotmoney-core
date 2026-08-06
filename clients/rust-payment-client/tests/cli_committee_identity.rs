@@ -16,6 +16,8 @@
 //!   signature end-to-end (AC-3).
 //! - `sign_accepts_payload_from_file_identically_to_inline`: `--payload`
 //!   and `--payload-file` over the same bytes produce the same signature.
+//! - `sign_refuses_payload_file_with_trailing_whitespace`: a newline from
+//!   `echo` is rejected before it can yield an unverifiable signature.
 //! - `create_without_passphrase_env_fails_loudly`: missing
 //!   `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` refuses with exit 2, not a
 //!   silent no-op.
@@ -200,6 +202,45 @@ fn sign_accepts_payload_from_file_identically_to_inline() {
     let file: Value =
         serde_json::from_str(std::str::from_utf8(&file_out.stdout).unwrap().trim()).unwrap();
     assert_eq!(inline["signature"], file["signature"]);
+}
+
+#[test]
+fn sign_refuses_payload_file_with_trailing_whitespace() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+    rmpc()
+        .env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .assert()
+        .success();
+
+    let payload_file = dir.path().join("payload-with-newline.json");
+    std::fs::write(&payload_file, format!("{SAMPLE_CANONICAL_PAYLOAD}\n")).unwrap();
+
+    let out = rmpc()
+        .env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "sign",
+            "--payload-file",
+            payload_file.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let failure: Value =
+        serde_json::from_str(std::str::from_utf8(&out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(failure["ok"], false);
+    assert_eq!(failure["error"], "ErrPayloadFormat");
+    assert!(failure["message"].as_str().unwrap().contains("printf '%s'"));
 }
 
 #[test]

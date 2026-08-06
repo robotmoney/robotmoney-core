@@ -466,10 +466,11 @@ pub enum CommitteeIdentitySubcommand {
         #[arg(long, conflicts_with = "payload_file")]
         payload: Option<String>,
         /// Path to a file holding the exact canonical payload bytes to
-        /// sign (every byte in the file is signed verbatim, no
-        /// trimming). Mutually exclusive with `--payload`. Prefer this
-        /// over `--payload` for payloads containing shell-sensitive
-        /// characters.
+        /// sign (every byte in the file is signed verbatim, no trimming).
+        /// A file ending in whitespace is refused because canonical JSON
+        /// cannot end in whitespace; use `printf '%s' "$payload" > file`,
+        /// never `echo`. Mutually exclusive with `--payload`. Prefer this
+        /// over `--payload` for payloads containing shell-sensitive characters.
         #[arg(long = "payload-file", conflicts_with = "payload")]
         payload_file: Option<PathBuf>,
     },
