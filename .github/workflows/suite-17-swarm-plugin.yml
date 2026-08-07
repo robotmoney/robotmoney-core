@@ -6,7 +6,7 @@
 # memos, and calls rmpc committee vote-submit. The plugin has no contract or
 # Rust dependencies but must be tested against offline fixtures to guarantee:
 # (a) plugin.json is valid and correctly named (robotmoney-swarm) and declares
-#     the two renamed skills, which exist on disk with matching front-matter,
+#     the one renamed skill, which exists on disk with matching front-matter,
 # (b) form-vote.sh produces schema-conformant vote JSON (ajv-validated against
 #     schemas/committee-vote.json) for all three regime stances,
 # (c) check-preflight.sh fails closed with MissingICConfig when
@@ -17,13 +17,25 @@
 #     returns that error variant,
 # (f) no restricted paths (contracts/, crates/, clients/, services/) are
 #     touched by the plugin, and
-# (g) the deprecation compat stubs still exist at the OLD committee skill paths
-#     and still name their robotmoney-swarm replacement (issue #1199) — the
-#     already-shipped raw URLs must keep returning 200, and
-# (h) the swarm-onboarding SKILL.md canonical application-payload recipe
-#     (Step 3) actually produces a well-formed payload when followed
-#     literally, against the REAL rmpc binary — not just that the doc
-#     prose contains the right words (issue #1193 Finding 2).
+# (g) the deprecation compat stub still exists at the OLD committee skill path
+#     and still names its robotmoney-swarm replacement (issue #1199) — the
+#     already-shipped raw URL must keep returning 200.
+#
+# ONBOARDING IS NO LONGER THIS SUITE'S CONCERN
+# This suite used to also assert (h): that the swarm-onboarding SKILL.md
+# canonical application-payload recipe produced a well-formed payload against
+# the real rmpc binary (issue #1193 Finding 2), via
+# test-onboarding-payload-recipe.sh, plus onboarding-specific checks inside
+# run-tests.sh (payload-contract prose, stale-committee-spelling guard). The
+# robotmoney-swarm/skills/swarm-onboarding skill was deleted outright — core no
+# longer serves onboarding at all; robotmoney-frontend's copy
+# (frontend/public/skills/swarm-onboarding/SKILL.md, served from
+# https://robotmoney.net/skills/swarm-onboarding/SKILL.md) is now the single
+# source of truth. There is deliberately no compat stub for it (unlike (g)
+# above): an old cached URL into core's onboarding paths should now 404, not
+# redirect. test-onboarding-payload-recipe.sh and the "Install Rust
+# toolchain" / "Cargo cache" / "Build rmpc" steps that only existed to support
+# it were removed along with it — see docs/technical/mcp-decision.md.
 #
 # WHY THERE IS NO paths: FILTER (changed in #1199)
 # The predecessor of this suite was scoped to plugins/robotmoney-committee/**.
@@ -33,19 +45,10 @@
 # gated on a hardcoded copy of the pre-rename path. It is a ~1 minute job; it
 # runs on every PR.
 #
-# WHY MOST OF THE SUITE IS OFFLINE / MOCKED, BUT NOT ALL OF IT
+# WHY THE SUITE IS OFFLINE / MOCKED
 # CI has no network access to robotmoney.net and no live IC contract, so
 # run-tests.sh (AC-1..AC-4, plugin/skill structure) uses fixture files and a
-# fake rmpc shell script to stay deterministic and fast. The one exception is
-# test-onboarding-payload-recipe.sh (issue #1193 Finding 2): a prose/fixture
-# check cannot prove the documented rmpc recipe actually works, because the
-# bug that shipped (Finding 1: rmpc's stdout is a JSON envelope, not a bare
-# value) is precisely the kind of thing a fake rmpc stub would paper over. So
-# that one script builds the real rmpc binary (see "Build rmpc" step below)
-# and runs the literal recipe against it. It still does not reach the
-# /api/swarm/apply server — that lives in the separate robotmoney-frontend
-# repo and has no reachable instance here — see the script's own header for
-# what it does and does not prove.
+# fake rmpc shell script to stay deterministic and fast.
 #
 # WHY ajv IS USED INSIDE THE TEST
 # The vote JSON schema (schemas/committee-vote.json) is the canonical contract
@@ -55,9 +58,9 @@
 #
 # WHY THERE IS NO paths-ignore FOR **.md (CI-taxonomy warning, deliberately kept)
 # The taxonomy nudges code checks to bypass docs-only PRs. Not this one: the
-# artifacts under test ARE markdown — the two SKILL.md front-matter names and
-# the two compat stubs at the old committee paths. A docs-only PR that deletes a
-# stub or renames a skill is precisely the change that must go red here, so a
+# artifacts under test ARE markdown — the SKILL.md front-matter name and the
+# compat stub at the old committee path. A docs-only PR that deletes the
+# stub or renames the skill is precisely the change that must go red here, so a
 # **.md bypass would reintroduce the #1199 false green through the other door.
 #
 # WHY THE EXECUTED-ASSERTION COUNT IS ASSERTED
@@ -102,20 +105,6 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install Rust toolchain
-        # Only test-onboarding-payload-recipe.sh needs this (it exercises the
-        # real rmpc binary — see "WHY MOST OF THE SUITE IS OFFLINE" above).
-        # run-tests.sh itself stays fixture-driven and does not need Rust.
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: clients/rust-payment-client
-
-      - name: Build rmpc (real binary, not the fake test stub)
-        run: cargo build --manifest-path clients/rust-payment-client/Cargo.toml --bin rmpc
-
       - name: Assert the renamed test entrypoint exists
         # Fails loudly if the tree moves again without this workflow following.
         # Without this, a missing script would be a confusing bash error; with
@@ -145,32 +134,5 @@ jobs:
           echo "executed assertions: $count"
           if [[ "$count" -lt 20 ]]; then
             echo "::error::only $count assertions executed (expected >= 20) — a suite that asserts nothing is a false green"
-            exit 1
-          fi
-
-      - name: Run onboarding canonical payload recipe proof (real rmpc)
-        # Issue #1193 Finding 2: proves the SKILL.md recipe works against the
-        # real binary, not just that the doc text contains the right words.
-        # RMPC_BIN reuses the binary built above instead of rebuilding it.
-        run: |
-          set -euo pipefail
-          RMPC_BIN="$PWD/target/debug/rmpc" \
-            bash plugins/robotmoney-swarm/tests/test-onboarding-payload-recipe.sh \
-            | tee swarm-onboarding-recipe.log
-
-      - name: Assert the onboarding recipe proof actually executed assertions
-        # Same "exit 0 != tested" independent re-check as above, scoped to
-        # the real-rmpc recipe proof.
-        run: |
-          set -euo pipefail
-          line=$(grep -o 'ROBOTMONEY_SWARM_ONBOARDING_RECIPE_TESTS_EXECUTED=[0-9]\+' swarm-onboarding-recipe.log | tail -1 || true)
-          if [[ -z "$line" ]]; then
-            echo "::error::test-onboarding-payload-recipe.sh printed no ROBOTMONEY_SWARM_ONBOARDING_RECIPE_TESTS_EXECUTED line — treating as zero tests executed"
-            exit 1
-          fi
-          count="${line#ROBOTMONEY_SWARM_ONBOARDING_RECIPE_TESTS_EXECUTED=}"
-          echo "executed assertions: $count"
-          if [[ "$count" -lt 12 ]]; then
-            echo "::error::only $count assertions executed (expected >= 12) — a suite that asserts nothing is a false green"
             exit 1
           fi

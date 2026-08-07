@@ -4,14 +4,14 @@
 //! feature as `docs/product/20260623-product-proposal-investment-committee-v0.md`,
 //! which scopes the separate **on-chain** IC v0 that `rmpc committee
 //! register`/`vote-submit` implement.
-//! Implements: issue #1111 — `rmpc committee-identity`: MCP committee signing identity
+//! Implements: issue #1111 — `rmpc committee-identity`: committee signing identity
 //!
 //! Encrypted-at-rest Ed25519 identity for the Investment Committee demo's
-//! MCP flow (`robotmoney-frontend`: public apply -> admin activation -> MCP
-//! OAuth -> `get_signing_payload` -> `submit_recommendation`). This is a
-//! **distinct identity type** from the on-chain EVM signer used by
-//! `rmpc committee register` / `vote-submit` (see [`crate::signer`]): the
-//! demo's HTTP/MCP verifier (`@robotmoney/contract`'s
+//! plain-REST flow (`robotmoney-frontend`: public apply -> human approval
+//! -> claim via challenge/signature -> participate; no MCP transport is
+//! involved). This is a **distinct identity type** from the on-chain EVM
+//! signer used by `rmpc committee register` / `vote-submit` (see
+//! [`crate::signer`]): the demo's HTTP verifier (`@robotmoney/contract`'s
 //! `canonicalizeSubmission` plus `crypto.subtle.verify({name:"Ed25519"})`)
 //! expects a **raw 32-byte Ed25519 public key** and a **raw 64-byte
 //! Ed25519 signature** over the UTF-8 bytes of the canonical JSON payload,
@@ -163,7 +163,7 @@ pub struct CipherParams {
     pub ciphertext: String,
 }
 
-/// A loaded, decrypted committee MCP signing identity.
+/// A loaded, decrypted committee signing identity.
 pub struct CommitteeIdentity {
     signing_key: SigningKey,
 }
@@ -392,16 +392,16 @@ impl CommitteeIdentity {
     }
 
     /// Base64 (standard, padded) encoding of the raw 32-byte Ed25519
-    /// public key — the exact wire format `POST /api/committee/apply`'s
-    /// `publicKey` field and the MCP submission verifier expect.
+    /// public key — the exact wire format `POST /api/swarm/apply`'s
+    /// `publicKey` field and the submission verifier expect.
     pub fn public_key_b64(&self) -> String {
         BASE64.encode(self.signing_key.verifying_key().to_bytes())
     }
 
     /// Sign the exact bytes of `payload` — the UTF-8 encoding of the
-    /// canonical JSON string returned by MCP `get_signing_payload` — and
+    /// canonical JSON string for a recommendation submission — and
     /// return the base64 (standard, padded) raw 64-byte Ed25519 signature
-    /// `submit_recommendation` expects.
+    /// the submission endpoint expects.
     ///
     /// Deterministic per RFC 8032: signing the same bytes with the same
     /// identity always yields the same signature.

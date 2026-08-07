@@ -420,20 +420,21 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
-    /// Manage a local Investment Committee **MCP** signing identity
+    /// Manage a local Investment Committee signing identity
     /// (`robotmoney-frontend` demo). Ed25519 keypair, encrypted at rest —
     /// distinct from the on-chain EVM signer used by `rmpc committee
     /// register` / `vote-submit`. Exports a base64 public key for `POST
-    /// /api/committee/apply` and signs the exact canonical payload
-    /// returned by MCP `get_signing_payload` for `submit_recommendation`,
-    /// so a prospective agent never has to hand-roll Ed25519 code.
+    /// /api/swarm/apply` and signs the exact canonical payload for a
+    /// recommendation submission over that flow's plain-REST apply ->
+    /// approval -> claim -> participate steps, so a prospective agent
+    /// never has to hand-roll Ed25519 code.
     /// Implements: issue #1111.
     ///
     /// The keystore passphrase is read from
     /// `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`; it is never accepted on argv
     /// or prompted on stdin.
     CommitteeIdentity {
-        /// Path to the committee MCP identity keystore file.
+        /// Path to the committee identity keystore file.
         #[arg(long, short = 'p')]
         path: PathBuf,
         #[command(subcommand)]
@@ -447,19 +448,20 @@ pub enum Command {
 /// Subcommands for `rmpc committee-identity`.
 #[derive(Debug, Subcommand)]
 pub enum CommitteeIdentitySubcommand {
-    /// Generate a fresh Ed25519 committee MCP signing identity and write
+    /// Generate a fresh Ed25519 committee signing identity and write
     /// an encrypted keystore at `--path`. Refuses to overwrite an
     /// existing file.
     Create,
     /// Print the identity's base64 (standard, padded) Ed25519 public
-    /// key — the exact value `POST /api/committee/apply`'s `publicKey`
+    /// key — the exact value `POST /api/swarm/apply`'s `publicKey`
     /// field expects. Reads the keystore's cleartext `public_key` field;
     /// no passphrase required.
     ShowPublicKey,
-    /// Sign the exact canonical payload string returned by MCP
-    /// `get_signing_payload` and print the base64 (standard, padded)
-    /// Ed25519 signature `submit_recommendation` expects. Deterministic:
-    /// signing the same payload twice yields the same signature.
+    /// Sign the exact canonical payload string for a recommendation
+    /// submission and print the base64 (standard, padded) Ed25519
+    /// signature required to submit it over the plain-REST swarm flow.
+    /// Deterministic: signing the same payload twice yields the same
+    /// signature.
     Sign {
         /// The exact canonical payload string to sign, passed inline.
         /// Mutually exclusive with `--payload-file`.
