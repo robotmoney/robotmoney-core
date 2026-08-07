@@ -8,8 +8,10 @@
 # 404 — and no CI job anywhere went red, because renaming a directory looks like
 # a local refactor and is actually a breaking change to another repo's shipped
 # constant. This suite fetches the published URLs and fails when one stops
-# returning 200. It also covers the deprecation compat stubs at the old
-# committee paths, since consumers shipped those URLs too.
+# returning 200. It also covers the deprecation compat stub at the old
+# committee path, since consumers shipped that URL too. (The onboarding paths
+# this suite used to check were removed along with the swarm-onboarding skill
+# itself — see scripts/check-skill-url-reachability.sh for why.)
 #
 # WHY IT IS SWEEP-ONLY (no pull_request trigger)
 # It is an external-dependency check against live raw.githubusercontent.com over

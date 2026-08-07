@@ -33,7 +33,11 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
 # Minimum number of assertions this suite must execute for a green result.
 # Bump it when you add assertions; never lower it to make a run pass.
-MIN_EXPECTED_ASSERTIONS=33
+# Lowered from 33 to 26 when the swarm-onboarding skill (and its two
+# onboarding-specific test sections: the canonical-payload-contract check and
+# the stale-committee-spelling guard) was deleted outright — core no longer
+# serves onboarding, so there is nothing left to assert about it here.
+MIN_EXPECTED_ASSERTIONS=26
 
 PASS=0
 FAIL=0
@@ -71,60 +75,6 @@ INPUTS_DIGEST="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcde
 
 echo "=== robotmoney-swarm tests ==="
 
-# ---------- 0. onboarding canonical application payload contract ----------
-echo ""
-echo "--- test: onboarding skill states the canonical application payload inline ---"
-ONBOARDING_SKILL="$PLUGIN_DIR/skills/swarm-onboarding/SKILL.md"
-onboarding_contains() {
-  local pattern="$1"
-  local description="$2"
-  if grep -Fq "$pattern" "$ONBOARDING_SKILL"; then
-    pass "$description"
-  else
-    fail "$description missing from swarm-onboarding skill"
-  fi
-}
-
-onboarding_contains 'fixed order: `name`, `contact`, `lens`' \
-  'canonical payload key order starts name, contact, lens'
-onboarding_contains 'then `publicKey`' \
-  'canonical payload key order ends publicKey'
-onboarding_contains 'omit the `lens` key entirely' \
-  'canonical payload omits absent lens'
-onboarding_contains 'never send `lens: null` or `lens: ""`' \
-  'canonical payload forbids null and empty lens'
-onboarding_contains 'compact JSON with no whitespace and no' \
-  'canonical payload requires compact JSON'
-onboarding_contains 'trailing newline' \
-  'canonical payload forbids trailing newline'
-onboarding_contains '`{"name":"Nova Desk","contact":"nova@example.com","publicKey":"<base64>"}`' \
-  'canonical payload includes a no-lens worked example'
-onboarding_contains 'POST "<host>/api/swarm/apply"' \
-  'onboarding includes a copyable apply POST request'
-
-# ---------- 0b. spelling regression guard: no stale committee-spelled surfaces ----------
-# Web/REST/docs surfaces are spelled `swarm` (the forms the frontend actually
-# serves). The deliberate committee identifiers — `rmpc committee-identity`,
-# `rmpc committee vote-submit`, RMPC_COMMITTEE_IDENTITY_PASSPHRASE,
-# schemas/committee-vote.json — must NOT trip this guard, so the banned
-# patterns below are anchored on the URL/file forms only.
-echo ""
-echo "--- test: swarm-onboarding skill contains no stale committee-spelled surfaces ---"
-BANNED_SPELLINGS=(
-  '/api/committee/'
-  '/docs/investment-committee'
-  'committee-application.js'
-  'ROUTES.committee'
-  '<host>/committee/'
-)
-for banned in "${BANNED_SPELLINGS[@]}"; do
-  if grep -Fq "$banned" "$ONBOARDING_SKILL"; then
-    fail "stale committee spelling '$banned' present in swarm-onboarding skill (frontend serves the swarm form)"
-  else
-    pass "no stale spelling '$banned' in swarm-onboarding skill"
-  fi
-done
-
 # ---------- 1. plugin.json valid JSON with correct name ----------
 echo ""
 echo "--- test: plugin.json valid JSON and name=robotmoney-swarm ---"
@@ -135,17 +85,17 @@ else
   fail "plugin name is '$plugin_name', expected 'robotmoney-swarm'"
 fi
 
-# ---------- 1b. the plugin ships exactly the two renamed skills ----------
+# ---------- 1b. the plugin ships exactly the one renamed skill ----------
 echo ""
-echo "--- test: plugin.json declares the swarm skills and they exist on disk ---"
+echo "--- test: plugin.json declares the swarm skill and it exists on disk ---"
 declared_skills=$(jq -r '.skills | sort | join(",")' "$PLUGIN_DIR/plugin.json")
-if [[ "$declared_skills" == "robotmoney-swarm,swarm-onboarding" ]]; then
-  pass "plugin.json skills are [robotmoney-swarm, swarm-onboarding]"
+if [[ "$declared_skills" == "robotmoney-swarm" ]]; then
+  pass "plugin.json skills are [robotmoney-swarm]"
 else
-  fail "plugin.json skills are '$declared_skills', expected 'robotmoney-swarm,swarm-onboarding'"
+  fail "plugin.json skills are '$declared_skills', expected 'robotmoney-swarm'"
 fi
 
-for skill in robotmoney-swarm swarm-onboarding; do
+for skill in robotmoney-swarm; do
   if [[ -f "$PLUGIN_DIR/skills/$skill/SKILL.md" ]]; then
     pass "skills/$skill/SKILL.md exists"
   else
@@ -159,13 +109,16 @@ for skill in robotmoney-swarm swarm-onboarding; do
   fi
 done
 
-# ---------- 1c. compat stubs still answer at the old skill paths ----------
-# The frontend shipped the old raw URLs; deleting them outright would 404 every
-# already-deployed consumer. These stubs must keep existing until the
-# deprecation window closes, and must point at the new path.
+# ---------- 1c. compat stub still answers at the old committee skill path ----------
+# The frontend shipped the old raw URL for the general committee->swarm
+# rename; deleting it outright would 404 every already-deployed consumer.
+# This stub must keep existing until the deprecation window closes, and must
+# point at the new path. (The sibling committee-onboarding stub is gone: it
+# pointed at swarm-onboarding, which was deleted outright — no stub, no
+# pointer, a plain 404 by design. See docs/technical/mcp-decision.md.)
 echo ""
-echo "--- test: compat stubs exist at the old committee skill paths ---"
-for old in committee-onboarding robotmoney-committee; do
+echo "--- test: compat stub exists at the old committee skill path ---"
+for old in robotmoney-committee; do
   stub="$REPO_ROOT/plugins/robotmoney-committee/skills/$old/SKILL.md"
   if [[ -f "$stub" ]]; then
     pass "compat stub present at plugins/robotmoney-committee/skills/$old/SKILL.md"

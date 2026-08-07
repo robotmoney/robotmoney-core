@@ -22,8 +22,11 @@ Concrete precedent, now generalized org-wide: robotmoney-frontend built a
 maintained skill covers the same ground with far less to run and secure, and
 the "agents need a bespoke protocol to call an API" premise did not
 materialize. That reasoning applies across Robot Money. Swarm onboarding
-and participation are REST-only; this repo's `swarm-onboarding` skill
-(`plugins/robotmoney-swarm/skills/`) teaches the REST flow with no MCP.
+and participation are REST-only; the `swarm-onboarding` skill teaches the
+REST flow with no MCP. It is maintained as a single copy in
+robotmoney-frontend (`frontend/public/skills/swarm-onboarding/SKILL.md`,
+served from `https://robotmoney.net/skills/swarm-onboarding/SKILL.md`) — this
+repo no longer carries its own copy.
 
 The original "defer" analysis below is retained as the historical record; only
 its **status** changes (defer → not supported).
