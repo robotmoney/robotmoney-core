@@ -6,5 +6,5 @@
   "homepage": "https://robotmoney.net/regime",
   "repository": "https://github.com/robotmoney/robotmoney-skills",
   "license": "Apache-2.0",
-  "skills": ["robotmoney-swarm", "swarm-onboarding"]
+  "skills": ["robotmoney-swarm"]
 }

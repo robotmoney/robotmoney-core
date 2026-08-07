@@ -2,23 +2,37 @@
 # check-skill-url-reachability.sh — assert every published raw SKILL.md URL
 # that an external consumer hardcodes still returns HTTP 200.
 #
-# Canonical docs: plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md
+# Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 # Filed by:       robotmoney-core#1199
 #
 # WHY THIS EXISTS
-# robotmoney-frontend ships SWARM_ONBOARDING_SKILL_URL as a literal
-# raw.githubusercontent.com URL. Nothing in either repo's CI ever fetched it, so
-# when this repo's plugin tree was named robotmoney-committee and the frontend
-# shipped the robotmoney-swarm path, every operator who clicked "onboard" got a
-# 404 and no build ever went red. Renaming a directory in this repo is a
-# breaking change to a shipped constant in another repo; this script is the only
-# thing that notices.
+# robotmoney-frontend ships skill-URL constants as literal
+# raw.githubusercontent.com URLs into this repo. Nothing in either repo's CI
+# ever fetched them, so when this repo's plugin tree was renamed, an operator
+# following a stale URL got a 404 and no build ever went red. Renaming a
+# directory in this repo is a breaking change to a shipped constant in another
+# repo; this script is the only thing that notices.
 #
 # WHAT IT CHECKS
 # Each path in SKILL_PATHS below, fetched at $REF (default: dev), must return
-# 200. That includes the deprecation compat stubs at the OLD committee paths:
-# consumers shipped those URLs too, and a stub that 404s is exactly the bug this
+# 200. That includes the deprecation compat stub at the OLD committee path
+# (plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md):
+# consumers shipped that URL too, and a stub that 404s is exactly the bug this
 # check exists to catch.
+#
+# ONBOARDING IS DELIBERATELY NOT CHECKED HERE
+# robotmoney-swarm/skills/swarm-onboarding/SKILL.md and
+# robotmoney-committee/skills/committee-onboarding/SKILL.md used to be in
+# SKILL_PATHS below. Both were removed from this repo outright: onboarding is
+# no longer core's concern. robotmoney-frontend's own copy
+# (frontend/public/skills/swarm-onboarding/SKILL.md, served from
+# https://robotmoney.net/skills/swarm-onboarding/SKILL.md) is now the single
+# source of truth, and core deliberately ships no compat stub pointing at it —
+# an old cached URL into core's onboarding paths should 404, not redirect. Do
+# not re-add those two paths here: checking their reachability would now be
+# meaningless at best (core never serves them again) and actively wrong at
+# worst (asserting they return 200 would contradict the deletion). See
+# docs/technical/mcp-decision.md for the reasoning.
 #
 # LOUD FAILURE, NEVER SILENT SKIP
 # curl is required and network access is required. If either is missing the
@@ -39,13 +53,10 @@ REF="${REF:-dev}"
 BASE="https://raw.githubusercontent.com/${REPO}/${REF}"
 
 # Every raw path an external consumer may have hardcoded.
-#   1. the live onboarding skill — the exact constant robotmoney-frontend ships
-#   2. the live vote-submission skill
-#   3-4. the deprecation compat stubs at the pre-#1199 paths
+#   1. the live vote-submission skill
+#   2. the deprecation compat stub at the pre-#1199 committee path
 SKILL_PATHS=(
-  "plugins/robotmoney-swarm/skills/swarm-onboarding/SKILL.md"
   "plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md"
-  "plugins/robotmoney-committee/skills/committee-onboarding/SKILL.md"
   "plugins/robotmoney-committee/skills/robotmoney-committee/SKILL.md"
 )
 
@@ -96,8 +107,8 @@ fi
 
 if [[ "$FAILED" -ne 0 ]]; then
   echo "FATAL: $FAILED of $CHECKED published skill URLs did not return 200." >&2
-  echo "       A shipped consumer (robotmoney-frontend SWARM_ONBOARDING_SKILL_URL)" >&2
-  echo "       is 404ing right now. Restore the path or add a compat stub." >&2
+  echo "       A shipped robotmoney-frontend consumer is 404ing right now." >&2
+  echo "       Restore the path or add a compat stub." >&2
   exit 1
 fi
 
