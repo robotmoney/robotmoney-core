@@ -72,7 +72,12 @@ jobs:
           bun-version: "1.2.13"
 
       - name: Install OpenCode at pinned version
-        run: bun install -g opencode-ai@1.14.29
+        # `--trust` is preventive here: bun 1.2.13 blocks lifecycle scripts for
+        # packages outside its default-trusted list. This pin (1.14.29) happens
+        # not to trip that, but the same plain `bun install -g` on suite-11b's
+        # newer pin left opencode-ai's postinstall unrun and reddened that
+        # nightly ~110 times between 2026-07 and 2026-08-24 (#1202 follow-up).
+        run: bun install -g --trust opencode-ai@1.14.29
 
       - name: OpenCode binary check (no API key)
         run: |

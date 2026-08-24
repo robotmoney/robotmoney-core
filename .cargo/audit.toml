@@ -2,9 +2,10 @@
 # Canonical: docs/technical/security-model.md §8
 #
 # cargo audit exits non-zero on any vulnerability advisory by default, which is
-# exactly the gate §8 requires: dependency CVEs must block merges. CI also
-# passes `--deny warnings` (see suite-04-rust-quality.yml) so that yanked crates
-# and unsound advisories are treated as hard failures too.
+# exactly the gate §8 requires: dependency CVEs must block merges. CI invokes it
+# as plain `cargo audit -f <lock>` (see suite-04-rust-quality.yml), WITHOUT
+# `--deny warnings`: informational advisories (unmaintained, unsound, yanked)
+# are reported but do not fail the gate. Only vulnerability advisories block.
 #
 # To accept a known low-risk advisory temporarily:
 # 1. Add its RUSTSEC id to the `ignore` list below.
