@@ -50,7 +50,11 @@
 //! once the key is loaded, so signing the same payload bytes twice with
 //! the same identity always yields the same signature.
 
-use std::path::Path;
+use std::{
+    ffi::OsString,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
@@ -64,13 +68,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroize;
 
-/// Env var carrying the passphrase used to encrypt/decrypt the keystore.
-/// Read only from the environment; never accepted on argv (would leak via
-/// `ps`) and never prompted on stdin (a non-interactive agent invocation
-/// must fail loudly instead of hanging on a TTY read that will never
-/// arrive — same rationale as `rmpc committee register`/`vote-submit`'s
-/// signer loader).
+/// Legacy env var carrying the passphrase used to encrypt/decrypt the
+/// keystore. Never accepted on argv (which would leak via `ps`).
 pub const PASSPHRASE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
+
+/// Env var naming a passphrase file. The file must be owned by the current
+/// user and inaccessible to group and other users.
+pub const PASSPHRASE_FILE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE";
 
 /// Argon2id parameters baked into the on-disk format. Matches the
 /// software EVM keystore's OWASP "second" recommendation.
@@ -411,19 +415,121 @@ impl CommitteeIdentity {
     }
 }
 
-/// Read the passphrase from [`PASSPHRASE_ENV_VAR`]. Never falls back to
-/// stdin — see the constant's doc comment.
-pub fn read_passphrase_from_env() -> Result<String, CommitteeIdentityError> {
-    match std::env::var(PASSPHRASE_ENV_VAR) {
-        Ok(p) if !p.is_empty() => Ok(p),
-        Ok(_) => Err(CommitteeIdentityError::ErrPassphrase(format!(
-            "{PASSPHRASE_ENV_VAR} is set but empty"
+#[derive(Debug, PartialEq, Eq)]
+enum PassphraseSource {
+    File(PathBuf),
+    Environment,
+    Tty,
+}
+
+fn select_passphrase_source(
+    file: Option<OsString>,
+    passphrase_is_set: bool,
+) -> Result<PassphraseSource, CommitteeIdentityError> {
+    match file {
+        Some(path) if path.is_empty() => Err(CommitteeIdentityError::ErrPassphrase(format!(
+            "{PASSPHRASE_FILE_ENV_VAR} is set but empty"
         ))),
-        Err(_) => Err(CommitteeIdentityError::ErrPassphrase(format!(
-            "{PASSPHRASE_ENV_VAR} is unset; refusing to prompt on stdin from a \
-             non-interactive command"
-        ))),
+        Some(path) => Ok(PassphraseSource::File(PathBuf::from(path))),
+        None if passphrase_is_set => Ok(PassphraseSource::Environment),
+        None => Ok(PassphraseSource::Tty),
     }
+}
+
+/// Read a committee-identity passphrase without ever consuming stdin. A
+/// protected file is preferred, followed by the legacy environment variable;
+/// if neither is set, rpassword opens `/dev/tty` directly and suppresses echo.
+pub fn read_passphrase() -> Result<String, CommitteeIdentityError> {
+    match select_passphrase_source(
+        std::env::var_os(PASSPHRASE_FILE_ENV_VAR),
+        std::env::var_os(PASSPHRASE_ENV_VAR).is_some(),
+    )? {
+        PassphraseSource::File(path) => read_passphrase_file(&path),
+        PassphraseSource::Environment => std::env::var(PASSPHRASE_ENV_VAR).map_err(|_| {
+            CommitteeIdentityError::ErrPassphrase(format!(
+                "{PASSPHRASE_ENV_VAR} must contain valid Unicode"
+            ))
+        }),
+        PassphraseSource::Tty => rpassword::prompt_password("Committee identity passphrase: ")
+            .map_err(|e| {
+                CommitteeIdentityError::ErrPassphrase(format!(
+                    "{PASSPHRASE_ENV_VAR} and {PASSPHRASE_FILE_ENV_VAR} are unset; \
+                     could not read a passphrase from /dev/tty: {e}"
+                ))
+            }),
+    }
+    .and_then(require_nonempty_passphrase)
+}
+
+fn require_nonempty_passphrase(passphrase: String) -> Result<String, CommitteeIdentityError> {
+    if passphrase.is_empty() {
+        return Err(CommitteeIdentityError::ErrPassphrase(
+            "passphrase is empty".to_string(),
+        ));
+    }
+    Ok(passphrase)
+}
+
+fn read_passphrase_file(path: &Path) -> Result<String, CommitteeIdentityError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        CommitteeIdentityError::ErrPassphrase(format!(
+            "could not open {PASSPHRASE_FILE_ENV_VAR} {}: {e}",
+            path.display()
+        ))
+    })?;
+    ensure_safe_passphrase_file(&file, path)?;
+    let mut bytes = Vec::new();
+    file.take(u64::MAX).read_to_end(&mut bytes).map_err(|e| {
+        CommitteeIdentityError::ErrPassphrase(format!(
+            "could not read {PASSPHRASE_FILE_ENV_VAR} {}: {e}",
+            path.display()
+        ))
+    })?;
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        CommitteeIdentityError::ErrPassphrase(format!(
+            "{PASSPHRASE_FILE_ENV_VAR} {} is not valid UTF-8",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn ensure_safe_passphrase_file(
+    file: &std::fs::File,
+    path: &Path,
+) -> Result<(), CommitteeIdentityError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata().map_err(|e| {
+        CommitteeIdentityError::ErrPassphrase(format!(
+            "could not inspect {PASSPHRASE_FILE_ENV_VAR} {}: {e}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(CommitteeIdentityError::ErrPassphrase(format!(
+            "{PASSPHRASE_FILE_ENV_VAR} {} must be a current-user-owned regular file with mode 0600 or stricter",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_safe_passphrase_file(
+    _file: &std::fs::File,
+    path: &Path,
+) -> Result<(), CommitteeIdentityError> {
+    Err(CommitteeIdentityError::ErrPassphrase(format!(
+        "{PASSPHRASE_FILE_ENV_VAR} {} is supported only on Unix platforms",
+        path.display()
+    )))
 }
 
 fn derive_key(
@@ -581,6 +687,50 @@ mod tests {
         );
         // A tampered payload must fail verification.
         assert!(vk.verify(b"tampered payload", &sig).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_passphrase_file_trims_trailing_newlines() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("passphrase");
+        std::fs::write(&path, b"correct horse battery staple\r\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let passphrase = read_passphrase_file(&path).unwrap();
+        assert_eq!(passphrase, "correct horse battery staple");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn passphrase_file_rejects_group_or_world_access() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("passphrase");
+        std::fs::write(&path, b"correct horse battery staple\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = read_passphrase_file(&path).expect_err("unsafe file permissions must fail");
+        assert!(matches!(err, CommitteeIdentityError::ErrPassphrase(_)));
+    }
+
+    #[test]
+    fn passphrase_source_prefers_file_and_uses_tty_only_when_unset() {
+        assert_eq!(
+            select_passphrase_source(Some(OsString::from("secret-file")), true).unwrap(),
+            PassphraseSource::File(PathBuf::from("secret-file"))
+        );
+        assert_eq!(
+            select_passphrase_source(None, true).unwrap(),
+            PassphraseSource::Environment
+        );
+        assert_eq!(
+            select_passphrase_source(None, false).unwrap(),
+            PassphraseSource::Tty
+        );
     }
 
     #[test]

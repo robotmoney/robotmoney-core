@@ -430,9 +430,12 @@ pub enum Command {
     /// never has to hand-roll Ed25519 code.
     /// Implements: issue #1111.
     ///
-    /// The keystore passphrase is read from
-    /// `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`; it is never accepted on argv
-    /// or prompted on stdin.
+    /// The keystore passphrase is never accepted on argv or read from
+    /// stdin. Set `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` to a
+    /// current-user-owned file with mode 0600 or stricter, or type it at
+    /// the local `/dev/tty` prompt. The legacy
+    /// `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` environment variable remains
+    /// supported.
     CommitteeIdentity {
         /// Path to the committee identity keystore file.
         #[arg(long, short = 'p')]

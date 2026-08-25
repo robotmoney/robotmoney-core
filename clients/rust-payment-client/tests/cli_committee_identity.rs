@@ -29,7 +29,7 @@
 //!   `rmpc committee-identity --help` surface the new command (AC-2).
 
 use assert_cmd::Command;
-use rust_payment_client::committee_identity::PASSPHRASE_ENV_VAR;
+use rust_payment_client::committee_identity::{PASSPHRASE_ENV_VAR, PASSPHRASE_FILE_ENV_VAR};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -267,6 +267,94 @@ fn create_without_passphrase_env_fails_loudly() {
         !path.exists(),
         "no keystore should be written when the passphrase is missing"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn file_passphrase_trims_newline_and_preserves_signatures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+    let passphrase_file = dir.path().join("passphrase");
+    std::fs::write(&passphrase_file, format!("{TEST_PASSPHRASE}\n")).unwrap();
+    std::fs::set_permissions(&passphrase_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .env(PASSPHRASE_FILE_ENV_VAR, &passphrase_file)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .assert()
+        .success();
+
+    let sign_with_file = rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .env(PASSPHRASE_FILE_ENV_VAR, &passphrase_file)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "sign",
+            "--payload",
+            SAMPLE_CANONICAL_PAYLOAD,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let sign_with_env = rmpc()
+        .env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
+        .env_remove(PASSPHRASE_FILE_ENV_VAR)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "sign",
+            "--payload",
+            SAMPLE_CANONICAL_PAYLOAD,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let file: Value = serde_json::from_slice(&sign_with_file.stdout).unwrap();
+    let env: Value = serde_json::from_slice(&sign_with_env.stdout).unwrap();
+    assert_eq!(file["signature"], env["signature"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_passphrase_file_permissions_are_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+    let passphrase_file = dir.path().join("passphrase");
+    std::fs::write(&passphrase_file, format!("{TEST_PASSPHRASE}\n")).unwrap();
+    std::fs::set_permissions(&passphrase_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .env(PASSPHRASE_FILE_ENV_VAR, &passphrase_file)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let response: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(response["error"], "ErrPassphrase");
+    assert!(!path.exists());
 }
 
 #[test]

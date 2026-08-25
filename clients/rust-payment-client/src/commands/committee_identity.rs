@@ -18,9 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::committee_identity::{
-    read_passphrase_from_env, CommitteeIdentity, CommitteeIdentityError,
-};
+use crate::committee_identity::{read_passphrase, CommitteeIdentity, CommitteeIdentityError};
 
 const EXIT_OK: i32 = 0;
 const EXIT_REFUSAL: i32 = 2;
@@ -69,7 +67,7 @@ struct Failure {
 
 /// Run `rmpc committee-identity create`. Returns the process exit code.
 pub fn run_create(path: &Path, pretty: bool) -> i32 {
-    let passphrase = match read_passphrase_from_env() {
+    let passphrase = match read_passphrase() {
         Ok(p) => p,
         Err(e) => return emit_error(&e, pretty),
     };
@@ -110,7 +108,7 @@ pub fn run_show_public_key(path: &Path, pretty: bool) -> i32 {
 
 /// Run `rmpc committee-identity sign`. Returns the process exit code.
 pub fn run_sign(path: &Path, source: PayloadSource, pretty: bool) -> i32 {
-    let passphrase = match read_passphrase_from_env() {
+    let passphrase = match read_passphrase() {
         Ok(p) => p,
         Err(e) => return emit_error(&e, pretty),
     };
