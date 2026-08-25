@@ -41,7 +41,16 @@ rmpc --version
 
 The script exits non-zero — printing `ChecksumMismatch` — if the archive does not
 match its published checksum, or if the release publishes no checksum at all.
-Either way nothing is extracted and nothing is installed; do not work around it.
+Either way nothing is extracted and nothing is installed.
+
+> **Releases published before `.sha256` existed:** `release-rmpc.yml` only began
+> emitting `<archive>.tar.gz.sha256` in #1204, so every release up to and
+> including `v0.3.3` ships archives with no checksum beside them. The installer
+> will correctly refuse those with exit `4` — *"no published checksum ... refusing
+> to install an unverifiable binary"*. That is the script working, not failing.
+> Until a release cut after #1204 exists, use **Option B** and build from source.
+> Do **not** answer that exit code by downloading the tarball by hand — that is
+> precisely the unverified path this replaced.
 
 > **Known issue:** the release binary may exit silently with exit code 3 on some systems (no stdout, stderr, or log output). If `rmpc --help` works but any subcommand exits 3 with no output, build from source instead (Option B).
 
