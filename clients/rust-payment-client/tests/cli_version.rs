@@ -36,7 +36,8 @@ fn version_flag_reports_manifest_version_and_is_not_the_placeholder() {
     );
 
     let out = rmpc().arg("--version").assert().success();
-    let stdout = String::from_utf8(out.get_output().stdout.clone()).expect("utf-8 --version output");
+    let stdout =
+        String::from_utf8(out.get_output().stdout.clone()).expect("utf-8 --version output");
 
     assert_eq!(
         stdout.trim(),
