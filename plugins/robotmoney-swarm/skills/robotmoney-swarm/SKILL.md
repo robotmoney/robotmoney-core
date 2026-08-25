@@ -64,14 +64,17 @@ Do **not** invoke this skill when:
 3. Form per-vault tilts → produce vote JSON (form-vote.sh)
 4. ajv-validate vote JSON against schemas/committee-vote.json
 5. Post rationale memo to rationale_uri  ← abort here if unreachable
-6. rmpc committee vote-submit --config <CONFIG> \
+6. rmpc committee --config <CONFIG> vote-submit \
        --vault <ADDR> \
        --stance <STANCE> \
-       --target-weight-bps <BPS> \
+       --weight-bps <BPS> \
        --confidence <0-100> \
        --rationale-uri <URI> \
+       --vote-json-hash <HASH> \
        --prompt-hash <HASH> \
        --inputs-digest <DIGEST> \
+       --timestamp <UNIX_SECS> \
+       --order-id <0x...64hex> \
        --pretty
 ```
 
@@ -107,15 +110,17 @@ Required fields: `schema_version`, `agent_id`, `vault`, `stance`,
 ### committee vote-submit
 
 ```bash
-rmpc committee vote-submit \
-  --config <CONFIG> \
+rmpc committee --config <CONFIG> vote-submit \
   --vault <VAULT_ADDR> \
   --stance <overweight|neutral|underweight> \
-  --target-weight-bps <0-10000> \
+  --weight-bps <0-10000> \
   --confidence <0-100> \
   --rationale-uri <URI> \
+  --vote-json-hash <0x...64hex> \
   --prompt-hash <0x...64hex> \
   --inputs-digest <0x...64hex> \
+  --timestamp <UNIX_SECS> \
+  --order-id <0x...64hex> \
   --pretty
 ```
 
