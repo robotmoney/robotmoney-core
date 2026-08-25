@@ -149,17 +149,13 @@ fi
 echo ""
 echo "--- AC-1: tilt-formation produces schema-conformant vote JSON (ajv) ---"
 
-# Install ajv into a temp directory scoped to this test run.
+# Install the exact, lockfile-backed AJV dependency tree into a temp directory
+# scoped to this test run. Lifecycle scripts are never needed for validation.
 AJV_TMP="$(mktemp -d)"
 trap 'rm -rf "$AJV_TMP"' EXIT
 
-# Write a minimal package.json so npm install works in the temp dir.
-cat > "$AJV_TMP/package.json" <<'PKGJSON'
-{"name":"ajv-test-runner","version":"1.0.0","private":true}
-PKGJSON
-
-# Install ajv and ajv-formats silently.
-npm install --prefix "$AJV_TMP" --save ajv ajv-formats 2>/dev/null 1>/dev/null
+cp "$PLUGIN_DIR/package.json" "$PLUGIN_DIR/package-lock.json" "$AJV_TMP/"
+npm ci --prefix "$AJV_TMP" --ignore-scripts 2>/dev/null 1>/dev/null
 
 # Write the Node.js validator script.
 AJV_VALIDATOR="$AJV_TMP/validate.js"

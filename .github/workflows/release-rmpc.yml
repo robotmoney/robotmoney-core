@@ -183,13 +183,17 @@ jobs:
         run: |
           ARCHIVE="rmpc-${{ needs.resolve.outputs.version }}-${{ matrix.os_label }}.tar.gz"
           tar -czf "${ARCHIVE}" -C target/${{ matrix.target }}/release rmpc
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          echo "CHECKSUM=${ARCHIVE}.sha256" >> "$GITHUB_ENV"
 
       - name: Upload archive as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.CHECKSUM }}
           if-no-files-found: error
           retention-days: 7
 
@@ -225,6 +229,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
           draft: false
           fail_on_unmatched_files: true
