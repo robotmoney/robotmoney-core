@@ -1,5 +1,6 @@
 //! Canonical: none — integration tests for `rmpc committee-identity`
-//! Implements: issue #1111 AC-3 (Test plan)
+//! Implements: issue #1111 AC-3 (Test plan); issue #1192 (safe passphrase
+//! input — file channel, `/dev/tty` prompt, loud non-interactive refusal)
 //!
 //! Exercises the actual `rmpc` binary end-to-end for the MCP committee
 //! identity flow: create -> show-public-key -> sign. No RPC fixture, no
@@ -18,9 +19,22 @@
 //!   and `--payload-file` over the same bytes produce the same signature.
 //! - `sign_refuses_payload_file_with_trailing_whitespace`: a newline from
 //!   `echo` is rejected before it can yield an unverifiable signature.
-//! - `create_without_passphrase_env_fails_loudly`: missing
-//!   `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` refuses with exit 2, not a
-//!   silent no-op.
+//! - `create_without_any_passphrase_source_fails_loudly`: with neither
+//!   `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` nor
+//!   `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` set and no terminal
+//!   attached, `create` refuses with exit 2 and names both safe channels
+//!   — it never hangs on `/dev/tty` and never no-ops (issue #1192).
+//! - `passphrase_piped_on_stdin_is_never_accepted`: a secret written to
+//!   the child's stdin is ignored and refused (issue #1192).
+//! - `empty_passphrase_file_variable_fails_loudly`: an empty
+//!   `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` refuses instead of falling
+//!   back to another source (issue #1192).
+//! - `file_passphrase_trims_newline_and_preserves_signatures`: a mode-0600
+//!   passphrase file is an exact substitute for the environment variable,
+//!   trailing newline trimmed (issue #1192).
+//! - `unsafe_passphrase_file_permissions_are_rejected`: a group- or
+//!   world-readable passphrase file is refused before any keystore is
+//!   written (issue #1192).
 //! - `create_refuses_to_overwrite_existing_keystore`: a second `create` at
 //!   the same `--path` exits 2 instead of clobbering the identity.
 //! - `sign_requires_exactly_one_payload_source`: neither/both of
@@ -243,13 +257,18 @@ fn sign_refuses_payload_file_with_trailing_whitespace() {
     assert!(failure["message"].as_str().unwrap().contains("printf '%s'"));
 }
 
+/// With no passphrase source and no terminal (assert_cmd gives the child a
+/// null stdin, exactly like an agent-driven or CI invocation), `create`
+/// must refuse loudly and point at the two safe channels — never hang on a
+/// `/dev/tty` read nobody is there to answer, and never no-op.
 #[test]
-fn create_without_passphrase_env_fails_loudly() {
+fn create_without_any_passphrase_source_fails_loudly() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("identity.json");
 
     let out = rmpc()
         .env_remove(PASSPHRASE_ENV_VAR)
+        .env_remove(PASSPHRASE_FILE_ENV_VAR)
         .args([
             "committee-identity",
             "--path",
@@ -263,10 +282,74 @@ fn create_without_passphrase_env_fails_loudly() {
     let v: Value = serde_json::from_str(std::str::from_utf8(&out.stdout).unwrap().trim()).unwrap();
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"], "ErrPassphrase");
+    let message = v["message"].as_str().unwrap();
+    assert!(
+        message.contains(PASSPHRASE_FILE_ENV_VAR),
+        "the refusal must name the passphrase-file channel: {message}"
+    );
+    assert!(
+        message.contains("/dev/tty"),
+        "the refusal must name the interactive channel: {message}"
+    );
     assert!(
         !path.exists(),
         "no keystore should be written when the passphrase is missing"
     );
+}
+
+/// A passphrase piped on stdin must never be accepted: the prompt reads
+/// `/dev/tty`, so an agent that tries to feed the secret through the pipe
+/// gets the same loud refusal rather than a silently created keystore.
+#[test]
+fn passphrase_piped_on_stdin_is_never_accepted() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+
+    let out = rmpc()
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .env_remove(PASSPHRASE_FILE_ENV_VAR)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .write_stdin(format!("{TEST_PASSPHRASE}\n"))
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_str(std::str::from_utf8(&out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["error"], "ErrPassphrase");
+    assert!(
+        !path.exists(),
+        "a stdin-supplied passphrase must not produce a keystore"
+    );
+}
+
+/// An empty `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` must refuse, not fall
+/// through to another source.
+#[test]
+fn empty_passphrase_file_variable_fails_loudly() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+
+    let out = rmpc()
+        .env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
+        .env(PASSPHRASE_FILE_ENV_VAR, "")
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let v: Value = serde_json::from_str(std::str::from_utf8(&out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(v["error"], "ErrPassphrase");
+    assert!(!path.exists());
 }
 
 #[cfg(unix)]

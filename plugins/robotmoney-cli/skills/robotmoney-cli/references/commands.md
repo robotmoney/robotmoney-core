@@ -224,29 +224,56 @@ inputs-digest, timestamp.
 Common options: schema-version, gas-limit, fee-cap,
 receipt-timeout-secs, pretty.
 
-## Investment Committee MCP identity commands
+## Investment Swarm signing identity commands
 
-`rmpc committee-identity` manages a local Ed25519 signing identity for the
-`robotmoney-frontend` Investment Committee **demo**'s MCP flow (public apply
--> admin activation -> MCP OAuth -> `get_signing_payload` ->
-`submit_recommendation`). It is a distinct identity type from the on-chain
-EVM signer used by `rmpc committee register` / `vote-submit` above — no
-on-chain write, no RPC, no operator config TOML. The private key never
-leaves the local keystore file.
+`rmpc committee-identity` manages the local Ed25519 signing identity every
+Investment Swarm member signs with. The flow is plain REST end to end
+(`POST /api/swarm/apply` -> approval -> token claim ->
+`POST /api/swarm/signing-payload` -> `POST /api/swarm/submit`); there is no
+MCP transport. It is a distinct identity type from the on-chain EVM signer
+used by `rmpc committee register` / `vote-submit` above — no on-chain write,
+no RPC, no operator config TOML. The private key never leaves the local
+keystore file.
 
 All three subcommands take a shared `--path <FILE>` (the keystore file) at
 the `rmpc committee-identity` level, e.g.
 `rmpc committee-identity --path identity.json create`.
 
-The keystore passphrase is read from
-`RMPC_COMMITTEE_IDENTITY_PASSPHRASE`; it is never accepted on argv or
-prompted on stdin.
+### Supplying the keystore passphrase
+
+The passphrase is **never** accepted on argv and **never** read from stdin,
+so it must never be typed into an agent's chat. `create` and `sign` take it
+from the first of these that applies:
+
+1. `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` — a path to a file holding the
+   passphrase. The file must be a regular file owned by the current user
+   with mode `0600` or stricter, or the command refuses. Trailing newlines
+   are trimmed. This is the channel to use when an agent runs the command:
+   the operator writes the file, the agent only ever passes its path.
+
+   ```bash
+   umask 077 && printf '%s' 'your passphrase' > ~/.rmpc-committee-pass
+   export RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE=~/.rmpc-committee-pass
+   ```
+
+2. `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` — the legacy variable, still
+   supported. The operator exports it themselves; never ask them to paste
+   its value into a chat.
+
+3. An interactive `/dev/tty` prompt with echo suppressed, used only when
+   neither variable is set **and** the command is attached to a terminal.
+   Because it reads the controlling terminal rather than stdin, a piped or
+   agent-driven stdin cannot answer it.
+
+With no variable set and no terminal attached, the command exits `2` with
+`ErrPassphrase` and names the two safe channels. It never hangs and never
+silently continues.
 
 ### `rmpc committee-identity create`
 
 Generate a fresh Ed25519 identity and write an encrypted keystore
 (Argon2id + AES-256-GCM) at `--path`. Refuses to overwrite an existing
-file. Requires `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`.
+file. Needs a passphrase — see "Supplying the keystore passphrase" above.
 
 ```
 rmpc committee-identity --path <FILE> create
@@ -257,7 +284,7 @@ Prints `{"ok":true,"path":"...","public_key":"<base64>"}` on success.
 ### `rmpc committee-identity show-public-key`
 
 Print the identity's base64 (standard, padded) raw 32-byte Ed25519 public
-key — the exact value `POST /api/committee/apply`'s `publicKey` field
+key — the exact value `POST /api/swarm/apply`'s `publicKey` field
 expects. Reads the keystore's cleartext `public_key` field; no passphrase
 required.
 
@@ -267,11 +294,12 @@ rmpc committee-identity --path <FILE> show-public-key
 
 ### `rmpc committee-identity sign`
 
-Sign the exact canonical payload string returned by MCP
-`get_signing_payload` and print the base64 (standard, padded) raw 64-byte
-Ed25519 signature `submit_recommendation` expects. Deterministic: signing
-the same payload twice yields the same signature. Requires
-`RMPC_COMMITTEE_IDENTITY_PASSPHRASE`.
+Sign the exact canonical payload string returned by `POST
+/api/swarm/signing-payload` and print the base64 (standard, padded) raw
+64-byte Ed25519 signature that `POST /api/swarm/submit` expects alongside
+the member bearer token. Deterministic: signing the same payload twice
+yields the same signature. Needs a passphrase — see "Supplying the keystore
+passphrase" above.
 
 ```
 rmpc committee-identity --path <FILE> sign ...

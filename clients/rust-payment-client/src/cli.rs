@@ -420,22 +420,24 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
-    /// Manage a local Investment Committee signing identity
-    /// (`robotmoney-frontend` demo). Ed25519 keypair, encrypted at rest —
-    /// distinct from the on-chain EVM signer used by `rmpc committee
-    /// register` / `vote-submit`. Exports a base64 public key for `POST
-    /// /api/swarm/apply` and signs the exact canonical payload for a
-    /// recommendation submission over that flow's plain-REST apply ->
-    /// approval -> claim -> participate steps, so a prospective agent
-    /// never has to hand-roll Ed25519 code.
+    /// Manage the local Investment Swarm signing identity — the
+    /// production signing path for every swarm member. Ed25519 keypair,
+    /// encrypted at rest — distinct from the on-chain EVM signer used by
+    /// `rmpc committee register` / `vote-submit`. Exports a base64 public
+    /// key for `POST /api/swarm/apply` and signs the exact canonical
+    /// payload returned by `POST /api/swarm/signing-payload`, producing
+    /// the signature `POST /api/swarm/submit` requires, so a prospective
+    /// member never has to hand-roll Ed25519 code. The flow is plain REST
+    /// end to end (apply -> approval -> claim -> participate).
     /// Implements: issue #1111.
     ///
-    /// The keystore passphrase is never accepted on argv or read from
-    /// stdin. Set `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` to a
-    /// current-user-owned file with mode 0600 or stricter, or type it at
-    /// the local `/dev/tty` prompt. The legacy
-    /// `RMPC_COMMITTEE_IDENTITY_PASSPHRASE` environment variable remains
-    /// supported.
+    /// The keystore passphrase is never accepted on argv and never read
+    /// from stdin, so it must never be typed into an agent transcript.
+    /// Set `RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` to a
+    /// current-user-owned file with mode 0600 or stricter, or run the
+    /// command from a terminal and type it at the local `/dev/tty`
+    /// prompt. The legacy `RMPC_COMMITTEE_IDENTITY_PASSPHRASE`
+    /// environment variable remains supported.
     CommitteeIdentity {
         /// Path to the committee identity keystore file.
         #[arg(long, short = 'p')]
@@ -460,11 +462,11 @@ pub enum CommitteeIdentitySubcommand {
     /// field expects. Reads the keystore's cleartext `public_key` field;
     /// no passphrase required.
     ShowPublicKey,
-    /// Sign the exact canonical payload string for a recommendation
-    /// submission and print the base64 (standard, padded) Ed25519
-    /// signature required to submit it over the plain-REST swarm flow.
-    /// Deterministic: signing the same payload twice yields the same
-    /// signature.
+    /// Sign the exact canonical payload string returned by `POST
+    /// /api/swarm/signing-payload` and print the base64 (standard,
+    /// padded) Ed25519 signature that `POST /api/swarm/submit` requires
+    /// alongside the member bearer token. Deterministic: signing the same
+    /// payload twice yields the same signature.
     Sign {
         /// The exact canonical payload string to sign, passed inline.
         /// Mutually exclusive with `--payload-file`.
