@@ -7,7 +7,7 @@ description: >
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
   commands (propose, vote), Investment Committee commands (committee
-  register, committee vote-submit), and the Investment Committee MCP
+  register, committee vote-submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
   Covers all flags, output shapes, preflight rules, and the get-governance
   → propose → vote example trace.
@@ -59,7 +59,7 @@ rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: register agents and submit signed allocation votes
-rmpc committee-identity  Investment Committee MCP demo: local Ed25519 identity, public-key export, and canonical-payload signing
+rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
 ## Governance write commands

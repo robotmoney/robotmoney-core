@@ -2,8 +2,8 @@
 //! Implements: issue #1111 AC-3 (Test plan); issue #1192 (safe passphrase
 //! input — file channel, `/dev/tty` prompt, loud non-interactive refusal)
 //!
-//! Exercises the actual `rmpc` binary end-to-end for the MCP committee
-//! identity flow: create -> show-public-key -> sign. No RPC fixture, no
+//! Exercises the actual `rmpc` binary end-to-end for the Investment Swarm
+//! signing identity: create -> show-public-key -> sign. No RPC fixture, no
 //! devnet, no external resource of any kind — this is a pure local
 //! crypto helper, so every test here runs unconditionally in CI.
 //!
@@ -55,9 +55,9 @@ const TEST_PASSPHRASE: &str = "correct horse battery staple";
 
 /// A representative `canonicalizeSubmission` payload shape (see
 /// `src/committee_identity.rs` module docs): fixed key order, plain
-/// `JSON.stringify` whitespace rules — this is what MCP
-/// `get_signing_payload` returns and `rmpc committee-identity sign` must
-/// sign byte-for-byte.
+/// `JSON.stringify` whitespace rules — this is what `POST
+/// /api/swarm/signing-payload` returns and `rmpc committee-identity sign`
+/// must sign byte-for-byte.
 const SAMPLE_CANONICAL_PAYLOAD: &str = r#"{"memberId":"agent-1","date":"2026-07-10","subjectId":"vault-a","nonce":"n-1","stance":"overweight","confidence":80,"body":"rationale for the recommendation","memoUrl":""}"#;
 
 fn rmpc() -> Command {

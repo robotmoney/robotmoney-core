@@ -1,12 +1,16 @@
 //! Canonical: no in-repo doc — see `crate::committee_identity` module docs.
-//! Implements: issue #1111 — `rmpc committee-identity`: MCP committee signing identity
+//! Implements: issue #1111 — `rmpc committee-identity`: committee signing identity;
+//! issue #1192 — safe passphrase input.
 //!
 //! `rmpc committee-identity create|show-public-key|sign` — local-only
-//! Ed25519 identity management for the Investment Committee demo's MCP
-//! flow. No RPC, no operator config TOML, no on-chain state: this is a
-//! pure client-side crypto helper so a prospective agent never has to
-//! hand-roll Ed25519 code (issue #1111 AC-1). See
-//! [`crate::committee_identity`] for the wire-format rationale.
+//! Ed25519 identity management for the Investment Swarm's plain-REST flow
+//! (`POST /api/swarm/apply` -> approval -> token claim ->
+//! `POST /api/swarm/signing-payload` -> `POST /api/swarm/submit`; no MCP
+//! transport is involved). No RPC, no operator config TOML, no on-chain
+//! state: this is a pure client-side crypto helper so a prospective member
+//! never has to hand-roll Ed25519 code (issue #1111 AC-1). See
+//! [`crate::committee_identity`] for the wire-format rationale and for the
+//! passphrase channels `create` / `sign` accept.
 //!
 //! Exit codes:
 //! - 0 — success.
