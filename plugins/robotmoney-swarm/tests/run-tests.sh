@@ -481,7 +481,13 @@ else
   # The two unverified forms #1204 exists to eliminate: piping a download into
   # tar (unfixable in place — extraction happens before any check could run),
   # and telling the reader to hand-place a downloaded binary on PATH.
-  if grep -qEi 'curl[^|]*\|[[:space:]]*tar' "$BOOTSTRAP_MD"; then
+  #
+  # Backslash continuations are folded away first. This document's own tag
+  # lookup is written as `curl ... \` / `| grep ...` across two lines, so a
+  # purely line-based grep would also miss a `curl ... \` / `| tar xz` written
+  # the same way — the exact shape it most needs to catch.
+  if sed -e :a -e '/\\$/N; s/\\\n//; ta' "$BOOTSTRAP_MD" \
+       | grep -qEi 'curl[^|]*\|[[:space:]]*tar'; then
     fail "BOOTSTRAP.md pipes a download straight into tar — nothing can verify an archive that is already unpacked"
   else
     pass "BOOTSTRAP.md pipes no download into tar"
