@@ -195,9 +195,36 @@ jobs:
         if: runner.os == 'macOS'
         run: strip target/${{ matrix.target }}/release/rmpc
 
-      - name: Smoke-test binary (linux/amd64 only)
+      - name: Smoke-test binary and assert it reports the released version
+        # Issue #1191: the binary takes its version from CARGO_PKG_VERSION, i.e.
+        # clients/rust-payment-client/Cargo.toml — nothing here injects the tag.
+        # For years that manifest sat at 0.1.0, so every published archive was
+        # named rmpc-v0.3.x-* while the binary inside reported 0.1.0 and no
+        # operator could tell builds apart. Printing --version without checking
+        # it is what let that ship, so compare it to the tag we are releasing.
+        # Skipped on dry runs, whose synthetic "dryrun-<sha>" version has no
+        # manifest counterpart.
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: ./target/${{ matrix.target }}/release/rmpc --version
+        run: |
+          set -euo pipefail
+          BIN=./target/${{ matrix.target }}/release/rmpc
+          REPORTED="$("$BIN" --version)"
+          echo "binary reports: ${REPORTED}"
+
+          VERSION="${{ needs.resolve.outputs.version }}"
+          case "${VERSION}" in
+            dryrun-*)
+              echo "dry run (${VERSION}) — skipping tag/version equality check"
+              exit 0
+              ;;
+          esac
+
+          EXPECTED="rmpc ${VERSION#v}"
+          if [ "${REPORTED}" != "${EXPECTED}" ]; then
+            echo "::error::Version mismatch. Releasing tag '${VERSION}' but the binary reports '${REPORTED}' (expected '${EXPECTED}'). Bump 'version' in clients/rust-payment-client/Cargo.toml to ${VERSION#v} and re-run; see issue #1191."
+            exit 1
+          fi
+          echo "OK: binary version matches tag ${VERSION}"
 
       - name: Package tar.gz
         # sha256sum is GNU coreutils and does NOT exist on the macos-latest half
