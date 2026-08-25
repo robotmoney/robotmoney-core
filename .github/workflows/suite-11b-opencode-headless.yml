@@ -161,7 +161,16 @@ jobs:
         # Issue #1151: version resolved from dispatch input / repo var / default
         # (1.18.4). 1.14.29 shipped a tool-schema serialization bug the hosted
         # provider began rejecting ("tools[0].function: missing field `name`").
-        run: bun install -g opencode-ai@"$OPENCODE_VERSION"
+        # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
+        # outside its default-trusted list, so a plain `bun install -g` leaves
+        # opencode-ai's postinstall unrun and every later `opencode` invocation
+        # dies with "opencode-ai's postinstall script was not run." That is what
+        # reddened this nightly ~110 times between 2026-07 and 2026-08-24.
+        run: |
+          bun install -g --trust opencode-ai@"$OPENCODE_VERSION"
+          # Fail loudly HERE if the install produced an unusable binary, rather
+          # than 5 minutes later as an inscrutable transcript-assertion failure.
+          opencode --version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -507,7 +516,16 @@ jobs:
         # Issue #1151: version resolved from dispatch input / repo var / default
         # (1.18.4). 1.14.29 shipped a tool-schema serialization bug the hosted
         # provider began rejecting ("tools[0].function: missing field `name`").
-        run: bun install -g opencode-ai@"$OPENCODE_VERSION"
+        # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
+        # outside its default-trusted list, so a plain `bun install -g` leaves
+        # opencode-ai's postinstall unrun and every later `opencode` invocation
+        # dies with "opencode-ai's postinstall script was not run." That is what
+        # reddened this nightly ~110 times between 2026-07 and 2026-08-24.
+        run: |
+          bun install -g --trust opencode-ai@"$OPENCODE_VERSION"
+          # Fail loudly HERE if the install produced an unusable binary, rather
+          # than 5 minutes later as an inscrutable transcript-assertion failure.
+          opencode --version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
