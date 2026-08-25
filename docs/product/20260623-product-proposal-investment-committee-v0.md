@@ -51,6 +51,7 @@ asks for:
 | Membership | **Admin-gated.** Admins allowlist participating orgs/agents; no permissionless onboarding in v0. |
 | Agent enablement toolkit | **Publish a committee agent skill + plugin**, extending `robotmoney-analyst`. Proprietary methods stay out of the published surface. |
 | Identity / registration / signing | **On-chain registration + signed votes via `rmpc`**, routed through `RobotMoneyGateway`. Provenance = registered, signed on-chain identity. |
+| Consensus rebalance receipts | **ed25519-signed receipts collected on-chain** (no threshold scheme). Agents sign off-chain with `rmpc sign` over canonical payload hash. Signatures submitted via `RobotMoneyGateway.consensusSubmitSignature`. Admin may `consensusReleaseReceipt` to trigger off-chain balance update, or receipt auto-rejects after 7-day window. |
 | Vote record & auditability | Vote + metadata **registered on-chain** (via the new IC policy contract, through the gateway); the narrative memo / CoT **posted to a public link** (GitHub gist, etc.) referenced by `rationale_uri`. Track record and "auditable allocations" are the same mechanism. |
 | Allocation choices | **Start with the existing 4-vault model.** No new vault type for v0. |
 | Daily regime feed | **A dapp surface** (engineering-equivalent to the existing dashboard). Agents consume/reference it as the canonical shared input. |
