@@ -20,7 +20,19 @@
 #     guard, not a repo-wide veto (see WHY THE CHECKOUT IS FULL-DEPTH below), and
 # (g) the deprecation compat stub still exists at the OLD committee skill path
 #     and still names its robotmoney-swarm replacement (issue #1199) — the
-#     already-shipped raw URL must keep returning 200.
+#     already-shipped raw URL must keep returning 200, and
+# (h) the documented rmpc install path verifies a release archive against its
+#     published .sha256 and aborts BEFORE `install` when they disagree
+#     (issue #1204), via scripts/release/install-rmpc-selftest.sh.
+#
+# WHY AN rmpc RELEASE CONCERN IS TESTED IN THE PLUGIN SUITE
+# release-rmpc.yml publishes the `.sha256` assets but only triggers on a tag
+# push, so nothing about the checksum contract executes on a PR. The consuming
+# half — scripts/release/install-rmpc.sh — is the piece an operator runs before
+# generating a signing key, so it needs coverage on every PR, and this is the
+# one suite that already runs unconditionally with no paths filter. run-tests.sh
+# folds each selftest assertion into its own counters, so the count guard below
+# protects them too.
 #
 # ONBOARDING IS NO LONGER THIS SUITE'S CONCERN
 # This suite used to also assert (h): that the swarm-onboarding SKILL.md
@@ -162,7 +174,7 @@ jobs:
           fi
           count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
           echo "executed assertions: $count"
-          if [[ "$count" -lt 21 ]]; then
-            echo "::error::only $count assertions executed (expected >= 21) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 41 ]]; then
+            echo "::error::only $count assertions executed (expected >= 41) — a suite that asserts nothing is a false green"
             exit 1
           fi

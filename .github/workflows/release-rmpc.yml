@@ -58,6 +58,21 @@ on:
 permissions:
   contents: write
 
+# CI TAXONOMY
+# Release plumbing, not a test suite: resolve/build/publish cross-compile and
+# attach artifacts, and assert nothing about product behaviour. Per the taxonomy
+# that is `ignore`. This workflow has no `pull_request` trigger and must never
+# gain one — it pushes tags and creates GitHub Releases.
+#
+# The behaviour that DOES need proving — that every archive ships a matching
+# `.sha256` and that the documented install path refuses a download which does
+# not match it — is covered on every PR by
+# scripts/release/install-rmpc-selftest.sh (issue #1204), which also asserts the
+# two packaging/upload lines below still exist. This workflow only fires on a
+# tag, so without that selftest those lines would never be exercised anywhere.
+env:
+  CI_CLASS: ignore
+
 jobs:
   resolve:
     name: resolve-inputs

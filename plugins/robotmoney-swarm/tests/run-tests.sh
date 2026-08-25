@@ -32,6 +32,13 @@ RESTRICTED_GUARD="$SCRIPT_DIR/check-restricted-paths.sh"
 FIXTURES="$SCRIPT_DIR/fixtures"
 SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
+# Issue #1204: core publishes the rmpc release artifacts, so core owns the
+# checksum-verified install recipe and the proof that it fails closed. The
+# release workflow itself only fires on a tag, so this suite is where that
+# behaviour actually executes on a PR.
+INSTALL_RMPC="$REPO_ROOT/scripts/release/install-rmpc.sh"
+INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
+
 # Minimum number of assertions this suite must execute for a green result.
 # Bump it when you add assertions; never lower it to make a run pass.
 # Lowered from 33 to 26 when the swarm-onboarding skill (and its two
@@ -40,7 +47,10 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 # serves onboarding, so there is nothing left to assert about it here.
 # Raised from 26 to 27 by issue #1232: the restricted-path coupling guard is now
 # two assertions (its self-test, plus the real branch check) instead of one.
-MIN_EXPECTED_ASSERTIONS=27
+# Raised from 27 to 43 by #1204: scripts/release/install-rmpc-selftest.sh
+# contributes 15 assertions covering the checksum-verified rmpc install path,
+# plus one guard asserting that selftest did not itself shrink.
+MIN_EXPECTED_ASSERTIONS=43
 
 PASS=0
 FAIL=0
@@ -138,8 +148,8 @@ done
 
 # ---------- 2. shellcheck ----------
 echo ""
-echo "--- test: shellcheck form-vote.sh, check-preflight.sh, check-restricted-paths.sh ---"
-if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT" "$RESTRICTED_GUARD"; then
+echo "--- test: shellcheck form-vote.sh, check-preflight.sh, check-restricted-paths.sh and the rmpc install path ---"
+if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT" "$RESTRICTED_GUARD" "$INSTALL_RMPC" "$INSTALL_RMPC_SELFTEST"; then
   pass "shellcheck passed"
 else
   fail "shellcheck reported issues"
@@ -397,6 +407,50 @@ else
   # prerequisite (checked above), so a server that will not come up is a real
   # failure of this environment, not a reason to declare the AC untested.
   fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
+fi
+
+# ---------- #1204: the rmpc install path verifies its checksum before installing ----------
+# release-rmpc.yml publishes `<archive>.tar.gz.sha256` alongside every archive,
+# but that workflow only runs on a tag push — it never executes on a PR. The
+# consuming half (verify, then install; abort loudly on mismatch) lives in
+# scripts/release/install-rmpc.sh and is exercised here, on every PR, by its
+# offline selftest. Each selftest assertion is folded into this suite's own
+# counters so it is covered by MIN_EXPECTED_ASSERTIONS and cannot silently
+# vanish.
+echo ""
+echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substituted) ---"
+
+# Minimum assertions the install selftest must itself contribute. Guards against
+# the selftest being gutted while this suite still reports a healthy total.
+MIN_INSTALL_SELFTEST_ASSERTIONS=15
+
+if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
+  # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
+  fail "scripts/release/install-rmpc-selftest.sh is missing or not executable — #1204 checksum coverage is gone"
+else
+  set +e
+  INSTALL_SELFTEST_OUT=$("$INSTALL_RMPC_SELFTEST" 2>&1)
+  set -e
+
+  INSTALL_SELFTEST_ASSERTIONS=0
+  while IFS= read -r selftest_line; do
+    case "$selftest_line" in
+      PASS:*)
+        pass "install-rmpc: ${selftest_line#PASS: }"
+        INSTALL_SELFTEST_ASSERTIONS=$((INSTALL_SELFTEST_ASSERTIONS+1))
+        ;;
+      FAIL:*)
+        fail "install-rmpc: ${selftest_line#FAIL: }"
+        INSTALL_SELFTEST_ASSERTIONS=$((INSTALL_SELFTEST_ASSERTIONS+1))
+        ;;
+    esac
+  done <<< "$INSTALL_SELFTEST_OUT"
+
+  if [[ $INSTALL_SELFTEST_ASSERTIONS -ge $MIN_INSTALL_SELFTEST_ASSERTIONS ]]; then
+    pass "install-rmpc selftest contributed $INSTALL_SELFTEST_ASSERTIONS assertions (>= $MIN_INSTALL_SELFTEST_ASSERTIONS)"
+  else
+    fail "install-rmpc selftest contributed only $INSTALL_SELFTEST_ASSERTIONS assertions, expected >= $MIN_INSTALL_SELFTEST_ASSERTIONS (output: $INSTALL_SELFTEST_OUT)"
+  fi
 fi
 
 # ---------- 3. restricted-path coupling guard ----------
