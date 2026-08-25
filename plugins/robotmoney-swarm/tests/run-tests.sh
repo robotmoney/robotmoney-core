@@ -50,7 +50,10 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # Raised from 27 to 43 by #1204: scripts/release/install-rmpc-selftest.sh
 # contributes 15 assertions covering the checksum-verified rmpc install path,
 # plus one guard asserting that selftest did not itself shrink.
-MIN_EXPECTED_ASSERTIONS=43
+# Raised from 42 to 46 by #1204: four more assertions keep BOOTSTRAP.md — core's
+# *documented* install path, and the one README.md sends an agent to — pointed at
+# that verified recipe instead of an unchecked download.
+MIN_EXPECTED_ASSERTIONS=47
 
 PASS=0
 FAIL=0
@@ -450,6 +453,50 @@ else
     pass "install-rmpc selftest contributed $INSTALL_SELFTEST_ASSERTIONS assertions (>= $MIN_INSTALL_SELFTEST_ASSERTIONS)"
   else
     fail "install-rmpc selftest contributed only $INSTALL_SELFTEST_ASSERTIONS assertions, expected >= $MIN_INSTALL_SELFTEST_ASSERTIONS (output: $INSTALL_SELFTEST_OUT)"
+  fi
+fi
+
+# ---------- #1204: core's *documented* install path is the verified one ----------
+# A verified installer nobody is told to use closes nothing. BOOTSTRAP.md is the
+# file README.md points an agent at, and its step 1 used to say "download the
+# latest rmpc and place it on PATH" with no integrity check — three steps before
+# step 4 creates a signing keystore with that same binary. These assertions keep
+# the documented path pointed at scripts/release/install-rmpc.sh, and keep the
+# unverified forms from creeping back. suite-17 has no `paths` filter, so a
+# Markdown-only edit to BOOTSTRAP.md still runs them.
+echo ""
+echo "--- #1204: BOOTSTRAP.md documents the checksum-verified rmpc install ---"
+
+BOOTSTRAP_MD="$REPO_ROOT/BOOTSTRAP.md"
+if [[ ! -f "$BOOTSTRAP_MD" ]]; then
+  # Loud-skip policy: a missing document is a red suite, not a quiet pass.
+  fail "BOOTSTRAP.md is missing — core's documented rmpc install path cannot be checked"
+else
+  if grep -q 'scripts/release/install-rmpc.sh' "$BOOTSTRAP_MD"; then
+    pass "BOOTSTRAP.md installs rmpc through the checksum-verified scripts/release/install-rmpc.sh"
+  else
+    fail "BOOTSTRAP.md no longer routes the rmpc install through scripts/release/install-rmpc.sh — #1204 regression"
+  fi
+
+  # The two unverified forms #1204 exists to eliminate: piping a download into
+  # tar (unfixable in place — extraction happens before any check could run),
+  # and telling the reader to hand-place a downloaded binary on PATH.
+  if grep -qEi 'curl[^|]*\|[[:space:]]*tar' "$BOOTSTRAP_MD"; then
+    fail "BOOTSTRAP.md pipes a download straight into tar — nothing can verify an archive that is already unpacked"
+  else
+    pass "BOOTSTRAP.md pipes no download into tar"
+  fi
+
+  if grep -qEi 'place it on .?PATH' "$BOOTSTRAP_MD"; then
+    fail "BOOTSTRAP.md tells the reader to place a downloaded rmpc on PATH with no integrity check"
+  else
+    pass "BOOTSTRAP.md documents no hand-placed, unverified rmpc download"
+  fi
+
+  if [[ -x "$INSTALL_RMPC" ]]; then
+    pass "the installer BOOTSTRAP.md names exists and is executable"
+  else
+    fail "BOOTSTRAP.md points at scripts/release/install-rmpc.sh but it is missing or not executable"
   fi
 fi
 

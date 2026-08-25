@@ -23,7 +23,25 @@ This uses `read -s` so the passphrase is never echoed, never written to shell hi
 
 Either install a release binary or build from source — both are supported.
 
-**Option A — release binary (preferred):** Download the latest `rmpc` for your platform from <https://github.com/lucky-tensor/robotmoney-monorepo/releases/latest> and place it on `PATH`. Verify with `rmpc --version`.
+**Option A — release binary (preferred):** Install it with this repo's
+checksum-verified recipe, `scripts/release/install-rmpc.sh`. It downloads the
+release archive *and* its published `.sha256`, verifies them, and only then
+extracts and installs — a mismatch aborts at the verify step, so a tampered
+download never reaches `PATH` (issue #1204). Do not fetch the tarball and drop
+the binary onto `PATH` yourself: step 4 below creates a **signing keystore** with
+whatever binary you installed here, so its provenance has to be checked first.
+
+```bash
+# From the repo root.
+TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest \
+      | grep -m1 '"tag_name"' | cut -d'"' -f4)
+./scripts/release/install-rmpc.sh --tag "$TAG" --dest ~/.local/bin
+rmpc --version
+```
+
+The script exits non-zero — printing `ChecksumMismatch` — if the archive does not
+match its published checksum, or if the release publishes no checksum at all.
+Either way nothing is extracted and nothing is installed; do not work around it.
 
 > **Known issue:** the release binary may exit silently with exit code 3 on some systems (no stdout, stderr, or log output). If `rmpc --help` works but any subcommand exits 3 with no output, build from source instead (Option B).
 
