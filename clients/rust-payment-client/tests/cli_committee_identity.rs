@@ -35,6 +35,10 @@
 //! - `unsafe_passphrase_file_permissions_are_rejected`: a group- or
 //!   world-readable passphrase file is refused before any keystore is
 //!   written (issue #1192).
+//! - `tty_prompt_reads_the_passphrase_without_echo`: over a real allocated
+//!   pty, `create` prompts on `/dev/tty`, never echoes the typed secret,
+//!   and writes a keystore that decrypts under exactly those bytes
+//!   (issue #1192).
 //! - `create_refuses_to_overwrite_existing_keystore`: a second `create` at
 //!   the same `--path` exits 2 instead of clobbering the identity.
 //! - `sign_requires_exactly_one_payload_source`: neither/both of
@@ -571,4 +575,174 @@ fn verify_ed25519(public_key_b64: &str, signature_b64: &str, message: &[u8]) -> 
         .expect("valid Ed25519 public key");
     let sig = Signature::from_bytes(&sig_bytes.try_into().expect("64-byte signature"));
     vk.verify(message, &sig).is_ok()
+}
+
+/// AC-3: with neither passphrase variable set, drive the real `/dev/tty`
+/// prompt over an allocated pty.
+///
+/// This is the one path the other tests cannot reach — they run with a null
+/// stdin, which is exactly the non-interactive refusal case. Here the child
+/// gets a pty as its controlling terminal, so `read_passphrase` takes the
+/// prompt branch. The test asserts the security-relevant properties: the
+/// prompt is shown, the typed secret is never echoed back to the terminal,
+/// and the keystore it produces decrypts under precisely those bytes.
+///
+/// Needs no external resource — a pty is a kernel facility, and every step
+/// that could fail to obtain one asserts rather than skipping.
+#[cfg(unix)]
+#[test]
+fn tty_prompt_reads_the_passphrase_without_echo() {
+    use std::ffi::CStr;
+    use std::io::{Read, Write};
+    use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("identity.json");
+
+    // Allocate a pty pair. posix_openpt/grantpt/unlockpt/ptsname is the
+    // POSIX route and needs no libutil link.
+    // SAFETY: plain FFI calls with no borrowed state; the raw fd is adopted
+    // by an OwnedFd immediately so it is closed exactly once.
+    let master = unsafe {
+        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(
+            fd >= 0,
+            "posix_openpt failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let master = OwnedFd::from_raw_fd(fd);
+        assert_eq!(
+            libc::grantpt(master.as_raw_fd()),
+            0,
+            "grantpt failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(
+            libc::unlockpt(master.as_raw_fd()),
+            0,
+            "unlockpt failed: {}",
+            std::io::Error::last_os_error()
+        );
+        master
+    };
+    // SAFETY: ptsname returns a pointer into static storage owned by libc,
+    // valid until the next ptsname call on this thread; it is copied here.
+    let slave_path = unsafe {
+        let name = libc::ptsname(master.as_raw_fd());
+        assert!(
+            !name.is_null(),
+            "ptsname failed: {}",
+            std::io::Error::last_os_error()
+        );
+        CStr::from_ptr(name).to_str().unwrap().to_owned()
+    };
+
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .expect("open pty slave");
+
+    let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("rmpc"));
+    command
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "create",
+        ])
+        .env_remove(PASSPHRASE_ENV_VAR)
+        .env_remove(PASSPHRASE_FILE_ENV_VAR)
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave.try_clone().unwrap()));
+    // SAFETY: between fork and exec only async-signal-safe syscalls are
+    // used. setsid() makes the child a session leader with no controlling
+    // terminal; TIOCSCTTY then adopts the pty slave (already this process's
+    // fd 0) as it, which is what makes /dev/tty resolve in the child.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().expect("spawn rmpc on a pty");
+    // The parent must not keep the slave open, or the master read below
+    // never reports EOF after the child exits.
+    drop(slave);
+
+    let mut writer = std::fs::File::from(master.try_clone().unwrap());
+    let mut reader = std::fs::File::from(master);
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 1024];
+        // A pty master reports EIO (not EOF) once the last slave closes,
+        // so any error ends the loop and drops the sender.
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut transcript = Vec::new();
+    while !String::from_utf8_lossy(&transcript).contains("passphrase") {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("timed out waiting for the /dev/tty passphrase prompt");
+        let chunk = rx
+            .recv_timeout(remaining)
+            .expect("rmpc exited without prompting on /dev/tty");
+        transcript.extend(chunk);
+    }
+
+    writer
+        .write_all(format!("{TEST_PASSPHRASE}\n").as_bytes())
+        .expect("type the passphrase on the pty");
+    writer.flush().unwrap();
+
+    let status = child.wait().expect("wait for rmpc");
+    while let Ok(chunk) = rx.recv_timeout(Duration::from_secs(5)) {
+        transcript.extend(chunk);
+    }
+    let transcript = String::from_utf8_lossy(&transcript).into_owned();
+
+    assert!(
+        status.success(),
+        "create should succeed from the /dev/tty prompt; transcript: {transcript}"
+    );
+    assert!(
+        !transcript.contains(TEST_PASSPHRASE),
+        "the typed passphrase must never be echoed to the terminal; transcript: {transcript}"
+    );
+    assert!(
+        path.exists(),
+        "the prompt should have produced a keystore; transcript: {transcript}"
+    );
+
+    // The keystore must decrypt under exactly the bytes typed at the prompt
+    // — proving the prompt captured the line without the trailing newline.
+    rmpc()
+        .env(PASSPHRASE_ENV_VAR, TEST_PASSPHRASE)
+        .env_remove(PASSPHRASE_FILE_ENV_VAR)
+        .args([
+            "committee-identity",
+            "--path",
+            path.to_str().unwrap(),
+            "sign",
+            "--payload",
+            SAMPLE_CANONICAL_PAYLOAD,
+        ])
+        .assert()
+        .success();
 }
