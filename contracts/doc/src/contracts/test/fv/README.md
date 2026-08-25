@@ -2,6 +2,7 @@
 
 # Contents
 - [CoverageMapTest](CoverageMap.t.sol/contract.CoverageMapTest.md)
+- [Sup1OverpromisingVault](CustodyMultiVault.t.sol/contract.Sup1OverpromisingVault.md)
 - [CustodyMultiVaultTest](CustodyMultiVault.t.sol/contract.CustodyMultiVaultTest.md)
 - [Ora3Token](DeployAssertions.t.sol/contract.Ora3Token.md)
 - [Ora3Pool](DeployAssertions.t.sol/contract.Ora3Pool.md)
