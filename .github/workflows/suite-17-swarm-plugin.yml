@@ -116,7 +116,7 @@ jobs:
           fi
           count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
           echo "executed assertions: $count"
-          if [[ "$count" -lt 20 ]]; then
-            echo "::error::only $count assertions executed (expected >= 20) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 24 ]]; then
+            echo "::error::only $count assertions executed (expected >= 24) — a suite that asserts nothing is a false green"
             exit 1
           fi

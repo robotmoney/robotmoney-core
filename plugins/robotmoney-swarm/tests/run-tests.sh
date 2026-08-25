@@ -33,7 +33,7 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
 # Minimum number of assertions this suite must execute for a green result.
 # Bump it when you add assertions; never lower it to make a run pass.
-MIN_EXPECTED_ASSERTIONS=20
+MIN_EXPECTED_ASSERTIONS=24
 
 PASS=0
 FAIL=0
@@ -139,17 +139,13 @@ fi
 echo ""
 echo "--- AC-1: tilt-formation produces schema-conformant vote JSON (ajv) ---"
 
-# Install ajv into a temp directory scoped to this test run.
+# Install the exact, lockfile-backed AJV dependency tree into a temp directory
+# scoped to this test run. Lifecycle scripts are never needed for validation.
 AJV_TMP="$(mktemp -d)"
 trap 'rm -rf "$AJV_TMP"' EXIT
 
-# Write a minimal package.json so npm install works in the temp dir.
-cat > "$AJV_TMP/package.json" <<'PKGJSON'
-{"name":"ajv-test-runner","version":"1.0.0","private":true}
-PKGJSON
-
-# Install ajv and ajv-formats silently.
-npm install --prefix "$AJV_TMP" --save ajv ajv-formats 2>/dev/null 1>/dev/null
+cp "$PLUGIN_DIR/package.json" "$PLUGIN_DIR/package-lock.json" "$AJV_TMP/"
+npm ci --prefix "$AJV_TMP" --ignore-scripts 2>/dev/null 1>/dev/null
 
 # Write the Node.js validator script.
 AJV_VALIDATOR="$AJV_TMP/validate.js"
@@ -391,6 +387,62 @@ else
   # prerequisite (checked above), so a server that will not come up is a real
   # failure of this environment, not a reason to declare the AC untested.
   fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
+fi
+
+# ---------- AC-5: documented release install rejects corruption ----------
+echo ""
+echo "--- AC-5: documented rmpc release install verifies the archive checksum ---"
+
+INSTALL_BLOCK="$AJV_TMP/install-rmpc.sh"
+awk '/^# RMPC_INSTALL_BLOCK_START$/{copy=1; next} /^# RMPC_INSTALL_BLOCK_END$/{copy=0} copy' \
+  "$PLUGIN_DIR/skills/swarm-onboarding/SKILL.md" > "$INSTALL_BLOCK"
+
+if [[ -s "$INSTALL_BLOCK" ]]; then
+  pass "extracted the documented rmpc install block"
+else
+  fail "could not extract the documented rmpc install block"
+fi
+
+RELEASE_FIXTURE="$AJV_TMP/release/v-test"
+INSTALL_DEST="$AJV_TMP/bin"
+mkdir -p "$RELEASE_FIXTURE" "$INSTALL_DEST"
+TEST_ARCHIVE="rmpc-v-test-linux-amd64.tar.gz"
+TEST_PAYLOAD="$AJV_TMP/rmpc"
+printf '#!/usr/bin/env bash\necho fixture-rmpc\n' > "$TEST_PAYLOAD"
+chmod +x "$TEST_PAYLOAD"
+tar -czf "$RELEASE_FIXTURE/$TEST_ARCHIVE" -C "$AJV_TMP" rmpc
+(cd "$RELEASE_FIXTURE" && sha256sum "$TEST_ARCHIVE" > "$TEST_ARCHIVE.sha256")
+
+if TAG=v-test OS=linux ARCH=amd64 RELEASE_BASE="file://$AJV_TMP/release" \
+  RMPC_INSTALL_DIR="$INSTALL_DEST" bash "$INSTALL_BLOCK"; then
+  pass "documented install accepts an archive matching its published checksum"
+else
+  fail "documented install rejected an archive matching its published checksum"
+fi
+
+printf 'corruption' >> "$RELEASE_FIXTURE/$TEST_ARCHIVE"
+set +e
+CORRUPT_OUT=$(TAG=v-test OS=linux ARCH=amd64 RELEASE_BASE="file://$AJV_TMP/release" \
+  RMPC_INSTALL_DIR="$INSTALL_DEST" bash "$INSTALL_BLOCK" 2>&1)
+CORRUPT_EXIT=$?
+set -e
+
+if [[ $CORRUPT_EXIT -ne 0 ]]; then
+  pass "corrupted archive makes the documented install fail loudly"
+else
+  fail "corrupted archive unexpectedly passed checksum verification"
+fi
+
+if [[ "$CORRUPT_OUT" == *"FAILED"* ]] || [[ "$CORRUPT_OUT" == *"failed"* ]]; then
+  pass "corrupted archive failure reports checksum verification"
+else
+  fail "corrupted archive failure did not report checksum verification: $CORRUPT_OUT"
+fi
+
+if [[ -x "$INSTALL_DEST/rmpc" ]]; then
+  pass "corruption failure occurs before a replacement rmpc installation"
+else
+  fail "the valid fixture binary was unexpectedly removed"
 fi
 
 # ---------- 3. no restricted paths touched ----------

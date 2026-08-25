@@ -104,21 +104,45 @@ published per OS/arch as `rmpc-<tag>-{linux,macos}-{amd64,arm64}.tar.gz` on
 the [releases page](https://github.com/robotmoney/robotmoney-core/releases):
 
 ```bash
-OS=$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')
-ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/robotmoney/robotmoney-core/releases/download/${TAG}/rmpc-${TAG}-${OS}-${ARCH}.tar.gz" | tar xz
-install -m 755 rmpc ~/.local/bin/rmpc   # or any directory on PATH
+# RMPC_INSTALL_BLOCK_START
+set -euo pipefail
+OS="${OS:-$(uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/macos/')}"
+ARCH="${ARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"
+TAG="${TAG:-$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)}"
+RELEASE_BASE="${RELEASE_BASE:-https://github.com/robotmoney/robotmoney-core/releases/download}"
+ARCHIVE="rmpc-${TAG}-${OS}-${ARCH}.tar.gz"
+CHECKSUM="${ARCHIVE}.sha256"
+WORKDIR=$(mktemp -d)
+trap 'rm -rf "$WORKDIR"' EXIT
+curl -fsSL "${RELEASE_BASE}/${TAG}/${ARCHIVE}" -o "${WORKDIR}/${ARCHIVE}"
+curl -fsSL "${RELEASE_BASE}/${TAG}/${CHECKSUM}" -o "${WORKDIR}/${CHECKSUM}"
+(
+  cd "$WORKDIR"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c "$CHECKSUM"
+  else
+    shasum -a 256 -c "$CHECKSUM"
+  fi
+  tar xzf "$ARCHIVE"
+  INSTALL_DIR="${RMPC_INSTALL_DIR:-$HOME/.local/bin}"
+  mkdir -p "$INSTALL_DIR"
+  install -m 755 rmpc "$INSTALL_DIR/rmpc"
+)
+# RMPC_INSTALL_BLOCK_END
 ```
 
-Verify with `rmpc --help` — you should see the `committee-identity`
+Each release includes a checksum file beside the archive. The install block
+fails before extraction or `install` if that checksum does not match; do not
+override that failure. Verify with `rmpc --help` — you should see the `committee-identity`
 subcommand. (The subcommand is spelled `committee-identity`, not
 `swarm-identity`: the CLI names the on-chain body, not the product surface.)
-Check `--help`, **never `--version`**: released binaries report
-`rmpc 0.1.0` whatever tag they were published under (robotmoney-core#1191), so
-comparing the version against the tag you just downloaded would fail a working
-install. If no asset matches this machine's OS/arch, stop and surface that to
-the owner; do not fall back to a source build.
+Check `--help` for the supported subcommand list. Do not use `--version` as
+an identity check until a release includes robotmoney-core#1191: current
+published binaries report `rmpc 0.1.0` regardless of their release tag. The
+checksum verification above is therefore the integrity control available now;
+the next release must pair it with #1191's corrected version identity. If no
+asset matches this machine's OS/arch, stop and surface that to the owner; do
+not fall back to a source build.
 
 Read that output for the subcommand list only. Its prose still describes the
 retired MCP transport — `get_signing_payload`, `submit_recommendation`, and a
