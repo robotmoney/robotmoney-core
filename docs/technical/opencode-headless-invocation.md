@@ -421,6 +421,19 @@ On schedule and manual dispatch, `live-model-coverage-unavailable` fails with
 this limitation explicitly. That deliberate red result satisfies loud-skip:
 missing model access cannot be mistaken for executed coverage or a green suite.
 
+The disabled jobs are retained in the workflow rather than deleted, so option A
+(provision the key) is a one-line `if:` flip. The workflow keeps an `env:` block
+defining `OPENCODE_VERSION` / `OPENCODE_MODEL` for that reason alone — the
+retained steps run under `set -u` and would die on unbound variables without it.
+Those defaults are **not** a working no-credential path; #1210 disproved that.
+
+**Who owns the deliberate red.** Suite 11b now fails on every nightly by design.
+Issue #1233 is the open tracking issue for restoring coverage and stays open for
+as long as the red does; it is what stops "permanently red nightly" from decaying
+back into the eight-week unowned red that #1210 was filed about. The
+`live-model-coverage-unavailable` step prints that issue URL in its failure
+output so the run log names its own owner.
+
 **Executed-in-CI proof.** The guard and the (previously CI-orphaned) transcript
 asserters are pinned by offline unit tests
 (`.github/scripts/tests/test_live_guard.py`,

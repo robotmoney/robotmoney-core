@@ -380,7 +380,9 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 - `live-model-coverage-unavailable` — fails nightly/dispatch with the explicit #1210 coverage limitation. This is intentional: live model coverage requires an unavailable external credential and must not silently skip or pass.
 - `deposit` / `read` — disabled live-agent jobs retained for future re-enablement; they do not execute and provide no coverage.
 
-**Live-model coverage limitation (issue #1210, option B).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests remain executed in CI, but validate only the assertion code and recorded test inputs—not live model behaviour. See `docs/technical/opencode-headless-invocation.md` §12.6.
+**Live-model coverage limitation (issue #1210, option B; re-enablement tracked by #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests remain executed in CI, but validate only the assertion code and recorded test inputs—not live model behaviour. See `docs/technical/opencode-headless-invocation.md` §12.6.
+
+> **Suite 11b is deliberately red every night.** That red is the #1210 decision made visible, not a regression or a flake, and issue #1233 is the open owner of it. Suite 21 (nightly full-suite) dispatches 11b, so 11b's red is expected there too. Do not green this suite by deleting or weakening `live-model-coverage-unavailable`: close #1233 by restoring real coverage (option A or C), or reopen the #1210 decision.
 
 **Steps — `refusal` job:**
 1. Checkout repository
@@ -796,7 +798,7 @@ Every workflow's `name:` and its tier.
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
 | `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
-| `opencode-headless-deposit-read` | nightly | live model coverage is disabled by #1210 option B; `live-model-coverage-unavailable` fails on schedule/dispatch to report the gap, while keyless `asserter-tests` runs on PRs and validates only the asserter/guard code |
+| `opencode-headless-deposit-read` | nightly | live model coverage is disabled by #1210 option B, so this suite is **deliberately red on every nightly** (owner: #1233); `live-model-coverage-unavailable` fails on schedule/dispatch to report the gap, while keyless `asserter-tests` runs on PRs and validates only the asserter/guard code |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
