@@ -83,6 +83,11 @@ pub const PASSPHRASE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
 /// user and inaccessible to group and other users.
 pub const PASSPHRASE_FILE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE";
 
+/// Largest passphrase file accepted. Generous for any real passphrase, and
+/// small enough that pointing the variable at the wrong file is refused
+/// outright instead of read into memory.
+const MAX_PASSPHRASE_FILE_BYTES: usize = 4096;
+
 /// Argon2id parameters baked into the on-disk format. Matches the
 /// software EVM keystore's OWASP "second" recommendation.
 const ARGON2_M_COST_KIB: u32 = 19_456; // ~19 MiB
@@ -508,13 +513,26 @@ fn read_passphrase_file(path: &Path) -> Result<String, CommitteeIdentityError> {
         ))
     })?;
     ensure_safe_passphrase_file(&file, path)?;
+    // Read one byte past the cap so an oversized file is refused rather than
+    // silently truncated to a passphrase that would decrypt nothing. The cap
+    // also stops a fifo or /dev/zero handed over as the "passphrase file"
+    // from being read into memory without bound.
     let mut bytes = Vec::new();
-    file.take(u64::MAX).read_to_end(&mut bytes).map_err(|e| {
-        CommitteeIdentityError::ErrPassphrase(format!(
-            "could not read {PASSPHRASE_FILE_ENV_VAR} {}: {e}",
+    file.take(MAX_PASSPHRASE_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            CommitteeIdentityError::ErrPassphrase(format!(
+                "could not read {PASSPHRASE_FILE_ENV_VAR} {}: {e}",
+                path.display()
+            ))
+        })?;
+    if bytes.len() > MAX_PASSPHRASE_FILE_BYTES {
+        return Err(CommitteeIdentityError::ErrPassphrase(format!(
+            "{PASSPHRASE_FILE_ENV_VAR} {} is larger than {MAX_PASSPHRASE_FILE_BYTES} bytes; \
+             it should hold only the passphrase",
             path.display()
-        ))
-    })?;
+        )));
+    }
     while matches!(bytes.last(), Some(b'\n' | b'\r')) {
         bytes.pop();
     }
@@ -731,6 +749,30 @@ mod tests {
 
         let passphrase = read_passphrase_file(&path).unwrap();
         assert_eq!(passphrase, "correct horse battery staple");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn passphrase_file_larger_than_the_cap_is_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("passphrase");
+        std::fs::write(&path, vec![b'x'; MAX_PASSPHRASE_FILE_BYTES + 1]).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let err = read_passphrase_file(&path).expect_err("an oversized file must be refused");
+        let CommitteeIdentityError::ErrPassphrase(message) = err else {
+            panic!("expected ErrPassphrase");
+        };
+        assert!(message.contains("larger than"), "{message}");
+
+        // Exactly at the cap is still accepted.
+        std::fs::write(&path, vec![b'x'; MAX_PASSPHRASE_FILE_BYTES]).unwrap();
+        assert_eq!(
+            read_passphrase_file(&path).unwrap().len(),
+            MAX_PASSPHRASE_FILE_BYTES
+        );
     }
 
     #[cfg(unix)]
