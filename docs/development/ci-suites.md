@@ -690,7 +690,10 @@ invariant it restores.
 - **Dedicated harnesses.** `CustodyMultiVault` (SUP-1/CUST family-wide custody),
   `StaleOracleRedemption` (SUP-5/ORA-2), `TwapManipulation` (ORA-7), and
   `DeployAssertions` (ACL-1/ORA-3/ORA-6) carry the cross-family / stale-oracle /
-  TWAP-manipulation / post-deploy scaffolding the remediation issues fill in.
+  TWAP-manipulation / post-deploy proofs. `CustodyMultiVault` executes SUP-1
+  live against the RobotMoneyVault, BasketVault and RwaVault families plus a
+  negative case proving the shared predicate is not vacuous — it contains no
+  `vm.skip` (#1213).
 - LIGHT tier because the suite is forge unit + static-guard + bounded fuzz and
   finishes in well under a minute; running it on every PR (no base-branch filter)
   is what gates PRs into the phase staging branch.
