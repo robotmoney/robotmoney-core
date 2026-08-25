@@ -29,9 +29,11 @@ import {IPositionAdapter} from "../interfaces/IPositionAdapter.sol";
 import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {IAerodromeSlipstreamRouter} from "../interfaces/IAerodromeSlipstreamRouter.sol";
 import {IAerodromeCLFactory} from "../interfaces/IAerodromeCLFactory.sol";
+import {IObservablePool} from "../interfaces/IObservablePool.sol";
 import {AerodromeAssetPositionAdapter} from "../adapters/AerodromeAssetPositionAdapter.sol";
 import {AerodromeSwapAdapter} from "../adapters/AerodromeSwapAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {TwapTickMath} from "../lib/TwapTickMath.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
@@ -480,6 +482,16 @@ contract AerodromeAssetPositionAdapterForkTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant DEPOSIT = 10_000 * ONE_USDC;
 
+    /// @dev Guard threshold the NAV-deviation test configures (0.20%).
+    uint256 internal constant NAV_GUARD_BPS = 20;
+    /// @dev How far past the TWAP the NAV-deviation test drives spot, in ticks
+    ///      (1 tick ≈ 1bps). 100 ticks ≈ 100bps is a 5x margin over
+    ///      `NAV_GUARD_BPS` while crossing a single `TICK_SPACING` step.
+    int24 internal constant NAV_MANIPULATION_TICKS = 100;
+    /// @dev `AerodromeAssetPositionAdapter.NAV_DEVIATION_PROBE` (internal there).
+    ///      Decimals cancel in the |spot − twap|/twap ratio.
+    uint256 internal constant NAV_DEVIATION_PROBE = 1e18;
+
     AeroPositionMockVault internal vault;
     AerodromeSwapAdapter internal venue;
     AerodromeAssetPositionAdapter internal adapter;
@@ -562,34 +574,79 @@ contract AerodromeAssetPositionAdapterForkTest is Test {
 
     function test_fork_navDeviationGuardRevertsOnManipulatedSpot() public {
         vm.prank(admin);
-        adapter.setNavDeviationGuardBps(20); // 0.20%
+        adapter.setNavDeviationGuardBps(NAV_GUARD_BPS); // 0.20%
 
-        // Push spot away from the lagging 30-min TWAP with a real swap against the
-        // Aerodrome pool. Empirically calibrated against live Base mainnet state
-        // (2026-07): 1M USDC moves this pool ~200bps — a 10x safety margin over
-        // the 20bps threshold — while staying far smaller than a manipulation
-        // large enough to matter for archive-node RPC cost. An earlier 8M-USDC
-        // size (a much larger safety margin, ~2900bps) crossed enough ticks to
-        // trip the public RPC's 429 rate limit in CI (issue #1125 review), since
-        // this step runs immediately after the sibling V3 fork test in the same
-        // job and shares its rate budget; 1M keeps the same guard-tripping
-        // behavior with a fraction of the storage-slot RPC calls.
-        uint256 manipUsdc = 1_000_000 * ONE_USDC;
-        deal(BASE_USDC, address(this), manipUsdc);
-        IERC20(BASE_USDC).forceApprove(SLIPSTREAM_ROUTER, manipUsdc);
+        // Push spot AWAY from the lagging 30-min TWAP with a real swap against
+        // the Aerodrome pool, stopping at an exact target tick via the router's
+        // `sqrtPriceLimitX96`. Both halves of that sentence are load-bearing, and
+        // the previous fixed-size USDC->wETH leg got both wrong (2026-08):
+        //
+        //   * Direction. A hardcoded USDC->wETH leg only ever RAISES the tick
+        //     (token0 = wETH, token1 = USDC). Live Base state routinely has spot
+        //     already drifted BELOW the lagging TWAP, and then that leg moves
+        //     spot back THROUGH the TWAP rather than away from it. The run that
+        //     caught this closed a 20-tick gap and reopened only 6 on the far
+        //     side — under the 20bps threshold, so the guard correctly did not
+        //     fire and the test failed with "next call did not revert as
+        //     expected". Picking the side from the live sign makes the resulting
+        //     deviation |drift| + NAV_MANIPULATION_TICKS, i.e. monotonically
+        //     larger than the drift for either sign.
+        //
+        //   * Magnitude. A fixed notional buys a tick move inversely
+        //     proportional to in-range liquidity, so its safety margin decays
+        //     silently as the pool deepens — the ~200bps that 1M USDC bought at
+        //     calibration time (2026-07) had decayed to ~26bps against the same
+        //     20bps threshold. A price LIMIT is liquidity-independent: the pool
+        //     consumes only as much of the (deliberately oversized) input as it
+        //     needs to reach the target tick and then stops, so the deviation is
+        //     NAV_MANIPULATION_TICKS whatever the depth. It also bounds the
+        //     crossing count — the public RPC's 429 budget, which an earlier
+        //     8M-USDC/~2900bps size blew (issue #1125 review) — at one
+        //     `TICK_SPACING` step instead of letting it scale with the notional.
+        uint32 window = adapter.effectiveTwapWindow();
+        int24 twapTick = TwapTickMath.meanTick(WETH_USDC_POOL, window);
+        (, int24 spotTick,,) = IObservablePool(WETH_USDC_POOL).slot0();
+
+        // Target the far side of wherever spot already is, so the limit price is
+        // always strictly beyond the current price (a limit on the wrong side is
+        // an `SPL` revert in the pool) and always at least
+        // NAV_MANIPULATION_TICKS from the TWAP.
+        bool pushUp = spotTick >= twapTick;
+        int24 targetTick =
+            pushUp ? spotTick + NAV_MANIPULATION_TICKS : spotTick - NAV_MANIPULATION_TICKS;
+
+        address tokenIn = pushUp ? BASE_USDC : BASE_WETH;
+        address tokenOut = pushUp ? BASE_WETH : BASE_USDC;
+        // Deliberately oversized: `sqrtPriceLimitX96`, not this number, is what
+        // bounds the swap. The unconsumed remainder simply stays put.
+        uint256 amountIn = pushUp ? 100_000_000 * ONE_USDC : 50_000 ether;
+        deal(tokenIn, address(this), amountIn);
+        IERC20(tokenIn).forceApprove(SLIPSTREAM_ROUTER, amountIn);
         IAerodromeSlipstreamRouter(SLIPSTREAM_ROUTER)
             .exactInputSingle(
                 IAerodromeSlipstreamRouter.ExactInputSingleParams({
-                tokenIn: BASE_USDC,
-                tokenOut: BASE_WETH,
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
                 tickSpacing: TICK_SPACING,
                 recipient: address(this),
                 deadline: block.timestamp,
-                amountIn: manipUsdc,
+                amountIn: amountIn,
                 amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
+                sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(targetTick)
             })
             );
+
+        // Arrange-phase precondition: the manipulation really did open a gap the
+        // guard must reject. Without it, an under-calibrated swap fails below as
+        // the opaque "next call did not revert as expected" instead of naming
+        // the achieved deviation.
+        assertGt(
+            TwapTickMath.deviationBps(
+                WETH_USDC_POOL, BASE_WETH, BASE_USDC, window, NAV_DEVIATION_PROBE
+            ),
+            NAV_GUARD_BPS,
+            "manipulation must drive spot past the guard threshold"
+        );
 
         // Entry-side guard must halt the deposit at the diverged mark.
         vm.expectRevert(); // TwapTickMath.NavMarketDeviationExceeded
