@@ -103,6 +103,15 @@ jobs:
         working-directory: clients/rust-payment-client
         run: cargo test --test skill_docs_parity -- --nocapture
 
+      # Parser conformance for concrete command examples published by plugin
+      # skills. The guard rejects a zero-test run so documentation drift cannot
+      # become a silent green CI result.
+      - name: Plugin skill command parser conformance
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test plugin_skill_command_examples -- --nocapture
+
       - name: dApp TOML round-trip
         working-directory: clients/rust-payment-client
         run: cargo test --test dapp_toml_roundtrip -- --nocapture
