@@ -13,6 +13,18 @@
 # The integration tests require a running chain and belong in suite 7. Running them here
 # would either fail (no chain) or silently skip, which is misleading.
 #
+# WHY plugin_skill_command_examples IS THE ONE INTEGRATION BINARY RUN HERE (issue #1203)
+# It is the exception the rule above is about: it needs no chain, no fixture, and not
+# even the built binary — it parses the `rmpc` command lines published in
+# plugins/**/skills/**.md against the library's clap `Cli` type. Its subject IS markdown,
+# so it has to run on the docs-only PRs that suite 7 deliberately skips via
+# paths-ignore: ['**.md']. Putting it in suite 7 would mean a PR that edits a SKILL.md —
+# precisely the change that can break a documented command — never runs the check that
+# catches it: the same false-green shape issue #1199 was filed about. This suite has no
+# paths filter and runs on every PR, so the guard cannot be bypassed. It is wrapped in
+# cargo_test_require_executed.sh so a zero-tests-collected run fails RED rather than
+# passing as a silent green.
+#
 # GOTCHAS
 # - The Cargo cache is scoped to clients/rust-payment-client/target, not the workspace
 #   root. If you add a workspace-level dependency that affects rmpc, the cache key
@@ -59,3 +71,9 @@ jobs:
       - name: cargo test --lib
         working-directory: clients/rust-payment-client
         run: cargo test --lib -- --nocapture
+
+      - name: Plugin skill command parser conformance
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test plugin_skill_command_examples -- --nocapture
