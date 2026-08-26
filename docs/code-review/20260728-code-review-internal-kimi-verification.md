@@ -176,7 +176,7 @@
 
 ---
 
-## MEDIUM SEVERITY — 10 of 11 CONFIRMED, 1 REFUTED
+## MEDIUM SEVERITY — 11 of 12 CONFIRMED, 1 REFUTED
 
 ### review-security-m-001: Timelock ADMIN bypass on router — CONFIRMED
 
