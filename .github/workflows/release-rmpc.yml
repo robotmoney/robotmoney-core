@@ -11,6 +11,15 @@
 # we never push a tag and never create a Release, so we never end up with an orphan
 # tag pointing at a commit whose binaries can't be produced.
 #
+# WHY verify-version RUNS BEFORE build AND NOT INSIDE IT
+# That invariant only holds for the workflow_dispatch path, where WE create the tag.
+# On the `push: tags` trigger the tag already exists when the build starts, so any
+# check that can fail on tag CONTENT must run before it can strand that tag. It also
+# has to precede the matrix because `fail-fast: false` lets the surviving legs upload
+# mislabelled archives as workflow artifacts even when the Release is blocked.
+# verify-version (issue #1191) is exactly such a check — manifest version vs tag —
+# so it is a job-level precondition, not a build step. See its own comment block.
+#
 # WHY CROSS FOR ARM TARGETS
 # GitHub-hosted runners are x86_64 only. arm64 cross-compilation is handled by the
 # cross-rs/cross action which wraps cargo in a Docker container with the appropriate
@@ -86,11 +95,44 @@ jobs:
       sha: ${{ steps.r.outputs.sha }}
       version: ${{ steps.r.outputs.version }}
     steps:
+      # Every `${{ }}` below is read through step-level `env:`, never interpolated
+      # into shell source. This workflow holds `contents: write`, and an expression
+      # spliced into a `run:` body is executed by bash — an actor with only
+      # `actions:write` could dispatch a tag like `v1$(...)` and reach code
+      # execution on the runner with that token. Via `env:` the value arrives as
+      # data in a variable and is never parsed as shell.
       - name: Validate inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" != "true" ] && [ -z "${{ inputs.tag }}" ]; then
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "workflow_dispatch" ]; then
+            exit 0
+          fi
+
+          if [ "${DRY_RUN}" != "true" ] && [ -z "${INPUT_TAG}" ]; then
             echo "::error::tag input is required when dry_run is false"
             exit 1
+          fi
+
+          # Shape-check the tag before anything consumes it. `inputs.tag` reaches
+          # `git tag`, the archive filenames, the Release name and the version
+          # assertion; constraining it once here is the cheapest mitigation for
+          # all of those sinks at the same time. It also forecloses a tag whose
+          # value carries a newline, which would otherwise inject a second
+          # `version=` line into $GITHUB_OUTPUT below and let the version we
+          # VERIFY differ from the version we RELEASE.
+          # Deliberately bash's `[[ =~ ]]` and not `grep -E`: grep matches
+          # LINE-wise, so `v1.2.3\nanything` would satisfy `^…$` on its first
+          # line and pass. bash anchors against the whole string, so an embedded
+          # newline fails the match — which is precisely the case that matters.
+          if [ -n "${INPUT_TAG}" ]; then
+            if [[ ! "${INPUT_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::tag input '${INPUT_TAG}' is not a release tag. Expected vX.Y.Z or vX.Y.Z-prerelease."
+              exit 1
+            fi
           fi
 
       - name: Checkout (full history)
@@ -100,26 +142,104 @@ jobs:
 
       - name: Resolve sha + version
         id: r
+        env:
+          INPUT_COMMIT_HASH: ${{ inputs.commit_hash }}
+          INPUT_TAG: ${{ inputs.tag }}
+          GITHUB_SHA_IN: ${{ github.sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ -n "${{ inputs.commit_hash }}" ]; then
-            SHA=$(git rev-parse "${{ inputs.commit_hash }}^{commit}")
+          set -euo pipefail
+          if [ -n "${INPUT_COMMIT_HASH}" ]; then
+            SHA=$(git rev-parse "${INPUT_COMMIT_HASH}^{commit}")
           else
-            SHA="${{ github.sha }}"
+            SHA="${GITHUB_SHA_IN}"
           fi
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-          if [ -n "${{ inputs.tag }}" ]; then
-            VERSION="${{ inputs.tag }}"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
+          if [ -n "${INPUT_TAG}" ]; then
+            VERSION="${INPUT_TAG}"
+          elif [ "${REF_TYPE}" = "tag" ]; then
+            VERSION="${REF_NAME}"
           else
             VERSION="dryrun-$(echo "${SHA}" | cut -c1-7)"
           fi
+
+          # $GITHUB_OUTPUT is a `key=value` file with no delimiter of its own, so
+          # a value carrying a newline writes a SECOND key and silently wins.
+          # `Validate inputs` rejects such a tag on the dispatch path; this is the
+          # same guarantee for the push-tags path, where the value comes from
+          # github.ref_name rather than from inputs.
+          for v in "${SHA}" "${VERSION}"; do
+            if [ "$(printf '%s' "${v}" | wc -l)" -ne 0 ]; then
+              echo "::error::resolved value contains a newline and cannot be written to \$GITHUB_OUTPUT"
+              exit 1
+            fi
+          done
+
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  # WHY THIS IS A JOB AND NOT A STEP INSIDE build
+  # The binary's version comes from clients/rust-payment-client/Cargo.toml
+  # (clap's `version` derive expands to CARGO_PKG_VERSION); nothing in this
+  # workflow injects the tag. For six releases that manifest sat at the 0.1.0
+  # placeholder, so every published archive was NAMED rmpc-v0.3.x-* while the
+  # binary inside reported 0.1.0 and no operator could tell builds apart
+  # (issue #1191).
+  #
+  # Checking that inside `build` would be too late in two ways. `fail-fast: false`
+  # means the other three matrix legs run to completion and upload MISLABELLED
+  # archives via actions/upload-artifact — a 7-day channel readable by anyone
+  # with repo read — even though the Release itself is correctly blocked. And on
+  # the `push: tags` trigger the tag ALREADY EXISTS when the build runs, so a
+  # late failure strands an orphan tag with no Release, contradicting this
+  # workflow's own invariant above ("we never end up with an orphan tag").
+  # As a precondition it costs seconds, needs no toolchain and no built binary,
+  # and gates all four archives plus the workflow-artifact channel at once.
+  verify-version:
+    name: verify-manifest-matches-tag
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - name: Manifest version must equal the tag being released
+        # Keyed on the actual dispatch MODE, not on the shape of the version
+        # string. Keying on a `dryrun-*` prefix let `dry_run=false` +
+        # `tag=dryrun-abc1234` skip the only version assertion in the pipeline
+        # while `publish` still pushed a real tag and cut a real Release — the
+        # control silently disabled by a caller-supplied string.
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.dry_run)"
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          MANIFEST=clients/rust-payment-client/Cargo.toml
+          EXPECTED="${VERSION#v}"
+          ACTUAL="$(
+            awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{
+                   gsub(/^version[[:space:]]*=[[:space:]]*"/,""); gsub(/".*$/,""); print; exit }' \
+              "${MANIFEST}"
+          )"
+          echo "tag: ${VERSION}   manifest: ${ACTUAL}"
+
+          if [ -z "${ACTUAL}" ]; then
+            echo "::error::could not read [package] version from ${MANIFEST}"
+            exit 1
+          fi
+
+          if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+            echo "::error::Version mismatch. Releasing '${VERSION}' but ${MANIFEST} says '${ACTUAL}' (expected '${EXPECTED}'), so every binary in this release would report 'rmpc ${ACTUAL}' — see issue #1191. Re-running this workflow CANNOT fix it: it re-checks-out the same commit. Recovery is: delete the tag (git push --delete origin ${VERSION}), set version=${EXPECTED} in ${MANIFEST} on dev, then re-tag that commit."
+            exit 1
+          fi
+          echo "OK: manifest matches tag ${VERSION}"
 
   build:
     name: build-${{ matrix.target }}
-    needs: [resolve]
+    needs: [resolve, verify-version]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -196,32 +316,27 @@ jobs:
         run: strip target/${{ matrix.target }}/release/rmpc
 
       - name: Smoke-test binary and assert it reports the released version
-        # Issue #1191: the binary takes its version from CARGO_PKG_VERSION, i.e.
-        # clients/rust-payment-client/Cargo.toml — nothing here injects the tag.
-        # For years that manifest sat at 0.1.0, so every published archive was
-        # named rmpc-v0.3.x-* while the binary inside reported 0.1.0 and no
-        # operator could tell builds apart. Printing --version without checking
-        # it is what let that ship, so compare it to the tag we are releasing.
-        # Skipped on dry runs, whose synthetic "dryrun-<sha>" version has no
-        # manifest counterpart.
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # `verify-version` already proved manifest == tag before any build ran,
+        # and is what actually gates the release. This step closes the last link
+        # of the chain by EXECUTING the artifact: it proves the built binary
+        # reports the manifest version, catching a build that somehow overrode
+        # CARGO_PKG_VERSION (a custom clap `long_version`, a stale cached
+        # artifact) rather than a stale manifest. Keyed on the dispatch mode, not
+        # on a `dryrun-*` string prefix — see verify-version for why that
+        # distinction is load-bearing.
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          BIN=./target/${{ matrix.target }}/release/rmpc
+          BIN="./target/${TARGET}/release/rmpc"
           REPORTED="$("$BIN" --version)"
           echo "binary reports: ${REPORTED}"
 
-          VERSION="${{ needs.resolve.outputs.version }}"
-          case "${VERSION}" in
-            dryrun-*)
-              echo "dry run (${VERSION}) — skipping tag/version equality check"
-              exit 0
-              ;;
-          esac
-
           EXPECTED="rmpc ${VERSION#v}"
           if [ "${REPORTED}" != "${EXPECTED}" ]; then
-            echo "::error::Version mismatch. Releasing tag '${VERSION}' but the binary reports '${REPORTED}' (expected '${EXPECTED}'). Bump 'version' in clients/rust-payment-client/Cargo.toml to ${VERSION#v} and re-run; see issue #1191."
+            echo "::error::Built binary reports '${REPORTED}' but tag '${VERSION}' expects '${EXPECTED}', even though the manifest matched. Something overrides CARGO_PKG_VERSION at build time — check clap's version derive in clients/rust-payment-client/src/cli.rs; see issue #1191."
             exit 1
           fi
           echo "OK: binary version matches tag ${VERSION}"
@@ -235,10 +350,18 @@ jobs:
         # scripts/release/install-rmpc.sh; both emit `<64-hex>  <name>`, which
         # `sha256sum -c` and `shasum -a 256 -c` both consume.
         # This step is extracted and executed with sha256sum removed from PATH by
-        # scripts/release/install-rmpc-selftest.sh on every PR.
+        # scripts/release/install-rmpc-selftest.sh on every PR. That extractor
+        # parses this step-level `env:` and splices the values into its `env -i`
+        # invocation, so any NEW `${{ }}` key added to this block must also be
+        # added to that script's SUBS map or the extraction is refused.
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          OS_LABEL: ${{ matrix.os_label }}
+          TARGET: ${{ matrix.target }}
         run: |
-          ARCHIVE="rmpc-${{ needs.resolve.outputs.version }}-${{ matrix.os_label }}.tar.gz"
-          tar -czf "${ARCHIVE}" -C target/${{ matrix.target }}/release rmpc
+          set -euo pipefail
+          ARCHIVE="rmpc-${VERSION}-${OS_LABEL}.tar.gz"
+          tar -czf "${ARCHIVE}" -C "target/${TARGET}/release" rmpc
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
           elif command -v shasum >/dev/null 2>&1; then
@@ -309,18 +432,26 @@ jobs:
           done
           echo "all ${#archives[@]} archives ship a matching .sha256"
 
+      # Both the tag and the Release read `needs.resolve.outputs.version`, the
+      # SAME value verify-version checked. Reading `inputs.tag` here instead was
+      # a second, independent read of the same nominal value: whatever
+      # verify-version validated, this step could still tag something else.
+      # One value is resolved once, validated once, and released.
       - name: Create and push git tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ inputs.tag }}"
-          git push origin "${{ inputs.tag }}"
+          git tag "${VERSION}"
+          git push origin "${VERSION}"
 
       - name: Create GitHub Release with all assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.resolve.outputs.version }}
           files: |
             artifacts/*.tar.gz
             artifacts/*.tar.gz.sha256
