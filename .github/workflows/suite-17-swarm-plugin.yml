@@ -133,10 +133,16 @@ jobs:
           # permanent PASS (issue #1232).
           fetch-depth: 0
 
-      - name: Install dependencies (jq, shellcheck)
+      - name: Install dependencies (jq, shellcheck, perl for shasum)
+        # `perl` supplies `shasum`, which install-rmpc-selftest.sh requires as a
+        # hard prerequisite: it runs release-rmpc.yml's packaging step with
+        # sha256sum removed from PATH to reproduce the macOS runner, and shasum
+        # is the fallback that step takes there. A missing shasum is a FATAL in
+        # that selftest, never a skip, so it is installed explicitly rather than
+        # relied on from the runner image.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq shellcheck
+          sudo apt-get install -y -qq jq shellcheck perl
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -174,7 +180,12 @@ jobs:
           fi
           count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
           echo "executed assertions: $count"
-          if [[ "$count" -lt 45 ]]; then
-            echo "::error::only $count assertions executed (expected >= 45) — a suite that asserts nothing is a false green"
+          # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
+          # This check is the second opinion for the case where that in-script
+          # minimum gets edited down, so any slack between the two numbers
+          # re-opens exactly the window the check exists to close. They move
+          # together, in the same commit.
+          if [[ "$count" -lt 55 ]]; then
+            echo "::error::only $count assertions executed (expected >= 55, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi

@@ -17,7 +17,20 @@
 #   download archive -> download .sha256 -> VERIFY -> extract -> install
 #
 # A mismatch aborts at the VERIFY step. Nothing is extracted and nothing is
-# installed, so a tampered download cannot leave an executable on disk.
+# installed, so a download that does not match the checksum cannot leave an
+# executable on disk.
+#
+# WHAT THIS CHECK DOES AND DOES NOT PROVE
+# Be precise about the trust root: the `.sha256` is fetched from the same release,
+# the same host and the same TLS session as the archive, and nothing signs either
+# one. So this DETECTS a corrupted, truncated or substituted download — a mirror,
+# proxy or cache that serves different bytes than the release holds. It does NOT
+# AUTHENTICATE the release itself: anyone able to write to the release (a leaked
+# `contents: write` token, a compromised maintainer account, a malicious workflow
+# run) publishes a matching `.sha256` beside a malicious archive and this script
+# reports `verified`. Real provenance needs an out-of-band anchor — build
+# attestation or a detached signature over the checksum with a committed public
+# key — which this script does not yet have.
 #
 # WHY --base-url IS A FLAG
 # It is the offline seam. scripts/release/install-rmpc-selftest.sh points it at a
@@ -25,14 +38,21 @@
 # exact code path — including the corrupted-archive path — with no network. There
 # is one implementation; the tests do not re-describe it.
 #
+# A non-`https://` base URL is refused unless --allow-insecure-base-url is given.
+# BASE_URL is read from argv only, never the environment, so this is not an
+# attacker-reachable downgrade — it is a copy-paste surface, and it matters
+# because the very next line this script prints is "verified", which would
+# otherwise vouch for bytes fetched in the clear. The selftest opts out
+# explicitly; an operator has to mean it.
+#
 # USAGE
 #   install-rmpc.sh --tag v0.3.1 --dest ~/.local/bin
 #   install-rmpc.sh --tag v0.3.1 --dest ./bin --platform linux-amd64 \
-#                   --base-url file:///tmp/fixture-releases
+#                   --base-url file:///tmp/fixture-releases --allow-insecure-base-url
 #
 # EXIT CODES
 #   0  installed, checksum verified
-#   2  usage error / missing prerequisite
+#   2  usage error / missing prerequisite / non-https --base-url without the opt-out
 #   3  download failed
 #   4  CHECKSUM MISMATCH or missing checksum file — nothing extracted, nothing installed
 #   5  extraction produced no rmpc binary
@@ -45,6 +65,7 @@ TAG=""
 DEST=""
 PLATFORM=""
 BASE_URL="$DEFAULT_BASE_URL"
+ALLOW_INSECURE_BASE_URL=0
 
 die() {
   echo "[install-rmpc] ERROR: $2" >&2
@@ -61,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --dest)     DEST="${2:-}"; shift 2 ;;
     --platform) PLATFORM="${2:-}"; shift 2 ;;
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
+    --allow-insecure-base-url) ALLOW_INSECURE_BASE_URL=1; shift ;;
     -h|--help)  usage; exit 0 ;;
     *)          usage; die 2 "unknown argument '$1'" ;;
   esac
@@ -68,6 +90,13 @@ done
 
 [[ -n "$TAG"  ]] || { usage; die 2 "--tag is required (e.g. --tag v0.3.1)"; }
 [[ -n "$DEST" ]] || { usage; die 2 "--dest is required (a directory on PATH)"; }
+
+# Default-reject any base URL that is not https://. Printing "verified" over a
+# plaintext fetch is the thing being prevented; the opt-out exists for the
+# offline selftest's file:// fixtures and has to be typed out.
+if [[ "$ALLOW_INSECURE_BASE_URL" -eq 0 && "$BASE_URL" != https://* ]]; then
+  die 2 "--base-url '$BASE_URL' is not https:// — refusing an insecure download channel. Pass --allow-insecure-base-url if you really mean it (the offline selftest does)."
+fi
 
 command -v curl >/dev/null 2>&1 || die 2 "curl is required to download the release archive"
 command -v tar  >/dev/null 2>&1 || die 2 "tar is required to unpack the release archive"

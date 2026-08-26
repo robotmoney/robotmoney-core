@@ -53,7 +53,18 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # Raised from 42 to 46 by #1204: four more assertions keep BOOTSTRAP.md — core's
 # *documented* install path, and the one README.md sends an agent to — pointed at
 # that verified recipe instead of an unchecked download.
-MIN_EXPECTED_ASSERTIONS=47
+# Raised from 46 to 54 by #1204's security review: the selftest stopped grepping
+# release-rmpc.yml for the text of its packaging step and started extracting and
+# EXECUTING that step (with sha256sum removed from PATH, which is what a macOS
+# runner is) plus a new archive-to-checksum pairing guard, and install-rmpc.sh
+# gained a non-https --base-url refusal.
+#
+# THIS NUMBER AND THE WORKFLOW FLOOR MOVE TOGETHER.
+# .github/workflows/suite-17-swarm-plugin.yml re-checks the executed count
+# independently, precisely so a silently-lowered MIN_EXPECTED_ASSERTIONS cannot
+# buy a green. That second opinion is worth nothing if it trails this number, so
+# the two are kept equal — change one, change the other in the same commit.
+MIN_EXPECTED_ASSERTIONS=55
 
 PASS=0
 FAIL=0
@@ -425,7 +436,7 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 
 # Minimum assertions the install selftest must itself contribute. Guards against
 # the selftest being gutted while this suite still reports a healthy total.
-MIN_INSTALL_SELFTEST_ASSERTIONS=15
+MIN_INSTALL_SELFTEST_ASSERTIONS=23
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
