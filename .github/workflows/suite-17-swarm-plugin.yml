@@ -15,8 +15,9 @@
 #     rationale URI is not reachable,
 # (e) check-preflight.sh fails closed with AgentNotRegistered when rmpc
 #     returns that error variant,
-# (f) no restricted paths (contracts/, crates/, clients/, services/) are
-#     touched by the plugin, and
+# (f) no restricted paths (contracts/, crates/, clients/rust-payment-client/,
+#     services/) are touched IN THE SAME CHANGE SET as the plugin — a coupling
+#     guard, not a repo-wide veto (see WHY THE CHECKOUT IS FULL-DEPTH below), and
 # (g) the deprecation compat stub still exists at the OLD committee skill path
 #     and still names its robotmoney-swarm replacement (issue #1199) — the
 #     already-shipped raw URL must keep returning 200.
@@ -63,6 +64,26 @@
 # stub or renames the skill is precisely the change that must go red here, so a
 # **.md bypass would reintroduce the #1199 false green through the other door.
 #
+# WHY THE CHECKOUT IS FULL-DEPTH AND THE BASE SHA IS PASSED IN (issue #1232)
+# Assertion (f) diffs this branch against its base. With the default depth-1
+# checkout there was no origin/dev and no HEAD~1: merge-base failed, the
+# `|| echo HEAD~1` fallback failed, git diff failed, every error was swallowed
+# by `2>/dev/null`, the pipeline emitted nothing, grep -q matched nothing, and
+# the else branch printed PASS. The guard could never fail — merged PR #1196
+# changed three clients/rust-payment-client/ files and still got
+# "PASS: no restricted paths modified". The executed-assertion floor did not
+# catch it, because the assertion did run; its input was silently empty.
+# So the checkout is now fetch-depth: 0 and the run step passes
+# github.event.pull_request.base.sha as SWARM_RESTRICTED_BASE_SHA. The guard
+# (plugins/robotmoney-swarm/tests/check-restricted-paths.sh) exits 2 with a
+# named reason when it cannot resolve a base commit, and its --self-test — run
+# on every CI run, ahead of the real check — proves it still fires on a
+# synthetic violation.
+# The guard's scope was wrong too: it diffed the whole branch, so it would have
+# vetoed every clients/rust-payment-client/ PR in the repo. It now fires only
+# when plugins/robotmoney-swarm/** and a restricted tree change together, which
+# is what (f) actually claims.
+#
 # WHY THE EXECUTED-ASSERTION COUNT IS ASSERTED
 # Per the test-coverage policy, exit 0 is not evidence anything ran. run-tests.sh
 # prints ROBOTMONEY_SWARM_TESTS_EXECUTED=<n> and refuses to exit 0 below its
@@ -94,6 +115,11 @@ jobs:
       CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the restricted-path coupling guard needs a resolvable
+          # base commit. A depth-1 clone is what silently turned it into a
+          # permanent PASS (issue #1232).
+          fetch-depth: 0
 
       - name: Install dependencies (jq, shellcheck)
         run: |
@@ -116,6 +142,10 @@ jobs:
       - name: Run robotmoney-swarm tests
         # pipefail is mandatory: without it `tee` masks a non-zero exit from
         # run-tests.sh and the job goes green on a failing suite.
+        env:
+          # Empty on push/dispatch events, where the guard falls back to
+          # origin/dev (present thanks to fetch-depth: 0). Never guessed.
+          SWARM_RESTRICTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           bash plugins/robotmoney-swarm/tests/run-tests.sh | tee swarm-tests.log
@@ -132,7 +162,7 @@ jobs:
           fi
           count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
           echo "executed assertions: $count"
-          if [[ "$count" -lt 20 ]]; then
-            echo "::error::only $count assertions executed (expected >= 20) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 21 ]]; then
+            echo "::error::only $count assertions executed (expected >= 21) — a suite that asserts nothing is a false green"
             exit 1
           fi
