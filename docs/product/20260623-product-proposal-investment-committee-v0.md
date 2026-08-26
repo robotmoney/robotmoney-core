@@ -52,6 +52,20 @@
 >    multi-signer shape (§2.1).
 > 3. No committee agent is registered anywhere, so genesis seat provisioning
 >    (§4 decision 3) is greenfield rather than a migration.
+>
+> **v0.1 targets a local fork or devnet, not a public chain.** Mainnet deployment
+> is a separate decision, deliberately deferred. This matters for how §2.1's
+> public-record framing should be read: the censorship-resistance it describes —
+> that no single entity can silently suppress a recommendation — is **design
+> intent that lands at deployment, not a property v0.1 delivers.** A devnet
+> anchor rehearses the mechanism on a chain nobody else reads. Until the
+> contracts are live on Base behind a real Safe and timelock, the dapp must not
+> describe the record as tamper-proof or censorship-resistant in the present
+> tense. Going live additionally requires a Safe with hardware-wallet signers,
+> `ADMIN_ROLE` transferred to a deployed `TimelockController` on all five
+> protocol contracts (`docs/architecture.md:1226`), an audit pass, a funded
+> submitter key with a custody and rotation story, and registered genesis agents —
+> none of which are in v0.1 scope.
 
 ---
 
@@ -136,7 +150,9 @@ spec in every respect.
     published only at an RM-controlled URL can still be silently suppressed by RM.
     The commitment is what makes the record censorship-resistant, which is the
     property the record exists to provide and what "no single entity in control"
-    (§1) actually requires.
+    (§1) actually requires. **Note this is the design's purpose, not v0.1's
+    delivered state** — v0.1 proves the mechanism on a devnet, and the property
+    itself lands only at mainnet deployment (see the status header).
   - **A missing receipt is a product defect, not an ops hiccup.** If a session
     that should have produced a receipt silently produces none, the record has a
     hole in exactly the place someone would look for suppression. Submission
