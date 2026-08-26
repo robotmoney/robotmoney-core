@@ -38,6 +38,16 @@
 # RMPC_INSTALL_SELFTEST_EXECUTED=<n>. plugins/robotmoney-swarm/tests/run-tests.sh
 # folds these into its own counters; the script is also runnable on its own.
 
+# ERREXIT IS DELIBERATELY OFF, ONCE, FOR THE WHOLE FILE.
+# Every case here runs a command that is EXPECTED to fail (a tampered archive, a
+# refused base URL, an unpaired artifact set) and asserts on its exit status, so
+# `$?` is captured explicitly at each site and there is nothing for errexit to
+# add. There used to be `set +e`/`set -e` pairs around those captures; since
+# errexit was never on, they did not restore it — they switched it ON from the
+# first pair to the end of the file, and an unguarded assignment there killed the
+# run before it could print its `RMPC_INSTALL_SELFTEST_EXECUTED=<n>` contract
+# line. Truncating silently is the one failure this script must not have, so the
+# pairs are gone: do not reintroduce `set -e` here, and do not add one locally.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -394,7 +404,52 @@ def substitute(text, where):
     return re.sub(r"\$\{\{([^}]*)\}\}", repl, text)
 
 
+def step_env_block(body, step_name):
+    """Parse the step's own `env:` mapping into {name: substituted value}.
+
+    A step-level `env:` is how a hardened workflow keeps a `${{ }}` expression
+    out of the shell text it would otherwise be interpolated into — exactly the
+    change review-security asked for on the packaging step. An extractor that
+    reads only `run: |` renders such a step as a body full of UNBOUND names,
+    records NO error (there is no `${{ }}` left in the body to fail on), and
+    then reports whatever the unbound names happen to break as a defect in the
+    workflow. So the mapping is parsed here, its values go through the same
+    substitute() as the body, and an entry this extractor cannot read is an
+    extractor error rather than a silent omission.
+    """
+    env = {}
+    k = 0
+    while k < len(body):
+        cur = body[k]
+        if re.match(r"\s*env:\s*$", cur):
+            env_indent = indent(cur)
+            k += 1
+            while k < len(body):
+                nxt = body[k]
+                if not nxt.strip() or nxt.lstrip().startswith("#"):
+                    k += 1
+                    continue
+                if indent(nxt) <= env_indent:
+                    break
+                m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*):\s*(\S.*?)\s*$", nxt)
+                if not m:
+                    errors.append(
+                        "step '%s' has an env: entry this extractor cannot read: %s"
+                        % (step_name, nxt.strip())
+                    )
+                    return env
+                value = m.group(2)
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                env[m.group(1)] = substitute(value, "env: of step '%s'" % step_name)
+                k += 1
+            return env
+        k += 1
+    return env
+
+
 def step_run_block(step_name):
+    """Return (runnable body, step env mapping) for a named step, or (None, {})."""
     for i, line in enumerate(lines):
         if re.match(r"\s*-\s+name:\s+" + re.escape(step_name) + r"\s*$", line):
             base = indent(line)
@@ -406,6 +461,7 @@ def step_run_block(step_name):
                     break
                 body.append(cur)
                 j += 1
+            step_env = step_env_block(body, step_name)
             for k, cur in enumerate(body):
                 if re.match(r"\s*run:\s*\|\s*$", cur):
                     run_indent = indent(cur)
@@ -417,11 +473,12 @@ def step_run_block(step_name):
                     while block and not block[-1].strip():
                         block.pop()
                     pad = min(indent(b) for b in block if b.strip())
-                    return "\n".join(b[pad:] if b.strip() else "" for b in block) + "\n"
+                    text = "\n".join(b[pad:] if b.strip() else "" for b in block) + "\n"
+                    return text, step_env
             errors.append("step '%s' has no 'run: |' block" % step_name)
-            return None
+            return None, step_env
     errors.append("step '%s' not found in the workflow" % step_name)
-    return None
+    return None, {}
 
 
 # Every runner the build matrix names, plus any literal runs-on in the file.
@@ -490,7 +547,12 @@ for step_name, filename in (
     ("Package tar.gz", "package.sh"),
     ("Assert every archive ships its checksum", "pairing.sh"),
 ):
-    block = step_run_block(step_name)
+    block, step_env = step_run_block(step_name)
+    # The env file is written even when empty, so the bash side never has to
+    # distinguish "this step declares no env:" from "the extractor did not look".
+    (out / (filename[: -len(".sh")] + ".env")).write_text(
+        "".join("%s=%s\n" % (name, value) for name, value in step_env.items())
+    )
     if block is not None:
         (out / filename).write_text(substitute(block, step_name))
 
@@ -539,22 +601,46 @@ cp "$WORKDIR/stage/rmpc" "$PKG_DIR/target/$MAC_TARGET/release/rmpc"
 # disk is a MANGLED rendering of a PR-editable YAML step — running it would
 # prove nothing and is the one case where this section generates shell it does
 # not understand. The extraction assertion above has already gone red by then.
+# read_step_env — load the NAME=value pairs the extractor read out of a step's
+# own `env:` block into STEP_ENV, ready to splice into an `env -i` invocation.
+# `env -i` starts from an empty environment on purpose, so anything the step
+# declares for itself has to be handed back explicitly or the body runs with
+# those names unbound and misbehaves in ways that look like workflow defects.
+STEP_ENV=()
+read_step_env() {
+  local file="$1" kv
+  STEP_ENV=()
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r kv; do
+    [[ -n "$kv" ]] && STEP_ENV+=("$kv")
+  done < "$file"
+  return 0
+}
+
+PKG_RAN=no
 if [[ -f "$WF_DIR/package.sh" && -z "$WF_ERRORS" ]]; then
-  set +e
+  read_step_env "$WF_DIR/package.env"
+  PKG_RAN=yes
   PKG_OUT=$(cd "$PKG_DIR" && env -i \
     PATH="$NOSHA_BIN" HOME="$PKG_DIR" GITHUB_ENV="$PKG_DIR/github_env" \
+    ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
     "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/package.sh" 2>&1)
   PKG_EXIT=$?
-  set -e
 else
   PKG_OUT="the Package tar.gz step could not be extracted cleanly: ${WF_ERRORS:-step not found}"
   PKG_EXIT=127
 fi
 
-if [[ $PKG_EXIT -eq 0 ]]; then
+# This assertion knows one fact — the exit status — and reports it plus the
+# captured output. It deliberately does NOT name a cause: an earlier version
+# hard-coded "no sha256sum on PATH" for every non-zero exit, which would send an
+# operator to revert the workflow's `env:` hardening over a harness bug.
+if [[ "$PKG_RAN" != "yes" ]]; then
+  fail "packaging step never executed under the macOS runner simulation: $PKG_OUT"
+elif [[ $PKG_EXIT -eq 0 ]]; then
   pass "packaging step runs to completion with no sha256sum on PATH (the macOS runner case)"
 else
-  fail "packaging step exited $PKG_EXIT with no sha256sum on PATH — it cannot run on the macOS half of its own matrix, so a tag would publish nothing (output: $PKG_OUT)"
+  fail "packaging step exited $PKG_EXIT under the macOS runner simulation (PATH without sha256sum) — read the captured output for the cause before changing release-rmpc.yml (output: $PKG_OUT)"
 fi
 
 if grep -Eq "^[0-9a-f]{64}  ${MAC_ARCHIVE}\$" "$PKG_DIR/${MAC_ARCHIVE}.sha256" 2>/dev/null; then
@@ -572,11 +658,9 @@ cp "$PKG_DIR/$MAC_ARCHIVE" "$MAC_REL/" 2>/dev/null || true
 cp "$PKG_DIR/${MAC_ARCHIVE}.sha256" "$MAC_REL/" 2>/dev/null || true
 
 DEST_MAC="$WORKDIR/bin-macos"
-set +e
 OUT_MAC=$("$INSTALLER" --tag "$TAG" --platform "macos-arm64" --dest "$DEST_MAC" \
   --base-url "file://$WORKDIR/releases-macos" --allow-insecure-base-url 2>&1)
 EXIT_MAC=$?
-set -e
 
 if [[ $EXIT_MAC -eq 0 && -f "$DEST_MAC/rmpc" ]]; then
   pass "round trip: an archive packaged the macOS way verifies and installs through install-rmpc.sh"
@@ -621,18 +705,18 @@ run_pairing_guard() {
   if [[ ! -f "$WF_DIR/pairing.sh" || -n "$WF_ERRORS" ]]; then
     return 126
   fi
+  read_step_env "$WF_DIR/pairing.env"
   (cd "$root" && env -i \
     PATH="$NOSHA_BIN" HOME="$root" \
+    ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
     "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/pairing.sh" >/dev/null 2>&1)
 }
 
 PAIR_OK_ROOT="$WORKDIR/pair-ok"
 mkdir -p "$PAIR_OK_ROOT"
 make_artifacts "$PAIR_OK_ROOT/artifacts" "${MATRIX_ENTRIES:-4}" keep
-set +e
 run_pairing_guard "$PAIR_OK_ROOT"
 PAIR_OK_EXIT=$?
-set -e
 
 if [[ $PAIR_OK_EXIT -eq 0 ]]; then
   pass "pairing guard: a complete set of ${MATRIX_ENTRIES} archives + checksums passes"
@@ -645,10 +729,8 @@ fi
 PAIR_BAD_ROOT="$WORKDIR/pair-bad"
 mkdir -p "$PAIR_BAD_ROOT"
 make_artifacts "$PAIR_BAD_ROOT/artifacts" "${MATRIX_ENTRIES:-4}" drop
-set +e
 run_pairing_guard "$PAIR_BAD_ROOT"
 PAIR_BAD_EXIT=$?
-set -e
 
 # A missing guard step would also "exit non-zero" here, which would be a pass for
 # the wrong reason — the exact shape this whole section exists to stop. So the
@@ -665,7 +747,10 @@ fi
 
 # The guard's expected-archive count is a constant in the workflow; it is only
 # correct while it equals the build matrix's length. Assert they move together.
-PAIR_EXPECTED=$(sed -n 's/^EXPECTED_ARCHIVES=\([0-9]\+\)$/\1/p' "$WF_DIR/pairing.sh" 2>/dev/null | head -1)
+# `|| true`: pairing.sh is absent whenever the step could not be extracted, and
+# a failed sed must leave PAIR_EXPECTED empty for the assertion below to report,
+# never abort the run before the summary.
+PAIR_EXPECTED=$(sed -n 's/^EXPECTED_ARCHIVES=\([0-9]\+\)$/\1/p' "$WF_DIR/pairing.sh" 2>/dev/null | head -1 || true)
 if [[ -n "$PAIR_EXPECTED" && "$PAIR_EXPECTED" == "$MATRIX_ENTRIES" ]]; then
   pass "pairing guard expects $PAIR_EXPECTED archives, matching the $MATRIX_ENTRIES build-matrix entries"
 else
@@ -675,16 +760,44 @@ fi
 # ---------- an insecure base URL must not be able to print "verified" ----------
 echo ""
 echo "--- selftest: a non-https --base-url is refused without the explicit opt-out ---"
-set +e
 OUT_HTTP=$("$INSTALLER" --tag "$TAG" --platform "$PLATFORM" --dest "$WORKDIR/bin-http" \
   --base-url "http://mirror.invalid/releases" 2>&1)
 EXIT_HTTP=$?
-set -e
 
 if [[ $EXIT_HTTP -eq 2 && ! -e "$WORKDIR/bin-http/rmpc" ]]; then
   pass "insecure base URL: http:// is refused with exit 2 before anything is downloaded"
 else
   fail "insecure base URL: installer exited $EXIT_HTTP on a plaintext --base-url (output: $OUT_HTTP)"
+fi
+
+# ---------- a digest tool that cannot run must not exit undocumented ----------
+# The installer's exit codes are its interface: a wrapper routes on them. A
+# failing sha256sum/shasum used to fall out as a bare 1 with no ERROR line —
+# not in the documented set, and indistinguishable from any other bash failure.
+# It can never false-verify (the coverage guard forces a 64-hex expected digest,
+# so an empty actual can only mismatch), so this asserts the CLASSIFICATION: the
+# unverifiable case reports itself as unverifiable, code 4, like every other one.
+echo ""
+echo "--- selftest: a digest tool that fails exits 4, not an undocumented 1 ---"
+
+BROKEN_SHA_BIN="$WORKDIR/broken-sha-bin"
+mkdir -p "$BROKEN_SHA_BIN"
+for stub in sha256sum shasum; do
+  printf '#!/usr/bin/env bash\necho "%s: simulated failure" >&2\nexit 1\n' "$stub" \
+    > "$BROKEN_SHA_BIN/$stub"
+  chmod +x "$BROKEN_SHA_BIN/$stub"
+done
+
+DEST_BROKEN="$WORKDIR/bin-broken-sha"
+OUT_BROKEN=$(PATH="$BROKEN_SHA_BIN:$PATH" "$INSTALLER" --tag "$TAG" --platform "$PLATFORM" \
+  --dest "$DEST_BROKEN" --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_BROKEN=$?
+
+if [[ $EXIT_BROKEN -eq 4 && ! -e "$DEST_BROKEN/rmpc" ]] \
+  && grep -q 'could not compute the sha256' <<< "$OUT_BROKEN"; then
+  pass "a digest tool that fails is reported as unverified with exit 4, and nothing is installed"
+else
+  fail "a failing digest tool produced exit $EXIT_BROKEN (expected 4) with dest $([[ -e "$DEST_BROKEN/rmpc" ]] && echo populated || echo empty) (output: $OUT_BROKEN)"
 fi
 
 echo ""
