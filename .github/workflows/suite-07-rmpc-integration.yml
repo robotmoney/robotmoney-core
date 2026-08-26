@@ -39,6 +39,15 @@
 # fires at release time. Delete this step and the #1191 regression goes back to being
 # invisible until an operator downloads a mislabelled archive.
 #
+# WHY THERE IS A SECOND, SEPARATE VERSION STEP
+# cli_version.rs asserts binary == manifest — both sides come from Cargo.toml, so it
+# is tautological on STALENESS. The harm in #1191 was staleness (manifest frozen at
+# 0.1.0 across six releases), and leaving the manifest on an already-published
+# version reproduces it exactly: every build then self-identifies as the shipped
+# release. assert_manifest_ahead_of_tags.sh checks the ordering invariant instead —
+# manifest strictly ahead of the newest v*.*.* tag — which no in-crate test can see,
+# because it is a property of repository state rather than of the crate.
+#
 # WHY nonce-race-stress IS A SEPARATE JOB (NOT A STEP)
 # The race test runs 100 iterations of concurrent nonce acquisition and is sensitive to
 # runner load. Mixing it into geth-tests would make timing-dependent failures ambiguous
@@ -151,6 +160,24 @@ jobs:
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test cli_version -- --nocapture
+
+      # The half cli_version.rs structurally CANNOT cover (issue #1191 review).
+      # That test compares the binary's output against env!("CARGO_PKG_VERSION"),
+      # so both sides come from the same manifest — it is tautological on
+      # staleness by construction. It proves the binary agrees with the manifest;
+      # it can never prove the manifest says anything true about which build you
+      # are holding. The failure that actually shipped WAS staleness: the manifest
+      # sat at 0.1.0 through six releases. Parking it on an already-published
+      # version reproduces that harm with a different string, and a release-time
+      # `manifest == tag` check PASSES for such a build, certifying the collision.
+      # So the invariant is ordering, not equality — and it is only checkable
+      # against repository state (the tag list), never from inside the crate.
+      # Needs the release tags: actions/checkout is shallow and tagless.
+      - name: rmpc manifest version is ahead of every published release tag
+        run: |
+          git fetch --depth=1 --no-recurse-submodules origin '+refs/tags/v*:refs/tags/v*'
+          bash .github/scripts/assert_manifest_ahead_of_tags.sh \
+            clients/rust-payment-client/Cargo.toml
 
   # PARALLEL DEVNET MATRIX (issue #600): each e2e binary booted its own Geth+Lighthouse
   # devnet on port 8545, so they were forced to run SERIALLY in one job with a

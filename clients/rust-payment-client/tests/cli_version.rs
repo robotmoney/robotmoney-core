@@ -12,9 +12,22 @@
 //! operators see, and keeping it truthful is a source-level obligation, not a
 //! packaging one.
 //!
-//! `release-rmpc.yml` additionally asserts at build time that the reported
-//! version matches the tag being released; these tests are the local half of
-//! that contract, so a stale manifest fails in PR CI rather than at release.
+//! `release-rmpc.yml` additionally asserts, before any build cost, that the
+//! manifest version matches the tag being released.
+//!
+//! WHAT THESE TESTS CANNOT DO — read before adding to them.
+//! Both sides of the comparison below originate in the same manifest: the
+//! binary prints `CARGO_PKG_VERSION` and the test reads
+//! `env!("CARGO_PKG_VERSION")`. So this file proves the binary AGREES with the
+//! manifest; it is tautological on whether the manifest is TRUE. The failure
+//! that actually shipped in #1191 was the latter — the manifest sat at `0.1.0`
+//! while six releases went out — and the `assert_ne!` below pins only that one
+//! literal string. Parking the manifest on any already-published version (say,
+//! leaving `dev` at 0.3.3 after v0.3.3 ships) reproduces the identical harm and
+//! passes every assertion here. That invariant is ordering against the release
+//! tag list, which is repository state and unreachable from inside the crate;
+//! it lives in `.github/scripts/assert_manifest_ahead_of_tags.sh`, run as its
+//! own step in suite 7 alongside this binary.
 
 use assert_cmd::Command;
 
