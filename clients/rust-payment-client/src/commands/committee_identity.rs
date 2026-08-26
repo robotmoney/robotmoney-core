@@ -1,12 +1,16 @@
 //! Canonical: no in-repo doc — see `crate::committee_identity` module docs.
-//! Implements: issue #1111 — `rmpc committee-identity`: MCP committee signing identity
+//! Implements: issue #1111 — `rmpc committee-identity`: committee signing identity;
+//! issue #1192 — safe passphrase input.
 //!
 //! `rmpc committee-identity create|show-public-key|sign` — local-only
-//! Ed25519 identity management for the Investment Committee demo's MCP
-//! flow. No RPC, no operator config TOML, no on-chain state: this is a
-//! pure client-side crypto helper so a prospective agent never has to
-//! hand-roll Ed25519 code (issue #1111 AC-1). See
-//! [`crate::committee_identity`] for the wire-format rationale.
+//! Ed25519 identity management for the Investment Swarm's plain-REST flow
+//! (`POST /api/swarm/apply` -> approval -> token claim ->
+//! `POST /api/swarm/signing-payload` -> `POST /api/swarm/submit`; no MCP
+//! transport is involved). No RPC, no operator config TOML, no on-chain
+//! state: this is a pure client-side crypto helper so a prospective member
+//! never has to hand-roll Ed25519 code (issue #1111 AC-1). See
+//! [`crate::committee_identity`] for the wire-format rationale and for the
+//! passphrase channels `create` / `sign` accept.
 //!
 //! Exit codes:
 //! - 0 — success.
@@ -18,9 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::committee_identity::{
-    read_passphrase_from_env, CommitteeIdentity, CommitteeIdentityError,
-};
+use crate::committee_identity::{read_passphrase, CommitteeIdentity, CommitteeIdentityError};
 
 const EXIT_OK: i32 = 0;
 const EXIT_REFUSAL: i32 = 2;
@@ -69,7 +71,7 @@ struct Failure {
 
 /// Run `rmpc committee-identity create`. Returns the process exit code.
 pub fn run_create(path: &Path, pretty: bool) -> i32 {
-    let passphrase = match read_passphrase_from_env() {
+    let passphrase = match read_passphrase() {
         Ok(p) => p,
         Err(e) => return emit_error(&e, pretty),
     };
@@ -110,7 +112,7 @@ pub fn run_show_public_key(path: &Path, pretty: bool) -> i32 {
 
 /// Run `rmpc committee-identity sign`. Returns the process exit code.
 pub fn run_sign(path: &Path, source: PayloadSource, pretty: bool) -> i32 {
-    let passphrase = match read_passphrase_from_env() {
+    let passphrase = match read_passphrase() {
         Ok(p) => p,
         Err(e) => return emit_error(&e, pretty),
     };
