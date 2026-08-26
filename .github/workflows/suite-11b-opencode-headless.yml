@@ -50,10 +50,13 @@ on:
 # These two values are consumed ONLY by the disabled `deposit` / `read` jobs
 # below. They are NOT a working no-credential path — issue #1210 proved every
 # anonymous zen model returns UnknownError, so no value here restores live
-# coverage. They exist so that re-enabling those jobs (issue #1233, option A)
-# is a one-line `if:` flip rather than a rebuild: without them the retained
-# steps would die on `set -u` unbound variables. The repo variables let an
-# operator re-pin version/model at that point without a code+merge cycle.
+# coverage. They exist, together with the `OPENCODE_API_KEY` env line kept on
+# both live run steps, so that re-enabling those jobs (issue #1233, option A)
+# really is a one-line `if:` flip rather than a rebuild: without them the
+# retained steps would die on `set -u` unbound variables, and without the key
+# line a re-enabled job would still run anonymously and die in the #1151
+# loud-fail guard. The repo variables let an operator re-pin version/model at
+# that point without a code+merge cycle.
 env:
   OPENCODE_VERSION: ${{ vars.OPENCODE_HEADLESS_VERSION || '1.18.4' }}
   OPENCODE_MODEL: ${{ vars.OPENCODE_HEADLESS_MODEL || 'opencode/north-mini-code-free' }}
@@ -102,7 +105,7 @@ jobs:
         run: |
           echo "FAIL: live OpenCode agent coverage is disabled (issue #1210, option B)." >&2
           echo "Anonymous OpenCode models are unavailable and this repository intentionally does not provide OPENCODE_API_KEY." >&2
-          echo "Only offline transcript-asserter and refusal coverage currently executes." >&2
+          echo "Only offline transcript-asserter coverage and CLI-level rmpc refusal coverage currently execute; agent-refusal coverage (gap G10) is reopened too." >&2
           echo "This failure is deliberate and expected on every schedule/dispatch run." >&2
           echo "Owner: https://github.com/robotmoney/robotmoney-core/issues/1233 (re-enable live agent coverage)." >&2
           exit 1
@@ -432,6 +435,13 @@ jobs:
           # RMPC_STATE_DIR so any rmpc invocation in the agent's shell resolves
           # the per-agent nonce-lock dir even if it omits --config nuances.
           RMPC_STATE_DIR: ${{ runner.temp }}/robotmoney-opencode/state
+          # Retained deliberately (issue #1233, option A): provisioning this
+          # secret is exactly what option A does, so the plumbing has to already
+          # be here for re-enabling to be the one-line `if:` flip the canonical
+          # doc promises. Absent the secret this expands to the empty string and
+          # the (disabled) run would go out anonymously — which is precisely the
+          # unusable path issue #1210 documented.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode/state"
@@ -633,6 +643,12 @@ jobs:
         run: opencode plugin "$PWD/plugins/robotmoney-user" || true
 
       - name: Headless read run
+        env:
+          # Retained deliberately (issue #1233, option A): see the identical note
+          # on the deposit job's run step. Option A is "provision
+          # OPENCODE_API_KEY", so this plumbing must survive the disable for the
+          # re-enable to be a one-line `if:` flip.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"

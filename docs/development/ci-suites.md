@@ -376,11 +376,11 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 
 **Jobs — `opencode-headless.yml`:**
 - `asserter-tests` — offline, keyless pytest of the transcript asserters and live-fail guard; runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
-- `refusal` — offline rmpc refusal assertions, no chain and no model key; runs nightly/dispatch.
+- `refusal` — offline **rmpc CLI-level** refusal assertions (`cargo test --test opencode_refusal`: unknown subcommand and missing `--config` each exit non-zero with a labelled stderr payload), no chain and no model key; runs nightly/dispatch. It invokes no model, so it is not agent-refusal coverage — gap G10 is reopened, see `headless-opencode-tests.md`.
 - `live-model-coverage-unavailable` — fails nightly/dispatch with the explicit #1210 coverage limitation. This is intentional: live model coverage requires an unavailable external credential and must not silently skip or pass.
 - `deposit` / `read` — disabled live-agent jobs retained for future re-enablement; they do not execute and provide no coverage.
 
-**Live-model coverage limitation (issue #1210, option B; re-enablement tracked by #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests remain executed in CI, but validate only the assertion code and recorded test inputs—not live model behaviour. See `docs/technical/opencode-headless-invocation.md` §12.6.
+**Live-model coverage limitation (issue #1210, option B; re-enablement tracked by #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests and the CLI-level `refusal` job remain executed in CI, but validate only the assertion code, recorded test inputs, and rmpc's own exit-code contract—not live model behaviour or agent refusal (gap G10). See `docs/technical/opencode-headless-invocation.md` §12.6.
 
 > **Suite 11b is deliberately red every night.** That red is the #1210 decision made visible, not a regression or a flake, and issue #1233 is the open owner of it. Suite 21 (nightly full-suite) dispatches 11b, so 11b's red is expected there too. Do not green this suite by deleting or weakening `live-model-coverage-unavailable`: close #1233 by restoring real coverage (option A or C), or reopen the #1210 decision.
 
@@ -388,7 +388,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 1. Checkout repository
 2. Install Rust + Foundry toolchain
 3. Cargo cache
-4. Run refusal transcript assertions (prompt injection, mainnet gate, out-of-policy amount) — no model key required
+4. Run `cargo test --test opencode_refusal` — two CLI-contract assertions (unknown subcommand refuses with non-zero exit; missing required `--config` refuses), no model key and no chain required
 
 **Disabled steps — `deposit` job (not current coverage):**
 1. Checkout repository

@@ -11,10 +11,20 @@ updated with the closing PR or ADR reference.
 > **A closed gap can reopen.** Issue #1210 disabled suite-11b's live `deposit`
 > and `read` jobs (the anonymous OpenCode tier no longer executes any model, and
 > this repo does not provision `OPENCODE_API_KEY`). Every gap those jobs closed
-> is therefore reopened or partially reopened below, and their closure text now
-> describes a disabled implementation rather than executing coverage. Restoring
-> them is tracked by #1233. Only G10 (refusal) and the offline asserter tests
-> still execute.
+> is therefore reopened below, and their closure text now describes a disabled
+> implementation rather than executing coverage. Restoring them is tracked by
+> #1233.
+>
+> **What still executes is narrower than the job names suggest.** Exactly two
+> things run: the keyless offline `asserter-tests` job (transcript-asserter and
+> live-guard unit tests), and the `refusal` job. The `refusal` job runs
+> `cargo test --test opencode_refusal`, which proves the **rmpc CLI-level
+> refusal contract** — an unknown subcommand and a missing `--config` both exit
+> non-zero with a labelled stderr payload (canonical:
+> [`opencode-readonly-fork.md`](opencode-readonly-fork.md), issue #53). It
+> invokes no model and asserts nothing about agent behaviour, so it does **not**
+> cover G10, whose five live-model precondition refusal cases are reopened like
+> the rest.
 
 ---
 
@@ -131,7 +141,16 @@ The nightly job:
 
 ## G10 — No CI exercises OpenCode refusal on precondition failures
 
-**Status:** Closed by issue #138.
+**Status:** Closed by issue #138 — **reopened by #1210.** The closing coverage was
+a live-model matrix that no longer exists: the closure text below names workflow
+`.github/workflows/opencode-headless-deposit.yml`, matrix job
+`headless-deposit-failure-cases`, and `assert_headless_deposit_transcript.py
+--expect-refusal` — none of which any current workflow invokes. Suite-11b's
+keyless `refusal` job does **not** substitute for it: it asserts the rmpc
+CLI-level refusal contract (unknown subcommand, missing `--config`) and covers
+none of the five model-driven precondition cases below. No CI job currently
+exercises OpenCode refusal on precondition failures. Tracked by #1233; the
+closure text below describes a removed implementation, not present coverage.
 
 **Gap description:** The deposit test (G9) proved the agent can execute a
 guarded deposit when all preconditions pass. The inverse — that the model
@@ -216,11 +235,13 @@ actually changed — a silent gateway no-op would also pass.
 
 ## G12 — Suite-11b did not actually exercise the agent onboarding workflow
 
-**Status:** Closed by issue #469 — **partially reopened by #1210.** The negative
-control (`negative_control_keystore_generate_flag.sh`) is independent of a live model,
-but every assertable step in the table below runs inside suite-11b's disabled
-`deposit` job, so the create-key → authorize → deposit onboarding path is not
-exercised by any current CI run. Tracked by #1233.
+**Status:** Closed by issue #469 — **reopened by #1210.** Every assertable step in
+the table below runs inside suite-11b's disabled `deposit` job, so the
+create-key → authorize → deposit onboarding path is not exercised by any current
+CI run. The negative control (`negative_control_keystore_generate_flag.sh`) is
+independent of a live model, but it is invoked by no workflow (tracked by #1235),
+so it contributes zero executed coverage — this gap is fully reopened, not
+partially. Tracked by #1233.
 
 **Gap description:** Suite-11b's "Generate agent EOA + fund" step ran
 `rmpc-keystore-import -- --generate` and parsed `jq -r '.address'`, but

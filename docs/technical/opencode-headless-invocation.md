@@ -422,9 +422,17 @@ this limitation explicitly. That deliberate red result satisfies loud-skip:
 missing model access cannot be mistaken for executed coverage or a green suite.
 
 The disabled jobs are retained in the workflow rather than deleted, so option A
-(provision the key) is a one-line `if:` flip. The workflow keeps an `env:` block
-defining `OPENCODE_VERSION` / `OPENCODE_MODEL` for that reason alone — the
-retained steps run under `set -u` and would die on unbound variables without it.
+(provision the key) is a one-line `if:` flip. Everything that flip depends on is
+kept live in the workflow for that reason alone:
+
+- the workflow-level `env:` block defining `OPENCODE_VERSION` /
+  `OPENCODE_MODEL` — the retained steps run under `set -u` and would die on
+  unbound variables without it; and
+- the step-level `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` line on
+  both live run steps — option A *is* provisioning that secret, so deleting the
+  line would make a re-enabled job run anonymously and die in the #1151
+  loud-fail guard, turning the "one-line flip" into a rebuild.
+
 Those defaults are **not** a working no-credential path; #1210 disproved that.
 
 **Who owns the deliberate red.** Suite 11b now fails on every nightly by design.
