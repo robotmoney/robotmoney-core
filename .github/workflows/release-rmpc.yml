@@ -117,6 +117,24 @@ jobs:
             exit 1
           fi
 
+          # dry_run=true AND a tag is refused, not silently reconciled.
+          # Both version assertions (verify-version, and the build's
+          # --version smoke-test) are keyed on the dispatch MODE, so they
+          # SKIP under dry_run. Combine that with an explicit tag and the
+          # run resolves VERSION to that tag, names four archives
+          # `rmpc-vX.Y.Z-*.tar.gz`, and uploads them to the 7-day
+          # workflow-artifact channel — readable by anyone with repo read —
+          # with the manifest never checked against the tag even once. The
+          # archives are then indistinguishable by name from the real
+          # release's, which is precisely the confusion issue #1191 is
+          # about. dry_run is a MODE, so it is authoritative: under it the
+          # version is always `dryrun-<sha7>` (see `Resolve sha + version`)
+          # and there is nothing for a tag to name.
+          if [ "${DRY_RUN:-}" = "true" ] && [ -n "${INPUT_TAG:-}" ]; then
+            echo "::error::dry_run=true cannot be combined with tag='${INPUT_TAG}'. A dry run publishes nothing, so its archives are always named dryrun-<sha7> and its version assertions do not run; naming a release tag here would upload release-named archives whose version was never verified. Drop the tag to dry-run, or set dry_run=false to release '${INPUT_TAG}'."
+            exit 1
+          fi
+
           # Shape-check the tag before anything consumes it. `inputs.tag` reaches
           # `git tag`, the archive filenames, the Release name and the version
           # assertion; constraining it once here is the cheapest mitigation for
@@ -145,6 +163,7 @@ jobs:
         env:
           INPUT_COMMIT_HASH: ${{ inputs.commit_hash }}
           INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
           GITHUB_SHA_IN: ${{ github.sha }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
@@ -156,7 +175,16 @@ jobs:
             SHA="${GITHUB_SHA_IN:-}"
           fi
 
-          if [ -n "${INPUT_TAG:-}" ]; then
+          # dry_run is checked FIRST and wins over every other source of a
+          # version. `Validate inputs` already refuses dry_run=true together
+          # with a tag, so this branch should be unreachable — it is here so the
+          # invariant "a dry run is never named after a release" is a property of
+          # the step that RESOLVES the name, not a consequence of an earlier
+          # step's ordering. Everything downstream (archive filenames, the
+          # mode-keyed version assertions, publish's `if:`) reads this one value.
+          if [ "${DRY_RUN:-}" = "true" ]; then
+            VERSION="dryrun-$(echo "${SHA}" | cut -c1-7)"
+          elif [ -n "${INPUT_TAG:-}" ]; then
             VERSION="${INPUT_TAG}"
           elif [ "${REF_TYPE:-}" = "tag" ]; then
             VERSION="${REF_NAME}"
