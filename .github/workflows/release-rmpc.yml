@@ -58,6 +58,26 @@ on:
 permissions:
   contents: write
 
+# CI TAXONOMY
+# Release plumbing, not a test suite: resolve/build/publish cross-compile and
+# attach artifacts, and assert nothing about product behaviour. Per the taxonomy
+# that is `ignore`. This workflow has no `pull_request` trigger and must never
+# gain one — it pushes tags and creates GitHub Releases.
+#
+# The behaviour that DOES need proving — that every archive ships a matching
+# `.sha256` and that the documented install path refuses a download which does
+# not match it — is covered on every PR by
+# scripts/release/install-rmpc-selftest.sh (issue #1204). That selftest does not
+# grep this file for the text of those steps: it EXTRACTS the `Package tar.gz`
+# and `Assert every archive ships its checksum` step bodies and RUNS them —
+# packaging with `sha256sum` removed from PATH (the macOS runner case), pairing
+# against a deliberately unpaired artifact set. A grep proves presence; only
+# execution proves the step can run on the runners this matrix names. This
+# workflow only fires on a tag, so without that selftest none of it would be
+# exercised anywhere.
+env:
+  CI_CLASS: ignore
+
 jobs:
   resolve:
     name: resolve-inputs
@@ -180,16 +200,36 @@ jobs:
         run: ./target/${{ matrix.target }}/release/rmpc --version
 
       - name: Package tar.gz
+        # sha256sum is GNU coreutils and does NOT exist on the macos-latest half
+        # of this matrix; macOS ships `shasum` instead. A bare `sha256sum` here
+        # exits 127 under the default `bash -e` shell, failing both macOS builds
+        # and skipping `publish` (which `needs: build`) — so a tag would publish
+        # nothing at all, not even the Linux archives. Same dispatch as
+        # scripts/release/install-rmpc.sh; both emit `<64-hex>  <name>`, which
+        # `sha256sum -c` and `shasum -a 256 -c` both consume.
+        # This step is extracted and executed with sha256sum removed from PATH by
+        # scripts/release/install-rmpc-selftest.sh on every PR.
         run: |
           ARCHIVE="rmpc-${{ needs.resolve.outputs.version }}-${{ matrix.os_label }}.tar.gz"
           tar -czf "${ARCHIVE}" -C target/${{ matrix.target }}/release rmpc
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          else
+            echo "::error::neither sha256sum nor shasum is available on this runner — refusing to publish an unverifiable archive"
+            exit 1
+          fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          echo "CHECKSUM=${ARCHIVE}.sha256" >> "$GITHUB_ENV"
 
       - name: Upload archive as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE }}
-          path: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.CHECKSUM }}
           if-no-files-found: error
           retention-days: 7
 
@@ -213,6 +253,35 @@ jobs:
       - name: List downloaded archives
         run: ls -la artifacts/
 
+      - name: Assert every archive ships its checksum
+        # The two options named below this step are NOT a pairing check.
+        # `if-no-files-found: error` fires only when the COMBINED glob set is
+        # empty, and `fail_on_unmatched_files: true` only when a PATTERN matches
+        # nothing — so one surviving checksum satisfies both while three archives
+        # ship with nothing to verify them against. This step is the actual 1:1
+        # guarantee, and scripts/release/install-rmpc-selftest.sh extracts and
+        # runs it against a paired and an unpaired fixture on every PR.
+        #
+        # EXPECTED_ARCHIVES tracks the `build` matrix length; the selftest asserts
+        # the two numbers stay equal, so adding a target here is caught rather
+        # than silently under-counted.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          EXPECTED_ARCHIVES=4
+          archives=(artifacts/*.tar.gz)
+          if [[ ${#archives[@]} -ne $EXPECTED_ARCHIVES ]]; then
+            echo "::error::expected $EXPECTED_ARCHIVES release archives (one per build-matrix target), found ${#archives[@]}"
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            if [[ ! -f "${archive}.sha256" ]]; then
+              echo "::error::${archive} has no ${archive}.sha256 — refusing to publish an archive nobody can verify"
+              exit 1
+            fi
+          done
+          echo "all ${#archives[@]} archives ship a matching .sha256"
+
       - name: Create and push git tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -225,6 +294,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
           draft: false
           fail_on_unmatched_files: true

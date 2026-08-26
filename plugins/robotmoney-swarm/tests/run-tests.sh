@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# run-tests.sh — offline CI tests for the robotmoney-swarm plugin.
+# run-tests.sh — CI tests for the robotmoney-swarm plugin.
 #
 # Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 # Vote schema:    schemas/committee-vote.json
 #
-# Runs without network access. All four acceptance criteria are exercised:
+# NETWORK: one dependency, and only one. The four acceptance criteria below run
+# entirely offline against fixtures and a loopback HTTP server; AC-1's schema
+# validator is installed with `npm ci` from registry.npmjs.org (lockfile-pinned,
+# `--ignore-scripts`), so that single step needs the network and a registry
+# outage reds this suite. Everything else here — including the #1204 checksum and
+# BOOTSTRAP.md assertions — has no external dependency at all.
+#
+# All four acceptance criteria are exercised:
 #   AC-1: tilt-formation produces a vote JSON that passes ajv schema validation
 #   AC-2: skill aborts before calling rmpc when ic_contract_address is absent
 #   AC-3: skill aborts before calling rmpc when rationale_uri is unreachable
@@ -32,6 +39,13 @@ RESTRICTED_GUARD="$SCRIPT_DIR/check-restricted-paths.sh"
 FIXTURES="$SCRIPT_DIR/fixtures"
 SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
+# Issue #1204: core publishes the rmpc release artifacts, so core owns the
+# checksum-verified install recipe and the proof that it fails closed. The
+# release workflow itself only fires on a tag, so this suite is where that
+# behaviour actually executes on a PR.
+INSTALL_RMPC="$REPO_ROOT/scripts/release/install-rmpc.sh"
+INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
+
 # Minimum number of assertions this suite must execute for a green result.
 # Bump it when you add assertions; never lower it to make a run pass.
 # Lowered from 33 to 26 when the swarm-onboarding skill (and its two
@@ -40,7 +54,40 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 # serves onboarding, so there is nothing left to assert about it here.
 # Raised from 26 to 27 by issue #1232: the restricted-path coupling guard is now
 # two assertions (its self-test, plus the real branch check) instead of one.
-MIN_EXPECTED_ASSERTIONS=27
+# Raised from 27 to 43 by #1204: scripts/release/install-rmpc-selftest.sh
+# contributes 15 assertions covering the checksum-verified rmpc install path,
+# plus one guard asserting that selftest did not itself shrink.
+# Raised from 42 to 46 by #1204: four more assertions keep BOOTSTRAP.md — core's
+# *documented* install path, and the one README.md sends an agent to — pointed at
+# that verified recipe instead of an unchecked download.
+# Raised from 46 to 54 by #1204's security review: the selftest stopped grepping
+# release-rmpc.yml for the text of its packaging step and started extracting and
+# EXECUTING that step (with sha256sum removed from PATH, which is what a macOS
+# runner is) plus a new archive-to-checksum pairing guard, and install-rmpc.sh
+# gained a non-https --base-url refusal.
+# Raised from 54 to 60 by #1204's second security review: `sha256sum -c` verifies
+# whichever filenames the checksum file lists, so a downloaded `.sha256` naming
+# `/dev/null` made a trojan archive "verify" (reproduced end to end). The
+# installer now requires the checksum file to be one line covering the archive
+# and compares digests itself; six assertions cover the hostile-INPUT cases the
+# earlier ones missed — every prior assertion tested the checksum file the
+# packaging step PRODUCES, never a downloaded one.
+#
+# THIS NUMBER AND THE WORKFLOW FLOOR MOVE TOGETHER, AND THAT IS ASSERTED.
+# .github/workflows/suite-17-swarm-plugin.yml re-checks the executed count
+# independently, precisely so a silently-lowered MIN_EXPECTED_ASSERTIONS cannot
+# buy a green. That second opinion is worth nothing if it trails this number.
+# Keeping them equal by comment did not work — the workflow floor already fell
+# behind once on this branch and was caught by human review, not CI — so the
+# equality is now an assertion in this suite (see "the workflow's independent
+# floor" section below), the same shape as the selftest's EXPECTED_ARCHIVES
+# check against the build matrix.
+# Raised from 61 to 65 by #1204's reliability review: the selftest's exit status
+# and its RMPC_INSTALL_SELFTEST_EXECUTED contract line are now asserted here
+# rather than inferred from the count, suite-17's independent floor is asserted
+# equal to this number instead of merely commented, and the installer's
+# failing-digest-tool path is covered.
+MIN_EXPECTED_ASSERTIONS=65
 
 PASS=0
 FAIL=0
@@ -138,28 +185,63 @@ done
 
 # ---------- 2. shellcheck ----------
 echo ""
-echo "--- test: shellcheck form-vote.sh, check-preflight.sh, check-restricted-paths.sh ---"
-if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT" "$RESTRICTED_GUARD"; then
+echo "--- test: shellcheck form-vote.sh, check-preflight.sh, check-restricted-paths.sh and the rmpc install path ---"
+if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT" "$RESTRICTED_GUARD" "$INSTALL_RMPC" "$INSTALL_RMPC_SELFTEST"; then
   pass "shellcheck passed"
 else
   fail "shellcheck reported issues"
+fi
+
+# ---------- the workflow's independent floor must not trail this script's ----------
+# suite-17 re-checks ROBOTMONEY_SWARM_TESTS_EXECUTED against its own literal so a
+# lowered MIN_EXPECTED_ASSERTIONS cannot buy a green on its own. Any slack
+# between the two re-opens that window, and prose alone did not hold them level.
+# Asserting it here makes the drift red in CI on the commit that introduces it.
+echo ""
+echo "--- test: suite-17's independent assertion floor equals this script's ---"
+
+SUITE17_WORKFLOW="$REPO_ROOT/.github/workflows/suite-17-swarm-plugin.yml"
+if [[ ! -f "$SUITE17_WORKFLOW" ]]; then
+  # Loud-skip policy: no workflow, no second opinion — that is a red, not a pass.
+  fail "$SUITE17_WORKFLOW is missing — nothing re-checks this suite's executed count independently"
+else
+  WORKFLOW_FLOOR=$(grep -o 'count" -lt [0-9][0-9]*' "$SUITE17_WORKFLOW" \
+    | head -1 | grep -o '[0-9][0-9]*$' || true)
+  if [[ -z "$WORKFLOW_FLOOR" ]]; then
+    fail "could not read the executed-assertion floor out of suite-17-swarm-plugin.yml — the independent guard may have been removed"
+  elif [[ "$WORKFLOW_FLOOR" == "$MIN_EXPECTED_ASSERTIONS" ]]; then
+    pass "suite-17's floor ($WORKFLOW_FLOOR) equals MIN_EXPECTED_ASSERTIONS ($MIN_EXPECTED_ASSERTIONS)"
+  else
+    fail "suite-17's floor is $WORKFLOW_FLOOR but MIN_EXPECTED_ASSERTIONS is $MIN_EXPECTED_ASSERTIONS — the independent re-check is not binding while it trails; raise both in the same commit"
+  fi
 fi
 
 # ---------- AC-1: tilt-formation → valid schema-conformant JSON ----------
 echo ""
 echo "--- AC-1: tilt-formation produces schema-conformant vote JSON (ajv) ---"
 
-# Install ajv into a temp directory scoped to this test run.
+# Install the exact, lockfile-backed AJV dependency tree into a temp directory
+# scoped to this test run. Lifecycle scripts are never needed for validation.
 AJV_TMP="$(mktemp -d)"
 trap 'rm -rf "$AJV_TMP"' EXIT
 
-# Write a minimal package.json so npm install works in the temp dir.
-cat > "$AJV_TMP/package.json" <<'PKGJSON'
-{"name":"ajv-test-runner","version":"1.0.0","private":true}
-PKGJSON
-
-# Install ajv and ajv-formats silently.
-npm install --prefix "$AJV_TMP" --save ajv ajv-formats 2>/dev/null 1>/dev/null
+cp "$PLUGIN_DIR/package.json" "$PLUGIN_DIR/package-lock.json" "$AJV_TMP/"
+# npm's output is captured, not discarded. Three different owners share this one
+# exit status — a package.json/package-lock.json drift (`EUSAGE ... not in
+# sync`), an unreachable registry, and a corrupt local npm cache — and npm names
+# which one it is on stderr. Sending that to /dev/null left the CI log ending at
+# the banner above with nothing after it, so every one of the three read as an
+# unexplained abort. The suite still dies (this is a hard prerequisite, never a
+# skip); it now dies saying why.
+if ! npm ci --prefix "$AJV_TMP" --ignore-scripts >"$AJV_TMP/npm-ci.log" 2>&1; then
+  echo "FATAL: npm ci failed while installing the ajv validator." >&2
+  echo "       Likely causes: plugins/robotmoney-swarm/package.json and" >&2
+  echo "       package-lock.json have drifted apart; registry.npmjs.org is" >&2
+  echo "       unreachable from this runner; or the local npm cache is corrupt." >&2
+  echo "       npm's own output follows." >&2
+  cat "$AJV_TMP/npm-ci.log" >&2
+  exit 1
+fi
 
 # Write the Node.js validator script.
 AJV_VALIDATOR="$AJV_TMP/validate.js"
@@ -401,6 +483,141 @@ else
   # prerequisite (checked above), so a server that will not come up is a real
   # failure of this environment, not a reason to declare the AC untested.
   fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
+fi
+
+# ---------- #1204: the rmpc install path verifies its checksum before installing ----------
+# release-rmpc.yml publishes `<archive>.tar.gz.sha256` alongside every archive,
+# but that workflow only runs on a tag push — it never executes on a PR. The
+# consuming half (verify, then install; abort loudly on mismatch) lives in
+# scripts/release/install-rmpc.sh and is exercised here, on every PR, by its
+# offline selftest. Each selftest assertion is folded into this suite's own
+# counters so it is covered by MIN_EXPECTED_ASSERTIONS and cannot silently
+# vanish.
+echo ""
+echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substituted) ---"
+
+# Minimum assertions the install selftest must itself contribute. Guards against
+# the selftest being gutted while this suite still reports a healthy total.
+# 23 -> 29 with the checksum-coverage assertions (a downloaded `.sha256` that
+# names a different file, and a multi-line one, must both be refused).
+# 29 -> 30 with the failing-digest-tool case (exit 4, not an undocumented 1).
+#
+# This floor is no longer the only thing standing between a crashed selftest and
+# a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
+# line are both asserted below. It used to be, and it worked only by arithmetic
+# accident — the known truncation point happened to land under it.
+MIN_INSTALL_SELFTEST_ASSERTIONS=30
+
+if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
+  # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
+  fail "scripts/release/install-rmpc-selftest.sh is missing or not executable — #1204 checksum coverage is gone"
+else
+  set +e
+  INSTALL_SELFTEST_OUT=$("$INSTALL_RMPC_SELFTEST" 2>&1)
+  INSTALL_SELFTEST_EXIT=$?
+  set -e
+
+  INSTALL_SELFTEST_ASSERTIONS=0
+  INSTALL_SELFTEST_FAILS=0
+  while IFS= read -r selftest_line; do
+    case "$selftest_line" in
+      PASS:*)
+        pass "install-rmpc: ${selftest_line#PASS: }"
+        INSTALL_SELFTEST_ASSERTIONS=$((INSTALL_SELFTEST_ASSERTIONS+1))
+        ;;
+      FAIL:*)
+        fail "install-rmpc: ${selftest_line#FAIL: }"
+        INSTALL_SELFTEST_ASSERTIONS=$((INSTALL_SELFTEST_ASSERTIONS+1))
+        INSTALL_SELFTEST_FAILS=$((INSTALL_SELFTEST_FAILS+1))
+        ;;
+    esac
+  done <<< "$INSTALL_SELFTEST_OUT"
+
+  # The selftest's own exit status. Without this, a selftest that DIED partway
+  # through — a stray errexit, a missing prerequisite, a kill — is caught only by
+  # the assertion floor below, i.e. by arithmetic: an abort past the floor leaves
+  # a crashed selftest reporting a healthy count and the whole suite green. Its
+  # documented contract is exit 0 when nothing failed, exit 1 when something did,
+  # so any other status, or a non-zero with no FAIL line to explain it, is a
+  # crash and is reported as one.
+  if [[ $INSTALL_SELFTEST_EXIT -eq 0 && $INSTALL_SELFTEST_FAILS -eq 0 ]]; then
+    pass "install-rmpc selftest exited 0 with no FAIL lines — it ran to completion"
+  elif [[ $INSTALL_SELFTEST_EXIT -eq 1 && $INSTALL_SELFTEST_FAILS -gt 0 ]]; then
+    pass "install-rmpc selftest exited 1, accounted for by its $INSTALL_SELFTEST_FAILS reported FAIL line(s)"
+  else
+    fail "install-rmpc selftest exited $INSTALL_SELFTEST_EXIT with $INSTALL_SELFTEST_FAILS FAIL line(s) — that status is not explained by its own assertions, so it crashed rather than finished (output: $INSTALL_SELFTEST_OUT)"
+  fi
+
+  # The output contract. `RMPC_INSTALL_SELFTEST_EXECUTED=<n>` is the last line the
+  # selftest prints, so its presence proves the run reached the end, and <n>
+  # matching the PASS/FAIL lines counted here proves nothing was lost in between.
+  # This is what makes truncation a contract violation instead of something the
+  # floor happens to notice.
+  INSTALL_SELFTEST_CONTRACT="$(printf '%s\n' "$INSTALL_SELFTEST_OUT" | tail -1)"
+  INSTALL_SELFTEST_CLAIMED="${INSTALL_SELFTEST_CONTRACT#RMPC_INSTALL_SELFTEST_EXECUTED=}"
+  if [[ "$INSTALL_SELFTEST_CONTRACT" != RMPC_INSTALL_SELFTEST_EXECUTED=* ]]; then
+    fail "install-rmpc selftest printed no RMPC_INSTALL_SELFTEST_EXECUTED line as its last output — it was truncated, so its assertion count cannot be trusted (last line: '$INSTALL_SELFTEST_CONTRACT')"
+  elif [[ "$INSTALL_SELFTEST_CLAIMED" != "$INSTALL_SELFTEST_ASSERTIONS" ]]; then
+    fail "install-rmpc selftest reports RMPC_INSTALL_SELFTEST_EXECUTED=$INSTALL_SELFTEST_CLAIMED but this suite counted $INSTALL_SELFTEST_ASSERTIONS PASS/FAIL lines — assertions went missing between the two"
+  else
+    pass "install-rmpc selftest's contract line agrees with the $INSTALL_SELFTEST_ASSERTIONS assertions folded in here"
+  fi
+
+  if [[ $INSTALL_SELFTEST_ASSERTIONS -ge $MIN_INSTALL_SELFTEST_ASSERTIONS ]]; then
+    pass "install-rmpc selftest contributed $INSTALL_SELFTEST_ASSERTIONS assertions (>= $MIN_INSTALL_SELFTEST_ASSERTIONS)"
+  else
+    fail "install-rmpc selftest contributed only $INSTALL_SELFTEST_ASSERTIONS assertions, expected >= $MIN_INSTALL_SELFTEST_ASSERTIONS (output: $INSTALL_SELFTEST_OUT)"
+  fi
+fi
+
+# ---------- #1204: core's *documented* install path is the verified one ----------
+# A verified installer nobody is told to use closes nothing. BOOTSTRAP.md is the
+# file README.md points an agent at, and its step 1 used to say "download the
+# latest rmpc and place it on PATH" with no integrity check — three steps before
+# step 4 creates a signing keystore with that same binary. These assertions keep
+# the documented path pointed at scripts/release/install-rmpc.sh, and keep the
+# unverified forms from creeping back. suite-17 has no `paths` filter, so a
+# Markdown-only edit to BOOTSTRAP.md still runs them.
+echo ""
+echo "--- #1204: BOOTSTRAP.md documents the checksum-verified rmpc install ---"
+
+BOOTSTRAP_MD="$REPO_ROOT/BOOTSTRAP.md"
+if [[ ! -f "$BOOTSTRAP_MD" ]]; then
+  # Loud-skip policy: a missing document is a red suite, not a quiet pass.
+  fail "BOOTSTRAP.md is missing — core's documented rmpc install path cannot be checked"
+else
+  if grep -q 'scripts/release/install-rmpc.sh' "$BOOTSTRAP_MD"; then
+    pass "BOOTSTRAP.md installs rmpc through the checksum-verified scripts/release/install-rmpc.sh"
+  else
+    fail "BOOTSTRAP.md no longer routes the rmpc install through scripts/release/install-rmpc.sh — #1204 regression"
+  fi
+
+  # The two unverified forms #1204 exists to eliminate: piping a download into
+  # tar (unfixable in place — extraction happens before any check could run),
+  # and telling the reader to hand-place a downloaded binary on PATH.
+  #
+  # Backslash continuations are folded away first. This document's own tag
+  # lookup is written as `curl ... \` / `| grep ...` across two lines, so a
+  # purely line-based grep would also miss a `curl ... \` / `| tar xz` written
+  # the same way — the exact shape it most needs to catch.
+  if sed -e :a -e '/\\$/N; s/\\\n//; ta' "$BOOTSTRAP_MD" \
+       | grep -qEi 'curl[^|]*\|[[:space:]]*tar'; then
+    fail "BOOTSTRAP.md pipes a download straight into tar — nothing can verify an archive that is already unpacked"
+  else
+    pass "BOOTSTRAP.md pipes no download into tar"
+  fi
+
+  if grep -qEi 'place it on .?PATH' "$BOOTSTRAP_MD"; then
+    fail "BOOTSTRAP.md tells the reader to place a downloaded rmpc on PATH with no integrity check"
+  else
+    pass "BOOTSTRAP.md documents no hand-placed, unverified rmpc download"
+  fi
+
+  if [[ -x "$INSTALL_RMPC" ]]; then
+    pass "the installer BOOTSTRAP.md names exists and is executable"
+  else
+    fail "BOOTSTRAP.md points at scripts/release/install-rmpc.sh but it is missing or not executable"
+  fi
 fi
 
 # ---------- 3. restricted-path coupling guard ----------
