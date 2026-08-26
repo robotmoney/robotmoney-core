@@ -8,8 +8,21 @@
 # is valid and correctly named, (b) the fetch helper validates required fields
 # and exits non-zero with a named error on missing fields, (c) the cache layer
 # works correctly (second call on the same UTC date reads from cache, not the
-# network), and (d) no restricted paths (contracts/, crates/, clients/, services/)
-# are touched by the plugin.
+# network).
+#
+# WHY THERE IS NO RESTRICTED-PATH CHECK HERE (issue #1251)
+# This suite used to claim a fourth guarantee: that no restricted paths
+# (contracts/, crates/, clients/rust-payment-client/, services/) were touched.
+# That assertion never executed — the checkout below is shallow, so its
+# merge-base/HEAD~1 diff always failed into an empty pipeline and reported PASS
+# unconditionally (same defect as #1232; the swarm copy was fixed in #1234).
+# It was also unscoped: it fired on any restricted path in the change set,
+# whether or not the analyst plugin was involved, so a working version would
+# have vetoed most PRs in this repo. Its one historical trigger (e6fbfc41,
+# adding rmpc propose/vote and documenting them in the analyst SKILL.md) was a
+# false positive. It was removed rather than repaired. Do not re-add it here.
+# The analogous rule for the swarm plugin, deliberately scoped to "the plugin
+# AND a restricted path in the same change set", lives in suite-17.
 #
 # WHY OFFLINE FIXTURES ONLY
 # CI does not have reliable network access to robotmoney.net, and the snapshot
