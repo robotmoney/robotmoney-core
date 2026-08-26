@@ -27,6 +27,13 @@
 > any need for per-analyst EVM identity in v0.1, and shrink the receipt contract.
 > §6.1 is unblocked as a result — writing the schema file is the next task.
 >
+> **What receipts are for.** They are primarily a **public, censorship-resistant
+> record** of what the committee recommended, and only occasionally the trigger
+> for a real weight change — a separate body approves those (§3.4). This framing
+> is set in §2.1 and shapes the surface: the on-chain commitment is the point
+> rather than an enhancement, a silently missing receipt is a product defect, and
+> the dapp must state per recommendation whether it was applied.
+>
 > **"Shipped" here means merged and tested, not deployed.** The only deployment
 > manifest in this repo (`deployments/full-stack.json`) records gateway, vault,
 > registry, `portfolio_router`, and `router_governance` — it has **no
@@ -112,6 +119,31 @@ spec in every respect.
   verification is load-bearing, not cosmetic. Per-analyst on-chain signing
   returns when external orgs onboard (§6.3); design the payload so analyst
   identity is a first-class field and that migration stays additive.
+- **What receipts are for — a public record first, a rebalance trigger
+  occasionally (decided).** The committee publishes on a fast cadence; a separate
+  human body (§3.4) applies a real weight change only periodically. **The on-chain
+  commitment and the public per-agent record are the deliverable**, not the
+  rebalance loop. Most receipts are informational **by design, not by accident.**
+  Three consequences:
+  - **The on-chain anchor is the point, not an enhancement.** A signed receipt
+    published only at an RM-controlled URL can still be silently suppressed by RM.
+    The commitment is what makes the record censorship-resistant, which is the
+    property the record exists to provide and what "no single entity in control"
+    (§1) actually requires.
+  - **A missing receipt is a product defect, not an ops hiccup.** If a session
+    that should have produced a receipt silently produces none, the record has a
+    hole in exactly the place someone would look for suppression. Submission
+    failures must alert, never drop quietly.
+  - **The dapp must show applied vs. not-applied per recommendation.** A public
+    record of recommendations that were mostly not followed is either honest and
+    valuable or misleading and damaging, and the difference is entirely
+    presentation. This is a first-class requirement of the surface, not a polish
+    item.
+
+  This also removes any tension with `RouterGovernance`'s one-active-proposal
+  limit (`RouterGovernance.sol:393-399`): receipts are not queued for application,
+  so a fast publishing cadence against slow governance throughput is the intended
+  shape rather than a bottleneck.
 - **Signalling-only:** `consensusReleaseReceipt` is an **admin signal** (emits
   `ReceiptReleased`, sets `released=true`). It does not call
   `RouterGovernance.propose`/`execute` (`RouterGovernance.sol:365-422,474-500`)
@@ -526,6 +558,19 @@ Remaining uncertainty is in §6.
   release remains an admin gate. Residual risk is a plausible-looking but
   unsupported receipt reaching a human reviewer; the signature check is what
   catches it, so it is not optional.
+- **An incomplete record (new, from §2.1's public-record framing).** When the
+  product *is* the public record, a receipt that silently fails to publish leaves
+  a gap exactly where an observer would look for suppression — and it is
+  indistinguishable from a session that legitimately produced nothing. Mitigated
+  by alerting on any session that should have produced a receipt and did not, by
+  never dropping a failed submission quietly, and by rendering session-level
+  participation (`quorum`, `absent`) so a thin session is visibly thin rather than
+  silently missing.
+- **A record that flatters or indicts by presentation (new, from §2.1).** Most
+  recommendations will not be applied. Rendering them without that context implies
+  an influence the committee does not have; rendering it badly implies the
+  committee is ignored. Mitigated by making applied vs. not-applied an explicit,
+  per-recommendation state in the dapp rather than something a reader infers.
 - **Approving body with a quorum of 1 (new, from §3.4).** The committee and the
   `RouterGovernance` voter set are deliberately separate bodies, but the deployed
   default `quorumThreshold = 1` means a single voter can carry a weight proposal,
@@ -586,17 +631,20 @@ Remaining uncertainty is in §6.
   unattended. Two constraints the earlier draft did not account for:
   - **A signature count now counts payload signatures, not on-chain calls**
     (§2.1's identity decision). The dapp must label them as such.
-  - **`RouterGovernance` permits only one Active/Queued proposal at a time**
-    (`RouterGovernance.sol:393-399`). If sessions publish faster than a proposal
-    completes voting plus `executionDelay`, receipts queue behind one another —
-    the policy must say skip, supersede, or throttle. The worker must also
-    re-check `isRouterEligibleAndActive` (`:387`) at draft time, since a vault
-    Active at receipt time may be Paused by then, and `propose` would revert.
+  - **The worker is a convenience, not core.** Because receipts are primarily a
+    public record (§2.1), there is no queue of recommendations waiting to be
+    applied and no throughput problem to solve. `RouterGovernance`'s
+    one-Active-proposal limit (`RouterGovernance.sol:393-399`) is therefore not a
+    constraint on the committee's cadence. Where a worker does draft a proposal
+    for the occasional real application, it must re-check
+    `isRouterEligibleAndActive` (`:387`) at draft time — a vault Active at receipt
+    time may be Paused by then, and `propose` would revert.
 
   **Default:** admin discretion with no auto-threshold; the dapp renders the
   payload signature count and the worker drafts nothing automatically until a
   policy is written. Where a worker does draft, it drafts **for human review** —
-  it never submits unattended.
+  it never submits unattended. Under §3.4's separate-bodies rule this is
+  permanent, not a conservative default to be relaxed later.
 
 - **6.3 Genesis seat attestation for external orgs — owner: ops + product.**
   Beyond the 3–5 internal genesis seats (§4 decision 3), what is the onboarding bar
