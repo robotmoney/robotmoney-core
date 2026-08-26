@@ -25,8 +25,8 @@
 > and feed addresses are reproduced only from official documentation or a chain
 > explorer read; none are inferred.
 >
-> **Repository line numbers** (`path:NN`) were read at commit `0a357af6` on the
-> `dev` line and are given so a claim about this codebase can be checked rather
+> **Repository line numbers** (`path:NN`) were read against this branch's base on
+> `dev` (`10128971`, 2026-08-26) and are given so a claim about this codebase can be checked rather
 > than taken on trust. Line numbers drift; the file and symbol names next to them
 > are the durable anchor.
 >
@@ -250,7 +250,7 @@ propagates everywhere at once:
   rests on pool behaviour this note has not observed. The guard's ceiling is
   `MAX_NAV_DEVIATION_BPS = 2_000` (20%, `contracts/vaults/BasketVault.sol:219`); it is
   entry-side only (invoked once on the deposit path at
-  `contracts/vaults/BasketVault.sol:566`, plus each adapter's own entry leg) and is
+  `contracts/vaults/BasketVault.sol:565`, plus each adapter's own entry leg) and is
   disabled at `0` by default.
 - **The successor guard has the same shape.** `docs/technical/unified-vault-spec.md`
   §4.3a commits the unified vault to a residual, adapter-independent **aggregate NAV
