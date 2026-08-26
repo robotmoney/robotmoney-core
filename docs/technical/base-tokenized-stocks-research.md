@@ -129,7 +129,7 @@ On top of plain ERC-20 (`name`, `symbol`, `decimals`, `approve`, `transfer`,
 | `scaledBalanceOf(account)` | raw balance × multiplier ÷ `WAD_PRECISION` |
 | `toScaledBalance(raw)` / `toRawBalance(scaled)` | unit conversion helpers |
 | `updateUIMultiplier()` | schedule a future-dated multiplier change (documented as ERC-8056) |
-| `updateMultiplier()` | instant multiplier change; documented as a "deprecated emergency failsafe" |
+| `updateMultiplier()` | instant multiplier change, applied immediately, clearing any pending scheduled change. The docs label this path "Instant (deprecated)" but describe the function itself as "a retained emergency failsafe; prefer the scheduled path" — it is retained, not being withdrawn |
 | `cancelUIMultiplierUpdate()` | clear a pending scheduled change |
 | `isAuthorized(policyID, account)` | policy/compliance check ([§3](#3-transfer-restrictions-and-compliance)) |
 | `pause()` | function-level pauses |
@@ -252,18 +252,34 @@ propagates everywhere at once:
   entry-side only (invoked once on the deposit path at
   `contracts/vaults/BasketVault.sol:565`, plus each adapter's own entry leg) and is
   disabled at `0` by default.
-- **The successor guard has the same shape.** `docs/technical/unified-vault-spec.md`
-  §4.3a commits the unified vault to a residual, adapter-independent **aggregate NAV
-  growth-rate limiter** (`maxNavGrowthRateBps`) on the deposit path, precisely because a
-  self-pricing adapter checking its own deviation is not a second opinion. A legitimate
-  dividend step is exactly the signature that limiter is built to reject. Any B20
-  integration inherits an unresolved calibration problem: distinguish "scheduled
-  corporate action" from "mis-scaled mark" without a second oracle. This note does not
-  solve it; see [§8](#8-open-questions).
-- **Market hours compound it.** Because the feed does not publish outside
-  [market hours](#4-pricing-and-oracle-behaviour), a corporate action processed while the
-  market is closed lands as a *single* step at the next open, stacked on top of whatever
-  the overnight equity move was. The two are indistinguishable to every guard above.
+- **The successor guard is built, and a dividend is its signature.** The residual,
+  adapter-independent **aggregate NAV growth-rate limiter** (`maxNavGrowthRateBps`) that
+  `docs/technical/unified-vault-spec.md` §4.3a specifies is implemented and shipping in
+  `contracts/Vault.sol`: state at `contracts/Vault.sol:188`, enforced by
+  `_enforceNavGrowthLimit` (`contracts/Vault.sol:632`) called from `_deposit`
+  (`contracts/Vault.sol:590`), reverting `NavGrowthRateExceeded` (`:378`), constructor-set
+  and zero-rejected (`:425`, `:435`), admin-tunable via `setMaxNavGrowthRateBps` (`:1551`),
+  with eight executing tests in `contracts/test/NavGrowthLimiter.t.sol`. It exists
+  precisely because a self-pricing adapter checking its own deviation is not a second
+  opinion. **But note what it compares:** the pre-deposit aggregate NAV against *the
+  vault's own prior checkpoint* over elapsed time (`contracts/Vault.sol:632`). It is a
+  rate-of-change circuit breaker measured against the vault's own history — not a
+  cross-check against an independent price. A legitimate dividend step is exactly the
+  signature it is built to reject. What is open is therefore not the mechanism but its
+  calibration: spec §9 item 3 records the concrete `maxNavGrowthRateBps` value as the one
+  remaining question, and any B20 integration inherits it — distinguish "scheduled
+  corporate action" from "mis-scaled mark" when the only built discriminator is rate of
+  change. This note does not solve it; see [§8](#8-open-questions).
+- **Market hours compound the calibration problem — in both directions.** Because the
+  feed does not publish outside [market hours](#4-pricing-and-oracle-behaviour), a
+  corporate action processed while the market is closed lands as a *single* step at the
+  next open, stacked on top of whatever the overnight equity move was. The growth-rate
+  limiter sees that as one combined jump against one checkpoint, so the two components
+  cannot be told apart by it. Worse, its budget scales with elapsed time —
+  `budgetBps = maxNavGrowthRateBps × elapsed / NAV_GROWTH_RATE_PERIOD`
+  (`contracts/Vault.sol:632`, asserted by `test_deposit_longerElapsedWidensBudget`) — so a
+  weekend gap simultaneously *merges* the two signals and *widens* the bound that would
+  otherwise catch them.
 
 ### 2.5 Cached and indexed balances
 
@@ -628,7 +644,7 @@ inputs change), or **replace** (the mechanism does not carry).
 | RWA vault shell | `contracts/vaults/RwaVault.sol` | **extend** | `maxAssets()` is 1 (`contracts/vaults/RwaVault.sol:188`), so four tickers is four deployments unless that changes. `DEFAULT_HEARTBEAT` / `MAX_HEARTBEAT` are the market-hours pressure point. The ADR-0006 §4 freeze disclosure block needs restating for a function-level pause ([§3.3](#33-what-each-control-would-do-to-a-vault-position)). |
 | NAV-deviation guard | `contracts/vaults/BasketVault.sol` (`navDeviationGuardBps`), `contracts/lib/BasketViews.sol`, `contracts/lib/TwapTickMath.sol` | **extend** | `requireWithinDeviation` needs an `IObservablePool` exposing V3-shaped `observe()`/`slot0()`. Whether Aerodrome's B20 pools expose that shape is `UNVERIFIED`. Note what this seam actually is: a pool-internal spot-vs-TWAP check that never reads the NAV mark, so extending it to B20 buys a single-venue sanity check, not a cross-check on an oracle-priced position ([§2.4](#24-consequences-for-erc-4626-share-accounting-and-previews)). |
 | Emergency floors | `BasketVault.EmergencyUnwindGuard` (`minUsdcOut`, `maxLossBps`), `RwaVault.emergencyUnwindStaleOverride` | **extend** | Mechanism carries; the weekly standing stale window changes the override from exceptional to routine ([§4.4](#44-against-the-emergency-unwind-floors)). |
-| Residual price sanity check | `docs/technical/unified-vault-spec.md` §4.3a (`maxNavGrowthRateBps`) | **extend** | Specified, not built. A dividend step is the signature it is designed to reject. |
+| Residual price sanity check | `contracts/Vault.sol` (`maxNavGrowthRateBps` `:188`, `_enforceNavGrowthLimit:632` called from `_deposit:590`, setter `:1551`), spec §4.3a | **extend** | **Built and tested** (`contracts/test/NavGrowthLimiter.t.sol`, eight tests), not merely specified. A dividend step is the signature it is designed to reject. It compares aggregate NAV against the vault's own prior checkpoint over elapsed time, so it is a rate-of-change breaker rather than a second opinion on the mark. What remains open is the calibrated value (spec §9 item 3) and the off-hours interaction that both merges a corporate action with the overnight move and widens the elapsed budget ([§2.4](#24-consequences-for-erc-4626-share-accounting-and-previews)). |
 | Address / pool config | `config/dex-pools.json` | **extend** | Purely additive: one `basket_assets` entry per ticker with `venue: "Aerodrome"`, `tokenDecimals: 8`, plus the feed address. The file's own rules apply — `pool_status: pending` until pinned from an on-chain read, and the genesis ingester (`testing/smoke-test/src/genesis_alloc.rs` via `fork-block.json::ingested_addresses`) must ingest every pool listed. The `pairs` price strip is `sqrtPriceX96`-based and excludes oracle-priced RWAs; B20 belongs outside it for the same reason deSPXA is. |
 | Router eligibility | `contracts/VaultRegistry.sol` (`setRouterEligible`, `routerEligibleCount` at `contracts/VaultRegistry.sol:130`), ADR-0002 | **reusable**, with an interlock | Adding a B20 vault as a router leg is the existing `defaultWeights`-length interlock, not new code. But there is no "temporarily ineligible" status, and `UNVERIFIED` whether the router degrades or reverts when one leg's `totalAssets()` reverts — which a 24/5 feed guarantees weekly. |
 | External-feed NAV seam | issues **#1185** / **#1186** | **extend** | The repository's live external-feed work, already scoped as an external push feed for NAV with a staleness/deviation guard — the same shape a Chainlink B20 feed would need. The scheduled off-hours gap and the registry pause flag are two inputs it does not currently contemplate. Whether B20 should land here is not decided in this note ([§4.6](#46-live-external-feed-work-already-in-flight), [§9](#9-integration-options-and-trade-offs)). |
@@ -691,13 +707,19 @@ a design decision itself.
 6. **How should a scheduled corporate-action NAV step be distinguished from a mis-scaled
    mark, without a second oracle?** Sharpened by
    [§2.4](#24-consequences-for-erc-4626-share-accounting-and-previews): **no built check
-   compares the oracle mark against a second price source.** The live
+   compares an external feed's mark against an independent price source.** The live
    `navDeviationGuardBps` compares a pool's spot tick with that same pool's TWAP and never
-   reads the mark, so the only check whose signature a legitimate dividend step matches is
-   `maxNavGrowthRateBps` — which is specified, not built
-   (`docs/technical/unified-vault-spec.md` §4.3a). Until it exists, a mis-scaled mark on an
-   oracle-priced position is unguarded on the deposit path, and the question is what a
-   second source would even be for an asset whose feed is dark 24/5.
+   reads the mark. The only built guard whose signature a legitimate dividend step matches
+   is the aggregate NAV growth-rate limiter `maxNavGrowthRateBps`, which **is** implemented
+   and tested (`contracts/Vault.sol:188`, `_enforceNavGrowthLimit:632` from `_deposit:590`;
+   `contracts/test/NavGrowthLimiter.t.sol`) — but it measures aggregate NAV against the
+   vault's *own prior checkpoint* over elapsed time, so it is a rate-of-change circuit
+   breaker, not a second opinion on the mark. The open question is therefore how to
+   calibrate that rate limiter against scheduled corporate actions — sharpened by the
+   off-hours gap, which merges the dividend step with the overnight move while widening the
+   elapsed budget ([§2.4](#24-consequences-for-erc-4626-share-accounting-and-previews)) —
+   and what an independent second source would even be for an asset whose feed is dark
+   24/5.
 7. **What notional does a 50 bps slippage cap permit against each Aerodrome B20 pool?**
    Requires reading the pool's curve and concentration on-chain; deliberately not
    estimated here ([§5.3](#53-is-an-adr-0006-equivalent-hold-and-swap-model-viable-per-asset)).
@@ -800,6 +822,8 @@ Secondary reporting:
 Repository files read for the stack mapping: `docs/adr/ADR-0006-despxa-rwa-vault-design.md`,
 `docs/adr/ADR-0010-unified-vault-architecture.md`, `docs/technical/unified-vault-spec.md`
 (§4.3, §4.3a, §4.4), `docs/technical/adapter-architecture.md`,
+`contracts/Vault.sol` (the unified vault, incl. the built `maxNavGrowthRateBps`
+limiter) and `contracts/test/NavGrowthLimiter.t.sol`,
 `contracts/vaults/RwaVault.sol`, `contracts/vaults/BasketVault.sol`,
 `contracts/adapters/DeSpxaAssetPositionAdapter.sol`,
 `contracts/adapters/ChronicleOracleAdapter.sol`,
