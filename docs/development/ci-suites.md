@@ -565,6 +565,9 @@ isolation, independent of any client (rmpc, dapp, explorer).
 **Jobs:**
 - `doc-validators` — ADR and runbook compliance checks; runs immediately
 - `schema-validators` — migration file placement invariant; runs in parallel with `doc-validators`
+- `generated-docs-freshness` — `forge doc` output is neither stale nor hand-edited
+- `feature-flag-consistency` — flag IDs agree across config, contract, dApp and indexer
+- `tracked-path-charset` — every tracked filename is printable ASCII (issue #1252)
 
 **Steps — `doc-validators` job:**
 1. Checkout repository
@@ -582,6 +585,27 @@ isolation, independent of any client (rmpc, dapp, explorer).
 1. Checkout repository
 2. Install Python
 3. `check_explorer_migrations.py` — single-canonical-home invariant: migration files exist only in `services/explorer-indexer/migrations/`, no duplicates elsewhere
+
+**Steps — `tracked-path-charset` job:**
+1. Checkout repository
+2. `scripts/check-tracked-path-charset.sh` — self-tests itself, then asserts every
+   tracked path uses printable ASCII (`0x20`–`0x7e`, excluding `"` and `\`)
+
+Outside that byte set git C-quotes the whole path (`"contracts/caf\303\251.sol"`),
+and the leading `"` silently defeats every `^`-anchored path regex in the repo —
+the bypass issue #1252 reproduced against the restricted-path coupling guard from
+PR #1234. The repo has zero such paths, so the job pins the existing state rather
+than imposing a new constraint; the convention is stated for contributors in
+`CLAUDE.md` § Filenames.
+
+This job belongs in suite 13 specifically because the subject of the check *is* a
+filename: a `paths:`-gated job structurally cannot see the file that would trip
+it, and suite 13 is the repo's path-unfiltered suite by design. The same script
+runs the negative self-test — non-ASCII, `"`, `\`, tab, newline, DEL, an
+untrusted input and an empty listing — *before* every scan and refuses to report
+a PASS if any fixture fails to go red. It uses no `grep -P` and no `grep -z`, so
+it has no non-POSIX flag whose absence (or, under `ugrep`, whose different
+meaning) could turn it into a silent no-op.
 
 ---
 
@@ -1144,7 +1168,7 @@ Every workflow's `name:` and its tier.
 | `dapp-e2e` | heavy | full-devnet Playwright suite |
 | `opencode-plugin-validate-walkthrough-offline` | quick | |
 | `openclaw-safety-walkthrough` | quick | |
-| `doc-adr-runbook-migration-checks` | quick | |
+| `doc-adr-runbook-migration-checks` | quick | includes `tracked-path-charset`, the repo-wide printable-ASCII filename guard (issue #1252) |
 | `smoke-test-devnet-boot-teardown` | heavy | devnet matrix (`cli_meta`, `fixture_meta`, `demo_seeding`/four-vault) |
 | `robotmoney-analyst-plugin-checks` | quick | |
 | `abi-drift-gate` | quick | |
@@ -1197,7 +1221,7 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
 | 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| `refusal` (offline, nightly/dispatch) \| explicit unavailable-live-coverage failure (nightly/dispatch) | `none` / `devnet` |
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
-| 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
+| 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` \| `generated-docs-freshness` \| `feature-flag-consistency` \| `tracked-path-charset` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |
 | 18 | `suite-18-secrets-scan.yml` | `secrets-scan` (gitleaks) | `none` |
 | 18b | `suite-18-security-gates.yml` | `cargo-audit` \| `bun-audit` \| `csp-gate` | `none` |

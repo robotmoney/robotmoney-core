@@ -326,3 +326,55 @@ jobs:
         # and services/explorer-indexer/src/feature_flags.rs.
         # Implements: issue #389
         run: python3 .github/scripts/check_feature_flag_consistency.py
+
+  tracked-path-charset:
+    name: tracked-path-charset
+    # WHY THIS JOB EXISTS (issue #1252)
+    # Every anchored path regex in this repo — the swarm plugin's restricted-path
+    # coupling guard, the analyst plugin's, the migration-placement invariant —
+    # assumes `git ls-files` / `git diff --name-only` emits a bare path. git only
+    # does that while the path is printable ASCII. Give a file a non-ASCII byte, a
+    # quote, a backslash, a tab or a newline and git C-quotes the whole path:
+    #
+    #     "contracts/caf\303\251.sol"
+    #
+    # The leading `"` defeats every `^`-anchored match, silently. #1252 reproduced
+    # exactly that against the guard PR #1234 had just added.
+    #
+    # The repo has zero such paths today, so this job pins the state the repo is
+    # already in rather than imposing a new constraint. It rejects the filename
+    # instead of teaching each parser to unquote — a filename we would reject in
+    # review is not one any parser should have to survive.
+    #
+    # WHY IT LIVES IN THIS SUITE AND NOT SUITE 17
+    # The subject of this check IS a filename, so a `paths:`-gated job structurally
+    # cannot see the file that would trip it — the change that adds `contracts/café.sol`
+    # is the change a path filter skips. This suite is the repo's designated home
+    # for path-unfiltered cross-cutting invariants and defends that property in its
+    # own header ("WHY NO paths: FILTER"), so scoping this job away would require
+    # overriding a documented invariant rather than doing it by accident. Suite 17
+    # was rejected as a host: it is the swarm plugin's suite, this rule is repo-wide,
+    # and its assertion floors (#1222) would have to move in lockstep for no gain.
+    # This is the third time the repo has had to reason about it — #1203 put a
+    # markdown guard behind `paths-ignore: ['**.md']`, #1235 repeated the shape.
+    #
+    # WHY THE SELF-TEST STEP IS NOT SEPARATE
+    # It is not a separate step because the script runs it itself, first, on every
+    # invocation, and refuses to scan if it fails. Same shape as the
+    # generated-docs-freshness self-test above, but the ordering cannot be lost to a
+    # later edit of this file.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Unit-level liveness check of a repo invariant; no external resource.
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Self-test the charset guard, then scan every tracked path
+        # The script proves on this runner that it can emit a FAIL (non-ASCII,
+        # quote, backslash, tab, newline, DEL, untrusted input, empty listing)
+        # before it is allowed to report a PASS on the real tree. It shells out to
+        # nothing but git — no `grep -P`, no `grep -z` — so it has no flag that a
+        # runner image could fail to support.
+        run: bash scripts/check-tracked-path-charset.sh
