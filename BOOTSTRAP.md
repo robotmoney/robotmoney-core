@@ -26,10 +26,21 @@ Either install a release binary or build from source — both are supported.
 **Option A — release binary (preferred):** Install it with this repo's
 checksum-verified recipe, `scripts/release/install-rmpc.sh`. It downloads the
 release archive *and* its published `.sha256`, verifies them, and only then
-extracts and installs — a mismatch aborts at the verify step, so a tampered
-download never reaches `PATH` (issue #1204). Do not fetch the tarball and drop
-the binary onto `PATH` yourself: step 4 below creates a **signing keystore** with
-whatever binary you installed here, so its provenance has to be checked first.
+extracts and installs — a mismatch aborts at the verify step, so a download that
+disagrees with its published checksum never reaches `PATH` (issue #1204). Do not
+fetch the tarball and drop the binary onto `PATH` yourself: step 4 below creates
+a **signing keystore** with whatever binary you installed here, so it must at
+minimum be the bytes the release actually holds.
+
+> **What this check does and does not prove.** The `.sha256` comes from the same
+> release, the same host and the same TLS session as the archive, and nothing
+> signs either one. So this *detects* a corrupted, truncated or substituted
+> download — a mirror, proxy or cache serving bytes the release does not hold.
+> It does **not** *authenticate the release itself*: anyone able to write to the
+> release publishes a matching `.sha256` beside a malicious archive and the
+> installer still prints `verified`. Establishing provenance needs an
+> out-of-band anchor (build attestation, or a detached signature over the
+> checksum with a committed public key), which does not exist yet.
 
 ```bash
 # From the repo root.
