@@ -83,7 +83,7 @@ echo "--- selftest: the release packaging step produces a usable checksum file -
 if grep -Eq "^[0-9a-f]{64}  ${ARCHIVE}\$" "$RELEASES/${ARCHIVE}.sha256"; then
   pass "packaging emits '<64-hex>  ${ARCHIVE}' — the single-line, archive-naming shape install-rmpc.sh's coverage check requires"
 else
-  fail "checksum file is not in sha256sum -c format: $(cat "$RELEASES/${ARCHIVE}.sha256")"
+  fail "checksum file is not '<64-hex>  ${ARCHIVE}': $(cat "$RELEASES/${ARCHIVE}.sha256")"
 fi
 
 # ---------- positive path: intact archive verifies, extracts, installs ----------
@@ -224,9 +224,9 @@ else
 fi
 
 # ---------- negative path: a checksum file that does not COVER this archive ----------
-# The three cases above all hand the installer an honest checksum file and a
-# dishonest archive. This one inverts it: the archive is whatever the attacker
-# likes, and the *checksum file* is the lie. `sha256sum -c FILE` and
+# Every case above hands the installer an archive an attacker controls and a
+# checksum file this repo produced (or none at all). This one inverts it: the
+# archive is whatever the attacker likes, and the *checksum file* is the lie. `sha256sum -c FILE` and
 # `shasum -a 256 -c FILE` verify whichever filenames FILE lists and exit 0 when
 # those match — so a one-line `.sha256` holding the digest of some other file,
 # naming that other file, made the installer print "verified" over a trojan.
@@ -243,9 +243,9 @@ mkdir -p "$WORKDIR/stage-decoy"
 printf '#!/usr/bin/env bash\necho "TROJAN rmpc"\n' > "$WORKDIR/stage-decoy/rmpc"
 chmod +x "$WORKDIR/stage-decoy/rmpc"
 
-# make_decoy_release <dirname> <checksum-file-contents-writer>
-# Builds a release dir holding the trojan archive plus whatever .sha256 the
-# caller writes, and returns the release root.
+# make_decoy_release <dirname> -> prints the release root
+# Builds "$WORKDIR/<dirname>/$TAG/$ARCHIVE" holding the trojan binary. The
+# caller then writes whatever .sha256 its case needs beside it.
 make_decoy_release() {
   local name="$1"
   local root="$WORKDIR/$name"
