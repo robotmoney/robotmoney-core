@@ -7,7 +7,7 @@ description: >
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
   commands (propose, vote), Investment Committee commands (committee
-  register, committee vote-submit), and the Investment Committee MCP
+  register, committee vote-submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
   Covers all flags, output shapes, preflight rules, and the get-governance
   → propose → vote example trace.
@@ -59,7 +59,7 @@ rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: register agents and submit signed allocation votes
-rmpc committee-identity  Investment Committee MCP demo: local Ed25519 identity, public-key export, and canonical-payload signing
+rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
 ## Governance write commands
@@ -218,24 +218,41 @@ stance, weight-bps, confidence, rationale-uri, vote-json-hash,
 prompt-hash, inputs-digest, timestamp, schema-version, gas-limit,
 fee-cap, receipt-timeout-secs, pretty).
 
-## Investment Committee MCP identity commands
+## Investment Swarm signing identity commands
 
-`rmpc committee-identity` is the local Ed25519 signing identity for the
-`robotmoney-frontend` Investment Committee **demo**'s MCP flow (public
-apply → admin activation → MCP OAuth → `get_signing_payload` →
-`submit_recommendation`). It is a separate identity type from the
-`rmpc committee` on-chain EVM signer above: no RPC, no operator config
-TOML, no on-chain write. Use it so a prospective agent never has to
-hand-roll Ed25519 code.
+`rmpc committee-identity` is the local Ed25519 signing identity every
+Investment Swarm member signs with — the production signing path, not a
+demo. The flow is plain REST end to end (`POST /api/swarm/apply` →
+approval → token claim → `POST /api/swarm/signing-payload` →
+`POST /api/swarm/submit`); there is no MCP transport. It is a separate
+identity type from the `rmpc committee` on-chain EVM signer above: no RPC,
+no operator config TOML, no on-chain write. Use it so a prospective member
+never has to hand-roll Ed25519 code.
+
+**Never ask the owner for their keystore passphrase, and never accept it in
+chat.** Have them write it to a file only they can read and hand you the
+path:
 
 ```bash
-# 1. Generate the identity (requires RMPC_COMMITTEE_IDENTITY_PASSPHRASE)
+umask 077 && printf '%s' '<passphrase>' > ~/.rmpc-committee-pass
+export RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE=~/.rmpc-committee-pass
+```
+
+An owner working at their own terminal can skip the file: with neither
+`RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE` nor
+`RMPC_COMMITTEE_IDENTITY_PASSPHRASE` set, `rmpc` prompts on `/dev/tty` with
+echo off. That prompt cannot be answered through a pipe, so run it yourself
+rather than through an agent.
+
+```bash
+# 1. Generate the identity (needs RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE
+#    or the /dev/tty prompt — never the passphrase itself on the command line)
 rmpc committee-identity --path identity.json create
 
-# 2. Export the base64 public key for POST /api/committee/apply
+# 2. Export the base64 public key for POST /api/swarm/apply
 rmpc committee-identity --path identity.json show-public-key
 
-# 3. Sign the canonical payload from MCP get_signing_payload
+# 3. Sign the canonical payload from POST /api/swarm/signing-payload
 rmpc committee-identity --path identity.json sign ...
 ```
 
