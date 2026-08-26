@@ -28,6 +28,7 @@ REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 
 FORM_VOTE="$PLUGIN_DIR/scripts/form-vote.sh"
 CHECK_PREFLIGHT="$PLUGIN_DIR/scripts/check-preflight.sh"
+RESTRICTED_GUARD="$SCRIPT_DIR/check-restricted-paths.sh"
 FIXTURES="$SCRIPT_DIR/fixtures"
 SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 
@@ -37,7 +38,9 @@ SCHEMA="$REPO_ROOT/schemas/committee-vote.json"
 # onboarding-specific test sections: the canonical-payload-contract check and
 # the stale-committee-spelling guard) was deleted outright — core no longer
 # serves onboarding, so there is nothing left to assert about it here.
-MIN_EXPECTED_ASSERTIONS=26
+# Raised from 26 to 27 by issue #1232: the restricted-path coupling guard is now
+# two assertions (its self-test, plus the real branch check) instead of one.
+MIN_EXPECTED_ASSERTIONS=27
 
 PASS=0
 FAIL=0
@@ -135,8 +138,8 @@ done
 
 # ---------- 2. shellcheck ----------
 echo ""
-echo "--- test: shellcheck form-vote.sh and check-preflight.sh ---"
-if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT"; then
+echo "--- test: shellcheck form-vote.sh, check-preflight.sh, check-restricted-paths.sh ---"
+if shellcheck "$FORM_VOTE" "$CHECK_PREFLIGHT" "$RESTRICTED_GUARD"; then
   pass "shellcheck passed"
 else
   fail "shellcheck reported issues"
@@ -400,16 +403,29 @@ else
   fail "could not start local HTTP server on port $HTTP_PORT — AC-4 did not execute"
 fi
 
-# ---------- 3. no restricted paths touched ----------
+# ---------- 3. restricted-path coupling guard ----------
+# Assertion (f). Delegated to check-restricted-paths.sh, which (unlike the inline
+# version this replaces — issue #1232) resolves a real base commit, fails loudly
+# when it cannot, and only fires when the swarm plugin AND a restricted tree
+# change together. The self-test runs FIRST and in CI, so a green from the real
+# check is only trusted once the guard has been shown able to go red.
 echo ""
-echo "--- test: no contracts/, crates/, clients/rust-payment-client/, services/ paths modified ---"
-if git -C "$REPO_ROOT" diff --name-only \
-    "$(git -C "$REPO_ROOT" merge-base HEAD origin/dev 2>/dev/null || echo HEAD~1)" HEAD 2>/dev/null \
-    | grep -qE '^(contracts/|crates/|clients/rust-payment-client/|services/)'; then
-  fail "restricted path (contracts/, crates/, clients/rust-payment-client/, services/) was modified"
+echo "--- test: restricted-path guard self-test (proves the guard can fail) ---"
+if bash "$RESTRICTED_GUARD" --self-test; then
+  pass "restricted-path guard fires on a coupling violation and reds out on an unresolvable base"
 else
-  pass "no restricted paths modified"
+  fail "restricted-path guard self-test failed — the guard is not proven able to fail"
 fi
+
+echo ""
+echo "--- test: swarm plugin not changed alongside contracts/, crates/, clients/rust-payment-client/, services/ ---"
+GUARD_RC=0
+bash "$RESTRICTED_GUARD" || GUARD_RC=$?
+case "$GUARD_RC" in
+  0) pass "no restricted paths modified alongside plugins/robotmoney-swarm/" ;;
+  1) fail "plugins/robotmoney-swarm/ was changed together with a restricted path (contracts/, crates/, clients/rust-payment-client/, services/)" ;;
+  *) fail "restricted-path guard could not run (exit $GUARD_RC) — it cannot resolve a base commit, so it refuses to report a PASS it cannot justify" ;;
+esac
 
 # ---------- summary ----------
 # "Exit 0 != tested": a run that asserted nothing is a false green, so the
