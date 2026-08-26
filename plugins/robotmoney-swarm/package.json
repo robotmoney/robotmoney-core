@@ -1,5 +1,9 @@
 {
   "name": "opencode-robotmoney-swarm",
   "version": "0.1.0",
-  "main": "plugin.json"
+  "main": "plugin.json",
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  }
 }

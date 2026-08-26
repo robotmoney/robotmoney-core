@@ -20,7 +20,19 @@
 #     guard, not a repo-wide veto (see WHY THE CHECKOUT IS FULL-DEPTH below), and
 # (g) the deprecation compat stub still exists at the OLD committee skill path
 #     and still names its robotmoney-swarm replacement (issue #1199) — the
-#     already-shipped raw URL must keep returning 200.
+#     already-shipped raw URL must keep returning 200, and
+# (h) the documented rmpc install path verifies a release archive against its
+#     published .sha256 and aborts BEFORE `install` when they disagree
+#     (issue #1204), via scripts/release/install-rmpc-selftest.sh.
+#
+# WHY AN rmpc RELEASE CONCERN IS TESTED IN THE PLUGIN SUITE
+# release-rmpc.yml publishes the `.sha256` assets but only triggers on a tag
+# push, so nothing about the checksum contract executes on a PR. The consuming
+# half — scripts/release/install-rmpc.sh — is the piece an operator runs before
+# generating a signing key, so it needs coverage on every PR, and this is the
+# one suite that already runs unconditionally with no paths filter. run-tests.sh
+# folds each selftest assertion into its own counters, so the count guard below
+# protects them too.
 #
 # ONBOARDING IS NO LONGER THIS SUITE'S CONCERN
 # This suite used to also assert (h): that the swarm-onboarding SKILL.md
@@ -46,10 +58,13 @@
 # gated on a hardcoded copy of the pre-rename path. It is a ~1 minute job; it
 # runs on every PR.
 #
-# WHY THE SUITE IS OFFLINE / MOCKED
+# WHY THE SUITE IS MOCKED, AND WHERE IT IS NOT OFFLINE
 # CI has no network access to robotmoney.net and no live IC contract, so
 # run-tests.sh (AC-1..AC-4, plugin/skill structure) uses fixture files and a
-# fake rmpc shell script to stay deterministic and fast.
+# fake rmpc shell script to stay deterministic and fast. One step is NOT
+# offline: `npm ci` installs the lockfile-pinned ajv validator from
+# registry.npmjs.org, so a registry outage reds this job for a reason unrelated
+# to the change under test. That is the suite's only external dependency.
 #
 # WHY ajv IS USED INSIDE THE TEST
 # The vote JSON schema (schemas/committee-vote.json) is the canonical contract
@@ -111,7 +126,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Scoped offline unit tests of one plugin's helpers and manifests.
+      # Scoped unit tests of one plugin's helpers and manifests, mocked apart
+      # from the lockfile-pinned `npm ci` that installs the ajv validator.
       CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
@@ -121,10 +137,16 @@ jobs:
           # permanent PASS (issue #1232).
           fetch-depth: 0
 
-      - name: Install dependencies (jq, shellcheck)
+      - name: Install dependencies (jq, shellcheck, perl for shasum)
+        # `perl` supplies `shasum`, which install-rmpc-selftest.sh requires as a
+        # hard prerequisite: it runs release-rmpc.yml's packaging step with
+        # sha256sum removed from PATH to reproduce the macOS runner, and shasum
+        # is the fallback that step takes there. A missing shasum is a FATAL in
+        # that selftest, never a skip, so it is installed explicitly rather than
+        # relied on from the runner image.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq jq shellcheck
+          sudo apt-get install -y -qq jq shellcheck perl
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -153,6 +175,12 @@ jobs:
       - name: Assert a non-zero number of assertions executed
         # "Exit 0 != tested." Independently re-check the executed count from the
         # captured log so a silently-degraded run cannot pass this job.
+        #
+        # `if: always()`: the suite step above runs under pipefail, so it fails
+        # first and this step used to be skipped exactly when its diagnostic was
+        # most wanted — an aborted run reached the log as a bare non-zero exit
+        # with no statement about how many assertions had executed.
+        if: always()
         run: |
           set -euo pipefail
           line=$(grep -o 'ROBOTMONEY_SWARM_TESTS_EXECUTED=[0-9]\+' swarm-tests.log | tail -1 || true)
@@ -162,7 +190,12 @@ jobs:
           fi
           count="${line#ROBOTMONEY_SWARM_TESTS_EXECUTED=}"
           echo "executed assertions: $count"
-          if [[ "$count" -lt 21 ]]; then
-            echo "::error::only $count assertions executed (expected >= 21) — a suite that asserts nothing is a false green"
+          # KEEP THIS EQUAL TO run-tests.sh's MIN_EXPECTED_ASSERTIONS.
+          # This check is the second opinion for the case where that in-script
+          # minimum gets edited down, so any slack between the two numbers
+          # re-opens exactly the window the check exists to close. They move
+          # together, in the same commit.
+          if [[ "$count" -lt 65 ]]; then
+            echo "::error::only $count assertions executed (expected >= 65, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
