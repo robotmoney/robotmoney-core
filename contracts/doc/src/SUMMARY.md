@@ -81,6 +81,7 @@
   - [❱ test](contracts/test/README.md)
     - [❱ fv](contracts/test/fv/README.md)
       - [CoverageMapTest](contracts/test/fv/CoverageMap.t.sol/contract.CoverageMapTest.md)
+      - [Sup1OverpromisingVault](contracts/test/fv/CustodyMultiVault.t.sol/contract.Sup1OverpromisingVault.md)
       - [CustodyMultiVaultTest](contracts/test/fv/CustodyMultiVault.t.sol/contract.CustodyMultiVaultTest.md)
       - [Ora3Token](contracts/test/fv/DeployAssertions.t.sol/contract.Ora3Token.md)
       - [Ora3Pool](contracts/test/fv/DeployAssertions.t.sol/contract.Ora3Pool.md)
