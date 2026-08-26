@@ -62,7 +62,10 @@ if [ -z "${MANIFEST_VERSION}" ]; then
 fi
 
 # Only vX.Y.Z tags are release tags; anything else (dryrun-*, feature markers)
-# is not a published version and must not raise the floor.
+# is not a published version and must not raise the floor. Prereleases
+# (vX.Y.Z-rc.N) DO match and DO count: release-rmpc.yml accepts them, so one can
+# be published, and a published prerelease is a version an operator can be
+# holding. See semver_sort below for the ordering they require.
 TAGS="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' || true)"
 
 if [ -z "${TAGS}" ]; then
@@ -70,7 +73,29 @@ if [ -z "${TAGS}" ]; then
   exit 2
 fi
 
-LATEST_TAG="$(printf '%s\n' "${TAGS}" | sort -V | tail -1)"
+# semver_sort — `sort -V` with semver's PRERELEASE precedence.
+#
+# The tag glob above deliberately admits prereleases: release-rmpc.yml's
+# `Validate inputs` accepts `vX.Y.Z-rc.N`, so one can be published and a
+# published prerelease is still a version an operator can be holding. But
+# `sort -V` reads `-rc.1` as an extra version COMPONENT and therefore ranks
+# `v0.4.0-rc.1` AFTER `v0.4.0` — the exact inverse of semver §11, which ranks
+# a prerelease BEFORE its release. Left uncorrected, publishing v0.4.0-rc.1
+# makes it LATEST_TAG, and a manifest correctly sitting at 0.4.0 is then
+# reported as "behind" it: every open PR to dev goes red on a true statement's
+# negation. (It fails safe — availability only, never a false green — but the
+# guard would be wrong about the one ordering it exists to assert.)
+#
+# GNU sort gives `~` the "sorts before everything, including nothing at all"
+# precedence semver assigns to a prerelease suffix, so the FIRST `-` (the
+# suffix separator; any later `-` is inside the prerelease identifier and must
+# not move) is swapped to `~` for the sort and swapped back after. Git refuses
+# `~` in a ref name, so the round trip cannot collide with a real tag.
+semver_sort() {
+  sed 's/-/~/' | sort -V | sed 's/~/-/'
+}
+
+LATEST_TAG="$(printf '%s\n' "${TAGS}" | semver_sort | tail -1)"
 LATEST_VERSION="${LATEST_TAG#v}"
 
 echo "manifest: ${MANIFEST_VERSION}  (${MANIFEST})"
@@ -81,8 +106,9 @@ if [ "${MANIFEST_VERSION}" = "${LATEST_VERSION}" ]; then
   exit 1
 fi
 
-# `sort -V` orders 1.9.0 < 1.10.0 correctly (a plain lexical sort does not).
-HIGHEST="$(printf '%s\n%s\n' "${MANIFEST_VERSION}" "${LATEST_VERSION}" | sort -V | tail -1)"
+# semver_sort orders 1.9.0 < 1.10.0 correctly (a plain lexical sort does not)
+# and 0.4.0-rc.1 < 0.4.0 correctly (a plain `sort -V` does not).
+HIGHEST="$(printf '%s\n%s\n' "${MANIFEST_VERSION}" "${LATEST_VERSION}" | semver_sort | tail -1)"
 if [ "${HIGHEST}" != "${MANIFEST_VERSION}" ]; then
   echo "::error::Version regression: ${MANIFEST} is at ${MANIFEST_VERSION}, BEHIND the newest published release ${LATEST_TAG}. Builds from this branch would claim to be an older release than one already distributed. Bump 'version' above ${LATEST_VERSION}; see issue #1191." >&2
   exit 1
