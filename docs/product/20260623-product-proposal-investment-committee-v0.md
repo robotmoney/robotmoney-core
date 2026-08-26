@@ -15,8 +15,17 @@
 > is done — it extends those primitives with a signalling-only registry. The
 > only new subsystem in the delta is the consensus rebalance receipts flow
 > (§2.1, §3.3), which is scoped as v0.1 and requires its own payload schema,
-> gateway surface, indexer tables, `rmpc` command, and off-chain worker
-> (see §2.1, §3.3, and §6).
+> **consensus judge**, gateway surface, indexer tables, `rmpc` command, and
+> off-chain worker (see §2.1, §3.3, and §6).
+>
+> **Two decisions since the first draft** (both in §2.1, and both narrowing §6):
+> the on-chain write is made by a **single submitter attesting for the
+> committee**, with analyst ed25519 signatures carried inside the payload and
+> verified off-chain per ADR-0012 §5; and the allocation is the **deterministic
+> mean** of the analysts' vectors, with the judge authoring the rationale rather
+> than the numbers. Together they make the signed allocation reproducible, remove
+> any need for per-analyst EVM identity in v0.1, and shrink the receipt contract.
+> §6.1 is unblocked as a result — writing the schema file is the next task.
 
 ---
 
@@ -61,7 +70,7 @@ asks for:
 | Allocation choices | **Per-vault tilts over the existing 4-vault catalog, not a weight vector.** Each vote is one vault (`overweight`/`neutral`/`underweight` at `InvestmentCommitteePolicy.sol:63-69`, `tests/fixtures/committee-vote.schema.json:22-33` with `target_weight_bps` 0–10 000 and `confidence` 0–100). Aggregation to a router weight vector is **off-chain, admin-applied**; there is no on-chain aggregation in v0. A vault is votable only when it is Active and (for router relevance) `isRouterEligible` (`docs/architecture.md` §4.1, §4.7; `RouterGovernance.sol:387`). | Shipped | `docs/prd.md` §11, `docs/architecture.md:4.1,4.7`, `RouterGovernance.sol:365-422` |
 | Daily regime feed | **Protocol-scope, read-only dapp surface with declared authority.** Rendered from the indexer + live chain reads per `docs/architecture.md` §5.0/5.3/5.4 (protocol scope: no wallet; safety-critical signing values still come from live `rmpc` reads, `docs/architecture.md` §6.1). Authored by Robot Money (RM) on a daily cadence; staleness and late-publish handling are specified in §3.2. | Shipped (shape) | `docs/architecture.md:5.0,5.3,5.4` |
 | Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own vote history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: vote submission (vault → stance/weight → `rationale_uri` → preview → sign via gateway). Preview states explicitly: vote is signalling-only, does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
-| Consensus rebalance receipts | **v0.1 — proposed, not yet implemented (see §2.1, §3.3, §6.1).** Signatures are **EOA-via-gateway commitments** (same identity as votes; ed25519 is not used in `robotmoney-core` v0 — see §2.2). Agents submit a commitment to a canonical receipt payload hash via `RobotMoneyGateway.consensusSubmitSignature`; admin may `consensusReleaseReceipt` as a **signalling-only** release (sets `released=true`, emits `ReceiptReleased`; no fund movement, no `setWeights` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.8). Expiry is derived as `block.timestamp > deadline && !released` (no on-chain auto-reject keeper in v0.1). Receipts are observable via the indexer/API like votes. Full spec (payload schema, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Proposed (v0.1) | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.8,5.1,5.4` |
+| Consensus rebalance receipts | **v0.1 — proposed, not yet implemented (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. Admin may `consensusReleaseReceipt` as a **signalling-only** release (sets `released=true`, emits `ReceiptReleased`; no fund movement, no `setWeights` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.8). Receipts are observable via the indexer/API like votes. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Proposed (v0.1) | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.8,5.1,5.4`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
 
 #### 2.1 Consensus rebalance receipts — v0.1 scope (proposed)
 
@@ -69,12 +78,28 @@ This is the only delta that is not shipped. It is **not** a one-row table entry 
 receipts are a full subsystem, and this section supersedes the prior one-row
 spec in every respect.
 
-- **Identity:** same as votes — EOA-via-gateway, `onlyGateway` on the receipt
-  contract, `COMMITTEE_AGENT_ROLE` check. No parallel `AGENT_ROLE` and no
-  second `registerAgent` entrypoint on the receipt contract; the shipped
-  policy pattern (`InvestmentCommitteePolicy.sol:154-157,209`) is the template,
-  so the gateway stays the single choke point and role administration stays
-  on one contract.
+- **Identity — one submitter attests for the committee (decided).** The on-chain
+  write is EOA-via-gateway: `onlyGateway` on the receipt contract,
+  `COMMITTEE_AGENT_ROLE` check, no parallel `AGENT_ROLE` and no second
+  `registerAgent` entrypoint; the shipped policy pattern
+  (`InvestmentCommitteePolicy.sol:154-157,209`) is the template, so the gateway
+  stays the single choke point and role administration stays on one contract.
+  **What changed:** an earlier draft of this section had *each* analyst call
+  `consensusSubmitSignature` under its own `COMMITTEE_AGENT_ROLE` EOA. That is
+  rejected. A **single submitter** records the receipt, and the analysts'
+  ed25519 signatures ride **inside the payload as verifiable data**, checked
+  off-chain. This is exactly the model ADR-0012 §5 fixes for the anchoring seam —
+  the chain stores a commitment, never an ed25519 verification — and it needs no
+  EVM identity for any analyst (see §2.2).
+  **Accepted cost:** the chain proves the committee produced the recommendation
+  and that one submitter attested to it; it does **not** prove each named analyst
+  signed. Verifying that is an off-chain check against the payload, and the dapp
+  must say so plainly rather than implying per-analyst on-chain attestation. A
+  compromised submitter could therefore publish a receipt the analysts never
+  agreed to unless the embedded signatures are verified on read — so that
+  verification is load-bearing, not cosmetic. Per-analyst on-chain signing
+  returns when external orgs onboard (§6.3); design the payload so analyst
+  identity is a first-class field and that migration stays additive.
 - **Signalling-only:** `consensusReleaseReceipt` is an **admin signal** (emits
   `ReceiptReleased`, sets `released=true`). It does not call
   `RouterGovernance.propose`/`execute` (`RouterGovernance.sol:365-422,474-500`)
@@ -82,17 +107,55 @@ spec in every respect.
   **off-chain, admin-applied** via the existing `RouterGovernance` path
   (`docs/architecture.md` §2.3, §2.4, §4.8). If a future phase needs on-chain
   coupling, it requires a new ADR revising `docs/prd.md` §12 INV-4 before build.
-- **Payload:** TBD — fixed-shape JSON schema committed to the repo (like
+- **Consensus derivation — deterministic; the judge explains, it does not decide
+  (decided).** The weight vector is the **unweighted arithmetic mean of the
+  analysts' normalized vectors** — `robotmoney-frontend`'s shipped
+  `meanTakeWeights` (`backend/src/swarm/domain.ts:1691-1710`), converted to bps.
+  A judge agent reads the frozen take set and the session brief and authors the
+  **rationale, the disagreements, and a release-safety opinion**; it never
+  authors a number. This is §6.2's stated default, now adopted.
+  **Why it matters:** the signed allocation is *reproducible* — anyone holding
+  the take set recomputes the vector and gets the same answer, which is the
+  strongest available property for an artifact governance acts on. A judge
+  failure degrades the explanation, never the weights, so the trust boundary
+  stays with the analysts and their existing per-take signatures.
+  *Rejected:* a judge authoring its own allocation so it can weight a stronger
+  argument over a weaker one. That is a v1+ conversation and would need pinned
+  inputs plus a bounds check before anything could sign its output.
+  **Consequence:** `meanTakeWeights` becomes load-bearing — a rounding or
+  normalization bug there propagates into a signed, governance-facing artifact.
+  It needs property tests and a guard against being bypassed or reimplemented.
+- **Judge component.** The judge is a **sixth component** of this subsystem
+  alongside the schema, gateway surface, indexer, `rmpc` command, and worker.
+  It slots into the frontend's existing job queue and session state machine
+  (`backend/src/worker/handlers/index.ts:55-59`, states
+  `scheduled → collecting → window_closed → aggregated → published`). Its inputs
+  must be pinned with `promptHash` / `inputsDigest` — the vocabulary the vote
+  schema already uses — which here protect the prose, since the number is
+  independently recomputable. It must fail closed on an unavailable model,
+  malformed output, or too few takes.
+- **Payload:** fixed-shape JSON schema committed to the repo (like
   `tests/fixtures/committee-vote.schema.json`), canonicalized at fixed field
-  order in `@robotmoney/contract` or `tests/fixtures/`, with a domain separator.
-  v0.1 does not ship until the schema is committed (see §6.1). **Shape prior art
-  exists** — `robotmoney-frontend` already ships a multi-agent aggregate carrying
-  target weights (`SwarmRecommendation`); see §2.3 for what to borrow and what
-  it does not solve.
+  order with a domain separator and a `schema_version`. v0.1 does not ship until
+  the schema is committed (see §6.1). Its contents are now settled in outline:
+  **bps-converted mean weights, judge-authored prose, the embedded analyst
+  ed25519 signature set, and `promptHash` / `inputsDigest`.** Adopt
+  `canonicalizeSubmission`'s append-only field-order rule
+  (`contract/src/signing.js:5-20`) so added fields never invalidate old
+  signatures. **Shape prior art exists** — `robotmoney-frontend` already ships a
+  multi-agent aggregate carrying target weights (`SwarmRecommendation`); see §2.3
+  for what to borrow and what it does not solve.
 - **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
-  at `contracts/gateway/interfaces/IGateway.sol:379-394` stay; the new
-  `consensusReceipt`/`consensusSubmitSignature`/`consensusReleaseReceipt` are
-  added alongside `agentOwner` (`IGateway.sol:422`), not substituted.
+  at `contracts/gateway/interfaces/IGateway.sol:380,386,392` stay; the new
+  receipt entrypoints are added alongside `agentOwner` (`IGateway.sol:422`), not
+  substituted. **The exact entrypoint set is reopened by the identity decision
+  above:** with one submitter carrying N signatures as payload data, there may be
+  nothing left for a per-agent `consensusSubmitSignature` to do, and a one-shot
+  `consensusRecordReceipt` (payload hash + digest + submitter) may replace both
+  it and `consensusReceipt`. Settle this before writing the contract.
+  `consensusReleaseReceipt` survives regardless — it is the human gate before the
+  governance worker sees anything, and becomes the only meaningful state
+  transition on the contract.
 - **Indexer / API / rmpc / worker:** each specified with its shipped analogue
   as template — `services/explorer-indexer/src/indexer.rs:74,1125` + reorg handling
   `docs/architecture.md:928`, `docs/architecture.md:5.4` read scopes,
@@ -100,22 +163,59 @@ spec in every respect.
   worker that watches `ReceiptReleased` and (if policy says so) drafts a
   `RouterGovernance.propose(vaults,bps)` — the on-chain execution still needs
   quorum and delay (`RouterGovernance.sol:54-63,365-422`).
-- **Expiry:** `deadline = firstSignatureAt + WINDOW_SECONDS` (7 days). No keeper;
-  expiry is derived off-chain (`block.timestamp > deadline && !released`). The
-  contract stores `deadline` immutably on first signature.
-- **Event correctness:** `SignatureSubmitted` must not use `uint8[64] indexed`
-  (exceeds 3-topic limit; cf. `InvestmentCommitteePolicy.sol:110-120` pattern).
+- **Expiry — re-derive, do not port.** The earlier `deadline = firstSignatureAt +
+  WINDOW_SECONDS` (7 days, stored immutably on first signature, expiry derived
+  off-chain as `block.timestamp > deadline && !released`, no keeper) existed to
+  bound a **multi-party signature-collection window**. With one submitter there
+  is nothing to wait for. The window may collapse to zero, or be repurposed as a
+  staleness bound on the recommendation itself — decide which before building,
+  and define what the dapp and the worker each do with a receipt that is never
+  released.
+- **Event correctness:** no event may use a `uint8[64] indexed` signature
+  parameter (exceeds the 3-topic limit; cf. the `VoteSubmitted` pattern at
+  `IInvestmentCommitteePolicy.sol:68-78`). This applies to whatever the
+  entrypoint set above resolves to.
+- **Quorum floor.** With the allocation now a plain mean, a two-analyst session
+  yields a mathematically valid but thinly-supported vector. The judge's
+  release-safety opinion is the natural place to catch this; the threshold itself
+  is a product decision (§6.2).
 
 #### 2.2 Identity note — EOA vs ed25519 (resolved)
 
 The earlier proposal blended two trust models: `robotmoney-core`'s EOA-via-gateway
 (`InvestmentCommitteePolicy.sol:154-157,209`) and `robotmoney-frontend`'s
 ed25519 swarm (`contract/src/signing.js:5-20`, `backend/src/lib/signing.ts:26-37`,
-`backend/src/swarm/domain.ts:544-768`). **v0/v0.1 use EOA-via-gateway only.**
-An `rmpc sign` ed25519 payload path for committee actions does not exist in
-`robotmoney-core` (`docs/architecture.md:5.1,690-710` signs the EVM envelope, not
-an ed25519 payload) and is not in scope until a future ADR defines the key
-registry, rotation, and verification site.
+`backend/src/swarm/domain.ts:544-768`).
+
+**The rule, stated precisely:**
+
+- **EOA-via-gateway is the sole *on-chain* identity** for v0 and v0.1. Every
+  on-chain write — vote or receipt — is authenticated by `msg.sender` through the
+  gateway plus a role check. No ed25519 signature is ever verified on-chain;
+  the EVM has no ed25519 precompile, and ADR-0012 §5 closes that seam explicitly
+  so no design assumes one.
+- **Ed25519 signatures may ride inside a receipt payload as verifiable data**,
+  checked off-chain by the indexer and the dapp. This is not a second on-chain
+  identity — it is content, bound by the payload digest, exactly the
+  "commitment on-chain, verification off-chain" model ADR-0012 §5 fixes.
+
+**Amended from the earlier draft.** This section previously said an ed25519 path
+"is not in scope until a future ADR defines the key registry, rotation, and
+verification site." **ADR-0012 is that ADR** — it makes ed25519 the default for
+every identity that does not sign EVM transactions (§1), keeps the curves from
+swapping roles (§4: a committee key carries no on-chain authority and must not
+be able to move funds), and fixes the anchoring model (§5). ADR-0012 is currently
+**Proposed**; accepting it is a precondition for building receipts under §2.1's
+identity decision.
+
+An `rmpc sign` ed25519 payload path for committee *actions* still does not exist
+in `robotmoney-core` (`docs/architecture.md:5.1,690-710` signs the EVM envelope,
+not an ed25519 payload) and remains out of scope. `rmpc committee-identity`
+(`clients/rust-payment-client/src/committee_identity.rs`) already implements the
+frontend's exact ed25519 wire format — raw 32-byte key, raw 64-byte signature,
+standard padded base64 — but it is a **demo-flow identity with no on-chain
+authority** (ADR-0012 §4), and §2.1's submitter does not use it to authenticate
+its chain write.
 
 #### 2.3 Prior art — `SwarmRecommendation` in `robotmoney-frontend`
 
@@ -257,13 +357,42 @@ behaviors the shape leaves open.
 - **Contract.** New `ConsensusRebalanceReceipt.sol` — `onlyGateway`, signalling-only
   (no `receive`/`fallback`, no vault/router calls — same constraint as
   `InvestmentCommitteePolicy.sol:272-278` / `docs/architecture.md:148,1192-1198`),
-  `ADMIN_ROLE` held by `TimelockController` (INV-3 `docs/prd.md:642-648`), events
-  `SignatureSubmitted` (no `indexed` signature), `ReceiptReleased`.
-  Additive gateway surface: `consensusReceipt` / `consensusSubmitSignature` /
-  `consensusReleaseReceipt` alongside `IGateway.sol:379-394,422`.
+  `ADMIN_ROLE` held by `TimelockController` (INV-3 `docs/prd.md:642-648`), event
+  `ReceiptReleased` plus whatever record event the entrypoint set resolves to —
+  none of them using an `indexed` signature parameter.
+  Additive gateway surface alongside `IGateway.sol:380,386,392,422`. **Note the
+  single-submitter decision (§2.1) shrinks this contract**: the multi-party
+  signature collection and its 7-day deadline may both disappear, leaving record
+  and release as the only transitions. Settle the entrypoint set before writing it.
+- **Judge.** New — see §2.1. Lives in `robotmoney-frontend`'s job queue and
+  session state machine, emits prose and a release-safety opinion, and never
+  emits weights.
 - **Indexer / API / `rmpc` / worker.** See §2.1 — each wired like the
   vote path (polling, reorg rewriting at `docs/architecture.md:928`, protocol vs
-  account read scopes at `docs/architecture.md:5.0`).
+  account read scopes at `docs/architecture.md:5.0`). The indexer and dapp must
+  additionally verify the **embedded analyst ed25519 signatures** on read and
+  render verified/unverified distinctly, exactly as they already do for
+  `vote_digest` (`docs/architecture.md:911-914`) — under §2.1's identity model
+  that check is the only thing binding the receipt to the analysts.
+- **Cross-repo transport.** `robotmoney-frontend`'s backend is **`eth_call`-only**
+  (`backend/src/chain/base-rpc-client.ts`) and cannot submit a transaction. The
+  submitter is therefore `rmpc` (or a core-side worker): it fetches the receipt
+  from the swarm API, verifies the digest and the embedded signatures, then
+  writes the commitment. `rmpc` is the lower-risk choice — the production-signer
+  gate, fail-closed config, and stable JSON envelope already exist there
+  (`docs/architecture.md:5.1,642-654,690-710`).
+- **Bucket ↔ vault mapping.** The frontend's four allocation buckets map 1:1 onto
+  this repo's four vaults: `conservative_defi_yield` → rmUSDC (`docs/prd.md:434`),
+  `protocol_tokens` → rmPROTO (`:460`), `agent_tokens` → rmAGENT (`:509`),
+  `real_world_assets` → rmRWA (`:568`). Today this correspondence is **implicit**;
+  it must be committed as canonical data referenced by both repos, with bucket →
+  vault *address* resolved per deployment, before any receipt can name vaults.
+- **Unit conversion.** Frontend weights are `[0,1]` floats; this repo is bps
+  (`tests/fixtures/committee-vote.schema.json:22-33`), and
+  `RouterGovernance.propose` hard-rejects a vector that does not sum to
+  `BPS_DENOMINATOR` (`RouterGovernance.sol:377`). The converter needs a stated
+  rounding rule with a settle-the-last-entry step — the same technique
+  `meanTakeWeights` already uses for floats — plus a property test at the boundary.
 
 ### 3.4 No contract refactor
 
@@ -294,7 +423,7 @@ Remaining uncertainty is in §6.
 
 | # | Decision | Resolution | Owner / grounding |
 |---|---|---|---|
-| 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; TBD for receipts.** Votes: on-chain stores the commitment tuple — `rationale_uri`, `vote_digest` (`voteJsonHash`), `prompt_hash`, `inputs_digest`, `timestamp`, `schema_version` plus structured `agent`, `vault`, `stance`, `target_weight_bps`, `confidence` — per `tests/fixtures/committee-vote.schema.json:1-60` and `InvestmentCommitteePolicy.sol:71-97,197-246`. Off-chain memo at `rationale_uri` carries the full narrative rationale, bound by the digest. Receipts: field split is TBD pending the receipt JSON schema (§2.1, §6.1) — no receipt schema is committed on this branch, though `robotmoney-frontend`'s `SwarmRecommendation` is shape prior art for the aggregate half (§2.3). | Contract + schema |
+| 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; TBD for receipts.** Votes: on-chain stores the commitment tuple — `rationale_uri`, `vote_digest` (`voteJsonHash`), `prompt_hash`, `inputs_digest`, `timestamp`, `schema_version` plus structured `agent`, `vault`, `stance`, `target_weight_bps`, `confidence` — per `tests/fixtures/committee-vote.schema.json:1-60` and `InvestmentCommitteePolicy.sol:71-97,197-246`. Off-chain memo at `rationale_uri` carries the full narrative rationale, bound by the digest. Receipts: **the split is now decided in outline, the schema file is still uncommitted.** On-chain stores a commitment only — payload digest, submitter, released flag. Off-chain payload carries the bps weight vector, the judge's prose, the embedded analyst ed25519 signature set, `prompt_hash` / `inputs_digest`, and `schema_version` (§2.1, §2.2). `robotmoney-frontend`'s `SwarmRecommendation` is shape prior art for the aggregate half (§2.3). Writing the schema file is the immediate next task (§6.1). | Contract + schema |
 | 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **Off-chain, admin-applied; no refactor.** IC output (votes and v0.1 receipts) is signalling-only (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is `RouterGovernance.propose` → `vote` → `execute` (`RouterGovernance.sol:365-500`), gated by quorum/delay (`:54-63`). The architecture already states "RouterGovernance is unchanged and no governance-interface refactor is required" (`docs/architecture.md:604`). | Architecture |
 | 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register`. External org seats require the receipt schema and attestation criteria in v0.1 before any third-party onboarding. | Ops + product |
 
@@ -316,6 +445,23 @@ Remaining uncertainty is in §6.
 - **Custody.** Committee contracts hold no assets and grant no treasury-spend
   (`docs/prd.md:650-657` INV-4, `docs/architecture.md:1192-1198`); releases are
   signals. Any future coupling that moves funds needs a new ADR.
+- **Submitter compromise (new, from §2.1's identity decision).** Because one
+  submitter attests for the committee, a compromised submitter could publish a
+  receipt the analysts never agreed to. Mitigated by verifying the **embedded
+  analyst ed25519 signatures on read** in both the indexer and the dapp, and by
+  rendering an unverified receipt distinctly rather than hiding it — the same
+  treatment `vote_digest` already gets (`docs/architecture.md:911-914`). The
+  submitter holds no on-chain authority beyond recording a signal (INV-4), and
+  release remains an admin gate. Residual risk is a plausible-looking but
+  unsupported receipt reaching a human reviewer; the signature check is what
+  catches it, so it is not optional.
+- **`meanTakeWeights` as a single point of failure (new, from §2.1's derivation
+  decision).** A rounding or normalization bug in
+  `backend/src/swarm/domain.ts:1691-1710` now propagates into a signed artifact
+  that governance acts on — a role that function has never carried. Mitigated by
+  property tests on the mean and on the float→bps conversion at the
+  `BPS_DENOMINATOR` boundary, and by a guard against the derivation being
+  bypassed or reimplemented elsewhere.
 
 ---
 
@@ -325,22 +471,28 @@ Remaining uncertainty is in §6.
 > They block **v0.1 (consensus receipts)** until resolved. Each has an owner
 > and a default if unresolved by the build kickoff.
 
-- **6.1 Receipt JSON schema — owner: product + contract.** What fields are in the
-  canonical rebalance receipt JSON (e.g. `agent_id`, `vault`, `stance`,
-  `target_weight_bps`, `confidence`, `rationale_uri`, `prompt_hash`,
-  `inputs_digest`, `timestamp`, `schema_version` — or a weight-vector shape?),
-  what is the fixed field order and domain separator, and where does the
-  canonicalizer live (`@robotmoney/contract` vs `tests/fixtures/`)?
-  **Narrowed by §2.3** — `robotmoney-frontend`'s `SwarmRecommendation`
-  (`contract/src/swarm.d.ts:260-275`) is a shipped aggregate with quorum, stance
-  tally, disagreements, and a weight vector, so the question is which of those
-  fields to keep and three specific changes to make: sign/hash the aggregate
-  (the frontend does not), express weights in bps rather than `[0,1]` floats, and
-  pin one serialized shape with `schema_version` (the frontend's array-vs-map
-  drift is the counterexample).
-  **Default:** do not build receipts; keep v0.1 unscoped until a schema is
-  committed to the repo (mirroring `tests/fixtures/committee-vote.schema.json`
-  and the frontend swarm's `contract/src/signing.js:5-20` in `robotmoney-frontend`).
+- **6.1 Receipt JSON schema — owner: product + contract. → UNBLOCKED; write it.**
+  Both design prerequisites are now decided (§2.1): the payload carries the
+  **bps-converted deterministic mean weight vector**, the **judge's prose**
+  (rationale, disagreements, release-safety opinion), the **embedded analyst
+  ed25519 signature set**, `prompt_hash` / `inputs_digest`, and `schema_version`;
+  the chain stores only a commitment to its digest. Start from
+  `SwarmRecommendation`'s field list (`contract/src/swarm.d.ts:260-275` — quorum,
+  stance tally, disagreements, weights) and make §2.3's three changes: hash the
+  aggregate, express weights in bps, and pin one serialized shape.
+  **What genuinely remains open is narrower than it looks:** the fixed field
+  order, the domain separator, and where the canonicalizer lives.
+  **On that last point — `@robotmoney/contract` does not work as an option.** It
+  is `robotmoney-frontend`'s own package (`contract/package.json`), wired by
+  `file:./contract` and `file:../contract` in that repo's two `package.json`s,
+  never published to a registry, and not consumable from a Rust/Solidity repo at
+  all. Either commit the schema to **both** repos as a shared fixture with a
+  byte-conformance test on each side (recommended — a JS package on `rmpc`'s
+  critical path is a heavy cost for one canonicalizer), or treat publishing
+  `@robotmoney/contract` as an explicit precondition.
+  **Default:** do not build receipts until the schema is committed to the repo,
+  mirroring `tests/fixtures/committee-vote.schema.json` and adopting
+  `contract/src/signing.js:5-20`'s append-only field-order rule.
 
 - **6.2 Release quorum & policy — owner: product.** Is `consensusReleaseReceipt`
   gated on a minimum signature count (e.g. ≥2 of 3–5 seats), or is admin
@@ -348,20 +500,47 @@ Remaining uncertainty is in §6.
   released receipt cause the off-chain worker to do — draft a
   `RouterGovernance.propose(vaults,bps)` with what `vaults`/`bps` derivation
   and what quorum/delay (`RouterGovernance.sol:54-63`), or merely record the
-  signal? For the `vaults`/`bps` derivation specifically, §2.3 gives a shipped
-  candidate — `meanTakeWeights` (`backend/src/swarm/domain.ts:1691-1710`):
-  normalize each agent's vector, take the unweighted per-bucket mean, and settle
-  the last entry so the vector sums exactly. Adopt it in bps form or reject it
-  explicitly. **Default:** admin discretion with no auto-threshold; the dapp
-  renders signature count and the worker drafts nothing automatically until
-  a policy is written.
+  signal? **The derivation half is now closed:** `meanTakeWeights`
+  (`backend/src/swarm/domain.ts:1691-1710`) is adopted in bps form (§2.1) —
+  normalize each agent's vector, take the unweighted per-bucket mean, settle the
+  last entry so it sums exactly.
+  **What remains open** is the release threshold and how much the worker may do
+  unattended. Two constraints the earlier draft did not account for:
+  - **A signature count now counts payload signatures, not on-chain calls**
+    (§2.1's identity decision). The dapp must label them as such.
+  - **`RouterGovernance` permits only one Active/Queued proposal at a time**
+    (`RouterGovernance.sol:393-399`). If sessions publish faster than a proposal
+    completes voting plus `executionDelay`, receipts queue behind one another —
+    the policy must say skip, supersede, or throttle. The worker must also
+    re-check `isRouterEligibleAndActive` (`:387`) at draft time, since a vault
+    Active at receipt time may be Paused by then, and `propose` would revert.
+
+  **Default:** admin discretion with no auto-threshold; the dapp renders the
+  payload signature count and the worker drafts nothing automatically until a
+  policy is written. Where a worker does draft, it drafts **for human review** —
+  it never submits unattended.
 
 - **6.3 Genesis seat attestation for external orgs — owner: ops + product.**
   Beyond the 3–5 internal genesis seats (§4 decision 3), what is the onboarding bar
   for a third-party org (org attestation format, EOA ↔ `agentId` binding,
   revocation transparency, disclosure), and are the Woon/Athena EOAs distinct
   from `robotmoney-frontend` swarm member identities (`backend/src/swarm/domain.ts:771-859`
-  `applyMember`)? **Default:** zero external seats in v0/v0.1; external
-  onboarding deferred to a follow-on proposal once the receipt schema and
-  attestation criteria are defined.
+  `applyMember`)? **Sharpened by §2.1's identity decision:** because a single
+  submitter attests for the committee, no analyst needs an EVM address in v0.1 —
+  and `committee_members` in `robotmoney-frontend`
+  (`backend/migrations/0001_backends.sql:18-36`) has none. External-org onboarding
+  is precisely what forces per-analyst on-chain signing, and with it an
+  `evm_address` column and a real ed25519 ↔ EOA binding. Design the receipt
+  payload so analyst identity is a first-class field, keeping that migration
+  additive rather than a reshape. **Default:** zero external seats in v0/v0.1;
+  external onboarding deferred to a follow-on proposal once the receipt schema
+  and attestation criteria are defined.
+
+- **6.4 Judge scope across subjects — owner: product. (New.)** `meanTakeWeights`
+  averages within **one session's** take set, and `robotmoney-frontend` sessions
+  are subject-scoped. A portfolio-wide rebalance spanning all four vaults
+  therefore has no defined derivation yet — either sessions must become
+  portfolio-scoped, or cross-session aggregation needs specifying. **Default:**
+  one receipt per session per subject; no cross-subject aggregation in v0.1.
+  This is the most likely thing to surface late, so decide it early.
 
