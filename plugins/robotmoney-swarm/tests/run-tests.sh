@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# run-tests.sh — offline CI tests for the robotmoney-swarm plugin.
+# run-tests.sh — CI tests for the robotmoney-swarm plugin.
 #
 # Canonical docs: plugins/robotmoney-swarm/skills/robotmoney-swarm/SKILL.md
 # Vote schema:    schemas/committee-vote.json
 #
-# Runs without network access. All four acceptance criteria are exercised:
+# NETWORK: one dependency, and only one. The four acceptance criteria below run
+# entirely offline against fixtures and a loopback HTTP server; AC-1's schema
+# validator is installed with `npm ci` from registry.npmjs.org (lockfile-pinned,
+# `--ignore-scripts`), so that single step needs the network and a registry
+# outage reds this suite. Everything else here — including the #1204 checksum and
+# BOOTSTRAP.md assertions — has no external dependency at all.
+#
+# All four acceptance criteria are exercised:
 #   AC-1: tilt-formation produces a vote JSON that passes ajv schema validation
 #   AC-2: skill aborts before calling rmpc when ic_contract_address is absent
 #   AC-3: skill aborts before calling rmpc when rationale_uri is unreachable
@@ -66,12 +73,21 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # earlier ones missed — every prior assertion tested the checksum file the
 # packaging step PRODUCES, never a downloaded one.
 #
-# THIS NUMBER AND THE WORKFLOW FLOOR MOVE TOGETHER.
+# THIS NUMBER AND THE WORKFLOW FLOOR MOVE TOGETHER, AND THAT IS ASSERTED.
 # .github/workflows/suite-17-swarm-plugin.yml re-checks the executed count
 # independently, precisely so a silently-lowered MIN_EXPECTED_ASSERTIONS cannot
-# buy a green. That second opinion is worth nothing if it trails this number, so
-# the two are kept equal — change one, change the other in the same commit.
-MIN_EXPECTED_ASSERTIONS=61
+# buy a green. That second opinion is worth nothing if it trails this number.
+# Keeping them equal by comment did not work — the workflow floor already fell
+# behind once on this branch and was caught by human review, not CI — so the
+# equality is now an assertion in this suite (see "the workflow's independent
+# floor" section below), the same shape as the selftest's EXPECTED_ARCHIVES
+# check against the build matrix.
+# Raised from 61 to 65 by #1204's reliability review: the selftest's exit status
+# and its RMPC_INSTALL_SELFTEST_EXECUTED contract line are now asserted here
+# rather than inferred from the count, suite-17's independent floor is asserted
+# equal to this number instead of merely commented, and the installer's
+# failing-digest-tool path is covered.
+MIN_EXPECTED_ASSERTIONS=65
 
 PASS=0
 FAIL=0
@@ -176,6 +192,30 @@ else
   fail "shellcheck reported issues"
 fi
 
+# ---------- the workflow's independent floor must not trail this script's ----------
+# suite-17 re-checks ROBOTMONEY_SWARM_TESTS_EXECUTED against its own literal so a
+# lowered MIN_EXPECTED_ASSERTIONS cannot buy a green on its own. Any slack
+# between the two re-opens that window, and prose alone did not hold them level.
+# Asserting it here makes the drift red in CI on the commit that introduces it.
+echo ""
+echo "--- test: suite-17's independent assertion floor equals this script's ---"
+
+SUITE17_WORKFLOW="$REPO_ROOT/.github/workflows/suite-17-swarm-plugin.yml"
+if [[ ! -f "$SUITE17_WORKFLOW" ]]; then
+  # Loud-skip policy: no workflow, no second opinion — that is a red, not a pass.
+  fail "$SUITE17_WORKFLOW is missing — nothing re-checks this suite's executed count independently"
+else
+  WORKFLOW_FLOOR=$(grep -o 'count" -lt [0-9][0-9]*' "$SUITE17_WORKFLOW" \
+    | head -1 | grep -o '[0-9][0-9]*$' || true)
+  if [[ -z "$WORKFLOW_FLOOR" ]]; then
+    fail "could not read the executed-assertion floor out of suite-17-swarm-plugin.yml — the independent guard may have been removed"
+  elif [[ "$WORKFLOW_FLOOR" == "$MIN_EXPECTED_ASSERTIONS" ]]; then
+    pass "suite-17's floor ($WORKFLOW_FLOOR) equals MIN_EXPECTED_ASSERTIONS ($MIN_EXPECTED_ASSERTIONS)"
+  else
+    fail "suite-17's floor is $WORKFLOW_FLOOR but MIN_EXPECTED_ASSERTIONS is $MIN_EXPECTED_ASSERTIONS — the independent re-check is not binding while it trails; raise both in the same commit"
+  fi
+fi
+
 # ---------- AC-1: tilt-formation → valid schema-conformant JSON ----------
 echo ""
 echo "--- AC-1: tilt-formation produces schema-conformant vote JSON (ajv) ---"
@@ -186,7 +226,22 @@ AJV_TMP="$(mktemp -d)"
 trap 'rm -rf "$AJV_TMP"' EXIT
 
 cp "$PLUGIN_DIR/package.json" "$PLUGIN_DIR/package-lock.json" "$AJV_TMP/"
-npm ci --prefix "$AJV_TMP" --ignore-scripts 2>/dev/null 1>/dev/null
+# npm's output is captured, not discarded. Three different owners share this one
+# exit status — a package.json/package-lock.json drift (`EUSAGE ... not in
+# sync`), an unreachable registry, and a corrupt local npm cache — and npm names
+# which one it is on stderr. Sending that to /dev/null left the CI log ending at
+# the banner above with nothing after it, so every one of the three read as an
+# unexplained abort. The suite still dies (this is a hard prerequisite, never a
+# skip); it now dies saying why.
+if ! npm ci --prefix "$AJV_TMP" --ignore-scripts >"$AJV_TMP/npm-ci.log" 2>&1; then
+  echo "FATAL: npm ci failed while installing the ajv validator." >&2
+  echo "       Likely causes: plugins/robotmoney-swarm/package.json and" >&2
+  echo "       package-lock.json have drifted apart; registry.npmjs.org is" >&2
+  echo "       unreachable from this runner; or the local npm cache is corrupt." >&2
+  echo "       npm's own output follows." >&2
+  cat "$AJV_TMP/npm-ci.log" >&2
+  exit 1
+fi
 
 # Write the Node.js validator script.
 AJV_VALIDATOR="$AJV_TMP/validate.js"
@@ -445,7 +500,13 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # the selftest being gutted while this suite still reports a healthy total.
 # 23 -> 29 with the checksum-coverage assertions (a downloaded `.sha256` that
 # names a different file, and a multi-line one, must both be refused).
-MIN_INSTALL_SELFTEST_ASSERTIONS=29
+# 29 -> 30 with the failing-digest-tool case (exit 4, not an undocumented 1).
+#
+# This floor is no longer the only thing standing between a crashed selftest and
+# a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
+# line are both asserted below. It used to be, and it worked only by arithmetic
+# accident — the known truncation point happened to land under it.
+MIN_INSTALL_SELFTEST_ASSERTIONS=30
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
@@ -453,9 +514,11 @@ if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
 else
   set +e
   INSTALL_SELFTEST_OUT=$("$INSTALL_RMPC_SELFTEST" 2>&1)
+  INSTALL_SELFTEST_EXIT=$?
   set -e
 
   INSTALL_SELFTEST_ASSERTIONS=0
+  INSTALL_SELFTEST_FAILS=0
   while IFS= read -r selftest_line; do
     case "$selftest_line" in
       PASS:*)
@@ -465,9 +528,40 @@ else
       FAIL:*)
         fail "install-rmpc: ${selftest_line#FAIL: }"
         INSTALL_SELFTEST_ASSERTIONS=$((INSTALL_SELFTEST_ASSERTIONS+1))
+        INSTALL_SELFTEST_FAILS=$((INSTALL_SELFTEST_FAILS+1))
         ;;
     esac
   done <<< "$INSTALL_SELFTEST_OUT"
+
+  # The selftest's own exit status. Without this, a selftest that DIED partway
+  # through — a stray errexit, a missing prerequisite, a kill — is caught only by
+  # the assertion floor below, i.e. by arithmetic: an abort past the floor leaves
+  # a crashed selftest reporting a healthy count and the whole suite green. Its
+  # documented contract is exit 0 when nothing failed, exit 1 when something did,
+  # so any other status, or a non-zero with no FAIL line to explain it, is a
+  # crash and is reported as one.
+  if [[ $INSTALL_SELFTEST_EXIT -eq 0 && $INSTALL_SELFTEST_FAILS -eq 0 ]]; then
+    pass "install-rmpc selftest exited 0 with no FAIL lines — it ran to completion"
+  elif [[ $INSTALL_SELFTEST_EXIT -eq 1 && $INSTALL_SELFTEST_FAILS -gt 0 ]]; then
+    pass "install-rmpc selftest exited 1, accounted for by its $INSTALL_SELFTEST_FAILS reported FAIL line(s)"
+  else
+    fail "install-rmpc selftest exited $INSTALL_SELFTEST_EXIT with $INSTALL_SELFTEST_FAILS FAIL line(s) — that status is not explained by its own assertions, so it crashed rather than finished (output: $INSTALL_SELFTEST_OUT)"
+  fi
+
+  # The output contract. `RMPC_INSTALL_SELFTEST_EXECUTED=<n>` is the last line the
+  # selftest prints, so its presence proves the run reached the end, and <n>
+  # matching the PASS/FAIL lines counted here proves nothing was lost in between.
+  # This is what makes truncation a contract violation instead of something the
+  # floor happens to notice.
+  INSTALL_SELFTEST_CONTRACT="$(printf '%s\n' "$INSTALL_SELFTEST_OUT" | tail -1)"
+  INSTALL_SELFTEST_CLAIMED="${INSTALL_SELFTEST_CONTRACT#RMPC_INSTALL_SELFTEST_EXECUTED=}"
+  if [[ "$INSTALL_SELFTEST_CONTRACT" != RMPC_INSTALL_SELFTEST_EXECUTED=* ]]; then
+    fail "install-rmpc selftest printed no RMPC_INSTALL_SELFTEST_EXECUTED line as its last output — it was truncated, so its assertion count cannot be trusted (last line: '$INSTALL_SELFTEST_CONTRACT')"
+  elif [[ "$INSTALL_SELFTEST_CLAIMED" != "$INSTALL_SELFTEST_ASSERTIONS" ]]; then
+    fail "install-rmpc selftest reports RMPC_INSTALL_SELFTEST_EXECUTED=$INSTALL_SELFTEST_CLAIMED but this suite counted $INSTALL_SELFTEST_ASSERTIONS PASS/FAIL lines — assertions went missing between the two"
+  else
+    pass "install-rmpc selftest's contract line agrees with the $INSTALL_SELFTEST_ASSERTIONS assertions folded in here"
+  fi
 
   if [[ $INSTALL_SELFTEST_ASSERTIONS -ge $MIN_INSTALL_SELFTEST_ASSERTIONS ]]; then
     pass "install-rmpc selftest contributed $INSTALL_SELFTEST_ASSERTIONS assertions (>= $MIN_INSTALL_SELFTEST_ASSERTIONS)"

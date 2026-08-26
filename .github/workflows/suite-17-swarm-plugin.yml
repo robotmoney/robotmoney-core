@@ -58,10 +58,13 @@
 # gated on a hardcoded copy of the pre-rename path. It is a ~1 minute job; it
 # runs on every PR.
 #
-# WHY THE SUITE IS OFFLINE / MOCKED
+# WHY THE SUITE IS MOCKED, AND WHERE IT IS NOT OFFLINE
 # CI has no network access to robotmoney.net and no live IC contract, so
 # run-tests.sh (AC-1..AC-4, plugin/skill structure) uses fixture files and a
-# fake rmpc shell script to stay deterministic and fast.
+# fake rmpc shell script to stay deterministic and fast. One step is NOT
+# offline: `npm ci` installs the lockfile-pinned ajv validator from
+# registry.npmjs.org, so a registry outage reds this job for a reason unrelated
+# to the change under test. That is the suite's only external dependency.
 #
 # WHY ajv IS USED INSIDE THE TEST
 # The vote JSON schema (schemas/committee-vote.json) is the canonical contract
@@ -123,7 +126,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Scoped offline unit tests of one plugin's helpers and manifests.
+      # Scoped unit tests of one plugin's helpers and manifests, mocked apart
+      # from the lockfile-pinned `npm ci` that installs the ajv validator.
       CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
@@ -171,6 +175,12 @@ jobs:
       - name: Assert a non-zero number of assertions executed
         # "Exit 0 != tested." Independently re-check the executed count from the
         # captured log so a silently-degraded run cannot pass this job.
+        #
+        # `if: always()`: the suite step above runs under pipefail, so it fails
+        # first and this step used to be skipped exactly when its diagnostic was
+        # most wanted — an aborted run reached the log as a bare non-zero exit
+        # with no statement about how many assertions had executed.
+        if: always()
         run: |
           set -euo pipefail
           line=$(grep -o 'ROBOTMONEY_SWARM_TESTS_EXECUTED=[0-9]\+' swarm-tests.log | tail -1 || true)
@@ -185,7 +195,7 @@ jobs:
           # minimum gets edited down, so any slack between the two numbers
           # re-opens exactly the window the check exists to close. They move
           # together, in the same commit.
-          if [[ "$count" -lt 61 ]]; then
-            echo "::error::only $count assertions executed (expected >= 61, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 65 ]]; then
+            echo "::error::only $count assertions executed (expected >= 65, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
