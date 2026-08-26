@@ -85,7 +85,10 @@ spec in every respect.
 - **Payload:** TBD — fixed-shape JSON schema committed to the repo (like
   `tests/fixtures/committee-vote.schema.json`), canonicalized at fixed field
   order in `@robotmoney/contract` or `tests/fixtures/`, with a domain separator.
-  v0.1 does not ship until the schema is committed (see §6.1).
+  v0.1 does not ship until the schema is committed (see §6.1). **Shape prior art
+  exists** — `robotmoney-frontend` already ships a multi-agent aggregate carrying
+  target weights (`SwarmRecommendation`); see §2.3 for what to borrow and what
+  it does not solve.
 - **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
   at `contracts/gateway/interfaces/IGateway.sol:379-394` stay; the new
   `consensusReceipt`/`consensusSubmitSignature`/`consensusReleaseReceipt` are
@@ -113,6 +116,70 @@ An `rmpc sign` ed25519 payload path for committee actions does not exist in
 `robotmoney-core` (`docs/architecture.md:5.1,690-710` signs the EVM envelope, not
 an ed25519 payload) and is not in scope until a future ADR defines the key
 registry, rotation, and verification site.
+
+#### 2.3 Prior art — `SwarmRecommendation` in `robotmoney-frontend`
+
+A consensus-produced rebalance artifact **already exists in `robotmoney-frontend`**.
+It is the closest working precedent for §2.1's receipt payload, so §6.1 is a
+question of *what to change*, not *what to invent*. Per §2.2 this is prior art
+for **shape only** — the frontend swarm's trust model (ed25519, off-chain
+Postgres) is a different product and is not adopted here.
+
+**The aggregate** — `SwarmRecommendation` (`contract/src/swarm.d.ts:260-275`),
+persisted as `swarm_sessions.swarm_recommendation` (jsonb):
+
+| Field | Meaning |
+|---|---|
+| `quorum` | `{active, submitted, absent, participation}` (`swarm.d.ts:227-232`) |
+| `stances` | `Record<stance, count>` tally |
+| `meanConfidence`, `absent[]` | participation summary |
+| `type` | `"bucket_weights" \| "position_actions"` |
+| `consensus[]`, `disagreements[]`, `rationale?` | prose; `disagreements` is `{topic, positions[{member_id, view}], what_settles}` |
+| `weights?` | **the rebalance content** — `{bucket, weight}[]` |
+
+**How consensus is computed.** `aggregateSession()`
+(`backend/src/swarm/domain.ts:1784-1931`) selects the *latest revision per member*
+over a frozen roster, then `meanTakeWeights` (`:1691-1710`) normalizes each agent's
+weights to sum 1 and takes the **unweighted arithmetic mean per bucket**, sorted by
+bucket, with the final bucket set to `1 - prefixTotal` so the vector sums exactly.
+This is a concrete, shipped answer to §6.2's "what derivation" — worth adopting or
+explicitly rejecting rather than leaving open.
+
+**The per-agent input** — `canonicalizeSubmission` (`contract/src/signing.js:5-20`)
+fixes key order as `memberId, date, subjectId, nonce, stance, confidence, body,
+memoUrl, weights?` and signs the UTF-8 bytes with ed25519. Note `weights` is
+**appended last and only when present**, so pre-`weights` signatures stay valid
+(`backend/tests/signing.test.ts:56,63`) — a schema-evolution pattern worth copying
+into the receipt canonicalizer.
+
+**Three gaps this precedent does *not* close** — each is a real design decision
+for v0.1, not a copy:
+
+1. **The aggregate is neither signed nor hashed.** Only per-agent takes carry
+   signatures (`backend/src/lib/signing.ts:26-38`, re-verified at read time at
+   `backend/src/swarm/projections.ts:183-201`). The only digest over aggregated
+   content is the v0 archive bundle's sha256 over 72 sessions
+   (`backend/src/swarm/v0-archive.ts:201`). §2.1's receipt is precisely the
+   missing piece: a canonical, hashed, co-signed *aggregate*. The frontend has
+   per-agent receipts (`SwarmTakeReceipt`, `swarm.d.ts:173-178`) but no aggregate one.
+2. **Units differ.** Frontend weights are `[0,1]` floats; `robotmoney-core` uses
+   `target_weight_bps` 0–10 000 (`tests/fixtures/committee-vote.schema.json:22-33`,
+   `RouterGovernance.sol:377` sums to `BPS_DENOMINATOR`). A receipt schema must be
+   bps-native, and the float→bps conversion needs a stated rounding rule so the
+   vector still sums exactly.
+3. **Serialized shape has already drifted.** Archived session payloads store
+   `weights` as a **map** plus a `within_bucket_weights` field that no backend code
+   writes and only the frontend reads
+   (`frontend/public/data/swarm/sessions/2026-06-17-robotmoney-allocation.json`,
+   `frontend/public/assets/js/app/alpine/static-views.js:335`), while the current
+   producer emits an **array**. This is the failure mode a committed schema plus
+   `schema_version` is meant to prevent (§6.1).
+
+**Also nearby, and not consensus-derived:** `AllocationFramework`
+(`backend/src/chain/allocation-framework.ts:15-34`) is the standing admin-managed
+target-weight policy — rebalance content with no multi-agent derivation. And the
+`"position_actions"` branch of `aggregateSession` emits **hardcoded** actions
+(`domain.ts:1891-1894`), not agent-derived ones; a receipt must not inherit that.
 
 ### Not yet ready to address (deferred to v1+)
 
@@ -227,7 +294,7 @@ Remaining uncertainty is in §6.
 
 | # | Decision | Resolution | Owner / grounding |
 |---|---|---|---|
-| 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; TBD for receipts.** Votes: on-chain stores the commitment tuple — `rationale_uri`, `vote_digest` (`voteJsonHash`), `prompt_hash`, `inputs_digest`, `timestamp`, `schema_version` plus structured `agent`, `vault`, `stance`, `target_weight_bps`, `confidence` — per `tests/fixtures/committee-vote.schema.json:1-60` and `InvestmentCommitteePolicy.sol:71-97,197-246`. Off-chain memo at `rationale_uri` carries the full narrative rationale, bound by the digest. Receipts: field split is TBD pending the receipt JSON schema (§2.1, §6.1) — no receipt schema is committed on this branch. | Contract + schema |
+| 1 | Exact split of fields on-chain vs off-chain memo | **Shipped for votes; TBD for receipts.** Votes: on-chain stores the commitment tuple — `rationale_uri`, `vote_digest` (`voteJsonHash`), `prompt_hash`, `inputs_digest`, `timestamp`, `schema_version` plus structured `agent`, `vault`, `stance`, `target_weight_bps`, `confidence` — per `tests/fixtures/committee-vote.schema.json:1-60` and `InvestmentCommitteePolicy.sol:71-97,197-246`. Off-chain memo at `rationale_uri` carries the full narrative rationale, bound by the digest. Receipts: field split is TBD pending the receipt JSON schema (§2.1, §6.1) — no receipt schema is committed on this branch, though `robotmoney-frontend`'s `SwarmRecommendation` is shape prior art for the aggregate half (§2.3). | Contract + schema |
 | 2 | Shape of the IC-policy → `RouterGovernance` linkage and governance-interface refactor | **Off-chain, admin-applied; no refactor.** IC output (votes and v0.1 receipts) is signalling-only (`docs/prd.md:650-657` INV-4, `docs/architecture.md:126-130,148`). Translation to live weights is `RouterGovernance.propose` → `vote` → `execute` (`RouterGovernance.sol:365-500`), gated by quorum/delay (`:54-63`). The architecture already states "RouterGovernance is unchanged and no governance-interface refactor is required" (`docs/architecture.md:604`). | Architecture |
 | 3 | Genesis seats (Athena / Robot Money / Woon) | **3–5 internal seats in v0, no external seats.** Athena / Robot Money / Woon are the named genesis agents under the admin-gated, timelock-held model (`InvestmentCommitteePolicy.sol:164-168`). Their EOAs are provisioned by RM ops, attested via `agentId` string (`:128,166`) and the public `AgentRegistered` log, and (if needed) seeded via `rmpc committee register`. External org seats require the receipt schema and attestation criteria in v0.1 before any third-party onboarding. | Ops + product |
 
@@ -264,6 +331,13 @@ Remaining uncertainty is in §6.
   `inputs_digest`, `timestamp`, `schema_version` — or a weight-vector shape?),
   what is the fixed field order and domain separator, and where does the
   canonicalizer live (`@robotmoney/contract` vs `tests/fixtures/`)?
+  **Narrowed by §2.3** — `robotmoney-frontend`'s `SwarmRecommendation`
+  (`contract/src/swarm.d.ts:260-275`) is a shipped aggregate with quorum, stance
+  tally, disagreements, and a weight vector, so the question is which of those
+  fields to keep and three specific changes to make: sign/hash the aggregate
+  (the frontend does not), express weights in bps rather than `[0,1]` floats, and
+  pin one serialized shape with `schema_version` (the frontend's array-vs-map
+  drift is the counterexample).
   **Default:** do not build receipts; keep v0.1 unscoped until a schema is
   committed to the repo (mirroring `tests/fixtures/committee-vote.schema.json`
   and the frontend swarm's `contract/src/signing.js:5-20` in `robotmoney-frontend`).
@@ -274,7 +348,11 @@ Remaining uncertainty is in §6.
   released receipt cause the off-chain worker to do — draft a
   `RouterGovernance.propose(vaults,bps)` with what `vaults`/`bps` derivation
   and what quorum/delay (`RouterGovernance.sol:54-63`), or merely record the
-  signal? **Default:** admin discretion with no auto-threshold; the dapp
+  signal? For the `vaults`/`bps` derivation specifically, §2.3 gives a shipped
+  candidate — `meanTakeWeights` (`backend/src/swarm/domain.ts:1691-1710`):
+  normalize each agent's vector, take the unweighted per-bucket mean, and settle
+  the last entry so the vector sums exactly. Adopt it in bps form or reject it
+  explicitly. **Default:** admin discretion with no auto-threshold; the dapp
   renders signature count and the worker drafts nothing automatically until
   a policy is written.
 
