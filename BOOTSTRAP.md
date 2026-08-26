@@ -25,9 +25,11 @@ Either install a release binary or build from source — both are supported.
 
 **Option A — release binary (preferred):** Install it with this repo's
 checksum-verified recipe, `scripts/release/install-rmpc.sh`. It downloads the
-release archive *and* its published `.sha256`, verifies them, and only then
-extracts and installs — a mismatch aborts at the verify step, so a download that
-disagrees with its published checksum never reaches `PATH` (issue #1204). Do not
+release archive *and* its published `.sha256`, checks that the checksum file is a
+single line naming *that* archive, hashes the archive itself and compares — and
+only then extracts and installs. A mismatch, or a checksum file covering some
+other file, aborts at the verify step, so a download that disagrees with its
+published checksum never reaches `PATH` (issue #1204). Do not
 fetch the tarball and drop the binary onto `PATH` yourself: step 4 below creates
 a **signing keystore** with whatever binary you installed here, so it must at
 minimum be the bytes the release actually holds.
@@ -50,9 +52,12 @@ TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/release
 rmpc --version
 ```
 
-The script exits non-zero — printing `ChecksumMismatch` — if the archive does not
-match its published checksum, or if the release publishes no checksum at all.
-Either way nothing is extracted and nothing is installed.
+The script exits `4` if the archive does not match its published checksum
+(printing `ChecksumMismatch`), if the release publishes no checksum at all, or if
+the published checksum file does not name this archive — the last case being the
+one where a hostile mirror serves a real digest for some *other* file so the
+verification would otherwise pass. In every case nothing is extracted and nothing
+is installed.
 
 > **Releases published before `.sha256` existed:** `release-rmpc.yml` only began
 > emitting `<archive>.tar.gz.sha256` in #1204, so every release up to and

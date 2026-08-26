@@ -58,13 +58,20 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # EXECUTING that step (with sha256sum removed from PATH, which is what a macOS
 # runner is) plus a new archive-to-checksum pairing guard, and install-rmpc.sh
 # gained a non-https --base-url refusal.
+# Raised from 54 to 60 by #1204's second security review: `sha256sum -c` verifies
+# whichever filenames the checksum file lists, so a downloaded `.sha256` naming
+# `/dev/null` made a trojan archive "verify" (reproduced end to end). The
+# installer now requires the checksum file to be one line covering the archive
+# and compares digests itself; six assertions cover the hostile-INPUT cases the
+# earlier ones missed — every prior assertion tested the checksum file the
+# packaging step PRODUCES, never a downloaded one.
 #
 # THIS NUMBER AND THE WORKFLOW FLOOR MOVE TOGETHER.
 # .github/workflows/suite-17-swarm-plugin.yml re-checks the executed count
 # independently, precisely so a silently-lowered MIN_EXPECTED_ASSERTIONS cannot
 # buy a green. That second opinion is worth nothing if it trails this number, so
 # the two are kept equal — change one, change the other in the same commit.
-MIN_EXPECTED_ASSERTIONS=55
+MIN_EXPECTED_ASSERTIONS=61
 
 PASS=0
 FAIL=0
@@ -436,7 +443,9 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 
 # Minimum assertions the install selftest must itself contribute. Guards against
 # the selftest being gutted while this suite still reports a healthy total.
-MIN_INSTALL_SELFTEST_ASSERTIONS=23
+# 23 -> 29 with the checksum-coverage assertions (a downloaded `.sha256` that
+# names a different file, and a multi-line one, must both be refused).
+MIN_INSTALL_SELFTEST_ASSERTIONS=29
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.

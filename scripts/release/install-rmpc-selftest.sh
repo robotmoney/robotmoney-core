@@ -21,6 +21,15 @@
 #     step, with no binary at the destination — it must abort *before* `install`,
 #     not fail somewhere after having already dropped an executable on disk.
 #
+#  3. The hostile CHECKSUM FILE. Every assertion in (1) and (2) tests a checksum
+#     file this repo PRODUCES against an archive an attacker controls. That got
+#     the direction backwards for one whole class: `sha256sum -c FILE` verifies
+#     whichever filenames FILE lists, so a downloaded `.sha256` holding the digest
+#     of the empty file and naming `/dev/null` made any archive verify — proved by
+#     running it against this installer. Those assertions live in the
+#     "a .sha256 that names a different file is refused" section and are the only
+#     ones that feed the installer a hostile *input* rather than a hostile archive.
+#
 # No network, no real release, no rmpc build: the fixture "binary" is a shell
 # script, and install-rmpc.sh downloads it through curl's `file://` support via
 # its --base-url seam, so the production code path is the one under test.
@@ -72,7 +81,7 @@ chmod +x "$WORKDIR/stage/rmpc"
 
 echo "--- selftest: the release packaging step produces a usable checksum file ---"
 if grep -Eq "^[0-9a-f]{64}  ${ARCHIVE}\$" "$RELEASES/${ARCHIVE}.sha256"; then
-  pass "packaging emits '<64-hex>  ${ARCHIVE}' — the format sha256sum -c consumes"
+  pass "packaging emits '<64-hex>  ${ARCHIVE}' — the single-line, archive-naming shape install-rmpc.sh's coverage check requires"
 else
   fail "checksum file is not in sha256sum -c format: $(cat "$RELEASES/${ARCHIVE}.sha256")"
 fi
@@ -214,6 +223,118 @@ else
   fail "missing checksum: installer exited $EXIT_NOSUM and may have installed (output: $OUT_NOSUM)"
 fi
 
+# ---------- negative path: a checksum file that does not COVER this archive ----------
+# The three cases above all hand the installer an honest checksum file and a
+# dishonest archive. This one inverts it: the archive is whatever the attacker
+# likes, and the *checksum file* is the lie. `sha256sum -c FILE` and
+# `shasum -a 256 -c FILE` verify whichever filenames FILE lists and exit 0 when
+# those match — so a one-line `.sha256` holding the digest of some other file,
+# naming that other file, made the installer print "verified" over a trojan.
+#
+# This is the hostile-INPUT case, and it is exactly what the earlier assertions
+# missed: they cover the checksum file the packaging step PRODUCES (:74, and the
+# macOS round trip below), never a downloaded one that names a different path.
+echo ""
+echo "--- selftest: a .sha256 that names a different file is refused ---"
+
+# The trojan archive is well-formed and installs cleanly if it is ever reached —
+# only the coverage check stands between it and $DEST.
+mkdir -p "$WORKDIR/stage-decoy"
+printf '#!/usr/bin/env bash\necho "TROJAN rmpc"\n' > "$WORKDIR/stage-decoy/rmpc"
+chmod +x "$WORKDIR/stage-decoy/rmpc"
+
+# make_decoy_release <dirname> <checksum-file-contents-writer>
+# Builds a release dir holding the trojan archive plus whatever .sha256 the
+# caller writes, and returns the release root.
+make_decoy_release() {
+  local name="$1"
+  local root="$WORKDIR/$name"
+  rm -rf "$root"
+  mkdir -p "$root/$TAG"
+  ( cd "$root/$TAG" && tar -czf "$ARCHIVE" -C "$WORKDIR/stage-decoy" rmpc )
+  echo "$root"
+}
+
+# --- case A: the well-known digest of the empty file, naming /dev/null ---
+DEVNULL_ROOT=$(make_decoy_release "releases-devnull")
+printf '%s  /dev/null\n' \
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+  > "$DEVNULL_ROOT/$TAG/${ARCHIVE}.sha256"
+
+DEST_DEVNULL="$WORKDIR/bin-devnull"
+OUT_DEVNULL=$("$INSTALLER" --tag "$TAG" --platform "$PLATFORM" --dest "$DEST_DEVNULL" \
+  --base-url "file://$DEVNULL_ROOT" --allow-insecure-base-url 2>&1)
+EXIT_DEVNULL=$?
+
+if [[ $EXIT_DEVNULL -eq 4 ]]; then
+  pass "uncovered checksum: a .sha256 naming /dev/null is refused with exit 4"
+else
+  fail "uncovered checksum: installer exited $EXIT_DEVNULL on a .sha256 naming /dev/null, expected 4 (output: $OUT_DEVNULL)"
+fi
+
+if [[ -e "$DEST_DEVNULL/rmpc" ]]; then
+  fail "uncovered checksum: a trojan rmpc was installed at $DEST_DEVNULL/rmpc using a checksum for /dev/null"
+else
+  pass "uncovered checksum: no binary reached the destination"
+fi
+
+# The refusal has to happen BEFORE the script vouches for the bytes. Printing
+# "verified" and then failing later would still put that word in an operator's
+# scrollback next to a trojan.
+if grep -q 'verified' <<<"$OUT_DEVNULL"; then
+  fail "uncovered checksum: the installer printed 'verified' for an archive its .sha256 does not name (output: $OUT_DEVNULL)"
+else
+  pass "uncovered checksum: the word 'verified' was never printed"
+fi
+
+# --- case B: multi-line — the real line plus a decoy line ---
+# Non-vacuous on purpose: line 1 is the CORRECT digest for the archive, so this
+# can only be rejected for its shape, never for a mismatch.
+MULTI_ROOT=$(make_decoy_release "releases-multiline")
+( cd "$MULTI_ROOT/$TAG" && sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256" )
+printf '%s  /dev/null\n' \
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+  >> "$MULTI_ROOT/$TAG/${ARCHIVE}.sha256"
+
+DEST_MULTI="$WORKDIR/bin-multiline"
+OUT_MULTI=$("$INSTALLER" --tag "$TAG" --platform "$PLATFORM" --dest "$DEST_MULTI" \
+  --base-url "file://$MULTI_ROOT" --allow-insecure-base-url 2>&1)
+EXIT_MULTI=$?
+
+if [[ $EXIT_MULTI -eq 4 && ! -e "$DEST_MULTI/rmpc" ]]; then
+  pass "multi-line checksum: a two-line .sha256 is refused with exit 4 and nothing installed"
+else
+  fail "multi-line checksum: installer exited $EXIT_MULTI and may have installed (output: $OUT_MULTI)"
+fi
+
+# --- case C: a correct checksum for a different REAL file ---
+# /dev/null is a special case (its digest is famous and it is always readable).
+# This proves the guard is about COVERAGE, not about that one path: the decoy is
+# an ordinary file with ordinary content, and its digest in the .sha256 is
+# genuinely correct — `sha256sum -c` would happily report OK.
+printf 'not the rmpc release archive\n' > "$WORKDIR/decoy-real.bin"
+DECOY_SHA=$(sha256sum "$WORKDIR/decoy-real.bin" | cut -d' ' -f1)
+OTHER_ROOT=$(make_decoy_release "releases-otherfile")
+printf '%s  %s\n' "$DECOY_SHA" "$WORKDIR/decoy-real.bin" \
+  > "$OTHER_ROOT/$TAG/${ARCHIVE}.sha256"
+
+DEST_OTHER="$WORKDIR/bin-otherfile"
+OUT_OTHER=$("$INSTALLER" --tag "$TAG" --platform "$PLATFORM" --dest "$DEST_OTHER" \
+  --base-url "file://$OTHER_ROOT" --allow-insecure-base-url 2>&1)
+EXIT_OTHER=$?
+
+if [[ $EXIT_OTHER -eq 4 ]]; then
+  pass "uncovered checksum: a valid checksum for a different real file is refused with exit 4"
+else
+  fail "uncovered checksum: installer exited $EXIT_OTHER on a checksum covering $WORKDIR/decoy-real.bin, expected 4 (output: $OUT_OTHER)"
+fi
+
+if [[ -e "$DEST_OTHER/rmpc" ]]; then
+  fail "uncovered checksum: a trojan rmpc was installed at $DEST_OTHER/rmpc using a checksum for another real file"
+else
+  pass "uncovered checksum: no binary reached the destination for the other-real-file case"
+fi
+
 # ---------- the release workflow still publishes what this path consumes ----------
 # release-rmpc.yml never runs on a PR, so this file is the only thing standing
 # between a refactor of that workflow and an install path that silently has no
@@ -313,7 +434,57 @@ for line in lines:
     if m:
         runners.append(m.group(1))
 (out / "runners.txt").write_text("\n".join(runners) + "\n")
-meta.append("matrix_entries=%d" % sum(1 for line in lines if re.match(r"\s*-?\s*runner:\s*\S+\s*$", line)))
+
+
+def matrix_include_entries():
+    """Count jobs.build.strategy.matrix.include entries structurally.
+
+    Counting `runner:` lines instead would miscount an entry that inherits its
+    runner, or over-count a stray `runner:` key elsewhere in the file — the
+    number would then disagree with the real archive count while the equality
+    assertion still passed. This walks the actual nesting, and reports an error
+    (turning the parse assertion red) rather than guessing.
+    """
+    base = -1
+    i = 0
+    for key in ("jobs:", "build:", "strategy:", "matrix:", "include:"):
+        found = False
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip() or line.lstrip().startswith("#"):
+                i += 1
+                continue
+            if base >= 0 and indent(line) <= base:
+                break
+            if line.strip() == key:
+                base = indent(line)
+                i += 1
+                found = True
+                break
+            i += 1
+        if not found:
+            errors.append("could not locate '%s' on the path to the build matrix" % key)
+            return 0
+
+    count = 0
+    item_indent = None
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() and not line.lstrip().startswith("#"):
+            if indent(line) <= base:
+                break
+            if line.lstrip().startswith("- "):
+                if item_indent is None:
+                    item_indent = indent(line)
+                if indent(line) == item_indent:
+                    count += 1
+        i += 1
+    if count == 0:
+        errors.append("the build matrix's include: list is empty")
+    return count
+
+
+meta.append("matrix_entries=%d" % matrix_include_entries())
 
 for step_name, filename in (
     ("Package tar.gz", "package.sh"),
@@ -363,7 +534,12 @@ mkdir -p "$PKG_DIR/target/$MAC_TARGET/release"
 cp "$WORKDIR/stage/rmpc" "$PKG_DIR/target/$MAC_TARGET/release/rmpc"
 : > "$PKG_DIR/github_env"
 
-if [[ -f "$WF_DIR/package.sh" ]]; then
+# Only ever execute a body the extractor reported as clean. `errors.txt` is
+# non-empty when an expression was left unsubstituted, which means the file on
+# disk is a MANGLED rendering of a PR-editable YAML step — running it would
+# prove nothing and is the one case where this section generates shell it does
+# not understand. The extraction assertion above has already gone red by then.
+if [[ -f "$WF_DIR/package.sh" && -z "$WF_ERRORS" ]]; then
   set +e
   PKG_OUT=$(cd "$PKG_DIR" && env -i \
     PATH="$NOSHA_BIN" HOME="$PKG_DIR" GITHUB_ENV="$PKG_DIR/github_env" \
@@ -371,7 +547,7 @@ if [[ -f "$WF_DIR/package.sh" ]]; then
   PKG_EXIT=$?
   set -e
 else
-  PKG_OUT="the Package tar.gz step could not be extracted"
+  PKG_OUT="the Package tar.gz step could not be extracted cleanly: ${WF_ERRORS:-step not found}"
   PKG_EXIT=127
 fi
 
@@ -382,7 +558,7 @@ else
 fi
 
 if grep -Eq "^[0-9a-f]{64}  ${MAC_ARCHIVE}\$" "$PKG_DIR/${MAC_ARCHIVE}.sha256" 2>/dev/null; then
-  pass "macOS-packaged checksum is '<64-hex>  ${MAC_ARCHIVE}' — the format sha256sum -c and shasum -a 256 -c both consume"
+  pass "macOS-packaged checksum is '<64-hex>  ${MAC_ARCHIVE}' — the single-line, archive-naming shape install-rmpc.sh's coverage check requires"
 else
   fail "macOS-packaged checksum file is missing or malformed: $(cat "$PKG_DIR/${MAC_ARCHIVE}.sha256" 2>/dev/null || echo '<no file>')"
 fi
@@ -429,12 +605,25 @@ make_artifacts() {
   return 0
 }
 
+# run_pairing_guard — execute the extracted publish-step body against a fixture
+# artifact tree.
+#
+# WHY THIS IS SANDBOXED
+# This is code generation from a PR-editable YAML file into a shell, exactly like
+# the packaging step above, so it gets the same containment: `env -i` with a
+# PATH holding only the fixture tool symlinks and HOME pointed at the fixture
+# root. Without it, a maintainer running run-tests.sh locally executes whatever
+# release-rmpc.yml's publish step currently says against their real $HOME.
+# 126 is reserved for "refused to run", so it can never be mistaken for the
+# guard's own non-zero rejection of an unpaired artifact set.
 run_pairing_guard() {
   local root="$1"
-  if [[ ! -f "$WF_DIR/pairing.sh" ]]; then
-    return 127
+  if [[ ! -f "$WF_DIR/pairing.sh" || -n "$WF_ERRORS" ]]; then
+    return 126
   fi
-  (cd "$root" && "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/pairing.sh" >/dev/null 2>&1)
+  (cd "$root" && env -i \
+    PATH="$NOSHA_BIN" HOME="$root" \
+    "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/pairing.sh" >/dev/null 2>&1)
 }
 
 PAIR_OK_ROOT="$WORKDIR/pair-ok"
@@ -447,6 +636,8 @@ set -e
 
 if [[ $PAIR_OK_EXIT -eq 0 ]]; then
   pass "pairing guard: a complete set of ${MATRIX_ENTRIES} archives + checksums passes"
+elif [[ $PAIR_OK_EXIT -eq 126 ]]; then
+  fail "pairing guard: refused to run the extracted step (${WF_ERRORS:-no pairing step extracted}) — the paired case did not execute"
 else
   fail "pairing guard: exited $PAIR_OK_EXIT on a complete, correctly paired artifact set"
 fi
@@ -462,10 +653,12 @@ set -e
 # A missing guard step would also "exit non-zero" here, which would be a pass for
 # the wrong reason — the exact shape this whole section exists to stop. So the
 # step has to be present for this assertion to be satisfiable at all.
-if [[ -f "$WF_DIR/pairing.sh" && $PAIR_BAD_EXIT -ne 0 ]]; then
-  pass "pairing guard: an archive with no .sha256 fails the publish job (exit $PAIR_BAD_EXIT)"
-elif [[ ! -f "$WF_DIR/pairing.sh" ]]; then
+if [[ ! -f "$WF_DIR/pairing.sh" ]]; then
   fail "pairing guard: release-rmpc.yml has no pairing-guard step, so nothing stops an archive shipping without its .sha256"
+elif [[ $PAIR_BAD_EXIT -eq 126 ]]; then
+  fail "pairing guard: refused to run the extracted step ($WF_ERRORS) — the unpaired case did not execute"
+elif [[ $PAIR_BAD_EXIT -ne 0 ]]; then
+  pass "pairing guard: an archive with no .sha256 fails the publish job (exit $PAIR_BAD_EXIT)"
 else
   fail "pairing guard: exited 0 with an unverifiable archive present — the release would ship it"
 fi

@@ -18,7 +18,10 @@
 #
 # A mismatch aborts at the VERIFY step. Nothing is extracted and nothing is
 # installed, so a download that does not match the checksum cannot leave an
-# executable on disk.
+# executable on disk. VERIFY also refuses a checksum file that does not COVER
+# this archive: `sha256sum -c` verifies whichever filenames the file lists, so a
+# hostile `.sha256` naming some other file would otherwise make any archive
+# "verify". See the VERIFY block for the two guards and why both are there.
 #
 # WHAT THIS CHECK DOES AND DOES NOT PROVE
 # Be precise about the trust root: the `.sha256` is fetched from the same release,
@@ -54,7 +57,8 @@
 #   0  installed, checksum verified
 #   2  usage error / missing prerequisite / non-https --base-url without the opt-out
 #   3  download failed
-#   4  CHECKSUM MISMATCH or missing checksum file — nothing extracted, nothing installed
+#   4  CHECKSUM MISMATCH, missing checksum file, or a checksum file that does
+#      not cover this archive — nothing extracted, nothing installed
 #   5  extraction produced no rmpc binary
 
 set -euo pipefail
@@ -103,10 +107,13 @@ command -v tar  >/dev/null 2>&1 || die 2 "tar is required to unpack the release 
 
 # sha256sum on Linux, shasum -a 256 on macOS. Refusing to run without one is the
 # whole point of this script — never degrade to "install it unverified".
+# Note these are the DIGEST forms, not the `-c` check forms: see the VERIFY
+# section below for why this script never lets the checksum file pick its own
+# subject.
 if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CHECK=(sha256sum -c)
+  SHA_DIGEST=(sha256sum)
 elif command -v shasum >/dev/null 2>&1; then
-  SHA_CHECK=(shasum -a 256 -c)
+  SHA_DIGEST=(shasum -a 256)
 else
   die 2 "neither sha256sum nor shasum is available — refusing to install rmpc unverified"
 fi
@@ -129,9 +136,47 @@ echo "[install-rmpc] STEP download  ${BASE_URL}/${TAG}/${ARCHIVE}.sha256"
 curl -fsSL -o "$WORKDIR/$ARCHIVE.sha256" "${BASE_URL}/${TAG}/${ARCHIVE}.sha256" \
   || die 4 "no published checksum for ${ARCHIVE} — refusing to install an unverifiable binary"
 
+# VERIFY — the downloaded .sha256 is DATA, never an instruction.
+#
+# `sha256sum -c FILE` / `shasum -a 256 -c FILE` verify whichever filenames the
+# checksum file happens to list, and exit 0 once all of those lines match. The
+# file therefore chooses its own subject. An attacker who serves the download —
+# the mirror/proxy/cache/CDN this script claims to detect — publishes a malicious
+# archive next to a one-line `.sha256` holding the well-known digest of the empty
+# file and naming `/dev/null`. `-c` reports OK, and this script would print
+# "verified" over a trojan. That was reproduced against this installer.
+#
+# So two guards, in this order:
+#   1. SHAPE + COVERAGE — exactly one line, and that line must name ${ARCHIVE}.
+#      A checksum file that does not cover this archive is refused outright, with
+#      a message that says so rather than a misleading "mismatch".
+#   2. DIGEST — the archive is hashed HERE and compared with that line's digest.
+#      The subject of the comparison is chosen by this script, so even a shape
+#      that slipped past guard 1 cannot redirect the check at another file.
+# Guard 2 is what makes the property hold; guard 1 is what makes the refusal
+# legible. Neither is load-bearing on the other.
 echo "[install-rmpc] STEP verify    ${ARCHIVE}.sha256"
-if ! (cd "$WORKDIR" && "${SHA_CHECK[@]}" "$ARCHIVE.sha256" >/dev/null 2>&1); then
-  echo "[install-rmpc] expected: $(cut -d' ' -f1 < "$WORKDIR/$ARCHIVE.sha256")" >&2
+
+# `wc -l` pads its output on macOS, so strip whitespace before it lands in the
+# error message.
+SHA_LINES=$(wc -l < "$WORKDIR/$ARCHIVE.sha256" | tr -d "[:space:]")
+if [[ "$SHA_LINES" -ne 1 ]]; then
+  die 4 "published checksum file for ${ARCHIVE} holds ${SHA_LINES} lines, expected exactly 1 — refusing. Nothing was extracted and nothing was installed."
+fi
+
+if ! grep -Eq "^[0-9a-f]{64} [ *]${ARCHIVE//./\\.}\$" "$WORKDIR/$ARCHIVE.sha256"; then
+  # The rejected file is attacker-supplied, so scrub non-printables before
+  # echoing it — a checksum file must never be able to write escape sequences
+  # to an operator's terminal.
+  echo "[install-rmpc] published:  $(head -c 200 "$WORKDIR/$ARCHIVE.sha256" | tr -c "[:print:]" "?")" >&2
+  die 4 "published checksum file does not name ${ARCHIVE} — refusing to accept a checksum for some other file. Nothing was extracted and nothing was installed."
+fi
+
+EXPECTED_SHA=$(cut -d' ' -f1 < "$WORKDIR/$ARCHIVE.sha256")
+ACTUAL_SHA=$( (cd "$WORKDIR" && "${SHA_DIGEST[@]}" "$ARCHIVE") | cut -d' ' -f1 )
+if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
+  echo "[install-rmpc] expected: $EXPECTED_SHA" >&2
+  echo "[install-rmpc] actual:   $ACTUAL_SHA" >&2
   die 4 "ChecksumMismatch for ${ARCHIVE} — the download does not match its published sha256. Nothing was extracted and nothing was installed."
 fi
 echo "[install-rmpc] verified       ${ARCHIVE} matches its published sha256"
