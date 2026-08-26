@@ -34,17 +34,24 @@
 > rather than an enhancement, a silently missing receipt is a product defect, and
 > the dapp must state per recommendation whether it was applied.
 >
-> **"Shipped" here means merged and tested, not deployed.** The only deployment
-> manifest in this repo (`deployments/full-stack.json`) records gateway, vault,
-> registry, `portfolio_router`, and `router_governance` — it has **no
-> `InvestmentCommitteePolicy` entry**, no `TimelockController` entry, and its
-> `admin` / `agent` / `pauser` are well-known Anvil development accounts, so it
-> describes a local fork rather than production. No `ic_policy` address appears
-> anywhere in `config/` or `deployments/`, which means `setICPolicy` has never
-> been called from anything recorded here. Confirm the live position with ops
-> before planning any rollout. If IC v0 is genuinely not deployed, the receipt
-> contract can share **one** deployment and timelock-wiring ceremony with it
-> instead of needing a second — see §3.3.
+> **"Shipped" here means merged and tested. `InvestmentCommitteePolicy` is not
+> deployed on any blockchain** — confirmed with the product owner, 2026-08-26.
+> The repo evidence agrees: `deployments/full-stack.json` records gateway, vault,
+> registry, `portfolio_router`, and `router_governance` but has **no
+> `InvestmentCommitteePolicy` entry** and no `TimelockController` entry, its
+> `admin` / `agent` / `pauser` are well-known Anvil development accounts, and no
+> `ic_policy` address appears anywhere in `config/` or `deployments/` — so
+> `setICPolicy` has never been called outside a local fork.
+>
+> **Three consequences for v0.1**, all assumed by §2.1 and §3.3:
+> 1. The receipt contract shares **one** deployment, **one** timelock role-wiring
+>    ceremony, and **one** audit pass with `InvestmentCommitteePolicy`'s own first
+>    deployment. It does not follow it.
+> 2. There is **no live interface to stay compatible with**, so the receipt
+>    entrypoint set is designed freely rather than preserving the rejected
+>    multi-signer shape (§2.1).
+> 3. No committee agent is registered anywhere, so genesis seat provisioning
+>    (§4 decision 3) is greenfield rather than a migration.
 
 ---
 
@@ -426,9 +433,11 @@ behaviors the shape leaves open.
   quality upgrade, not a blocker.
 - **Deployment sequencing.** Contracts here are immutable — `InvestmentCommitteePolicy`
   has no proxy or initializer — so receipts genuinely need a new contract rather
-  than an extension. But since IC v0 appears undeployed (see the status header),
-  the two should share **one** deploy script, one timelock role-wiring ceremony,
-  and one audit pass. Plan them together rather than sequentially.
+  than an extension. And since IC v0 is **confirmed undeployed** (status header),
+  the two share **one** deploy script, one timelock role-wiring ceremony, and one
+  audit pass. Plan them together, not sequentially. Nothing is live, so there is
+  no migration, no registered agent to preserve, and no deployed interface to
+  stay compatible with.
 - **Indexer / API / `rmpc` / worker.** See §2.1 — each wired like the
   vote path (polling, reorg rewriting at `docs/architecture.md:928`, protocol vs
   account read scopes at `docs/architecture.md:5.0`). The indexer and dapp must
