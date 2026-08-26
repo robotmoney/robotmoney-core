@@ -424,7 +424,7 @@ behaviors the shape leaves open.
   rounding rule with a settle-the-last-entry step — the same technique
   `meanTakeWeights` already uses for floats — plus a property test at the boundary.
 
-### 3.4 No contract refactor
+### 3.4 No contract refactor — and who recommends vs. who approves
 
 `InvestmentCommitteePolicy` never calls and is never called by
 `RouterGovernance` (`RouterGovernance.sol:1-630` controls `PortfolioRouter`
@@ -436,6 +436,47 @@ enforces `bps` sum to `BPS_DENOMINATOR` at `:377` and `isRouterEligibleAndActive
 at `:387`, then the existing `propose` → `vote` → `execute` path (`:474-500`)
 applies weights. **No governance-interface refactor is required**
 (`docs/architecture.md:604`).
+
+#### Governance topology (this repo has more than one governing body)
+
+Earlier drafts said "admin-applied" as though one Safe did everything. It does
+not. Three distinct bodies exist, with different membership models:
+
+| Body | Membership | Governs |
+|---|---|---|
+| **Safe → `TimelockController` → `ADMIN_ROLE`** | 2-of-N Safe, hardware wallets required (`docs/technical/security-model.md` §4, `:89,98`) | Role changes, protocol params, committee agent registration, the agent-token shortlist (with a public veto window, ADR-0004) |
+| **`RouterGovernance` voter set** | Addresses given power by `ADMIN_ROLE` via `setVotingPower` (`RouterGovernance.sol:310`); `vote()` reads power checkpointed at the proposal's `voteSnapshot`. Explicitly **not** token-holder governance (`docs/technical/governance-decisions.md:98`, `services/explorer-indexer/src/abi.rs:139`) | Portfolio weights, and only those |
+| **Guardian** | Lower quorum than the full Safe; may pause, may **not** unpause (`docs/technical/security-model.md:212`) | Emergency pause |
+
+**Decision — the committee and the `RouterGovernance` voter set are separate
+bodies.** The committee recommends; a different set approves. No committee agent
+address may hold `RouterGovernance` voting power.
+
+This is what makes INV-4's signalling-only boundary real rather than nominal — if
+the same parties both recommended and approved, "signalling-only" would be a
+label, not a control. Three consequences:
+
+- **New invariant, and it is testable.** The `COMMITTEE_AGENT_ROLE` holder set and
+  the `RouterGovernance` non-zero-voting-power set MUST be disjoint. Add a
+  regression test asserting it, alongside `testSignallingOnlyBoundary`. Any future
+  change granting a committee agent voting power is a security-model change
+  requiring a new ADR against `docs/prd.md` §12 INV-4.
+- **The loop never runs unattended.** A human approval step sits in every
+  rebalance, permanently — not merely by default. The off-chain worker drafts a
+  proposal for human review and must never submit one itself (§6.2).
+- **This strengthens the case for keeping the per-vault vote path.** Because the
+  approving body is different, the committee's on-chain per-agent record is its
+  own public artifact rather than a duplicate of who holds power — which is
+  precisely the "live, per-agent track record" the GTM strategy asks for (§1).
+
+**Open concern: the approving body's quorum is currently 1.**
+`DeployRouterGovernance.s.sol` deploys `quorumThreshold = DEFAULT_QUORUM_THRESHOLD`
+= 1, and `MIN_QUORUM_THRESHOLD` is also 1 (`RouterGovernance.sol:54`). One voter
+with any nonzero power can therefore carry a weight proposal. That is a defensible
+MVP default when the voter set is a single trusted admin, but it is **not** a
+meaningful separate-body control. Before receipts drive real weight changes, set a
+quorum that reflects the intended voter set — otherwise "a different body
+approves" is true on paper and hollow in practice.
 
 ### 3.5 Drop / out of scope for v0
 
@@ -485,6 +526,13 @@ Remaining uncertainty is in §6.
   release remains an admin gate. Residual risk is a plausible-looking but
   unsupported receipt reaching a human reviewer; the signature check is what
   catches it, so it is not optional.
+- **Approving body with a quorum of 1 (new, from §3.4).** The committee and the
+  `RouterGovernance` voter set are deliberately separate bodies, but the deployed
+  default `quorumThreshold = 1` means a single voter can carry a weight proposal,
+  which hollows out that separation. Mitigated by setting a quorum that reflects
+  the real voter set before receipts drive weight changes, and by the disjointness
+  invariant in §3.4. Until then, treat the separation as an organisational control
+  rather than an enforced one.
 - **`meanTakeWeights` as a single point of failure (new, from §2.1's derivation
   decision).** A rounding or normalization bug in
   `backend/src/swarm/domain.ts:1691-1710` now propagates into a signed artifact
