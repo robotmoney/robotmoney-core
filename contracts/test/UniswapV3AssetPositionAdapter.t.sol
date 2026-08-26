@@ -31,7 +31,9 @@ import {IBasketSwapAdapter} from "../interfaces/IBasketSwapAdapter.sol";
 import {ISwapRouter} from "../interfaces/ISwapRouter.sol";
 import {UniswapV3AssetPositionAdapter} from "../adapters/UniswapV3AssetPositionAdapter.sol";
 import {UniswapV3SwapAdapter} from "../adapters/UniswapV3SwapAdapter.sol";
+import {IObservablePool} from "../interfaces/IObservablePool.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
+import {TickMath} from "../lib/TickMath.sol";
 import {TwapTickMath} from "../lib/TwapTickMath.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 
@@ -468,6 +470,18 @@ contract UniV3AssetPositionAdapterForkTest is Test {
     uint256 internal constant ONE_USDC = 1e6;
     uint256 internal constant DEPOSIT = 10_000 * ONE_USDC;
 
+    /// @dev Guard threshold the NAV-deviation test configures (0.20%).
+    uint256 internal constant NAV_GUARD_BPS = 20;
+    /// @dev How far past the TWAP the NAV-deviation test drives spot, in ticks
+    ///      (1 tick ≈ 1bps). 100 ticks ≈ 100bps is a 5x margin over
+    ///      `NAV_GUARD_BPS`. Measured from the TWAP, not from spot, so the
+    ///      margin holds for any live drift; the swap therefore crosses
+    ///      |spot − twap| + 100 ticks, bounded and independent of pool depth.
+    int24 internal constant NAV_MANIPULATION_TICKS = 100;
+    /// @dev `UniswapV3AssetPositionAdapter.NAV_DEVIATION_PROBE` (internal there).
+    ///      Decimals cancel in the |spot − twap|/twap ratio.
+    uint256 internal constant NAV_DEVIATION_PROBE = 1e18;
+
     UniV3PositionMockVault internal vault;
     UniswapV3SwapAdapter internal venue;
     UniswapV3AssetPositionAdapter internal adapter;
@@ -545,12 +559,48 @@ contract UniV3AssetPositionAdapterForkTest is Test {
 
     function test_fork_navDeviationGuardRevertsOnManipulatedSpot() public {
         vm.prank(admin);
-        adapter.setNavDeviationGuardBps(20); // 0.20%
+        adapter.setNavDeviationGuardBps(NAV_GUARD_BPS); // 0.20%
 
-        // Push spot away from the lagging 30-min TWAP with a real swap. Kept modest
-        // so it crosses few ticks (fast, archive-friendly); a low guard threshold
-        // guarantees the divergence trips it.
-        uint256 manipUsdc = 2_000_000 * ONE_USDC;
+        // Ported verbatim from the Aerodrome sibling's 2026-08 recalibration
+        // (see AerodromeAssetPositionAdapter.t.sol for the full derivation) —
+        // this test carried BOTH defects diagnosed there. It ran as an earlier
+        // step of the same required fork job, on the same RPC budget and the
+        // same red-check identity, so leaving it would have kept the exact flake
+        // class that recalibration set out to remove. In short:
+        //
+        //   * Magnitude. A fixed 2M-USDC notional buys a tick move inversely
+        //     proportional to in-range liquidity, so its margin over the 20bps
+        //     threshold decays silently as the pool deepens. A price LIMIT is
+        //     liquidity-independent: the pool consumes only as much of the
+        //     (deliberately oversized) input as it needs to reach the target
+        //     tick and then stops. It also bounds the crossing count, and with
+        //     it the public RPC's 429 budget.
+        //
+        //   * Reference point. `sqrtPriceLimitX96: 0` let the swap run to
+        //     whatever tick the notional reached, measured from wherever spot
+        //     happened to sit — but the guard measures against the lagging TWAP.
+        //     With spot already drifted below it, such a leg moves spot back
+        //     THROUGH the TWAP rather than away from it, and the guard correctly
+        //     does not fire. Anchoring the target at
+        //     `max(spotTick, twapTick) + N` fixes the distance FROM THE TWAP at
+        //     >= N ticks for any live drift and either sign of it.
+        //
+        // Anchoring above both values also means the single USDC->wETH leg is
+        // always the correct direction, so there is no live-state-selected
+        // branch and every run exercises the same path.
+        uint32 window = adapter.effectiveTwapWindow();
+        int24 twapTick = TwapTickMath.meanTick(pool, window);
+        (, int24 spotTick,,) = IObservablePool(pool).slot0();
+
+        // Strictly above the current price (a limit on the wrong side is an
+        // `SPL` revert in the pool) AND at least NAV_MANIPULATION_TICKS above
+        // the TWAP.
+        int24 anchorTick = spotTick >= twapTick ? spotTick : twapTick;
+        int24 targetTick = anchorTick + NAV_MANIPULATION_TICKS;
+
+        // Deliberately oversized: `sqrtPriceLimitX96`, not this number, is what
+        // bounds the swap. The unconsumed remainder simply stays put.
+        uint256 manipUsdc = 100_000_000 * ONE_USDC;
         deal(BASE_USDC, address(this), manipUsdc);
         IERC20(BASE_USDC).forceApprove(SWAP_ROUTER02, manipUsdc);
         ISwapRouter(SWAP_ROUTER02)
@@ -562,12 +612,27 @@ contract UniV3AssetPositionAdapterForkTest is Test {
                 recipient: address(this),
                 amountIn: manipUsdc,
                 amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
+                sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(targetTick)
             })
             );
 
-        // Entry-side guard must halt the deposit at the diverged mark.
-        vm.expectRevert(); // TwapTickMath.NavMarketDeviationExceeded
+        // Arrange-phase precondition: the manipulation really did open a gap the
+        // guard must reject, named explicitly rather than surfacing as the
+        // opaque "next call did not revert as expected".
+        uint256 dev =
+            TwapTickMath.deviationBps(pool, BASE_WETH, BASE_USDC, window, NAV_DEVIATION_PROBE);
+        assertGt(dev, NAV_GUARD_BPS, "manipulation must drive spot past the guard threshold");
+
+        // Entry-side guard must halt the deposit at the diverged mark — asserted
+        // by selector AND arguments. A bare `vm.expectRevert()` cannot tell the
+        // adapter's guard firing from the venue swap reverting on its minTokenOut
+        // floor, which a large manipulation can also trigger, so it would still
+        // pass with the guard call deleted outright.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                TwapTickMath.NavMarketDeviationExceeded.selector, BASE_WETH, dev, NAV_GUARD_BPS
+            )
+        );
         vault.callDeploy(adapter, IERC20(BASE_USDC), DEPOSIT, 0);
     }
 }

@@ -1,5 +1,5 @@
 # AerodromeAssetPositionAdapterForkTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2aba282c86417c9c31d823d209b6b2ffb4011eea/contracts/test/AerodromeAssetPositionAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c78b94387a5128aec495ab38ade8279dbb45f9d6/contracts/test/AerodromeAssetPositionAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -74,7 +74,9 @@ uint256 internal constant NAV_GUARD_BPS = 20
 ### NAV_MANIPULATION_TICKS
 How far past the TWAP the NAV-deviation test drives spot, in ticks
 (1 tick ≈ 1bps). 100 ticks ≈ 100bps is a 5x margin over
-`NAV_GUARD_BPS` while crossing a single `TICK_SPACING` step.
+`NAV_GUARD_BPS`. Measured from the TWAP, not from spot, so the
+margin holds for any live drift; the swap therefore crosses
+|spot − twap| + 100 ticks, bounded and independent of pool depth.
 
 
 ```solidity
