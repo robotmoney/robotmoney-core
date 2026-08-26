@@ -57,8 +57,9 @@
 #   0  installed, checksum verified
 #   2  usage error / missing prerequisite / non-https --base-url without the opt-out
 #   3  download failed
-#   4  CHECKSUM MISMATCH, missing checksum file, or a checksum file that does
-#      not cover this archive — nothing extracted, nothing installed
+#   4  NOT VERIFIED — checksum mismatch, missing checksum file, a checksum file
+#      that does not cover this archive, or a digest tool that failed to run.
+#      Nothing extracted, nothing installed.
 #   5  extraction produced no rmpc binary
 
 set -euo pipefail
@@ -128,12 +129,19 @@ ARCHIVE="rmpc-${TAG}-${PLATFORM}.tar.gz"
 WORKDIR="$(mktemp -d -t install-rmpc.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
+# CURL_NET — bounded, retried fetches. Without a timeout a half-open connection
+# to the release CDN leaves the documented BOOTSTRAP.md install hanging on
+# "STEP download" forever instead of failing with exit 3, and an operator cannot
+# tell a stall from a slow download. --retry covers the transient case so the
+# bound does not turn a blip into a failed install.
+CURL_NET=(--connect-timeout 15 --max-time 300 --retry 3 --retry-connrefused)
+
 echo "[install-rmpc] STEP download  ${BASE_URL}/${TAG}/${ARCHIVE}"
-curl -fsSL -o "$WORKDIR/$ARCHIVE" "${BASE_URL}/${TAG}/${ARCHIVE}" \
+curl -fsSL "${CURL_NET[@]}" -o "$WORKDIR/$ARCHIVE" "${BASE_URL}/${TAG}/${ARCHIVE}" \
   || die 3 "could not download ${BASE_URL}/${TAG}/${ARCHIVE}"
 
 echo "[install-rmpc] STEP download  ${BASE_URL}/${TAG}/${ARCHIVE}.sha256"
-curl -fsSL -o "$WORKDIR/$ARCHIVE.sha256" "${BASE_URL}/${TAG}/${ARCHIVE}.sha256" \
+curl -fsSL "${CURL_NET[@]}" -o "$WORKDIR/$ARCHIVE.sha256" "${BASE_URL}/${TAG}/${ARCHIVE}.sha256" \
   || die 4 "no published checksum for ${ARCHIVE} — refusing to install an unverifiable binary"
 
 # VERIFY — the downloaded .sha256 is DATA, never an instruction.
@@ -173,7 +181,16 @@ if ! grep -Eq "^[0-9a-f]{64} [ *]${ARCHIVE//./\\.}\$" "$WORKDIR/$ARCHIVE.sha256"
 fi
 
 EXPECTED_SHA=$(cut -d' ' -f1 < "$WORKDIR/$ARCHIVE.sha256")
-ACTUAL_SHA=$( (cd "$WORKDIR" && "${SHA_DIGEST[@]}" "$ARCHIVE") | cut -d' ' -f1 )
+
+# A digest tool that FAILS is not a mismatch, and must not exit with an
+# undocumented bare 1. It cannot false-verify — guard 1 above forces
+# EXPECTED_SHA to be 64 hex characters, so an empty or truncated ACTUAL_SHA can
+# only ever compare unequal — but a wrapper routing on this script's exit codes
+# deserves one of the documented ones, and the operator deserves a line saying
+# the hash never ran.
+if ! ACTUAL_SHA=$( (cd "$WORKDIR" && "${SHA_DIGEST[@]}" "$ARCHIVE") | cut -d' ' -f1 ); then
+  die 4 "could not compute the sha256 of ${ARCHIVE} — ${SHA_DIGEST[*]} failed, so the download is unverified. Nothing was extracted and nothing was installed."
+fi
 if [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
   echo "[install-rmpc] expected: $EXPECTED_SHA" >&2
   echo "[install-rmpc] actual:   $ACTUAL_SHA" >&2
