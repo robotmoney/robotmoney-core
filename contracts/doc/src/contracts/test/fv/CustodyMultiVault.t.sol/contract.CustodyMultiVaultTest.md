@@ -1,5 +1,5 @@
 # CustodyMultiVaultTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/fv/CustodyMultiVault.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ae9ab040de96dcd5638644fcfb59f6387e80803a/contracts/test/fv/CustodyMultiVault.t.sol)
 
 **Inherits:**
 Test
@@ -27,6 +27,18 @@ function _assertRedeemableLeqTotalAssets(IERC4626 vault, address[] memory holder
     view;
 ```
 
+### assertRedeemableLeqTotalAssetsExternal
+
+External boundary lets the negative test assert that the complete
+shared predicate reverts, rather than merely one of its view calls.
+
+
+```solidity
+function assertRedeemableLeqTotalAssetsExternal(IERC4626 vault, address[] memory holders)
+    external
+    view;
+```
+
 ### test_SUP1_robotMoneyVault_redeemableLeqTotalAssets
 
 SUP-1 / CUST-4 / INV-2 (RobotMoneyVault, live). A single
@@ -42,11 +54,8 @@ function test_SUP1_robotMoneyVault_redeemableLeqTotalAssets() public;
 
 ### test_SUP1_basketFamily_redeemableLeqTotalAssets
 
-SUP-1 (BasketVault family, seam). Extending the custody
-stateful-invariant handler to BasketVault/AgentTokenVault/
-ProtocolAssetVault requires a TWAP-pool + vetted-adapter test rig;
-the adapter-vetting gap is ADP-2 (#966). Build the basket custody
-handler here once that lands, then remove this skip.
+SUP-1 (BasketVault family): a live V3-priced basket deposit keeps
+its holder's redeemable value within NAV.
 
 
 ```solidity
@@ -55,13 +64,20 @@ function test_SUP1_basketFamily_redeemableLeqTotalAssets() public;
 
 ### test_SUP1_rwaVault_redeemableLeqTotalAssets
 
-SUP-5 (RwaVault, seam). The RWA family's redeemability under a
-stale feed is the subject of StaleOracleRedemption.t.sol; the live
-custody handler for RwaVault depends on the freshness short-circuit
-landing (NC-1).
+SUP-1 (RwaVault): a live Chronicle-priced RWA deposit keeps its
+holder's redeemable value within NAV.
 
 
 ```solidity
 function test_SUP1_rwaVault_redeemableLeqTotalAssets() public;
+```
+
+### test_SUP1_predicateRejectsOverpromisingVault
+
+SUP-1's predicate rejects a vault that overstates redemption value.
+
+
+```solidity
+function test_SUP1_predicateRejectsOverpromisingVault() public;
 ```
 
