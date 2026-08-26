@@ -5,13 +5,14 @@
 # https://www.robotmoney.net/data/regime-snapshot.json and surfaces regime
 # context for deposit decisions. The plugin has no contract or Rust dependencies
 # but must be tested against offline fixtures to guarantee: (a) the plugin.json
-# is valid and correctly named, (b) the fetch helper validates required fields
-# and exits non-zero with a named error on missing fields, (c) the cache layer
-# works correctly (second call on the same UTC date reads from cache, not the
-# network).
+# is valid and correctly named, (b) the helper surfaces the expected snapshot
+# fields from a valid offline fixture, (c) the fetch helper validates required
+# fields and exits non-zero with a named error on missing fields, and (d) the
+# cache layer works correctly (second call on the same UTC date reads from
+# cache, not the network). The helper is also shellchecked (see below).
 #
 # WHY THERE IS NO RESTRICTED-PATH CHECK HERE (issue #1251)
-# This suite used to claim a fourth guarantee: that no restricted paths
+# This suite used to claim a further guarantee: that no restricted paths
 # (contracts/, crates/, clients/rust-payment-client/, services/) were touched.
 # That assertion never executed — the checkout below is shallow, so its
 # merge-base/HEAD~1 diff always failed into an empty pipeline and reported PASS
@@ -35,10 +36,19 @@
 # variables, missing error handling, path injection) can silently pass all output
 # tests but still misbehave at runtime. shellcheck catches these statically.
 #
-# WHY paths: FILTER IS USED HERE (unlike suite-13)
-# This suite only verifies robotmoney-analyst plugin artifacts and the helper script.
-# It does not check cross-cutting repo invariants. Restricting to plugin paths keeps
-# the suite fast and avoids running it on every unrelated change.
+# THERE IS NO paths: FILTER HERE (corrected in #1251)
+# This header used to claim a paths: filter restricted the suite to the plugin
+# tree. No such filter exists. The trigger below is a bare `pull_request:`, so
+# this suite runs on EVERY pull request in the repo, including ones that touch
+# nothing under plugins/robotmoney-analyst/.
+# The reasoning for wanting a filter still holds: this suite only verifies
+# robotmoney-analyst plugin artifacts and the helper script, it checks no
+# cross-cutting repo invariant, and a filter would keep it off unrelated
+# changes. But nothing on record says whether the missing filter is an
+# oversight or a deliberate choice, so do not read this comment as a
+# justification for the current trigger. #1251 corrected the comment only and
+# deliberately left the trigger alone — narrowing it is a behaviour change that
+# needs its own decision.
 
 name: robotmoney-analyst-plugin-checks
 
