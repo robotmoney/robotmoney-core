@@ -11,9 +11,10 @@ updated with the closing PR or ADR reference.
 > **A closed gap can reopen.** Issue #1210 disabled suite-11b's live `deposit`
 > and `read` jobs (the anonymous OpenCode tier no longer executes any model, and
 > this repo does not provision `OPENCODE_API_KEY`). Every gap those jobs closed
-> is therefore reopened below, and their closure text now describes a disabled
-> implementation rather than executing coverage. Restoring them is tracked by
-> #1233.
+> is therefore reopened below (G11 partially — its offline plugin-provenance
+> pytest genuinely still runs; every other reopened gap is fully reopened), and
+> their closure text now describes a disabled implementation rather than
+> executing coverage. Restoring them is tracked by #1233.
 >
 > **What still executes is narrower than the job names suggest.** Exactly two
 > things run: the keyless offline `asserter-tests` job (transcript-asserter and
