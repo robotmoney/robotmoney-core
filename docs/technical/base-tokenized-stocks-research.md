@@ -25,6 +25,11 @@
 > and feed addresses are reproduced only from official documentation or a chain
 > explorer read; none are inferred.
 >
+> **Repository line numbers** (`path:NN`) were read at commit `0a357af6` on the
+> `dev` line and are given so a claim about this codebase can be checked rather
+> than taken on trust. Line numbers drift; the file and symbol names next to them
+> are the durable anchor.
+>
 > **On-chain reads in this note were taken on 2026-08-25.** Supply and holder counts are
 > point-in-time and will be stale by the time you read them; addresses and verification
 > status are the durable part.
@@ -165,9 +170,12 @@ drift that never happens, while the actual hazard sits in the oracle read.
 **Yes, on the dividend path.** Trace the existing NAV chain in this repo and substitute a
 Chainlink B20 feed for Chronicle:
 
-`Vault.totalAssets()` → `DeSpxaAssetPositionAdapter.totalAssets()` →
+`BasketVault.totalAssets()` (`contracts/vaults/BasketVault.sol:486`) →
+`DeSpxaAssetPositionAdapter.totalAssets()`
+(`contracts/adapters/DeSpxaAssetPositionAdapter.sol:303-308`) →
 `IERC20(TOKEN).balanceOf(address(this))` × `SWAP_ADAPTER.twapPrice(...)` →
-`ChronicleOracleAdapter.twapPrice()` → `ORACLE.latestAnswer()`.
+`ChronicleOracleAdapter.twapPrice()` (`contracts/adapters/ChronicleOracleAdapter.sol:204`)
+→ `ORACLE.latestAnswer()`.
 
 `balanceOf` is constant across a multiplier update. `latestAnswer()` is not: on a
 dividend the multiplier steps up (the docs' worked example is `1.02`) with the underlying
@@ -195,12 +203,15 @@ is reachable by the issuer at will, and a vault must be built as if it can happe
 propagates everywhere at once:
 
 - **`previewDeposit`** discounts the deposit by `maxSlippageBps` and converts to shares
-  (`contracts/vaults/BasketVault.sol`, documented as "a floor, not an exact quote"). A
+  (`contracts/vaults/BasketVault.sol:736`, `maxSlippageBps` at
+  `contracts/vaults/BasketVault.sol:179`, documented as "a floor, not an exact quote"). A
   preview taken before the step and executed after it mints **fewer** shares than
   previewed. That is not a loss — the shares are worth more — but any client, test, or
   acceptance criterion that asserts preview equals realized will fail intermittently, at
   a cadence set by the dividend calendar rather than by anything in the codebase.
-- **`previewRedeem`** returns `TWAP NAV × (1 − maxSlippageBps) × (1 − exitFeeBps)`. An
+- **`previewRedeem`** (`contracts/vaults/BasketVault.sol:716`) returns
+  `TWAP NAV × (1 − maxSlippageBps) × (1 − exitFeeBps)` (`exitFeeBps` at
+  `contracts/vaults/BasketVault.sol:177`). An
   upward step leaves realized proceeds above the previewed floor, which is the benign
   direction. A downward step ([§2.3](#23-can-a-multiplier-update-move-vault-nav-between-blocks-with-no-transfer))
   would put realized proceeds **below** a floor the user was shown, which is the
@@ -210,11 +221,12 @@ propagates everywhere at once:
   distinguishes a legitimate 2% dividend step from a 2% oracle malfunction. Both are
   "NAV jumped with no trade".
 - **The NAV-deviation guard never reads the mark.** The chain
-  `BasketVault.navDeviationGuardBps` → `BasketViews.checkNavDeviation` →
-  `TwapTickMath.requireWithinDeviation` is named as though it cross-checked NAV against a
+  `BasketVault.navDeviationGuardBps` (`contracts/vaults/BasketVault.sol:213`) →
+  `BasketViews.checkNavDeviation` (`contracts/lib/BasketViews.sol:82`) →
+  `TwapTickMath.requireWithinDeviation` (`contracts/lib/TwapTickMath.sol:99`) is named as though it cross-checked NAV against a
   market price. It does not. `TwapTickMath.deviationBps`
-  (`contracts/lib/TwapTickMath.sol`) prices one probe amount **twice against the same
-  pool** — once at that pool's `slot0()` spot tick, once at its `observe()`
+  (`contracts/lib/TwapTickMath.sol:74-91`) prices one probe amount **twice against the
+  same pool** — once at that pool's `slot0()` spot tick, once at its `observe()`
   arithmetic-mean tick over `effectiveTwapWindow` — and returns `|spot − twap| / twap` in
   basis points. `priceFromTick` is linear in the probe amount, so the probe divides out of
   the ratio entirely; the helper's own NatSpec documents the probe as an amount priced
@@ -222,9 +234,10 @@ propagates everywhere at once:
   `AssetPositionAdapter`s make that explicit by passing a hardcoded
   `NAV_DEVIATION_PROBE = 1e18` into the same helper, commented as being "used only for the
   ORA-4 spot-vs-TWAP divergence ratio"
-  (`contracts/adapters/UniswapV3AssetPositionAdapter.sol`). The probe is a magnitude
+  (`contracts/adapters/UniswapV3AssetPositionAdapter.sol:73`, passed at line 210;
+  `contracts/adapters/AerodromeAssetPositionAdapter.sol:79`). The probe is a magnitude
   device, not a price input. `BasketViews.checkNavDeviation` merely happens to source its
-  probe from `vault.assetTokenValue(i, 1e6)` — itself a TWAP quote — and no oracle or NAV
+  probe from `vault.assetTokenValue(i, 1e6)` (`contracts/lib/BasketViews.sol:92`) — itself a TWAP quote — and no oracle or NAV
   value survives into the comparison.
 - **So the guard is blind to a multiplier-driven NAV step.** For an oracle-priced position
   — deSPXA today, a Chainlink-priced B20 tomorrow — this is a pool-internal spot-vs-TWAP
@@ -235,8 +248,9 @@ propagates everywhere at once:
   traders reprice the pool after the multiplier lands — a weaker, slower and
   venue-dependent claim than "deposits halt on a routine corporate action", and one that
   rests on pool behaviour this note has not observed. The guard's ceiling is
-  `MAX_NAV_DEVIATION_BPS = 2_000` (20%); it is entry-side only (`BasketVault`'s deposit
-  path at `contracts/vaults/BasketVault.sol`, plus each adapter's own entry leg) and is
+  `MAX_NAV_DEVIATION_BPS = 2_000` (20%, `contracts/vaults/BasketVault.sol:219`); it is
+  entry-side only (invoked once on the deposit path at
+  `contracts/vaults/BasketVault.sol:566`, plus each adapter's own entry leg) and is
   disabled at `0` by default.
 - **The successor guard has the same shape.** `docs/technical/unified-vault-spec.md`
   §4.3a commits the unified vault to a residual, adapter-independent **aggregate NAV
@@ -260,13 +274,14 @@ The explorer keeps two derived numbers, and the multiplier hits exactly one of t
   these stay correct. Nothing to do.
 - **`vault_snapshots`** stores `total_assets` / `total_supply` read from the vault, written
   on vault events plus a `SNAPSHOT_HEARTBEAT_BLOCKS = 7200` block heartbeat
-  (`services/explorer-indexer/src/lib.rs`) — roughly four hours at Base block times.
-  `clients/explorer-api/src/model.rs::VaultPosition.usdc_value` is computed from that
+  (`services/explorer-indexer/src/lib.rs:52`) — roughly four hours at Base block times.
+  `clients/explorer-api/src/model.rs::VaultPosition.usdc_value`
+  (`clients/explorer-api/src/model.rs:397-399`) is computed from that
   snapshot as `shares * total_assets / total_supply`. **A multiplier update emits no vault
   event**, so the displayed USD value lags real NAV by up to one heartbeat with no
   triggering signal — the indexer has no reason to know anything happened.
 - **A stale feed makes it worse.** When `totalAssets()` reverts `StalePriceFeed`,
-  `snapshot_vault_or_skip` (`services/explorer-indexer/src/indexer.rs`) logs and skips by
+  `snapshot_vault_or_skip` (`services/explorer-indexer/src/indexer.rs:405`) logs and skips by
   design (issue #878), leaving the previous row in place. Over a weekend the explorer
   keeps serving Friday's TVL, distinguishable only by the `Freshness` envelope and the
   snapshot's `block_number`.
@@ -442,13 +457,13 @@ The repo's existing rules, all fail-closed by deliberate design:
 
 | Rule | Where | Value |
 | --- | --- | --- |
-| `_checkOracleFreshness()` reverts `StalePriceFeed` when `block.timestamp > updatedAt + heartbeat` | `contracts/vaults/RwaVault.sol`, `contracts/adapters/DeSpxaAssetPositionAdapter.sol` | — |
-| `DEFAULT_HEARTBEAT` | both | **24 hours** |
-| `MAX_HEARTBEAT` (admin ceiling, a `constant`) | both | **48 hours** |
-| `MIN_HEARTBEAT` | adapter | 1 hour |
+| `_checkOracleFreshness()` reverts `StalePriceFeed` when `block.timestamp > updatedAt + heartbeat` | `contracts/vaults/RwaVault.sol:235`, `contracts/adapters/DeSpxaAssetPositionAdapter.sol:345` | — |
+| `DEFAULT_HEARTBEAT` | `RwaVault.sol:114`, `DeSpxaAssetPositionAdapter.sol:88` | **24 hours** |
+| `MAX_HEARTBEAT` (admin ceiling, a `constant`) | `RwaVault.sol:109`, `DeSpxaAssetPositionAdapter.sol:84` | **48 hours** |
+| `MIN_HEARTBEAT` | `DeSpxaAssetPositionAdapter.sol:79` | 1 hour |
 | Applies to | `deploy`, `withdraw`, and `totalAssets()` when the position is non-empty (ORA-2) | — |
-| Zero-balance short-circuit | `RwaVault._holdsPricedRwa()` / adapter SUP-5 | skips the oracle when nothing is held |
-| Price sanity band | `ChronicleOracleAdapter.MIN_NAV = 1e12`, `MAX_NAV = 1e24` | reverts `BadNavPrice` outside |
+| Zero-balance short-circuit | `RwaVault._holdsPricedRwa()` (`contracts/vaults/RwaVault.sol:222`) / adapter SUP-5 (`DeSpxaAssetPositionAdapter.sol:305`) | skips the oracle when nothing is held |
+| Price sanity band | `ChronicleOracleAdapter.MIN_NAV = 1e12`, `MAX_NAV = 1e24` (`contracts/adapters/ChronicleOracleAdapter.sol:64`, `:72`; enforced at `:220`) | reverts `BadNavPrice` outside |
 
 Those constants were chosen for a Chronicle NAV push feed, which updates roughly daily
 and has **no scheduled multi-day gap**. A 24/5 equity feed has one every single week.
@@ -463,7 +478,8 @@ Substituting a Chainlink B20 feed into this machinery, unchanged, gives:
    three-day US market holiday exceeds it.** A Friday-close-to-Tuesday-open gap runs
    past 48 hours on the wall clock.
 3. **No admin setting fixes this.** `MAX_HEARTBEAT` is a Solidity `constant` in both
-   `RwaVault` and `DeSpxaAssetPositionAdapter`; widening it is a redeploy, not a
+   `RwaVault` (`contracts/vaults/RwaVault.sol:109`) and `DeSpxaAssetPositionAdapter`
+   (`contracts/adapters/DeSpxaAssetPositionAdapter.sol:84`); widening it is a redeploy, not a
    governance action. Whether it *should* be widened is precisely the question this note
    declines to answer — a longer bound trades a weekly halt for a weekly window of
    trading against a mark up to three days old.
@@ -473,9 +489,10 @@ Substituting a Chainlink B20 feed into this machinery, unchanged, gives:
 
 ### 4.4 Against the emergency-unwind floors
 
-`RwaVault.emergencyUnwind()` and `emergencyUnwindWithOverride()` call
-`_guardEmergencyFreshness()`, which reverts on a stale feed **unless**
-`emergencyUnwindStaleOverride` has been armed. That flag is `ADMIN_ROLE`-gated while the
+`RwaVault.emergencyUnwind()` (`contracts/vaults/RwaVault.sol:277`) and
+`emergencyUnwindWithOverride()` (`:285`) call `_guardEmergencyFreshness()` (`:270`),
+which reverts on a stale feed **unless** `emergencyUnwindStaleOverride` (`:250`) has been
+armed. That flag is `ADMIN_ROLE`-gated while the
 unwind itself is `EMERGENCY_ROLE` — a deliberate two-key split (audit 2026-06-19 F-08) so
 that one compromised hot key cannot both authorize stale pricing and dump the basket
 against it.
@@ -484,7 +501,7 @@ With a 24/5 feed, that flag is no longer an exceptional measure. There is a stan
 multi-day stale window every week, so **any weekend incident response requires arming the
 stale override** — meaning selling into a live 24/7 DEX at a Friday-close mark. The whole
 defence then collapses onto `EmergencyUnwindGuard.minUsdcOut` and `maxLossBps`
-(`contracts/vaults/BasketVault.sol`), both of which are reference floors calibrated
+(`contracts/vaults/BasketVault.sol:155`), both of which are reference floors calibrated
 against a mark that is, by construction, stale. `docs/technical/unified-vault-spec.md`
 §4.4 already moves the stale-price override to an atomic `EMERGENCY_ROLE` arm-and-execute
 (M-S5) so an incident is never blocked by ADMIN latency; that makes the weekend response
@@ -578,7 +595,8 @@ What transfers cleanly from ADR-0006:
 
 What does not transfer:
 
-- **Per-swap sizing.** `RwaVault._DEFAULT_SLIPPAGE_BPS` is 50 bps (0.5%), deliberately
+- **Per-swap sizing.** `RwaVault._DEFAULT_SLIPPAGE_BPS` (`contracts/vaults/RwaVault.sol:102`)
+  is 50 bps (0.5%), deliberately
   tighter than the DEX-TWAP adapters because slippage is anchored to a NAV mark rather
   than a pool TWAP. Against a $619k–$957k pool that caps a single swap at a notional this
   note did **not** measure — the answer depends on the pool's curve and concentration,
@@ -586,10 +604,11 @@ What does not transfer:
   should be measured, not estimated, before any sizing claim is made.
 - **No aggregator seam exists.** `IBasketSwapAdapter` implementations route a single
   direct pool hop — `ChronicleOracleAdapter.swap` builds a one-element
-  `IAerodromeRouter.Route[]`. The 0x / 1inch / CoW routing that makes these tokens liquid
+  `IAerodromeRouter.Route[]` (`contracts/adapters/ChronicleOracleAdapter.sol:167-169`). The 0x / 1inch / CoW routing that makes these tokens liquid
   in practice is not reachable from the current adapter interface.
 - **The floor is anchored to the wrong clock.** `DeSpxaAssetPositionAdapter.withdraw`
-  derives `internalFloor` from `SWAP_ADAPTER.twapPrice(...)`, i.e. from the oracle mark.
+  (`contracts/adapters/DeSpxaAssetPositionAdapter.sol:248`) derives `internalFloor` from
+  `SWAP_ADAPTER.twapPrice(...)` at `:277`, i.e. from the oracle mark.
   Outside [market hours](#42-what-the-feed-does-when-the-market-is-closed) that mark is
   frozen while the pool trades on. A min-out floor computed from Friday's close is not a
   floor against Saturday's market — in either direction.
@@ -605,13 +624,13 @@ inputs change), or **replace** (the mechanism does not carry).
 | --- | --- | --- | --- |
 | Position-adapter interface | `contracts/interfaces/IPositionAdapter.sol`, ADR-0010 §4 | **reusable** | `deploy` / `withdraw` / `totalAssets` / `isExact` describe a swap-and-custody B20 position exactly as they describe deSPXA. `isExact()` stays `false`. |
 | Chronicle position adapter | `contracts/adapters/DeSpxaAssetPositionAdapter.sol` | **extend** | The pattern is right — heartbeat gate, SUP-5 zero-balance short-circuit, freeze-safe `totalAssets`, `onlyVaultAdmin` config. The `IChronicleOracle` binding (`latestAnswer` / `latestTimestamp`) must become a Chainlink `latestRoundData()` read, and `MAX_HEARTBEAT` is the binding constraint ([§4.3](#43-against-chronicleoracleadapter-and-the-fail-closed-freshness-rules)). |
-| Venue + pricing executor | `contracts/adapters/ChronicleOracleAdapter.sol` | **replace** (pricing) / **extend** (execution) | Aerodrome routing carries over unchanged. Pricing does not: `twapPrice` hardcodes an 18-decimal asset against 6-decimal USDC (`WAD * 1e12` one way, `baseAmount * 1e12` the other). B20 is **8** decimals and the Chainlink answer is **8** decimals, so **both** scaling constants are wrong. `MIN_NAV`/`MAX_NAV` are WAD-band constants and would also need rebasing. This is the same hardcoded-`1e12` class `docs/technical/unified-vault-spec.md` §4.3a already flags as live (ORA-6/F-17). |
-| RWA vault shell | `contracts/vaults/RwaVault.sol` | **extend** | `maxAssets()` is 1, so four tickers is four deployments unless that changes. `DEFAULT_HEARTBEAT` / `MAX_HEARTBEAT` are the market-hours pressure point. The ADR-0006 §4 freeze disclosure block needs restating for a function-level pause ([§3.3](#33-what-each-control-would-do-to-a-vault-position)). |
+| Venue + pricing executor | `contracts/adapters/ChronicleOracleAdapter.sol` | **replace** (pricing) / **extend** (execution) | Aerodrome routing carries over unchanged. Pricing does not: `twapPrice` hardcodes an 18-decimal asset against 6-decimal USDC (`WAD * 1e12` one way, `baseAmount * 1e12` the other — `contracts/adapters/ChronicleOracleAdapter.sol:228` and `:232`). B20 is **8** decimals and the Chainlink answer is **8** decimals, so **both** scaling constants are wrong. `MIN_NAV`/`MAX_NAV` are WAD-band constants and would also need rebasing. This is the same hardcoded-`1e12` class `docs/technical/unified-vault-spec.md` §4.3a already flags as live (ORA-6/F-17). |
+| RWA vault shell | `contracts/vaults/RwaVault.sol` | **extend** | `maxAssets()` is 1 (`contracts/vaults/RwaVault.sol:188`), so four tickers is four deployments unless that changes. `DEFAULT_HEARTBEAT` / `MAX_HEARTBEAT` are the market-hours pressure point. The ADR-0006 §4 freeze disclosure block needs restating for a function-level pause ([§3.3](#33-what-each-control-would-do-to-a-vault-position)). |
 | NAV-deviation guard | `contracts/vaults/BasketVault.sol` (`navDeviationGuardBps`), `contracts/lib/BasketViews.sol`, `contracts/lib/TwapTickMath.sol` | **extend** | `requireWithinDeviation` needs an `IObservablePool` exposing V3-shaped `observe()`/`slot0()`. Whether Aerodrome's B20 pools expose that shape is `UNVERIFIED`. Note what this seam actually is: a pool-internal spot-vs-TWAP check that never reads the NAV mark, so extending it to B20 buys a single-venue sanity check, not a cross-check on an oracle-priced position ([§2.4](#24-consequences-for-erc-4626-share-accounting-and-previews)). |
 | Emergency floors | `BasketVault.EmergencyUnwindGuard` (`minUsdcOut`, `maxLossBps`), `RwaVault.emergencyUnwindStaleOverride` | **extend** | Mechanism carries; the weekly standing stale window changes the override from exceptional to routine ([§4.4](#44-against-the-emergency-unwind-floors)). |
 | Residual price sanity check | `docs/technical/unified-vault-spec.md` §4.3a (`maxNavGrowthRateBps`) | **extend** | Specified, not built. A dividend step is the signature it is designed to reject. |
 | Address / pool config | `config/dex-pools.json` | **extend** | Purely additive: one `basket_assets` entry per ticker with `venue: "Aerodrome"`, `tokenDecimals: 8`, plus the feed address. The file's own rules apply — `pool_status: pending` until pinned from an on-chain read, and the genesis ingester (`testing/smoke-test/src/genesis_alloc.rs` via `fork-block.json::ingested_addresses`) must ingest every pool listed. The `pairs` price strip is `sqrtPriceX96`-based and excludes oracle-priced RWAs; B20 belongs outside it for the same reason deSPXA is. |
-| Router eligibility | `contracts/VaultRegistry.sol` (`setRouterEligible`, `routerEligibleCount`), ADR-0002 | **reusable**, with an interlock | Adding a B20 vault as a router leg is the existing `defaultWeights`-length interlock, not new code. But there is no "temporarily ineligible" status, and `UNVERIFIED` whether the router degrades or reverts when one leg's `totalAssets()` reverts — which a 24/5 feed guarantees weekly. |
+| Router eligibility | `contracts/VaultRegistry.sol` (`setRouterEligible`, `routerEligibleCount` at `contracts/VaultRegistry.sol:130`), ADR-0002 | **reusable**, with an interlock | Adding a B20 vault as a router leg is the existing `defaultWeights`-length interlock, not new code. But there is no "temporarily ineligible" status, and `UNVERIFIED` whether the router degrades or reverts when one leg's `totalAssets()` reverts — which a 24/5 feed guarantees weekly. |
 | External-feed NAV seam | issues **#1185** / **#1186** | **extend** | The repository's live external-feed work, already scoped as an external push feed for NAV with a staleness/deviation guard — the same shape a Chainlink B20 feed would need. The scheduled off-hours gap and the registry pause flag are two inputs it does not currently contemplate. Whether B20 should land here is not decided in this note ([§4.6](#46-live-external-feed-work-already-in-flight), [§9](#9-integration-options-and-trade-offs)). |
 | Explorer indexing | `services/explorer-indexer/src/{indexer,db,lib}.rs` (`vault_snapshots`, `SNAPSHOT_HEARTBEAT_BLOCKS`) | **extend** | Needs a `MultiplierUpdated` trigger or an explicit staleness marker ([§2.5](#25-cached-and-indexed-balances)). |
 | Explorer API surface | `clients/explorer-api/src/model.rs` (`VaultPosition.usdc_value`) | **extend** | `usdc_value` can silently lag a corporate action; the wire contract is pinned by `check_explorer_positions_doc.py`, so any field change is a documented change. |
