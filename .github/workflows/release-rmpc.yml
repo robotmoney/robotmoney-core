@@ -30,12 +30,38 @@
 # use the host strip; the aarch64 Linux cross build needs aarch64-linux-gnu-strip
 # from binutils-aarch64-linux-gnu because host x86_64 strip can't read ARM64 ELF.
 #
+# WHY THE TAG NAMESPACE IS `rmpc-v*` AND NOT `v*` (issue #1243)
+# This workflow used to trigger on `v*.*.*` — the SAME namespace release-dapp.yml
+# publishes into, from an unvalidated `inputs.tag`. Nothing could tell the two
+# apart, and three tags (v0.2.2, v0.3.0, v0.3.1) really did fire both pipelines
+# at once. Two consequences, both live:
+#   1. .github/scripts/assert_manifest_ahead_of_tags.sh raised the rmpc floor to
+#      whatever the dApp last released, so a dApp-only release blocked every rmpc
+#      PR until the rmpc crate was bumped past a version chosen for the dApp.
+#   2. verify-version compared the rmpc MANIFEST against a tag chosen for the
+#      dApp, failed, and told the operator to `git push --delete` that tag —
+#      which would have destroyed the dApp Release published from it.
+# rmpc releases now own `rmpc-vX.Y.Z` exclusively. release-dapp.yml keeps `v*.*.*`;
+# neither workflow can see the other's tags, and this workflow is the sole owner
+# of every tag it can be triggered by, which is what makes the tag-deletion
+# recovery in verify-version safe to print.
+# Archive names are unchanged: `rmpc-v0.4.0-linux-amd64.tar.gz` for tag
+# `rmpc-v0.4.0` exactly as for the legacy `v0.4.0`, because the packaging step
+# strips the `rmpc-` prefix (scripts/release/install-rmpc.sh strips it the same
+# way, so old and new tags both resolve).
+#
+# WHY publish IS FOLLOWED BY bump-manifest
+# verify-version demands manifest == tag; assert_manifest_ahead_of_tags.sh demands
+# manifest > newest release. Publishing therefore leaves `dev` in exactly the
+# state the PR guard rejects, by construction. bump-manifest closes that loop by
+# opening the patch-bump PR automatically. See docs/development/releasing.md.
+#
 # DISPATCH MODES
-# - workflow_dispatch + tag=vX.Y.Z  -> build all targets, then tag + publish Release
+# - workflow_dispatch + tag=rmpc-vX.Y.Z -> build all targets, then tag + publish Release
 # - workflow_dispatch + dry_run=true -> build all targets, upload as workflow
 #                                       artifacts only (no tag, no Release). Use to
 #                                       validate the workflow from any branch.
-# - push: tags v*.*.*               -> build all targets, attach to the existing tag
+# - push: tags rmpc-v*.*.*          -> build all targets, attach to the existing tag
 #
 # GOTCHAS
 # - dtolnay/rust-toolchain@stable is the pinned toolchain action already used in suite-04.
@@ -47,11 +73,13 @@ name: release-rmpc
 on:
   push:
     tags:
-      - "v*.*.*"
+      # rmpc's own namespace. `v*.*.*` belongs to release-dapp.yml — see the
+      # "WHY THE TAG NAMESPACE IS `rmpc-v*`" block above.
+      - "rmpc-v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Git tag to create on success (e.g. v0.3.1). Required unless dry_run=true."
+        description: "Git tag to create on success (e.g. rmpc-v0.4.0). Required unless dry_run=true."
         required: false
         type: string
       commit_hash:
@@ -146,9 +174,13 @@ jobs:
           # LINE-wise, so `v1.2.3\nanything` would satisfy `^…$` on its first
           # line and pass. bash anchors against the whole string, so an embedded
           # newline fails the match — which is precisely the case that matters.
+          # The `rmpc-` prefix is REQUIRED, not optional (issue #1243). A bare
+          # `vX.Y.Z` here would publish into release-dapp.yml's namespace, where
+          # this workflow cannot own the tag and the recovery advice below would
+          # tell an operator to delete somebody else's Release.
           if [ -n "${INPUT_TAG:-}" ]; then
-            if [[ ! "${INPUT_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-              echo "::error::tag input '${INPUT_TAG}' is not a release tag. Expected vX.Y.Z or vX.Y.Z-prerelease."
+            if [[ ! "${INPUT_TAG}" =~ ^rmpc-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::tag input '${INPUT_TAG}' is not an rmpc release tag. Expected rmpc-vX.Y.Z or rmpc-vX.Y.Z-prerelease. The bare 'vX.Y.Z' namespace belongs to release-dapp.yml (issue #1243)."
               exit 1
             fi
           fi
@@ -243,10 +275,14 @@ jobs:
         if: "!(github.event_name == 'workflow_dispatch' && inputs.dry_run)"
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           MANIFEST=clients/rust-payment-client/Cargo.toml
-          EXPECTED="${VERSION#v}"
+          # rmpc-v0.4.0 -> 0.4.0. The strip is prefix-only, so the legacy
+          # dryrun-<sha7> shape and any bare vX.Y.Z both still reduce correctly.
+          EXPECTED="${VERSION#rmpc-}"
+          EXPECTED="${EXPECTED#v}"
           ACTUAL="$(
             awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{
                    gsub(/^version[[:space:]]*=[[:space:]]*"/,""); gsub(/".*$/,""); print; exit }' \
@@ -259,8 +295,25 @@ jobs:
             exit 1
           fi
 
+          # The recovery differs by trigger, and printing the wrong one is a
+          # destructive instruction (issue #1243).
+          #
+          # push: the tag already exists and this workflow is its sole owner —
+          # `rmpc-v*` is not shared with release-dapp.yml — so deleting it
+          # destroys nothing else. Under the old shared `v*.*.*` namespace this
+          # same line told an operator to delete a tag a dApp Release had
+          # already been published from.
+          #
+          # workflow_dispatch: verify-version runs BEFORE publish, so no tag has
+          # been created yet. There is nothing to delete, and saying otherwise
+          # sends the operator hunting for a ref that does not exist.
           if [ "${ACTUAL}" != "${EXPECTED}" ]; then
-            echo "::error::Version mismatch. Releasing '${VERSION}' but ${MANIFEST} says '${ACTUAL}' (expected '${EXPECTED}'), so every binary in this release would report 'rmpc ${ACTUAL}' — see issue #1191. Re-running this workflow CANNOT fix it: it re-checks-out the same commit. Recovery is: delete the tag (git push --delete origin ${VERSION}), set version=${EXPECTED} in ${MANIFEST} on dev, then re-tag that commit."
+            if [ "${EVENT_NAME:-}" = "push" ]; then
+              RECOVERY="delete the tag (git push --delete origin ${VERSION}) — this workflow owns the rmpc-v* namespace outright, so no other component's release depends on it — then set version=${EXPECTED} in ${MANIFEST} on dev and re-tag that commit."
+            else
+              RECOVERY="no tag was created (this check runs before publish), so nothing needs deleting. Set version=${EXPECTED} in ${MANIFEST} on dev, then re-dispatch this workflow against that commit."
+            fi
+            echo "::error::Version mismatch. Releasing '${VERSION}' but ${MANIFEST} says '${ACTUAL}' (expected '${EXPECTED}'), so every binary in this release would report 'rmpc ${ACTUAL}' — see issue #1191. Re-running this workflow CANNOT fix it: it re-checks-out the same commit. Recovery: ${RECOVERY}"
             exit 1
           fi
           echo "OK: manifest matches tag ${VERSION}"
@@ -362,7 +415,8 @@ jobs:
           REPORTED="$("$BIN" --version)"
           echo "binary reports: ${REPORTED}"
 
-          EXPECTED="rmpc ${VERSION#v}"
+          SEMVER="${VERSION#rmpc-}"
+          EXPECTED="rmpc ${SEMVER#v}"
           if [ "${REPORTED}" != "${EXPECTED}" ]; then
             echo "::error::Built binary reports '${REPORTED}' but tag '${VERSION}' expects '${EXPECTED}', even though the manifest matched. Something overrides CARGO_PKG_VERSION at build time — check clap's version derive in clients/rust-payment-client/src/cli.rs; see issue #1191."
             exit 1
@@ -388,7 +442,12 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          ARCHIVE="rmpc-${VERSION}-${OS_LABEL}.tar.gz"
+          # `rmpc-` is stripped from the tag so `rmpc-v0.4.0` produces
+          # `rmpc-v0.4.0-linux-amd64.tar.gz`, not `rmpc-rmpc-v0.4.0-…`. Archive
+          # names are therefore unchanged by the namespace split (issue #1243),
+          # and scripts/release/install-rmpc.sh applies the same strip so both
+          # legacy `v0.3.3` and new `rmpc-v0.4.0` tags resolve to a real asset.
+          ARCHIVE="rmpc-${VERSION#rmpc-}-${OS_LABEL}.tar.gz"
           tar -czf "${ARCHIVE}" -C "target/${TARGET}/release" rmpc
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
@@ -485,3 +544,111 @@ jobs:
             artifacts/*.tar.gz.sha256
           draft: false
           fail_on_unmatched_files: true
+
+  # THE OTHER HALF OF THE VERSION CONTRACT (issue #1243)
+  # verify-version above requires manifest == tag. The PR guard
+  # (.github/scripts/assert_manifest_ahead_of_tags.sh) requires manifest >
+  # newest published release. Both are correct and they are mutually exclusive:
+  # the moment this workflow publishes, `dev` is BY CONSTRUCTION in the state the
+  # PR guard rejects, and it stays there until a human bumps the manifest. That
+  # trap was documented nowhere, which is what made it a trap.
+  #
+  # So the release opens its own fix. This job runs after the Release exists,
+  # checks whether `dev` is actually in the self-rejecting state, and if it is,
+  # pushes a patch bump and opens the PR. Nothing is force-merged: the bump PR
+  # goes through the same CI everything else does, and the guard it satisfies is
+  # scoped to rmpc-crate changes, so unrelated PRs are never red in the meantime.
+  #
+  # It is a SEPARATE job, not a step in publish, so a failure here (the most
+  # likely cause being the repo/org setting "Allow GitHub Actions to create and
+  # approve pull requests" being off) is reported as its own red signal and can
+  # never roll back or obscure a Release that already published. When it does
+  # fail, the manual recipe is docs/development/releasing.md §"If the bump PR was
+  # not opened".
+  bump-manifest:
+    name: open-post-release-bump-pr
+    needs: [resolve, publish]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Open the patch-bump PR against dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          MANIFEST=clients/rust-payment-client/Cargo.toml
+
+          # All the logic — prerelease supersession, patch arithmetic, and an
+          # in-place rewrite that must not touch dependency `version =` keys —
+          # lives in a script so it can be executed on every PR by
+          # .github/scripts/tests/test_bump_rmpc_manifest.sh. This workflow fires
+          # only on a tag; a `run:` block here would first run during a real
+          # release, on dev, holding contents: write.
+          #
+          # Exit 3 means dev is not in the post-release collision state (the
+          # release was cut from an older commit, or the bump already merged).
+          # That is a legitimate no-op, not a failure.
+          BUMP_OUT="$(bash .github/scripts/bump_rmpc_manifest.sh "${VERSION}" "${MANIFEST}")" && BUMP_CODE=0 || BUMP_CODE=$?
+          printf '%s\n' "${BUMP_OUT}"
+
+          if [ "${BUMP_CODE}" -eq 3 ]; then
+            exit 0
+          fi
+          if [ "${BUMP_CODE}" -ne 0 ]; then
+            echo "::error::the post-release manifest bump could not be computed; the release itself is published and unaffected. Follow docs/development/releasing.md to bump ${MANIFEST} by hand."
+            exit "${BUMP_CODE}"
+          fi
+
+          NEXT="$(printf '%s\n' "${BUMP_OUT}" | sed -n 's/^next=//p')"
+          RELEASED="${VERSION#rmpc-}"
+          RELEASED="${RELEASED#v}"
+
+          BRANCH="chore/post-release-manifest-bump-${NEXT}"
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            echo "branch ${BRANCH} already exists on origin — the bump PR was already opened"
+            exit 0
+          fi
+
+          TITLE="chore(rmpc): bump manifest to ${NEXT} after releasing ${VERSION}"
+
+          # Written to a file rather than inlined so the message keeps its line
+          # breaks without dedenting out of this YAML block scalar.
+          cat > "${RUNNER_TEMP}/bump-body.md" <<EOF
+          Automated post-release bump opened by release-rmpc.yml.
+
+          ${VERSION} published with ${MANIFEST} at ${RELEASED}. Until this merges every
+          build from dev reports "rmpc ${RELEASED}" — indistinguishable from the shipped
+          release (issue #1191) — and any PR touching clients/rust-payment-client/ fails
+          .github/scripts/assert_manifest_ahead_of_tags.sh. Merging this restores both
+          invariants.
+
+          Runbook: docs/development/releasing.md. Reconciliation: issue #1243.
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+          git add "${MANIFEST}"
+          git commit -F - <<EOF
+          ${TITLE}
+
+          $(cat "${RUNNER_TEMP}/bump-body.md")
+          EOF
+
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --base dev \
+            --head "${BRANCH}" \
+            --title "${TITLE}" \
+            --body-file "${RUNNER_TEMP}/bump-body.md"

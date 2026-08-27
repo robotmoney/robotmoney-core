@@ -49,8 +49,8 @@
 # explicitly; an operator has to mean it.
 #
 # USAGE
-#   install-rmpc.sh --tag v0.3.1 --dest ~/.local/bin
-#   install-rmpc.sh --tag v0.3.1 --dest ./bin --platform linux-amd64 \
+#   install-rmpc.sh --tag rmpc-v0.4.0 --dest ~/.local/bin
+#   install-rmpc.sh --tag rmpc-v0.4.0 --dest ./bin --platform linux-amd64 \
 #                   --base-url file:///tmp/fixture-releases --allow-insecure-base-url
 #
 # EXIT CODES
@@ -93,7 +93,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$TAG"  ]] || { usage; die 2 "--tag is required (e.g. --tag v0.3.1)"; }
+[[ -n "$TAG"  ]] || { usage; die 2 "--tag is required (e.g. --tag rmpc-v0.4.0; releases up to v0.3.3 used the bare vX.Y.Z form)"; }
 [[ -n "$DEST" ]] || { usage; die 2 "--dest is required (a directory on PATH)"; }
 
 # Default-reject any base URL that is not https://. Printing "verified" over a
@@ -125,7 +125,12 @@ if [[ -z "$PLATFORM" ]]; then
   PLATFORM="${OS}-${ARCH}"
 fi
 
-ARCHIVE="rmpc-${TAG}-${PLATFORM}.tar.gz"
+# rmpc releases are tagged `rmpc-vX.Y.Z` (issue #1243) but the archive inside is
+# named `rmpc-vX.Y.Z-<platform>.tar.gz` — one `rmpc-`, not two. The release
+# workflow's packaging step applies the identical strip, so this handles both the
+# current namespace and the legacy `vX.Y.Z` tags (v0.0.1 … v0.3.3), where the
+# strip is a no-op. The DIRECTORY in the URL is always the full tag.
+ARCHIVE="rmpc-${TAG#rmpc-}-${PLATFORM}.tar.gz"
 WORKDIR="$(mktemp -d -t install-rmpc.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
 

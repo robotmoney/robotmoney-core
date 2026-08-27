@@ -247,6 +247,10 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 3. Cargo cache
 4. `bash .github/scripts/stress_nonce_race.sh` — runs the race test 100× in-process; no chain
 
+**Version guards — `rmpc-parity` job, ahead of the release build (issues #1191, #1243):**
+- `.github/scripts/assert_manifest_ahead_of_tags.sh` — the rmpc manifest must be strictly ahead of every published `rmpc-v*.*.*` release. Scoped to changes under `clients/rust-payment-client/**`, because the state it reports belongs to the branch rather than to the change; the bare `v*.*.*` namespace belongs to `release-dapp` and cannot raise the rmpc floor.
+- `.github/scripts/tests/test_assert_manifest_ahead_of_tags.sh` and `.github/scripts/tests/test_bump_rmpc_manifest.sh` — synthetic-repository exercises for the two scripts above, neither of whose real caller runs on a PR. See `docs/development/releasing.md`.
+
 ---
 
 ### 8. Explorer indexer tests
@@ -794,8 +798,8 @@ Every workflow's `name:` and its tier.
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
 | `opencode-headless-deposit-read` | nightly | live `refusal`/`deposit`/`read` jobs are schedule + dispatch only (gated `if: github.event_name != 'pull_request'`); the offline keyless `asserter-tests` job also runs on `pull_request` for the transcript-asserter/live-guard paths (issue #1151) |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
-| `release-dapp` | release | tag/dispatch-only; not PR-triggered |
-| `release-rmpc` | release | tag/dispatch-only; not PR-triggered |
+| `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
+| `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
 | `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
 
 ---

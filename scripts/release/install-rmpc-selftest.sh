@@ -8,7 +8,7 @@
 # WHY THIS SELFTEST EXISTS
 # Two pieces of #1204's behaviour would otherwise never execute in CI:
 #
-#  1. release-rmpc.yml only triggers on `push: tags: v*.*.*` and workflow_dispatch,
+#  1. release-rmpc.yml only triggers on `push: tags: rmpc-v*.*.*` and workflow_dispatch,
 #     so the step that publishes `<archive>.tar.gz.sha256` never runs on a PR. This
 #     selftest re-creates that step's exact commands on a fixture archive and, on
 #     top of that, asserts the workflow still contains them — mirroring
