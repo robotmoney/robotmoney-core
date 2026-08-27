@@ -150,13 +150,26 @@ jobs:
       - name: Explorer migrations single-canonical-home
         run: python3 .github/scripts/check_explorer_migrations.py
 
-      - name: Install jsonschema (committee vote schema validation)
-        run: pip install jsonschema
+      # jsonschema — both schema validators. cryptography — the consensus
+      # receipt's analyst Ed25519 signatures are VERIFIED, not just format-checked.
+      # pycryptodome — keccak256 for the anchored payload digest; node/python
+      # stdlib offer only NIST-padded sha3-256, which is a different function
+      # (robotmoney-core#1280).
+      - name: Install schema-validation dependencies
+        run: pip install jsonschema cryptography pycryptodome
 
       - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044, #1050)
         run: python3 .github/scripts/check_committee_vote_schema.py
 
-      - name: Consensus receipt schema, canonical bytes, and bucket map (issue #1244)
+      - name: Self-test consensus receipt guard (issue #1244)
+        # Confirms every guard FIRES before the real check is believed: a
+        # scrambled spec field order, a signed body edited by one character, a
+        # stale keccak256 constant, and a judge block whose flags contradict its
+        # own take_count/min_takes. Each of these passed green before #1244
+        # reconciled the judge block and made the canonicalizer spec-driven.
+        run: python3 .github/scripts/check_consensus_receipt_schema.py --self-test
+
+      - name: Consensus receipt schema, canonical bytes, signatures, and bucket map (issue #1244)
         run: python3 .github/scripts/check_consensus_receipt_schema.py
 
   generated-docs-freshness:

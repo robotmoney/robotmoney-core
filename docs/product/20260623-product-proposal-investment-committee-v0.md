@@ -25,9 +25,10 @@
 > mean** of the analysts' vectors, with the judge authoring the rationale rather
 > than the numbers. Together they make the signed allocation reproducible, remove
 > any need for per-analyst EVM identity in v0.1, and shrink the receipt contract.
-> §6 records the resulting pinned schema, release policy, and subject scope —
-> and the one item still open, the `judge` block's reconciliation with the
-> shipped judge (§6.5), which blocks the frontend mirror but nothing else.
+> §6 records the resulting pinned schema, release policy, and subject scope.
+> The `judge` block's reconciliation with the shipped `JudgeOpinion` is now
+> **settled** (§6.5): the receipt carries the shipped opinion field for field
+> plus its `source`, and both repos hold the same bytes.
 >
 > **What receipts are for.** They are primarily a **public, censorship-resistant
 > record** of what the committee recommended, and only occasionally the trigger
@@ -218,14 +219,20 @@ spec in every respect.
   `canonicalizeSubmission` string, raw Ed25519 public key, and signature, avoiding
   float reserialization before verification. New optional fields append after
   all existing fields and are omitted when absent; unknown fields are never
-  serialized. Under D2 this repo holds the source-of-truth copy and
-  `robotmoney-frontend` mirrors the same bytes at
-  `contract/src/__fixtures__/`, each side carrying its own byte-conformance
-  test. **The frontend half is a companion change and has not landed yet**
-  (`robotmoney-frontend#775`) — until it does,
-  `tests/fixtures/consensus-receipt.*` here is the only committed copy and is
-  what the frontend must be made to reproduce. Its `judge` block has one open
-  reconciliation against the shipped `JudgeOpinion`; see §6.5.
+  serialized. The `judge` block is the shipped `JudgeOpinion`
+  (`backend/src/swarm/judge.ts`) field for field —
+  `{rationale, disagreements, release_safety}` — plus `source` from the
+  `JudgeOutcome` envelope; `release_safety` carries the full shipped shape so a
+  verifier recomputes thin support instead of trusting a flag (§6.5). Under D2
+  both repos hold the identical bytes at `tests/fixtures/` here and
+  `contract/src/__fixtures__/` in `robotmoney-frontend`, each side carrying its
+  own byte-conformance test; the frontend half has landed
+  (`robotmoney-frontend#775`). A non-ASCII conformance receipt
+  (`consensus-receipt.escaping.*`) is part of that shared set because the two
+  most likely non-JS implementations — Go's `encoding/json` and Python's
+  `json.dumps` — each diverge from the escaping rule **by default while still
+  reproducing an all-ASCII golden exactly**, so an ASCII-only corpus cannot
+  detect either.
   `@robotmoney/contract` remains explicitly unsuitable across the
   Rust/Solidity boundary (§6.1).
 - **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
@@ -638,19 +645,27 @@ Remaining uncertainty is in §6.
 ## 6. Pinned receipt decisions and deferred expansion
 
 > Issue #1244 closes every design question needed by the format-gap and on-chain
-> anchor work. Two items stay outside that set: the external-organization
-> expansion is deferred (§6.3), and the `judge` block's reconciliation with the
-> shipped `JudgeOpinion` is open (§6.5). Neither changes the receipt's identity,
-> digest, derivation, signature set, or entrypoints.
+> anchor work, including the `judge` block's reconciliation with the shipped
+> `JudgeOpinion` (§6.5, settled). One item stays outside that set: the
+> external-organization expansion is deferred (§6.3). It changes none of the
+> receipt's identity, digest, derivation, signature set, or entrypoints.
 
 - **6.1 Receipt JSON schema and transport — pinned (D2).** The canonical core
   fixtures are `tests/fixtures/consensus-receipt.*`, validated on every PR by
   `.github/scripts/check_consensus_receipt_schema.py`; identical copies belong at
   `robotmoney-frontend/contract/src/__fixtures__/` so both repos independently
-  reproduce the golden canonical bytes. That frontend mirror is a separate,
-  still-open change tracked by `robotmoney-frontend#775`, which also owns the
-  one remaining open item — the `judge` block's reconciliation with the shipped
-  `JudgeOpinion` (§6.5). The schema includes `schema_version`,
+  reproduce the golden canonical bytes. **That mirror has landed**
+  (`robotmoney-frontend#775`), and the two sides are not merely equivalent but
+  **byte-identical**: every `tests/fixtures/consensus-receipt.*` file here except
+  the core-only anchor digest is the same bytes as the file of that name under
+  `contract/src/__fixtures__/` there, and the manifest of that shared set is
+  asserted in CI. Byte identity is what discharges D2 — "the same fixture in both
+  repos" is not satisfiable by two files that merely agree in spirit.
+  `consensus-receipt.anchor-digest.json` is the one deliberate core-only
+  addition: it commits the `keccak256` of each golden and is checked by
+  re-hashing the file rather than by transcription, because `contract/` has zero
+  dependencies and cannot reach a keccak256 implementation at all
+  (`robotmoney-core#1280`). The schema includes `schema_version`,
   bps-converted mean weights, judge-authored prose, exact analyst Ed25519
   signature material, and `prompt_hash` / `inputs_digest`; fixed order, domain,
   digest algorithm, nested order, bps conversion, and append-only evolution are
@@ -695,24 +710,68 @@ Remaining uncertainty is in §6.
   aggregation in v0.1. A future portfolio-wide artifact needs a new schema
   version rather than silently changing this derivation.
 
-- **6.5 `judge` block vs the shipped `JudgeOpinion` — OPEN, owned by
-  `robotmoney-frontend#775`.** The `judge` block above was pinned before
-  `robotmoney-frontend` PR #757 shipped the consensus judge. The shipped
-  `JudgeOpinion` (`backend/src/swarm/judge.ts`) is
-  `{rationale, disagreements, release_safety}` with
-  `release_safety = {release: "safe"|"hold", thinly_supported, take_count,
-  min_takes, concerns[]}`, and it has **no `consensus` field** — whereas
-  `consensus-receipt.schema.json` requires `judge.consensus` and defines
-  `release_safety` as `{safe_to_release, opinion}`. Two things follow:
-  - Nothing else in the receipt design depends on this. Session/subject
-    identity, the digest and domain separator, the bps derivation, the analyst
-    signature set, the bucket-vault map, the entrypoint set, and the release
-    policy are all unaffected, so the downstream format-gap and on-chain anchor
-    work is **not blocked** by it.
-  - It must close before `robotmoney-frontend` can mirror these bytes, because
-    the mirror has to be produced by the shipped judge. The choice — carry the
-    full shipped shape (so a verifier can recompute `thinly_supported` from
-    `take_count` / `min_takes` instead of trusting the flag), or keep a reduced
-    form and record the divergence, and either drop `judge.consensus` or specify
-    what derives it — is a product decision and belongs to `#775`. A reshape
-    here is a `schema_version` bump, not an in-place edit of 1.0.
+- **6.5 `judge` block vs the shipped `JudgeOpinion` — SETTLED.** The `judge`
+  block was first drafted before `robotmoney-frontend` PR #757 shipped the
+  consensus judge, and required a field no producer emits. Both halves are now
+  decided, and schema 1.0 carries the shipped `JudgeOpinion`
+  (`backend/src/swarm/judge.ts`) **field for field** —
+  `{rationale, disagreements, release_safety}` — plus `source` from the
+  `JudgeOutcome` envelope. The receipt and the judge opinion are deliberately
+  not allowed to drift apart: keeping them identical is what makes "the receipt
+  says what the judge said" checkable rather than asserted.
+
+  - **`judge.consensus` — DROPPED.** It was an invention of the draft. No judge
+    produces it: `JudgeOpinion` has no such field, and the only thing in the
+    frontend that builds anything by that name, `buildConsensus()` in
+    `backend/src/swarm/domain.ts`, restates quorum, stances, mean confidence and
+    the regime summary in English. The first two of those are already carried
+    **structurally and signed** in this payload's own `quorum` and `stances`
+    blocks, so the field would have committed a prose paraphrase of numbers the
+    receipt already commits exactly. Specifying a derivation for it would have
+    meant inventing a producer to match a schema, which is backwards.
+
+  - **`judge.release_safety` — the SHIPPED SHAPE, carried whole.**
+    `{release: "safe"|"hold", thinly_supported, take_count, min_takes,
+    concerns[]}` replaces the draft's `{safe_to_release, opinion}` reduction.
+    The deciding argument is verifier-side and it is about trust, not tidiness:
+    with `take_count` and `min_takes` present, a verifier **recomputes**
+    `thinly_supported` (it must equal `take_count < min_takes`) and **recomputes**
+    `release` (`"hold"` iff thinly supported or any concern is present) rather
+    than believing two flags. That matters here more than it would elsewhere,
+    because `release` is **member-steerable**: `releaseSafety()` merges concerns
+    the model drew from member-authored take bodies, so one analyst's text can
+    move the verdict (`robotmoney-frontend#767`). A reduction to a boolean would
+    have anchored a steerable flag with nothing beside it to check it against.
+    `judge.ts` also records that a later-phase signer reads this field — so the
+    receipt has to carry what that signer read, in the shape it read it. Both
+    recomputations are asserted in CI by
+    `.github/scripts/check_consensus_receipt_schema.py`.
+
+  - **`judge.source` — ADDED and required**, decided here rather than deferred.
+    `runJudge()` spreads one `base` object — same `promptHash`, same
+    `inputsDigest` — into both the model return and the template-fallback
+    return, and `templateOpinion()` calls the same `buildRationale()` /
+    `buildDisagreements()` the aggregator uses. Without `source` a published
+    receipt carries **no field at all** separating "a model read the takes and
+    wrote this" from "the model timed out and a template produced this".
+    `"fallback"` is not a defect — it is the fail-closed path, and a fallback
+    receipt is a complete, anchorable receipt — but an artifact whose point is
+    attribution must say which one it is. `fallbackReason` and `model` are
+    deliberately excluded: the first interpolates model-controlled text and is
+    operator debugging rather than a public commitment, the second is deployment
+    configuration that would make the anchored bytes depend on a vendor string.
+    Both remain appendable after `source` under the minor-bump rule.
+
+  - **`judge.disagreements` needed no change.** `JudgeDisagreement` is
+    `{topic, positions[{member_id, view}], what_settles}`, which the draft
+    already matched. `positions` is relaxed to `minItems: 1` to match what
+    `parseJudgeResponse()` really produces.
+
+  **This was resolved inside 1.0, not by a version bump.** No receipt has ever
+  been published under the draft — the schema had not left this repository and
+  no producer could satisfy it — so there are no bytes in the world to preserve.
+  The append-only rule protects *published* receipts, and reshaping a block that
+  no conforming receipt could ever have carried breaks nothing it exists to
+  protect. **The golden canonical bytes did change**, and with them the
+  anchored `keccak256`; both are now committed and asserted (§6.1). Reshaping
+  the `judge` block after this point **is** a `schema_version` bump.

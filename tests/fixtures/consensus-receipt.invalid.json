@@ -20,12 +20,15 @@
   },
   "judge": {
     "rationale": "",
-    "consensus": [],
     "disagreements": [],
     "release_safety": {
-      "safe_to_release": true,
-      "opinion": ""
-    }
+      "release": "maybe",
+      "thinly_supported": false,
+      "take_count": 1,
+      "min_takes": 3,
+      "concerns": []
+    },
+    "source": "human"
   },
   "analyst_signatures": [],
   "weights": [
