@@ -22,6 +22,11 @@ This script is the CI signal that closes that gap.
 
 PREREQUISITES
 - `forge` must be on PATH (installed via foundry-rs/foundry-toolchain@v1).
+- The generator version matters: the committed tree is the mdbook layout emitted
+  by Foundry <= 1.7.1. Foundry 1.8.0 replaced it with a vocs site and still exits
+  0, so CI pins foundry-toolchain to v1.7.1 (issue #1263) and this script refuses
+  to compare any layout it does not recognise. Adopting the vocs layout — and
+  removing the pin — is issue #1264.
 - Script must be run from the repo root (same directory as foundry.toml).
 """
 
@@ -110,6 +115,33 @@ def compare_trees(
     return added, removed, changed
 
 
+# `forge doc` output layouts. Foundry <= 1.7.1 emits an mdbook site whose
+# generated pages live under <out>/src/contracts/. Foundry 1.8.0 replaced that
+# generator with a vocs site (<out>/src/pages/**/*.mdx plus vocs.config.ts /
+# vocs.sidebar.ts / package.json scaffolding) and still exits 0. Without an
+# explicit classification step, "the generator wrote a shape we do not
+# understand" is indistinguishable from "the docs are fresh" — the failure mode
+# that reddened every job in issue #1263.
+LAYOUT_MDBOOK = "mdbook"
+LAYOUT_VOCS = "vocs"
+LAYOUT_UNKNOWN = "unknown"
+
+
+def classify_output(out_dir: Path) -> tuple[str, Path | None]:
+    """Classify a `forge doc --out <out_dir>` tree.
+
+    Returns ``(layout, generated_root)`` where ``generated_root`` is the
+    directory this comparator knows how to diff, or ``None`` when the layout is
+    one it cannot compare.
+    """
+    mdbook_root = out_dir / "src" / "contracts"
+    if mdbook_root.is_dir():
+        return LAYOUT_MDBOOK, mdbook_root
+    if (out_dir / "vocs.config.ts").is_file() or (out_dir / "src" / "pages").is_dir():
+        return LAYOUT_VOCS, None
+    return LAYOUT_UNKNOWN, None
+
+
 def self_test() -> int:
     """Confirm the drift comparator fires for added/removed/changed files.
 
@@ -119,6 +151,11 @@ def self_test() -> int:
     detect the drift. Three synthetic scenarios are checked — added file,
     removed file, and content-changed file (the case that fires when a new
     ``function`` line appears in a contract's NatSpec output).
+
+    It also covers the *generator* contract (issue #1263): `forge doc` exits 0
+    on every release, so classify_output() is the only thing that keeps a
+    layout change (mdbook -> vocs in Foundry 1.8.0) from being reported as
+    "docs are fresh".
     """
     base = {"a.md": "alpha\n", "b.md": "beta\n"}
 
@@ -161,7 +198,48 @@ def self_test() -> int:
         "self-test sha-normalization failed — comparator would flag every PR"
     )
 
-    print("OK: freshness-check self-test passed (4 drift scenarios + SHA norm).")
+    # Scenarios 6-8: the generator contract. `forge doc` exits 0 on every
+    # Foundry release, so the only thing standing between "1.8.0 rewrote the
+    # layout" and a false "docs are fresh" is classify_output(). Issue #1263.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # 6: the mdbook layout this comparator diffs (Foundry <= 1.7.1).
+        mdbook = tmp / "mdbook"
+        (mdbook / "src" / "contracts" / "Vault.sol").mkdir(parents=True)
+        (mdbook / "src" / "contracts" / "Vault.sol" / "contract.Vault.md").write_text(
+            "# Vault\n"
+        )
+        layout, root = classify_output(mdbook)
+        assert layout == LAYOUT_MDBOOK and root == mdbook / "src" / "contracts", (
+            f"self-test mdbook-layout scenario failed: {layout=} {root=}"
+        )
+
+        # 7: the vocs layout Foundry 1.8.0 emits — must be named, not mistaken
+        # for fresh docs.
+        vocs = tmp / "vocs"
+        (vocs / "src" / "pages").mkdir(parents=True)
+        (vocs / "src" / "pages" / "contract.Vault.mdx").write_text("# Vault\n")
+        (vocs / "vocs.config.ts").write_text("export default {}\n")
+        layout, root = classify_output(vocs)
+        assert layout == LAYOUT_VOCS and root is None, (
+            f"self-test vocs-layout scenario failed: {layout=} {root=}"
+        )
+
+        # 8: any other shape (a future generator rewrite) must also refuse to
+        # report freshness.
+        other = tmp / "other"
+        (other / "site").mkdir(parents=True)
+        (other / "site" / "index.html").write_text("<html></html>\n")
+        layout, root = classify_output(other)
+        assert layout == LAYOUT_UNKNOWN and root is None, (
+            f"self-test unknown-layout scenario failed: {layout=} {root=}"
+        )
+
+    print(
+        "OK: freshness-check self-test passed "
+        "(4 drift scenarios + SHA norm + 3 generator-layout scenarios)."
+    )
     return 0
 
 
@@ -227,10 +305,27 @@ def main() -> int:
             )
             return 1
 
-        regenerated_dir = tmp_path / "docs" / "src" / "contracts"
-        if not regenerated_dir.is_dir():
+        out_dir = tmp_path / "docs"
+        layout, regenerated_dir = classify_output(out_dir)
+        if layout == LAYOUT_VOCS:
             print(
-                f"FAIL: `forge doc` did not produce {regenerated_dir}.",
+                "FAIL: `forge doc` produced the vocs layout (Foundry >= 1.8.0), "
+                "which this comparator cannot diff against the committed mdbook "
+                f"tree at {GENERATED_DIR}.\n"
+                "This is a generator-version mismatch, NOT stale docs. CI pins "
+                "foundry-toolchain to v1.7.1 (issue #1263); install the same "
+                "release locally with `foundryup --install v1.7.1`. Adopting the "
+                "vocs layout is tracked in issue #1264.",
+                file=sys.stderr,
+            )
+            return 1
+        if layout == LAYOUT_UNKNOWN or regenerated_dir is None:
+            print(
+                f"FAIL: `forge doc` exited 0 but wrote an unrecognised layout to "
+                f"{out_dir} (no src/contracts/, no vocs scaffold). Top-level "
+                f"entries: {sorted(p.name for p in out_dir.iterdir()) if out_dir.is_dir() else '<missing>'}.\n"
+                "This is a generator-version mismatch, NOT stale docs. See issues "
+                "#1263 and #1264.",
                 file=sys.stderr,
             )
             return 1
