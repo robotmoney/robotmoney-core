@@ -1,6 +1,6 @@
 [package]
 name = "rust-payment-client"
-version = "0.1.0"
+version = "0.3.4"
 edition = "2021"
 description = "Robot Money payment client (rmpc) — signs and broadcasts gateway-mediated USDC deposits."
 license = "MIT"
