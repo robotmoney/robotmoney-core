@@ -47,7 +47,9 @@
 //!   `rmpc committee-identity --help` surface the new command (AC-2).
 
 use assert_cmd::Command;
-use rust_payment_client::committee_identity::{PASSPHRASE_ENV_VAR, PASSPHRASE_FILE_ENV_VAR};
+use rust_payment_client::committee_identity::{
+    PASSPHRASE_ENV_VAR, PASSPHRASE_FILE_ENV_VAR, TTY_PASSPHRASE_PROMPT,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -676,35 +678,102 @@ fn tty_prompt_reads_the_passphrase_without_echo() {
         });
     }
     let mut child = command.spawn().expect("spawn rmpc on a pty");
-    // The parent must not keep the slave open, or the master read below
-    // never reports EOF after the child exits.
+    // The reader thread keeps one descriptor on the slave — not for I/O, but to
+    // read the tty's termios the instant the prompt bytes surface. It closes it
+    // as soon as it has seen the prompt: a slave descriptor still held open by
+    // this process would stop the master read from ever reporting EOF/EIO once
+    // the child exits.
+    let echo_probe = slave.try_clone().expect("clone the pty slave");
     drop(slave);
 
     let mut writer = std::fs::File::from(master.try_clone().unwrap());
     let mut reader = std::fs::File::from(master);
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // Each chunk is paired with the terminal's ECHO flag as it was when that
+    // chunk surfaced. Sampling it here, in the reading thread, rather than
+    // after a channel hop and a main-thread wakeup, is deliberate: it is what
+    // makes the flag describe the moment the prompt appeared instead of some
+    // tens of microseconds later, by which time a child racing to clear ECHO
+    // has usually won and the defect this guards against would go unseen.
+    let (tx, rx) = mpsc::channel::<(Vec<u8>, bool)>();
     std::thread::spawn(move || {
+        let mut echo_probe = Some(echo_probe);
+        let mut seen = Vec::new();
         let mut buf = [0u8; 1024];
         // A pty master reports EIO (not EOF) once the last slave closes,
         // so any error ends the loop and drops the sender.
         while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+            if n == 0 {
                 break;
+            }
+            let echo_enabled = echo_probe.as_ref().is_some_and(|probe| {
+                // SAFETY: `probe` is an open descriptor on the pty slave for
+                // the whole call, and `term` is fully initialised by a
+                // successful tcgetattr.
+                unsafe {
+                    let mut term = std::mem::MaybeUninit::<libc::termios>::uninit();
+                    assert_eq!(
+                        libc::tcgetattr(probe.as_raw_fd(), term.as_mut_ptr()),
+                        0,
+                        "tcgetattr on the pty slave failed: {}",
+                        std::io::Error::last_os_error()
+                    );
+                    term.assume_init().c_lflag & libc::ECHO != 0
+                }
+            });
+            if tx.send((buf[..n].to_vec(), echo_enabled)).is_err() {
+                break;
+            }
+            seen.extend_from_slice(&buf[..n]);
+            if String::from_utf8_lossy(&seen).contains(TTY_PASSPHRASE_PROMPT) {
+                echo_probe = None;
             }
         }
     });
 
+    // Wait for the prompt itself — matched exactly, so an error message that
+    // merely mentions a passphrase can never be mistaken for the prompt.
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut transcript = Vec::new();
-    while !String::from_utf8_lossy(&transcript).contains("passphrase") {
+    let mut echo_at_prompt = true;
+    while !String::from_utf8_lossy(&transcript).contains(TTY_PASSPHRASE_PROMPT) {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .expect("timed out waiting for the /dev/tty passphrase prompt");
-        let chunk = rx
+        let (chunk, echo_enabled) = rx
             .recv_timeout(remaining)
             .expect("rmpc exited without prompting on /dev/tty");
         transcript.extend(chunk);
+        echo_at_prompt = echo_enabled;
     }
+
+    // Echo must already be off by the time the prompt is on screen
+    // (issues #1261, #1267).
+    //
+    // This is an ordering assertion, not a wait. `read_passphrase` clears ECHO
+    // on /dev/tty *before* it writes the prompt, so the prompt bytes cannot
+    // reach this pty master until the tcsetattr that cleared ECHO has already
+    // returned in the child. Reading those bytes therefore implies echo is
+    // already off — no polling, no sleep, no timing margin.
+    //
+    // That ordering is the security property. Written the other way round —
+    // prompt first, ECHO cleared afterwards, which is what
+    // `rpassword::prompt_password` does — there is a window spanning two
+    // `open("/dev/tty")` calls in which the line discipline is still echoing,
+    // and type-ahead, a pasted secret, or anything typing on the prompt is
+    // reflected back in the clear. The window is not bounded by the product:
+    // it widens with system load. This assertion is what stops it from
+    // reappearing, and it is also what makes the typing below race-free.
+    //
+    // termios belongs to the tty device rather than to a descriptor, so the
+    // probe on the slave sees exactly the flags the child installed on its
+    // /dev/tty.
+    assert!(
+        !echo_at_prompt,
+        "the /dev/tty passphrase prompt was displayed while ECHO was still set \
+         on the terminal: anything typed or pasted at it — the passphrase \
+         included — would be echoed back in the clear; transcript: {}",
+        String::from_utf8_lossy(&transcript)
+    );
 
     writer
         .write_all(format!("{TEST_PASSPHRASE}\n").as_bytes())
@@ -712,7 +781,7 @@ fn tty_prompt_reads_the_passphrase_without_echo() {
     writer.flush().unwrap();
 
     let status = child.wait().expect("wait for rmpc");
-    while let Ok(chunk) = rx.recv_timeout(Duration::from_secs(5)) {
+    while let Ok((chunk, _)) = rx.recv_timeout(Duration::from_secs(5)) {
         transcript.extend(chunk);
     }
     let transcript = String::from_utf8_lossy(&transcript).into_owned();
@@ -728,6 +797,34 @@ fn tty_prompt_reads_the_passphrase_without_echo() {
     assert!(
         path.exists(),
         "the prompt should have produced a keystore; transcript: {transcript}"
+    );
+
+    // Suppressing echo must not be a one-way trip. `read_passphrase` clears
+    // ECHO itself now, so it also owns putting it back: a command that exits
+    // leaving echo off hands the user a terminal that no longer shows what
+    // they type. Reopening the slave reads the tty's current termios — the
+    // device outlives the child because this process still holds the master.
+    let restored_probe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .expect("reopen pty slave");
+    // SAFETY: `restored_probe` is an open descriptor on the pty slave for the
+    // whole call, and `term` is fully initialised by a successful tcgetattr.
+    let echo_restored = unsafe {
+        let mut term = std::mem::MaybeUninit::<libc::termios>::uninit();
+        assert_eq!(
+            libc::tcgetattr(restored_probe.as_raw_fd(), term.as_mut_ptr()),
+            0,
+            "tcgetattr on the pty slave failed: {}",
+            std::io::Error::last_os_error()
+        );
+        term.assume_init().c_lflag & libc::ECHO != 0
+    };
+    assert!(
+        echo_restored,
+        "rmpc exited leaving ECHO cleared on the terminal, so the user's shell \
+         would no longer show what they type; transcript: {transcript}"
     );
 
     // The keystore must decrypt under exactly the bytes typed at the prompt
