@@ -676,8 +676,12 @@ fn tty_prompt_reads_the_passphrase_without_echo() {
         });
     }
     let mut child = command.spawn().expect("spawn rmpc on a pty");
-    // The parent must not keep the slave open, or the master read below
-    // never reports EOF after the child exits.
+    // The parent keeps one descriptor on the slave, not for I/O but to read
+    // the pty's termios while the child configures it (see the echo-off wait
+    // below). It is closed the moment that wait succeeds, because a slave
+    // descriptor held open by the parent stops the master read below from
+    // ever reporting EOF/EIO after the child exits.
+    let echo_probe = slave.try_clone().expect("clone the pty slave");
     drop(slave);
 
     let mut writer = std::fs::File::from(master.try_clone().unwrap());
@@ -705,6 +709,49 @@ fn tty_prompt_reads_the_passphrase_without_echo() {
             .expect("rmpc exited without prompting on /dev/tty");
         transcript.extend(chunk);
     }
+
+    // Now wait for the condition the write below actually depends on: that
+    // the prompt has cleared ECHO on the pty.
+    //
+    // The prompt text appearing is strictly *earlier* than echo suppression —
+    // rpassword writes and flushes the prompt first, and only then opens
+    // /dev/tty and clears ECHO/ICANON on it. Typing on the prompt alone races
+    // that tcsetattr, and when the write wins the pty line discipline echoes
+    // the secret straight back into the transcript, reddening the no-echo
+    // assertion for a product that is behaving correctly (issue #1261).
+    //
+    // termios belongs to the tty device, not to a descriptor, so this
+    // descriptor on the slave observes exactly the flags the child installs on
+    // its /dev/tty. Waiting on the flag itself makes the write deterministic;
+    // if echo suppression were removed from the runtime path the wait would
+    // never be satisfied and this fails loudly on the same deadline.
+    loop {
+        // SAFETY: `echo_probe` is an open descriptor on the pty slave for the
+        // whole call, and `term` is fully initialised by a successful
+        // tcgetattr.
+        let echo_enabled = unsafe {
+            let mut term = std::mem::MaybeUninit::<libc::termios>::uninit();
+            assert_eq!(
+                libc::tcgetattr(echo_probe.as_raw_fd(), term.as_mut_ptr()),
+                0,
+                "tcgetattr on the pty slave failed: {}",
+                std::io::Error::last_os_error()
+            );
+            term.assume_init().c_lflag & libc::ECHO != 0
+        };
+        if !echo_enabled {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the /dev/tty passphrase prompt never suppressed echo on the \
+             terminal, so a typed passphrase would be echoed back; \
+             transcript: {}",
+            String::from_utf8_lossy(&transcript)
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(echo_probe);
 
     writer
         .write_all(format!("{TEST_PASSPHRASE}\n").as_bytes())
