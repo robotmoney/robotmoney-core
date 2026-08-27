@@ -1,5 +1,5 @@
 # AerodromeAssetPositionAdapterForkTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d740448a2c3c14fa0c325f99c0cf5fb21593c110/contracts/test/AerodromeAssetPositionAdapter.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/c78b94387a5128aec495ab38ade8279dbb45f9d6/contracts/test/AerodromeAssetPositionAdapter.t.sol)
 
 **Inherits:**
 Test
@@ -59,6 +59,38 @@ uint256 internal constant ONE_USDC = 1e6
 
 ```solidity
 uint256 internal constant DEPOSIT = 10_000 * ONE_USDC
+```
+
+
+### NAV_GUARD_BPS
+Guard threshold the NAV-deviation test configures (0.20%).
+
+
+```solidity
+uint256 internal constant NAV_GUARD_BPS = 20
+```
+
+
+### NAV_MANIPULATION_TICKS
+How far past the TWAP the NAV-deviation test drives spot, in ticks
+(1 tick ≈ 1bps). 100 ticks ≈ 100bps is a 5x margin over
+`NAV_GUARD_BPS`. Measured from the TWAP, not from spot, so the
+margin holds for any live drift; the swap therefore crosses
+|spot − twap| + 100 ticks, bounded and independent of pool depth.
+
+
+```solidity
+int24 internal constant NAV_MANIPULATION_TICKS = 100
+```
+
+
+### NAV_DEVIATION_PROBE
+`AerodromeAssetPositionAdapter.NAV_DEVIATION_PROBE` (internal there).
+Decimals cancel in the |spot − twap|/twap ratio.
+
+
+```solidity
+uint256 internal constant NAV_DEVIATION_PROBE = 1e18
 ```
 
 
