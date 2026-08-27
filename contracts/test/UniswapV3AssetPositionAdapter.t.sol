@@ -603,18 +603,16 @@ contract UniV3AssetPositionAdapterForkTest is Test {
         uint256 manipUsdc = 100_000_000 * ONE_USDC;
         deal(BASE_USDC, address(this), manipUsdc);
         IERC20(BASE_USDC).forceApprove(SWAP_ROUTER02, manipUsdc);
-        ISwapRouter(SWAP_ROUTER02)
-            .exactInputSingle(
-                ISwapRouter.ExactInputSingleParams({
-                tokenIn: BASE_USDC,
-                tokenOut: BASE_WETH,
-                fee: FEE,
-                recipient: address(this),
-                amountIn: manipUsdc,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(targetTick)
-            })
-            );
+        ISwapRouter.ExactInputSingleParams memory manipSwap = ISwapRouter.ExactInputSingleParams({
+            tokenIn: BASE_USDC,
+            tokenOut: BASE_WETH,
+            fee: FEE,
+            recipient: address(this),
+            amountIn: manipUsdc,
+            amountOutMinimum: 0,
+            sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(targetTick)
+        });
+        ISwapRouter(SWAP_ROUTER02).exactInputSingle(manipSwap);
 
         // Arrange-phase precondition: the manipulation really did open a gap the
         // guard must reject, named explicitly rather than surfacing as the

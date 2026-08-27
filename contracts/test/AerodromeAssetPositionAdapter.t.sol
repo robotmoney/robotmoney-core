@@ -631,9 +631,8 @@ contract AerodromeAssetPositionAdapterForkTest is Test {
         uint256 amountIn = 100_000_000 * ONE_USDC;
         deal(BASE_USDC, address(this), amountIn);
         IERC20(BASE_USDC).forceApprove(SLIPSTREAM_ROUTER, amountIn);
-        IAerodromeSlipstreamRouter(SLIPSTREAM_ROUTER)
-            .exactInputSingle(
-                IAerodromeSlipstreamRouter.ExactInputSingleParams({
+        IAerodromeSlipstreamRouter.ExactInputSingleParams memory manipSwap =
+            IAerodromeSlipstreamRouter.ExactInputSingleParams({
                 tokenIn: BASE_USDC,
                 tokenOut: BASE_WETH,
                 tickSpacing: TICK_SPACING,
@@ -642,8 +641,8 @@ contract AerodromeAssetPositionAdapterForkTest is Test {
                 amountIn: amountIn,
                 amountOutMinimum: 0,
                 sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(targetTick)
-            })
-            );
+            });
+        IAerodromeSlipstreamRouter(SLIPSTREAM_ROUTER).exactInputSingle(manipSwap);
 
         // Arrange-phase precondition: the manipulation really did open a gap the
         // guard must reject. Without it, an under-calibrated swap fails below as
