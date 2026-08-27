@@ -83,6 +83,11 @@ pub const PASSPHRASE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE";
 /// user and inaccessible to group and other users.
 pub const PASSPHRASE_FILE_ENV_VAR: &str = "RMPC_COMMITTEE_IDENTITY_PASSPHRASE_FILE";
 
+/// The `/dev/tty` passphrase prompt. Public so tests can wait for exactly
+/// this text: it is only written once echo has been suppressed, so its
+/// appearance is the signal that typing is safe (see [`prompt_passphrase_on_tty`]).
+pub const TTY_PASSPHRASE_PROMPT: &str = "Committee identity passphrase: ";
+
 /// Largest passphrase file accepted. Generous for any real passphrase, and
 /// small enough that pointing the variable at the wrong file is refused
 /// outright instead of read into memory.
@@ -485,15 +490,107 @@ pub fn read_passphrase() -> Result<String, CommitteeIdentityError> {
                 "{PASSPHRASE_ENV_VAR} must contain valid Unicode"
             ))
         }),
-        PassphraseSource::Tty => rpassword::prompt_password("Committee identity passphrase: ")
-            .map_err(|e| {
-                CommitteeIdentityError::ErrPassphrase(format!(
-                    "{PASSPHRASE_ENV_VAR} and {PASSPHRASE_FILE_ENV_VAR} are unset; \
-                     could not read a passphrase from /dev/tty: {e}"
-                ))
-            }),
+        PassphraseSource::Tty => prompt_passphrase_on_tty(TTY_PASSPHRASE_PROMPT).map_err(|e| {
+            CommitteeIdentityError::ErrPassphrase(format!(
+                "{PASSPHRASE_ENV_VAR} and {PASSPHRASE_FILE_ENV_VAR} are unset; \
+                 could not read a passphrase from /dev/tty: {e}"
+            ))
+        }),
     }
     .and_then(require_nonempty_passphrase)
+}
+
+/// RAII guard that clears `ECHO` on a terminal and puts back exactly what it
+/// found when it is dropped — including when the guarded code returns an error
+/// or panics.
+///
+/// The borrow of the `File` is what keeps the descriptor open for the guard's
+/// whole life, so `Drop` can never restore through a closed or recycled fd.
+#[cfg(unix)]
+struct EchoSuppressed<'a> {
+    tty: &'a std::fs::File,
+    original: libc::termios,
+}
+
+#[cfg(unix)]
+impl<'a> EchoSuppressed<'a> {
+    fn new(tty: &'a std::fs::File) -> std::io::Result<Self> {
+        use std::os::unix::io::AsRawFd;
+
+        // SAFETY: `tty` is an open terminal descriptor for the duration of the
+        // call, and `tcgetattr` fully initialises `term` when it returns 0.
+        let original = unsafe {
+            let mut term = std::mem::MaybeUninit::<libc::termios>::uninit();
+            if libc::tcgetattr(tty.as_raw_fd(), term.as_mut_ptr()) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            term.assume_init()
+        };
+
+        let mut quiet = original;
+        quiet.c_lflag &= !libc::ECHO;
+        // SAFETY: same open descriptor; `quiet` is a fully initialised termios
+        // derived from the one just read back from this very terminal.
+        if unsafe { libc::tcsetattr(tty.as_raw_fd(), libc::TCSANOW, &quiet) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self { tty, original })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for EchoSuppressed<'_> {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: the borrowed `File` is still alive, so the descriptor is
+        // still open, and `original` was read from this same terminal. A
+        // failure here cannot be reported from `drop`, so it is discarded.
+        unsafe {
+            libc::tcsetattr(self.tty.as_raw_fd(), libc::TCSANOW, &self.original);
+        }
+    }
+}
+
+/// Prompt for a passphrase on `/dev/tty` with echo suppressed **before** the
+/// prompt is written.
+///
+/// `rpassword::prompt_password` does it the other way round: it writes and
+/// flushes the prompt, closes that handle, and only then reopens `/dev/tty`
+/// and clears `ECHO` on it. Between those two steps the terminal's line
+/// discipline is still echoing, so anything that arrives in the window is
+/// printed back in the clear — type-ahead entered before the prompt appeared,
+/// a pasted secret, or an automated typist reacting to the prompt text
+/// (issues #1261, #1267). Nothing about the window is bounded by the product:
+/// it stretches with load, because it spans two `open("/dev/tty")` calls.
+///
+/// Clearing `ECHO` first removes the window outright and buys a property the
+/// caller can rely on: **once the prompt is visible, echo is already off**.
+/// The `/dev/tty` passphrase test asserts exactly that ordering.
+///
+/// `rpassword::read_password` still does the reading — raw-mode line editing,
+/// `SafeString` zeroization and all. It reopens `/dev/tty`, finds echo already
+/// clear, and on the way out restores what it found, which is this guard's
+/// echo-off state; `_echo_off` then restores the terminal the user started with.
+#[cfg(unix)]
+fn prompt_passphrase_on_tty(prompt: &str) -> std::io::Result<String> {
+    use std::io::Write;
+
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")?;
+    let _echo_off = EchoSuppressed::new(&tty)?;
+    (&tty).write_all(prompt.as_bytes())?;
+    (&tty).flush()?;
+    rpassword::read_password()
+}
+
+/// Non-Unix fallback: there is no `/dev/tty` to pre-configure, and rpassword's
+/// Windows backend disables console echo through the console handle rather
+/// than a termios flag, so the ordering hazard above does not apply.
+#[cfg(not(unix))]
+fn prompt_passphrase_on_tty(prompt: &str) -> std::io::Result<String> {
+    rpassword::prompt_password(prompt)
 }
 
 fn require_nonempty_passphrase(passphrase: String) -> Result<String, CommitteeIdentityError> {
