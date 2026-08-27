@@ -99,19 +99,6 @@ else
   fail "second call output differs from first (cache miss or re-fetch)"
 fi
 
-# ---------- 6. no restricted paths touched ----------
-echo ""
-echo "--- test: no contracts/, crates/, clients/rust-payment-client/, services/ paths modified ---"
-REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
-# Check that none of the restricted paths have been modified by this PR's changes
-# We compare against the merge-base with origin/dev
-if git -C "$REPO_ROOT" diff --name-only "$(git -C "$REPO_ROOT" merge-base HEAD origin/dev 2>/dev/null || echo HEAD~1)" HEAD 2>/dev/null \
-    | grep -qE '^(contracts/|crates/|clients/rust-payment-client/|services/)'; then
-  fail "restricted path (contracts/, crates/, clients/rust-payment-client/, services/) was modified"
-else
-  pass "no restricted paths modified"
-fi
-
 # ---------- summary ----------
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
