@@ -156,6 +156,9 @@ jobs:
       - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044, #1050)
         run: python3 .github/scripts/check_committee_vote_schema.py
 
+      - name: Consensus receipt schema, canonical bytes, and bucket map (issue #1244)
+        run: python3 .github/scripts/check_consensus_receipt_schema.py
+
   generated-docs-freshness:
     name: generated-docs-freshness
     # WHY THIS JOB EXISTS
