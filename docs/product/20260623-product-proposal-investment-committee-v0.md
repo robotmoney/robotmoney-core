@@ -216,9 +216,13 @@ spec in every respect.
   `canonicalizeSubmission` string, raw Ed25519 public key, and signature, avoiding
   float reserialization before verification. New optional fields append after
   all existing fields and are omitted when absent; unknown fields are never
-  serialized. Identical fixtures and an independent byte-conformance test live
-  in `robotmoney-frontend/contract/src/__fixtures__/`. This shared-fixture model
-  is D2; `@robotmoney/contract` remains explicitly unsuitable across the
+  serialized. Under D2 this repo holds the source-of-truth copy and
+  `robotmoney-frontend` mirrors the same bytes at
+  `contract/src/__fixtures__/`, each side carrying its own byte-conformance
+  test. **The frontend half is a companion change and has not landed yet** —
+  until it does, `tests/fixtures/consensus-receipt.*` here is the only committed
+  copy and is what the frontend must be made to reproduce.
+  `@robotmoney/contract` remains explicitly unsuitable across the
   Rust/Solidity boundary (§6.1).
 - **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
   at `contracts/gateway/interfaces/IGateway.sol:380,386,392` stay; the new
@@ -483,8 +487,8 @@ behaviors the shape leaves open.
   this repo's four vaults: `conservative_defi_yield` → rmUSDC (`docs/prd.md:434`),
   `protocol_tokens` → rmPROTO (`:460`), `agent_tokens` → rmAGENT (`:509`),
   `real_world_assets` → rmRWA (`:568`). The canonical data is
-  `tests/fixtures/consensus-receipt.bucket-vault-map.json`, mirrored byte-for-byte
-  in `robotmoney-frontend`. It maps symbols rather than inventing global
+  `tests/fixtures/consensus-receipt.bucket-vault-map.json`, to be mirrored
+  byte-for-byte in `robotmoney-frontend`. It maps symbols rather than inventing global
   addresses: every receipt-capable deployment manifest must provide all four
   `vault_addresses` entries, and a missing entry makes that deployment
   non-receipt-capable rather than falling back to a zero or cross-chain address.
@@ -634,9 +638,11 @@ Remaining uncertainty is in §6.
 > change the v0.1 receipt shape.
 
 - **6.1 Receipt JSON schema and transport — pinned (D2).** The canonical core
-  fixtures are `tests/fixtures/consensus-receipt.*`; identical copies live at
-  `robotmoney-frontend/contract/src/__fixtures__/`. Both repos independently
-  reproduce the golden canonical bytes. The schema includes `schema_version`,
+  fixtures are `tests/fixtures/consensus-receipt.*`, validated on every PR by
+  `.github/scripts/check_consensus_receipt_schema.py`; identical copies belong at
+  `robotmoney-frontend/contract/src/__fixtures__/` so both repos independently
+  reproduce the golden canonical bytes. That frontend mirror is a separate,
+  still-open change tracked against this repo's committed copy. The schema includes `schema_version`,
   bps-converted mean weights, judge-authored prose, exact analyst Ed25519
   signature material, and `prompt_hash` / `inputs_digest`; fixed order, domain,
   digest algorithm, nested order, bps conversion, and append-only evolution are

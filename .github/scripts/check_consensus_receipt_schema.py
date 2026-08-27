@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
+PRD_PATH = REPO_ROOT / "docs" / "prd.md"
 SCHEMA_PATH = FIXTURES / "consensus-receipt.schema.json"
 CANONICALIZATION_PATH = FIXTURES / "consensus-receipt.canonicalization.json"
 MAP_PATH = FIXTURES / "consensus-receipt.bucket-vault-map.json"
@@ -24,7 +26,11 @@ EXPECTED_BUCKETS = [
     "protocol_tokens",
     "real_world_assets",
 ]
-EXPECTED_VAULTS = ["rmAGENT", "rmUSDC", "rmPROTO", "rmRWA"]
+# The vault symbols are NOT hard-coded here on purpose: docs/prd.md §11 is the
+# canonical vault catalog, so the bucket map is asserted against whatever that
+# section actually names — no extras, none missing (issue #1244 test plan).
+VAULT_CATALOG_HEADING = "## 11. Vault Catalog"
+RECEIPT_TOKEN_ROW = re.compile(r"^\|\s*Receipt token\s*\|\s*(\S+)\s*\|\s*$")
 SUBMISSION_FIELDS = [
     "memberId",
     "date",
@@ -43,6 +49,25 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return value
+
+
+def prd_vault_symbols() -> list[str]:
+    """Receipt-token symbols named by docs/prd.md §11, in catalog order."""
+    lines = PRD_PATH.read_text(encoding="utf-8").splitlines()
+    try:
+        start = lines.index(VAULT_CATALOG_HEADING) + 1
+    except ValueError as exc:  # pragma: no cover - guarded by CI
+        raise ValueError(f"{PRD_PATH.name} has no '{VAULT_CATALOG_HEADING}' heading") from exc
+    symbols: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        match = RECEIPT_TOKEN_ROW.match(line)
+        if match:
+            symbols.append(match.group(1))
+    if not symbols:
+        raise ValueError(f"{PRD_PATH.name} §11 names no receipt tokens")
+    return symbols
 
 
 def compact_json(value: Any) -> str:
@@ -203,6 +228,7 @@ def semantic_errors(receipt: dict[str, Any]) -> list[str]:
 
 def mapping_errors(mapping: dict[str, Any], spec: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    prd_vaults = prd_vault_symbols()
     rows = mapping.get("buckets", [])
     buckets = [row.get("bucket") for row in rows]
     vaults = [row.get("vault_symbol") for row in rows]
@@ -210,15 +236,29 @@ def mapping_errors(mapping: dict[str, Any], spec: dict[str, Any]) -> list[str]:
         errors.append("bucket map must cover the four PRD §11 buckets in canonical order")
     if spec.get("canonical_bucket_order") != EXPECTED_BUCKETS:
         errors.append("canonicalization spec bucket order disagrees with bucket map")
-    if vaults != EXPECTED_VAULTS:
-        errors.append("bucket map must map exactly to rmAGENT/rmUSDC/rmPROTO/rmRWA")
+
+    # Exactly the PRD §11 catalog: no extras, none missing, no duplicates.
+    missing = [symbol for symbol in prd_vaults if symbol not in vaults]
+    extra = [symbol for symbol in vaults if symbol not in prd_vaults]
+    if missing:
+        errors.append(f"bucket map omits PRD §11 vault(s): {', '.join(missing)}")
+    if extra:
+        errors.append(f"bucket map names vault(s) absent from PRD §11: {', '.join(extra)}")
+    if len(set(vaults)) != len(vaults):
+        errors.append("bucket map maps two buckets onto the same vault symbol")
+    if len(vaults) != len(prd_vaults):
+        errors.append(
+            f"bucket map has {len(vaults)} vault(s); PRD §11 names {len(prd_vaults)}"
+        )
+
     for row in rows:
         expected_pointer = f"/vault_addresses/{row.get('vault_symbol')}"
         if row.get("deployment_address_json_pointer") != expected_pointer:
             errors.append(f"{row.get('bucket')} does not resolve its address per deployment")
     contract = mapping.get("deployment_address_contract", {})
-    if contract.get("required_vault_symbols") != ["rmUSDC", "rmPROTO", "rmAGENT", "rmRWA"]:
-        errors.append("deployment address contract must require all four PRD §11 vault symbols")
+    required = contract.get("required_vault_symbols")
+    if not isinstance(required, list) or sorted(required) != sorted(prd_vaults):
+        errors.append("deployment address contract must require exactly the PRD §11 vault symbols")
     return errors
 
 
@@ -269,7 +309,10 @@ def main() -> int:
 
     failures.extend(mapping_errors(mapping, spec))
     if not mapping_errors(mapping, spec):
-        print("ok: bucket map covers exactly the four PRD §11 vaults and resolves per deployment")
+        print(
+            "ok: bucket map covers exactly the PRD §11 vault catalog "
+            f"({', '.join(prd_vault_symbols())}) and resolves each address per deployment"
+        )
 
     canonical = canonicalize_receipt(valid, spec)
     expected_canonical = CANONICAL_PATH.read_text(encoding="utf-8")
