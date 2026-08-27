@@ -25,7 +25,9 @@
 > mean** of the analysts' vectors, with the judge authoring the rationale rather
 > than the numbers. Together they make the signed allocation reproducible, remove
 > any need for per-analyst EVM identity in v0.1, and shrink the receipt contract.
-> §6 records the resulting pinned schema, release policy, and subject scope.
+> §6 records the resulting pinned schema, release policy, and subject scope —
+> and the one item still open, the `judge` block's reconciliation with the
+> shipped judge (§6.5), which blocks the frontend mirror but nothing else.
 >
 > **What receipts are for.** They are primarily a **public, censorship-resistant
 > record** of what the committee recommended, and only occasionally the trigger
@@ -219,9 +221,11 @@ spec in every respect.
   serialized. Under D2 this repo holds the source-of-truth copy and
   `robotmoney-frontend` mirrors the same bytes at
   `contract/src/__fixtures__/`, each side carrying its own byte-conformance
-  test. **The frontend half is a companion change and has not landed yet** —
-  until it does, `tests/fixtures/consensus-receipt.*` here is the only committed
-  copy and is what the frontend must be made to reproduce.
+  test. **The frontend half is a companion change and has not landed yet**
+  (`robotmoney-frontend#775`) — until it does,
+  `tests/fixtures/consensus-receipt.*` here is the only committed copy and is
+  what the frontend must be made to reproduce. Its `judge` block has one open
+  reconciliation against the shipped `JudgeOpinion`; see §6.5.
   `@robotmoney/contract` remains explicitly unsuitable across the
   Rust/Solidity boundary (§6.1).
 - **Gateway surface:** additive only — `setICPolicy`/`committeeRegister`/`committeeVoteSubmit`
@@ -634,15 +638,19 @@ Remaining uncertainty is in §6.
 ## 6. Pinned receipt decisions and deferred expansion
 
 > Issue #1244 closes every design question needed by the format-gap and on-chain
-> anchor work. The external-organization expansion remains deferred and does not
-> change the v0.1 receipt shape.
+> anchor work. Two items stay outside that set: the external-organization
+> expansion is deferred (§6.3), and the `judge` block's reconciliation with the
+> shipped `JudgeOpinion` is open (§6.5). Neither changes the receipt's identity,
+> digest, derivation, signature set, or entrypoints.
 
 - **6.1 Receipt JSON schema and transport — pinned (D2).** The canonical core
   fixtures are `tests/fixtures/consensus-receipt.*`, validated on every PR by
   `.github/scripts/check_consensus_receipt_schema.py`; identical copies belong at
   `robotmoney-frontend/contract/src/__fixtures__/` so both repos independently
   reproduce the golden canonical bytes. That frontend mirror is a separate,
-  still-open change tracked against this repo's committed copy. The schema includes `schema_version`,
+  still-open change tracked by `robotmoney-frontend#775`, which also owns the
+  one remaining open item — the `judge` block's reconciliation with the shipped
+  `JudgeOpinion` (§6.5). The schema includes `schema_version`,
   bps-converted mean weights, judge-authored prose, exact analyst Ed25519
   signature material, and `prompt_hash` / `inputs_digest`; fixed order, domain,
   digest algorithm, nested order, bps conversion, and append-only evolution are
@@ -686,3 +694,25 @@ Remaining uncertainty is in §6.
   and its one bound `subject_id`; there is no cross-session or cross-subject
   aggregation in v0.1. A future portfolio-wide artifact needs a new schema
   version rather than silently changing this derivation.
+
+- **6.5 `judge` block vs the shipped `JudgeOpinion` — OPEN, owned by
+  `robotmoney-frontend#775`.** The `judge` block above was pinned before
+  `robotmoney-frontend` PR #757 shipped the consensus judge. The shipped
+  `JudgeOpinion` (`backend/src/swarm/judge.ts`) is
+  `{rationale, disagreements, release_safety}` with
+  `release_safety = {release: "safe"|"hold", thinly_supported, take_count,
+  min_takes, concerns[]}`, and it has **no `consensus` field** — whereas
+  `consensus-receipt.schema.json` requires `judge.consensus` and defines
+  `release_safety` as `{safe_to_release, opinion}`. Two things follow:
+  - Nothing else in the receipt design depends on this. Session/subject
+    identity, the digest and domain separator, the bps derivation, the analyst
+    signature set, the bucket-vault map, the entrypoint set, and the release
+    policy are all unaffected, so the downstream format-gap and on-chain anchor
+    work is **not blocked** by it.
+  - It must close before `robotmoney-frontend` can mirror these bytes, because
+    the mirror has to be produced by the shipped judge. The choice — carry the
+    full shipped shape (so a verifier can recompute `thinly_supported` from
+    `take_count` / `min_takes` instead of trusting the flag), or keep a reduced
+    form and record the divergence, and either drop `judge.consensus` or specify
+    what derives it — is a product decision and belongs to `#775`. A reshape
+    here is a `schema_version` bump, not an in-place edit of 1.0.

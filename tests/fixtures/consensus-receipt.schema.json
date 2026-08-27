@@ -67,6 +67,7 @@
     },
     "judge": {
       "type": "object",
+      "description": "Judge-authored prose. OPEN RECONCILIATION (robotmoney-frontend#775): this block was pinned before robotmoney-frontend PR #757 shipped JudgeOpinion. The shipped type has no `consensus` field, and its `release_safety` is {release, thinly_supported, take_count, min_takes, concerns[]} rather than {safe_to_release, opinion}. Either the divergence is made deliberate and recorded, or a schema_version bump reshapes this block, before the frontend can mirror these bytes.",
       "required": ["rationale", "consensus", "disagreements", "release_safety"],
       "additionalProperties": false,
       "properties": {
