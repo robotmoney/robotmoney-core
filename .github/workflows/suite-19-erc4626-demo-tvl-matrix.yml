@@ -58,7 +58,10 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # Pinned to the last release before 1.8.0 (issue #1263). Foundry 1.8.0
+          # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
+          # reddening the repo with no repo change. Unpin via issue #1264.
+          version: v1.7.1
       - name: forge test ERC-4626 preconditions (exitFeeBps=${{ matrix.exit_fee_bps }})
         env:
           EXIT_FEE_BPS: ${{ matrix.exit_fee_bps }}
@@ -87,7 +90,10 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          # Pinned to the last release before 1.8.0 (issue #1263). Foundry 1.8.0
+          # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
+          # reddening the repo with no repo change. Unpin via issue #1264.
+          version: v1.7.1
       - name: Install bun (needed by DappStack dapp-build step)
         uses: oven-sh/setup-bun@v2
       - name: Cargo cache

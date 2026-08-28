@@ -6,6 +6,26 @@ execution order as they appear (or should appear) in the job.
 The CI job has no special devnet setup step — the test suite itself starts
 and tears down the Docker Compose stack whenever it needs a clean slate.
 
+## Foundry version
+
+Every `foundry-rs/foundry-toolchain@v1` step in `.github/workflows/` is pinned
+to **`v1.7.1`**. Wherever a step below reads "Install Foundry toolchain", that
+is the version it installs — there are no floating `stable` or `nightly`
+channels left.
+
+Foundry 1.8.0 replaced `forge doc`'s mdbook generator with a
+[vocs](https://vocs.dev) site generator and changed how `forge fmt` indents a
+struct literal inside a broken method chain. Both changes are silent (`forge
+doc` still exits 0), so the release turned `generated-docs-freshness` and
+`solidity-lint` red on `dev` with no repo change (issue #1263). The pin is
+containment, not the destination: adopting the vocs layout and lifting it is
+issue #1264, and `grep -rn 'Unpin via issue #1264' .github/workflows/` is the
+complete worklist.
+
+Match the pin locally with `foundryup --install v1.7.1`; a newer `forge` will
+regenerate `contracts/doc/` into a layout the freshness comparator refuses to
+compare (it names the mismatch rather than reporting stale docs).
+
 ## Environment key
 
 | Symbol | Meaning |
@@ -608,7 +628,7 @@ This is the HEAVY-tier integration-layer half of the four-vault real-TVL test py
 
 **Steps — `erc4626-precondition` job (matrix over exit_fee_bps: [0, 30, 100]):**
 1. Checkout repository (recursive submodules)
-2. Install Foundry toolchain (stable)
+2. Install Foundry toolchain
 3. `forge test --match-contract ERC4626PreconditionChecks --fuzz-runs 256 -vv` with `EXIT_FEE_BPS` env var set to the matrix value
 4. Repeat for each exit-fee tier in parallel
 
@@ -616,7 +636,7 @@ This is the HEAVY-tier integration-layer half of the four-vault real-TVL test py
 1. Checkout repository (recursive submodules)
 2. Verify Docker is available
 3. Install Rust toolchain (stable)
-4. Install Foundry toolchain (stable)
+4. Install Foundry toolchain
 5. Install Bun (needed by DappStack dapp-build step)
 6. Rust cache via `Swatinem/rust-cache@v2` pointing to `testing/smoke-test -> target`
 7. `cargo build -p smoke-test` (smoke-test crate)

@@ -101,7 +101,10 @@ jobs:
           submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          # Pinned to the last release before 1.8.0 (issue #1263). Foundry 1.8.0
+          # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
+          # reddening the repo with no repo change. Unpin via issue #1264.
+          version: v1.7.1
       - name: Run live fork drift suite
         id: drift
         continue-on-error: true
