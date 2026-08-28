@@ -50,9 +50,17 @@ regexes = [
 #   - package lockfiles: carry long integrity hashes that trip the entropy
 #     heuristic but contain no credentials.
 #   - ABI/bytecode fixtures: long hex blobs flagged by entropy, never secrets.
+#   - consensus-receipt fixtures (issue #1244): the Project Fusion receipt
+#     fixtures embed base64 Ed25519 *public* keys and detached signatures. Both
+#     are public verification material by construction — a signature scheme's
+#     verifying half is meant to be published, and no private/seed key is
+#     committed anywhere in this fixture family. gitleaks' generic-api-key
+#     entropy heuristic flags them only because 32- and 64-byte base64 blobs are
+#     high-entropy. Delete this entry if the fixtures are removed.
 paths = [
   '''\.env\.example$''',
   '''(^|/)example\.env$''',
   '''(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock)$''',
   '''\.abi\.json$''',
+  '''(^|/)tests/fixtures/consensus-receipt\.[^/]+$''',
 ]
