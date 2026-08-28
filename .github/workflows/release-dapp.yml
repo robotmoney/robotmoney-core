@@ -24,6 +24,12 @@
 #
 # GOTCHAS
 # - The workflow only fires on v*.*.* tags, never on branch pushes or pull requests.
+# - `v*.*.*` is the dApp's namespace and is no longer shared (issue #1243). rmpc
+#   releases moved to `rmpc-v*.*.*`, so a tag pushed here no longer triggers
+#   release-rmpc.yml, no longer raises the rmpc manifest floor in
+#   .github/scripts/assert_manifest_ahead_of_tags.sh, and can no longer be the
+#   subject of a "delete the tag" recovery instruction printed by that workflow.
+#   Do not re-point release-rmpc.yml at this namespace.
 # - docker/metadata-action produces both the semver tag and :latest automatically.
 # - The Dockerfile expects the build context to be the repo root (not clients/dapp/)
 #   because it COPYs from clients/dapp/ explicitly. The context is therefore set to

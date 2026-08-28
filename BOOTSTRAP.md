@@ -45,9 +45,13 @@ minimum be the bytes the release actually holds.
 > checksum with a committed public key), which does not exist yet.
 
 ```bash
-# From the repo root.
-TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases/latest \
-      | grep -m1 '"tag_name"' | cut -d'"' -f4)
+# From the repo root. rmpc releases are tagged `rmpc-vX.Y.Z`; the dApp publishes
+# into its own `vX.Y.Z` namespace (issue #1243), so `releases/latest` is NOT
+# usable here — a dApp release would win that race and the installer would
+# correctly fail with exit 3 looking for an rmpc archive that release does not
+# hold. Select the newest rmpc release explicitly:
+TAG=$(curl -fsSL https://api.github.com/repos/robotmoney/robotmoney-core/releases \
+      | grep -o '"tag_name": *"rmpc-v[^"]*"' | head -1 | cut -d'"' -f4)
 ./scripts/release/install-rmpc.sh --tag "$TAG" --dest ~/.local/bin
 rmpc --version
 ```
@@ -61,7 +65,8 @@ is installed.
 
 > **Releases published before `.sha256` existed:** `release-rmpc.yml` only began
 > emitting `<archive>.tar.gz.sha256` in #1204, so every release up to and
-> including `v0.3.3` ships archives with no checksum beside them. The installer
+> including `v0.3.3` — the last rmpc release cut under the old shared `vX.Y.Z`
+> tag namespace — ships archives with no checksum beside them. The installer
 > will correctly refuse those with exit `4` — *"no published checksum ... refusing
 > to install an unverifiable binary"*. That is the script working, not failing.
 > Until a release cut after #1204 exists, use **Option B** and build from source.
