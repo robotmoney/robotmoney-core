@@ -947,3 +947,14 @@ and cannot reach keccak256, while `sha256` is already in its runtime. The
 manifest is therefore comparable from **either** side with one command and no new
 dependency, and it is derived by re-hashing on every run: changing a shared
 fixture without changing its `sha256` fails, and so does the reverse.
+
+**The one residual, stated rather than glossed.** The manifest comparison is a
+**process control (step 3 above), not a CI check**, and it cannot become one on
+either side alone: neither repo's CI fetches the other. So the chain "frontend
+bytes reproduce the frontend golden" → "the two goldens are the same bytes" →
+"that golden hashes to the anchored digest" has its middle link enforced by the
+landing procedure rather than by a runner. The cheapest way to shorten it is for
+`robotmoney-frontend` to assert the `sha256` of its own two goldens against the
+constants in `shared_fixture_manifest` — reachable from `contract/`'s zero
+dependencies, which is why the manifest is pinned in `sha256` at all. Until that
+lands, step 3 is what stands between a drifted fixture and a divergent anchor.
