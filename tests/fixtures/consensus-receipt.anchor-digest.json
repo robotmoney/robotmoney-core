@@ -1,0 +1,24 @@
+{
+  "$comment": "CORE-ONLY SIDECAR. Every other tests/fixtures/consensus-receipt.* file in this repo is BYTE-IDENTICAL to contract/src/__fixtures__/ in robotmoney-frontend — that byte identity IS the cross-repo pin (issue #1244 AC5), and it is asserted by .github/scripts/check_consensus_receipt_schema.py. This file is deliberately NOT part of that shared set: it carries the one thing the frontend structurally cannot, and adding it to a shared file would break the byte comparison that makes the pin checkable.",
+  "why_this_file_exists": "consensus-receipt.canonicalization.json#digest_note names the keccak256 of the canonical bytes a CONSUMER OBLIGATION and explains why robotmoney-frontend cannot discharge it: contract/ has zero runtime and zero dev dependencies, and keccak256 is not reachable from a zero-dependency Bun test. node:crypto and Bun.CryptoHasher both offer sha3-256, which is NIST-padded and DIFFERENT (sha3-256(\"\") is a7ffc6f8..., keccak256(\"\") is c5d24601...), so it is not a substitute. robotmoney-core is the anchoring repo and has keccak256 available, so the obligation lands here. Tracked as robotmoney-core#1280.",
+  "digest_algorithm": "keccak256",
+  "derivation": "keccak256 over the exact bytes of the named file, which are already domain-separated: the file's own first line is consensus-receipt.canonicalization.json#domain_separator. Nothing is prepended, appended, trimmed, or re-encoded — the trailing newline is part of the preimage.",
+  "not_transcribed": "check_consensus_receipt_schema.py READS each file and HASHES it, then compares against the constant below. Changing the bytes without changing the constant fails, and changing the constant without changing the bytes fails. A constant that could only ever agree with itself is the failure mode robotmoney-core#1280 exists to prevent, and is exactly what the 1.0 draft's stale valid_fixture_digest was.",
+  "goldens": [
+    {
+      "file": "consensus-receipt.valid.canonical.txt",
+      "byte_length": 2818,
+      "keccak256": "0xeecdaf43ef720ec445b8fe9c405be84a550c77fc43cfaf4be975795e8c491177",
+      "sha256": "0x1d3b073e34fd14d744267360afc2c9273b3a787512a8f90cbafcbbf068cf34b0",
+      "role": "The payload_digest a consensusRecordReceipt call must carry for this fixture receipt."
+    },
+    {
+      "file": "consensus-receipt.escaping.canonical.txt",
+      "byte_length": 3046,
+      "keccak256": "0xf01d4bc09f8240bf310b450ad098961dd8e1a6698c97b97e45a54508b19887af",
+      "sha256": "0x097f811bae8e3b4ea9d1ec7ea06c35a601d2a863e81ae08939c5a3598668f0c1",
+      "role": "The same, for the non-ASCII conformance receipt. Pinned separately because an ASCII-only digest check cannot detect a serializer that escapes non-ASCII, U+2028, or the HTML-sensitive characters — the two most likely non-JS implementations (Go's encoding/json, Python's json.dumps) each diverge that way BY DEFAULT while still reproducing an all-ASCII golden exactly."
+    }
+  ],
+  "still_open": "robotmoney-core#1280 asks for two things. The digest half is discharged here and asserted in CI. The second half — asserting that the anchoring path actually SUBMITS this digest for this fixture receipt — cannot be discharged yet: no consensusRecordReceipt implementation exists in this repo (the receipt contract is v0.1 proposed, not built; see docs/product/20260623-product-proposal-investment-committee-v0.md §2.1). #1280 stays open for that half, and the issue whose scope is the on-chain anchor must wire this constant into its own test."
+}

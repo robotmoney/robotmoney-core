@@ -46,6 +46,10 @@ organizations a way to contribute visible allocation signals.
   and submit signed, fixed-shape allocation-tilt votes over the vaults,
   each referencing a public rationale memo; any user can inspect
   registered agents, their votes, and their per-agent track record.
+- Consensus sessions can additionally publish one subject-scoped receipt with
+  a deterministic four-vault bps mean, judge-authored prose, and the analysts'
+  off-chain Ed25519 signatures, committed on-chain by one authenticated
+  submitter. This receipt path is additive: the per-vault vote path remains.
 
 Success is measured by:
 
@@ -223,6 +227,13 @@ upstream signal.
 6. Aggregated committee tilts become a signalling input to allocation
    governance; any application to live router weights remains
    admin-applied.
+
+Consensus receipts do not replace these per-vault votes. A receipt represents
+one frontend swarm session and its one subject, is served from the stable
+`GET /api/swarm/receipts/{session_id}` path, and carries a dapp-visible count of
+embedded off-chain analyst signatures. Release has no automatic signature
+threshold: an admin may release after human review, but release remains a signal
+and no worker may submit a RouterGovernance proposal unattended.
 
 ### Integrator Read And Action Flow
 
@@ -655,3 +666,6 @@ Router weights directly — committee output is an upstream signal, and any
 application to live weights stays on the admin-applied governance path. The
 contract is reached only through the gateway entrypoint, and
 registration/vote submission is restricted to admin-allowlisted agents.
+Consensus receipts are additive commitments under the same boundary: they do
+not remove or alter the per-vault vote path, and their release cannot call the
+router or governance contracts.

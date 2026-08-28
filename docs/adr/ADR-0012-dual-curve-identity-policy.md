@@ -1,6 +1,6 @@
 # ADR-0012: Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-23
 - **Deciders:** Product owner
 - **Related:**
