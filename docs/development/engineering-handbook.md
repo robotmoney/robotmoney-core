@@ -13,6 +13,13 @@ than a local invention.
   production codebase; environments differ only by configuration and seeded
   data, never by code variants.
 
+## Runbooks
+
+- [Releasing](releasing.md) — the two tag namespaces (`rmpc-v*` for the client,
+  `v*` for the dApp), how to cut and install a release, why publishing one
+  obliges the manifest bump that follows it, and what to do when either version
+  guard goes red.
+
 ## How to use this handbook
 
 - Read the relevant principle before designing a change that touches its area.
