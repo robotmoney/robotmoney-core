@@ -8,6 +8,25 @@ headless invocation. Each gap (G-prefixed) is a discrete unit of missing
 automation. When a gap is closed by an implementation issue, the row is
 updated with the closing PR or ADR reference.
 
+> **A closed gap can reopen.** Issue #1210 disabled suite-11b's live `deposit`
+> and `read` jobs (the anonymous OpenCode tier no longer executes any model, and
+> this repo does not provision `OPENCODE_API_KEY`). Every gap those jobs closed
+> is therefore reopened below (G11 partially — its offline plugin-provenance
+> pytest genuinely still runs; every other reopened gap is fully reopened), and
+> their closure text now describes a disabled implementation rather than
+> executing coverage. Restoring them is tracked by #1233.
+>
+> **What still executes is narrower than the job names suggest.** Exactly two
+> things run: the keyless offline `asserter-tests` job (transcript-asserter and
+> live-guard unit tests), and the `refusal` job. The `refusal` job runs
+> `cargo test --test opencode_refusal`, which proves the **rmpc CLI-level
+> refusal contract** — an unknown subcommand and a missing `--config` both exit
+> non-zero with a labelled stderr payload (canonical:
+> [`opencode-readonly-fork.md`](opencode-readonly-fork.md), issue #53). It
+> invokes no model and asserts nothing about agent behaviour, so it does **not**
+> cover G10, whose five live-model precondition refusal cases are reopened like
+> the rest.
+
 ---
 
 ## G7 — Headless invocation contract not documented
@@ -44,7 +63,11 @@ implementation issue.
 
 ## G8 — No CI exercises OpenCode headless vault read via skill
 
-**Status:** Closed by issue #136.
+**Status:** Closed by issue #136 — **reopened by #1210.** The closing coverage was
+suite-11b's live `read` job, which is disabled: anonymous OpenCode models no longer
+execute and the repo does not provision `OPENCODE_API_KEY`. No CI job currently
+exercises a headless vault read via the skill. Tracked by #1233; the closure text
+below describes the disabled implementation, not present coverage.
 
 **Gap description:** All prior CI called `rmpc` directly from Rust or shell.
 No workflow routed through `opencode run`. A broken skill description,
@@ -75,7 +98,10 @@ The nightly job:
 
 ## G9 — No CI exercises OpenCode headless guarded deposit via skill
 
-**Status:** Closed by issue #137.
+**Status:** Closed by issue #137 — **reopened by #1210.** The closing coverage was
+suite-11b's live `deposit` job, which is disabled for the same reason as G8. No CI
+job currently exercises a headless guarded deposit via the skill. Tracked by #1233;
+the closure text below describes the disabled implementation, not present coverage.
 
 **Gap description:** The OpenCode read test (G8) proved OpenCode could drive
 `rmpc` read commands headlessly, but never exercised the write path. The
@@ -116,7 +142,16 @@ The nightly job:
 
 ## G10 — No CI exercises OpenCode refusal on precondition failures
 
-**Status:** Closed by issue #138.
+**Status:** Closed by issue #138 — **reopened by #1210.** The closing coverage was
+a live-model matrix that no longer exists: the closure text below names workflow
+`.github/workflows/opencode-headless-deposit.yml`, matrix job
+`headless-deposit-failure-cases`, and `assert_headless_deposit_transcript.py
+--expect-refusal` — none of which any current workflow invokes. Suite-11b's
+keyless `refusal` job does **not** substitute for it: it asserts the rmpc
+CLI-level refusal contract (unknown subcommand, missing `--config`) and covers
+none of the five model-driven precondition cases below. No CI job currently
+exercises OpenCode refusal on precondition failures. Tracked by #1233; the
+closure text below describes a removed implementation, not present coverage.
 
 **Gap description:** The deposit test (G9) proved the agent can execute a
 guarded deposit when all preconditions pass. The inverse — that the model
@@ -160,7 +195,12 @@ For each case, the job:
 
 ## G11 — Suite-11b did not exercise the in-repo plugin manifest or prove on-chain deposit delta
 
-**Status:** Closed by issue #461.
+**Status:** Closed by issue #461 — **partially reopened by #1210.** The asserter-side
+half still executes: `test_transcript_asserter_provenance.py` runs in the keyless
+`asserter-tests` job on every trigger and pins both branches of the plugin-provenance
+check. The live half does not: the `--plugin` flag and the on-chain deposit-delta
+assertion live in the disabled `deposit`/`read` jobs, so no CI run proves a real
+agent loads the in-repo plugin or moves vault total assets. Tracked by #1233.
 
 **Gap description:** The suite-11b deposit and read jobs invoked
 `opencode run` without `--plugin "$PWD/plugins/robotmoney-user"`, so the
@@ -196,7 +236,13 @@ actually changed — a silent gateway no-op would also pass.
 
 ## G12 — Suite-11b did not actually exercise the agent onboarding workflow
 
-**Status:** Closed by issue #469.
+**Status:** Closed by issue #469 — **reopened by #1210.** Every assertable step in
+the table below runs inside suite-11b's disabled `deposit` job, so the
+create-key → authorize → deposit onboarding path is not exercised by any current
+CI run. The negative control (`negative_control_keystore_generate_flag.sh`) is
+independent of a live model, but it is invoked by no workflow (tracked by #1235),
+so it contributes zero executed coverage — this gap is fully reopened, not
+partially. Tracked by #1233.
 
 **Gap description:** Suite-11b's "Generate agent EOA + fund" step ran
 `rmpc-keystore-import -- --generate` and parsed `jq -r '.address'`, but

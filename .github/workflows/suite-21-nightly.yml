@@ -3,8 +3,10 @@
 # WHY THIS SUITE EXISTS
 # The per-commit CI on dev runs all workflows that are triggered on push:dev.
 # However several suites are either too heavy for per-commit runs (suite-11b
-# opencode-headless, which calls a live LLM), currently disabled pending
-# implementation (suite-18-security-gates, suite-19-erc4626-demo-tvl-matrix),
+# opencode-headless was such a suite; its live-LLM jobs are now disabled by
+# issue #1210 and it fails on purpose every night — see #1233), currently
+# disabled pending implementation (suite-18-security-gates,
+# suite-19-erc4626-demo-tvl-matrix),
 # or benefit from a periodic re-run against the latest HEAD to catch
 # time-dependent regressions (flaky tests, upstream API drift, stale fixtures).
 # This nightly orchestrator re-dispatches ALL suites against dev HEAD so every
@@ -15,6 +17,11 @@
 # Re-running via the REST API's workflow_dispatch endpoint is the simplest way
 # to re-trigger each suite against a specific ref without duplicating job steps.
 # Each suite retains its own timeout, matrix, and concurrency settings.
+#
+# NOTE ON THE EXPECTED RED: suite-11b is dispatched below and is deliberately
+# red on every run (issue #1210 option B — live OpenCode agent coverage is
+# unavailable and must not look green). Do not treat that as a nightly
+# regression; issue #1233 owns restoring it.
 #
 # WHY 02:00 UTC
 # Avoids collision with suite-11b (03:17 UTC) and suite-18-upstream-monitoring

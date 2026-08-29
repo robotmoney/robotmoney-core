@@ -1,30 +1,17 @@
 # Canonical: docs/development/ci-suites.md §11 (opencode-headless)
 #
-# WHY THIS SUITE EXISTS
-# The headless deposit and read tests are the only end-to-end proof that an AI agent,
-# given a plain-English prompt, will call the correct tools in the correct order and
-# produce a valid on-chain transaction. They catch regressions in prompt engineering,
-# tool schema definitions, and the rmpc output contract — none of which are detectable
-# by unit tests or structural checks. The refusal job runs first as a hard gate: an
-# agent that fails safety checks should never proceed to a live chain interaction.
+# COVERAGE LIMITATION (issue #1210, option B; re-enablement tracked by #1233)
+# The hosted anonymous OpenCode tier no longer executes any model. This workflow
+# intentionally does not provision OPENCODE_API_KEY or run live agent/model jobs.
+# Its keyless asserter and refusal tests still execute, but they do not prove that
+# a live AI agent can drive rmpc. Scheduled and manually dispatched runs therefore
+# fail on purpose, in the `live-model-coverage-unavailable` job, so the missing
+# coverage is loudly visible rather than silently green.
 #
-# WHY NIGHTLY ONLY (NOT EVERY PR)
-# Each headless run invokes a live language model. This takes 3–10 min, costs API
-# credits, and has non-deterministic output that can produce false positives. Running
-# on every PR would slow down the feedback loop and create noise from model variability.
-# Nightly gives a daily signal on model/tool drift without blocking development.
-#
-# WHY refusal RUNS BEFORE deposit AND read
-# The refusal assertions are the safety contract: the agent must not broadcast to
-# mainnet, must not leak secrets, must reject out-of-policy amounts. If these fail, a
-# broken prompt or tool schema could send real transactions to the wrong network. The
-# dependency makes it structurally impossible to reach the live-chain steps with a
-# failing safety gate.
-#
-# WHY deposit AND read RUN IN PARALLEL (BOTH NEED refusal)
-# They test orthogonal agent configurations (deposit-enabled vs read-only) against
-# independent devnet instances. There is no shared state between them; running in
-# parallel cuts the nightly wall time roughly in half.
+# THIS SUITE IS DELIBERATELY RED ON EVERY NIGHTLY. That is not a regression and
+# not a flake: it is the #1210 decision, and #1233 is the open issue that owns
+# it. Do not "fix" the red by deleting or greening this job — close #1233 by
+# restoring real coverage, or reopen the #1210 decision.
 #
 # GOTCHAS
 # - assert_headless_deposit_transcript.py validates tool-call ORDER, not just presence.
@@ -46,22 +33,6 @@ on:
   schedule:
     - cron: "17 3 * * *"  # nightly
   workflow_dispatch:
-    inputs:
-      # Issue #1151: the hosted zen model is an EXTERNAL, volatile dependency —
-      # the free `big-pickle` model was rotated out from under the pin on
-      # 2026-07-01 and 400ed thereafter. These dispatch overrides let an operator
-      # re-point the nightly at a currently-working free model (or the same value
-      # via the `OPENCODE_HEADLESS_MODEL` repo variable) WITHOUT a code+merge
-      # cycle, and let them prove the loud-fail guard by dispatching an invalid
-      # model name (the "Headless … run" step then reds itself; see §12.6).
-      model:
-        description: "Override opencode model (provider/model). Blank = repo default."
-        required: false
-        default: ""
-      opencode_version:
-        description: "Override pinned opencode-ai version. Blank = repo default."
-        required: false
-        default: ""
   pull_request:
     # PRs run ONLY the offline `asserter-tests` job (the live jobs below are gated
     # to non-pull_request events). This wires the previously-orphaned transcript
@@ -76,16 +47,19 @@ on:
       - ".github/scripts/tests/fixtures/**"
       - ".github/workflows/suite-11b-opencode-headless.yml"
 
-# Issue #1151: resolve the opencode version and model from dispatch input →
-# repo variable → hardcoded default. Defaults are an empirically-verified
-# no-credential path (opencode 1.18.4 fixed the 1.14.29 tool-schema
-# serialization bug; `north-mini-code-free` is a currently-advertised free zen
-# model that tool-calls anonymously). A `secrets.OPENCODE_API_KEY`, if the repo
-# ever provisions one, upgrades the same jobs to an authenticated, reliable
-# model with no further workflow change.
+# These two values are consumed ONLY by the disabled `deposit` / `read` jobs
+# below. They are NOT a working no-credential path — issue #1210 proved every
+# anonymous zen model returns UnknownError, so no value here restores live
+# coverage. They exist, together with the `OPENCODE_API_KEY` env line kept on
+# both live run steps, so that re-enabling those jobs (issue #1233, option A)
+# really is a one-line `if:` flip rather than a rebuild: without them the
+# retained steps would die on `set -u` unbound variables, and without the key
+# line a re-enabled job would still run anonymously and die in the #1151
+# loud-fail guard. The repo variables let an operator re-pin version/model at
+# that point without a code+merge cycle.
 env:
-  OPENCODE_VERSION: ${{ inputs.opencode_version || vars.OPENCODE_HEADLESS_VERSION || '1.18.4' }}
-  OPENCODE_MODEL: ${{ inputs.model || vars.OPENCODE_HEADLESS_MODEL || 'opencode/north-mini-code-free' }}
+  OPENCODE_VERSION: ${{ vars.OPENCODE_HEADLESS_VERSION || '1.18.4' }}
+  OPENCODE_MODEL: ${{ vars.OPENCODE_HEADLESS_MODEL || 'opencode/north-mini-code-free' }}
 
 jobs:
   # Offline, keyless unit tests for the transcript asserters and the issue #1151
@@ -97,6 +71,8 @@ jobs:
     name: opencode-headless-asserter-tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CI_CLASS: feature-correctness
     steps:
       - uses: actions/checkout@v4
 
@@ -114,13 +90,33 @@ jobs:
             .github/scripts/tests/test_transcript_asserter_provenance.py \
             .github/scripts/tests/test_live_guard.py
 
+  live-model-coverage-unavailable:
+    name: opencode-live-model-coverage-unavailable
+    runs-on: ubuntu-latest
+    env:
+      CI_CLASS: feature-correctness
+    # A live-model assertion needs a model credential. Do not skip this absence:
+    # the coverage policy requires the nightly/dispatch signal to fail loudly.
+    # Gated off pull_request so the deliberate red reports the gap on the nightly
+    # signal without blocking unrelated PR merges.
+    if: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - name: Report disabled live-model coverage
+        run: |
+          echo "FAIL: live OpenCode agent coverage is disabled (issue #1210, option B)." >&2
+          echo "Anonymous OpenCode models are unavailable and this repository intentionally does not provide OPENCODE_API_KEY." >&2
+          echo "Only offline transcript-asserter coverage and CLI-level rmpc refusal coverage currently execute; agent-refusal coverage (gap G10) is reopened too." >&2
+          echo "This failure is deliberate and expected on every schedule/dispatch run." >&2
+          echo "Owner: https://github.com/robotmoney/robotmoney-core/issues/1233 (re-enable live agent coverage)." >&2
+          exit 1
+
   refusal:
     name: opencode-refusal
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Live jobs are nightly/dispatch only — never on pull_request (which runs
-    # asserter-tests alone). A missing model path reds loudly via the guard, not
-    # silently; it never blocks a PR merge.
+    env:
+      CI_CLASS: feature-correctness
+    # Offline rmpc refusal checks remain useful and execute nightly/dispatch.
     if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
@@ -148,8 +144,12 @@ jobs:
     name: opencode-headless-deposit
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CI_CLASS: feature-correctness
     needs: refusal
-    if: ${{ github.event_name != 'pull_request' }}
+    # Disabled by issue #1210 option B: no anonymous model is available, and
+    # this repository intentionally does not add paid OPENCODE_API_KEY access.
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -161,8 +161,10 @@ jobs:
           bun-version: "1.2.13"
 
       - name: Install OpenCode at pinned version
-        # Issue #1151: version resolved from dispatch input / repo var / default
-        # (1.18.4). 1.14.29 shipped a tool-schema serialization bug the hosted
+        # Issue #1151: version resolved from the `OPENCODE_HEADLESS_VERSION` repo
+        # variable / default (1.18.4). The #1151 dispatch inputs were removed with
+        # the live coverage (#1210) — a model rotation cannot fix an absent tier.
+        # 1.14.29 shipped a tool-schema serialization bug the hosted
         # provider began rejecting ("tools[0].function: missing field `name`").
         # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
         # outside its default-trusted list, so a plain `bun install -g` leaves
@@ -433,9 +435,12 @@ jobs:
           # RMPC_STATE_DIR so any rmpc invocation in the agent's shell resolves
           # the per-agent nonce-lock dir even if it omits --config nuances.
           RMPC_STATE_DIR: ${{ runner.temp }}/robotmoney-opencode/state
-          # Optional (issue #1151): if the repo provisions an opencode zen API
-          # key, opencode authenticates and uses a reliable paid model; absent,
-          # OPENCODE_MODEL runs on the anonymous free tier (current behaviour).
+          # Retained deliberately (issue #1233, option A): provisioning this
+          # secret is exactly what option A does, so the plumbing has to already
+          # be here for re-enabling to be the one-line `if:` flip the canonical
+          # doc promises. Absent the secret this expands to the empty string and
+          # the (disabled) run would go out anonymously — which is precisely the
+          # unusable path issue #1210 documented.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
@@ -450,9 +455,8 @@ jobs:
           # and shell quoting stay simple. The numbered steps are separated by
           # " | " — the model follows them deterministically.
           PROMPT="You are operating the Robot Money rmpc client against a local devnet to make a guarded USDC deposit. The rmpc binary is on PATH. RMPC_STATE_DIR and RMPC_KEYSTORE_PASSPHRASE are already set in your shell. Using the bash tool ONLY, run EXACTLY these commands in this exact order, one per bash call, printing each command's output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-agent --config ${RMPC_CONFIG} --agent ${AGENT_ADDRESS} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty | (4) rmpc get-allowance --config ${RMPC_CONFIG} --owner ${AGENT_ADDRESS} --spender ${GATEWAY_ADDRESS} --pretty | (5) rmpc self-check --config ${RMPC_CONFIG} --pretty | (6) rmpc deposit --config ${RMPC_CONFIG} --amount 1000000 --order-id ${ORDER_ID} --pretty. After the deposit, report the deposit's tx_hash and amount, then stop."
-          # Model resolved from dispatch input / repo var / default (see the
-          # workflow-level env block). The default is an empirically-verified
-          # no-credential free zen model that tool-calls anonymously.
+          # This disabled job is retained only as historical implementation
+          # context. Model selection cannot restore anonymous coverage (#1210).
           opencode run "$PROMPT" --model "$OPENCODE_MODEL" --format json --dangerously-skip-permissions \
             | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
           # Loud-fail guard (issue #1151): opencode run exits 0 even when the
@@ -506,8 +510,12 @@ jobs:
     name: opencode-headless-read
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CI_CLASS: feature-correctness
     needs: refusal
-    if: ${{ github.event_name != 'pull_request' }}
+    # Disabled by issue #1210 option B: no anonymous model is available, and
+    # this repository intentionally does not add paid OPENCODE_API_KEY access.
+    if: ${{ false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -519,8 +527,10 @@ jobs:
           bun-version: "1.2.13"
 
       - name: Install OpenCode at pinned version
-        # Issue #1151: version resolved from dispatch input / repo var / default
-        # (1.18.4). 1.14.29 shipped a tool-schema serialization bug the hosted
+        # Issue #1151: version resolved from the `OPENCODE_HEADLESS_VERSION` repo
+        # variable / default (1.18.4). The #1151 dispatch inputs were removed with
+        # the live coverage (#1210) — a model rotation cannot fix an absent tier.
+        # 1.14.29 shipped a tool-schema serialization bug the hosted
         # provider began rejecting ("tools[0].function: missing field `name`").
         # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
         # outside its default-trusted list, so a plain `bun install -g` leaves
@@ -634,8 +644,10 @@ jobs:
 
       - name: Headless read run
         env:
-          # Optional (issue #1151): opencode zen API key upgrades the run to an
-          # authenticated model when provisioned; absent, the free tier is used.
+          # Retained deliberately (issue #1233, option A): see the identical note
+          # on the deposit job's run step. Option A is "provision
+          # OPENCODE_API_KEY", so this plumbing must survive the disable for the
+          # re-enable to be a one-line `if:` flip.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
@@ -646,8 +658,8 @@ jobs:
           # Single-line prompt (no embedded newlines) so the YAML block scalar
           # and shell quoting stay simple.
           PROMPT="You are operating the Robot Money rmpc client against a local devnet. The rmpc binary is on PATH. Using the bash tool ONLY, run EXACTLY these read commands in this exact order, one per bash call, printing each command's JSON output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-gateway --config ${RMPC_CONFIG} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty. After running the three commands, summarize the vault state, gateway state, and balance, then stop."
-          # Model resolved from dispatch input / repo var / default (workflow-level
-          # env block). Default is an empirically-verified no-credential free model.
+          # This disabled job is retained only as historical implementation
+          # context. Model selection cannot restore anonymous coverage (#1210).
           opencode run "$PROMPT" --model "$OPENCODE_MODEL" --format json --dangerously-skip-permissions \
             | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
           # Loud-fail guard (issue #1151): reds THIS step on an empty, error-only,
