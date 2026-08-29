@@ -375,20 +375,22 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
-- `asserter-tests` — offline, keyless pytest of the transcript asserters and the issue #1151 live-fail guard; runs on **every** trigger, including `pull_request` (the live jobs below are gated `if: github.event_name != 'pull_request'`, so a PR touching the asserters/guard runs only this job — proving the guard executes in CI, not just at nightly time). pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
-- `refusal` — offline safety assertions, no chain, no model key; runs first (nightly/dispatch)
-- `deposit` — **needs `refusal`**; full headless deposit run against devnet
-- `read` — **needs `refusal`**; runs in parallel with `deposit`
+- `asserter-tests` — offline, keyless pytest of the transcript asserters and live-fail guard; runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
+- `refusal` — offline **rmpc CLI-level** refusal assertions (`cargo test --test opencode_refusal`: unknown subcommand and missing `--config` each exit non-zero with a labelled stderr payload), no chain and no model key; runs nightly/dispatch. It invokes no model, so it is not agent-refusal coverage — gap G10 is reopened, see `headless-opencode-tests.md`.
+- `live-model-coverage-unavailable` — fails nightly/dispatch with the explicit #1210 coverage limitation. This is intentional: live model coverage requires an unavailable external credential and must not silently skip or pass.
+- `deposit` / `read` — disabled live-agent jobs retained for future re-enablement; they do not execute and provide no coverage.
 
-**Model path (issue #1151).** The hosted zen model is an external, rotated dependency: the free `opencode/big-pickle` pin 400ed from 2026-07-01, and `opencode run` exits 0 on that dead session, so a **loud-fail guard** (`assert_headless_live_transcript.py`) now reds the "Headless … run" step itself on an empty / error-only / zero-rmpc transcript. The opencode version and model resolve from `workflow_dispatch` input → repo variable (`OPENCODE_HEADLESS_VERSION` / `OPENCODE_HEADLESS_MODEL`) → default (opencode `1.18.4`, `opencode/north-mini-code-free` — an empirically-verified no-credential path); an optional `OPENCODE_API_KEY` secret upgrades to an authenticated model with no workflow change. See `docs/technical/opencode-headless-invocation.md` §12.6.
+**Live-model coverage limitation (issue #1210, option B; re-enablement tracked by #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests and the CLI-level `refusal` job remain executed in CI, but validate only the assertion code, recorded test inputs, and rmpc's own exit-code contract—not live model behaviour or agent refusal (gap G10). See `docs/technical/opencode-headless-invocation.md` §12.6.
+
+> **Suite 11b is deliberately red every night.** That red is the #1210 decision made visible, not a regression or a flake, and issue #1233 is the open owner of it. Suite 21 (nightly full-suite) dispatches 11b, so 11b's red is expected there too. Do not green this suite by deleting or weakening `live-model-coverage-unavailable`: close #1233 by restoring real coverage (option A or C), or reopen the #1210 decision.
 
 **Steps — `refusal` job:**
 1. Checkout repository
 2. Install Rust + Foundry toolchain
 3. Cargo cache
-4. Run refusal transcript assertions (prompt injection, mainnet gate, out-of-policy amount) — no model key required
+4. Run `cargo test --test opencode_refusal` — two CLI-contract assertions (unknown subcommand refuses with non-zero exit; missing required `--config` refuses), no model key and no chain required
 
-**Steps — `deposit` job:**
+**Disabled steps — `deposit` job (not current coverage):**
 1. Checkout repository
 2. Install OpenCode at pinned version + Rust + Foundry
 3. Deploy `MockUSDC` + `MockVault` + `RobotMoneyGateway` via `Deploy.s.sol` on devnet
@@ -397,7 +399,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 6. `opencode run <deposit-prompt> --format json` against devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / error-only / zero-rmpc transcript (issue #1151)
 7. `assert_headless_deposit_transcript.py` — asserts tool-call order (get-vault → get-agent → get-balance → get-allowance → self-check → deposit), `final-report.json` outcome, tx_hash non-null hex
 
-**Steps — `read` job:**
+**Disabled steps — `read` job (not current coverage):**
 1. Checkout repository
 2. Install OpenCode at pinned version + Rust + Foundry
 3. Deploy contracts + fund agent on devnet
@@ -796,7 +798,7 @@ Every workflow's `name:` and its tier.
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
 | `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
-| `opencode-headless-deposit-read` | nightly | live `refusal`/`deposit`/`read` jobs are schedule + dispatch only (gated `if: github.event_name != 'pull_request'`); the offline keyless `asserter-tests` job also runs on `pull_request` for the transcript-asserter/live-guard paths (issue #1151) |
+| `opencode-headless-deposit-read` | nightly | live model coverage is disabled by #1210 option B, so this suite is **deliberately red on every nightly** (owner: #1233); `live-model-coverage-unavailable` fails on schedule/dispatch to report the gap, while keyless `asserter-tests` runs on PRs and validates only the asserter/guard code |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
@@ -817,7 +819,7 @@ Every workflow's `name:` and its tier.
 | 8 | `explorer-indexer.yml` | `fast` \| `devnet` | `devnet` |
 | 9 | `dapp-quality.yml` | `lint-build` | `none` |
 | 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
-| 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| (`refusal` → `deposit` \| `read`) (nightly/dispatch) | `none` / `devnet` |
+| 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| `refusal` (offline, nightly/dispatch) \| explicit unavailable-live-coverage failure (nightly/dispatch) | `none` / `devnet` |
 | 12 | `openclaw.yml` | `safety` → `walkthrough` | `devnet` |
 | 13 | `doc-checks.yml` | `doc-validators` \| `schema-validators` | `none` |
 | 14 | `smoke-test.yml` | `smoke-test` | `devnet` |

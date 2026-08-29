@@ -328,11 +328,10 @@ supersedes the relevant details above where they conflict.
 ### 12.2 Drive rmpc deterministically through the bash tool
 
 Because the skill is not registered, a vague prompt makes the agent improvise
-with `task`/`read` (and even suggest explorer URLs). The jobs therefore pass an
-**explicit prompt** that names the exact rmpc commands, in order, and instructs
-the agent to use the `bash` tool only. The model is pinned to the free,
-no-credential zen model `opencode/big-pickle` (the default a fresh CI runner
-selects), so no API-key secret is required and the run is deterministic.
+with `task`/`read` (and even suggest explorer URLs). The disabled live jobs
+retain explicit prompts naming the exact rmpc commands and instructing the
+agent to use the `bash` tool only. They currently provide no CI coverage: see
+§12.6 for the unavailable live-model dependency.
 
 - Read job commands: `get-vault`, `get-gateway`, `get-balance`.
 - Deposit job commands (read prefix in the asserter's required order, then the
@@ -388,7 +387,7 @@ These are independent of OpenCode and were missing from the original workflow:
   the deposit tx `from` equals the generated agent key — both updated only to
   read `tx_hash`/`amount` out of the real `part.state.output` JSON.
 
-### 12.6 Live-transcript loud-fail guard + volatile model path (issue #1151)
+### 12.6 Live-transcript loud-fail guard and unavailable model coverage (issues #1151/#1210)
 
 **The failure.** From 2026-07-01 the nightly was red every day: the pinned free
 zen model `opencode/big-pickle` on `opencode-ai@1.14.29` began 400ing. First the
@@ -412,17 +411,36 @@ invocations** — a broken model path fails loudly at the agent step
 command order / exit codes / envelopes; those remain the transcript asserters'
 job, unchanged (the order and exit-code checks were not weakened).
 
-**Volatile model path.** The free zen model is an external, rotated dependency
-(`big-pickle` was rotated out from under the pin). The workflow no longer
-hardcodes it: the opencode version and model resolve from
-`workflow_dispatch` input → repo variable (`OPENCODE_HEADLESS_VERSION` /
-`OPENCODE_HEADLESS_MODEL`) → default. Defaults are an empirically-verified
-no-credential path — **opencode `1.18.4`** (the 1.14.29 tool-schema serialization
-bug is fixed) and **`opencode/north-mini-code-free`** (a currently-advertised free
-zen model that tool-calls anonymously). An operator can re-point the nightly to a
-working free model without a code+merge cycle, prove the guard by dispatching an
-invalid model name, or — if `secrets.OPENCODE_API_KEY` is ever provisioned —
-upgrade to an authenticated, reliable model with no workflow change.
+**Unavailable model coverage (issue #1210, option B).** The anonymous zen tier
+no longer executes any model, so selecting a different free model cannot restore
+the live runs. This repository intentionally does not provision or require
+`OPENCODE_API_KEY`; the `deposit` and `read` live-agent jobs are therefore
+disabled. They are not replayed from fixtures, and the offline tests below do
+not prove live model behaviour, tool-schema compatibility, or prompt adherence.
+On schedule and manual dispatch, `live-model-coverage-unavailable` fails with
+this limitation explicitly. That deliberate red result satisfies loud-skip:
+missing model access cannot be mistaken for executed coverage or a green suite.
+
+The disabled jobs are retained in the workflow rather than deleted, so option A
+(provision the key) is a one-line `if:` flip. Everything that flip depends on is
+kept live in the workflow for that reason alone:
+
+- the workflow-level `env:` block defining `OPENCODE_VERSION` /
+  `OPENCODE_MODEL` — the retained steps run under `set -u` and would die on
+  unbound variables without it; and
+- the step-level `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` line on
+  both live run steps — option A *is* provisioning that secret, so deleting the
+  line would make a re-enabled job run anonymously and die in the #1151
+  loud-fail guard, turning the "one-line flip" into a rebuild.
+
+Those defaults are **not** a working no-credential path; #1210 disproved that.
+
+**Who owns the deliberate red.** Suite 11b now fails on every nightly by design.
+Issue #1233 is the open tracking issue for restoring coverage and stays open for
+as long as the red does; it is what stops "permanently red nightly" from decaying
+back into the eight-week unowned red that #1210 was filed about. The
+`live-model-coverage-unavailable` step prints that issue URL in its failure
+output so the run log names its own owner.
 
 **Executed-in-CI proof.** The guard and the (previously CI-orphaned) transcript
 asserters are pinned by offline unit tests
@@ -430,5 +448,5 @@ asserters are pinned by offline unit tests
 `test_transcript_asserter_provenance.py`) run by the keyless
 `opencode-headless-asserter-tests` job on every trigger — including
 `pull_request`, so a change to the guard or asserters is proven to execute rather
-than silent-skipped. The live `refusal` / `deposit` / `read` jobs stay
-schedule/dispatch-only and never gate a PR.
+than silent-skipped. The offline `refusal` job stays schedule/dispatch-only;
+the live `deposit` and `read` jobs are disabled and have no current replacement.
