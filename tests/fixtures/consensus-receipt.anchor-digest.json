@@ -20,5 +20,59 @@
       "role": "The same, for the non-ASCII conformance receipt. Pinned separately because an ASCII-only digest check cannot detect a serializer that escapes non-ASCII, U+2028, or the HTML-sensitive characters — the two most likely non-JS implementations (Go's encoding/json, Python's json.dumps) each diverge that way BY DEFAULT while still reproducing an all-ASCII golden exactly."
     }
   ],
-  "still_open": "robotmoney-core#1280 asks for two things. The digest half is discharged here and asserted in CI. The second half — asserting that the anchoring path actually SUBMITS this digest for this fixture receipt — cannot be discharged yet: no consensusRecordReceipt implementation exists in this repo (the receipt contract is v0.1 proposed, not built; see docs/product/20260623-product-proposal-investment-committee-v0.md §2.1). #1280 stays open for that half, and the issue whose scope is the on-chain anchor must wire this constant into its own test."
+  "still_open": "robotmoney-core#1280 asks for two things. The digest half is discharged here and asserted in CI. The second half — asserting that the anchoring path actually SUBMITS this digest for this fixture receipt — cannot be discharged yet: no consensusRecordReceipt implementation exists in this repo (the receipt contract is v0.1 proposed, not built; see docs/product/20260623-product-proposal-investment-committee-v0.md §2.1). #1280 stays open for that half, and the issue whose scope is the on-chain anchor must wire this constant into its own test.",
+  "shared_fixture_manifest": {
+    "purpose": "THE CROSS-REPO PIN, IN ONE COMPARABLE VALUE (issue #1246). Every file below is byte-identical to contract/src/__fixtures__/<same name> in robotmoney-frontend. Neither repo's CI can fetch the other, so what makes that identity CHECKABLE rather than asserted is this manifest: either side re-hashes its own nine files and compares the list. A single differing sha256 names the drifted file.",
+    "why_sha256_here_and_keccak256_above": "keccak256 pins the goldens because that is what an EVM anchor computes. This manifest is aimed at the other repo, where contract/ has zero runtime and zero dev dependencies and cannot reach a keccak256 implementation at all — but sha256 is in its runtime (Bun.CryptoHasher, node:crypto). Pinning the shared set in sha256 is what lets the frontend check cross-repo identity with one command and no new dependency.",
+    "not_transcribed": "check_consensus_receipt_schema.py READS each file and HASHES it, then compares. Changing a shared fixture without changing its sha256 fails, and the reverse fails too.",
+    "how_to_compare_from_robotmoney_frontend": "cd contract/src/__fixtures__ && for f in $(...the nine names...); do printf '%s %s\\n' \"$f\" \"0x$(sha256sum \"$f\" | cut -d' ' -f1)\"; done  — then diff against `files` below. A mismatch is a cross-repo drift and must be resolved by the release process in docs/product/20260623-product-proposal-investment-committee-v0.md §7.4, never by editing one side to match the other.",
+    "release_process": "docs/product/20260623-product-proposal-investment-committee-v0.md §7.4",
+    "files": [
+      {
+        "file": "consensus-receipt.schema.json",
+        "byte_length": 15768,
+        "sha256": "0xb179fce879be180b2532a1aa11987fb679952a17b2e0b7c454f2d0b181d2fab9"
+      },
+      {
+        "file": "consensus-receipt.canonicalization.json",
+        "byte_length": 12017,
+        "sha256": "0x40a798a0ccb7e6cc15f157065cb8e908c50cdc250684f48573114551361e58d8"
+      },
+      {
+        "file": "consensus-receipt.bucket-vault-map.json",
+        "byte_length": 1193,
+        "sha256": "0xd9bdf399f5ff1879c230914aa001b7b04ebd6d593c006eb9c2fb1def03ece323"
+      },
+      {
+        "file": "consensus-receipt.valid.json",
+        "byte_length": 3315,
+        "sha256": "0x0c86a88aa88829b2be20839103e06ef97301abb335a828a76042b4e6c9f5f26d"
+      },
+      {
+        "file": "consensus-receipt.valid-no-weights.json",
+        "byte_length": 1724,
+        "sha256": "0x68a111c76cc322d999f2e6d7b4d249471f05cc2f6a062bcdda4bde59c9d706f6"
+      },
+      {
+        "file": "consensus-receipt.invalid.json",
+        "byte_length": 1003,
+        "sha256": "0x273c01396b385e8384a3f252ae52aa6421c2ab89d84c184887ca328530e30331"
+      },
+      {
+        "file": "consensus-receipt.escaping.json",
+        "byte_length": 3457,
+        "sha256": "0xbc35235d2d6ba8731d5453b19bc5cf026619f0a512ce2e008b7fd0a189faa5b2"
+      },
+      {
+        "file": "consensus-receipt.valid.canonical.txt",
+        "byte_length": 2818,
+        "sha256": "0x1d3b073e34fd14d744267360afc2c9273b3a787512a8f90cbafcbbf068cf34b0"
+      },
+      {
+        "file": "consensus-receipt.escaping.canonical.txt",
+        "byte_length": 3046,
+        "sha256": "0x097f811bae8e3b4ea9d1ec7ea06c35a601d2a863e81ae08939c5a3598668f0c1"
+      }
+    ]
+  }
 }

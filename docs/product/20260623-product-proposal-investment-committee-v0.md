@@ -657,15 +657,17 @@ Remaining uncertainty is in §6.
   reproduce the golden canonical bytes. **That mirror has landed**
   (`robotmoney-frontend#775`), and the two sides are not merely equivalent but
   **byte-identical**: every `tests/fixtures/consensus-receipt.*` file here except
-  the core-only anchor digest is the same bytes as the file of that name under
-  `contract/src/__fixtures__/` there, and the manifest of that shared set is
-  asserted in CI. Byte identity is what discharges D2 — "the same fixture in both
-  repos" is not satisfiable by two files that merely agree in spirit.
-  `consensus-receipt.anchor-digest.json` is the one deliberate core-only
-  addition: it commits the `keccak256` of each golden and is checked by
-  re-hashing the file rather than by transcription, because `contract/` has zero
-  dependencies and cannot reach a keccak256 implementation at all
-  (`robotmoney-core#1280`). The schema includes `schema_version`,
+  the two core-only sidecars is the same bytes as the file of that name under
+  `contract/src/__fixtures__/` there, and that set is asserted in CI both by
+  name and, since issue #1246, by a committed `sha256` per file. Byte identity is
+  what discharges D2 — "the same fixture in both repos" is not satisfiable by two
+  files that merely agree in spirit. The two deliberate core-only additions are
+  `consensus-receipt.anchor-digest.json`, which commits the `keccak256` of each
+  golden and the `sha256` of each shared file and is checked by re-hashing rather
+  than by transcription (`contract/` has zero dependencies and cannot reach a
+  keccak256 implementation at all — `robotmoney-core#1280`), and
+  `consensus-receipt.legacy-weights.json`, which records the two shape decisions
+  of §7.2–§7.3 and pins the archived corpus they are about. The schema includes `schema_version`,
   bps-converted mean weights, judge-authored prose, exact analyst Ed25519
   signature material, and `prompt_hash` / `inputs_digest`; fixed order, domain,
   digest algorithm, nested order, bps conversion, and append-only evolution are
@@ -775,3 +777,184 @@ Remaining uncertainty is in §6.
   protect. **The golden canonical bytes did change**, and with them the
   anchored `keccak256`; both are now committed and asserted (§6.1). Reshaping
   the `judge` block after this point **is** a `schema_version` bump.
+
+---
+
+## 7. The cross-repo format contract (issue #1246)
+
+§6 pins *what* a receipt is. This section pins *how the two repos stay able to
+produce the same bytes for it* — the float→bps conversion that bridges the two
+unit systems, the two serialized-shape questions that had drifted before anyone
+wrote a decision down, and the process a schema revision has to follow to land
+across two repositories without a window in which one side cannot read the
+other.
+
+### 7.1 Float `[0,1]` → bps — pinned, implemented, and one measured defect
+
+`robotmoney-frontend` expresses an allocation as `[0,1]` floats over four named
+buckets. This repo expresses it as `target_weight_bps` over four vault
+addresses, and `RouterGovernance.propose` **hard-rejects** any vector that does
+not sum to `BPS_DENOMINATOR` exactly (`RouterGovernance.sol:377`). Nothing
+converted between them before this issue.
+
+**The rule is data, not code.** `bps_conversion` in
+`tests/fixtures/consensus-receipt.canonicalization.json` states it,
+`canonical_bucket_order` in the same file supplies the iteration order, and the
+schema supplies `BPS_DENOMINATOR` (`definitions.bucket_weight.properties.weight_bps.maximum`).
+`mean_weights_to_bps()` in `.github/scripts/check_consensus_receipt_schema.py`
+**reads all three** rather than restating any of them, for the same reason the
+canonicalizer is spec-driven: the other repo implements from those files, so this
+side has to be a reader of them and not a second authority that can drift. A
+converter that hard-coded the four bucket names would agree with the golden no
+matter what the published spec said; the property test scrambles the spec's order
+and asserts the output follows it.
+
+The rule is *settle-the-last-entry*: round each bucket except the last half-up,
+then set the last to `BPS_DENOMINATOR − prefix_sum`, refusing if that falls
+outside `0..BPS_DENOMINATOR`. Half-up and not half-even is load-bearing — they
+differ at every exact `.5` boundary, and a receipt that disagrees on one is a
+receipt that fails to reproduce.
+
+**The one thing the property test found, and why it is documented rather than
+fixed.** The refusal branch is not a corner case. When the last canonical bucket
+`real_world_assets` is **exactly zero**, the three prefix buckets carry the whole
+distribution, their true bps sum is exactly `BPS_DENOMINATOR`, and their three
+independent roundings sum to `+1` bps about **one time in eight** — settling the
+last entry to `−1` and refusing the vector, so no receipt can be assembled for
+that session. Measured over a seeded corpus:
+
+| last bucket | vectors refused |
+|---|---|
+| `real_world_assets == 0` | **12.5 %** (6 256 / 50 000) |
+| `real_world_assets > 0` | 0 % (0 / 50 000) |
+
+`real_world_assets` is exactly 0 in **four of the six** archived allocations
+(§7.3), so this is the shape the committee actually produces. Those four convert
+only because their means are whole bps (9 500 / 500 / 0 / 0) with no rounding to
+accumulate — which the test suite asserts, with that reasoning attached, so a
+future archived vector that is *not* whole-bps reads as the known defect rather
+than as a converter bug.
+
+It is not fixed here because `bps_conversion` is one of the nine byte-identical
+shared fixtures: changing the settle rule changes canonical bytes and the
+anchored `keccak256` on **both** sides, which is a schema event under §7.4 and
+never a unilateral edit. The rate is instead **pinned by a passing test**
+(`test_a_zero_last_bucket_is_where_the_final_rule_refusal_lives`) so it cannot
+drift unnoticed or be rediscovered from scratch, and the coordinated fix —
+largest-remainder apportionment is the standard answer — is
+**`robotmoney-core#1290`**. No receipt has been anchored yet, so it is still
+resolvable inside `1.0`; that window closes with the first anchor.
+
+### 7.2 `within_bucket_weights` — DROPPED from schema 1.0
+
+Recorded, with its reasoning and its reversal path, in
+`tests/fixtures/consensus-receipt.legacy-weights.json`, and **bound to behaviour**:
+the CI guard asserts schema 1.0 actually refuses a receipt carrying the field, so
+the written decision cannot quietly become false.
+
+- **No consumer can act on it.** `weights` exists to become a
+  `RouterGovernance.propose` vector over the four vault addresses in
+  `consensus-receipt.bucket-vault-map.json`. Nothing on-chain consumes a bucket's
+  internal composition — the vault's own adapter set decides that. Anchoring a
+  number no contract enforces commits the committee, in a signed artifact, to a
+  figure nothing checks.
+- **No producer writes it.** It appears in exactly six archived allocation
+  payloads and nowhere else; its sole reader is `withinBucketWeightsFrom()` in
+  `frontend/public/assets/js/app/alpine/static-views.js`, a display transform.
+  Putting a display-only field under signature is the same mistake §6.5 avoided
+  by dropping `judge.consensus`.
+- **It is not destroyed.** The archived payloads keep it and the archive page
+  keeps rendering it. What is dropped is its presence in the anchored commitment.
+- **Reversible by a minor bump.** Under `evolution_rule` an optional field
+  appended after `weights` is omitted when absent, so adding it later cannot move
+  a byte of any receipt published under 1.0 or invalidate a signature. The bar
+  is a producer that writes it and a consumer that acts on it.
+
+### 7.3 Archived `weights`: map vs array — reconciled behind `schema_version`
+
+**The array is the pinned shape.** A JSON object's key order is not part of its
+value, so a map cannot pin bytes — two serializers holding the same map may emit
+different bytes and therefore different digests. An array plus
+`canonical_bucket_order` is the only shape under which "the same weights" and
+"the same bytes" are the same statement. The archived payloads make this
+concrete: all six spell their keys `conservative_defi_yield, agent_tokens,
+protocol_tokens, real_world_assets`, which is **not** `canonical_bucket_order`.
+The current producer (`meanTakeWeights()`, `backend/src/swarm/domain.ts`) already
+emits an array and already settles its last entry to the exact remainder — the
+same shape §7.1 pins, one unit system up. The map is the archived form only.
+
+**The archived payloads are not retro-fitted.** They carry no `schema_version` at
+all: they are pre-schema session archives, not receipts. Schema 1.0 types
+`weights` as an array, so one can never be mistaken for the other. They are
+converted on assembly — read the map by `canonical_bucket_order`, normalize to
+sum 1, apply `bps_conversion` — and all six conversions are **recomputed in CI**
+from the archived floats rather than transcribed, then round-tripped: the
+recovered bucket set must equal the archived one and every weight must return
+within 1 bps. Nothing at bucket level is lost. What is not carried is
+`within_bucket_weights`, dropped deliberately per §7.2 rather than lost to the
+shape change.
+
+### 7.4 How a schema revision lands across two repos — and which side deploys first
+
+**The two repos hold opposite ends of the artifact.** `robotmoney-frontend`
+**produces and signs**; `robotmoney-core` **verifies and anchors**.
+
+> **The verifier deploys first. The producer deploys second. This holds even for
+> an append-only minor bump.**
+
+The append-only rule protects **published signatures**, not **old verifiers**.
+The schema root is `additionalProperties: false`, so a verifier holding only 1.0
+*refuses* a receipt that carries a field appended in 1.1. Readers-first is
+therefore mandatory, not merely tidy.
+
+Readers-first is *safe* because a bump **adds** a schema document rather than
+replacing one: `version_policy.retroactivity` publishes a new `$id`, keeps the
+old document, and has a verifier select by the receipt's own `schema_version`.
+A verifier holding both accepts 1.0 and 1.1 simultaneously, so the skew window
+between the two deploys is harmless — **in that direction only**. Producer-first
+inverts it: the frontend emits 1.1 bytes the anchoring side cannot validate or
+reproduce, and a digest gets anchored over a payload nothing here can check.
+
+**The landing procedure.**
+
+1. **It is a schema event, never a drive-by edit.** Any change to one of the nine
+   shared fixtures opens one issue in each repo, cross-linked. Within a version
+   those nine files are frozen.
+2. **Author both PRs together.** The nine shared files change **identically** in
+   both. The frontend PR carries `contract/src/consensus-receipt.js`; the core PR
+   carries `.github/scripts/check_consensus_receipt_schema.py`, the regenerated
+   goldens, and the regenerated `keccak256` / `sha256` constants and
+   `shared_fixture_manifest` in `consensus-receipt.anchor-digest.json`.
+3. **Neither merges until both are green** and the manifest comparison passes —
+   `shared_fixture_manifest.how_to_compare_from_robotmoney_frontend` is a
+   one-command `sha256` diff runnable from either side.
+4. **Merge order: core, then frontend.** **Deploy order: core, then frontend.**
+5. **The old schema document is never deleted.** Retirement would strand every
+   receipt already anchored under it.
+
+**The conformance vector runs in both CIs, over the same bytes.** Here:
+`.github/scripts/check_consensus_receipt_schema.py` (and `--self-test`) plus
+`.github/scripts/tests/test_consensus_receipt_bps.py`, in suite-13
+`schema-validators`. There: `contract/tests/unit/consensus-receipt-fixture.test.ts`.
+Both reproduce `consensus-receipt.valid.canonical.txt` and
+`consensus-receipt.escaping.canonical.txt` byte for byte; core additionally pins
+the `keccak256` an anchor commits to.
+
+**What neither CI can do alone is reach the other repo**, which is exactly the
+hole `shared_fixture_manifest` fills. It pins each shared file's `sha256` —
+`sha256` and not `keccak256` precisely because `contract/` has zero dependencies
+and cannot reach keccak256, while `sha256` is already in its runtime. The
+manifest is therefore comparable from **either** side with one command and no new
+dependency, and it is derived by re-hashing on every run: changing a shared
+fixture without changing its `sha256` fails, and so does the reverse.
+
+**The one residual, stated rather than glossed.** The manifest comparison is a
+**process control (step 3 above), not a CI check**, and it cannot become one on
+either side alone: neither repo's CI fetches the other. So the chain "frontend
+bytes reproduce the frontend golden" → "the two goldens are the same bytes" →
+"that golden hashes to the anchored digest" has its middle link enforced by the
+landing procedure rather than by a runner. The cheapest way to shorten it is for
+`robotmoney-frontend` to assert the `sha256` of its own two goldens against the
+constants in `shared_fixture_manifest` — reachable from `contract/`'s zero
+dependencies, which is why the manifest is pinned in `sha256` at all. Until that
+lands, step 3 is what stands between a drifted fixture and a divergent anchor.

@@ -1,0 +1,121 @@
+{
+  "$comment": "CORE-ONLY SIDECAR, like consensus-receipt.anchor-digest.json and for the same reason. The nine other tests/fixtures/consensus-receipt.* files are BYTE-IDENTICAL to contract/src/__fixtures__/ in robotmoney-frontend — that byte identity IS the cross-repo pin (issue #1244 AC5) and adding a file to that set would break the comparison that makes the pin checkable. This file records two decisions issue #1246 owes an answer to, and pins the archived vectors those decisions are about. It is asserted by .github/scripts/check_consensus_receipt_schema.py.",
+  "schema_version": "1.0",
+  "issue": "robotmoney-core#1246",
+  "why_this_file_exists": "robotmoney-frontend's archived allocation sessions serialize `weights` as a MAP plus a `within_bucket_weights` field. No backend writes within_bucket_weights, only the static archive page reads it, and the CURRENT producer emits an ARRAY — so the shape has already drifted once. Leaving either question undefined guarantees it drifts again, this time into a signed and anchored artifact. Both are answered here, with the archived corpus committed beside the answers so the answers stay checkable rather than remembered.",
+
+  "decisions": {
+    "within_bucket_weights": {
+      "resolution": "DROPPED from schema 1.0",
+      "restated": "The receipt does not carry a bucket's internal composition. `weights` is bucket-level bps and nothing else.",
+      "reasons": [
+        "NO CONSUMER CAN ACT ON IT. The receipt's `weights` exists to become a RouterGovernance.propose vector over the four vault addresses in consensus-receipt.bucket-vault-map.json. There is no on-chain consumer for what a bucket holds internally — the vault's own adapter set decides that. Anchoring a number no contract can enforce commits the committee, in a signed artifact, to a figure nothing checks.",
+        "NO PRODUCER WRITES IT. It appears in exactly the six archived allocation payloads listed under `vectors` and nowhere else; the sole reader is withinBucketWeightsFrom() in frontend/public/assets/js/app/alpine/static-views.js, a display transform. Promoting a display-only field into a signed payload would put a field with no producer under signature, which is the failure #1244 avoided by DROPPING judge.consensus for the same reason.",
+        "IT IS NOT BEING DESTROYED. The archived payloads keep it and the archive page keeps rendering it. What is dropped is its presence in the ANCHORED COMMITMENT, not its existence."
+      ],
+      "reversible_how": "By a MINOR bump, not a major one. Under consensus-receipt.canonicalization.json#evolution_rule an optional field appended after `weights` is omitted when absent, so adding `within_bucket_weights` later cannot move a byte of any receipt published under 1.0 and cannot invalidate a signature. The bar for doing so is a producer that writes it and a consumer that acts on it — neither exists today.",
+      "enforced_by": "check_consensus_receipt_schema.py asserts schema 1.0 REFUSES a receipt carrying `within_bucket_weights` (the root object is additionalProperties:false). A unilateral addition therefore turns this repo red instead of silently widening a shared schema."
+    },
+
+    "weights_shape": {
+      "resolution": "ARRAY, pinned behind schema_version 1.0",
+      "restated": "`weights` is an array of {bucket, weight_bps} in canonical_bucket_order. A map-shaped `weights` is not a 1.0 receipt and is refused by the schema (`type: array`).",
+      "reasons": [
+        "A MAP CANNOT PIN BYTES. A JSON object's key order is not part of its value, so two serializers holding the same map may emit different bytes and therefore different digests. The receipt's one real property is that anyone holding the payload recomputes the same bytes; an array plus canonical_bucket_order is the only shape under which 'the same weights' and 'the same bytes' are the same statement. The archived maps make this concrete: all six spell the keys conservative_defi_yield, agent_tokens, protocol_tokens, real_world_assets — which is NOT canonical_bucket_order.",
+        "THE ARRAY IS ALREADY WHAT THE PRODUCER EMITS. meanTakeWeights() in robotmoney-frontend backend/src/swarm/domain.ts returns {bucket, weight}[] and settles its last entry to the exact remainder — the same settle-the-last shape bps_conversion pins, one unit system up. The map is the archived form only.",
+        "THE TWO CAN NEVER BE CONFUSED. Schema 1.0 types `weights` as an array, so an archived payload cannot be mistaken for a receipt even by a careless reader."
+      ],
+      "archived_payloads_reconciled_how": "The six archived payloads carry NO schema_version at all (`carries_schema_version: false` on every vector below) — they are pre-schema session archives, not receipts, and they are not retro-fitted. They are converted on assembly: read the map by canonical_bucket_order, normalize to sum 1, apply bps_conversion. `canonical_weights` below is that conversion, recomputed in CI rather than transcribed.",
+      "what_the_conversion_loses": "Nothing at bucket level. The round trip is asserted in CI: the canonical array names exactly the archived map's bucket set, and each weight_bps / BPS_DENOMINATOR is within 1 bps of the archived float. What it does NOT carry is within_bucket_weights — dropped deliberately, per the decision above, not lost by the shape change."
+    }
+  },
+
+  "round_trip_tolerance_bps": 1,
+
+  "vectors": [
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-05-robotmoney-allocation.json",
+      "date": "2026-06-05",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.95, "agent_tokens": 0.05, "protocol_tokens": 0, "real_world_assets": 0},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 500},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9500},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 0}
+      ]
+    },
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-09-robotmoney-allocation.json",
+      "date": "2026-06-09",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.96, "agent_tokens": 0.04, "protocol_tokens": 0, "real_world_assets": 0},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 400},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9600},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 0}
+      ]
+    },
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-13-robotmoney-allocation.json",
+      "date": "2026-06-13",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.95, "agent_tokens": 0.05, "protocol_tokens": 0, "real_world_assets": 0},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 500},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9500},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 0}
+      ]
+    },
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-17-robotmoney-allocation.json",
+      "date": "2026-06-17",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.95, "agent_tokens": 0.03, "protocol_tokens": 0, "real_world_assets": 0.02},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 300},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9500},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 200}
+      ]
+    },
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-21-robotmoney-allocation.json",
+      "date": "2026-06-21",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.95, "agent_tokens": 0.05, "protocol_tokens": 0, "real_world_assets": 0},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 500},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9500},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 0}
+      ]
+    },
+    {
+      "source": "robotmoney-frontend:frontend/public/data/swarm/sessions/2026-06-24-robotmoney-allocation.json",
+      "date": "2026-06-24",
+      "carries_schema_version": false,
+      "legacy_weights": {"conservative_defi_yield": 0.95, "agent_tokens": 0.03, "protocol_tokens": 0, "real_world_assets": 0.02},
+      "legacy_key_order": ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"],
+      "within_bucket_weights_constituent_counts": {"conservative_defi_yield": 4, "agent_tokens": 7, "protocol_tokens": 3, "real_world_assets": 2},
+      "canonical_weights": [
+        {"bucket": "agent_tokens", "weight_bps": 300},
+        {"bucket": "conservative_defi_yield", "weight_bps": 9500},
+        {"bucket": "protocol_tokens", "weight_bps": 0},
+        {"bucket": "real_world_assets", "weight_bps": 200}
+      ]
+    }
+  ]
+}

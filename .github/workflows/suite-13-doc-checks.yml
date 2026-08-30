@@ -155,8 +155,13 @@ jobs:
       # pycryptodome — keccak256 for the anchored payload digest; node/python
       # stdlib offer only NIST-padded sha3-256, which is a different function
       # (robotmoney-core#1280).
+      # pytest — the float→bps property tests (issue #1246). They are a pytest
+      # suite rather than more --self-test cases because the claim they make is
+      # universal ("every converted vector sums to exactly BPS_DENOMINATOR") and
+      # is exercised over ~50,000 generated vectors, including the degenerate
+      # shapes a hand-picked fixture set never contains.
       - name: Install schema-validation dependencies
-        run: pip install jsonschema cryptography pycryptodome
+        run: pip install jsonschema cryptography pycryptodome pytest
 
       - name: Committee vote JSON schema — valid fixture passes, invalid fixture fails (issue #1044, #1050)
         run: python3 .github/scripts/check_committee_vote_schema.py
@@ -171,6 +176,12 @@ jobs:
 
       - name: Consensus receipt schema, canonical bytes, signatures, and bucket map (issue #1244)
         run: python3 .github/scripts/check_consensus_receipt_schema.py
+
+      # -v so the executed test count is visible in the log: a green job is not
+      # proof a test ran. pytest exits 5 on zero collected, so a mis-pathed file
+      # reds this step rather than passing vacuously (loud-skip policy).
+      - name: Float→bps conversion property tests (issue #1246)
+        run: python3 -m pytest -v .github/scripts/tests/test_consensus_receipt_bps.py
 
   generated-docs-freshness:
     name: generated-docs-freshness
