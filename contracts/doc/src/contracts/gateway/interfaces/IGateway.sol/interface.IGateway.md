@@ -1,5 +1,5 @@
 # IGateway
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/gateway/interfaces/IGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/gateway/interfaces/IGateway.sol)
 
 **Title:**
 IGateway
@@ -366,6 +366,54 @@ function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
 |`voteId`|`uint256`| Index of the newly appended vote in the IC contract.|
 
 
+### setConsensusReceipt
+
+Set or update the ConsensusRebalanceReceipt contract address.
+Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
+
+
+```solidity
+function setConsensusReceipt(address receipt_) external;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receipt_`|`address`|Address of the deployed `ConsensusRebalanceReceipt` contract, or `address(0)` to disable receipt routing.|
+
+
+### consensusRecordReceipt
+
+Record a consensus rebalance receipt commitment. Restricted to
+`AGENT_ROLE`. Reverts if `consensusReceipt` is not set.
+Signalling only — see `docs/architecture.md` §4.9 and INV-4.
+There is no gateway release entrypoint: `ADMIN_ROLE` on the
+receipt contract is held by the `TimelockController` (INV-3),
+which calls `releaseReceipt` there directly.
+
+
+```solidity
+function consensusRecordReceipt(
+    bytes32 receiptId,
+    bytes32 payloadDigest,
+    string calldata payloadUri
+) external returns (uint256 index);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receiptId`|`bytes32`|    Unique receipt id (one per session per subject).|
+|`payloadDigest`|`bytes32`|`keccak256` of the receipt's canonical bytes.|
+|`payloadUri`|`string`|   Public route serving those exact bytes.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`index`|`uint256`|Index of the newly appended receipt.|
+
+
 ### WINDOW_SECONDS
 
 Window length in seconds for per-window gross caps.
@@ -418,6 +466,15 @@ Investment Committee policy contract, or `address(0)` if not configured.
 
 ```solidity
 function icPolicy() external view returns (IInvestmentCommitteePolicy);
+```
+
+### consensusReceipt
+
+Consensus rebalance receipt contract, or `address(0)` if not configured.
+
+
+```solidity
+function consensusReceipt() external view returns (IConsensusRebalanceReceipt);
 ```
 
 ### agentOwner

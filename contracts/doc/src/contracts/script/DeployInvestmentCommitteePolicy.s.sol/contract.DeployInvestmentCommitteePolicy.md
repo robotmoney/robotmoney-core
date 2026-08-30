@@ -1,5 +1,5 @@
 # DeployInvestmentCommitteePolicy
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
 
 **Inherits:**
 Script
@@ -8,19 +8,30 @@ Script
 DeployInvestmentCommitteePolicy
 
 Foundry deploy script for the InvestmentCommitteePolicy contract.
-Deploys InvestmentCommitteePolicy with the given admin and gateway
-addresses, wires the IC policy into the gateway (`setICPolicy`),
-and grants the gateway IC's `ADMIN_ROLE` so it can forward
-`committeeRegister` calls to the IC contract on behalf of the admin.
-Writes a deployment JSON readable by the smoke-test fixture and
-off-chain tooling.
+Deploys InvestmentCommitteePolicy AND ConsensusRebalanceReceipt in
+one ceremony (issue #1247 AC10 — one greenfield rollout, no
+migration, no registered agent to preserve), wires both into the
+gateway (`setICPolicy`, `setConsensusReceipt`), and grants the
+gateway IC's `ADMIN_ROLE` so it can forward `committeeRegister`
+calls on behalf of the admin. Writes a deployment JSON readable by
+the smoke-test fixture and off-chain tooling.
+**The receipt contract's `ADMIN_ROLE` goes to `RECEIPT_ADMIN_ADDRESS`
+and nowhere else.** In production that is the `TimelockController`
+(INV-3). The gateway is deliberately NOT granted it: routing
+`releaseReceipt` through the gateway would need a second holder and
+defeat INV-3, so the timelock calls the receipt contract directly.
+See `docs/architecture.md` §4.9.
 Required env vars:
 ADMIN_ADDRESS    — receives DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC;
 must also hold ADMIN_ROLE on the gateway (for
 setICPolicy and gateway grantRole).
 GATEWAY_ADDRESS  — deployed RobotMoneyGateway address; all committee
-writes (register, voteSubmit) must originate here.
+writes (register, voteSubmit, receipt record)
+must originate here.
 Optional env vars:
+RECEIPT_ADMIN_ADDRESS — sole holder of ADMIN_ROLE on the receipt
+contract; the TimelockController in production.
+Defaults to ADMIN_ADDRESS for devnet ceremonies.
 DEPLOYMENT_OUT   — path for the output JSON
 (default: "deployments/ic-policy-<chain_id>.json")
 
@@ -67,11 +78,57 @@ function runInProcessWith(address admin_, address gateway_)
 |`d`|`Deployed`|Struct containing the deployed contract and key parameters.|
 
 
+### runInProcessWith
+
+In-process variant that separates the IC admin from the receipt
+contract's `ADMIN_ROLE` holder (the timelock). No broadcast, no
+JSON written.
+
+
+```solidity
+function runInProcessWith(address admin_, address receiptAdmin_, address gateway_)
+    public
+    returns (Deployed memory d);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`admin_`|`address`|       Address to receive DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC.|
+|`receiptAdmin_`|`address`|Sole holder of ADMIN_ROLE on the receipt contract.|
+|`gateway_`|`address`|     Deployed RobotMoneyGateway address.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`d`|`Deployed`|Struct containing the deployed contracts and key parameters.|
+
+
+### wireGatewayInProcess
+
+In-process gateway wiring for forge tests. `msg.sender` must
+hold `ADMIN_ROLE` on the gateway AND `DEFAULT_ADMIN_ROLE` on the
+IC contract, exactly as the broadcast path requires.
+
+
+```solidity
+function wireGatewayInProcess(Deployed memory d) public;
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`d`|`Deployed`|Result of `runInProcessWith`.|
+
+
 ### _deploy
 
 
 ```solidity
-function _deploy(address admin_, address gateway_) internal returns (Deployed memory d);
+function _deploy(address admin_, address receiptAdmin_, address gateway_)
+    internal
+    returns (Deployed memory d);
 ```
 
 ### _wireGateway
@@ -112,7 +169,9 @@ Result struct returned to in-process callers (e.g. forge tests).
 ```solidity
 struct Deployed {
     InvestmentCommitteePolicy policy;
+    ConsensusRebalanceReceipt receipts;
     address admin;
+    address receiptAdmin;
     address gateway;
 }
 ```
