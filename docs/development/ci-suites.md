@@ -78,6 +78,43 @@ compare (it names the mismatch rather than reporting stale docs).
 3. Cache Foundry build artifacts (`cache/`, `out/`)
 4. `forge coverage` with `check_gateway_coverage.py` — enforces branch-coverage gate on `RobotMoneyGateway`
 
+> **The coverage compile is memory-bound, and the budget is now gated (issue #1298).**
+> `forge coverage` runs without `--ir-minimum`. That flag enables `viaIR`, whose peak
+> RSS grows steeply with the compile set. Peak RSS of the whole coverage run with
+> solc 0.8.24, measured on an unconstrained host:
+>
+> | compile set | `--ir-minimum` | peak RSS | wall |
+> |---|---|---|---|
+> | 174 files (`dev` @ `969cfc84`) | yes | 17.48 GiB | 7m12s |
+> | 178 files (#1293 @ `3faeadd9`) | yes | 18.00 GiB | 9m30s |
+> | 174 files | no | 2.27 GiB | 0m24s |
+> | 178 files | no | 2.30 GiB | 1m10s |
+>
+> A GitHub-hosted `ubuntu-latest` runner has 16 GB, and **both `viaIR` figures are
+> above it**. `dev` at 174 files survived only because the allocator reuses arenas
+> under memory pressure instead of growing; PR #1293's four extra files were enough
+> that it no longer could, and the runner was OOM-killed mid-compile at 7m26s of a
+> 20-minute timeout. GitHub reports that as `The runner has received a shutdown
+> signal` / `exit code 143`, which reads as infrastructure flake and invites a re-run
+> that cannot succeed. The kill is **not** a timeout: the two deaths landed at 7m26s
+> and 8m42s, different elapsed times, both far short of the 20-minute deadline.
+>
+> Nothing in `contracts/` needs `viaIR` to compile under coverage's unoptimised
+> profile, and dropping it *raised* measured branch coverage (49.0% → 58.5%) because
+> `--ir-minimum`'s degraded source mappings were losing branch hits. Two exclusions
+> that existed only as `--ir-minimum` workarounds — `^test_getPastVotes_` (AZ-GOV-1)
+> and `CustodyInvariantGuardTest` (issue #944) — were removed at the same time, so the
+> coverage set grew rather than shrank.
+>
+> Dropping `viaIR` also collapses the job's sensitivity to compile-set size, from
+> ~133 MB per added Solidity file to ~7.7 MB.
+>
+> The step runs under `.github/scripts/run_coverage_memory_guard.py`, which measures
+> the run's peak RSS and **fails the job above 50% of runner RAM**. That is deliberate:
+> the next contract-adding PR should meet an explanatory red gate with the number in
+> it, not rediscover the cliff as an unfixable "flake". Raising the ceiling is a
+> deliberate act (`COVERAGE_MEM_CEILING_PCT`), not a default.
+
 ---
 
 ### 3. Solidity quality gate
