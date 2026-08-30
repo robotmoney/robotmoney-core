@@ -603,6 +603,126 @@ not driven by committee output. Because the link is off-chain and
 admin-applied, RouterGovernance is unchanged and no governance-interface
 refactor is required.
 
+### 4.9 Consensus Rebalance Receipt Contract
+
+`contracts/gateway/ConsensusRebalanceReceipt.sol` is a **seventh protocol
+contract** and a **signalling-only commitment register** for the swarm's
+consensus rebalance receipts. It anchors the `keccak256` of a receipt's
+canonical bytes on chain, next to the public URI serving those exact bytes.
+
+**Why the anchor exists.** A signed receipt published only at an
+RM-controlled URL can still be silently suppressed by RM, which is exactly
+the property the record exists to provide (product proposal §2.1). The
+on-chain commitment is the trust story, not an enhancement to it.
+**That property lands at mainnet deployment, not here** — v0.1 proves the
+mechanism on a devnet, and no surface may describe the record as
+tamper-proof or censorship-resistant in the present tense before then.
+
+**Payload contract.** The bytes are pinned by
+`tests/fixtures/consensus-receipt.schema.json` and
+`consensus-receipt.canonicalization.json`, which are **byte-identical** to
+`contract/src/__fixtures__/` in `robotmoney-frontend`; that byte identity
+is the cross-repo pin. The preimage is UTF-8
+`robotmoney:consensus-receipt:v1\n` + compact JSON + a trailing newline.
+`tests/fixtures/consensus-receipt.anchor-digest.json` is a **core-only
+sidecar** — deliberately outside the shared set — recording the `keccak256`
+of each committed golden. `ConsensusRebalanceReceiptTest` **derives** those
+digests by hashing the golden files and compares them with the sidecar
+constants, so changing either side alone turns the test red.
+
+#### 4.9.1 The three interface answers (issue #1247 task 4.0)
+
+The earlier design in the product proposal §2.1 assumed multiple analysts
+each calling `consensusSubmitSignature` under their own EOA. That model was
+rejected; its entrypoint set and its 7-day deadline were **re-derived, not
+ported**. The three answers are recorded here before any contract code:
+
+**1. `consensusSubmitSignature` does not survive. A one-shot
+`recordReceipt` replaces it.** One submitter attests for the committee and
+the analysts' ed25519 signatures ride inside the payload as data verified
+off-chain. The EVM has no ed25519 precompile and ADR-0012 §5 closes that
+seam, so a per-analyst on-chain signature call could never verify anything
+it accepted. There is no second agent registry either: submitters are gated
+by `COMMITTEE_AGENT_ROLE` on the shipped `InvestmentCommitteePolicy`, so
+role administration stays on one contract.
+
+*Accepted cost.* The chain proves the committee produced the
+recommendation and that one submitter attested to it. It does **not** prove
+each named analyst signed. Verifying that is an off-chain check against the
+payload, and every surface must say so plainly — the dapp renders the
+payload signature count labelled as **off-chain analyst signatures**, never
+as on-chain approvals. Because a compromised submitter could otherwise
+publish a receipt the analysts never agreed to, that verification is
+load-bearing: `rmpc` refuses to submit a receipt whose digest or whose
+embedded signatures do not verify, and the indexer stores the verification
+state it independently recomputed.
+
+**2. The 7-day window collapses to zero. Staleness becomes a property of
+the recommendation, computed off-chain.** The `deadline = firstSignatureAt +
+WINDOW_SECONDS` design bounded a **multi-party signature-collection
+window**. With one submitter there is nothing to wait for, so the window is
+deleted rather than repurposed: the contract has no deadline field, no
+expiry, and no keeper. Staleness is derived from the payload's `created_at`
+by the reader — the dapp labels a recommendation stale, and the worker
+never drafts governance from a stale one. No timeout changes on-chain
+state; `testUnreleasedReceiptNeverExpires` asserts this.
+
+**3. A receipt that is never released stays an immutable public record.**
+Recording is the point; release is a separate, discretionary human act.
+An unreleased receipt is never deleted, never expires, and never mutates.
+The **dapp** renders it as *recorded, not released*, alongside its
+verification state and its applied/not-applied state, so a recommendation
+that governance declined is visible as such rather than absent. The
+**worker** treats it as non-actionable: it watches `ReceiptReleased` only,
+and never drafts a `RouterGovernance.propose` from an unreleased or stale
+receipt. There is no automatic release threshold (D5) — release follows
+human review of the judge's safety opinion and the verified embedded
+signatures.
+
+#### 4.9.2 Entrypoint set
+
+| Call | Site | Authority |
+|---|---|---|
+| `setConsensusReceipt(address)` | `RobotMoneyGateway` | `ADMIN_ROLE` on the gateway |
+| `consensusRecordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)` | `RobotMoneyGateway` | `AGENT_ROLE` on the gateway **and** `COMMITTEE_AGENT_ROLE` on the IC policy |
+| `recordReceipt(address submitter, …)` | `ConsensusRebalanceReceipt` | `onlyGateway` |
+| `releaseReceipt(bytes32 receiptId)` | `ConsensusRebalanceReceipt` | `ADMIN_ROLE`, held by the `TimelockController` |
+
+`receiptId` is
+`keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`;
+refusing an existing id enforces **one receipt per session per subject**.
+`payloadUri` must be the stable backend route
+`/api/swarm/receipts/{session_id}` on the configured frontend origin.
+
+**Why release is not a gateway entrypoint.** Routing release through the
+gateway would require granting the gateway `ADMIN_ROLE` on the receipt
+contract — the pattern `committeeRegister` uses. INV-3 requires that role
+to be held by the `TimelockController`, and a second holder would defeat
+it. The timelock therefore calls `releaseReceipt` directly, and
+`ADMIN_ROLE` on the receipt contract has exactly one holder.
+`testAdminRoleHeldByTimelock` and
+`testReleaseRevertsUnlessRoutedThroughTimelock` assert both halves.
+
+**Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
+no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
+`RouterGovernance`. Recording appends a row; releasing flips a boolean.
+`ConsensusRebalanceReceiptTest.testSignallingOnlyBoundary` mirrors
+`InvestmentCommitteePolicyTest.testSignallingOnlyBoundary`.
+
+**Events.** `ReceiptRecorded(bytes32 indexed receiptId, address indexed
+submitter, uint256 indexed index, bytes32 payloadDigest, string payloadUri,
+uint64 recordedAt)` and `ReceiptReleased(bytes32 indexed receiptId, address
+indexed releasedBy, uint64 releasedAt)`. **No event carries a signature
+parameter, indexed or otherwise** — a `uint8[64] indexed` signature would
+exceed the EVM's 3-topic non-anonymous limit, and analyst signatures are
+payload data in every case.
+
+**Submitter custody.** The submitter EOA is an operational secret with real
+authority over the public record. Its custody, rotation, and compromise
+runbook are in
+`docs/technical/consensus-receipt-submitter-runbook.md`, which must be
+satisfied before any production submission.
+
 ## 5. Off-Chain Architecture
 
 ### 5.0 Read Surface Taxonomy

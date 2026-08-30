@@ -4,6 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {IInvestmentCommitteePolicy} from "./IInvestmentCommitteePolicy.sol";
+import {IConsensusRebalanceReceipt} from "./IConsensusRebalanceReceipt.sol";
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
@@ -393,6 +394,28 @@ interface IGateway {
         external
         returns (uint256 voteId);
 
+    /// @notice Set or update the ConsensusRebalanceReceipt contract address.
+    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
+    /// @param receipt_ Address of the deployed `ConsensusRebalanceReceipt`
+    ///                 contract, or `address(0)` to disable receipt routing.
+    function setConsensusReceipt(address receipt_) external;
+
+    /// @notice Record a consensus rebalance receipt commitment. Restricted to
+    ///         `AGENT_ROLE`. Reverts if `consensusReceipt` is not set.
+    ///         Signalling only — see `docs/architecture.md` §4.9 and INV-4.
+    ///         There is no gateway release entrypoint: `ADMIN_ROLE` on the
+    ///         receipt contract is held by the `TimelockController` (INV-3),
+    ///         which calls `releaseReceipt` there directly.
+    /// @param receiptId     Unique receipt id (one per session per subject).
+    /// @param payloadDigest `keccak256` of the receipt's canonical bytes.
+    /// @param payloadUri    Public route serving those exact bytes.
+    /// @return index Index of the newly appended receipt.
+    function consensusRecordReceipt(
+        bytes32 receiptId,
+        bytes32 payloadDigest,
+        string calldata payloadUri
+    ) external returns (uint256 index);
+
     // -------------------------------------------------------------------
     // Views
     // -------------------------------------------------------------------
@@ -414,6 +437,9 @@ interface IGateway {
 
     /// @notice Investment Committee policy contract, or `address(0)` if not configured.
     function icPolicy() external view returns (IInvestmentCommitteePolicy);
+
+    /// @notice Consensus rebalance receipt contract, or `address(0)` if not configured.
+    function consensusReceipt() external view returns (IConsensusRebalanceReceipt);
 
     /// @notice Recorded owner (depositor EOA) for `agent`, or `address(0)`
     ///         if no policy is recorded.

@@ -12,6 +12,7 @@ import {AccessRoles} from "./AccessRoles.sol";
 import {IGateway} from "./interfaces/IGateway.sol";
 import {IPortfolioRouter} from "./interfaces/IPortfolioRouter.sol";
 import {IInvestmentCommitteePolicy} from "./interfaces/IInvestmentCommitteePolicy.sol";
+import {IConsensusRebalanceReceipt} from "./interfaces/IConsensusRebalanceReceipt.sol";
 
 /// @title RobotMoneyGateway
 /// @notice Thin policy-gated wrapper around `vault.deposit()`. Pulls USDC from
@@ -112,6 +113,9 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     /// @notice `committeeRegister()` or `committeeVoteSubmit()` called but no IC
     ///         policy contract is configured (`icPolicy == address(0)`).
     error ICPolicyNotSet();
+    /// @notice `consensusRecordReceipt()` called but no consensus receipt contract
+    ///         is configured (`consensusReceipt == address(0)`).
+    error ConsensusReceiptNotSet();
 
     // -------------------------------------------------------------------
     // Constants
@@ -301,6 +305,13 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     uint256 private _adminCount;
     /// @notice Number of accounts currently holding `DEFAULT_ADMIN_ROLE`.
     uint256 private _defaultAdminCount;
+
+    /// @notice Consensus Rebalance Receipt contract. When set,
+    ///         `consensusRecordReceipt` forwards calls here. Settable by
+    ///         `ADMIN_ROLE` via `setConsensusReceipt`. `address(0)` means not
+    ///         configured. Appended after the admin-tier counters so no
+    ///         preceding storage slot moves.
+    IConsensusRebalanceReceipt public consensusReceipt;
 
     /// @notice Revoking/renouncing the sole holder of an admin tier is forbidden.
     error LastAdminFloor();
@@ -1443,6 +1454,58 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuard, IGateway {
     {
         if (address(icPolicy) == address(0)) revert ICPolicyNotSet();
         voteId = icPolicy.submitVote(p);
+    }
+
+    // -------------------------------------------------------------------
+    // Consensus rebalance receipt routing (issue #1247)
+    // -------------------------------------------------------------------
+
+    /// @notice Emitted when the consensus receipt contract address is set or updated.
+    /// @param by      Address that called `setConsensusReceipt` (must hold `ADMIN_ROLE`).
+    /// @param receipt New receipt contract address (`address(0)` clears it).
+    event ConsensusReceiptSet(address indexed by, address indexed receipt);
+
+    /// @notice Set or update the ConsensusRebalanceReceipt contract address.
+    ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
+    /// @param receipt_ Address of the deployed `ConsensusRebalanceReceipt`
+    ///                 contract, or `address(0)` to disable receipt routing.
+    function setConsensusReceipt(address receipt_) external onlyRole(ADMIN_ROLE) {
+        consensusReceipt = IConsensusRebalanceReceipt(receipt_);
+        emit ConsensusReceiptSet(msg.sender, receipt_);
+    }
+
+    /// @notice Record a consensus rebalance receipt commitment on chain.
+    ///         Restricted to `AGENT_ROLE`; the caller is the single submitter
+    ///         attesting for the committee, and it must additionally hold
+    ///         `COMMITTEE_AGENT_ROLE` on the IC policy (checked by the receipt
+    ///         contract, which keeps no registry of its own).
+    ///
+    ///         This is the whole write surface for anchoring. There is no
+    ///         `consensusSubmitSignature`: the rejected multi-signer design was
+    ///         replaced by one submitter carrying the analysts' ed25519
+    ///         signatures as payload data verified off-chain (ADR-0012 §5,
+    ///         `docs/architecture.md` §4.9). Recording is **signalling only**.
+    ///
+    ///         Release is deliberately NOT routed through the gateway: routing
+    ///         it here would require granting the gateway `ADMIN_ROLE` on the
+    ///         receipt contract, and INV-3 requires that role to be held by the
+    ///         `TimelockController`. The timelock calls
+    ///         `ConsensusRebalanceReceipt.releaseReceipt` directly.
+    ///
+    /// @param receiptId     `keccak256("robotmoney:consensus-receipt-id:v1\n" +
+    ///                      session_id + "\n" + subject_id)`.
+    /// @param payloadDigest `keccak256` of the receipt's canonical bytes.
+    /// @param payloadUri    Public route serving those exact bytes.
+    /// @return index Index of the newly appended receipt.
+    function consensusRecordReceipt(
+        bytes32 receiptId,
+        bytes32 payloadDigest,
+        string calldata payloadUri
+    ) external onlyRole(AGENT_ROLE) returns (uint256 index) {
+        if (address(consensusReceipt) == address(0)) {
+            revert ConsensusReceiptNotSet();
+        }
+        index = consensusReceipt.recordReceipt(msg.sender, receiptId, payloadDigest, payloadUri);
     }
 
     /// @dev Execute the multi-leg router withdrawal: pull shares from shareHolder,
