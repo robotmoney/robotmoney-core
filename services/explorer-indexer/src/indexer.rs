@@ -23,8 +23,9 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IGatewayEvents, IInvestmentCommitteePolicyEvents, IPortfolioRouterEvents,
-    IRouterGovernanceEvents, IVaultEvents, IVaultReads, IVaultRegistryEvents, Topics,
+    IConsensusRebalanceReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
+    IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
+    IVaultRegistryEvents, Topics,
 };
 use crate::db::{Db, DbError};
 use crate::rpc::{JsonRpc, LogEntry, RpcError};
@@ -74,6 +75,12 @@ pub struct IndexerConfig {
     /// `VoteSubmitted` events and writes to `committee_agents`,
     /// `committee_votes`, and `regime_snapshots` tables (issue #1053).
     pub investment_committee: Option<Address>,
+    /// Optional ConsensusRebalanceReceipt contract address.
+    /// When set, the indexer ingests `ReceiptRecorded` and `ReceiptReleased`
+    /// events, fetches each receipt's `payloadUri` to recompute its keccak256
+    /// digest, and writes to the `consensus_receipts` table
+    /// (issue #1247, docs/architecture.md §4.9).
+    pub consensus_receipt: Option<Address>,
     /// Hard cap on per-tick block range. Protects against an unbounded
     /// `eth_getLogs` request when the indexer is far behind tip.
     pub max_blocks_per_tick: u64,
@@ -112,6 +119,11 @@ impl IndexerConfig {
         if let Some(ic) = self.investment_committee {
             if !addrs.contains(&ic) {
                 addrs.push(ic);
+            }
+        }
+        if let Some(cr) = self.consensus_receipt {
+            if !addrs.contains(&cr) {
+                addrs.push(cr);
             }
         }
         addrs
@@ -159,6 +171,10 @@ pub async fn run_once(
     }
     if let Some(ic) = cfg.investment_committee {
         db.upsert_contract(cfg.chain_id, ic.into_array(), "investment_committee", None)
+            .await?;
+    }
+    if let Some(cr) = cfg.consensus_receipt {
+        db.upsert_contract(cfg.chain_id, cr.into_array(), "consensus_receipt", None)
             .await?;
     }
 
@@ -1217,7 +1233,132 @@ pub async fn handle_log(
         return Ok(r);
     }
 
+    // ─── ConsensusRebalanceReceipt event handlers ─────────────────────────────
+    // Canonical: docs/architecture.md §4.9 — issue #1247.
+    //
+    // Two events: ReceiptRecorded (append) and ReceiptReleased (in-place flip).
+    // Neither carries a signature parameter — the analysts' ed25519 signatures
+    // are payload data, never event data.
+
+    if topic0 == topics.consensus_receipt_recorded {
+        let decoded = IConsensusRebalanceReceiptEvents::ReceiptRecorded::decode_log(
+            &into_alloy_log(log),
+            true,
+        )
+        .map_err(|e| IndexerError::Decode(format!("ReceiptRecorded: {e}")))?;
+        let receipt_id: [u8; 32] = decoded.receiptId.0;
+        let payload_digest: [u8; 32] = decoded.payloadDigest.0;
+        let receipt_index: i64 = decoded.index.try_into().unwrap_or(i64::MAX);
+
+        // Independent digest verification: fetch the bytes the on-chain commitment
+        // points at and recompute keccak256 over them.  A fetch failure is
+        // NON-FATAL — the commitment row is always stored, with verified = false,
+        // so a suppressed or unreachable payload is visible as such rather than
+        // silently absent (architecture §4.9: the record's whole point is that it
+        // cannot be quietly withheld).
+        //
+        // SCOPE: this verifies the payload DIGEST only.  Per-analyst ed25519
+        // verification of the signatures embedded in the payload is `rmpc`'s job
+        // at submit time (architecture §4.9.1 answer 1: rmpc refuses to submit a
+        // receipt whose digest or embedded signatures do not verify) and a future
+        // indexer pass.  The EVM has no ed25519 precompile and ADR-0012 §5 closes
+        // that seam, so nothing on chain asserts it either.
+        let (verified, payload_bytes) = if decoded.payloadUri.is_empty() {
+            (false, None)
+        } else {
+            match fetch_and_verify_payload(&decoded.payloadUri, payload_digest).await {
+                Ok((v, len)) => (v, Some(len)),
+                Err(e) => {
+                    tracing::warn!(
+                        receipt_id = %alloy_primitives::hex::encode(receipt_id),
+                        payload_uri = %decoded.payloadUri,
+                        error = %e,
+                        "consensus receipt payload fetch/verify failed; \
+                         storing receipt with verified=false"
+                    );
+                    (false, None)
+                }
+            }
+        };
+
+        let r = db
+            .insert_consensus_receipt(
+                cfg.chain_id,
+                receipt_id,
+                receipt_index,
+                decoded.submitter.into_array(),
+                payload_digest,
+                &decoded.payloadUri,
+                decoded.recordedAt as i64,
+                log.block_number as i64,
+                log.log_index as i32,
+                log.tx_hash.0,
+                verified,
+                payload_bytes,
+            )
+            .await?;
+        return Ok(r);
+    }
+
+    if topic0 == topics.consensus_receipt_released {
+        let decoded = IConsensusRebalanceReceiptEvents::ReceiptReleased::decode_log(
+            &into_alloy_log(log),
+            true,
+        )
+        .map_err(|e| IndexerError::Decode(format!("ReceiptReleased: {e}")))?;
+        let r = db
+            .mark_consensus_receipt_released(
+                cfg.chain_id,
+                decoded.receiptId.0,
+                decoded.releasedBy.into_array(),
+                decoded.releasedAt as i64,
+                log.block_number as i64,
+            )
+            .await?;
+        return Ok(r);
+    }
+
     Ok(0)
+}
+
+/// Fetch the canonical receipt bytes from `payload_uri` and verify their
+/// keccak256 against the on-chain `expected_digest`.  Returns
+/// `(digest_matches, body_len)`.  Errors on network failure, non-200 HTTP, or
+/// a response body over the 1 MiB cap — every error is non-fatal at the call
+/// site, which stores the receipt with `verified = false`.
+async fn fetch_and_verify_payload(
+    payload_uri: &str,
+    expected_digest: [u8; 32],
+) -> Result<(bool, i64), String> {
+    // Mirrors `fetch_and_verify_memo`: 10s timeout, 1 MiB body cap.
+    const MAX_BODY: usize = 1024 * 1024;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("build client: {e}"))?;
+
+    let resp = client
+        .get(payload_uri)
+        .send()
+        .await
+        .map_err(|e| format!("GET {payload_uri}: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GET {payload_uri} returned {}", resp.status()));
+    }
+
+    let body = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+
+    if body.len() > MAX_BODY {
+        return Err(format!(
+            "receipt payload too large: {} bytes (max {MAX_BODY})",
+            body.len()
+        ));
+    }
+
+    let actual = alloy_primitives::keccak256(&body);
+    Ok((actual.0 == expected_digest, body.len() as i64))
 }
 
 /// Fetch the JSON memo from `rationale_uri` and verify its keccak256 against

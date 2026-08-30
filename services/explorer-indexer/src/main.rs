@@ -73,6 +73,14 @@ struct Cli {
     #[arg(long, env = "INDEXER_INVESTMENT_COMMITTEE")]
     investment_committee: Option<String>,
 
+    /// Optional ConsensusRebalanceReceipt contract address.
+    /// When set, the indexer ingests ReceiptRecorded and ReceiptReleased
+    /// events, fetches each receipt's payloadUri to recompute its keccak256
+    /// digest, and writes to the consensus_receipts table
+    /// (issue #1247, docs/architecture.md §4.9).
+    #[arg(long, env = "INDEXER_CONSENSUS_RECEIPT")]
+    consensus_receipt: Option<String>,
+
     /// Tick interval in seconds (default 12, ADR §3.2).
     #[arg(long, env = "INDEXER_TICK_SECONDS", default_value_t = DEFAULT_TICK_SECONDS)]
     tick_seconds: u64,
@@ -143,6 +151,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|s| Address::from_str(s.trim_start_matches("0x")))
         .transpose()?;
 
+    let consensus_receipt = cli
+        .consensus_receipt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| Address::from_str(s.trim_start_matches("0x")))
+        .transpose()?;
+
     let cfg = IndexerConfig {
         chain_id: cli.chain_id,
         chain_name: cli.chain_name,
@@ -153,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router_governance,
         portfolio_router,
         investment_committee,
+        consensus_receipt,
         max_blocks_per_tick: cli.max_blocks_per_tick,
         end_block: cli.end_block,
         // Load feature flags from FEATURE_FLAGS env var at startup.
