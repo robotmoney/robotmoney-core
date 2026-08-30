@@ -178,12 +178,38 @@ If a session that should have produced a receipt silently produces none, the
 public record has a hole in exactly the place someone would look for
 suppression. **Submission failures must alert and must never drop quietly.**
 
-The `watchdog` service carries this rule: it compares sessions that reached a
-publishable state against `ReceiptRecorded` rows within a bounded lateness
-window and raises `ConsensusReceiptMissing` when a session passes that window
-with no anchored receipt. It is deliberately a *page*, not a warning — the
-alternative is a gap that nobody notices until someone asks why a
-recommendation is missing.
+The `watchdog` service carries this rule
+(`services/watchdog/src/receipt_liveness.rs`). Enable it with the
+`[consensus_receipts]` config section:
+
+```toml
+[consensus_receipts]
+enabled = true
+expected_cadence_secs = 86400   # the committee's publishing cadence
+grace_secs = 21600              # tolerated lateness on top of it
+```
+
+When the gap since the most recently anchored receipt exceeds
+`expected_cadence_secs + grace_secs`, the watchdog pages with
+`alert_kind = "consensus_receipt_missing"` at `critical` severity. It is
+deliberately a *page*, not a warning.
+
+**Two limits, stated rather than hidden.**
+
+- `robotmoney-core` cannot see swarm session state — sessions live in
+  `robotmoney-frontend` — so the monitor cannot name the specific session that
+  went missing. What it sees is the observable consequence, which is what
+  actually catches suppression: an anchoring gap materially longer than the
+  publishing cadence means at least one session that should have produced a
+  receipt did not.
+- **Cold start is not alertable.** With no receipt ever anchored on a chain
+  there is no cadence to be late against, so the monitor stays quiet until the
+  first receipt lands. A publisher that never started is a deployment question,
+  not a suppression signal — check the deploy, not this alert.
+
+**This path never pauses the gateway.** It is deliberately separate from the
+mint/burn breach cycle so a quiet swarm can never halt the protocol. The
+response to a missing receipt is a page, never a halt.
 
 ### 5.4 Retry policy
 

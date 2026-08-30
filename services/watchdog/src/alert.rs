@@ -169,6 +169,99 @@ pub async fn dispatch_alert(
     Ok(())
 }
 
+/// Machine-readable detail fields for a consensus-receipt anchoring gap.
+///
+/// A deliberately separate payload from [`AlertDetails`]: a missing receipt is
+/// not a volume breach, and reusing the USDC-shaped fields would have made the
+/// alert unreadable. See `receipt_liveness` for why this path never pauses.
+#[derive(Debug, Serialize)]
+pub struct MissingReceiptDetails {
+    /// Always `"consensus_receipt_missing"`.
+    pub alert_kind: &'static str,
+    /// Chain ID.
+    pub chain_id: i64,
+    /// Unix seconds of the most recently anchored receipt.
+    pub last_recorded_at: i64,
+    /// Unix seconds at evaluation time.
+    pub observed_at: i64,
+    /// Observed anchoring gap, in seconds.
+    pub seconds_since_last_receipt: i64,
+    /// Configured cadence + grace, in seconds.
+    pub budget_secs: u64,
+}
+
+/// Dispatch a consensus-receipt anchoring-gap alert.
+///
+/// Issue #1247 AC7: a session that should have produced a receipt and did not
+/// must raise an alert rather than pass unnoticed. This is a **page**, not a
+/// warning, and it never pauses the gateway — see
+/// [`crate::receipt_liveness`].
+///
+/// Returns `Ok(())` on HTTP 200–299; any non-2xx or network error is returned
+/// as [`WatchdogError::Alert`] so the caller can log it rather than drop it.
+pub async fn dispatch_missing_receipt_alert(
+    client: &Client,
+    webhook_url: &str,
+    event: &crate::receipt_liveness::MissingReceiptEvent,
+) -> Result<(), WatchdogError> {
+    let summary = format!(
+        "RobotMoney watchdog: no consensus receipt anchored for {}s (budget={}s, chain={}) \
+         — a session that should have produced a receipt did not",
+        event.seconds_since, event.budget_secs, event.chain_id,
+    );
+
+    let body = MissingReceiptAlertPayload {
+        event_action: "trigger",
+        routing_key: "watchdog",
+        payload: MissingReceiptAlertInner {
+            summary,
+            severity: "critical",
+            source: "watchdog",
+            custom_details: MissingReceiptDetails {
+                alert_kind: "consensus_receipt_missing",
+                chain_id: event.chain_id,
+                last_recorded_at: event.last_recorded_at,
+                observed_at: event.now,
+                seconds_since_last_receipt: event.seconds_since,
+                budget_secs: event.budget_secs,
+            },
+        },
+    };
+
+    let resp = client
+        .post(webhook_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| WatchdogError::Alert(format!("webhook POST failed: {e}")))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(WatchdogError::Alert(format!(
+            "webhook returned HTTP {status}: {text}"
+        )));
+    }
+
+    Ok(())
+}
+
+/// PagerDuty Events v2 -shaped envelope for a missing-receipt page.
+#[derive(Debug, Serialize)]
+struct MissingReceiptAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    payload: MissingReceiptAlertInner,
+}
+
+#[derive(Debug, Serialize)]
+struct MissingReceiptAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: MissingReceiptDetails,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

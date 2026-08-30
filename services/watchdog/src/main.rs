@@ -35,7 +35,9 @@ use std::time::Duration;
 use tracing::{error, info};
 
 use watchdog::{
+    alert::dispatch_missing_receipt_alert,
     config::Config,
+    receipt_liveness::check_receipt_liveness,
     watchdog::{latest_indexed_block, run_cycles_since_cursor, CycleResult},
 };
 
@@ -142,6 +144,46 @@ async fn main() {
             }
             Err(e) => {
                 error!("failed to fetch latest block: {e}");
+            }
+        }
+
+        // Consensus-receipt anchoring gap (issue #1247 task 4.13). Deliberately
+        // a separate path from the volume cycle above: a quiet swarm must never
+        // pause the gateway, and a missing receipt must never be dropped
+        // silently — a gap in the public record is exactly where someone would
+        // look for suppression.
+        if config.consensus_receipts.enabled {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or_default();
+            match check_receipt_liveness(&pool, &config.consensus_receipts, args.chain_id, now)
+                .await
+            {
+                Ok(Some(event)) => {
+                    error!(
+                        seconds_since = event.seconds_since,
+                        budget_secs = event.budget_secs,
+                        "consensus receipt missing: a session that should have produced a receipt did not"
+                    );
+                    match config.action.webhook_url.as_deref() {
+                        Some(url) => {
+                            if let Err(e) =
+                                dispatch_missing_receipt_alert(&client, url, &event).await
+                            {
+                                error!("missing-receipt alert dispatch failed: {e}");
+                            }
+                        }
+                        // Never silent: if there is nowhere to page, say so
+                        // every cycle rather than swallowing the condition.
+                        None => error!(
+                            "consensus receipt missing but action.webhook_url is unset — \
+                             the alert had nowhere to go"
+                        ),
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => error!("consensus receipt liveness check failed: {e}"),
             }
         }
 
