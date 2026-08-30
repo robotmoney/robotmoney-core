@@ -1067,6 +1067,34 @@ protocol-scope read (latest snapshot plus history). All committee/regime
 reads are display-only and non-authoritative for signing, like the rest of
 the explorer surface.
 
+**Consensus receipt indexing (§4.9, issue #1247).** The indexer ingests
+`ReceiptRecorded` and `ReceiptReleased` through the same poll-based path,
+into `consensus_receipts` keyed by `(chain_id, receipt_id)`. On each
+`ReceiptRecorded` it re-fetches the payload at `payload_uri` and stores
+whether `keccak256(body) == payload_digest` — the same
+commitment-on-chain / verification-off-chain shape the vote path already
+uses. A receipt whose payload is unreachable or whose digest disagrees is
+stored **unverified, never dropped**: a hole in the record is precisely the
+failure the anchor exists to prevent, so an unverifiable receipt must be
+visible as unverifiable rather than absent. Only digest verification happens
+here; per-analyst Ed25519 verification is `rmpc`'s job at submit time
+(§5.1), because the refusal has to bite *before* the transaction is signed.
+
+The reorg cascade covers `consensus_receipts` in two ways, because a receipt
+carries two block numbers. Rows above the fork root are deleted by
+`block_number` like every other event table; release is additionally
+**un-flipped in place** for rows whose `released_block_number` is above the
+root, since a release is an in-place mutation of a row that may itself sit
+below the root and would otherwise survive a rollback that erased the event
+causing it.
+
+Read scopes follow §5.0. Protocol scope: `GET /v1/consensus-receipts` and
+`GET /v1/consensus-receipts/:receipt_id`. Account scope:
+`GET /v1/accounts/:address/consensus-receipts`, the receipts anchored by
+that submitter. Every entry carries its verification state, its released
+state, and the digest and URI a reader needs to check the record
+independently.
+
 Architecture constraints:
 
 - Postgres is the database for every environment that runs the indexer.
