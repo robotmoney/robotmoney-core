@@ -3,7 +3,8 @@
 # rmpc install path.
 #
 # Canonical: scripts/release/install-rmpc.sh, .github/workflows/release-rmpc.yml
-# Issue: #1204.
+# Issue: #1204; #1242 (the extracted steps must not be able to reconfigure the
+# sandbox that runs them — see "disarm the sandbox judging it" below).
 #
 # WHY THIS SELFTEST EXISTS
 # Two pieces of #1204's behaviour would otherwise never execute in CI:
@@ -372,7 +373,12 @@ mkdir -p "$WF_DIR"
 # expressions are substituted with fixture values so the bodies are runnable; an
 # expression this extractor does not know about is reported as an error rather
 # than quietly dropped, because a silently-mangled body would prove nothing.
-python3 - "$RELEASE_WORKFLOW" "$WF_DIR" <<'PY'
+# The extractor is written to a file rather than run from a heredoc because the
+# hostile-workflow fixtures at the end of this section run the SAME code against
+# deliberately doctored copies of release-rmpc.yml. A fixture that exercised a
+# second, parallel copy of the parser would prove nothing about this one.
+EXTRACTOR_PY="$WORKDIR/extract-workflow.py"
+cat > "$EXTRACTOR_PY" <<'PY'
 import pathlib
 import re
 import sys
@@ -387,6 +393,42 @@ SUBS = {
     "matrix.os_label": "macos-arm64",
     "matrix.target": "aarch64-apple-darwin",
 }
+
+# Names this selftest's sandbox owns, plus the ones bash consults BEFORE it runs
+# a single line of the extracted body. Issue #1242: these used to be spliced
+# straight through from release-rmpc.yml into the `env -i` that contains the
+# extracted step, which let the file under test rewrite the containment the
+# assertions depend on. `PATH:` put sha256sum back inside the "macOS runner"
+# simulation, so the packaging step's macOS dispatch could be deleted outright
+# with every assertion still green; `BASH_ENV:` makes bash source a file that is
+# not the step body at all, and `--noprofile --norc` do NOT suppress it. There is
+# no value of these names that a workflow can safely supply to its own test
+# harness, so they are refused at extraction time: an extractor error blocks
+# execution and turns the parse assertion red, which is exactly what should
+# happen to a step trying to configure the sandbox that judges it.
+REFUSED_ENV_NAMES = {
+    "BASHOPTS",
+    "BASH_ENV",
+    "ENV",
+    "GITHUB_ENV",
+    "HOME",
+    "IFS",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "PATH",
+    "SHELLOPTS",
+}
+
+# What the sandbox hands every extracted body. A body may read these without
+# declaring them; anything else it reads has to come from its own `env:` block.
+SANDBOX_PROVIDED = {"GITHUB_ENV", "HOME", "PATH"}
+
+# `$NAME` / `${NAME}` reads, and the two shapes that bind a name inside the body
+# itself. `${#arr[@]}` and `$(cmd)` deliberately do not match: neither is a read
+# of an environment name.
+NAME_REF = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+NAME_ASSIGNED = re.compile(r"^\s*(?:export\s+|local\s+|declare\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
+NAME_FOR_LOOP = re.compile(r"^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
 
 
 def indent(line):
@@ -438,47 +480,104 @@ def step_env_block(body, step_name):
                         % (step_name, nxt.strip())
                     )
                     return env
+                name = m.group(1)
+                if name in REFUSED_ENV_NAMES:
+                    errors.append(
+                        "step '%s' declares env: %s — this selftest's sandbox owns "
+                        "that name, or bash reads it before the step body runs, so "
+                        "the workflow would be configuring the harness that tests "
+                        "it (issue #1242). Refusing to splice it."
+                        % (step_name, name)
+                    )
+                    k += 1
+                    continue
                 value = m.group(2)
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                     value = value[1:-1]
-                env[m.group(1)] = substitute(value, "env: of step '%s'" % step_name)
+                env[name] = substitute(value, "env: of step '%s'" % step_name)
                 k += 1
             return env
         k += 1
     return env
 
 
+def check_bound_names(text, step_env, step_name):
+    """Refuse a body that reads a name nothing in reach of the sandbox sets.
+
+    This extractor reads STEP-level `env:` only. Move a variable up to the job's
+    or the workflow's `env:` block and it vanishes from the rendering: the body
+    still reads `${NAME}`, there is no `${{ }}` left for substitute() to fail on,
+    and the bodies run without `set -u` — so the name expands to the empty string
+    and the step "succeeds" having packaged nothing under a name like
+    `rmpc--macos-arm64.tar.gz`. A silently vacuous body is the exact shape this
+    whole section exists to stop, so an unbound read is an extractor error.
+    """
+    bound = set()
+    for line in text.splitlines():
+        m = NAME_ASSIGNED.match(line)
+        if m:
+            bound.add(m.group(1))
+        m = NAME_FOR_LOOP.match(line)
+        if m:
+            bound.add(m.group(1))
+    for name in sorted(set(NAME_REF.findall(text))):
+        if name in bound or name in step_env or name in SANDBOX_PROVIDED:
+            continue
+        errors.append(
+            "step '%s' reads ${%s}, which its own env: block does not declare and "
+            "the sandbox does not supply — this extractor reads step-level env: "
+            "only, so a job- or workflow-level declaration renders here as an "
+            "empty string instead of a failure (issue #1242)"
+            % (step_name, name)
+        )
+
+
 def step_run_block(step_name):
     """Return (runnable body, step env mapping) for a named step, or (None, {})."""
-    for i, line in enumerate(lines):
-        if re.match(r"\s*-\s+name:\s+" + re.escape(step_name) + r"\s*$", line):
-            base = indent(line)
-            body = []
-            j = i + 1
-            while j < len(lines):
-                cur = lines[j]
-                if cur.strip() and indent(cur) <= base:
+    pattern = re.compile(r"\s*-\s+name:\s+" + re.escape(step_name) + r"\s*$")
+    matches = [i for i, line in enumerate(lines) if pattern.match(line)]
+    if not matches:
+        errors.append("step '%s' not found in the workflow" % step_name)
+        return None, {}
+    if len(matches) > 1:
+        # This used to bind to the first match anywhere in the file. A decoy step
+        # of the same name in an earlier job was therefore extracted and executed
+        # while the real one stayed broken — every assertion green over a step
+        # that never ran (issue #1242). Ambiguity is refused, never guessed.
+        errors.append(
+            "step name '%s' matches %d steps (lines %s) — this extractor cannot "
+            "tell which one the release actually runs, and binding to the first "
+            "would let a decoy step be tested in place of the real one"
+            % (step_name, len(matches), ", ".join(str(n + 1) for n in matches))
+        )
+        return None, {}
+
+    i = matches[0]
+    base = indent(lines[i])
+    body = []
+    j = i + 1
+    while j < len(lines):
+        cur = lines[j]
+        if cur.strip() and indent(cur) <= base:
+            break
+        body.append(cur)
+        j += 1
+    step_env = step_env_block(body, step_name)
+    for k, cur in enumerate(body):
+        if re.match(r"\s*run:\s*\|\s*$", cur):
+            run_indent = indent(cur)
+            block = []
+            for nxt in body[k + 1:]:
+                if nxt.strip() and indent(nxt) <= run_indent:
                     break
-                body.append(cur)
-                j += 1
-            step_env = step_env_block(body, step_name)
-            for k, cur in enumerate(body):
-                if re.match(r"\s*run:\s*\|\s*$", cur):
-                    run_indent = indent(cur)
-                    block = []
-                    for nxt in body[k + 1:]:
-                        if nxt.strip() and indent(nxt) <= run_indent:
-                            break
-                        block.append(nxt)
-                    while block and not block[-1].strip():
-                        block.pop()
-                    pad = min(indent(b) for b in block if b.strip())
-                    text = "\n".join(b[pad:] if b.strip() else "" for b in block) + "\n"
-                    return text, step_env
-            errors.append("step '%s' has no 'run: |' block" % step_name)
-            return None, step_env
-    errors.append("step '%s' not found in the workflow" % step_name)
-    return None, {}
+                block.append(nxt)
+            while block and not block[-1].strip():
+                block.pop()
+            pad = min(indent(b) for b in block if b.strip())
+            text = "\n".join(b[pad:] if b.strip() else "" for b in block) + "\n"
+            return text, step_env
+    errors.append("step '%s' has no 'run: |' block" % step_name)
+    return None, step_env
 
 
 # Every runner the build matrix names, plus any literal runs-on in the file.
@@ -554,11 +653,21 @@ for step_name, filename in (
         "".join("%s=%s\n" % (name, value) for name, value in step_env.items())
     )
     if block is not None:
-        (out / filename).write_text(substitute(block, step_name))
+        rendered = substitute(block, step_name)
+        check_bound_names(rendered, step_env, step_name)
+        (out / filename).write_text(rendered)
 
 (out / "meta.txt").write_text("\n".join(meta) + "\n")
 (out / "errors.txt").write_text("\n".join(errors) + "\n" if errors else "")
 PY
+
+# extract_workflow — run the extractor over <workflow.yml> into <outdir>.
+extract_workflow() {
+  mkdir -p "$2"
+  python3 "$EXTRACTOR_PY" "$1" "$2"
+}
+
+extract_workflow "$RELEASE_WORKFLOW" "$WF_DIR"
 
 WF_ERRORS="$(cat "$WF_DIR/errors.txt" 2>/dev/null || echo "extractor did not run")"
 MATRIX_ENTRIES=$(sed -n 's/^matrix_entries=//p' "$WF_DIR/meta.txt" 2>/dev/null || echo 0)
@@ -617,14 +726,38 @@ read_step_env() {
   return 0
 }
 
+# run_extracted_step — execute one extracted step body inside the sandbox.
+#   $1 body file, $2 the directory to run in (also HOME), $3 GITHUB_ENV (optional)
+# Echoes the body's combined output; returns the body's exit status.
+#
+# WHY THE STEP'S OWN env: IS SPLICED *FIRST* (issue #1242)
+# `env -i A=1 A=2` applies its assignments left to right, so the LAST one wins.
+# The step's `env:` used to come last, which meant release-rmpc.yml — the file
+# this section exists to test — could set `PATH:` and replace the sandbox's PATH
+# with one that still has sha256sum on it. Reverting the packaging step to a bare
+# `sha256sum` (the exact `high` this selftest was written to catch) then left all
+# 30 assertions green, still printing "runs to completion with no sha256sum on
+# PATH". A guard that the guarded file can disarm is worse than no guard, so the
+# harness's own assignments are written LAST and win unconditionally.
+# step_env_block() additionally refuses these names outright, so nothing should
+# reach this splice at all. Both, on purpose: the ordering still holds for a name
+# the refusal list has not learned about yet, and the refusal still holds if a
+# future call site gets the ordering wrong.
+run_extracted_step() {
+  local body="$1" root="$2" github_env="${3:-}"
+  local -a sandbox=(PATH="$NOSHA_BIN" HOME="$root")
+  [[ -n "$github_env" ]] && sandbox+=(GITHUB_ENV="$github_env")
+  ( cd "$root" && env -i \
+    ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
+    "${sandbox[@]}" \
+    "$(command -v bash)" --noprofile --norc -e -o pipefail "$body" 2>&1 )
+}
+
 PKG_RAN=no
 if [[ -f "$WF_DIR/package.sh" && -z "$WF_ERRORS" ]]; then
   read_step_env "$WF_DIR/package.env"
   PKG_RAN=yes
-  PKG_OUT=$(cd "$PKG_DIR" && env -i \
-    PATH="$NOSHA_BIN" HOME="$PKG_DIR" GITHUB_ENV="$PKG_DIR/github_env" \
-    ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
-    "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/package.sh" 2>&1)
+  PKG_OUT=$(run_extracted_step "$WF_DIR/package.sh" "$PKG_DIR" "$PKG_DIR/github_env")
   PKG_EXIT=$?
 else
   PKG_OUT="the Package tar.gz step could not be extracted cleanly: ${WF_ERRORS:-step not found}"
@@ -706,10 +839,7 @@ run_pairing_guard() {
     return 126
   fi
   read_step_env "$WF_DIR/pairing.env"
-  (cd "$root" && env -i \
-    PATH="$NOSHA_BIN" HOME="$root" \
-    ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
-    "$(command -v bash)" --noprofile --norc -e -o pipefail "$WF_DIR/pairing.sh" >/dev/null 2>&1)
+  run_extracted_step "$WF_DIR/pairing.sh" "$root" >/dev/null 2>&1
 }
 
 PAIR_OK_ROOT="$WORKDIR/pair-ok"
@@ -755,6 +885,163 @@ if [[ -n "$PAIR_EXPECTED" && "$PAIR_EXPECTED" == "$MATRIX_ENTRIES" ]]; then
   pass "pairing guard expects $PAIR_EXPECTED archives, matching the $MATRIX_ENTRIES build-matrix entries"
 else
   fail "pairing guard expects '${PAIR_EXPECTED:-<none>}' archives but the build matrix has $MATRIX_ENTRIES entries — add a target and the count guard stops matching"
+fi
+
+# ---------- release-rmpc.yml must not be able to disarm the sandbox judging it ----------
+# Issue #1242. Everything above generates shell out of a PR-editable YAML file and
+# runs it, so the assertions are only worth something while the harness's own
+# containment beats anything that file can say. It did not: the step's `env:` was
+# spliced LAST into `env -i`, which applies assignments left to right, so a single
+# `PATH:` key added to the packaging step's `env:` block put sha256sum back inside
+# the "macOS runner" simulation. Reverting that step to a bare `sha256sum` — the
+# exact defect this selftest was written to catch — then produced 30 passed, 0
+# failed, exit 0, still printing "runs to completion with no sha256sum on PATH".
+# Reproduced end to end before the fix; these assertions are what stop it coming
+# back. Two independent defences are asserted here, because either one alone is a
+# single edit away from silence:
+#   1. ORDERING — the sandbox's PATH/HOME/GITHUB_ENV are applied after anything
+#      the step declares, so a spliced value can never win.
+#   2. REFUSAL — the extractor rejects the names the sandbox owns (and the ones
+#      bash reads before the body runs, e.g. BASH_ENV) rather than ordering
+#      around them, recording an extractor error that blocks execution outright.
+# The fixtures below are hostile COPIES of release-rmpc.yml run through the same
+# extractor; the real workflow is never modified.
+echo ""
+echo "--- selftest: the workflow under test cannot disarm the selftest's sandbox ---"
+
+# (1) Ordering, executed through the real runner. The step env file here is
+# written by hand rather than extracted, precisely so the ordering is proved for
+# a name the refusal list would otherwise have stopped upstream — this is the
+# defence that has to hold when the refusal list has not heard of a name yet.
+ORDER_ROOT="$WORKDIR/env-order"
+HOSTILE_BIN="$WORKDIR/hostile-bin"
+mkdir -p "$ORDER_ROOT" "$HOSTILE_BIN"
+: > "$ORDER_ROOT/github_env"
+# shellcheck disable=SC2016  # the $-expansions are the GENERATED body's, read
+# inside the sandbox; expanding them here would write this shell's values into
+# the fixture and assert nothing.
+printf 'printf "PATH=%%s\\nHOME=%%s\\nGITHUB_ENV=%%s\\n" "$PATH" "$HOME" "$GITHUB_ENV"\n' \
+  > "$ORDER_ROOT/body.sh"
+{
+  printf 'PATH=%s\n' "$HOSTILE_BIN"
+  printf 'HOME=%s\n' "$WORKDIR/hostile-home"
+  printf 'GITHUB_ENV=%s\n' "$WORKDIR/hostile-github-env"
+} > "$ORDER_ROOT/body.env"
+read_step_env "$ORDER_ROOT/body.env"
+ORDER_OUT=$(run_extracted_step "$ORDER_ROOT/body.sh" "$ORDER_ROOT" "$ORDER_ROOT/github_env")
+STEP_ENV=()
+ORDER_WANT=$(printf 'PATH=%s\nHOME=%s\nGITHUB_ENV=%s' \
+  "$NOSHA_BIN" "$ORDER_ROOT" "$ORDER_ROOT/github_env")
+
+if [[ "$ORDER_OUT" == "$ORDER_WANT" ]]; then
+  pass "sandbox ordering: a step env: declaring PATH/HOME/GITHUB_ENV cannot override the sandbox's own values"
+else
+  fail "sandbox ordering: a step env: overrode the sandbox — the extracted body saw '$ORDER_OUT', expected '$ORDER_WANT'; a workflow PATH: can put sha256sum back inside the macOS simulation and make that assertion vacuous"
+fi
+
+# (2) Refusal, proved on hostile copies of the real workflow.
+MUTATOR_PY="$WORKDIR/mutate-workflow.py"
+cat > "$MUTATOR_PY" <<'PY'
+"""Write a deliberately hostile copy of release-rmpc.yml for one fixture.
+
+Each mutation is anchored on the real file, so a fixture whose anchor has moved
+exits non-zero and says so rather than producing a copy that asserts nothing —
+a silently vacuous fixture is the failure mode this whole section is about.
+"""
+import pathlib
+import sys
+
+src, dst, mutation = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = pathlib.Path(src).read_text().splitlines(True)
+STEP = "- name: Package tar.gz"
+
+
+def step_start():
+    for i, line in enumerate(lines):
+        if line.strip() == STEP:
+            return i
+    sys.exit("no '%s' step in %s — this fixture's anchor moved" % (STEP, src))
+
+
+def env_block_start(i):
+    for j in range(i, len(lines)):
+        if lines[j].strip() == "env:":
+            return j
+        if lines[j].strip().startswith("run:"):
+            break
+    sys.exit("the '%s' step has no env: block — this fixture's anchor moved" % STEP)
+
+
+if mutation == "step-env-path":
+    lines.insert(env_block_start(step_start()) + 1, "          PATH: /hostile/bin\n")
+elif mutation == "step-env-bash-env":
+    lines.insert(
+        env_block_start(step_start()) + 1, "          BASH_ENV: /hostile/preamble.sh\n"
+    )
+elif mutation == "duplicate-step":
+    i = step_start()
+    lines[i:i] = ["      %s\n" % STEP, "        run: |\n", "          echo decoy\n", "\n"]
+elif mutation == "env-moved-up":
+    # The variable did not disappear — it moved to the job's or the workflow's
+    # `env:`, which the extractor does not read. The body still reads ${VERSION}.
+    start = env_block_start(step_start())
+    for j in range(start + 1, len(lines)):
+        if lines[j].strip().startswith("VERSION:"):
+            del lines[j]
+            break
+    else:
+        sys.exit("the '%s' step declares no VERSION: — this fixture's anchor moved" % STEP)
+else:
+    sys.exit("unknown mutation '%s'" % mutation)
+
+pathlib.Path(dst).write_text("".join(lines))
+PY
+
+# hostile_extract — build one hostile copy, run the REAL extractor over it, and
+# echo whatever it recorded in errors.txt. A fixture that failed to build reports
+# itself in that same channel, so it can only ever produce a FAIL, never a quiet
+# pass.
+hostile_extract() {
+  local mutation="$1" dir="$WORKDIR/hostile/$1" mutate_err
+  rm -rf "$dir"
+  mkdir -p "$dir/out"
+  if ! mutate_err=$(python3 "$MUTATOR_PY" "$RELEASE_WORKFLOW" "$dir/release-rmpc.yml" \
+    "$mutation" 2>&1); then
+    echo "FIXTURE DID NOT BUILD: $mutate_err"
+    return 0
+  fi
+  extract_workflow "$dir/release-rmpc.yml" "$dir/out" >/dev/null 2>&1
+  cat "$dir/out/errors.txt" 2>/dev/null
+}
+
+HOSTILE_PATH_ERRORS="$(hostile_extract step-env-path)"
+if grep -q "declares env: PATH" <<<"$HOSTILE_PATH_ERRORS"; then
+  pass "a packaging step declaring 'env: PATH:' is refused by the extractor, so it never runs and the macOS assertion cannot be made vacuous"
+else
+  fail "a packaging step declaring 'env: PATH:' was accepted — that value would replace the sandbox PATH, putting sha256sum back into the macOS runner simulation (extractor errors: ${HOSTILE_PATH_ERRORS:-<none>})"
+fi
+
+HOSTILE_BASH_ENV_ERRORS="$(hostile_extract step-env-bash-env)"
+if grep -q "declares env: BASH_ENV" <<<"$HOSTILE_BASH_ENV_ERRORS"; then
+  pass "a packaging step declaring 'env: BASH_ENV:' is refused — bash would have sourced that file before the step body, which no assertion here can see"
+else
+  fail "a packaging step declaring 'env: BASH_ENV:' was accepted — bash sources it before the extracted body, so code outside the step text runs invisibly (--noprofile/--norc do not suppress it) (extractor errors: ${HOSTILE_BASH_ENV_ERRORS:-<none>})"
+fi
+
+HOSTILE_DUP_ERRORS="$(hostile_extract duplicate-step)"
+if grep -q "matches 2 steps" <<<"$HOSTILE_DUP_ERRORS"; then
+  pass "two steps sharing the name 'Package tar.gz' are refused rather than resolved to the first match"
+else
+  fail "a duplicate 'Package tar.gz' step was resolved silently to the first match — a decoy step in an earlier job is then extracted and executed while the real one stays broken (extractor errors: ${HOSTILE_DUP_ERRORS:-<none>})"
+fi
+
+HOSTILE_MOVED_ERRORS="$(hostile_extract env-moved-up)"
+# shellcheck disable=SC2016  # '${VERSION}' is literal text inside the extractor's
+# error message, not an expansion this shell should perform.
+if grep -q 'reads ${VERSION}' <<<"$HOSTILE_MOVED_ERRORS"; then
+  pass "a body reading a name its own env: no longer declares is refused — the extractor reads step-level env: only, and says so instead of rendering an empty string"
+else
+  fail "a body reading \${VERSION} with no step-level declaration was extracted anyway — moved to a job- or workflow-level env: that name expands to empty here, and the step 'succeeds' having packaged nothing (extractor errors: ${HOSTILE_MOVED_ERRORS:-<none>})"
 fi
 
 # ---------- an insecure base URL must not be able to print "verified" ----------
