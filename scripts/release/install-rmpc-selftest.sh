@@ -4,7 +4,9 @@
 #
 # Canonical: scripts/release/install-rmpc.sh, .github/workflows/release-rmpc.yml
 # Issue: #1204; #1242 (the extracted steps must not be able to reconfigure the
-# sandbox that runs them — see "disarm the sandbox judging it" below).
+# sandbox that runs them — see "disarm the sandbox judging it" below); #1236 (the
+# checksum shares a trust root with the archive, so the install path also has to
+# verify build provenance — see "build provenance" below).
 #
 # WHY THIS SELFTEST EXISTS
 # Two pieces of #1204's behaviour would otherwise never execute in CI:
@@ -30,6 +32,14 @@
 #     running it against this installer. Those assertions live in the
 #     "a .sha256 that names a different file is refused" section and are the only
 #     ones that feed the installer a hostile *input* rather than a hostile archive.
+#
+#  4. The BUILD PROVENANCE gate (#1236). Everything in (1)-(3) tests a control
+#     whose trust root is the release itself, so none of it can stop an attacker
+#     who can write that release. `gh attestation verify` is the control that can,
+#     and nothing about it — that it is called at all, that the signer identity is
+#     pinned, that a bad verdict is fatal before extraction, that a missing
+#     verifier is a refusal rather than a downgrade — had any coverage. The
+#     signature itself cannot be checked offline; the GATING can, and is.
 #
 # No network, no real release, no rmpc build: the fixture "binary" is a shell
 # script, and install-rmpc.sh downloads it through curl's `file://` support via
@@ -76,6 +86,44 @@ done
 
 WORKDIR="$(mktemp -d -t install-rmpc-selftest.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT
+
+# ---------- the `gh` stub: the offline seam for the provenance check (#1236) ----------
+# install-rmpc.sh now refuses any archive without a Sigstore build-provenance
+# attestation it can verify with `gh attestation verify`. That call is a network
+# lookup against GitHub's attestation store and a Sigstore trust root, and this
+# selftest is offline by construction (file:// fixtures, no release, no build) —
+# so a real verification cannot happen here and MUST NOT be faked into a green.
+#
+# WHAT IS AND IS NOT PROVEN BELOW
+# The cryptography is gh's and is not under test. What IS under test, and what
+# had no coverage at all before #1236, is the installer's GATING: that it calls
+# the verifier at all, that it pins the identity when it does, that a non-zero
+# verdict is fatal before extraction, and that a missing `gh` is a refusal rather
+# than a silent downgrade. Those are exactly the properties a future edit can
+# delete without any other test noticing.
+#
+# So the stub shadows the real `gh` on PATH, records the argv it was called with
+# so the pinning can be asserted, and takes its exit status from GH_STUB_EXIT.
+# It is placed on PATH for the WHOLE file on purpose: every positive-path
+# assertion above and below now runs through the attest step, so deleting that
+# step does not quietly leave them green — it empties the argv log and reds the
+# invocation assertions.
+GH_STUB_BIN="$WORKDIR/gh-stub-bin"
+GH_ARGV_LOG="$WORKDIR/gh-argv.log"
+mkdir -p "$GH_STUB_BIN"
+: > "$GH_ARGV_LOG"
+cat > "$GH_STUB_BIN/gh" <<'GH_STUB'
+#!/usr/bin/env bash
+# Records its argv and exits with GH_STUB_EXIT (default 0). Never touches the
+# network. `${GH_ARGV_LOG:-/dev/null}` so an invocation that somehow loses the
+# variable degrades to a silent success rather than an unexplained failure in
+# code that is not what the surrounding assertion is about.
+printf '%s\n' "$*" >> "${GH_ARGV_LOG:-/dev/null}"
+exit "${GH_STUB_EXIT:-0}"
+GH_STUB
+chmod +x "$GH_STUB_BIN/gh"
+export GH_ARGV_LOG
+export PATH="$GH_STUB_BIN:$PATH"
 
 TAG="v0.0.0-selftest"
 PLATFORM="linux-amd64"
@@ -642,6 +690,71 @@ def matrix_include_entries():
 
 meta.append("matrix_entries=%d" % matrix_include_entries())
 
+
+def job_body(job_name):
+    """Return the lines of jobs.<job_name>, refusing an ambiguous match."""
+    starts = [
+        i for i, line in enumerate(lines)
+        if re.match(r"^  " + re.escape(job_name) + r":\s*$", line)
+    ]
+    if len(starts) != 1:
+        errors.append(
+            "expected exactly one 'jobs.%s' block, found %d" % (job_name, len(starts))
+        )
+        return []
+    body = []
+    for line in lines[starts[0] + 1:]:
+        if line.strip() and indent(line) <= 2:
+            break
+        body.append(line)
+    return body
+
+
+def build_job_facts():
+    """Read the two workflow-side halves of #1236's control out of jobs.build.
+
+    Everything else this extractor produces is a `run:` body that gets EXECUTED,
+    because a grep proves presence and not executability (see the section header
+    below). These two cannot be: `permissions:` is consumed by GitHub's token
+    minter and `uses: actions/attest-build-provenance` by the Actions runner —
+    neither has a shell body to run, and neither can mint a real Sigstore
+    attestation offline. So they are read STRUCTURALLY out of the parsed job
+    block instead of matched anywhere in the file: a `permissions:` map belonging
+    to some other job, or an attest step sitting in a job that was never granted
+    `id-token: write`, does not satisfy them. That is the strongest honest
+    assertion available offline, and it is labelled as presence where it is used.
+    """
+    body = job_body("build")
+    perms = []
+    attest_subject = ""
+    for i, line in enumerate(body):
+        if re.match(r"^    permissions:\s*$", line):
+            for nxt in body[i + 1:]:
+                if not nxt.strip() or nxt.lstrip().startswith("#"):
+                    continue
+                if indent(nxt) <= 4:
+                    break
+                m = re.match(r"\s*([A-Za-z-]+):\s*(\S+)\s*$", nxt)
+                if m:
+                    perms.append("%s:%s" % (m.group(1), m.group(2)))
+        m = re.match(r"\s*-?\s*uses:\s*(actions/attest-build-provenance\S*)\s*$", line)
+        if m:
+            for nxt in body[i + 1:]:
+                if nxt.strip() and (
+                    indent(nxt) < indent(line) or nxt.lstrip().startswith("- ")
+                ):
+                    break
+                sub = re.match(r"\s*subject-path:\s*(\S.*?)\s*$", nxt)
+                if sub:
+                    attest_subject = sub.group(1)
+                    break
+    return perms, attest_subject
+
+
+build_perms, attest_subject = build_job_facts()
+meta.append("build_permissions=%s" % ",".join(sorted(build_perms)))
+meta.append("attest_subject=%s" % attest_subject)
+
 for step_name, filename in (
     ("Package tar.gz", "package.sh"),
     ("Assert every archive ships its checksum", "pairing.sh"),
@@ -1085,6 +1198,168 @@ if [[ $EXIT_BROKEN -eq 4 && ! -e "$DEST_BROKEN/rmpc" ]] \
   pass "a digest tool that fails is reported as unverified with exit 4, and nothing is installed"
 else
   fail "a failing digest tool produced exit $EXIT_BROKEN (expected 4) with dest $([[ -e "$DEST_BROKEN/rmpc" ]] && echo populated || echo empty) (output: $OUT_BROKEN)"
+fi
+
+# ---------- #1236: build provenance is the out-of-band anchor the checksum is not ----------
+# Every assertion above this line proves the checksum control works. None of them
+# could ever prove the release is AUTHENTIC, because the `.sha256` is published
+# by whoever published the archive: a leaked `contents: write` token writes both,
+# and the installer prints "verified" over a trojan. The control with a different
+# trust root is `gh attestation verify` — a Sigstore certificate carrying the
+# release workflow's OIDC identity, which cannot be minted without an
+# `id-token: write` Actions run in this repository.
+#
+# WHAT THESE ASSERTIONS COVER, AND WHAT THEY DO NOT
+# They do NOT verify a signature: no real attestation exists offline, and faking
+# one into a green would be worse than having no test. They cover the installer's
+# GATING, which is the half that lives in this repository and the half a future
+# edit can delete silently:
+#   - the verifier is invoked at all, on the archive that was just checksummed;
+#   - the identity is PINNED when it is (`--repo` plus `--signer-workflow`; with
+#     only `--repo`, any workflow in this repository could vouch for an archive,
+#     which readmits the malicious-workflow-run case #1236 names);
+#   - a non-zero verdict is FATAL, with the documented exit 6, before extract;
+#   - a missing `gh` is a refusal, not a downgrade to "install it unattested".
+# Delete the attest block from install-rmpc.sh and the first seven of these go
+# red; that is the fail-without-the-fix property this section exists to have.
+echo ""
+echo "--- selftest: an archive whose build provenance does not verify is refused ---"
+
+# --- the invocation itself: shape and identity pinning ---
+: > "$GH_ARGV_LOG"
+DEST_ATT_OK="$WORKDIR/bin-attest-ok"
+OUT_ATT_OK=$("$INSTALLER" --tag "$TAG" --platform "$PLATFORM" --dest "$DEST_ATT_OK" \
+  --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_ATT_OK=$?
+GH_CALL="$(cat "$GH_ARGV_LOG")"
+
+if [[ $EXIT_ATT_OK -eq 0 ]] && grep -q "attestation verify" <<<"$GH_CALL" \
+  && grep -q "$ARCHIVE" <<<"$GH_CALL"; then
+  pass "provenance: the installer runs 'gh attestation verify' over ${ARCHIVE} on the install path"
+else
+  fail "provenance: no 'gh attestation verify' call naming ${ARCHIVE} was recorded (installer exit $EXIT_ATT_OK, gh calls: '${GH_CALL:-<none>}', output: $OUT_ATT_OK)"
+fi
+
+if grep -q -- "--repo robotmoney/robotmoney-core" <<<"$GH_CALL"; then
+  pass "provenance: the verification is scoped to --repo robotmoney/robotmoney-core"
+else
+  fail "provenance: the gh call does not pin --repo robotmoney/robotmoney-core, so an attestation linked to any repository would be accepted (gh calls: '${GH_CALL:-<none>}')"
+fi
+
+# --signer-workflow is the difference between "somebody's workflow in this repo
+# built it" and "the release workflow built it". Without it, the malicious
+# workflow run in #1236's threat list is back in scope.
+if grep -q -- "--signer-workflow robotmoney/robotmoney-core/.github/workflows/release-rmpc.yml" <<<"$GH_CALL" \
+  && grep -q -- "--deny-self-hosted-runners" <<<"$GH_CALL"; then
+  pass "provenance: the signer identity is pinned to release-rmpc.yml on a GitHub-hosted runner"
+else
+  fail "provenance: the gh call does not pin --signer-workflow to .github/workflows/release-rmpc.yml (and --deny-self-hosted-runners) — any workflow in the repository could then vouch for an archive (gh calls: '${GH_CALL:-<none>}')"
+fi
+
+# Ordering is load-bearing exactly as it is for the checksum: an archive that
+# fails provenance must never have been unpacked.
+ATT_LINE=$(grep -n 'STEP attest' <<<"$OUT_ATT_OK" | head -1 | cut -d: -f1)
+EXTRACT_LINE=$(grep -n 'STEP extract' <<<"$OUT_ATT_OK" | head -1 | cut -d: -f1)
+if [[ -n "$ATT_LINE" && -n "$EXTRACT_LINE" && "$ATT_LINE" -lt "$EXTRACT_LINE" ]]; then
+  pass "provenance: the attest step runs before extract, so a failure cannot unpack anything"
+else
+  fail "provenance: expected 'STEP attest' before 'STEP extract' (attest at line '${ATT_LINE:-<absent>}', extract at '${EXTRACT_LINE:-<absent>}') (output: $OUT_ATT_OK)"
+fi
+
+# --- the refusal path: verification fails ---
+# This is the fixture the acceptance criteria ask for: an archive that is intact,
+# correctly checksummed, and has no attestation that verifies. Everything the
+# pre-#1236 installer checked passes here.
+: > "$GH_ARGV_LOG"
+DEST_ATT_BAD="$WORKDIR/bin-attest-bad"
+OUT_ATT_BAD=$(GH_STUB_EXIT=1 "$INSTALLER" --tag "$TAG" --platform "$PLATFORM" \
+  --dest "$DEST_ATT_BAD" --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_ATT_BAD=$?
+
+if [[ $EXIT_ATT_BAD -eq 4 ]]; then
+  # Guard against a pass for the wrong reason: this fixture's checksum is good,
+  # so a 4 here means the archive never reached the attest step at all.
+  fail "provenance: the unattested archive was rejected at the CHECKSUM step (exit 4), so the attestation gate did not execute (output: $OUT_ATT_BAD)"
+elif [[ $EXIT_ATT_BAD -eq 6 ]]; then
+  pass "provenance: an archive whose attestation does not verify is refused with the documented exit 6"
+else
+  fail "provenance: installer exited $EXIT_ATT_BAD on an archive with no verifiable attestation, expected 6 (output: $OUT_ATT_BAD)"
+fi
+
+if [[ -e "$DEST_ATT_BAD/rmpc" ]]; then
+  fail "provenance: an unattested rmpc was installed at $DEST_ATT_BAD/rmpc"
+else
+  pass "provenance: no unattested binary reached the destination"
+fi
+
+if grep -q 'STEP extract' <<<"$OUT_ATT_BAD" || grep -q 'STEP install' <<<"$OUT_ATT_BAD"; then
+  fail "provenance: extract or install was reached despite a failed attestation (output: $OUT_ATT_BAD)"
+else
+  pass "provenance: neither extract nor install was reached for the unattested archive"
+fi
+
+# --- the refusal path: no verifier available ---
+# A missing `gh` must fail closed. The tempting shape is "warn and continue",
+# which turns the whole control into an opt-out any environment can take by
+# accident. The sandbox holds only the tools install-rmpc.sh legitimately needs;
+# `gh` is the one deliberately absent, and the assertion names it so a genuinely
+# missing prerequisite cannot pass for the case under test.
+NOGH_BIN="$WORKDIR/nogh-bin"
+mkdir -p "$NOGH_BIN"
+for tool in bash curl tar sha256sum shasum mktemp install grep cut wc head tr uname sed rm mkdir cat; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  [[ -n "$tool_path" ]] && ln -sf "$tool_path" "$NOGH_BIN/$tool"
+done
+
+DEST_NOGH="$WORKDIR/bin-nogh"
+OUT_NOGH=$(PATH="$NOGH_BIN" "$INSTALLER" --tag "$TAG" --platform "$PLATFORM" \
+  --dest "$DEST_NOGH" --base-url "file://$WORKDIR/releases" --allow-insecure-base-url 2>&1)
+EXIT_NOGH=$?
+
+if [[ $EXIT_NOGH -eq 2 ]] && grep -q 'gh' <<<"$OUT_NOGH" && grep -qi 'refusing' <<<"$OUT_NOGH"; then
+  pass "provenance: a missing gh is a hard refusal (exit 2, naming gh), never a downgrade to installing unattested"
+else
+  fail "provenance: with no gh on PATH the installer exited $EXIT_NOGH — expected a refusal naming gh (output: $OUT_NOGH)"
+fi
+
+# The refusal has to land BEFORE the fetch, not after it. install-rmpc.sh checks
+# for `gh` alongside curl/tar/sha256sum for that reason: an operator missing the
+# verifier should learn it in the first second, not after a multi-megabyte
+# download. Asserting it here also keeps this case from passing vacuously — a
+# build with no attestation gate at all exits 2 for some unrelated reason further
+# down, having already downloaded.
+if [[ ! -e "$DEST_NOGH/rmpc" ]] && ! grep -q 'STEP download' <<<"$OUT_NOGH"; then
+  pass "provenance: with no verifier present the refusal precedes the download, and nothing is installed"
+else
+  fail "provenance: with no gh on PATH the installer downloaded first and/or left a binary at $DEST_NOGH/rmpc (output: $OUT_NOGH)"
+fi
+
+# --- the producing half, read structurally out of release-rmpc.yml ---
+# These two are PRESENCE assertions and are labelled as such: `permissions:` and
+# `uses: actions/attest-build-provenance` have no shell body to execute and no
+# offline way to mint a real Sigstore bundle, so unlike the `run:` bodies above
+# they cannot be run here. What they are not is a grep over the whole file: the
+# extractor reads them out of the parsed `jobs.build` block, so a permission map
+# belonging to `publish`, or an attest step in a job with no `id-token: write`,
+# does not satisfy them. The install-side gating above is what is executed.
+BUILD_PERMS=$(sed -n 's/^build_permissions=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
+ATTEST_SUBJECT=$(sed -n 's/^attest_subject=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
+
+if grep -q 'id-token:write' <<<"$BUILD_PERMS" && grep -q 'attestations:write' <<<"$BUILD_PERMS"; then
+  pass "release-rmpc.yml's build job grants id-token: write and attestations: write — without both, no attestation is ever minted"
+else
+  fail "release-rmpc.yml's build job does not grant both id-token: write and attestations: write (its permissions: '${BUILD_PERMS:-<none>}') — the attest step would fail and releases would ship unattested"
+fi
+
+# The subject has to be the SAME name the packaging step exported, or the
+# attestation covers bytes other than the ones uploaded.
+# shellcheck disable=SC2016  # '${{ env.ARCHIVE }}' is the literal GitHub Actions
+# expression as it appears in the YAML, not something this shell should expand.
+if [[ "$ATTEST_SUBJECT" == '${{ env.ARCHIVE }}' ]] \
+  && grep -q 'ARCHIVE=' "$WF_DIR/package.sh" 2>/dev/null; then
+  pass "release-rmpc.yml attests \${{ env.ARCHIVE }} — the exact archive name the packaging step exports"
+else
+  fail "release-rmpc.yml's attest step covers '${ATTEST_SUBJECT:-<no attest step>}' rather than the \${{ env.ARCHIVE }} the packaging step exports — the attested bytes and the published bytes could drift apart"
 fi
 
 echo ""
