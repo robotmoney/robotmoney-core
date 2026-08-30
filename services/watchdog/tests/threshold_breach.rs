@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use watchdog::{
     alert::ThresholdKind,
     config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig},
+    receipt_liveness::ReceiptLivenessConfig,
     watchdog::{run_cycle, CycleResult},
 };
 
@@ -128,6 +129,9 @@ fn make_alert_config(per_block_mint: u64, webhook_url: &str) -> Config {
             max_response_secs: 300,
         },
         vault: HashMap::new(),
+        // The consensus-receipt liveness monitor is off by default, so these
+        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
+        consensus_receipts: ReceiptLivenessConfig::default(),
     }
 }
 
@@ -223,6 +227,7 @@ async fn deposits_within_threshold_no_breach() {
 #[test]
 fn config_missing_threshold_is_fatal() {
     use watchdog::config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig};
+    use watchdog::receipt_liveness::ReceiptLivenessConfig;
 
     let bad = Config {
         global: GlobalThresholds {
@@ -243,6 +248,9 @@ fn config_missing_threshold_is_fatal() {
             max_response_secs: 300,
         },
         vault: HashMap::new(),
+        // The consensus-receipt liveness monitor is off by default, so these
+        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
+        consensus_receipts: ReceiptLivenessConfig::default(),
     };
 
     let err = bad.validate().unwrap_err();
