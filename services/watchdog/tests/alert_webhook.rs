@@ -143,3 +143,58 @@ async fn multiple_breaches_dispatch_multiple_alerts() {
 
     server.shutdown();
 }
+
+/// Issue #1247 AC7: a session that should have produced a receipt and did not
+/// raises an alert rather than passing unnoticed.
+///
+/// Asserts the page is dispatched, is distinguishable from a volume breach by
+/// its `alert_kind`, and carries the numbers an operator needs to act: how long
+/// the gap has been open and what the budget was.
+#[tokio::test]
+async fn missing_consensus_receipt_pages_with_a_distinguishable_payload() {
+    use watchdog::alert::dispatch_missing_receipt_alert;
+    use watchdog::receipt_liveness::{evaluate_receipt_liveness, ReceiptLivenessConfig};
+
+    let cfg = ReceiptLivenessConfig {
+        enabled: true,
+        expected_cadence_secs: 86_400,
+        grace_secs: 21_600,
+    };
+    // Last receipt anchored 200_000s ago against a 108_000s budget.
+    let event = evaluate_receipt_liveness(&cfg, 8453, Some(1_000_000), 1_200_000)
+        .expect("a gap this far past budget must be a missing receipt");
+
+    let server = MockWebhookServer::start().await;
+    let client = Client::new();
+
+    dispatch_missing_receipt_alert(&client, &server.url, &event)
+        .await
+        .expect("missing-receipt alert dispatch must succeed");
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    let captures = server.drain_captures();
+    assert_eq!(captures.len(), 1, "exactly one POST must be captured");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&captures[0].body).expect("captured body must be valid JSON");
+    let details = &body["payload"]["custom_details"];
+
+    assert_eq!(
+        details["alert_kind"], "consensus_receipt_missing",
+        "a missing receipt must be distinguishable from a volume breach"
+    );
+    assert_eq!(details["chain_id"], 8453);
+    assert_eq!(details["last_recorded_at"], 1_000_000);
+    assert_eq!(details["observed_at"], 1_200_000);
+    assert_eq!(details["seconds_since_last_receipt"], 200_000);
+    assert_eq!(details["budget_secs"], 108_000);
+    assert_eq!(body["payload"]["severity"], "critical", "this is a page");
+
+    // The volume-breach fields must NOT appear — reusing them would have made
+    // the alert unreadable.
+    assert!(
+        details.get("threshold_usdc").is_none(),
+        "a missing receipt is not a USDC volume breach"
+    );
+}
