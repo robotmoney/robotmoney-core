@@ -47,6 +47,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
 PRD_PATH = REPO_ROOT / "docs" / "prd.md"
+PROPOSAL_PATH = REPO_ROOT / "docs" / "product" / "20260623-product-proposal-investment-committee-v0.md"
 SCHEMA_PATH = FIXTURES / "consensus-receipt.schema.json"
 CANONICALIZATION_PATH = FIXTURES / "consensus-receipt.canonicalization.json"
 MAP_PATH = FIXTURES / "consensus-receipt.bucket-vault-map.json"
@@ -57,6 +58,7 @@ ESCAPING_PATH = FIXTURES / "consensus-receipt.escaping.json"
 CANONICAL_PATH = FIXTURES / "consensus-receipt.valid.canonical.txt"
 ESCAPING_CANONICAL_PATH = FIXTURES / "consensus-receipt.escaping.canonical.txt"
 ANCHOR_DIGEST_PATH = FIXTURES / "consensus-receipt.anchor-digest.json"
+LEGACY_PATH = FIXTURES / "consensus-receipt.legacy-weights.json"
 
 # THE CROSS-REPO PIN (issue #1244 AC5). Each of these is byte-identical to the
 # file of the same name under contract/src/__fixtures__/ in robotmoney-frontend.
@@ -75,7 +77,10 @@ SHARED_WITH_FRONTEND = [
     "consensus-receipt.valid.canonical.txt",
     "consensus-receipt.escaping.canonical.txt",
 ]
-CORE_ONLY = ["consensus-receipt.anchor-digest.json"]
+CORE_ONLY = [
+    "consensus-receipt.anchor-digest.json",
+    "consensus-receipt.legacy-weights.json",
+]
 
 EXPECTED_BUCKETS = [
     "agent_tokens",
@@ -332,7 +337,135 @@ def judge_errors(receipt: dict[str, Any]) -> list[str]:
     return errors
 
 
-def semantic_errors(receipt: dict[str, Any]) -> list[str]:
+# ── the float → bps conversion (issue #1246) ──────────────────────────────────
+#
+# THE FORMAT GAP THIS CLOSES. robotmoney-frontend expresses an allocation as
+# [0,1] floats over the four named buckets; this repo expresses it as
+# `target_weight_bps` 0..BPS_DENOMINATOR over four vault addresses, and
+# RouterGovernance.propose HARD-REJECTS any vector that does not sum to
+# BPS_DENOMINATOR exactly. A conversion that is merely "close" is a proposal
+# that reverts, so the rounding rule has to be pinned rather than left to
+# whichever side rounds first.
+#
+# The rule is DATA, not code: `bps_conversion` in
+# consensus-receipt.canonicalization.json states it, `canonical_bucket_order`
+# supplies the iteration order, and the schema supplies BPS_DENOMINATOR. Nothing
+# below re-states any of the three, for the same reason the canonicalizer is
+# spec-driven — the other repo implements from those files, so this has to be a
+# reader of them rather than a second authority that can drift.
+
+
+def bps_denominator(schema: dict[str, Any]) -> int:
+    """BPS_DENOMINATOR, read from the schema rather than typed in here."""
+    try:
+        maximum = schema["definitions"]["bucket_weight"]["properties"]["weight_bps"]["maximum"]
+    except (KeyError, TypeError) as exc:
+        raise CanonicalizationError("schema does not pin bucket_weight.weight_bps.maximum") from exc
+    if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0:
+        raise CanonicalizationError(f"bucket_weight.weight_bps.maximum is {maximum!r}, not a positive integer")
+    return maximum
+
+
+def _decimal(value: Any, where: str) -> Decimal:
+    """A weight as an EXACT decimal.
+
+    `Decimal(str(x))` and not `Decimal(x)`: the archived payloads and the signed
+    submissions are JSON text, so 0.05 means the two-place decimal a human wrote,
+    not the binary double 0.05000000000000000277... that `Decimal(float)` would
+    faithfully reproduce. Converting through the text keeps a rounding boundary
+    where the spec puts it.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CanonicalizationError(f"{where} is {value!r}, not a number")
+    return Decimal(str(value))
+
+
+def normalize_weights(raw: dict[str, Any]) -> dict[str, Decimal]:
+    """Scale a raw [0,1] vector so it sums to exactly 1.
+
+    Separate from the conversion below ON PURPOSE. `bps_conversion.input` says
+    the converter's input is the mean of vectors that are ALREADY normalized, so
+    normalizing inside the converter would be inventing a rule the other repo
+    does not implement. This is the caller-side step, used for legacy archived
+    maps and for generated test vectors — never silently applied to a mean that
+    is supposed to already sum to 1.
+    """
+    values = {bucket: _decimal(value, f"weight for {bucket!r}") for bucket, value in raw.items()}
+    for bucket, value in values.items():
+        if value < 0:
+            raise CanonicalizationError(f"weight for {bucket!r} is negative ({value})")
+    total = sum(values.values(), Decimal(0))
+    if total <= 0:
+        raise CanonicalizationError("weight vector totals zero; there is no allocation to convert")
+    return {bucket: value / total for bucket, value in values.items()}
+
+
+def mean_weights_to_bps(
+    mean_by_bucket: dict[str, Any], spec: dict[str, Any], denominator: int
+) -> list[dict[str, Any]]:
+    """`bps_conversion`, applied. Settle-the-last-entry, half-up on the prefix.
+
+    Returns the receipt's `weights` array: exactly the spec's
+    canonical_bucket_order, each entry `{bucket, weight_bps}`, summing to
+    `denominator` EXACTLY or raising rather than returning a vector that
+    RouterGovernance.propose would revert on.
+
+    The `final_rule` range check is a REAL branch, not defensive decoration.
+    Each prefix bucket rounds half-up independently, so a vector whose last
+    bucket is ~0 and whose prefix fractions sit on .5 boundaries can overshoot
+    the denominator by up to (len(prefix) / 2) bps and drive the settled last
+    entry negative. That vector has no representation under this rule and is
+    REFUSED; test_consensus_receipt_bps.py constructs one so the branch executes.
+    """
+    order = spec.get("canonical_bucket_order")
+    if not isinstance(order, list) or len(order) < 2 or not all(isinstance(b, str) for b in order):
+        raise CanonicalizationError("spec canonical_bucket_order is not a list of at least two bucket names")
+
+    missing = [bucket for bucket in order if bucket not in mean_by_bucket]
+    if missing:
+        raise CanonicalizationError(f"mean vector omits canonical bucket(s): {', '.join(missing)}")
+    unknown = [bucket for bucket in mean_by_bucket if bucket not in order]
+    if unknown:
+        raise CanonicalizationError(f"mean vector names non-canonical bucket(s): {', '.join(unknown)}")
+
+    mean = {bucket: _decimal(mean_by_bucket[bucket], f"mean weight for {bucket!r}") for bucket in order}
+    for bucket, value in mean.items():
+        if value < 0:
+            raise CanonicalizationError(f"mean weight for {bucket!r} is negative ({value})")
+    total = sum(mean.values(), Decimal(0))
+    # The caller normalizes (normalize_weights); this only refuses an input that
+    # never was a distribution. The tolerance absorbs Decimal division residue
+    # (~1e-27 for a 1/3 split), not a genuinely unnormalized vector.
+    if abs(total - 1) > Decimal("1e-9"):
+        raise CanonicalizationError(f"mean vector sums to {total}, not 1 — normalize before converting")
+
+    scale = Decimal(denominator)
+    prefix = [
+        int((mean[bucket] * scale).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        for bucket in order[:-1]
+    ]
+    final = denominator - sum(prefix)
+    if not 0 <= final <= denominator:
+        raise CanonicalizationError(
+            f"settled last bucket {order[-1]!r} is {final} bps, outside 0..{denominator} "
+            "— this vector has no representation under bps_conversion.final_rule"
+        )
+    return [
+        {"bucket": bucket, "weight_bps": value}
+        for bucket, value in zip(order, prefix + [final])
+    ]
+
+
+def float_vector_to_bps(
+    raw: dict[str, Any], spec: dict[str, Any], denominator: int
+) -> list[dict[str, Any]]:
+    """The whole float [0,1] → bps path: normalize, then convert."""
+    return mean_weights_to_bps(normalize_weights(raw), spec, denominator)
+
+
+def semantic_errors(receipt: dict[str, Any], spec: dict[str, Any], denominator: int) -> list[str]:
     errors: list[str] = []
     quorum = receipt["quorum"]
     if quorum["active"] != quorum["submitted"] + quorum["absent"]:
@@ -388,8 +521,8 @@ def semantic_errors(receipt: dict[str, Any]) -> list[str]:
         buckets = [item["bucket"] for item in weights]
         if buckets != EXPECTED_BUCKETS:
             errors.append("weights must use canonical bucket order and cover exactly four buckets")
-        if sum(item["weight_bps"] for item in weights) != 10_000:
-            errors.append("weights must sum exactly to 10,000 bps")
+        if sum(item["weight_bps"] for item in weights) != denominator:
+            errors.append(f"weights must sum exactly to {denominator} bps")
         if not weighted_submissions:
             errors.append("receipt weights require at least one signed weighted submission")
         else:
@@ -406,13 +539,17 @@ def semantic_errors(receipt: dict[str, Any]) -> list[str]:
                 for entry in submitted_weights:
                     totals[entry["bucket"]] += entry["weight"] / submitted_total
             count = Decimal(len(weighted_submissions))
-            prefix = [
-                int((totals[bucket] / count * 10_000).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-                for bucket in EXPECTED_BUCKETS[:-1]
-            ]
-            expected_bps = prefix + [10_000 - sum(prefix)]
-            if [entry["weight_bps"] for entry in weights] != expected_bps:
-                errors.append("receipt weights do not equal the pinned bps-converted signed mean")
+            mean = {bucket: totals[bucket] / count for bucket in EXPECTED_BUCKETS}
+            # ONE conversion implementation, shared with the legacy reconciliation
+            # and with the property tests. A second copy here is exactly the
+            # "two roundings that agree until they do not" failure this closes.
+            try:
+                expected = mean_weights_to_bps(mean, spec, denominator)
+            except CanonicalizationError as exc:
+                errors.append(f"receipt weights are not bps-convertible: {exc}")
+            else:
+                if weights != expected:
+                    errors.append("receipt weights do not equal the pinned bps-converted signed mean")
     elif weighted_submissions:
         errors.append("a receipt with signed complete weight vectors must carry the derived bps weights")
     return errors
@@ -501,6 +638,194 @@ def digest_errors(anchor: dict[str, Any]) -> list[str]:
     return errors
 
 
+def legacy_errors(
+    legacy: dict[str, Any],
+    spec: dict[str, Any],
+    schema: dict[str, Any],
+    denominator: int,
+    valid: dict[str, Any],
+    validator: Any,
+) -> list[str]:
+    """The two shape decisions issue #1246 owes an answer to, made checkable.
+
+    consensus-receipt.legacy-weights.json states them in prose. Prose alone is
+    how `within_bucket_weights` got where it is: a field with no producer, one
+    display-only reader, and no recorded decision either way. So each written
+    resolution is BOUND HERE to the behaviour it claims:
+
+      "DROPPED"  ->  schema 1.0 must actually REFUSE a receipt carrying it.
+      "ARRAY"    ->  schema 1.0 must actually type `weights` as an array.
+
+    and the archived corpus is CONVERTED rather than transcribed, so the
+    reconciliation is recomputed on every run instead of remembered.
+    """
+    errors: list[str] = []
+    order = spec.get("canonical_bucket_order", [])
+    decisions = legacy.get("decisions", {})
+
+    # ── decision 1: within_bucket_weights is dropped, and the schema says so ──
+    dropped = decisions.get("within_bucket_weights", {}).get("resolution", "")
+    if not dropped.startswith("DROPPED"):
+        errors.append(
+            f"legacy fixture records within_bucket_weights as {dropped!r}; "
+            "this check only knows how to verify a DROPPED resolution"
+        )
+    elif "within_bucket_weights" in schema.get("properties", {}):
+        errors.append(
+            "legacy fixture says within_bucket_weights is DROPPED, but the schema defines it "
+            "— a promotion into the shared schema is a coordinated cross-repo change, not a drive-by edit"
+        )
+    else:
+        smuggled = copy.deepcopy(valid)
+        smuggled["within_bucket_weights"] = {"agent_tokens": {"robotmoney": 1}}
+        if not list(validator.iter_errors(smuggled)):
+            errors.append(
+                "schema 1.0 ACCEPTS a receipt carrying within_bucket_weights; the field is documented "
+                "as dropped, so the root object must stay additionalProperties:false"
+            )
+
+    # ── decision 2: weights is an array, not a map ────────────────────────────
+    shape = decisions.get("weights_shape", {}).get("resolution", "")
+    if not shape.startswith("ARRAY"):
+        errors.append(
+            f"legacy fixture records the weights shape as {shape!r}; "
+            "this check only knows how to verify an ARRAY resolution"
+        )
+    elif schema.get("properties", {}).get("weights", {}).get("type") != "array":
+        errors.append("legacy fixture says `weights` is an ARRAY, but the schema does not type it as one")
+
+    # ── the archived corpus: converted, round-tripped, nothing transcribed ────
+    vectors = legacy.get("vectors", [])
+    if not vectors:
+        return errors + ["legacy fixture pins no archived vectors"]
+    tolerance = legacy.get("round_trip_tolerance_bps")
+    if not isinstance(tolerance, int) or tolerance < 0:
+        return errors + ["legacy fixture does not pin a round_trip_tolerance_bps"]
+
+    for vector in vectors:
+        where = vector.get("source", "<unnamed>")
+        archived = vector.get("legacy_weights", {})
+
+        if vector.get("carries_schema_version") is not False:
+            errors.append(
+                f"{where}: recorded as carrying a schema_version. The reconciliation rests on these "
+                "payloads being PRE-schema session archives rather than receipts to retro-fit"
+            )
+        if list(archived) != vector.get("legacy_key_order"):
+            errors.append(f"{where}: legacy_key_order does not match the archived map's own key order")
+        if list(archived) == list(order):
+            errors.append(
+                f"{where}: the archived key order is already canonical, so this vector no longer "
+                "demonstrates the map/array drift it was committed to pin"
+            )
+        counts = vector.get("within_bucket_weights_constituent_counts", {})
+        if not counts or any(not isinstance(n, int) or n < 1 for n in counts.values()):
+            errors.append(
+                f"{where}: records no dropped within-bucket constituents. An empty drop record makes "
+                "the DROPPED decision unfalsifiable — the point is that real data is being left out"
+            )
+
+        try:
+            converted = float_vector_to_bps(archived, spec, denominator)
+        except CanonicalizationError as exc:
+            errors.append(f"{where}: archived vector is not bps-convertible: {exc}")
+            continue
+        if converted != vector.get("canonical_weights"):
+            errors.append(
+                f"{where}: conversion yields {converted}, the fixture records {vector.get('canonical_weights')}"
+            )
+            continue
+        if sum(entry["weight_bps"] for entry in converted) != denominator:
+            errors.append(f"{where}: converted vector does not sum to {denominator} bps")
+
+        # ROUND TRIP — "loses nothing", asserted rather than asserted-to.
+        recovered = {entry["bucket"]: entry["weight_bps"] for entry in converted}
+        if sorted(recovered) != sorted(archived):
+            errors.append(
+                f"{where}: round trip changes the bucket set — archived {sorted(archived)}, "
+                f"recovered {sorted(recovered)}"
+            )
+            continue
+        for bucket, share in normalize_weights(archived).items():
+            drift = abs(Decimal(recovered[bucket]) - share * denominator)
+            if drift > tolerance:
+                errors.append(
+                    f"{where}: {bucket} drifts {drift} bps across the round trip, over the pinned "
+                    f"tolerance of {tolerance}"
+                )
+    return errors
+
+
+def shared_manifest_errors(anchor: dict[str, Any]) -> list[str]:
+    """Re-hash every shared fixture and compare against the committed manifest.
+
+    WHY sha256 HERE AND keccak256 ABOVE. keccak256 is what an EVM anchor computes,
+    so the golden bytes are pinned that way. This manifest is aimed at the OTHER
+    repo: contract/ in robotmoney-frontend has zero dependencies and cannot reach
+    keccak256, but sha256 is in its runtime. Pinning the shared set in sha256 is
+    what makes cross-repo byte identity checkable FROM EITHER SIDE with one
+    command and no new dependency — manifest_errors() below can only prove the
+    set has the right NAMES, which is the weaker half.
+    """
+    errors: list[str] = []
+    manifest = anchor.get("shared_fixture_manifest", {})
+    rows = manifest.get("files", [])
+    named = [row.get("file") for row in rows]
+    if named != SHARED_WITH_FRONTEND:
+        errors.append(
+            f"shared fixture manifest covers {named}; the shared set is {SHARED_WITH_FRONTEND} "
+            "— every shared file must be pinned, in order, and nothing else"
+        )
+    for row in rows:
+        path = FIXTURES / str(row.get("file"))
+        if not path.is_file():
+            errors.append(f"shared fixture manifest names a missing file: {row.get('file')}")
+            continue
+        payload = path.read_bytes()
+        if len(payload) != row.get("byte_length"):
+            errors.append(
+                f"{row['file']}: {len(payload)} bytes, manifest records {row.get('byte_length')}"
+            )
+        actual = "0x" + hashlib.sha256(payload).hexdigest()
+        if actual != row.get("sha256"):
+            errors.append(f"{row['file']}: sha256 is {actual}, manifest records {row.get('sha256')}")
+    return errors
+
+
+# The claims §7.4 has to keep making for the cross-repo process to mean anything.
+# Deliberately a handful of load-bearing substrings, not the prose: the wording
+# is free to improve, the commitments are not free to disappear.
+RELEASE_PROCESS_REQUIRED = [
+    "### 7.4",
+    "The verifier deploys first. The producer deploys second.",
+    "Merge order: core, then frontend.",
+    "Deploy order: core, then frontend.",
+    "The old schema document is never deleted.",
+    "shared_fixture_manifest",
+    "contract/tests/unit/consensus-receipt-fixture.test.ts",
+]
+
+
+def release_process_doc_errors() -> list[str]:
+    """AC6: the cross-repo release process is written down, and stays written down.
+
+    A process that lives only in a merged PR description is a process the next
+    schema revision will not follow. This asserts the canonical proposal still
+    carries the parts a second repo cannot infer: which side deploys first, that
+    the ordering survives an append-only minor bump, that old schema documents
+    are never retired, and where the one-command cross-repo comparison lives.
+    """
+    if not PROPOSAL_PATH.is_file():
+        return [f"{PROPOSAL_PATH.name} is missing; §7.4 is the canonical release process"]
+    text = PROPOSAL_PATH.read_text(encoding="utf-8")
+    return [
+        f"{PROPOSAL_PATH.name} no longer states {claim!r} — the cross-repo release process (§7.4) "
+        "must say which side deploys first and why"
+        for claim in RELEASE_PROCESS_REQUIRED
+        if claim not in text
+    ]
+
+
 def manifest_errors() -> list[str]:
     """The shared set is exactly what it claims to be.
 
@@ -529,11 +854,13 @@ def check(paths_must_exist: bool = True) -> list[str]:
     spec = load_json(CANONICALIZATION_PATH)
     mapping = load_json(MAP_PATH)
     anchor = load_json(ANCHOR_DIGEST_PATH)
+    legacy = load_json(LEGACY_PATH)
     valid = load_json(VALID_PATH)
     valid_no_weights = load_json(VALID_NO_WEIGHTS_PATH)
     invalid = load_json(INVALID_PATH)
     escaping = load_json(ESCAPING_PATH)
     validator = jsonschema.Draft7Validator(schema, format_checker=jsonschema.FormatChecker())
+    denominator = bps_denominator(schema)
 
     failures.extend(manifest_errors())
     failures.extend(spec_schema_agreement(schema, spec))
@@ -541,7 +868,7 @@ def check(paths_must_exist: bool = True) -> list[str]:
     for path, receipt in ((VALID_PATH, valid), (VALID_NO_WEIGHTS_PATH, valid_no_weights)):
         schema_errors = sorted(validator.iter_errors(receipt), key=lambda error: list(error.path))
         failures.extend(f"{path.name}: {error.message}" for error in schema_errors)
-        sem = semantic_errors(receipt)
+        sem = semantic_errors(receipt, spec, denominator)
         failures.extend(f"{path.name}: {error}" for error in sem)
         sig = signature_errors(receipt, path.name)
         failures.extend(sig)
@@ -559,7 +886,7 @@ def check(paths_must_exist: bool = True) -> list[str]:
     failures.extend(f"{ESCAPING_PATH.name}: {error}" for error in judge_errors(escaping))
 
     invalid_errors = list(validator.iter_errors(invalid)) + [
-        ValueError(error) for error in semantic_errors(invalid)
+        ValueError(error) for error in semantic_errors(invalid, spec, denominator)
     ]
     if not invalid_errors:
         failures.append(f"{INVALID_PATH.name} unexpectedly passed validation")
@@ -599,6 +926,28 @@ def check(paths_must_exist: bool = True) -> list[str]:
         print(
             "ok: committed keccak256/sha256 constants are reproduced from the golden bytes "
             "(robotmoney-core#1280)"
+        )
+
+    manifest_failures = shared_manifest_errors(anchor)
+    failures.extend(manifest_failures)
+    if not manifest_failures:
+        print(
+            f"ok: all {len(SHARED_WITH_FRONTEND)} cross-repo shared fixtures reproduce their "
+            "committed sha256 (issue #1246)"
+        )
+
+    process_failures = release_process_doc_errors()
+    failures.extend(process_failures)
+    if not process_failures:
+        print("ok: the cross-repo schema release process is documented in §7.4 (issue #1246)")
+
+    legacy_failures = legacy_errors(legacy, spec, schema, denominator, valid, validator)
+    failures.extend(legacy_failures)
+    if not legacy_failures:
+        print(
+            f"ok: within_bucket_weights is dropped and refused by the schema, `weights` is the array "
+            f"shape, and all {len(legacy.get('vectors', []))} archived map payloads convert and round "
+            "trip within the pinned tolerance (issue #1246)"
         )
 
     return failures
@@ -691,6 +1040,77 @@ def self_test() -> int:
         bool(list(validator.iter_errors(load_json(INVALID_PATH)))),
     ))
 
+    # ── issue #1246 guards ───────────────────────────────────────────────────
+    legacy = load_json(LEGACY_PATH)
+    denominator = bps_denominator(schema)
+
+    # 9. A stale sha256 in the cross-repo manifest must be caught — this is the
+    #    whole value of the manifest, and a transcribed constant that only ever
+    #    agrees with itself is the failure mode it exists to prevent.
+    stale_manifest = copy.deepcopy(anchor)
+    stale_manifest["shared_fixture_manifest"]["files"][0]["sha256"] = "0x" + "00" * 32
+    cases.append(("a stale shared-fixture sha256 is caught", bool(shared_manifest_errors(stale_manifest))))
+
+    # 10. A shared file dropped from the manifest must be caught, or a fixture
+    #     could quietly leave the pinned set without leaving the shared set.
+    short_manifest = copy.deepcopy(anchor)
+    short_manifest["shared_fixture_manifest"]["files"].pop()
+    cases.append(("a shared fixture missing from the manifest is caught", bool(shared_manifest_errors(short_manifest))))
+
+    # 11. The conversion is DERIVED from the archived map, not transcribed.
+    edited_legacy = copy.deepcopy(legacy)
+    edited_legacy["vectors"][0]["canonical_weights"][0]["weight_bps"] += 1
+    cases.append((
+        "a legacy vector whose recorded bps disagree with the conversion is caught",
+        bool(legacy_errors(edited_legacy, spec, schema, denominator, valid, validator)),
+    ))
+
+    # 12. "within_bucket_weights is DROPPED" is bound to the schema REFUSING it.
+    #     A schema that opened its root would silently make the recorded decision
+    #     false while every other check stayed green.
+    open_schema = copy.deepcopy(schema)
+    open_schema["additionalProperties"] = True
+    open_validator = jsonschema.Draft7Validator(open_schema, format_checker=jsonschema.FormatChecker())
+    cases.append((
+        "a schema that would accept within_bucket_weights is caught",
+        bool(legacy_errors(legacy, spec, open_schema, denominator, valid, open_validator)),
+    ))
+
+    # 13. The bps converter READS canonical_bucket_order from the spec. A
+    #     hard-coded order would ignore this and return the same vector.
+    reordered = copy.deepcopy(spec)
+    reordered["canonical_bucket_order"] = list(reversed(spec["canonical_bucket_order"]))
+    archived = legacy["vectors"][0]["legacy_weights"]
+    cases.append((
+        "the bps converter follows the spec's bucket order, not a hard-coded one",
+        float_vector_to_bps(archived, reordered, denominator)
+        != float_vector_to_bps(archived, spec, denominator),
+    ))
+
+    # 14. The release process cannot silently lose its deploy-order rule.
+    cases.append((
+        "a release process missing its deploy-order rule is caught",
+        bool([
+            claim for claim in RELEASE_PROCESS_REQUIRED
+            if claim not in PROPOSAL_PATH.read_text(encoding="utf-8").replace(
+                "Deploy order: core, then frontend.", "Deploy order: whichever is ready."
+            )
+        ]),
+    ))
+
+    # 15. bps_conversion.final_rule's range check is a REAL branch. Three prefix
+    #     buckets each rounding half-up can overshoot the denominator by up to
+    #     1.5 bps, driving the settled last entry negative; that vector has no
+    #     representation and must be REFUSED rather than proposed and reverted.
+    order = spec["canonical_bucket_order"]
+    overshoot = {order[0]: "0.33335", order[1]: "0.33335", order[2]: "0.3333", order[3]: "0"}
+    refused = False
+    try:
+        mean_weights_to_bps({k: Decimal(v) for k, v in overshoot.items()}, spec, denominator)
+    except CanonicalizationError:
+        refused = True
+    cases.append(("a vector whose settled last bucket goes negative is refused", refused))
+
     failed = [name for name, passed in cases if not passed]
     for name, passed in cases:
         print(f"{'ok' if passed else 'FAIL'}: self-test — {name}")
@@ -713,6 +1133,7 @@ def main(argv: list[str]) -> int:
         ESCAPING_PATH,
         CANONICAL_PATH,
         ESCAPING_CANONICAL_PATH,
+        LEGACY_PATH,
     ]
     missing = [path.name for path in required_paths if not path.is_file()]
     if missing:
