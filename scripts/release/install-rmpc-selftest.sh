@@ -442,6 +442,19 @@ SUBS = {
     "matrix.target": "aarch64-apple-darwin",
 }
 
+# Expressions allowed ONLY in a step's `env:` values, never in a `run:` body
+# (issue #1237). They are deliberately NOT in SUBS: substitute() is what turns an
+# expression spliced into shell source into a hard extractor error, so putting a
+# caller-supplied name like `inputs.tag` in SUBS would make exactly the splice
+# this issue is about render silently and run as shell here. The `Validate
+# inputs` step reads these through its own `env:`, which is the shape under test,
+# so they have to resolve there and nowhere else.
+ENV_ONLY_SUBS = {
+    "github.event_name": "workflow_dispatch",
+    "inputs.dry_run": "false",
+    "inputs.tag": "rmpc-v0.0.0",
+}
+
 # Names this selftest's sandbox owns, plus the ones bash consults BEFORE it runs
 # a single line of the extracted body. Issue #1242: these used to be spliced
 # straight through from release-rmpc.yml into the `env -i` that contains the
@@ -459,6 +472,7 @@ REFUSED_ENV_NAMES = {
     "BASH_ENV",
     "ENV",
     "GITHUB_ENV",
+    "GITHUB_OUTPUT",
     "HOME",
     "IFS",
     "LD_LIBRARY_PATH",
@@ -469,7 +483,11 @@ REFUSED_ENV_NAMES = {
 
 # What the sandbox hands every extracted body. A body may read these without
 # declaring them; anything else it reads has to come from its own `env:` block.
-SANDBOX_PROVIDED = {"GITHUB_ENV", "HOME", "PATH"}
+# GITHUB_OUTPUT joins them for issue #1237: the runner always defines it, the
+# `Validate inputs` body names it, and a step is never the thing that should
+# decide where its own step outputs land — so it is supplied by the sandbox and
+# refused in REFUSED_ENV_NAMES above, exactly like GITHUB_ENV.
+SANDBOX_PROVIDED = {"GITHUB_ENV", "GITHUB_OUTPUT", "HOME", "PATH"}
 
 # `$NAME` / `${NAME}` reads, and the two shapes that bind a name inside the body
 # itself. `${#arr[@]}` and `$(cmd)` deliberately do not match: neither is a read
@@ -483,13 +501,15 @@ def indent(line):
     return len(line) - len(line.lstrip())
 
 
-def substitute(text, where):
+def substitute(text, where, extra=None):
+    table = dict(SUBS, **(extra or {}))
+
     def repl(m):
         key = m.group(1).strip()
-        if key not in SUBS:
+        if key not in table:
             errors.append("unsubstituted expression '%s' in step '%s'" % (key, where))
             return "UNSUBSTITUTED"
-        return SUBS[key]
+        return table[key]
 
     return re.sub(r"\$\{\{([^}]*)\}\}", repl, text)
 
@@ -542,7 +562,9 @@ def step_env_block(body, step_name):
                 value = m.group(2)
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                     value = value[1:-1]
-                env[name] = substitute(value, "env: of step '%s'" % step_name)
+                env[name] = substitute(
+                    value, "env: of step '%s'" % step_name, ENV_ONLY_SUBS
+                )
                 k += 1
             return env
         k += 1
@@ -758,6 +780,11 @@ meta.append("attest_subject=%s" % attest_subject)
 for step_name, filename in (
     ("Package tar.gz", "package.sh"),
     ("Assert every archive ships its checksum", "pairing.sh"),
+    # Issue #1237. The step that decides whether a caller-supplied `inputs.tag`
+    # is allowed to reach `git tag`, the archive filenames and $GITHUB_OUTPUT.
+    # Extracted so the refusal can be EXECUTED against a `$(...)` payload rather
+    # than argued for in a comment.
+    ("Validate inputs", "validate.sh"),
 ):
     block, step_env = step_run_block(step_name)
     # The env file is written even when empty, so the bash side never has to
@@ -858,7 +885,7 @@ read_step_env() {
 # future call site gets the ordering wrong.
 run_extracted_step() {
   local body="$1" root="$2" github_env="${3:-}"
-  local -a sandbox=(PATH="$NOSHA_BIN" HOME="$root")
+  local -a sandbox=(PATH="$NOSHA_BIN" HOME="$root" GITHUB_OUTPUT="$root/github_output")
   [[ -n "$github_env" ]] && sandbox+=(GITHUB_ENV="$github_env")
   ( cd "$root" && env -i \
     ${STEP_ENV[@]+"${STEP_ENV[@]}"} \
@@ -1155,6 +1182,487 @@ if grep -q 'reads ${VERSION}' <<<"$HOSTILE_MOVED_ERRORS"; then
   pass "a body reading a name its own env: no longer declares is refused — the extractor reads step-level env: only, and says so instead of rendering an empty string"
 else
   fail "a body reading \${VERSION} with no step-level declaration was extracted anyway — moved to a job- or workflow-level env: that name expands to empty here, and the step 'succeeds' having packaged nothing (extractor errors: ${HOSTILE_MOVED_ERRORS:-<none>})"
+fi
+
+# ---------- release-rmpc.yml's authority surface and its injection sinks ----------
+# Issue #1237. Two defects were reported together, and they are the same defect
+# seen from both ends: the workflow granted `contents: write` at WORKFLOW scope —
+# inherited by the `build` matrix, which checks out `submodules: recursive` at a
+# caller-supplied SHA and runs cargo, so build.rs and every proc macro in that
+# tree executed with a repo-write token in the environment — and it spliced
+# `${{ inputs.tag }}` / `${{ inputs.commit_hash }}` straight into `run:` bodies,
+# which is how a caller reaches code execution in the first place. Together,
+# "can dispatch a release" silently meant "can run arbitrary code with a
+# repo-write token", for an actor who only needed `actions: write`.
+#
+# The splice half was closed by #1279 (every input now arrives through `env:`).
+# Nothing asserted it, so nothing would notice it coming back: a `${{ }}` is
+# substituted into the shell SOURCE before bash parses it, which is invisible to
+# every quoting rule and to every test that does not read the YAML. The
+# permission half was still open on `dev`.
+#
+# Both halves are audited here, on every PR, by a parser run over the real file —
+# and each assertion is proved non-vacuous by running the SAME parser over a
+# hostile copy that reintroduces the defect. The refusal is then EXECUTED: the
+# workflow's own `Validate inputs` body is extracted and run against a `$(...)`
+# payload and a newline payload, and the mechanism itself is demonstrated by
+# running the spliced and the env-passed form of one payload side by side.
+echo ""
+echo "--- selftest: release-rmpc.yml's permission map and run: bodies ---"
+
+AUDIT_PY="$WORKDIR/audit-workflow.py"
+cat > "$AUDIT_PY" <<'PY'
+"""Audit release-rmpc.yml's authority surface and its `run:` bodies.
+
+Prints one finding per line, tagged so an assertion can grep for the exact
+shape it means; no output means clean. Structural, not a grep: `contents:
+write` appears in this file's prose too, and what matters is which JOB it
+lands in, which only the nesting can say.
+
+PyYAML is not a dependency of this repo's CI, so the nesting is walked the
+same way extract-workflow.py walks it, and a path this parser cannot follow is
+reported as an `anchor:` finding rather than silently returning "clean" — an
+auditor that cannot find the jobs must never look like an auditor that found
+nothing wrong.
+"""
+import pathlib
+import re
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+findings = []
+
+# Jobs that legitimately write to the repository, with the reason. `publish`
+# pushes the tag and creates the Release; `bump-manifest` pushes the post-release
+# version bump and opens its PR. Every other job is a reader.
+MAY_WRITE_CONTENTS = {"publish", "bump-manifest"}
+
+# The only expressions allowed inside a `run:` body. `matrix.*` is a literal from
+# this file's own `include:` list and `runner.*` comes from the runner, so
+# neither can carry a caller's string. Everything else — `inputs.*`,
+# `github.event.*`, and `needs.*.outputs.*`, which is derived FROM inputs — has
+# to reach the shell through `env:` as a variable, where bash sees data instead
+# of source text. Keep this list closed: the value of the guard is that a new
+# expression is refused until someone decides it is safe.
+RUN_ALLOWED_PREFIXES = ("matrix.", "runner.")
+
+
+def indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def is_blank(line):
+    return not line.strip() or line.lstrip().startswith("#")
+
+
+def mapping_at(start, base_indent):
+    """Read a `key: value` mapping whose entries sit deeper than base_indent."""
+    out = {}
+    k = start
+    while k < len(lines):
+        line = lines[k]
+        if is_blank(line):
+            k += 1
+            continue
+        if indent(line) <= base_indent:
+            break
+        m = re.match(r"\s*([A-Za-z][\w-]*):\s*(\S+)\s*$", line)
+        if m:
+            out[m.group(1)] = m.group(2)
+        k += 1
+    return out
+
+
+# ---- workflow-scope permissions -------------------------------------------
+workflow_perms = None
+for i, line in enumerate(lines):
+    if line == "permissions:":
+        workflow_perms = mapping_at(i + 1, 0)
+        break
+
+if workflow_perms is None:
+    findings.append(
+        "perms-default: the workflow declares no top-level permissions: block, so "
+        "every job falls back to the repository's default GITHUB_TOKEN scopes — "
+        "which can be read-write, and is decided outside this file"
+    )
+elif workflow_perms.get("contents") == "write":
+    findings.append(
+        "perms-default: the workflow-scope permissions: block grants "
+        "contents: write, which every job inherits — including build, which runs "
+        "build.rs and proc-macro code out of a caller-supplied tree (issue #1237)"
+    )
+
+# ---- per-job permissions ---------------------------------------------------
+jobs_at = [i for i, line in enumerate(lines) if line == "jobs:"]
+if len(jobs_at) != 1:
+    findings.append(
+        "anchor: expected exactly one top-level 'jobs:' key, found %d" % len(jobs_at)
+    )
+    jobs_at = []
+
+seen_jobs = []
+for start in jobs_at:
+    i = start + 1
+    while i < len(lines):
+        line = lines[i]
+        if is_blank(line):
+            i += 1
+            continue
+        if indent(line) == 0:
+            break
+        m = re.match(r"^  ([A-Za-z][\w-]*):\s*$", line)
+        if not m:
+            i += 1
+            continue
+        job = m.group(1)
+        seen_jobs.append(job)
+        # The job's own block: everything indented deeper than the job key.
+        j = i + 1
+        perms = None
+        while j < len(lines):
+            cur = lines[j]
+            if not is_blank(cur) and indent(cur) <= 2:
+                break
+            if re.match(r"^    permissions:\s*$", cur):
+                perms = mapping_at(j + 1, 4)
+            j += 1
+        if perms is None:
+            findings.append(
+                "perms-missing: job '%s' declares no permissions: block, so its "
+                "authority is inherited rather than stated where it is reviewed"
+                % job
+            )
+        elif perms.get("contents") == "write" and job not in MAY_WRITE_CONTENTS:
+            findings.append(
+                "perms-write: job '%s' is granted contents: write and is not one "
+                "of the publishing jobs %s"
+                % (job, sorted(MAY_WRITE_CONTENTS))
+            )
+        i = j
+
+if not seen_jobs:
+    findings.append("anchor: no jobs found under 'jobs:' — the audit would be vacuous")
+
+# Non-vacuity from the other side. An audit that only ever says "nothing may
+# write" is satisfied by a workflow that lost the authority to publish at all,
+# which would be green here and broken in production.
+for job in sorted(MAY_WRITE_CONTENTS):
+    if job in seen_jobs:
+        j = lines.index("  %s:" % job) + 1
+        perms = None
+        while j < len(lines):
+            cur = lines[j]
+            if not is_blank(cur) and indent(cur) <= 2:
+                break
+            if re.match(r"^    permissions:\s*$", cur):
+                perms = mapping_at(j + 1, 4)
+            j += 1
+        if (perms or {}).get("contents") != "write":
+            findings.append(
+                "perms-cannot-publish: job '%s' does not hold contents: write, so "
+                "it cannot push the tag or create the Release" % job
+            )
+
+# ---- every run: body, scanned for interpolated expressions -----------------
+# The scan covers comment lines inside a body on purpose. Actions substitutes an
+# expression wherever it appears in the run string, comments included, and a
+# value carrying a newline ends the comment and starts a command.
+EXPR = re.compile(r"\$\{\{([^}]*)\}\}")
+
+
+def report_splice(text, where):
+    for raw in EXPR.findall(text):
+        key = raw.strip()
+        if key.startswith(RUN_ALLOWED_PREFIXES):
+            continue
+        findings.append(
+            "run-splice: '${{ %s }}' is interpolated into the run: body at %s — "
+            "Actions substitutes it into the shell SOURCE before bash parses it, "
+            "so quoting at the call site cannot contain it. Pass it through the "
+            "step's env: and read it as a shell variable (issue #1237)"
+            % (key, where)
+        )
+
+
+i = 0
+run_blocks = 0
+while i < len(lines):
+    m = re.match(r"(\s*)run:\s*(.*)$", lines[i])
+    if not m:
+        i += 1
+        continue
+    run_indent, inline = len(m.group(1)), m.group(2).strip()
+    run_blocks += 1
+    where = "line %d" % (i + 1)
+    if inline in ("|", ">", "|-", ">-", "|+", ">+"):
+        body = []
+        j = i + 1
+        while j < len(lines):
+            cur = lines[j]
+            if cur.strip() and indent(cur) <= run_indent:
+                break
+            body.append(cur)
+            j += 1
+        report_splice("\n".join(body), where)
+        i = j
+    else:
+        report_splice(inline, where)
+        i += 1
+
+if run_blocks == 0:
+    findings.append("anchor: no run: blocks found — the splice scan would be vacuous")
+
+sys.stdout.write("".join(f + "\n" for f in findings))
+PY
+
+# audit_workflow — run the auditor over <workflow.yml>, echo its findings.
+audit_workflow() {
+  python3 "$AUDIT_PY" "$1" 2>&1
+}
+
+AUDIT_OUT="$(audit_workflow "$RELEASE_WORKFLOW")"
+
+if grep -q '^anchor:' <<<"$AUDIT_OUT"; then
+  fail "the permission/splice auditor could not walk release-rmpc.yml, so its verdict means nothing: $AUDIT_OUT"
+else
+  pass "the permission/splice auditor walked release-rmpc.yml (jobs and run: blocks both located)"
+fi
+
+if grep -q '^perms-default:' <<<"$AUDIT_OUT"; then
+  fail "release-rmpc.yml's workflow-scope permissions are not read-only: $(grep '^perms-default:' <<<"$AUDIT_OUT")"
+else
+  pass "release-rmpc.yml's workflow-scope default is not contents: write — a job added later starts read-only"
+fi
+
+if grep -q '^perms-missing:' <<<"$AUDIT_OUT"; then
+  fail "a job in release-rmpc.yml states no permissions: block of its own: $(grep '^perms-missing:' <<<"$AUDIT_OUT")"
+else
+  pass "every job in release-rmpc.yml declares its own permissions: block"
+fi
+
+if grep -q '^perms-write:' <<<"$AUDIT_OUT"; then
+  fail "a non-publishing job holds contents: write — build runs build.rs and proc-macro code from a caller-supplied tree with that token in its environment: $(grep '^perms-write:' <<<"$AUDIT_OUT")"
+else
+  pass "no non-publishing job (build included) can write to the repository"
+fi
+
+if grep -q '^perms-cannot-publish:' <<<"$AUDIT_OUT"; then
+  fail "the publishing jobs cannot actually publish, so the least-privilege assertions above are vacuous: $(grep '^perms-cannot-publish:' <<<"$AUDIT_OUT")"
+else
+  pass "publish and bump-manifest DO hold contents: write — the least-privilege assertions are not passing on a workflow that simply cannot release"
+fi
+
+if grep -q '^run-splice:' <<<"$AUDIT_OUT"; then
+  fail "an expression other than matrix.*/runner.* is interpolated into a run: body: $(grep '^run-splice:' <<<"$AUDIT_OUT")"
+else
+  pass "no run: body in release-rmpc.yml interpolates a caller-supplied expression — every input reaches the shell through env: as data"
+fi
+
+# --- the same auditor, run over copies that put each defect back -------------
+# Every assertion above passes on a clean file; that is exactly what an auditor
+# with no teeth also does. Each finding is therefore proved reachable on a
+# hostile copy of the REAL workflow, through the SAME parser.
+AUDIT_MUTATOR_PY="$WORKDIR/mutate-authority.py"
+cat > "$AUDIT_MUTATOR_PY" <<'PY'
+"""Write a copy of release-rmpc.yml with one authority defect put back.
+
+Anchored on the real file: a mutation whose anchor has moved exits non-zero and
+says so, so a fixture can never quietly stop reintroducing the defect it exists
+to reintroduce and leave its assertion green over nothing.
+"""
+import pathlib
+import re
+import sys
+
+src, dst, mutation = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = pathlib.Path(src).read_text().splitlines(True)
+
+
+def workflow_perms_contents():
+    for i, line in enumerate(lines):
+        if line.rstrip("\n") == "permissions:":
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("  contents:"):
+                    return j
+                if lines[j].strip() and not lines[j].startswith("  "):
+                    break
+    sys.exit("no workflow-scope 'permissions:/contents:' in %s — anchor moved" % src)
+
+
+def job_perms_contents(job):
+    for i, line in enumerate(lines):
+        if line.rstrip("\n") == "  %s:" % job:
+            for j in range(i + 1, len(lines)):
+                if lines[j].strip() and not lines[j].startswith("   "):
+                    break
+                if lines[j].rstrip("\n") == "    permissions:":
+                    for k in range(j + 1, len(lines)):
+                        if lines[k].startswith("      contents:"):
+                            return j, k
+                    break
+    sys.exit("job '%s' has no permissions:/contents: in %s — anchor moved" % (job, src))
+
+
+def package_run_line():
+    for i, line in enumerate(lines):
+        if line.strip() == "- name: Package tar.gz":
+            for j in range(i, len(lines)):
+                if re.match(r"\s*run:\s*\|\s*$", lines[j]):
+                    return j
+            break
+    sys.exit("no 'Package tar.gz' step with a 'run: |' block in %s — anchor moved" % src)
+
+
+if mutation == "default-write":
+    lines[workflow_perms_contents()] = "  contents: write\n"
+elif mutation == "build-write":
+    _, k = job_perms_contents("build")
+    lines[k] = "      contents: write\n"
+elif mutation == "build-perms-removed":
+    j, k = job_perms_contents("build")
+    del lines[j : k + 1]
+elif mutation == "run-splice-input":
+    j = package_run_line()
+    body_indent = len(lines[j + 1]) - len(lines[j + 1].lstrip())
+    lines.insert(j + 1, "%secho \"releasing ${{ inputs.tag }}\"\n" % (" " * body_indent))
+else:
+    sys.exit("unknown mutation '%s'" % mutation)
+
+pathlib.Path(dst).write_text("".join(lines))
+PY
+
+# hostile_audit — build one hostile copy and echo what the REAL auditor found.
+# A fixture that failed to build reports itself through the same channel, so it
+# can only ever produce a FAIL, never a quiet pass.
+hostile_audit() {
+  local mutation="$1" dir="$WORKDIR/hostile-authority/$1" mutate_err
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  if ! mutate_err=$(python3 "$AUDIT_MUTATOR_PY" "$RELEASE_WORKFLOW" \
+    "$dir/release-rmpc.yml" "$mutation" 2>&1); then
+    echo "FIXTURE DID NOT BUILD: $mutate_err"
+    return 0
+  fi
+  audit_workflow "$dir/release-rmpc.yml"
+}
+
+HOSTILE_DEFAULT="$(hostile_audit default-write)"
+if grep -q '^perms-default:' <<<"$HOSTILE_DEFAULT"; then
+  pass "restoring workflow-scope 'contents: write' is caught — the original #1237 shape, where every job including build inherits a repo-write token"
+else
+  fail "workflow-scope 'contents: write' was accepted by the auditor, so the read-only-default assertion above proves nothing (findings: ${HOSTILE_DEFAULT:-<none>})"
+fi
+
+HOSTILE_BUILD="$(hostile_audit build-write)"
+if grep -q "^perms-write: job 'build'" <<<"$HOSTILE_BUILD"; then
+  pass "granting the build matrix 'contents: write' directly is caught — the job that executes build.rs from a caller-supplied tree"
+else
+  fail "the build job was allowed contents: write (findings: ${HOSTILE_BUILD:-<none>})"
+fi
+
+HOSTILE_INHERIT="$(hostile_audit build-perms-removed)"
+if grep -q "^perms-missing: job 'build'" <<<"$HOSTILE_INHERIT"; then
+  pass "deleting the build job's permissions: block is caught — silent inheritance is how the workflow-scope grant reached build in the first place"
+else
+  fail "the build job was allowed to inherit its authority instead of stating it (findings: ${HOSTILE_INHERIT:-<none>})"
+fi
+
+HOSTILE_SPLICE="$(hostile_audit run-splice-input)"
+if grep -q "^run-splice: '\${{ inputs.tag }}'" <<<"$HOSTILE_SPLICE"; then
+  pass "splicing '\${{ inputs.tag }}' back into a run: body is caught — the second half of #1237, closed by #1279 and until now asserted nowhere"
+else
+  fail "'\${{ inputs.tag }}' interpolated into a run: body was accepted — that expression is substituted into the shell source before bash parses it (findings: ${HOSTILE_SPLICE:-<none>})"
+fi
+
+# --- the refusal, executed --------------------------------------------------
+# Everything above reads YAML. This runs the workflow's OWN `Validate inputs`
+# body — extracted by the same extractor, inside the same sandbox — against the
+# payloads the guard exists for. `mkdir` is on the sandbox PATH, so a payload
+# that executed would leave a directory behind and be visible to the assertion;
+# a guard that "refuses" by exiting non-zero AFTER running the payload would be
+# worth nothing.
+echo ""
+echo "--- selftest: the release's own input validation, executed against payloads ---"
+
+# run_validate — run the extracted Validate inputs body with INPUT_TAG=$1.
+# The extracted env: is loaded first and the payload appended, so `env -i`'s
+# last-wins ordering puts the payload in place of the fixture tag without the
+# harness's own sandbox assignments (spliced later still) losing.
+VALIDATE_ROOT="$WORKDIR/validate"
+run_validate() {
+  local payload="$1" root="$VALIDATE_ROOT/$2"
+  rm -rf "$root"
+  mkdir -p "$root"
+  read_step_env "$WF_DIR/validate.env"
+  STEP_ENV+=("EVENT_NAME=workflow_dispatch" "DRY_RUN=false" "INPUT_TAG=$payload")
+  VALIDATE_OUT=$(run_extracted_step "$WF_DIR/validate.sh" "$root")
+  VALIDATE_EXIT=$?
+  STEP_ENV=()
+  VALIDATE_ROOT_USED="$root"
+  return 0
+}
+
+if [[ ! -f "$WF_DIR/validate.sh" || -n "$WF_ERRORS" ]]; then
+  fail "the Validate inputs step could not be extracted, so the input-refusal assertions did not execute: ${WF_ERRORS:-step not found}"
+  fail "the Validate inputs step could not be extracted, so the newline-tag assertion did not execute: ${WF_ERRORS:-step not found}"
+  fail "the Validate inputs step could not be extracted, so the accept-a-real-tag assertion did not execute: ${WF_ERRORS:-step not found}"
+else
+  # shellcheck disable=SC2016  # $(mkdir pwned) must reach the step as literal
+  # text; expanding it here would run it in THIS shell and assert nothing.
+  run_validate 'rmpc-v1.0.0$(mkdir pwned)' cmdsub
+  if [[ $VALIDATE_EXIT -ne 0 && ! -e "$VALIDATE_ROOT_USED/pwned" ]]; then
+    pass "a dispatched tag carrying \$(...) is refused by the release's own validation, and the payload never ran"
+  elif [[ -e "$VALIDATE_ROOT_USED/pwned" ]]; then
+    fail "a dispatched tag carrying \$(...) EXECUTED its payload — the value is reaching the shell as source, not as data (output: $VALIDATE_OUT)"
+  else
+    fail "a dispatched tag carrying \$(...) was accepted (exit $VALIDATE_EXIT) — it would go on to name the tag, the archives and the Release (output: $VALIDATE_OUT)"
+  fi
+
+  run_validate 'rmpc-v1.0.0
+version=rmpc-v9.9.9' newline
+  if [[ $VALIDATE_EXIT -ne 0 ]]; then
+    pass "a dispatched tag carrying a newline is refused — it would otherwise write a second version= line into \$GITHUB_OUTPUT and release something the version check never saw"
+  else
+    fail "a dispatched tag carrying a newline was accepted (exit $VALIDATE_EXIT) — \$GITHUB_OUTPUT is a key=value file with no delimiter, so the second line silently wins (output: $VALIDATE_OUT)"
+  fi
+
+  run_validate 'rmpc-v1.2.3' good
+  if [[ $VALIDATE_EXIT -eq 0 ]]; then
+    pass "a well-formed rmpc-vX.Y.Z tag is still accepted — the two refusals above are not a step that rejects everything"
+  else
+    fail "a well-formed 'rmpc-v1.2.3' was refused (exit $VALIDATE_EXIT) — releases cannot be dispatched at all (output: $VALIDATE_OUT)"
+  fi
+fi
+
+# --- why env: is the fix, demonstrated rather than asserted ------------------
+# The audit above refuses a `${{ }}` in a run: body. This shows what that refusal
+# buys, by running the two renderings of ONE payload through the same sandbox:
+# the spliced form is what Actions writes when the expression sits in the body,
+# the env form is what it writes when the expression sits in `env:`. Same string,
+# same bash. Only one of them executes it.
+SPLICE_ROOT="$WORKDIR/splice-demo"
+mkdir -p "$SPLICE_ROOT/spliced" "$SPLICE_ROOT/passed"
+# shellcheck disable=SC2016  # `$(mkdir pwned)` is the payload's literal text.
+# Expanding it here would run it in THIS shell and prove nothing about either
+# rendering below.
+PAYLOAD='rmpc-v1.0.0$(mkdir pwned)'
+printf 'printf "tag=%%s\\n" "%s"\n' "$PAYLOAD" > "$SPLICE_ROOT/spliced.sh"
+# shellcheck disable=SC2016  # `${INPUT_TAG}` is the generated body's expansion,
+# performed inside the sandbox against the env: value spliced there.
+printf 'printf "tag=%%s\\n" "${INPUT_TAG}"\n' > "$SPLICE_ROOT/passed.sh"
+
+STEP_ENV=()
+SPLICED_OUT=$(run_extracted_step "$SPLICE_ROOT/spliced.sh" "$SPLICE_ROOT/spliced")
+STEP_ENV=("INPUT_TAG=$PAYLOAD")
+PASSED_OUT=$(run_extracted_step "$SPLICE_ROOT/passed.sh" "$SPLICE_ROOT/passed")
+STEP_ENV=()
+
+if [[ -d "$SPLICE_ROOT/spliced/pwned" && ! -e "$SPLICE_ROOT/passed/pwned" \
+      && "$PASSED_OUT" == "tag=$PAYLOAD" ]]; then
+  pass "the mechanism: the same tag runs its \$(...) as code when spliced into the run: body and is inert when passed through env: — which is why the audit refuses the first shape"
+else
+  fail "the splice/env demonstration did not behave as documented — spliced payload ran: $([[ -d "$SPLICE_ROOT/spliced/pwned" ]] && echo yes || echo no) (output: $SPLICED_OUT); env-passed payload ran: $([[ -e "$SPLICE_ROOT/passed/pwned" ]] && echo yes || echo no) (output: $PASSED_OUT)"
 fi
 
 # ---------- an insecure base URL must not be able to print "verified" ----------

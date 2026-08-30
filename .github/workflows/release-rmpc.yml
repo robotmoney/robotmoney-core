@@ -92,8 +92,24 @@ on:
         type: boolean
         default: false
 
+# WHY THE DEFAULT IS READ AND WRITE IS GRANTED PER JOB (issue #1237)
+# `contents: write` used to be declared here, at workflow scope, so EVERY job
+# inherited it — including the `build` matrix, which never needs it. That matrix
+# checks out `submodules: recursive` at a caller-supplied SHA and runs
+# `cargo build`, which executes `build.rs` and proc-macro code out of that tree.
+# The token is in the job's environment the whole time. "Can dispatch a release"
+# therefore silently meant "can run arbitrary code with a repo-write token", for
+# a caller who only needed `actions: write` to get there.
+# So the workflow default is the floor, not the ceiling: read. Every job then
+# declares its own block, which makes the authority a job-local, reviewable fact
+# rather than something inherited from 400 lines away — and a job added later
+# starts read-only instead of silently inheriting write.
+# scripts/release/install-rmpc-selftest.sh audits this map on every PR: the
+# default must not be write, every job must declare a block, resolve /
+# verify-version / build must not reach write, and `publish` must (an audit that
+# passed because the release lost the authority to publish would assert nothing).
 permissions:
-  contents: write
+  contents: read
 
 # CI TAXONOMY
 # Release plumbing, not a test suite: resolve/build/publish cross-compile and
@@ -120,17 +136,26 @@ env:
 jobs:
   resolve:
     name: resolve-inputs
+    # Reads the repo (full-history checkout to expand a short commit_hash) and
+    # writes nothing.
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.r.outputs.sha }}
       version: ${{ steps.r.outputs.version }}
     steps:
       # Every `${{ }}` below is read through step-level `env:`, never interpolated
-      # into shell source. This workflow holds `contents: write`, and an expression
-      # spliced into a `run:` body is executed by bash — an actor with only
-      # `actions:write` could dispatch a tag like `v1$(...)` and reach code
-      # execution on the runner with that token. Via `env:` the value arrives as
-      # data in a variable and is never parsed as shell.
+      # into shell source. An expression spliced into a `run:` body is substituted
+      # into the shell SOURCE before bash ever parses it, so quoting at the call
+      # site does not help — an actor with only `actions: write` could dispatch a
+      # tag like `v1$(...)` and reach code execution on the runner. Via `env:` the
+      # value arrives as data in a variable and is never parsed as shell.
+      # This job no longer holds `contents: write` (see the permissions block
+      # above), but the sink is the runner, not the token: the guard stands on its
+      # own. install-rmpc-selftest.sh extracts this step and RUNS it against a
+      # `$(...)` payload and a newline payload, and separately refuses any `${{ }}`
+      # other than `matrix.*` anywhere in a `run:` body in this file.
       - name: Validate inputs
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -260,6 +285,9 @@ jobs:
   # and gates all four archives plus the workflow-artifact channel at once.
   verify-version:
     name: verify-manifest-matches-tag
+    # Checks out and reads a manifest. Writes nothing.
+    permissions:
+      contents: read
     needs: [resolve]
     runs-on: ubuntu-latest
     steps:
@@ -322,6 +350,14 @@ jobs:
 
   build:
     name: build-${{ matrix.target }}
+    # The job this issue is about. It checks out `submodules: recursive` at
+    # needs.resolve.outputs.sha and runs cargo, so build.rs and every proc macro
+    # in that tree execute here. Read is all a checkout needs; the archives leave
+    # via actions/upload-artifact, which does not use the contents scope.
+    permissions:
+      contents: read
+      id-token: write        # mint the Sigstore cert for build provenance (#1236)
+      attestations: write    # write the attestation to this repo's store (#1236)
     needs: [resolve, verify-version]
     runs-on: ${{ matrix.runner }}
     # WHY THIS JOB HAS ITS OWN PERMISSION MAP (issue #1236)
@@ -518,6 +554,11 @@ jobs:
 
   publish:
     name: tag-and-publish
+    # The only job that writes: `git push origin <tag>` and the Release created
+    # by softprops/action-gh-release. It runs no code from the built tree — it
+    # downloads the matrix's artifacts and attaches them.
+    permissions:
+      contents: write
     needs: [resolve, build]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: ubuntu-latest

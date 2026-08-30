@@ -146,7 +146,38 @@ that must not silently rot is exercised by:
 | `.github/scripts/tests/test_assert_manifest_ahead_of_tags.sh` | the PR guard's collision, regression, tagless, prerelease-ordering, foreign-tag and out-of-scope branches, against synthetic repositories |
 | `.github/scripts/tests/test_bump_rmpc_manifest.sh` | the post-release bump — including that the bump it writes makes the same repository pass the guard |
 | `scripts/release/install-rmpc-selftest.sh` | `release-rmpc.yml`'s own packaging and pairing steps, extracted and *run* (packaging with `sha256sum` absent, i.e. the macOS runner), plus the installer's verify/refuse paths — including that an archive whose build provenance does not verify is refused with exit 6 before extraction, and that a missing `gh` refuses before the download rather than degrading |
+| `scripts/release/install-rmpc-selftest.sh` (authority audit) | `release-rmpc.yml`'s per-job permission map and its `run:` bodies — see "Who holds the write token" below |
 
 The first two run in `suite-07-rmpc-integration.yml` (job `rmpc-parity`), ahead of
 `Build rmpc binary` so a version problem does not cost a release build first. The
 third runs in `suite-17-swarm-plugin.yml`.
+
+## Who holds the write token
+
+`release-rmpc.yml` defaults to `contents: read` and grants write per job. The map,
+audited on every PR by `install-rmpc-selftest.sh`:
+
+| Job | `contents` | Why |
+|---|---|---|
+| `resolve` | `read` | full-history checkout to expand a short `commit_hash` |
+| `verify-version` | `read` | checks out and reads `Cargo.toml` |
+| `build` | `read` | checks out `submodules: recursive` at a caller-supplied SHA and runs cargo, so `build.rs` and every proc macro in that tree execute here; archives leave via `actions/upload-artifact`, which does not use the `contents` scope |
+| `publish` | `write` | `git push origin <tag>` and the GitHub Release |
+| `bump-manifest` | `write` (+ `pull-requests: write`) | pushes the post-release bump and opens its PR |
+
+`contents: write` used to sit at workflow scope, so `build` inherited it and
+arbitrary code from the dispatched ref ran alongside a repo-write token — "can
+dispatch a release" silently meant "can run arbitrary code with that token"
+(issue #1237). Two rules keep it closed, and both are asserted rather than
+documented only: the workflow-scope default must not be `write`, and **every job
+must state its own `permissions:` block** — silent inheritance is how the grant
+reached `build` in the first place.
+
+Relatedly, no `run:` body in that file may interpolate a `${{ }}` expression
+other than `matrix.*` / `runner.*`. Actions substitutes an expression into the
+shell *source* before bash parses it, so quoting at the call site cannot contain
+a `$(...)` in a dispatched tag. Caller-supplied values reach the shell through
+the step's `env:` and are read as `"$VAR"`. The selftest executes the release's
+own `Validate inputs` step against a `$(...)` payload and a newline payload to
+prove the refusal, and runs both renderings of one payload side by side to show
+why the `env:` form is the fix.

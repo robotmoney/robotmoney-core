@@ -195,7 +195,7 @@ jobs:
           # minimum gets edited down, so any slack between the two numbers
           # re-opens exactly the window the check exists to close. They move
           # together, in the same commit.
-          if [[ "$count" -lt 81 ]]; then
-            echo "::error::only $count assertions executed (expected >= 81, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
+          if [[ "$count" -lt 95 ]]; then
+            echo "::error::only $count assertions executed (expected >= 95, the same floor run-tests.sh enforces) — a suite that asserts nothing is a false green"
             exit 1
           fi
