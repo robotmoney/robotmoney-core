@@ -829,6 +829,33 @@ to named `RmpcError` variants and to the stable product reason codes in
 §7.2. Committee read commands (e.g. listing an agent's registered votes)
 use the same protocol/account read envelopes as §5.0.
 
+**Consensus receipt commands.** `rmpc receipt` handles the consensus
+rebalance receipt of §4.9 (issue #1247).
+
+- `receipt verify` — fetch (or read) a receipt, canonicalize it per
+  `tests/fixtures/consensus-receipt.canonicalization.json`, print the
+  derived `payload_digest` and `receipt_id`, and report per-analyst
+  Ed25519 verification. Read-only: no signer, no nonce lock, no RPC.
+- `receipt submit` — the same checks, then
+  `RobotMoneyGateway.consensusRecordReceipt(receiptId, payloadDigest,
+  payloadUri)` sent **to the gateway address** (the receipt contract is
+  `onlyGateway`).
+
+The canonicalizer lives in `clients/rust-payment-client/src/consensus_receipt.rs`
+and is a second implementation of bytes the frontend already produces, so it
+is proved equal to the committed goldens byte for byte —
+`consensus-receipt.escaping.canonical.txt` in particular, because an
+ASCII-only comparison passes for a serializer that escapes non-ASCII,
+U+2028, or the HTML-sensitive characters (Go's `encoding/json` and Python's
+`json.dumps` each do one of those by default).
+
+`submit` **refuses to broadcast** when the derived digest disagrees with an
+operator-supplied `--expected-digest`, or when any embedded analyst
+signature fails — before the signer is loaded, before the nonce lock is
+taken and before any RPC call. That refusal is what §4.9.1 names
+load-bearing: the chain cannot verify Ed25519, so without it a compromised
+submitter could anchor a receipt the analysts never agreed to.
+
 ### 5.2 Agent Permissions Gateway
 
 The gateway is the permissions and agent-safety layer for autonomous

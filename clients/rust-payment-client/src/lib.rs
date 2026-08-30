@@ -12,6 +12,9 @@ pub mod cli;
 pub mod commands;
 pub mod committee_identity;
 pub mod config;
+/// Canonicalization, digest derivation and Ed25519 verification for the swarm's
+/// consensus rebalance receipt (issue #1247 / docs/architecture.md §4.9).
+pub mod consensus_receipt;
 pub mod errors;
 pub mod fees;
 pub mod gateway;
