@@ -491,6 +491,48 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "function",
+    name: "consensusReceipt",
+    inputs: [],
+    outputs: [
+      {
+        name: "",
+        type: "address",
+        internalType: "contract IConsensusRebalanceReceipt",
+      },
+    ],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "consensusRecordReceipt",
+    inputs: [
+      {
+        name: "receiptId",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "payloadDigest",
+        type: "bytes32",
+        internalType: "bytes32",
+      },
+      {
+        name: "payloadUri",
+        type: "string",
+        internalType: "string",
+      },
+    ],
+    outputs: [
+      {
+        name: "index",
+        type: "uint256",
+        internalType: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "deposit",
     inputs: [
       {
@@ -853,6 +895,19 @@ export const gatewayAbiGenerated = [
       },
     ],
     stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "setConsensusReceipt",
+    inputs: [
+      {
+        name: "receipt_",
+        type: "address",
+        internalType: "address",
+      },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
@@ -1461,6 +1516,25 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "event",
+    name: "ConsensusReceiptSet",
+    inputs: [
+      {
+        name: "by",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+      {
+        name: "receipt",
+        type: "address",
+        indexed: true,
+        internalType: "address",
+      },
+    ],
+    anonymous: false,
+  },
+  {
+    type: "event",
     name: "ICPolicySet",
     inputs: [
       {
@@ -1670,6 +1744,11 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "CommitmentTooRecent",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "ConsensusReceiptNotSet",
     inputs: [],
   },
   {
