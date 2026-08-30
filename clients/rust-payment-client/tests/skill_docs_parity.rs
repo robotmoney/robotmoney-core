@@ -110,48 +110,55 @@ fn rmpc_help(args: &[&str]) -> String {
     String::from_utf8(out.stdout).expect("rmpc --help stdout is utf-8")
 }
 
-/// Subcommand list from `rmpc --help`. Uses clap's `print_long_help`
-/// indirectly: clap prints subcommands under a `Commands:` section,
-/// indented two spaces, name then description.
+/// Subcommand names listed under the `Commands:` section of `rmpc <args>
+/// --help`. Empty for a leaf command, which has no such section.
+///
+/// Clap prints subcommands under a `Commands:` heading, indented two spaces,
+/// name then description.
+fn subcommands_under(args: &[&str]) -> BTreeSet<String> {
+    let help = rmpc_help(args);
+    let mut in_commands = false;
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for line in help.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("Commands:") {
+            in_commands = true;
+            continue;
+        }
+        if !in_commands {
+            continue;
+        }
+        if trimmed.is_empty() {
+            // First blank line after `Commands:` ends the block.
+            if !out.is_empty() {
+                break;
+            }
+            continue;
+        }
+        // Skip non-indented section headers (e.g. `Options:`).
+        if !line.starts_with("  ") {
+            break;
+        }
+        let name = line.split_whitespace().next().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        // `help` is a built-in clap command we don't surface in the skill docs.
+        if name == "help" {
+            continue;
+        }
+        out.insert(name.to_string());
+    }
+    out
+}
+
+/// Top-level subcommand list from `rmpc --help`.
 fn rmpc_subcommands() -> BTreeSet<String> {
     static CACHE: OnceLock<BTreeSet<String>> = OnceLock::new();
     CACHE
         .get_or_init(|| {
             let help = rmpc_help(&[]);
-            let mut in_commands = false;
-            let mut out: BTreeSet<String> = BTreeSet::new();
-            for line in help.lines() {
-                let trimmed = line.trim_end();
-                if trimmed.starts_with("Commands:") {
-                    in_commands = true;
-                    continue;
-                }
-                if !in_commands {
-                    continue;
-                }
-                if trimmed.is_empty() {
-                    // First blank line after `Commands:` ends the block.
-                    if !out.is_empty() {
-                        break;
-                    }
-                    continue;
-                }
-                // Clap prints "  name   description"; skip non-indented
-                // section headers (e.g. `Options:`).
-                if !line.starts_with("  ") {
-                    break;
-                }
-                let name = line.split_whitespace().next().unwrap_or("");
-                if name.is_empty() {
-                    continue;
-                }
-                // `help` is a built-in clap command we don't surface in
-                // the skill docs.
-                if name == "help" {
-                    continue;
-                }
-                out.insert(name.to_string());
-            }
+            let out = subcommands_under(&[]);
             assert!(
                 !out.is_empty(),
                 "could not parse subcommand list from `rmpc --help`:\n{help}"
@@ -163,18 +170,23 @@ fn rmpc_subcommands() -> BTreeSet<String> {
         .collect()
 }
 
-/// Long-flag list (`--something`) for a given subcommand from its
-/// `--help` output. Caches per-subcommand.
-fn rmpc_subcommand_flags(sub: &str) -> BTreeSet<String> {
+/// Long-flag list (`--something`) for a subcommand PATH from its `--help`
+/// output. Caches per path.
+///
+/// The path may be nested (`["committee", "vote-submit"]`): a flag declared on
+/// a leaf is invisible in the parent's help, so a union built only from
+/// top-level `--help` output would reject every leaf flag the skill docs name.
+fn rmpc_subcommand_flags(path: &[&str]) -> BTreeSet<String> {
     static CACHE: OnceLock<std::sync::Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
     let mu = CACHE.get_or_init(|| std::sync::Mutex::new(BTreeMap::new()));
+    let key = path.join(" ");
     {
         let guard = mu.lock().unwrap();
-        if let Some(v) = guard.get(sub) {
+        if let Some(v) = guard.get(&key) {
             return v.clone();
         }
     }
-    let help = rmpc_help(&[sub]);
+    let help = rmpc_help(path);
     let mut flags = BTreeSet::new();
     for tok in help.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')) {
         if let Some(rest) = tok.strip_prefix("--") {
@@ -198,7 +210,7 @@ fn rmpc_subcommand_flags(sub: &str) -> BTreeSet<String> {
         }
     }
     let mut guard = mu.lock().unwrap();
-    guard.insert(sub.to_string(), flags.clone());
+    guard.insert(key, flags.clone());
     flags
 }
 
@@ -367,8 +379,16 @@ fn every_documented_flag_exists_on_some_rmpc_subcommand() {
             }
         }
     }
+    // Walk the whole command tree, not just its first level. `rmpc committee`
+    // and `rmpc receipt` are subcommand GROUPS: their real flags
+    // (`--weight-bps`, `--receipt-url`, ...) live on the leaves and never
+    // appear in the parent's help, so a union built from top-level help alone
+    // would reject every leaf flag the skill docs publish.
     for sub in rmpc_subcommands() {
-        union.extend(rmpc_subcommand_flags(&sub));
+        union.extend(rmpc_subcommand_flags(&[&sub]));
+        for leaf in subcommands_under(&[&sub]) {
+            union.extend(rmpc_subcommand_flags(&[&sub, &leaf]));
+        }
     }
 
     // Flags clap always supplies. They may not appear in every

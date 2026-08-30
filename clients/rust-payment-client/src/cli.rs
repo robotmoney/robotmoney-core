@@ -420,6 +420,25 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
+    /// Consensus rebalance receipt (Project Fusion) — verify a receipt
+    /// off-chain, and anchor its digest on chain through
+    /// `RobotMoneyGateway.consensusRecordReceipt`.
+    ///
+    /// The chain proves that one submitter attested to the receipt; it cannot
+    /// prove each named analyst signed, because the EVM has no Ed25519
+    /// precompile. The embedded analyst signatures are therefore verified
+    /// off-chain here, and `submit` REFUSES to broadcast when the derived
+    /// digest or any embedded signature fails. Implements: issue #1247.
+    Receipt {
+        /// Path to the operator config TOML.
+        #[arg(long, short = 'c')]
+        config: PathBuf,
+        #[command(subcommand)]
+        subcommand: ReceiptSubcommand,
+        /// Pretty-print the JSON output.
+        #[arg(long, global = true)]
+        pretty: bool,
+    },
     /// Manage the local Investment Swarm signing identity — the
     /// production signing path for every swarm member. Ed25519 keypair,
     /// encrypted at rest — distinct from the on-chain EVM signer used by
@@ -447,6 +466,63 @@ pub enum Command {
         /// Pretty-print the JSON output.
         #[arg(long, global = true)]
         pretty: bool,
+    },
+}
+
+/// Subcommands for `rmpc receipt`.
+#[derive(Debug, Subcommand)]
+pub enum ReceiptSubcommand {
+    /// Fetch (or read) a consensus rebalance receipt, canonicalize it, print
+    /// the derived `payload_digest` and `receipt_id`, and report per-analyst
+    /// Ed25519 verification. Read-only: no signer, no nonce, no chain. Exits
+    /// non-zero on any validation or signature failure.
+    Verify {
+        /// URL serving the receipt JSON (the swarm API's
+        /// `/api/swarm/receipts/{session_id}` route). Mutually exclusive with
+        /// `--receipt-file`; exactly one is required.
+        #[arg(long = "receipt-url", conflicts_with = "receipt_file")]
+        receipt_url: Option<String>,
+        /// Local path to the receipt JSON. Mutually exclusive with
+        /// `--receipt-url`; exactly one is required.
+        #[arg(long = "receipt-file", conflicts_with = "receipt_url")]
+        receipt_file: Option<PathBuf>,
+    },
+    /// Anchor a verified receipt's digest on chain.
+    ///
+    /// Canonicalizes the receipt, derives `payload_digest` and `receipt_id`,
+    /// verifies EVERY embedded analyst Ed25519 signature, and refuses to
+    /// broadcast if any check fails — including a mismatch against
+    /// `--expected-digest`. Only then does it encode
+    /// `consensusRecordReceipt(receiptId, payloadDigest, payloadUri)` and send
+    /// it to the GATEWAY address (the receipt contract is `onlyGateway`).
+    ///
+    /// Requires `AGENT_ROLE` on the gateway and `COMMITTEE_AGENT_ROLE` on the
+    /// IC policy.
+    Submit {
+        /// Public URL serving these exact bytes. Anchored on chain as
+        /// `payloadUri`, so it is required even when `--receipt-file` supplies
+        /// the bytes.
+        #[arg(long = "receipt-url")]
+        receipt_url: String,
+        /// Read the receipt bytes from this file instead of fetching
+        /// `--receipt-url`. The URL is still what gets anchored.
+        #[arg(long = "receipt-file")]
+        receipt_file: Option<PathBuf>,
+        /// 32-byte digest, 0x-prefixed hex, that the derived `payload_digest`
+        /// must equal. When it does not, the command refuses and no
+        /// transaction is sent.
+        #[arg(long = "expected-digest")]
+        expected_digest: Option<String>,
+        /// Maximum seconds to wait for the receipt. Default 60.
+        #[arg(long = "receipt-timeout-secs", default_value_t = 60)]
+        receipt_timeout_secs: u64,
+        /// Gas limit for the anchor tx. Default 300_000 — recording appends one
+        /// row and stores a short URI string.
+        #[arg(long = "gas-limit", default_value_t = 300_000)]
+        gas_limit: u64,
+        /// Optional override for `max_fee_per_gas_cap` in wei.
+        #[arg(long = "fee-cap")]
+        fee_cap: Option<u64>,
     },
 }
 

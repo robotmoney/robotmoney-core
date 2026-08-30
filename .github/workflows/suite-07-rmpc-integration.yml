@@ -15,8 +15,8 @@
 # setup container re-runs against a populated volume and exits 1, hanging the test.
 # The explicit teardown between binaries is load-bearing; do not remove it.
 #
-# WHY skill_docs_parity, dapp_toml_roundtrip, committee, cli_committee_identity AND
-# cli_version RUN HERE BEFORE THE DOCKER TESTS
+# WHY skill_docs_parity, dapp_toml_roundtrip, committee, receipt,
+# cli_committee_identity AND cli_version RUN HERE BEFORE THE DOCKER TESTS
 # These tests require the rmpc binary but no chain. Running them first means that if
 # the plugin manifest, TOML config, or committee register/vote-submit calldata path
 # drifts, CI fails fast (< 1 min) before paying for the Docker boot. They are in this
@@ -24,13 +24,16 @@
 # The committee test (clients/rust-payment-client/tests/committee.rs, issue #1105) mocks
 # the JSON-RPC server with mockito and drives the real `rmpc committee register` /
 # `vote-submit` binary via assert_cmd — no live chain, so it belongs in the binary-only
-# parity job, not the devnet matrix. The cli_committee_identity test (issue #1111) drives
+# parity job, not the devnet matrix. The receipt test
+# (clients/rust-payment-client/tests/receipt.rs, issue #1247) is the same shape and is
+# the only executor of the consensus-receipt canonicalization goldens and of the
+# anchor-digest constants (issue #1280). The cli_committee_identity test (issue #1111) drives
 # `rmpc committee-identity create/show-public-key/sign` the same way — no RPC/mockito
 # needed at all, it is a pure local Ed25519 keystore. The cli_version test
 # (clients/rust-payment-client/tests/cli_version.rs, issue #1191) asserts the built
 # binary reports the manifest version and not the 0.1.0 placeholder that shipped in six
 # tagged releases — it needs the release binary and no chain, so it belongs here too.
-# All three are wrapped in cargo_test_require_executed.sh so a zero-tests-collected run
+# All four are wrapped in cargo_test_require_executed.sh so a zero-tests-collected run
 # fails RED instead of a silent green.
 #
 # NOTE ON THE cli_version STEP: it is the ONLY place in PR CI that executes
@@ -237,6 +240,31 @@ jobs:
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test committee -- --nocapture
+
+      # Consensus rebalance receipt: canonicalization goldens + the anchoring
+      # refusal gate (issue #1247, and the second half of issue #1280).
+      # mockito-backed, drives the release rmpc binary via assert_cmd — no chain.
+      #
+      # WHY THIS STEP IS LOAD-BEARING AND NOT OPTIONAL
+      # tests/receipt.rs is the ONLY executor of two pins. (1) The canonical
+      # bytes are byte-identical across robotmoney-core and robotmoney-frontend;
+      # consensus-receipt.escaping.canonical.txt is the fixture that catches a
+      # serializer escaping non-ASCII, U+2028 or the HTML-sensitive characters,
+      # and an all-ASCII check passes for every such serializer. (2)
+      # consensus-receipt.anchor-digest.json's keccak256 constants are compared
+      # against hashes derived at test time AND against the payloadDigest the
+      # `rmpc receipt submit` calldata actually carries — the half #1280 could
+      # not discharge until a consensusRecordReceipt implementation existed.
+      # Suite 6 runs `cargo test --lib`, which never builds tests/ integration
+      # targets, so without this step nothing in PR CI executes either pin.
+      # Wrapped in the executed-count guard so a zero-tests-collected run fails
+      # RED, never silent-green.
+      - name: rmpc receipt verify / submit (consensus receipt anchoring)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test receipt -- --nocapture
 
       # Investment-Committee MCP identity: create / show-public-key / sign
       # (issue #1111). No RPC, no chain, no external resource — pure local
