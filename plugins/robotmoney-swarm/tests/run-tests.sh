@@ -87,7 +87,14 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # rather than inferred from the count, suite-17's independent floor is asserted
 # equal to this number instead of merely commented, and the installer's
 # failing-digest-tool path is covered.
-MIN_EXPECTED_ASSERTIONS=65
+# Raised from 65 to 70 by #1242: the selftest's own sandbox was disarmable from
+# release-rmpc.yml — the step's `env:` was spliced LAST into `env -i`, so a
+# `PATH:` key in the file under test replaced the sandbox PATH and the macOS
+# packaging assertion passed over a step that would exit 127 on a macOS runner
+# (reproduced: 30 passed, 0 failed, exit 0). Five assertions now cover the
+# ordering and the extractor's refusal of sandbox-owned / shell-steering names,
+# each proved red with its fix reverted.
+MIN_EXPECTED_ASSERTIONS=70
 
 PASS=0
 FAIL=0
@@ -501,12 +508,16 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # 23 -> 29 with the checksum-coverage assertions (a downloaded `.sha256` that
 # names a different file, and a multi-line one, must both be refused).
 # 29 -> 30 with the failing-digest-tool case (exit 4, not an undocumented 1).
+# 30 -> 35 with #1242's sandbox-integrity cases: the extracted-step sandbox must
+# beat any `env:` the workflow under test declares (ordering), and the extractor
+# must refuse the names it owns plus BASH_ENV/ENV/SHELLOPTS/LD_PRELOAD, duplicate
+# step names, and a body reading a name its own `env:` does not declare.
 #
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=30
+MIN_INSTALL_SELFTEST_ASSERTIONS=35
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
