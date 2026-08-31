@@ -94,7 +94,15 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # (reproduced: 30 passed, 0 failed, exit 0). Five assertions now cover the
 # ordering and the extractor's refusal of sandbox-owned / shell-steering names,
 # each proved red with its fix reverted.
-MIN_EXPECTED_ASSERTIONS=81
+# Raised from 81 to 95 by #1237 (81 is #1236's floor; +14 here): release-rmpc.yml granted `contents: write` at
+# WORKFLOW scope, so the build matrix — which checks out submodules at a
+# caller-supplied SHA and runs build.rs and proc macros out of that tree — held a
+# repo-write token, and nothing asserted that #1279's `env:` indirection stayed
+# in place. Fourteen assertions now audit the per-job permission map and every
+# `run:` body, prove each finding reachable on a hostile copy of the real
+# workflow, and EXECUTE the release's own input validation against a `$(...)`
+# payload and a newline payload. Five of them were red against the pre-fix file.
+MIN_EXPECTED_ASSERTIONS=95
 
 PASS=0
 FAIL=0
@@ -518,12 +526,16 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # nothing; must refuse outright when no verifier is present rather than degrade;
 # and release-rmpc.yml's build job must still grant the two scopes that mint the
 # attestation. All eleven were confirmed red against the pre-#1236 installer.
+# 46 -> 60 with #1237's authority audit (46 is #1236's floor; +14 here): the workflow's per-job permission map
+# and its `run:` bodies are audited on every PR, each finding is proved reachable
+# on a hostile copy of the real workflow, and the release's own `Validate inputs`
+# step is extracted and RUN against injection payloads.
 #
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=46
+MIN_INSTALL_SELFTEST_ASSERTIONS=60
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
