@@ -102,7 +102,29 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # `run:` body, prove each finding reachable on a hostile copy of the real
 # workflow, and EXECUTE the release's own input validation against a `$(...)`
 # payload and a newline payload. Five of them were red against the pre-fix file.
-MIN_EXPECTED_ASSERTIONS=95
+#
+# Raised from 95 to 101 by #1292 (95 is #1237's floor; +6 here). This branch was
+# cut when the floor was 81 and rebased over #1237, so the two raises SUM: 95 + 6.
+# Taking either side's literal at the conflict would have silently discarded the
+# other side's assertions, which is the exact failure this floor exists to catch,
+# so the arithmetic is written down here rather than left to the next rebase.
+# #1292 reproduced two survivors of #1242's fix. The refusal list was an
+# ENUMERATION of ten names, and `LD_AUDIT` was not among them: a compiled audit
+# library referenced from a step's `env:` executed outside the fixture root while
+# the selftest reported 35 passed / 0 failed / exit 0, and `LD_DEBUG` +
+# `LD_DEBUG_OUTPUT` wrote files there with no compiler at all. Ordering cannot
+# defend either — the sandbox assigns neither name, so there is no last-wins race
+# to win — so the refusal was inverted to an ALLOW-list of the three names the
+# extracted steps actually need. Separately, the non-vacuity guard proving the
+# macOS packaging assertion is not vacuous swept the whole file for `runner:`
+# text, and a workflow with ZERO macOS builds plus one stray top-level
+# `runner: macos-latest` satisfied it; it now reads the structural
+# matrix.include walk. Six assertions cover the two, each proved red individually
+# against a targeted revert, re-measured after the rebase over #1237 (deny-list
+# restored: 62 passed / 4 failed; whole-file sweep restored: 65 / 1; allow-list
+# emptied: 55 / 11 — the last figure grew because #1237's extracted
+# `Validate inputs` step also stops resolving when the allow-list is empty).
+MIN_EXPECTED_ASSERTIONS=101
 
 PASS=0
 FAIL=0
@@ -530,12 +552,21 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # and its `run:` bodies are audited on every PR, each finding is proved reachable
 # on a hostile copy of the real workflow, and the release's own `Validate inputs`
 # step is extracted and RUN against injection payloads.
+# 60 -> 66 with #1292 (60 is #1237's floor; +6 here — this branch raised 46 -> 52
+# before #1237 landed, so the two raises SUM rather than replace one another):
+# the extractor's env: refusal became an allow-list (four assertions — LD_AUDIT,
+# LD_DEBUG_OUTPUT, a name no deny-list ever enumerated, and an executed escape
+# probe that catches the loader writing outside the fixture root — plus one that
+# the allow-list still admits the three names the real packaging step declares,
+# so "refuse everything" cannot buy a green), and the macOS non-vacuity guard
+# started counting build-matrix entries instead of `runner:` text anywhere in the
+# file (one assertion, on a zero-macOS fixture).
 #
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=60
+MIN_INSTALL_SELFTEST_ASSERTIONS=66
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
