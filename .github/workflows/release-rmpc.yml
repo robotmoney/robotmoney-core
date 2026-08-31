@@ -102,8 +102,10 @@ permissions:
 # gain one — it pushes tags and creates GitHub Releases.
 #
 # The behaviour that DOES need proving — that every archive ships a matching
-# `.sha256` and that the documented install path refuses a download which does
-# not match it — is covered on every PR by
+# `.sha256`, that this job still grants the scopes that mint a build-provenance
+# attestation, and that the documented install path refuses both a download which
+# does not match its checksum and an archive whose attestation does not verify —
+# is covered on every PR by
 # scripts/release/install-rmpc-selftest.sh (issue #1204). That selftest does not
 # grep this file for the text of those steps: it EXTRACTS the `Package tar.gz`
 # and `Assert every archive ships its checksum` step bodies and RUNS them —
@@ -322,6 +324,19 @@ jobs:
     name: build-${{ matrix.target }}
     needs: [resolve, verify-version]
     runs-on: ${{ matrix.runner }}
+    # WHY THIS JOB HAS ITS OWN PERMISSION MAP (issue #1236)
+    # `actions/attest-build-provenance` mints a Sigstore attestation using this
+    # run's OIDC identity, which needs `id-token: write`, and writes it to the
+    # repository's attestation store, which needs `attestations: write`. Neither
+    # is grantable from the workflow-level map, so the map is restated here — and
+    # restating it also DROPS the workflow-level `contents: write` this job never
+    # used: build checks out and compiles, it does not tag or publish. A job-level
+    # map replaces the inherited one outright, so this is a narrowing, not an
+    # addition. `publish` and `bump-manifest` keep the write scopes they need.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -459,6 +474,37 @@ jobs:
           fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
           echo "CHECKSUM=${ARCHIVE}.sha256" >> "$GITHUB_ENV"
+
+      # THE OUT-OF-BAND TRUST ANCHOR (issue #1236)
+      # The `.sha256` published beside each archive shares its trust root with the
+      # archive: same release, same host, same token. Anyone who can write the
+      # release can write both, so a checksum-only install path cannot detect a
+      # substituted release — only a substituted DOWNLOAD. This step is what does
+      # not share that root. It signs a SLSA provenance statement over the
+      # archive's digest with a Fulcio certificate carrying this workflow's OIDC
+      # identity; producing one requires an `id-token: write` Actions run in this
+      # repository, which a leaked release-write token is not.
+      #
+      # The subject is `${{ env.ARCHIVE }}` — the exact name `Package tar.gz`
+      # exported to GITHUB_ENV one step above, so the attested bytes and the
+      # uploaded bytes cannot drift apart. The attestation is keyed by digest in
+      # the repository's attestation store, not attached as a release asset, so
+      # nothing here changes what the Release holds.
+      #
+      # The consuming half is `gh attestation verify` in
+      # scripts/release/install-rmpc.sh, pinned to this repository AND this
+      # workflow path. scripts/release/install-rmpc-selftest.sh asserts on every
+      # PR that the installer refuses an archive whose attestation does not
+      # verify, and that this job still grants the two scopes above.
+      #
+      # What this does NOT prove: that the commit was reviewed. An attacker who
+      # can push a ref here can trigger this workflow and get a genuine
+      # attestation for it. Ref protection on `rmpc-v*` and review on this file
+      # are the other half, and they live in repository settings.
+      - name: Attest build provenance for the archive
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ env.ARCHIVE }}
 
       - name: Upload archive as workflow artifact
         uses: actions/upload-artifact@v4

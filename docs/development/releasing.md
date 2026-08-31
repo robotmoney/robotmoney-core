@@ -5,13 +5,14 @@ Canonical for: `.github/workflows/release-rmpc.yml`, `.github/workflows/release-
 `scripts/release/install-rmpc.sh`.
 
 Issues: #1191 (a released binary must not misreport its version), #1204 (checksummed
-release assets), #1243 (the two version guards contradicted each other).
+release assets), #1236 (build provenance — the checksum alone shares a trust root
+with the archive), #1243 (the two version guards contradicted each other).
 
 ## Two components, two tag namespaces
 
 | Namespace | Owner | Publishes |
 |---|---|---|
-| `rmpc-vX.Y.Z` | `release-rmpc.yml` | four `rmpc-vX.Y.Z-<platform>.tar.gz` archives + `.sha256`, attached to a GitHub Release |
+| `rmpc-vX.Y.Z` | `release-rmpc.yml` | four `rmpc-vX.Y.Z-<platform>.tar.gz` archives + `.sha256`, attached to a GitHub Release, each with a Sigstore build-provenance attestation |
 | `vX.Y.Z` | `release-dapp.yml` | `ghcr.io/<owner>/dapp:X.Y.Z` and `:latest` |
 
 They were the same namespace until #1243, and the overlap was not cosmetic. Three
@@ -44,7 +45,9 @@ retired for rmpc: the guard treats `0.3.3` as a frozen floor constant and reads 
      which is exactly why a dry run may not be named after a release.
 3. The workflow verifies manifest == tag, builds all four targets, asserts the
    built binary reports that version, packages each archive with its `.sha256`,
-   and creates the Release.
+   attests each archive's build provenance (`actions/attest-build-provenance`,
+   which is why `build` carries its own `id-token: write` / `attestations: write`
+   map and drops the inherited `contents: write`), and creates the Release.
 4. `bump-manifest` then opens **chore(rmpc): bump manifest to X.Y.Z+1** against
    `dev`. Merge it.
 
@@ -109,10 +112,25 @@ tag. It touches nothing in the rmpc release train.
 
 `scripts/release/install-rmpc.sh --tag rmpc-vX.Y.Z --dest ~/.local/bin`. It
 downloads the archive *and* its `.sha256`, refuses a checksum file that does not
-name that archive, and only then extracts. Legacy `vX.Y.Z` tags still resolve — the
-archive name has one `rmpc-` prefix either way — but releases up to and including
-`v0.3.3` predate #1204 and ship no checksum, so the installer correctly refuses
-them with exit 4. See `BOOTSTRAP.md` §1.
+name that archive, then runs `gh attestation verify` pinned to this repository
+and to `release-rmpc.yml` as the signer workflow, and only then extracts. `gh` is
+a hard prerequisite: without it the installer exits 2 rather than installing a
+binary it could not check.
+
+The two checks answer different questions and both are needed. The `.sha256`
+shares a trust root with the archive — same release, same host, same token — so
+it detects a tampered *download* and nothing more; anyone who can write the
+release can write a matching checksum beside a malicious archive. The attestation
+is signed with an OIDC identity GitHub issues only to an Actions run in this
+repository, so release-write alone cannot forge it. It does **not** prove the
+commit was reviewed: whoever can push a ref here can trigger this workflow and
+get a genuine attestation for it, which is what ref protection on `rmpc-v*` and
+review on `release-rmpc.yml` are for.
+
+Legacy `vX.Y.Z` tags still resolve — the archive name has one `rmpc-` prefix
+either way — but releases up to and including `v0.3.3` predate #1204 and ship no
+checksum (exit 4), and every release cut before #1236 has no attestation
+(exit 6). See `BOOTSTRAP.md` §1.
 
 Note that `releases/latest` is **not** a way to find the newest rmpc release: both
 components publish Releases into the same repository, so a dApp release can be the
@@ -127,7 +145,7 @@ that must not silently rot is exercised by:
 |---|---|
 | `.github/scripts/tests/test_assert_manifest_ahead_of_tags.sh` | the PR guard's collision, regression, tagless, prerelease-ordering, foreign-tag and out-of-scope branches, against synthetic repositories |
 | `.github/scripts/tests/test_bump_rmpc_manifest.sh` | the post-release bump — including that the bump it writes makes the same repository pass the guard |
-| `scripts/release/install-rmpc-selftest.sh` | `release-rmpc.yml`'s own packaging and pairing steps, extracted and *run* (packaging with `sha256sum` absent, i.e. the macOS runner), plus the installer's verify/refuse paths |
+| `scripts/release/install-rmpc-selftest.sh` | `release-rmpc.yml`'s own packaging and pairing steps, extracted and *run* (packaging with `sha256sum` absent, i.e. the macOS runner), plus the installer's verify/refuse paths — including that an archive whose build provenance does not verify is refused with exit 6 before extraction, and that a missing `gh` refuses before the download rather than degrading |
 
 The first two run in `suite-07-rmpc-integration.yml` (job `rmpc-parity`), ahead of
 `Build rmpc binary` so a version problem does not cost a release build first. The

@@ -23,26 +23,46 @@ This uses `read -s` so the passphrase is never echoed, never written to shell hi
 
 Either install a release binary or build from source — both are supported.
 
-**Option A — release binary (preferred):** Install it with this repo's
-checksum-verified recipe, `scripts/release/install-rmpc.sh`. It downloads the
-release archive *and* its published `.sha256`, checks that the checksum file is a
-single line naming *that* archive, hashes the archive itself and compares — and
-only then extracts and installs. A mismatch, or a checksum file covering some
-other file, aborts at the verify step, so a download that disagrees with its
-published checksum never reaches `PATH` (issue #1204). Do not
-fetch the tarball and drop the binary onto `PATH` yourself: step 4 below creates
-a **signing keystore** with whatever binary you installed here, so it must at
-minimum be the bytes the release actually holds.
+**Option A — release binary (preferred):** Install it with this repo's verified
+recipe, `scripts/release/install-rmpc.sh`. It applies two checks, in this order,
+and only then extracts and installs:
 
-> **What this check does and does not prove.** The `.sha256` comes from the same
-> release, the same host and the same TLS session as the archive, and nothing
-> signs either one. So this *detects* a corrupted, truncated or substituted
-> download — a mirror, proxy or cache serving bytes the release does not hold.
-> It does **not** *authenticate the release itself*: anyone able to write to the
-> release publishes a matching `.sha256` beside a malicious archive and the
-> installer still prints `verified`. Establishing provenance needs an
-> out-of-band anchor (build attestation, or a detached signature over the
-> checksum with a committed public key), which does not exist yet.
+1. **Checksum** (issue #1204). It downloads the release archive *and* its
+   published `.sha256`, checks that the checksum file is a single line naming
+   *that* archive, hashes the archive itself and compares.
+2. **Build provenance** (issue #1236). It runs `gh attestation verify` over the
+   archive, pinned to this repository **and** to
+   `.github/workflows/release-rmpc.yml` as the signing workflow.
+
+A checksum mismatch, a checksum file covering some other file, or an attestation
+that does not verify aborts before extraction, so an archive that fails either
+check never reaches `PATH`. Do not fetch the tarball and unpack the binary
+yourself: step 4 below creates a **signing keystore** with whatever binary you
+installed here.
+
+**Prerequisites:** `curl`, `tar`, `sha256sum` (or `shasum`), and the
+[GitHub CLI](https://cli.github.com) `gh` ≥ 2.49. `gh` is **required**, not
+optional — the installer refuses to run without it rather than installing a
+binary whose provenance it could not check. If `gh` reports an authentication or
+rate-limit problem, run `gh auth login` and retry.
+
+> **What these checks do and do not prove.** The `.sha256` shares a trust root
+> with the archive: same release, same host, same TLS session, and whoever can
+> write the release can write both. On its own it *detects* a corrupted,
+> truncated or substituted **download** — a mirror, proxy or cache serving bytes
+> the release does not hold — and nothing more. The **attestation** is the check
+> with a different trust root. It is a Sigstore signature over the archive's
+> digest, made with an OIDC identity that GitHub issues only to an Actions run in
+> this repository, so a leaked `contents: write` token, a stolen `GITHUB_TOKEN`,
+> or a maintainer account used to swap release assets **cannot** produce one.
+>
+> What it does **not** prove is that the code was reviewed. Provenance answers
+> "this archive came out of that workflow in this repository", not "the commit it
+> was built from was any good": anyone who can push a ref here can trigger the
+> release workflow and receive a genuine attestation for whatever that ref
+> contains. Closing that is branch and tag protection on the release workflow —
+> a repository setting, not something the installer can assert. Read `attested`
+> as *built by this repo's release workflow*, never as *reviewed*.
 
 ```bash
 # From the repo root. rmpc releases are tagged `rmpc-vX.Y.Z`; the dApp publishes
@@ -60,17 +80,20 @@ The script exits `4` if the archive does not match its published checksum
 (printing `ChecksumMismatch`), if the release publishes no checksum at all, or if
 the published checksum file does not name this archive — the last case being the
 one where a hostile mirror serves a real digest for some *other* file so the
-verification would otherwise pass. In every case nothing is extracted and nothing
-is installed.
+verification would otherwise pass. It exits `6` (`NotAttested`) if the archive
+has no build-provenance attestation that verifies against this repository and its
+release workflow. It exits `2` if `gh` is not installed. In every case nothing is
+extracted and nothing is installed.
 
-> **Releases published before `.sha256` existed:** `release-rmpc.yml` only began
-> emitting `<archive>.tar.gz.sha256` in #1204, so every release up to and
-> including `v0.3.3` — the last rmpc release cut under the old shared `vX.Y.Z`
-> tag namespace — ships archives with no checksum beside them. The installer
-> will correctly refuse those with exit `4` — *"no published checksum ... refusing
-> to install an unverifiable binary"*. That is the script working, not failing.
-> Until a release cut after #1204 exists, use **Option B** and build from source.
-> Do **not** answer that exit code by downloading the tarball by hand — that is
+> **Releases published before these checks existed:** `release-rmpc.yml` only
+> began emitting `<archive>.tar.gz.sha256` in #1204 and only began attesting
+> build provenance in #1236. Every release up to and including `v0.3.3` — the
+> last rmpc release cut under the old shared `vX.Y.Z` tag namespace — ships
+> archives with no checksum beside them, and every release cut before #1236
+> merged has no attestation. The installer will correctly refuse the first with
+> exit `4` and the second with exit `6`. That is the script working, not failing.
+> Until a release cut after #1236 exists, use **Option B** and build from source.
+> Do **not** answer either exit code by downloading the tarball by hand — that is
 > precisely the unverified path this replaced.
 
 > **Known issue:** the release binary may exit silently with exit code 3 on some systems (no stdout, stderr, or log output). If `rmpc --help` works but any subcommand exits 3 with no output, build from source instead (Option B).

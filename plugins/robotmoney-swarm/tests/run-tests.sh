@@ -94,7 +94,7 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # (reproduced: 30 passed, 0 failed, exit 0). Five assertions now cover the
 # ordering and the extractor's refusal of sandbox-owned / shell-steering names,
 # each proved red with its fix reverted.
-MIN_EXPECTED_ASSERTIONS=70
+MIN_EXPECTED_ASSERTIONS=81
 
 PASS=0
 FAIL=0
@@ -512,12 +512,18 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # beat any `env:` the workflow under test declares (ordering), and the extractor
 # must refuse the names it owns plus BASH_ENV/ENV/SHELLOPTS/LD_PRELOAD, duplicate
 # step names, and a body reading a name its own `env:` does not declare.
+# 35 -> 46 with #1236's build-provenance gate: the installer must invoke
+# `gh attestation verify` with the repository AND the release workflow pinned,
+# before extract; must refuse a non-verifying attestation with exit 6 and install
+# nothing; must refuse outright when no verifier is present rather than degrade;
+# and release-rmpc.yml's build job must still grant the two scopes that mint the
+# attestation. All eleven were confirmed red against the pre-#1236 installer.
 #
 # This floor is no longer the only thing standing between a crashed selftest and
 # a green suite: the exit status and the RMPC_INSTALL_SELFTEST_EXECUTED contract
 # line are both asserted below. It used to be, and it worked only by arithmetic
 # accident — the known truncation point happened to land under it.
-MIN_INSTALL_SELFTEST_ASSERTIONS=35
+MIN_INSTALL_SELFTEST_ASSERTIONS=46
 
 if [[ ! -x "$INSTALL_RMPC_SELFTEST" ]]; then
   # Loud-skip policy: a missing selftest is a red suite, never a quiet pass.
