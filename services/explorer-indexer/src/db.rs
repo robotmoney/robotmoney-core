@@ -193,11 +193,12 @@ const CHAIN_SCOPE_COLUMN: &str = "chain_id";
 /// survive an orphaned block", and the reason string must say why. A table that
 /// is merely inconvenient to roll back does not belong here.
 ///
-/// **Empty today.** Every table in the live schema that carries
-/// `block_number` also rolls back with its block. `reorg_rollback_exclusions_
-/// are_documented_and_live` (tests/reorg_cursor_vault_status.rs) fails on an
-/// entry with an empty reason or one that no longer matches a live block-scoped
-/// table, so a stale exemption cannot sit here unnoticed.
+/// **Empty today.** Every table in the live schema that carries `block_number`
+/// also rolls back with its block. The test
+/// `reorg_rollback_exclusions_are_documented_and_live`
+/// (`tests/reorg_cursor_vault_status.rs`) fails on an entry with no stated
+/// reason, one that no longer matches a live block-scoped table, or one the
+/// rollback covers anyway — so a stale exemption cannot sit here unnoticed.
 pub const REORG_ROLLBACK_EXCLUSIONS: &[(&str, &str)] = &[];
 
 /// A catalog identifier is only interpolated into SQL after this check.
