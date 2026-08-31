@@ -7,7 +7,8 @@ description: >
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
   commands (propose, vote), Investment Committee commands (committee
-  register, committee vote-submit), and the Investment Swarm signing
+  register, committee vote-submit), consensus rebalance receipt commands
+  (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
   Covers all flags, output shapes, preflight rules, and the get-governance
   → propose → vote example trace.
@@ -33,7 +34,7 @@ Exit code 0 means success; non-zero means a named, structured error. Add
   subcommand: `deposit`, `withdraw`, `status`, `self-check`, `get-vault`,
   `get-vaults`, `get-router`, `get-governance`, `get-timelock`, `get-gateway`,
   `get-agent`, `get-roles`, `get-balance`, `get-allowance`, `get-deposit`,
-  `get-tx`, `propose`, `vote`, `committee`, `committee-identity`.
+  `get-tx`, `propose`, `vote`, `committee`, `receipt`, `committee-identity`.
 
 ## Command surface
 
@@ -59,6 +60,7 @@ rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: register agents and submit signed allocation votes
+rmpc receipt         Consensus rebalance receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
@@ -217,6 +219,50 @@ See `rmpc committee vote-submit --help` for the full flag list (vault,
 stance, weight-bps, confidence, rationale-uri, vote-json-hash,
 prompt-hash, inputs-digest, timestamp, schema-version, gas-limit,
 fee-cap, receipt-timeout-secs, pretty).
+
+## Consensus receipt commands
+
+`rmpc receipt` handles a **consensus rebalance receipt** — the signed
+off-chain artifact a Project Fusion swarm session produces. The chain stores
+only the `keccak256` of the receipt's canonical bytes, beside the public URI
+serving those exact bytes.
+
+**The chain cannot verify the analyst signatures.** The EVM has no Ed25519
+precompile, so the per-analyst signatures ride inside the payload as data. A
+recorded receipt proves that one submitter attested to it — not that each
+named analyst signed. Say so on every surface: render the count as
+*off-chain analyst signatures*, never as on-chain approvals.
+
+### receipt verify
+
+Canonicalize a receipt, print the derived `payload_digest` and `receipt_id`,
+and report per-analyst Ed25519 verification. Read-only — no signer, no
+chain. Exits non-zero on any failure.
+
+```bash
+rmpc receipt --config <CONFIG> verify --receipt-url <URL>
+```
+
+### receipt submit
+
+Anchor a verified receipt's digest on chain via
+`RobotMoneyGateway.consensusRecordReceipt`. The call goes to the **gateway**
+address; the receipt contract is `onlyGateway`.
+
+```bash
+rmpc receipt --config <CONFIG> submit --receipt-url <URL> --expected-digest <0x...64hex>
+```
+
+`submit` re-derives the digest and verifies EVERY embedded analyst signature
+first, and **refuses to broadcast** if either check fails — before it loads
+the signer, takes the nonce lock, or makes any RPC call. That refusal is the
+only thing standing between a compromised submitter and a receipt the
+analysts never agreed to, so never work around it by anchoring a digest by
+hand.
+
+See `references/commands.md` for the full flag list (`--receipt-url`,
+`--receipt-file`, `--expected-digest`, `--gas-limit`, `--fee-cap`,
+`--receipt-timeout-secs`, `--pretty`) and the named error codes.
 
 ## Investment Swarm signing identity commands
 

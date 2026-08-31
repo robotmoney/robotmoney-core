@@ -47,6 +47,8 @@ import { LandingPriceStrip } from "./components/LandingPriceStrip";
 import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
 import { GovernancePanel } from "./components/GovernancePanel";
+import { ConsensusReceiptPanel } from "./components/ConsensusReceiptPanel";
+import { parseVaultAddressMap } from "./lib/consensusReceiptApi";
 import { makeConfig } from "./lib/wagmi";
 import { useGatewayVerifier } from "./lib/useGatewayVerifier";
 import { resolveExplorerApiUrl } from "./lib/explorerApi";
@@ -79,6 +81,12 @@ const rmToken = env.VITE_RM_TOKEN_ADDRESS ? (env.VITE_RM_TOKEN_ADDRESS as Addres
 const expectedCodeHash = env.VITE_GATEWAY_EXPECTED_CODE_HASH;
 const envClass = (env.VITE_ENV_CLASS as "fork" | "devnet" | "testnet" | "mainnet") ?? "fork";
 const explorerApiUrl = resolveExplorerApiUrl(env);
+// Issue #1247 task 4.14: the per-deployment vault-symbol map that
+// tests/fixtures/consensus-receipt.bucket-vault-map.json requires in order to
+// say whether a recommendation was applied. When it is absent or incomplete the
+// deployment is not receipt-capable for that comparison, and the surface says
+// "cannot determine" rather than substituting a global or zero address.
+const vaultAddressBySymbol = parseVaultAddressMap(env.VITE_VAULT_ADDRESSES);
 
 function App() {
   const { state: verificationState, refresh: verificationRefresh } = useGatewayVerifier(
@@ -191,6 +199,18 @@ function App() {
                       </p>
                     </section>
                   )}
+                </div>
+              ),
+            },
+            {
+              id: "consensus-receipts",
+              label: "Consensus Receipts",
+              content: (
+                <div className="tab-section-stack">
+                  <ConsensusReceiptPanel
+                    explorerApiUrl={explorerApiUrl}
+                    vaultAddressBySymbol={vaultAddressBySymbol}
+                  />
                 </div>
               ),
             },

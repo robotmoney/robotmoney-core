@@ -82,6 +82,9 @@ pub enum CountTable {
     CommitteeVotes,
     /// Added in migration 0014 — aggregated per-vault tilt snapshots (issue #1053).
     RegimeSnapshots,
+    /// Added in migration 0015 — on-chain consensus rebalance receipt
+    /// commitments (issue #1247, docs/architecture.md §4.9).
+    ConsensusReceipts,
 }
 
 impl CountTable {
@@ -110,6 +113,7 @@ impl CountTable {
             CountTable::CommitteeAgents => "committee_agents",
             CountTable::CommitteeVotes => "committee_votes",
             CountTable::RegimeSnapshots => "regime_snapshots",
+            CountTable::ConsensusReceipts => "consensus_receipts",
         }
     }
 }
@@ -151,6 +155,7 @@ impl TryFrom<&str> for CountTable {
             "committee_agents" => Ok(CountTable::CommitteeAgents),
             "committee_votes" => Ok(CountTable::CommitteeVotes),
             "regime_snapshots" => Ok(CountTable::RegimeSnapshots),
+            "consensus_receipts" => Ok(CountTable::ConsensusReceipts),
             other => Err(DbError::UnknownTable(other.to_owned())),
         }
     }
@@ -293,6 +298,11 @@ impl Db {
             "vault_fee_events",
             "vault_transfer_events",
             "account_history_events",
+            // Issue #1247 / docs/architecture.md §4.9 — consensus receipt
+            // commitments are block-numbered rows and MUST roll back with the
+            // chain, or an orphaned ReceiptRecorded would stay in the public
+            // record forever.
+            "consensus_receipts",
             "transactions",
             "blocks",
         ] {
@@ -334,6 +344,29 @@ impl Db {
              WHERE v.chain_id = $1 AND v.vault_address = latest.vault_address",
         )
         .bind(chain_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Issue #1247 (docs/architecture.md §4.9): `consensus_receipts.released`
+        // is an in-place mutation written by `ReceiptReleased`, exactly like
+        // `vaults.status` above.  A reorg that rolls back the release block but
+        // NOT the record block leaves a surviving row whose `released` flag came
+        // from an orphaned log — the dapp would then show a receipt as released
+        // that the canonical chain never released.  Un-release every surviving
+        // row whose release landed above `root`.  The row itself is never
+        // deleted here: an unreleased receipt stays an immutable public record
+        // (architecture §4.9.1 answer 3).
+        sqlx::query(
+            "UPDATE consensus_receipts SET \
+                 released = FALSE, \
+                 released_at = NULL, \
+                 released_block_number = NULL, \
+                 released_by = NULL, \
+                 indexed_at = now() \
+             WHERE chain_id = $1 AND released_block_number > $2",
+        )
+        .bind(chain_id)
+        .bind(root)
         .execute(&mut *tx)
         .await?;
 
@@ -1245,6 +1278,98 @@ impl Db {
 
     // ─── End InvestmentCommitteePolicy writers ────────────────────────────────
 
+    // ─── ConsensusRebalanceReceipt writers ────────────────────────────────────
+    // Canonical: docs/architecture.md §4.9 — issue #1247.
+    //
+    // Two events drive one table:
+    //   ReceiptRecorded → insert_consensus_receipt
+    //   ReceiptReleased → mark_consensus_receipt_released (in-place flip)
+
+    /// Insert a consensus receipt commitment row on `ReceiptRecorded`.
+    ///
+    /// `verified` is set by the caller after fetching `payload_uri` and
+    /// recomputing `keccak256(body) == payload_digest`.  It records **digest**
+    /// verification only — per-analyst ed25519 verification of the payload's
+    /// embedded signatures is `rmpc`'s job at submit time (architecture §4.9.1)
+    /// and a future indexer pass.
+    ///
+    /// Uses `ON CONFLICT DO NOTHING` so re-indexing the same range is a no-op.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_consensus_receipt(
+        &self,
+        chain_id: i64,
+        receipt_id: [u8; 32],
+        receipt_index: i64,
+        submitter: [u8; 20],
+        payload_digest: [u8; 32],
+        payload_uri: &str,
+        recorded_at: i64,
+        block_number: i64,
+        log_index: i32,
+        tx_hash: [u8; 32],
+        verified: bool,
+        payload_bytes: Option<i64>,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "INSERT INTO consensus_receipts \
+               (chain_id, receipt_id, receipt_index, submitter, payload_digest, \
+                payload_uri, recorded_at, block_number, log_index, tx_hash, \
+                verified, payload_bytes) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+             ON CONFLICT (chain_id, receipt_id) DO NOTHING",
+        )
+        .bind(chain_id)
+        .bind(&receipt_id[..])
+        .bind(receipt_index)
+        .bind(&submitter[..])
+        .bind(&payload_digest[..])
+        .bind(payload_uri)
+        .bind(recorded_at)
+        .bind(block_number)
+        .bind(log_index)
+        .bind(&tx_hash[..])
+        .bind(verified)
+        .bind(payload_bytes)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    /// Flip a recorded receipt to released on `ReceiptReleased`.
+    ///
+    /// No-ops gracefully when the row does not exist (the `ReceiptRecorded`
+    /// event may not have been indexed yet on a partial re-index).
+    /// `released_block_number` is stored so [`Db::delete_above_block`] can
+    /// un-release a receipt whose release landed on an orphaned block.
+    pub async fn mark_consensus_receipt_released(
+        &self,
+        chain_id: i64,
+        receipt_id: [u8; 32],
+        released_by: [u8; 20],
+        released_at: i64,
+        block_number: i64,
+    ) -> Result<u64, DbError> {
+        let r = sqlx::query(
+            "UPDATE consensus_receipts SET \
+                 released = TRUE, \
+                 released_at = $3, \
+                 released_block_number = $4, \
+                 released_by = $5, \
+                 indexed_at = now() \
+             WHERE chain_id = $1 AND receipt_id = $2",
+        )
+        .bind(chain_id)
+        .bind(&receipt_id[..])
+        .bind(released_at)
+        .bind(block_number)
+        .bind(&released_by[..])
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected())
+    }
+
+    // ─── End ConsensusRebalanceReceipt writers ────────────────────────────────
+
     /// Row count for any of the nine §11 tables.
     ///
     /// Accepts a [`CountTable`] enum value instead of a raw `&str` so
@@ -1435,6 +1560,11 @@ mod count_guard_tests {
             "governance_votes",
             "router_weight_snapshots",
             "router_deposit_legs",
+            "committee_agents",
+            "committee_votes",
+            "regime_snapshots",
+            // Migration 0015 — issue #1247.
+            "consensus_receipts",
         ];
         for name in known {
             let variant = CountTable::try_from(name)

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use watchdog::{
     alert::ThresholdKind,
     config::{ActionConfig, ActionMode, Config, GlobalThresholds, SlaConfig, VaultThresholds},
+    receipt_liveness::ReceiptLivenessConfig,
     volume::{
         burn_volume_per_block, mint_volume_per_block, mint_volume_per_block_for_vault,
         mint_volume_per_hour_for_vault,
@@ -186,6 +187,9 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
             max_response_secs: 300,
         },
         vault: HashMap::new(),
+        // The consensus-receipt liveness monitor is off by default, so these
+        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
+        consensus_receipts: ReceiptLivenessConfig::default(),
     }
 }
 
@@ -220,6 +224,9 @@ fn per_vault_config(
             max_response_secs: 300,
         },
         vault: vaults,
+        // The consensus-receipt liveness monitor is off by default, so these
+        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
+        consensus_receipts: ReceiptLivenessConfig::default(),
     }
 }
 
@@ -520,6 +527,9 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
             max_response_secs: 1,
         },
         vault: HashMap::new(),
+        // The consensus-receipt liveness monitor is off by default, so these
+        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
+        consensus_receipts: ReceiptLivenessConfig::default(),
     };
     let client = Client::new();
 

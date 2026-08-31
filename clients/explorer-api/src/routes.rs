@@ -23,6 +23,11 @@
 //   GET /v1/accounts/:address/history
 //   GET /v1/accounts/:address/policies
 //
+// Consensus rebalance receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
+//   GET /v1/consensus-receipts                        (protocol scope, ?limit=)
+//   GET /v1/consensus-receipts/:receipt_id            (protocol scope, one)
+//   GET /v1/accounts/:address/consensus-receipts      (account scope, by submitter)
+//
 // Boundary (§11): only GET methods. Any other method on any path returns
 // 405. Any /v1/sign* or /v1/authorize* path falls through to a global 404
 // handler. The router-introspection test asserts no non-GET routes exist.
@@ -55,12 +60,13 @@ use crate::model::{
     AccountPoliciesResponse, AccountPolicy, AccountPositionsResponse, ActivityEvent,
     AdapterAllocationEntry, AgentPolicy, AgentResponse, CommitteeAgent, CommitteeAgentsResponse,
     CommitteeTilt, CommitteeTiltsResponse, CommitteeTrackRecordResponse, CommitteeVoteEntry,
-    Contract, ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness,
-    Health, ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse,
-    RegimeFeedResponse, RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse,
-    Transaction, TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry,
-    VaultPosition, VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint,
-    VaultWeight, VaultsResponse, VoteEntry, WeightHistoryEntry,
+    ConsensusReceipt, ConsensusReceiptResponse, ConsensusReceiptsResponse, Contract,
+    ContractsResponse, Deposit, DepositResponse, DepositsResponse, EventKind, Freshness, Health,
+    ProposalDetail, ProposalDetailResponse, ProposalSummary, ProposalsResponse, RegimeFeedResponse,
+    RegimeSnapshot, RouterStateResponse, RouterWeightsResponse, StatsResponse, Transaction,
+    TransactionResponse, Vault, VaultDetail, VaultDetailResponse, VaultFeeEntry, VaultPosition,
+    VaultSnapshot, VaultSnapshotsResponse, VaultTransferEntry, VaultTvlPoint, VaultWeight,
+    VaultsResponse, VoteEntry, WeightHistoryEntry,
 };
 use crate::state::AppState;
 
@@ -249,6 +255,12 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/committee/tilts", get(get_committee_tilts))
         .route("/v1/regime/feed", get(get_regime_feed))
+        // Consensus rebalance receipts — issue #1247, docs/architecture.md §4.9.
+        // Protocol scope (§5.0): no :address segment.
+        .route("/v1/consensus-receipts", get(list_consensus_receipts))
+        .route("/v1/consensus-receipts/:receipt_id", get(get_consensus_receipt))
+        // Account scope (§5.0): receipts anchored by this submitter.
+        .route("/v1/accounts/:address/consensus-receipts", get(list_account_consensus_receipts))
         .fallback(not_found)
         .with_state(state)
 }
@@ -1576,6 +1588,190 @@ async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<Regime
     let freshness = latest_freshness(&state).await?;
     Ok(Json(RegimeFeedResponse {
         snapshots,
+        freshness,
+    }))
+}
+
+// ─── Consensus rebalance receipt endpoints ───────────────────────────────────
+// Canonical: docs/architecture.md §4.9 — issue #1247.
+//
+// Read-scope taxonomy (docs/architecture.md §5.0): a route with no `:address`
+// segment is PROTOCOL scope; `/v1/accounts/:address/...` is ACCOUNT scope.
+// `/v1/consensus-receipts[...]` is protocol scope — the commitment register is
+// a whole-protocol public record, not a per-depositor view.
+//
+// `verified` is DIGEST verification only, recomputed by the indexer. It is NOT
+// a claim that each named analyst signed — those ed25519 signatures ride inside
+// the payload and are verified off-chain (§4.9.1 answer 1). A client must label
+// the payload's signature count as *off-chain analyst signatures*.
+
+/// Default page size for the receipt list endpoints.
+const CONSENSUS_RECEIPTS_DEFAULT_LIMIT: i64 = 100;
+/// Hard upper bound so a caller cannot ask for an unbounded scan.
+const CONSENSUS_RECEIPTS_MAX_LIMIT: i64 = 500;
+
+#[derive(Debug, Deserialize)]
+pub struct ConsensusReceiptsQuery {
+    pub limit: Option<i64>,
+}
+
+/// Clamp a caller-supplied `?limit=` into `[1, CONSENSUS_RECEIPTS_MAX_LIMIT]`.
+fn clamp_receipt_limit(limit: Option<i64>) -> ApiResult<i64> {
+    match limit {
+        None => Ok(CONSENSUS_RECEIPTS_DEFAULT_LIMIT),
+        Some(n) if n < 1 => Err(ApiError::BadRequest("limit must be >= 1".into())),
+        Some(n) => Ok(n.min(CONSENSUS_RECEIPTS_MAX_LIMIT)),
+    }
+}
+
+// (receipt_id, receipt_index, submitter, payload_digest, payload_uri,
+//  recorded_at, block_number, tx_hash, verified, payload_bytes,
+//  released, released_at)
+type ConsensusReceiptRow = (
+    Vec<u8>,
+    i64,
+    Vec<u8>,
+    Vec<u8>,
+    String,
+    i64,
+    i64,
+    Vec<u8>,
+    bool,
+    Option<i64>,
+    bool,
+    Option<i64>,
+);
+
+/// Columns selected by every consensus-receipt query, in `ConsensusReceiptRow`
+/// order. Kept in one constant so the three handlers cannot drift apart.
+const CONSENSUS_RECEIPT_COLUMNS: &str = "receipt_id, receipt_index, submitter, payload_digest, \
+     payload_uri, recorded_at, block_number, tx_hash, verified, payload_bytes, \
+     released, released_at";
+
+fn receipt_from_row(row: ConsensusReceiptRow) -> ConsensusReceipt {
+    let (
+        receipt_id,
+        index,
+        submitter,
+        payload_digest,
+        payload_uri,
+        recorded_at,
+        block_number,
+        tx_hash,
+        verified,
+        payload_bytes,
+        released,
+        released_at,
+    ) = row;
+    ConsensusReceipt {
+        receipt_id: format!("0x{}", hex::encode(receipt_id)),
+        index,
+        submitter: format!("0x{}", hex::encode(submitter)),
+        payload_digest: format!("0x{}", hex::encode(payload_digest)),
+        payload_uri,
+        recorded_at,
+        block_number,
+        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+        verified,
+        payload_bytes,
+        released,
+        released_at,
+    }
+}
+
+/// GET /v1/consensus-receipts?limit=
+///
+/// Protocol scope. Every recorded commitment, newest first. Unreleased and
+/// unverified receipts are included — a receipt that governance declined, or
+/// whose payload could not be fetched, must be visible as such rather than
+/// absent (architecture §4.9.1 answer 3).
+async fn list_consensus_receipts(
+    State(state): State<AppState>,
+    Query(q): Query<ConsensusReceiptsQuery>,
+) -> ApiResult<Json<ConsensusReceiptsResponse>> {
+    let limit = clamp_receipt_limit(q.limit)?;
+
+    let sql = format!(
+        "SELECT {CONSENSUS_RECEIPT_COLUMNS} \
+         FROM consensus_receipts \
+         WHERE chain_id = $1 \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT $2"
+    );
+    let rows: Vec<ConsensusReceiptRow> = sqlx::query_as(&sql)
+        .bind(state.chain_id)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let receipts = rows.into_iter().map(receipt_from_row).collect();
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(ConsensusReceiptsResponse {
+        receipts,
+        freshness,
+    }))
+}
+
+/// GET /v1/consensus-receipts/:receipt_id
+///
+/// Protocol scope. One commitment by its bytes32 receipt id.
+async fn get_consensus_receipt(
+    State(state): State<AppState>,
+    Path(receipt_id): Path<String>,
+) -> ApiResult<Json<ConsensusReceiptResponse>> {
+    let id_bytes = decode_hash_param(&receipt_id)?;
+
+    let sql = format!(
+        "SELECT {CONSENSUS_RECEIPT_COLUMNS} \
+         FROM consensus_receipts \
+         WHERE chain_id = $1 AND receipt_id = $2"
+    );
+    let row: Option<ConsensusReceiptRow> = sqlx::query_as(&sql)
+        .bind(state.chain_id)
+        .bind(&id_bytes)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    let Some(row) = row else {
+        return Err(ApiError::NotFound);
+    };
+
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(ConsensusReceiptResponse {
+        receipt: receipt_from_row(row),
+        freshness,
+    }))
+}
+
+/// GET /v1/accounts/:address/consensus-receipts?limit=
+///
+/// Account scope. Receipts anchored by this submitter address, newest first.
+async fn list_account_consensus_receipts(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+    Query(q): Query<ConsensusReceiptsQuery>,
+) -> ApiResult<Json<ConsensusReceiptsResponse>> {
+    let addr_bytes = decode_address_param(&address)?;
+    let limit = clamp_receipt_limit(q.limit)?;
+
+    let sql = format!(
+        "SELECT {CONSENSUS_RECEIPT_COLUMNS} \
+         FROM consensus_receipts \
+         WHERE chain_id = $1 AND submitter = $2 \
+         ORDER BY block_number DESC, log_index DESC \
+         LIMIT $3"
+    );
+    let rows: Vec<ConsensusReceiptRow> = sqlx::query_as(&sql)
+        .bind(state.chain_id)
+        .bind(&addr_bytes)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
+
+    let receipts = rows.into_iter().map(receipt_from_row).collect();
+    let freshness = latest_freshness(&state).await?;
+    Ok(Json(ConsensusReceiptsResponse {
+        receipts,
         freshness,
     }))
 }

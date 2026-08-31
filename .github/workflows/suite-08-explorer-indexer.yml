@@ -97,7 +97,20 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --test rpc_failure -- --nocapture
 
-  # EXPLORER-API IC COMMITTEE / REGIME ENDPOINT TESTS (issue #1105)
+      # CONSENSUS REBALANCE RECEIPT INDEXING (issue #1247, docs/architecture.md §4.9)
+      # A `tests/<name>.rs` file is executed by NOTHING unless a job names it with an
+      # explicit `--test <name>`. This step wires the receipt-event ingestion tests
+      # (ReceiptRecorded / ReceiptReleased, payload-digest verification, and the
+      # reorg rewrite of `consensus_receipts` via `delete_above_block`) into CI.
+      # Routed through cargo_test_require_executed.sh so a run that collects zero
+      # tests fails RED instead of passing as a silent skip.
+      - name: Consensus receipt indexing + reorg rewrite
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-indexer \
+            --test consensus_receipt_indexing -- --nocapture
+
+  # EXPLORER-API IC COMMITTEE / REGIME / CONSENSUS-RECEIPT ENDPOINT TESTS (issues #1105, #1247)
   # The clients/explorer-api crate (the read API the dApp queries) shipped IC committee
   # and regime-feed endpoint integration tests (committee_api.rs, regime_api.rs from
   # PR #1083) that NO required suite executed — the fast job above runs only
@@ -123,7 +136,8 @@ jobs:
 
       - name: Verify Docker is available (testcontainer Postgres resource)
         run: |
-          # The committee_api / regime_api tests start a Postgres testcontainer in-process.
+          # The committee_api / regime_api / consensus_receipt_api tests start a Postgres
+          # testcontainer in-process.
           # Fail loudly here if Docker is missing instead of letting the tests skip/no-op.
           docker version
 
@@ -133,12 +147,13 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: explorer-api committee + regime endpoint tests
+      - name: explorer-api committee + regime + consensus-receipt endpoint tests
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test committee_api \
-            --test regime_api -- --nocapture
+            --test regime_api \
+            --test consensus_receipt_api -- --nocapture
 
   devnet:
     name: explorer-indexer-devnet

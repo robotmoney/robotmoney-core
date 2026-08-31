@@ -2,6 +2,7 @@
 // Canonical: docs/architecture.md — Investment Committee Policy
 // Implements: issue #1048 — InvestmentCommitteePolicy.sol deploy script
 // Implements: issue #1049 — gateway wiring (setICPolicy + IC ADMIN_ROLE grant)
+// Implements: issue #1247 — ConsensusRebalanceReceipt deploys in the SAME ceremony
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
@@ -9,26 +10,39 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
+import {ConsensusRebalanceReceipt} from "../gateway/ConsensusRebalanceReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 
 /// @title DeployInvestmentCommitteePolicy
 /// @notice Foundry deploy script for the InvestmentCommitteePolicy contract.
 ///
-///         Deploys InvestmentCommitteePolicy with the given admin and gateway
-///         addresses, wires the IC policy into the gateway (`setICPolicy`),
-///         and grants the gateway IC's `ADMIN_ROLE` so it can forward
-///         `committeeRegister` calls to the IC contract on behalf of the admin.
-///         Writes a deployment JSON readable by the smoke-test fixture and
-///         off-chain tooling.
+///         Deploys InvestmentCommitteePolicy AND ConsensusRebalanceReceipt in
+///         one ceremony (issue #1247 AC10 — one greenfield rollout, no
+///         migration, no registered agent to preserve), wires both into the
+///         gateway (`setICPolicy`, `setConsensusReceipt`), and grants the
+///         gateway IC's `ADMIN_ROLE` so it can forward `committeeRegister`
+///         calls on behalf of the admin. Writes a deployment JSON readable by
+///         the smoke-test fixture and off-chain tooling.
+///
+///         **The receipt contract's `ADMIN_ROLE` goes to `RECEIPT_ADMIN_ADDRESS`
+///         and nowhere else.** In production that is the `TimelockController`
+///         (INV-3). The gateway is deliberately NOT granted it: routing
+///         `releaseReceipt` through the gateway would need a second holder and
+///         defeat INV-3, so the timelock calls the receipt contract directly.
+///         See `docs/architecture.md` §4.9.
 ///
 ///         Required env vars:
 ///           ADMIN_ADDRESS    — receives DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC;
 ///                              must also hold ADMIN_ROLE on the gateway (for
 ///                              setICPolicy and gateway grantRole).
 ///           GATEWAY_ADDRESS  — deployed RobotMoneyGateway address; all committee
-///                              writes (register, voteSubmit) must originate here.
+///                              writes (register, voteSubmit, receipt record)
+///                              must originate here.
 ///
 ///         Optional env vars:
+///           RECEIPT_ADMIN_ADDRESS — sole holder of ADMIN_ROLE on the receipt
+///                              contract; the TimelockController in production.
+///                              Defaults to ADMIN_ADDRESS for devnet ceremonies.
 ///           DEPLOYMENT_OUT   — path for the output JSON
 ///                              (default: "deployments/ic-policy-<chain_id>.json")
 contract DeployInvestmentCommitteePolicy is Script {
@@ -37,7 +51,9 @@ contract DeployInvestmentCommitteePolicy is Script {
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
         InvestmentCommitteePolicy policy;
+        ConsensusRebalanceReceipt receipts;
         address admin;
+        address receiptAdmin;
         address gateway;
     }
 
@@ -48,9 +64,10 @@ contract DeployInvestmentCommitteePolicy is Script {
     function run() external returns (Deployed memory d) {
         address admin = vm.envAddress("ADMIN_ADDRESS");
         address gateway = vm.envAddress("GATEWAY_ADDRESS");
+        address receiptAdmin = vm.envOr("RECEIPT_ADMIN_ADDRESS", admin);
 
         vm.startBroadcast();
-        d = _deploy(admin, gateway);
+        d = _deploy(admin, receiptAdmin, gateway);
         _wireGateway(d);
         vm.stopBroadcast();
 
@@ -66,22 +83,52 @@ contract DeployInvestmentCommitteePolicy is Script {
         external
         returns (Deployed memory d)
     {
+        return runInProcessWith(admin_, admin_, gateway_);
+    }
+
+    /// @notice In-process variant that separates the IC admin from the receipt
+    ///         contract's `ADMIN_ROLE` holder (the timelock). No broadcast, no
+    ///         JSON written.
+    /// @param admin_        Address to receive DEFAULT_ADMIN_ROLE and ADMIN_ROLE on IC.
+    /// @param receiptAdmin_ Sole holder of ADMIN_ROLE on the receipt contract.
+    /// @param gateway_      Deployed RobotMoneyGateway address.
+    /// @return d Struct containing the deployed contracts and key parameters.
+    function runInProcessWith(address admin_, address receiptAdmin_, address gateway_)
+        public
+        returns (Deployed memory d)
+    {
         require(admin_ != address(0), "ADMIN_ADDRESS=0");
+        require(receiptAdmin_ != address(0), "RECEIPT_ADMIN_ADDRESS=0");
         require(gateway_ != address(0), "GATEWAY_ADDRESS=0");
 
-        d = _deploy(admin_, gateway_);
+        d = _deploy(admin_, receiptAdmin_, gateway_);
         _logResult(d);
         // Note: _wireGateway requires the broadcaster/pranker to hold ADMIN_ROLE
         // on the gateway. Callers of this in-process variant must set up the
         // appropriate prank context and call _wireGateway separately if needed.
     }
 
+    /// @notice In-process gateway wiring for forge tests. `msg.sender` must
+    ///         hold `ADMIN_ROLE` on the gateway AND `DEFAULT_ADMIN_ROLE` on the
+    ///         IC contract, exactly as the broadcast path requires.
+    /// @param d Result of `runInProcessWith`.
+    function wireGatewayInProcess(Deployed memory d) public {
+        _wireGateway(d);
+    }
+
     // ─── Internal ────────────────────────────────────────────────────────────
 
-    function _deploy(address admin_, address gateway_) internal returns (Deployed memory d) {
+    function _deploy(address admin_, address receiptAdmin_, address gateway_)
+        internal
+        returns (Deployed memory d)
+    {
         d.admin = admin_;
+        d.receiptAdmin = receiptAdmin_;
         d.gateway = gateway_;
         d.policy = new InvestmentCommitteePolicy(admin_, gateway_);
+        // One ceremony: the receipt contract reads COMMITTEE_AGENT_ROLE off the
+        // IC policy, so it keeps no registry of its own (issue #1247 task 4.0).
+        d.receipts = new ConsensusRebalanceReceipt(receiptAdmin_, gateway_, address(d.policy));
     }
 
     /// @notice Wire the deployed IC policy into the gateway.
@@ -102,13 +149,23 @@ contract DeployInvestmentCommitteePolicy is Script {
         //    on behalf of the admin when `committeeRegister` is invoked.
         d.policy.grantRole(d.policy.ADMIN_ROLE(), d.gateway);
         console2.log("  IC ADMIN_ROLE granted to gateway:", d.gateway);
+
+        // 3. Register the receipt contract in the gateway.
+        //    NOTE: the gateway is deliberately NOT granted ADMIN_ROLE on the
+        //    receipt contract. INV-3 requires the TimelockController to hold
+        //    it, and a second holder would defeat that; the timelock calls
+        //    `releaseReceipt` directly (docs/architecture.md §4.9).
+        gw.setConsensusReceipt(address(d.receipts));
+        console2.log("  gateway.setConsensusReceipt:", address(d.receipts));
     }
 
     function _logResult(Deployed memory d) internal pure {
-        console2.log("InvestmentCommitteePolicy deployed");
-        console2.log("  policy  :", address(d.policy));
-        console2.log("  admin   :", d.admin);
-        console2.log("  gateway :", d.gateway);
+        console2.log("InvestmentCommitteePolicy + ConsensusRebalanceReceipt deployed");
+        console2.log("  policy       :", address(d.policy));
+        console2.log("  receipts     :", address(d.receipts));
+        console2.log("  admin        :", d.admin);
+        console2.log("  receiptAdmin :", d.receiptAdmin);
+        console2.log("  gateway      :", d.gateway);
     }
 
     function _writeDeploymentJson(Deployed memory d) internal {
@@ -122,7 +179,9 @@ contract DeployInvestmentCommitteePolicy is Script {
         string memory obj = "ic_policy_deployment";
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeAddress(obj, "policy", address(d.policy));
+        vm.serializeAddress(obj, "consensus_receipt", address(d.receipts));
         vm.serializeAddress(obj, "admin", d.admin);
+        vm.serializeAddress(obj, "receipt_admin", d.receiptAdmin);
         string memory json = vm.serializeAddress(obj, "gateway", d.gateway);
 
         vm.writeJson(json, outPath);

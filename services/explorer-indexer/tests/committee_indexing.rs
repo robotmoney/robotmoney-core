@@ -169,6 +169,7 @@ fn base_cfg(_stub: &StubRpcServer) -> IndexerConfig {
         router_governance: None,
         portfolio_router: None,
         investment_committee: Some(ic_addr()),
+        consensus_receipt: None,
         max_blocks_per_tick: 100,
         end_block: Some(10),
         feature_flags: 0,

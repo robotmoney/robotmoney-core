@@ -30,6 +30,10 @@ fs_permissions = [
     # Read-only access to config/ so DeployAgentTokenVault.s.sol can read the
     # canonical MVP shortlist (config/agent-token-shortlist.json, ADR-0001).
     { access = "read", path = "./config" },
+    # Read-only access to tests/fixtures so ConsensusRebalanceReceipt.t.sol can
+    # DERIVE the anchoring digest by hashing the committed golden canonical
+    # bytes rather than transcribing a constant (issue #1247 AC11, #1280).
+    { access = "read", path = "./tests" },
 ]
 
 # Custody-invariant suite (CustodyInvariant.t.sol, issue #929). Bounded runs/depth

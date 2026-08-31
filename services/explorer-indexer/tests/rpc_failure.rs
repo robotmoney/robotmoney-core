@@ -43,6 +43,7 @@ async fn rpc_failure_recorded_in_indexer_runs() {
         router_governance: None,
         portfolio_router: None,
         investment_committee: None,
+        consensus_receipt: None,
         max_blocks_per_tick: 100,
         end_block: None,
         feature_flags: 0,

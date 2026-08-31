@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -247,6 +247,19 @@ Number of accounts currently holding `DEFAULT_ADMIN_ROLE`.
 
 ```solidity
 uint256 private _defaultAdminCount
+```
+
+
+### consensusReceipt
+Consensus Rebalance Receipt contract. When set,
+`consensusRecordReceipt` forwards calls here. Settable by
+`ADMIN_ROLE` via `setConsensusReceipt`. `address(0)` means not
+configured. Appended after the admin-tier counters so no
+preceding storage slot moves.
+
+
+```solidity
+IConsensusRebalanceReceipt public consensusReceipt
 ```
 
 
@@ -957,6 +970,63 @@ function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
 |`voteId`|`uint256`| Index of the newly appended vote in the IC contract.|
 
 
+### setConsensusReceipt
+
+Set or update the ConsensusRebalanceReceipt contract address.
+Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
+
+
+```solidity
+function setConsensusReceipt(address receipt_) external onlyRole(ADMIN_ROLE);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receipt_`|`address`|Address of the deployed `ConsensusRebalanceReceipt` contract, or `address(0)` to disable receipt routing.|
+
+
+### consensusRecordReceipt
+
+Record a consensus rebalance receipt commitment on chain.
+Restricted to `AGENT_ROLE`; the caller is the single submitter
+attesting for the committee, and it must additionally hold
+`COMMITTEE_AGENT_ROLE` on the IC policy (checked by the receipt
+contract, which keeps no registry of its own).
+This is the whole write surface for anchoring. There is no
+`consensusSubmitSignature`: the rejected multi-signer design was
+replaced by one submitter carrying the analysts' ed25519
+signatures as payload data verified off-chain (ADR-0012 §5,
+`docs/architecture.md` §4.9). Recording is **signalling only**.
+Release is deliberately NOT routed through the gateway: routing
+it here would require granting the gateway `ADMIN_ROLE` on the
+receipt contract, and INV-3 requires that role to be held by the
+`TimelockController`. The timelock calls
+`ConsensusRebalanceReceipt.releaseReceipt` directly.
+
+
+```solidity
+function consensusRecordReceipt(
+    bytes32 receiptId,
+    bytes32 payloadDigest,
+    string calldata payloadUri
+) external onlyRole(AGENT_ROLE) returns (uint256 index);
+```
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`receiptId`|`bytes32`|    `keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`.|
+|`payloadDigest`|`bytes32`|`keccak256` of the receipt's canonical bytes.|
+|`payloadUri`|`string`|   Public route serving those exact bytes.|
+
+**Returns**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`index`|`uint256`|Index of the newly appended receipt.|
+
+
 ### _executeRouterWithdraw
 
 Execute the multi-leg router withdrawal: pull shares from shareHolder,
@@ -987,6 +1057,21 @@ event ICPolicySet(address indexed by, address indexed policy);
 |----|----|-----------|
 |`by`|`address`|    Address that called `setICPolicy` (must hold `ADMIN_ROLE`).|
 |`policy`|`address`|New IC policy contract address (`address(0)` clears it).|
+
+### ConsensusReceiptSet
+Emitted when the consensus receipt contract address is set or updated.
+
+
+```solidity
+event ConsensusReceiptSet(address indexed by, address indexed receipt);
+```
+
+**Parameters**
+
+|Name|Type|Description|
+|----|----|-----------|
+|`by`|`address`|     Address that called `setConsensusReceipt` (must hold `ADMIN_ROLE`).|
+|`receipt`|`address`|New receipt contract address (`address(0)` clears it).|
 
 ## Errors
 ### ZeroAddress
@@ -1263,6 +1348,15 @@ policy contract is configured (`icPolicy == address(0)`).
 
 ```solidity
 error ICPolicyNotSet();
+```
+
+### ConsensusReceiptNotSet
+`consensusRecordReceipt()` called but no consensus receipt contract
+is configured (`consensusReceipt == address(0)`).
+
+
+```solidity
+error ConsensusReceiptNotSet();
 ```
 
 ### WindowBufferFull

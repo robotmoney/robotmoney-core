@@ -8,7 +8,9 @@
 use std::path::Path;
 
 use clap::Parser;
-use rust_payment_client::cli::{Cli, Command, CommitteeIdentitySubcommand, CommitteeSubcommand};
+use rust_payment_client::cli::{
+    Cli, Command, CommitteeIdentitySubcommand, CommitteeSubcommand, ReceiptSubcommand,
+};
 use rust_payment_client::commands;
 use rust_payment_client::config::Config;
 use rust_payment_client::logging;
@@ -42,6 +44,7 @@ fn main() {
         Command::Withdraw { config, .. } => Some(config.as_path()),
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
         Command::Committee { config, .. } => Some(config.as_path()),
+        Command::Receipt { config, .. } => Some(config.as_path()),
         // No operator config TOML — this is a local-only Ed25519 identity
         // helper with no RPC/chain surface (issue #1111).
         Command::CommitteeIdentity { .. } => None,
@@ -286,6 +289,50 @@ fn main() {
                     pretty,
                 })
             }
+        },
+        Command::Receipt {
+            config,
+            subcommand,
+            pretty,
+        } => match subcommand {
+            ReceiptSubcommand::Verify {
+                receipt_url,
+                receipt_file,
+            } => {
+                let source = match (receipt_url, receipt_file) {
+                    (Some(u), None) => commands::receipt::ReceiptSource::Url(u),
+                    (None, Some(f)) => commands::receipt::ReceiptSource::File(f),
+                    _ => {
+                        eprintln!(
+                            "rmpc receipt verify: exactly one of --receipt-url or \
+                             --receipt-file is required"
+                        );
+                        std::process::exit(3);
+                    }
+                };
+                commands::receipt::run_verify(commands::receipt::VerifyArgs {
+                    config_path: config,
+                    source,
+                    pretty,
+                })
+            }
+            ReceiptSubcommand::Submit {
+                receipt_url,
+                receipt_file,
+                expected_digest,
+                receipt_timeout_secs,
+                gas_limit,
+                fee_cap,
+            } => commands::receipt::run_submit(commands::receipt::SubmitArgs {
+                config_path: config,
+                receipt_url,
+                receipt_file,
+                expected_digest,
+                receipt_timeout_secs,
+                gas_limit,
+                fee_cap_wei: fee_cap,
+                pretty,
+            }),
         },
         Command::CommitteeIdentity {
             path,

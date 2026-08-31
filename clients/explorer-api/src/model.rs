@@ -590,6 +590,63 @@ pub struct RegimeFeedResponse {
     pub freshness: Freshness,
 }
 
+// ─── Consensus rebalance receipt models ──────────────────────────────────────
+// Canonical: docs/architecture.md §4.9 — issue #1247.
+//
+// One on-chain commitment per row. `verified` is DIGEST verification only:
+// the indexer independently fetched `payload_uri` and recomputed
+// keccak256(bytes) == `payload_digest`. It does NOT assert that each named
+// analyst signed — those ed25519 signatures ride inside the payload and are
+// verified off-chain (architecture §4.9.1 answer 1). Surfaces must label the
+// payload's signature count as *off-chain analyst signatures*, never as
+// on-chain approvals.
+
+/// A single consensus rebalance receipt commitment.
+#[derive(Debug, Serialize)]
+pub struct ConsensusReceipt {
+    /// bytes32 receiptId, 0x-prefixed hex.
+    pub receipt_id: String,
+    /// uint256 append index from `ReceiptRecorded`.
+    pub index: i64,
+    /// Committee agent EOA that attested for the committee.
+    pub submitter: String,
+    /// bytes32 keccak256 of the receipt's canonical bytes, 0x-prefixed hex.
+    pub payload_digest: String,
+    /// Public route serving those exact bytes.
+    pub payload_uri: String,
+    /// uint64 block timestamp of `recordReceipt`.
+    pub recorded_at: i64,
+    pub block_number: i64,
+    pub tx_hash: String,
+    /// Digest verification state recomputed by the indexer — NOT a claim
+    /// about the payload's embedded analyst signatures.
+    pub verified: bool,
+    /// Byte length of the fetched payload; null when the fetch failed.
+    pub payload_bytes: Option<i64>,
+    /// Whether an admin (the timelock) has released the receipt. An
+    /// unreleased receipt is still an immutable public record.
+    pub released: bool,
+    /// uint64 block timestamp of `releaseReceipt`, or null.
+    pub released_at: Option<i64>,
+}
+
+/// Response envelope for GET /v1/consensus-receipts (protocol scope) and
+/// GET /v1/accounts/:address/consensus-receipts (account scope).
+#[derive(Debug, Serialize)]
+pub struct ConsensusReceiptsResponse {
+    pub receipts: Vec<ConsensusReceipt>,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
+/// Response envelope for GET /v1/consensus-receipts/:receipt_id.
+#[derive(Debug, Serialize)]
+pub struct ConsensusReceiptResponse {
+    pub receipt: ConsensusReceipt,
+    #[serde(flatten)]
+    pub freshness: Freshness,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

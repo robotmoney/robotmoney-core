@@ -285,6 +285,7 @@ fn base_config(vault: Address) -> IndexerConfig {
         router_governance: None,
         portfolio_router: None,
         investment_committee: None,
+        consensus_receipt: None,
         max_blocks_per_tick: 200,
         end_block: Some(65),
         feature_flags: 0,
