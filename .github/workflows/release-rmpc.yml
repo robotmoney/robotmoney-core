@@ -354,10 +354,6 @@ jobs:
     # needs.resolve.outputs.sha and runs cargo, so build.rs and every proc macro
     # in that tree execute here. Read is all a checkout needs; the archives leave
     # via actions/upload-artifact, which does not use the contents scope.
-    permissions:
-      contents: read
-      id-token: write        # mint the Sigstore cert for build provenance (#1236)
-      attestations: write    # write the attestation to this repo's store (#1236)
     needs: [resolve, verify-version]
     runs-on: ${{ matrix.runner }}
     # WHY THIS JOB HAS ITS OWN PERMISSION MAP (issue #1236)
