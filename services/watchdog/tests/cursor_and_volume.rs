@@ -187,9 +187,6 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
             max_response_secs: 300,
         },
         vault: HashMap::new(),
-        // The consensus-receipt liveness monitor is off by default, so these
-        // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
-        consensus_receipts: ReceiptLivenessConfig::default(),
     }
 }
 

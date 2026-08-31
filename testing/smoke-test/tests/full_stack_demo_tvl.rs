@@ -118,7 +118,6 @@ fn explorer_api_shows_four_active_nonzero_vaults_after_boot() {
     let opts = DappStackOptions {
         dapp_port: None,
         explorer_api_port: None,
-        public_endpoints: PublicEndpoints::Local,
     };
     let dapp = DappStack::boot(&fixture, opts).expect("DappStack::boot");
 
