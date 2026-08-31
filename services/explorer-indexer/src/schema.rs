@@ -148,9 +148,23 @@
 //!    out of `CountTable` makes it invisible to the `db::count()` helper used
 //!    by integration tests and ops tooling.
 //!
-//! 5. **`delete_above_block` reorg cascade.**  The reorg recovery function
-//!    (`db.rs`) hard-codes the table list.  Issues #654 and #675 must add their
-//!    new tables to that list, or reorg recovery will leave orphaned history rows
-//!    after a chain re-org.  See `db::delete_above_block` for the current list.
+//! 5. **`delete_above_block` reorg cascade.**  *(Resolved by issue #1283 — this
+//!    note predicted a real defect and, being only a note, did not prevent it.)*
+//!
+//!    The warning used to read: the reorg recovery function hard-codes the table
+//!    list, so a new table must be added to that list by hand.  Migration 0014
+//!    then added `committee_votes` and `regime_snapshots` without touching the
+//!    list, and a reorg left both serving orphaned rows as current state.
+//!
+//!    **Do not add your table to a list.**  `db::delete_above_block` now derives
+//!    the set from the live schema: any base table with a `block_number` column
+//!    is rolled back, in a foreign-key-safe order taken from `pg_constraint`.
+//!    Give a new block-scoped table a `chain_id` and a `block_number` column and
+//!    it is covered by the migration that creates it.  The only escape hatch is
+//!    `db::REORG_ROLLBACK_EXCLUSIONS`, where each entry must state why those rows
+//!    legitimately survive an orphaned block;
+//!    `tests/reorg_cursor_vault_status.rs` fails on an undocumented, stale, or
+//!    self-contradicting entry, and on a block-scoped table that is neither
+//!    covered nor excluded.
 
 // This module intentionally contains no runtime code.

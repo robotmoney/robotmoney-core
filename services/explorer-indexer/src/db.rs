@@ -24,6 +24,16 @@ pub enum DbError {
     /// string that is not in the known-good identifier allowlist.
     #[error("unknown table identifier: {0:?}")]
     UnknownTable(String),
+    /// Issue #1283. A live table carries `block_number` but no `chain_id`, so
+    /// [`Db::delete_above_block`] cannot confine its rollback DELETE to the
+    /// chain that reorged. Failing loudly is deliberate: silently skipping the
+    /// table is precisely the orphaned-row bug this derivation replaced.
+    #[error(
+        "block-scoped table {0:?} has no chain_id column, so reorg rollback cannot \
+         scope its DELETE to one chain. Add chain_id to the table, or add \
+         ({0:?}, \"<reason>\") to db::REORG_ROLLBACK_EXCLUSIONS."
+    )]
+    UnscopedBlockTable(String),
 }
 
 #[derive(Clone)]
@@ -161,6 +171,171 @@ impl TryFrom<&str> for CountTable {
     }
 }
 
+/// Marker column that makes a table **block-scoped**: every row belongs to one
+/// block of one chain, so an orphaned block must take its rows with it.
+///
+/// Issue #1283: this marker replaces the hand-copied table literal that
+/// `delete_above_block` used to iterate. Migration 0014 added `committee_votes`
+/// and `regime_snapshots` without touching that literal, and a reorg left both
+/// behind — exactly the drift `schema.rs` had predicted in a comment. A comment
+/// is not a mechanism; the live schema is.
+const BLOCK_SCOPE_COLUMN: &str = "block_number";
+
+/// Chain-scope column every block-scoped table must also carry, so the rollback
+/// DELETE can be confined to the chain that reorged.
+const CHAIN_SCOPE_COLUMN: &str = "chain_id";
+
+/// Block-scoped tables that are deliberately **not** rolled back by
+/// [`Db::delete_above_block`], each with the reason it is exempt.
+///
+/// This is the only escape hatch from the schema-derived set. It is an
+/// allowlist, not a to-do list: an entry here means "these rows legitimately
+/// survive an orphaned block", and the reason string must say why. A table that
+/// is merely inconvenient to roll back does not belong here.
+///
+/// **Empty today.** Every table in the live schema that carries
+/// `block_number` also rolls back with its block. `reorg_rollback_exclusions_
+/// are_documented_and_live` (tests/reorg_cursor_vault_status.rs) fails on an
+/// entry with an empty reason or one that no longer matches a live block-scoped
+/// table, so a stale exemption cannot sit here unnoticed.
+pub const REORG_ROLLBACK_EXCLUSIONS: &[(&str, &str)] = &[];
+
+/// A catalog identifier is only interpolated into SQL after this check.
+///
+/// The names come from the Postgres catalog rather than from a caller, so this
+/// is defence in depth, not the primary control — but `delete_above_block` is
+/// the one place in the crate that builds DDL-shaped SQL from a runtime string,
+/// and it stays as narrow as [`Db::count`]'s [`CountTable`] allowlist.
+fn is_safe_identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 63
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// Order `tables` so that every child is deleted before the parent it
+/// references (Kahn's algorithm over the live foreign-key graph).
+///
+/// `governance_votes` has an FK to `governance_proposals` and both are
+/// block-scoped: deleting the proposals first raises a foreign-key violation
+/// when a vote above the reorg root still points at them. The old literal
+/// encoded that ordering by hand; deriving it from `pg_constraint` means the
+/// next migration that adds an FK between two block-scoped tables is ordered
+/// correctly without anyone remembering to reorder the list.
+///
+/// Ties are broken by name so the emitted order is deterministic across runs.
+/// A cycle (which no ordering could satisfy) leaves residue; it is appended in
+/// name order so Postgres reports the real constraint rather than this function
+/// hiding it behind a hang or a panic.
+fn fk_child_first_order(tables: &[String], edges: &[(String, String)]) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let known: BTreeSet<&str> = tables.iter().map(String::as_str).collect();
+
+    // child -> parents it references, and parent -> how many distinct children
+    // are still pending deletion.
+    let mut parents_of: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut pending_children: BTreeMap<&str, usize> =
+        tables.iter().map(|t| (t.as_str(), 0usize)).collect();
+
+    for (child, parent) in edges {
+        let (c, p) = (child.as_str(), parent.as_str());
+        if c == p || !known.contains(c) || !known.contains(p) {
+            continue;
+        }
+        if parents_of.entry(c).or_default().insert(p) {
+            *pending_children.entry(p).or_insert(0) += 1;
+        }
+    }
+
+    let mut ready: BTreeSet<&str> = pending_children
+        .iter()
+        .filter(|(_, n)| **n == 0)
+        .map(|(t, _)| *t)
+        .collect();
+    let mut ordered: Vec<String> = Vec::with_capacity(tables.len());
+
+    while let Some(next) = ready.iter().next().copied() {
+        ready.remove(next);
+        ordered.push(next.to_string());
+        for parent in parents_of.get(next).into_iter().flatten() {
+            if let Some(n) = pending_children.get_mut(*parent) {
+                *n -= 1;
+                if *n == 0 {
+                    ready.insert(parent);
+                }
+            }
+        }
+    }
+
+    // FK cycle (or a table unreachable by the walk): keep it in the rollback
+    // rather than silently dropping it.
+    let emitted: BTreeSet<String> = ordered.iter().cloned().collect();
+    for t in tables {
+        if !emitted.contains(t) {
+            ordered.push(t.clone());
+        }
+    }
+    ordered
+}
+
+/// Derive, from the live schema, the tables `delete_above_block` must clear,
+/// in a foreign-key-safe deletion order.
+///
+/// A table qualifies when it is a base table in the current schema with a
+/// [`BLOCK_SCOPE_COLUMN`] column, and it is not listed in
+/// [`REORG_ROLLBACK_EXCLUSIONS`]. A qualifying table with no
+/// [`CHAIN_SCOPE_COLUMN`] is an error, not a silent skip: the rollback could
+/// not confine its DELETE to the reorged chain, and quietly leaving the table
+/// out would recreate issue #1283.
+async fn derive_rollback_tables(conn: &mut sqlx::PgConnection) -> Result<Vec<String>, DbError> {
+    let rows: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT c.table_name::text, \
+                COALESCE(bool_or(c.column_name = $2), FALSE) \
+         FROM information_schema.columns c \
+         JOIN information_schema.tables t \
+           ON t.table_schema = c.table_schema AND t.table_name = c.table_name \
+         WHERE c.table_schema = current_schema() \
+           AND t.table_type = 'BASE TABLE' \
+         GROUP BY c.table_name \
+         HAVING bool_or(c.column_name = $1) \
+         ORDER BY c.table_name",
+    )
+    .bind(BLOCK_SCOPE_COLUMN)
+    .bind(CHAIN_SCOPE_COLUMN)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let mut tables: Vec<String> = Vec::with_capacity(rows.len());
+    for (name, has_chain_id) in rows {
+        if REORG_ROLLBACK_EXCLUSIONS.iter().any(|(t, _)| *t == name) {
+            continue;
+        }
+        if !is_safe_identifier(&name) {
+            return Err(DbError::UnknownTable(name));
+        }
+        if !has_chain_id {
+            return Err(DbError::UnscopedBlockTable(name));
+        }
+        tables.push(name);
+    }
+
+    let edges: Vec<(String, String)> = sqlx::query_as(
+        "SELECT child.relname::text, parent.relname::text \
+         FROM pg_constraint con \
+         JOIN pg_class child  ON child.oid  = con.conrelid \
+         JOIN pg_class parent ON parent.oid = con.confrelid \
+         JOIN pg_namespace ns ON ns.oid     = child.relnamespace \
+         WHERE con.contype = 'f' AND ns.nspname = current_schema()",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(fk_child_first_order(&tables, &edges))
+}
+
 impl Db {
     pub async fn connect(database_url: &str) -> Result<Self, DbError> {
         let pool = PgPoolOptions::new()
@@ -262,8 +437,30 @@ impl Db {
         Ok(row.and_then(|(v,)| v.try_into().ok()))
     }
 
+    /// The tables [`Db::delete_above_block`] will clear, in the order it will
+    /// clear them, derived from the live schema.
+    ///
+    /// Exposed so the reorg coverage tests can assert on the *actual* rollback
+    /// set rather than on a copy of it — a test that restated the list would
+    /// drift the same way the list did (issue #1283).
+    pub async fn block_scoped_rollback_tables(&self) -> Result<Vec<String>, DbError> {
+        let mut conn = self.pool.acquire().await?;
+        derive_rollback_tables(&mut conn).await
+    }
+
     /// Reorg recovery: delete every row with block_number > `root` for
     /// the given chain. Per ADR §3.3, this is preferred over soft-delete.
+    ///
+    /// **The table set is derived from the live schema, not hand-maintained**
+    /// (issue #1283). [`derive_rollback_tables`] asks the catalog which base
+    /// tables carry `block_number`, subtracts [`REORG_ROLLBACK_EXCLUSIONS`],
+    /// and orders the result child-before-parent over the live foreign-key
+    /// graph. The predecessor of this code iterated a literal list; migration
+    /// 0014 added `committee_votes` and `regime_snapshots` without updating it,
+    /// so a reorg past a `VoteSubmitted` left both tables serving orphaned rows
+    /// as current state. Deriving the set means a new block-scoped table is
+    /// covered by the migration that creates it.
+    ///
     /// Reorg-rollback cascade: remove every block-numbered row strictly above
     /// `root` for this chain, then reconcile the two derived states that are
     /// **not** plain block-numbered rows:
@@ -283,31 +480,16 @@ impl Db {
     ///   resolves to `root`, so indexing resumes at `root + 1` with no gap.
     pub async fn delete_above_block(&self, chain_id: i64, root: i64) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
+
+        // Issue #1283: the table set is DERIVED from the live schema inside the
+        // same transaction as the deletes, never hand-copied. Any migration that
+        // adds a `block_number` table is covered the moment it has been applied.
+        let tables = derive_rollback_tables(&mut tx).await?;
+
         let mut total = 0u64;
-        for table in [
-            "wallet_positions",
-            "vault_snapshots",
-            "vault_status_events",
-            "agent_deposits",
-            "agent_policies",
-            "governance_votes",
-            "governance_proposals",
-            "router_weight_snapshots",
-            "router_deposit_legs",
-            "adapter_allocations",
-            "vault_fee_events",
-            "vault_transfer_events",
-            "account_history_events",
-            // Issue #1247 / docs/architecture.md §4.9 — consensus receipt
-            // commitments are block-numbered rows and MUST roll back with the
-            // chain, or an orphaned ReceiptRecorded would stay in the public
-            // record forever.
-            "consensus_receipts",
-            "transactions",
-            "blocks",
-        ] {
+        for table in &tables {
             let q = format!(
-                "DELETE FROM {} WHERE chain_id = $1 AND block_number > $2",
+                "DELETE FROM \"{}\" WHERE chain_id = $1 AND block_number > $2",
                 table
             );
             let r = sqlx::query(&q)
