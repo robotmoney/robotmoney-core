@@ -370,6 +370,38 @@ sol! {
             uint64  timestamp
         );
     }
+
+    /// Event surface from `ConsensusRebalanceReceipt`.
+    ///
+    /// Signatures match `contracts/gateway/ConsensusRebalanceReceipt.sol` and
+    /// `contracts/gateway/interfaces/IConsensusRebalanceReceipt.sol` exactly.
+    /// See `docs/architecture.md §4.9` and issue #1247.
+    ///
+    /// Two events are indexed:
+    ///   ReceiptRecorded — inserts a consensus_receipts row; the indexer fetches
+    ///                     `payloadUri` and sets `verified` from the keccak256
+    ///                     comparison against `payloadDigest`.
+    ///   ReceiptReleased — flips `released` / `released_at` on the existing row.
+    ///
+    /// **No event carries a signature parameter** (architecture §4.9): the
+    /// analysts' ed25519 signatures are payload data verified off-chain, never
+    /// event data.
+    #[allow(missing_docs)]
+    interface IConsensusRebalanceReceiptEvents {
+        /// Emitted when a committee submitter records a receipt commitment.
+        /// ConsensusRebalanceReceipt.sol — three indexed params (EVM limit).
+        event ReceiptRecorded(
+            bytes32 indexed receiptId,
+            address indexed submitter,
+            uint256 indexed index,
+            bytes32 payloadDigest,
+            string  payloadUri,
+            uint64  recordedAt
+        );
+
+        /// Emitted when ADMIN_ROLE (the timelock) releases a recorded receipt.
+        event ReceiptReleased(bytes32 indexed receiptId, address indexed releasedBy, uint64 releasedAt);
+    }
 }
 
 /// Topic-0 hashes the indexer matches on `eth_getLogs`. Computed once
@@ -419,6 +451,11 @@ pub struct Topics {
     /// Emitted when an allowlisted agent submits a signed vote.
     /// InvestmentCommitteePolicy.sol:110
     pub ic_vote_submitted: B256,
+    // ConsensusRebalanceReceipt events — docs/architecture.md §4.9, issue #1247.
+    /// Emitted when a committee submitter records a receipt commitment.
+    pub consensus_receipt_recorded: B256,
+    /// Emitted when ADMIN_ROLE (the timelock) releases a recorded receipt.
+    pub consensus_receipt_released: B256,
 }
 
 impl Topics {
@@ -468,6 +505,11 @@ impl Topics {
             ic_vote_submitted: keccak256(
                 b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
             ),
+            // ConsensusRebalanceReceipt — issue #1247.
+            consensus_receipt_recorded: keccak256(
+                b"ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)",
+            ),
+            consensus_receipt_released: keccak256(b"ReceiptReleased(bytes32,address,uint64)"),
         }
     }
 
@@ -501,6 +543,10 @@ impl Topics {
             self.ic_agent_registered,
             self.ic_agent_revoked,
             self.ic_vote_submitted,
+            // ConsensusRebalanceReceipt — issue #1247. A topic omitted from this
+            // list is silently never fetched by `eth_getLogs`.
+            self.consensus_receipt_recorded,
+            self.consensus_receipt_released,
         ]
     }
 }
@@ -604,6 +650,45 @@ mod tests {
         assert_eq!(
             t.ic_vote_submitted,
             IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH
+        );
+        // ConsensusRebalanceReceipt — issue #1247.
+        assert_eq!(
+            t.consensus_receipt_recorded,
+            IConsensusRebalanceReceiptEvents::ReceiptRecorded::SIGNATURE_HASH
+        );
+        assert_eq!(
+            t.consensus_receipt_released,
+            IConsensusRebalanceReceiptEvents::ReceiptReleased::SIGNATURE_HASH
+        );
+    }
+
+    /// Every topic-0 the indexer knows about must also appear in
+    /// `all_topic0()` — a topic omitted there is never requested from
+    /// `eth_getLogs`, so its events are silently dropped with no error.
+    /// Issue #1247 added the two ConsensusRebalanceReceipt topics; this gate
+    /// keeps them (and the pre-existing set) wired to the fetch filter.
+    #[test]
+    fn all_topic0_includes_consensus_receipt_topics() {
+        let t = Topics::new();
+        let all = t.all_topic0();
+        assert!(
+            all.contains(&t.consensus_receipt_recorded),
+            "ReceiptRecorded topic-0 missing from Topics::all_topic0() — \
+             the indexer would never fetch it"
+        );
+        assert!(
+            all.contains(&t.consensus_receipt_released),
+            "ReceiptReleased topic-0 missing from Topics::all_topic0() — \
+             the indexer would never fetch it"
+        );
+        // No duplicate topic-0 may appear in the OR-filter.
+        let mut sorted = all.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            all.len(),
+            "duplicate topic-0 in Topics::all_topic0()"
         );
     }
 
@@ -740,6 +825,18 @@ mod tests {
                 "VoteSubmitted",
                 b"VoteSubmitted(uint256,address,address,uint8,uint16,uint8,string,bytes32,uint64)",
                 IInvestmentCommitteePolicyEvents::VoteSubmitted::SIGNATURE_HASH,
+            ),
+            // ConsensusRebalanceReceipt.sol — issue #1247, docs/architecture.md §4.9.
+            // Exactly two events; neither carries a signature parameter.
+            (
+                "ReceiptRecorded",
+                b"ReceiptRecorded(bytes32,address,uint256,bytes32,string,uint64)",
+                IConsensusRebalanceReceiptEvents::ReceiptRecorded::SIGNATURE_HASH,
+            ),
+            (
+                "ReceiptReleased",
+                b"ReceiptReleased(bytes32,address,uint64)",
+                IConsensusRebalanceReceiptEvents::ReceiptReleased::SIGNATURE_HASH,
             ),
         ];
 

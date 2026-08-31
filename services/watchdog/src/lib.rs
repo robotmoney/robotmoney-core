@@ -15,12 +15,15 @@
 //! - [`alert`] — structured JSON webhook/PagerDuty alert dispatcher.
 //! - [`pause`] — `gateway.pause()` transaction construction and submission.
 //! - [`watchdog`] — core polling loop and breach detection logic.
+//! - [`receipt_liveness`] — consensus-receipt anchoring-gap monitor (issue
+//!   #1247 task 4.13). Alert-only; it never pauses the gateway.
 
 #![warn(missing_docs)]
 
 pub mod alert;
 pub mod config;
 pub mod pause;
+pub mod receipt_liveness;
 /// Dev-scout seam map for the off-chain scan-remediation phase (issue #994) —
 /// documentation-only, no runtime code.
 pub mod scan_remediation_seams;

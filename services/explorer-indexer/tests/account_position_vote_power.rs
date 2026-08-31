@@ -42,6 +42,7 @@ fn cfg(vault: Address) -> IndexerConfig {
         router_governance: None,
         portfolio_router: None,
         investment_committee: None,
+        consensus_receipt: None,
         max_blocks_per_tick: 200,
         end_block: None,
         feature_flags: 0,

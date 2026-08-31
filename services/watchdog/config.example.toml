@@ -24,3 +24,14 @@ mint_per_block_units = "1000000000000"
 mint_per_hour_units = "10000000000000"
 burn_per_block_units = "1000000000000"
 burn_per_hour_units = "10000000000000"
+
+# Consensus-receipt anchoring-gap monitor (issue #1247 task 4.13).
+# Alert-only: a missing receipt pages an operator and NEVER pauses the gateway.
+# Absent or `enabled = false` disables the control. Cold start is not alertable —
+# the monitor stays quiet until the first receipt is anchored on the chain.
+[consensus_receipts]
+enabled = false
+# Expected seconds between anchored receipts (the committee's publishing cadence).
+expected_cadence_secs = 86400
+# Extra seconds tolerated on top of the cadence before paging.
+grace_secs = 21600

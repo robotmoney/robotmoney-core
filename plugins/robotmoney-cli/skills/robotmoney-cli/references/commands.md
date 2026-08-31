@@ -224,6 +224,79 @@ inputs-digest, timestamp.
 Common options: schema-version, gas-limit, fee-cap,
 receipt-timeout-secs, pretty.
 
+## Consensus receipt commands
+
+`rmpc receipt` handles a **consensus rebalance receipt** — the signed
+off-chain artifact a swarm session produces (Project Fusion). The chain
+stores only `keccak256` of the receipt's canonical bytes, next to the public
+URI serving those exact bytes.
+
+The canonical bytes are UTF-8 `robotmoney:consensus-receipt:v1\n` + compact
+RFC 8259 JSON + a trailing newline, in a pinned field order, with
+`analyst_signatures` sorted by `member_id`. `rmpc` re-derives them from the
+receipt JSON rather than trusting a digest it was handed.
+
+**The chain cannot verify the analyst signatures.** The EVM has no Ed25519
+precompile, so the per-analyst signatures ride inside the payload as data.
+On-chain, a recorded receipt proves only that one submitter attested to it.
+Verifying that each named analyst actually signed is an off-chain check, and
+it is the check `rmpc receipt` exists to perform — never describe a recorded
+receipt as proving analyst approval.
+
+### `rmpc receipt verify`
+
+Fetch (or read) a receipt, canonicalize it, print the derived
+`payload_digest` and `receipt_id`, and report per-analyst Ed25519
+verification. Read-only: no signer, no nonce lock, no chain. Exits non-zero
+on any validation or signature failure.
+
+Exactly one of `--receipt-url` / `--receipt-file` is required.
+
+```
+rmpc receipt --config <CONFIG> verify --receipt-url <URL> [--pretty]
+```
+
+```
+rmpc receipt --config <CONFIG> verify --receipt-file <FILE> [--pretty]
+```
+
+Prints `{"ok":true,"action":"verify","receipt_id":"0x...",
+"payload_digest":"0x...","canonical_bytes":<N>,"session_id":"...",
+"subject_id":"...","analyst_signatures":[{"member_id":"...","verified":true}]}`.
+
+### `rmpc receipt submit`
+
+Anchor a verified receipt's digest on chain. Encodes
+`RobotMoneyGateway.consensusRecordReceipt(receiptId, payloadDigest,
+payloadUri)` and sends it to the **gateway** address — the receipt contract
+is `onlyGateway`. Requires `AGENT_ROLE` on the gateway and
+`COMMITTEE_AGENT_ROLE` on the IC policy, plus a signer that passes the
+production-grade gate.
+
+```
+rmpc receipt --config <CONFIG> submit --receipt-url <URL>
+  [--receipt-file <FILE>] [--expected-digest <0x...64hex>]
+  [--gas-limit <N>] [--fee-cap <WEI>] [--receipt-timeout-secs <N>]
+  [--pretty]
+```
+
+`--receipt-url` is required even with `--receipt-file`: the file supplies the
+BYTES, the URL is what gets anchored as `payloadUri`.
+
+`submit` **refuses to broadcast** — before loading the signer, before taking
+the nonce lock, before any RPC call — when:
+
+- the receipt fails schema or assembler validation (`ErrReceiptSchema`);
+- a required field is missing (`ErrReceiptParse`);
+- `--expected-digest` was supplied and does not equal the derived digest
+  (`ErrReceiptDigestMismatch`);
+- any embedded analyst Ed25519 signature fails
+  (`ErrReceiptSignatureInvalid`, naming the failing `member_id`).
+
+Other named errors: `ErrReceiptFetchFailed`, `ErrReceiptReadFailed`,
+`ErrReceiptDigestMalformed`, `ErrReceiptRecordReverted` (missing role, or a
+receipt id already recorded — one receipt per session per subject).
+
 ## Investment Swarm signing identity commands
 
 `rmpc committee-identity` manages the local Ed25519 signing identity every

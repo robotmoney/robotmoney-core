@@ -45,6 +45,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::receipt_liveness::ReceiptLivenessConfig;
 use crate::WatchdogError;
 
 /// Top-level configuration struct loaded from the TOML file.
@@ -59,6 +60,10 @@ pub struct Config {
     /// Optional per-vault overrides keyed by lowercase hex vault address (no `0x` prefix).
     #[serde(default)]
     pub vault: HashMap<String, VaultThresholds>,
+    /// Consensus-receipt anchoring-gap monitor (issue #1247 task 4.13).
+    /// Absent means disabled, so pre-existing configs keep parsing unchanged.
+    #[serde(default)]
+    pub consensus_receipts: ReceiptLivenessConfig,
 }
 
 /// Global per-block and per-hour mint/burn volume limits (USDC units, 6-decimal integer strings).
@@ -169,6 +174,10 @@ impl Config {
     /// A missing or zero threshold is a fatal error: running the watchdog without a
     /// configured safety envelope would silently disable the control.
     pub fn validate(&self) -> Result<(), WatchdogError> {
+        // A zero receipt cadence would page on every poll; refuse it rather
+        // than silently disable the control (issue #1247 task 4.13).
+        self.consensus_receipts.validate()?;
+
         // Validate global thresholds.
         validate_threshold(
             &self.global.per_block_mint_limit_usdc,
