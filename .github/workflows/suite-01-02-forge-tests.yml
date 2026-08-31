@@ -17,8 +17,17 @@
 # GOTCHAS
 # - The Foundry cache key includes all *.sol files. If the cache is stale after a
 #   dependency update in lib/, force a cache miss by bumping the key suffix.
-# - forge coverage uses --ir-minimum to keep instrumentation cheap. Without it the
-#   optimizer inlines everything and lcov reports misleading coverage gaps.
+# - forge coverage deliberately does NOT pass --ir-minimum (issue #1298). That flag
+#   enables viaIR, whose peak memory grows steeply with the compile set: it wanted
+#   17.5 GiB of a 16 GB runner at 174 files and OOM-killed it at 178. It is
+#   also not needed — nothing in contracts/ hits "stack too deep" without it — and
+#   removing it *raised* measured branch coverage, because viaIR's own warning about
+#   degraded source mappings was costing real branch hits. Do not re-add it; the
+#   memory guard below will fail the job if anything reintroduces that cost.
+# - the coverage compile runs under .github/scripts/run_coverage_memory_guard.py, which
+#   fails the job once the run exceeds 50% of runner RAM. That is on purpose: past the
+#   real ceiling GitHub reports only "The runner has received a shutdown signal" and
+#   "exit code 143", which reads as flake and provokes re-runs that cannot succeed.
 # - check_gateway_coverage.py reads lcov.info from the working directory. If forge
 #   writes it elsewhere (e.g. after a Foundry version bump), the script will exit 1
 #   with a FileNotFoundError that looks like a test failure.
@@ -387,35 +396,84 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-foundry-
 
-      - name: forge coverage
-        # See the unit job for why `--no-match-test "^testFail_"` is required.
-        # `--no-match-contract VaultCodeSizeGuard`: that guard asserts each vault's
-        # deployed bytecode is under the EIP-170 24576-byte limit (issue #865), but
-        # `forge coverage` instruments bytecode, inflating every contract well past
-        # the limit (RobotMoneyVault ~34KB) — the assertion is meaningless under
-        # coverage. The guard still runs in the unit job above; only coverage skips it.
-        # `--no-match-contract CustodyInvariantGuardTest`: this guard scans each
-        # production source file for forbidden arbitrary-recipient asset movers
-        # (INV-1/INV-2, issue #929). It reads and substring-scans large source files
-        # in a loop; under `--ir-minimum` coverage instrumentation the per-instruction
-        # tracing overhead multiplies gas ~100x and exhausts the block gas limit
-        # (issue #944). The invariant still runs in the unit job above; only the
-        # coverage instrumentation pass is excluded.
-        # `^test_getPastVotes_` tests are excluded: they all rely on `vm.roll` to
-        # create historical voting-power checkpoints, but under
-        # `forge coverage --ir-minimum` the roll does not take effect, so
-        # getPastVotes either returns the latest value instead of the historical
-        # one, or does not revert when it should (AZ-GOV-1). All pass in the
-        # forge test (unit) job; only the coverage instrumentation pass is affected.
-        # `UniV3AssetPositionAdapterForkTest` / `UniV4AssetPositionAdapterForkTest` /
-        # `AerodromeAssetPositionAdapterForkTest` are excluded: all three are
-        # LOUD-SKIP fork tests (issues #1118 / #1124 / #1125) whose
-        # setUp reverts without a fork RPC, which this coverage job does not set.
-        # They execute in `fork-regressions` above.
+      - name: Coverage memory-guard self-test (issue #1298)
+        # The guard below is the only thing standing between this job and a repeat
+        # of the #1298 OOM, so prove it can actually go red before trusting it: the
+        # self-test asserts the measurement sees a known allocation, passes under
+        # budget, fails over budget, and propagates a failing inner command.
+        run: python3 .github/scripts/run_coverage_memory_guard.py --self-test
+
+      - name: forge coverage (memory-guarded — issue #1298)
+        # NO `--ir-minimum` (issue #1298). This job was memory-bound, not slow.
+        # `--ir-minimum` turns on viaIR, and solc holds the whole compilation unit's
+        # Yul IR resident, so its demand climbs steeply with the compile set. Peak
+        # RSS of the whole coverage run, pinned solc 0.8.24, measured on an
+        # unconstrained host (so these are what solc *wants*, an upper bound on what
+        # it would touch on a 16 GB runner):
+        #
+        #     174 files, --ir-minimum    -> 17.48 GiB, 7m12s   (dev @ 969cfc84)
+        #     178 files, --ir-minimum    -> 18.00 GiB, 9m30s   (#1293 @ 3faeadd9)
+        #     174 files, no --ir-minimum ->  2.27 GiB, 0m24s
+        #     178 files, no --ir-minimum ->  2.30 GiB, 1m10s
+        #
+        # A GitHub-hosted `ubuntu-latest` runner has 16 GB, and BOTH viaIR figures
+        # are above it. `dev` at 174 files survived only because under memory
+        # pressure the allocator reuses arenas instead of growing, keeping the
+        # resident set just inside 16 GB; at 178 files it no longer could. That is
+        # why this looked like a cliff rather than a slope: demand had been over the
+        # runner's RAM for some time and only the allocator's give kept it alive.
+        #
+        # The kill was an OOM, not a timeout. `timeout-minutes` is 20 and the two
+        # deaths landed at 7m26s and 8m42s of compiling — different elapsed times,
+        # so not a fixed deadline — reported as "The runner has received a shutdown
+        # signal" / "exit code 143", which is how GitHub surfaces a runner-level OOM.
+        #
+        # Note the second-order win: dropping viaIR also collapses sensitivity to
+        # compile-set size, from ~133 MB per added Solidity file to ~7.7 MB.
+        #
+        # Dropping the flag is safe on both counts the flag existed for:
+        #   - "stack too deep": does not occur. Nothing in contracts/ needs viaIR to
+        #     compile under coverage's unoptimised profile — the sources were written
+        #     to stay inside the non-viaIR stack limit on purpose (see the notes in
+        #     BasketViews.sol, DeployVaultThemes.s.sol, StaleOracleRedemption.t.sol).
+        #   - coverage accuracy: it improves. `--ir-minimum` prints its own warning
+        #     that it "can result in inaccurate source mappings", and that was costing
+        #     real hits. Same instrumentation universe (LF 5772 / BRF 1263), more of
+        #     it recorded: lines 4532 -> 4559, branches 619 -> 739 (49.0% -> 58.5%).
+        #     check_gateway_coverage.py passes identically either way.
+        #
+        # Two exclusions were removed with the flag, because both existed ONLY as
+        # `--ir-minimum` workarounds and both now pass under coverage:
+        #   - `^test_getPastVotes_` (AZ-GOV-1): `vm.roll` did not take effect under
+        #     viaIR instrumentation, so historical voting-power checkpoints read back
+        #     wrong. It behaves correctly without the flag.
+        #   - `CustodyInvariantGuardTest` (issue #944): the INV-1/INV-2 source scan
+        #     exhausted the block gas limit because viaIR instrumentation multiplied
+        #     per-instruction gas ~100x. It fits comfortably now.
+        # Restoring them is a coverage *increase*; no exclusion was added here.
+        #
+        # The exclusions that remain are unrelated to viaIR and stay:
+        #   - `^testFail_`: the vendored a16z erc4626-tests ships two deprecated
+        #     `testFail_*` functions that modern forge rejects by name. See the unit
+        #     job.
+        #   - `VaultCodeSizeGuard`: asserts deployed bytecode is under the EIP-170
+        #     24576-byte limit (issue #865), but coverage instruments bytecode and
+        #     inflates every contract past it, so the assertion is meaningless here.
+        #     It runs in the unit job.
+        #   - `UniV3/UniV4/Aerodrome AssetPositionAdapterForkTest`: LOUD-SKIP fork
+        #     tests (issues #1118 / #1124 / #1125) whose setUp reverts without a fork
+        #     RPC, which this job does not set. They run in `fork-regressions`.
+        #   - `DeploySeedDeposit` / `SafeIntegration` / `VaultForkRegressions`: fork
+        #     tests, same reason.
+        #
+        # The wrapper measures the run's peak RSS and fails the job above 50% of
+        # runner RAM, so the next contract-adding PR meets an explanatory red gate
+        # instead of rediscovering the OOM as an unfixable "flake".
         run: >-
-          forge coverage --report lcov --ir-minimum
-          --no-match-test "^testFail_|^test_getPastVotes_"
-          --no-match-contract "VaultCodeSizeGuard|CustodyInvariantGuardTest|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
+          python3 .github/scripts/run_coverage_memory_guard.py
+          forge coverage --report lcov
+          --no-match-test "^testFail_"
+          --no-match-contract "VaultCodeSizeGuard|UniV3AssetPositionAdapterForkTest|UniV4AssetPositionAdapterForkTest|AerodromeAssetPositionAdapterForkTest"
           --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions}.t.sol"
 
       - name: Enforce branch-coverage gate
