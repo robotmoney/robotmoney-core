@@ -65,7 +65,10 @@ jobs:
     runs-on: ubuntu-latest
     # system-correctness: never run on a draft PR (push/dispatch events have no PR).
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 25
+    # 35 (was 25): issue #1282 added eight previously dark targets (37 tests,
+    # ~2m10s locally). Each boots its own Postgres testcontainer, which is
+    # slower on a GitHub-hosted runner than on a developer machine.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,14 +129,40 @@ jobs:
       # see that difference on its own: a test that returns early still reports
       # as passed, so without this the whole step could be a green zero-assertion
       # run. Loud-skip, never silent-skip.
-      - name: Reorg rollback coverage (committee/regime + cursor/header)
+      # THE EIGHT INDEXER TARGETS NOTHING EXECUTED (issue #1282)
+      # The four steps above are the only indexer targets any workflow named, so
+      # eight of the thirteen tests/*.rs files in this crate never ran anywhere.
+      # Two of them are the repository's ONLY reorg-correctness suites:
+      # cursor_header_reorg.rs (header-cursor persistence, walk-back root
+      # rejection, stale-row deletion below a no-event cursor) and
+      # reorg_cursor_vault_status.rs (cursor + vault-status rollback). Issue
+      # #1283 -- reorg recovery in src/db.rs omitting two block-scoped tables
+      # added by migration 0014 -- shipped precisely because these two were dark.
+      # The other six cover the read path the dApp renders: account history,
+      # position vote power, committee indexing, multi-vault, vault detail and
+      # the vault registry.
+      #
+      # All eight use the same Postgres testcontainer harness as the steps above
+      # (tests/common/mod.rs::try_pg_fixture), so they need Docker and nothing
+      # else -- no compose stack, no devnet. Measured cost: 37 tests, ~2m10s
+      # wall clock locally.
+      #
+      # Wrapped in the executed-count guard so a run that collects zero tests
+      # fails RED instead of passing as a silent skip.
+      - name: Indexer reorg + read-path suites
         env:
           EXPLORER_INDEXER_REQUIRE_PG: "1"
         run: |
           bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
+            --test cursor_header_reorg \
             --test reorg_cursor_vault_status \
-            --test cursor_header_reorg -- --nocapture
+            --test account_history \
+            --test account_position_vote_power \
+            --test committee_indexing \
+            --test multi_vault \
+            --test vault_detail \
+            --test vault_registry -- --test-threads=1 --nocapture
 
   # EXPLORER-API IC COMMITTEE / REGIME / CONSENSUS-RECEIPT ENDPOINT TESTS (issues #1105, #1247)
   # The clients/explorer-api crate (the read API the dApp queries) shipped IC committee
@@ -153,7 +182,11 @@ jobs:
     name: explorer-api-committee-regime
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 25
+    # 40 (was 25): issue #1282 added four previously dark targets (49 tests,
+    # ~2m40s locally). endpoints.rs dominates -- it starts a seeded Postgres
+    # testcontainer per test, 42 times, and container start is the slow part on
+    # a GitHub-hosted runner.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,6 +212,34 @@ jobs:
             --test committee_api \
             --test regime_api \
             --test consensus_receipt_api -- --nocapture
+
+      # THE FOUR SIBLING EXPLORER-API SUITES LEFT DARK (issue #1282)
+      # The comment above this job records the team finding committee_api.rs and
+      # regime_api.rs executed by nothing and wiring them up. The four other
+      # tests/*.rs files sitting in the same directory were left exactly as they
+      # were found -- still executed by nothing. endpoints.rs is the largest test
+      # file in the crate (1090 lines, 42 tests) and is the ONLY executor of the
+      # HTTP contract the dApp reads: health cursor, contract listing freshness
+      # headers, JSON shape against the frozen snapshot fixtures, and the
+      # negative assertion that sign/authorize-style URLs 404.
+      # router_introspection.rs is the guard for §11 "the API does not sign,
+      # authorize, or write" -- it walks src/routes.rs and fails on any non-GET
+      # route. cors.rs pins the allowed-origin and GET-only preflight behaviour;
+      # canonical_schema.rs pins byte-parity between this crate's embedded
+      # migration and the indexer's canonical file.
+      #
+      # Same Postgres testcontainer requirement as the step above (the Docker
+      # check at the top of this job covers both); router_introspection needs no
+      # resource at all. Measured cost: 49 tests, ~2m40s wall clock locally,
+      # dominated by endpoints.rs booting a seeded container per test.
+      - name: explorer-api HTTP contract, CORS, router shape, schema parity
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p explorer-api \
+            --test endpoints \
+            --test router_introspection \
+            --test cors \
+            --test canonical_schema -- --test-threads=1 --nocapture
 
   devnet:
     name: explorer-indexer-devnet

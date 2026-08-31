@@ -1,0 +1,59 @@
+# Integration-test targets that NO workflow executes, and why.
+#
+# Enforced by .github/scripts/check_cargo_test_target_coverage.py (issue #1282),
+# which fails CI when a `tests/<name>.rs` file in any workspace member is neither
+# executed by a workflow nor listed here. Every entry MUST carry a reason -- as a
+# comment block immediately above it, or inline after `#` on the same line. The
+# checker fails on an entry with no reason, on an entry whose target IS executed
+# (stale), and on an entry naming a target that does not exist (orphan).
+#
+# Format: <package>::<target>, one per line.
+#
+# THIS FILE IS A DEBT LEDGER, NOT A MUTE BUTTON. An entry means "we know this
+# never runs and here is the cost of running it". Wiring the target up is always
+# the better fix; reach for a line here only when the runtime cost is real and
+# named.
+
+# ---------------------------------------------------------------------------
+# smoke-test devnet targets — tracked by issue #1311
+# ---------------------------------------------------------------------------
+# Each of these calls smoke_test::Fixture, which runs `docker compose up --build`
+# on the full Geth + Lighthouse devnet, deploys the contract set with forge, and
+# seeds it. That is the same cost as one row of suite-14-smoke-test.yml's devnet
+# matrix, which carries a 70-minute timeout per binary because the heaviest one
+# has hit 45 minutes on a GitHub-hosted runner (issue #880). Rust does not run
+# Drop on statics at process exit, so the compose stack outlives the binary and a
+# second binary cannot reuse it (see the header of suite-07-rmpc-integration.yml)
+# -- five targets therefore mean five more runners, not five more minutes.
+#
+# Adding five 70-minute devnet runners to every ready-for-review PR is a cost
+# that has to be decided deliberately rather than smuggled in under a CI-hygiene
+# change, and these five sit squarely on the geth state-lag flake path of issue
+# #1241. Issue #1311 owns the decision: fold them into the existing suite-14
+# matrix, give them a push-to-dev-only tier, or delete the ones the fork-e2e
+# suite already covers.
+#
+# NOTE: smoke-test::governance is dark for a reason easy to miss. suite-05 does
+# run `--test governance`, but from `testing/fork-e2e-rust` -- that is
+# rmpc-fork-e2e::governance, a different crate's file. A name-only grep credits
+# this target; a package-scoped check does not.
+
+# Native Base ETH faucet drip round-trip (issue #466). Boots its own devnet.
+smoke-test::faucet_eth
+
+# RM token faucet drip round-trip (issue #365). Boots its own devnet.
+smoke-test::faucet_rm
+
+# fund_usdc real-signed-transfer assertions, incl. the Geth-not-Anvil check
+# (issue #255 step 7). Boots its own devnet.
+smoke-test::fund_usdc
+
+# RouterGovernance deploy + setVotingPower round-trip (issue #364). Boots its own
+# devnet. Distinct from rmpc-fork-e2e::governance, which suite-05 does run.
+smoke-test::governance
+
+# RobotMoneyVault deposit->redeem round-trip against the three real adapters
+# (issue #277). Boots its own devnet. Partially overlapped by
+# rmpc-fork-e2e::vault_deposit_redeem_smoke, which suite-05 does run on anvil
+# goldens; the overlap is one of the things issue #1311 has to weigh.
+smoke-test::vault_deposit_redeem
