@@ -159,7 +159,7 @@ compare (it names the mismatch rather than reporting stale docs).
 2. Install Rust toolchain + clippy
 3. Cargo cache
 4. `cargo fmt --check` — formatting across all crates
-5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced
+5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced. `--all-targets` is what type-checks every crate's `tests/` integration binaries; the root manifest is a virtual manifest with no `default-members`, so this one command covers every workspace member. **Do not drop `--all-targets`** — see [Rust `tests/` compile coverage](#rust-tests-compile-coverage) (issue #1295), which fails red if it is removed.
 
 **Steps — `audit` job:**
 1. Checkout repository
@@ -243,11 +243,11 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 
 **Steps:**
 1. Checkout repository
-2. Install Rust toolchain + clippy
+2. Install Rust toolchain
 3. Cargo cache
-4. `cargo fmt --check`
-5. `cargo clippy --all-targets -- -D warnings`
-6. `cargo test --lib` — calldata builder output, preflight rejection cases, nonce management logic, fee policy guard, JSON output schema conformance, config parsing
+4. `cargo clippy -p rust-payment-client --all-targets -- -D warnings` — type-checks the crate's 23 `tests/` integration binaries in this job, so a struct-literal break in `tests/` fails here rather than only in suite 4 (issue #1295)
+5. `cargo test --lib` — calldata builder output, preflight rejection cases, nonce management logic, fee policy guard, JSON output schema conformance, config parsing
+6. `cargo_test_require_executed.sh --test plugin_skill_command_examples` — the one integration binary run here (issue #1203); fails red on a zero-tests-collected run
 
 ---
 
@@ -489,8 +489,8 @@ isolation, independent of any client (rmpc, dapp, explorer).
 4. Install Foundry toolchain
 5. Cargo cache
 6. `cargo fmt --check -p smoke-test`
-7. `cargo clippy -p smoke-test --all-targets -- -D warnings`
-8. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
+7. `cargo build -p smoke-test` — includes the `smoke-test` CLI binary
+8. `cargo clippy -p smoke-test --all-targets -- -D warnings` — type-checks the crate's 10 `tests/` integration binaries in the hermetic `smoke-test-guards` job (issue #1295); `cargo build` alone never compiles them
 9. `cargo test -p smoke-test --release --test cli_meta -- --nocapture` — boots `smoke-test --full-stack`, checks the structured endpoint summary, verifies `--dapp-port` / Ctrl-C teardown, and writes `smoke-test-cli_meta.log`
 10. `cargo test -p smoke-test --release --test fixture_meta -- --test-threads=1 --nocapture` — boots devnet, deploys contracts, asserts healthy RPC + block production, then tears down; verifies `Drop` runs compose-down cleanly and writes `smoke-test-fixture_meta.log`
 11. `cargo test -p smoke-test --release --test demo_seeding -- --test-threads=1 --nocapture` (four-vault real-TVL, issue #592) — boots the devnet fixture, seeds the simulated depositors, and asserts the four-vault real-TVL end state: `VaultRegistry.listVaults()` returns **exactly four Active** vaults (PRD §11.1–§11.4); `PortfolioRouter.getWeights()` covers the three router-eligible vaults summing to 10000 bps while the deSPXA RWA vault is never weighted (direct-seed-only, ADR-0006 §1); and **all four** vaults report non-zero on-chain `totalAssets` after seeding. Writes `smoke-test-demo_seeding.log`. **This gate runs exactly once per suite run — on the `demo_seeding` matrix binary only** (see de-dup note below).
@@ -540,6 +540,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 6. `check_explorer_adr.py` — explorer schema ADR compliance
 7. `check_gateway_coverage.py` — gateway coverage report present and above threshold
 8. `check_source_doc_reconciliation.py` — source-doc reconciliation file up to date
+9. `check_rust_test_target_compile_coverage.py --self-test` then `check_rust_test_target_compile_coverage.py` — asserts every workspace crate with a `tests/` directory is type-checked by an unconditional PR-stage job, and that every `cargo test … --lib` job compiles its own crate's `tests/` binaries (issue #1295). See [Rust `tests/` compile coverage](#rust-tests-compile-coverage). Needs PyYAML, installed by the step above it.
 
 **Steps — `schema-validators` job:**
 1. Checkout repository
@@ -765,6 +766,116 @@ invariant it restores.
 - `forge-formal-verification` — `forge build`; `forge test --match-path
   'contracts/test/fv/**'`; then the anchoring proofs
   (`CustodyInvariant|CustodyInvariantGuard|AdapterDelegatecallGuard|AccessRoles`).
+
+---
+
+## Rust `tests/` compile coverage
+
+> Canonical for issue #1295. Enforced by
+> `.github/scripts/check_rust_test_target_compile_coverage.py`, run in suite 13
+> (`doc-validators`) on every PR.
+
+### The failure class
+
+A `tests/*.rs` integration binary is a **separate compilation unit**. A pub
+struct that those binaries construct as a literal can gain a required field and
+the crate's `src/` still compiles — only the test targets break. None of these
+commands notice:
+
+| Command | Compiles `tests/` binaries? |
+|---|---|
+| `cargo build --workspace` | no — lib and bin targets only |
+| `cargo test -p C --lib` | no — the lib test target only |
+| `cargo test --test one_binary` | only that one target |
+| `cargo fmt --check` | no — never type-checks |
+| `#[serde(default)]` on the new field | no — covers TOML deserialization, not Rust literals |
+| `cargo clippy --all-targets` | **yes** |
+| `cargo test --no-run` (unfiltered) | **yes** |
+
+This is not hypothetical: on PR #1293 a required field was added to
+`watchdog::config::Config`, five `Config { … }` literals across
+`services/watchdog/tests/cursor_and_volume.rs` and `threshold_breach.rs` went
+short, and the break reached compliance review.
+
+### Relationship to `rust-lint` (suite 4)
+
+`rust-lint` runs `cargo clippy --all-targets --all-features -- -D warnings` from
+the repository root. The root manifest is a **virtual manifest with no
+`default-members`**, so that one command covers every workspace member, and no
+crate in the repo declares a `[features]` table — `--all-features` is therefore
+the same target set as the default. **Every crate's `tests/` binaries are
+type-checked by `rust-lint` on every PR, drafts included.** Coverage is complete.
+
+So why did it not fail *before* review on #1293? Ordering, not coverage. On the
+broken head `3a4280dc`:
+
+| Job | Verdict | Wall clock from push |
+|---|---|---|
+| `robotmoney-swarm-plugin-checks` | success | 0:58 |
+| `secrets-scan` | success | 1:37 |
+| `dapp-lint-typecheck-vitest-build` | success | 7:37 |
+| **`rust-fmt-clippy-doc-coverage` (`rust-lint`)** | **failure** | **8:56** |
+| `watchdog-rate-monitor` (`watchdog-unit`) | cancelled — never reported | — |
+
+The failure text was
+`error[E0063]: missing field 'consensus_receipts' in initializer of 'watchdog::config::Config'`
+at `services/watchdog/tests/cursor_and_volume.rs:170`.
+
+Two things made that survivable long enough to reach a reviewer. First,
+`rust-lint` is the **slowest** Rust job and the only one with `--all-targets`
+coverage, so it reports last. Second — and this is the part worth fixing — the
+job *named after the affected crate*, `watchdog-unit`, ran
+`cargo clippy -p watchdog` (no `--all-targets`) and `cargo test -p watchdog
+--lib`. Both are green against a fully broken `tests/` directory. A reader
+checking "is the watchdog crate OK?" got a green answer from the wrong job.
+
+### The two invariants
+
+**(A) Reachability.** Every workspace member with a `tests/*.rs` file has its
+test targets compiled by at least one *unconditional* PR-stage job — one whose
+workflow triggers on `pull_request` with no `paths`/`paths-ignore` filter and
+whose `if:` does not skip drafts. Today `rust-lint` satisfies this for all nine
+crates. The guard exists so that dropping `--all-targets` from suite 4, or
+adding a crate outside the workspace members list, fails red immediately.
+
+**(B) Crate-local truthfulness.** Any job that runs `cargo test … --lib` for
+crate C must compile C's `tests/` targets **in the same job**. A job that
+presents itself as crate C's unit gate must not report green while C's test
+binaries do not compile.
+
+### Enumeration: every `cargo test … --lib` job
+
+| Job (workflow) | `--lib` command | Crate | Has `tests/`? | Compiles them in-job |
+|---|---|---|---|---|
+| `rmpc-unit` (suite 6) | `cargo test --lib` in `clients/rust-payment-client` | `rust-payment-client` | yes (23 files) | **added #1295** — `cargo clippy -p rust-payment-client --all-targets` |
+| `explorer-indexer-fast` (suite 8) | `cargo test --lib -- abi::tests::abi_drift_gate` | `explorer-indexer` | yes (13 files) | already — `cargo test --no-run` in `services/explorer-indexer` |
+| `smoke-test-guards` (suite 14) | `cargo test -p smoke-test --lib fork_manifest::tests`, `… --lib tests::` | `smoke-test` | yes (10 files) | **added #1295** — `cargo clippy -p smoke-test --all-targets` |
+| `watchdog-unit` (suite 20) | `cargo test -p watchdog --lib` | `watchdog` | yes (3 files) | **added #1295** — `cargo clippy -p watchdog --all-targets` (was `cargo clippy -p watchdog`) |
+
+### Enumeration: every crate with a `tests/` directory
+
+| Crate | Path | `tests/*.rs` | Unconditional PR-stage compiler | Crate-local compiler |
+|---|---|---|---|---|
+| `rust-payment-client` | `clients/rust-payment-client` | 23 | `rust-lint` (suite 4) | `rmpc-unit` (suite 6) |
+| `explorer-api` | `clients/explorer-api` | 8 | `rust-lint` (suite 4) | none — see exclusion note |
+| `rmpc-logging` | `crates/rmpc-logging` | 1 | `rust-lint` (suite 4) | none — see exclusion note |
+| `explorer-indexer` | `services/explorer-indexer` | 13 | `rust-lint` (suite 4) | `explorer-indexer-fast` (suite 8, skips drafts) |
+| `watchdog` | `services/watchdog` | 3 | `rust-lint` (suite 4) | `watchdog-unit` (suite 20) |
+| `doctests` | `testing/doctests` | 4 | `rust-lint` (suite 4) | `opencode-plugin-validate` (suite 11a, `paths:`-filtered) |
+| `rmpc-e2e` | `testing/ethereum-testnet/e2e-rust` | 4 | `rust-lint` (suite 4) | suite 7 (`paths-ignore`, per-binary `--test`) |
+| `rmpc-fork-e2e` | `testing/fork-e2e-rust` | 18 | `rust-lint` (suite 4) | suite 5 `cargo test --no-run --release` (`paths-ignore`) |
+| `smoke-test` | `testing/smoke-test` | 10 | `rust-lint` (suite 4) | `smoke-test-guards` (suite 14) |
+
+`testing/test-utils` has no `tests/` directory and is out of scope.
+
+**Exclusion note (`explorer-api`, `rmpc-logging`).** Neither crate has a job
+that runs its `--lib` tests, so invariant (B) does not apply to them and no
+crate-local compile step is added. Their test targets are type-checked on every
+PR by `rust-lint`, which satisfies invariant (A). `explorer-api`'s endpoint
+tests are *executed* by suite 8's `pg` job; `rmpc-logging`'s
+`workspace_uses_shared_facade.rs` is compiled by `rust-lint` but executed by no
+named job — that execution gap is a separate concern from this compile gate and
+is not addressed here.
 
 ---
 
