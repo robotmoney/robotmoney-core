@@ -3,7 +3,7 @@
 > Status: **Implemented + delta.** The `InvestmentCommitteePolicy` contract and
 > its gateway/indexer wiring are shipped (`issue #1044`, `docs/architecture.md`
 > §2.4, §4.8, §5.1, §5.4, §7.4 — see §3.1 for shipped artifacts). The remaining
-> delta in this document is the **consensus rebalance receipts** surface,
+> delta in this document is the **consensus recommendation receipts** surface,
 > which is specified here as **v0.1 (proposed, not yet implemented)** with
 > its design decisions and wire contract pinned. Companion to the sprint spec
 > (`docs/sprint/20260601-week-sprint.md`, Workstream A) and the GTM strategy doc
@@ -13,7 +13,7 @@
 > client, `RobotMoneyGateway` entrypoint, `RouterGovernance`, `robotmoney-analyst`
 > plugin, and dapp surfaces. The committee's core (`InvestmentCommitteePolicy`)
 > is done — it extends those primitives with a signalling-only registry. The
-> only new subsystem in the delta is the consensus rebalance receipts flow
+> only new subsystem in the delta is the consensus recommendation receipts flow
 > (§2.1, §3.3), which is scoped as v0.1 and requires its own payload schema,
 > **consensus judge**, gateway surface, indexer tables, `rmpc` command, and
 > off-chain worker (see §2.1, §3.3, and §6).
@@ -113,9 +113,9 @@ asks for:
 | Allocation choices | **Per-vault tilts over the existing 4-vault catalog, not a weight vector.** Each vote is one vault (`overweight`/`neutral`/`underweight` at `InvestmentCommitteePolicy.sol:63-69`, `tests/fixtures/committee-vote.schema.json:22-33` with `target_weight_bps` 0–10 000 and `confidence` 0–100). Aggregation to a router weight vector is **off-chain, admin-applied**; there is no on-chain aggregation in v0. A vault is votable only when it is Active and (for router relevance) `isRouterEligible` (`docs/architecture.md` §4.1, §4.7; `RouterGovernance.sol:387`). | Shipped | `docs/prd.md` §11, `docs/architecture.md:4.1,4.7`, `RouterGovernance.sol:365-422` |
 | Daily regime feed | **Protocol-scope, read-only dapp surface with declared authority.** Rendered from the indexer + live chain reads per `docs/architecture.md` §5.0/5.3/5.4 (protocol scope: no wallet; safety-critical signing values still come from live `rmpc` reads, `docs/architecture.md` §6.1). Authored by Robot Money (RM) on a daily cadence; staleness and late-publish handling are specified in §3.2. | Shipped (shape) | `docs/architecture.md:5.0,5.3,5.4` |
 | Committee display | **Three-layer dapp surface (protocol / account / action) per `docs/architecture.md` §5.3.** Protocol layer: registered agents, per-vault tilts, aggregated tilt, per-agent track record (from indexer). Account layer: connected agent's own vote history (live `getVote`/`latestVoteByAgent` + indexed history). Action layer: vote submission (vault → stance/weight → `rationale_uri` → preview → sign via gateway). Preview states explicitly: vote is signalling-only, does not move funds or set weights. | Shipped (shape) | `contracts/gateway/InvestmentCommitteePolicy.sol:250-270`, `docs/architecture.md:845-856,906-921` |
-| Consensus rebalance receipts | **v0.1 — proposed, not yet implemented (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. Admin may `consensusReleaseReceipt` as a **signalling-only** release (sets `released=true`, emits `ReceiptReleased`; no fund movement, no `setWeights` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.8). Receipts are observable via the indexer/API like votes. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Proposed (v0.1) | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.8,5.1,5.4`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
+| Consensus recommendation receipts | **v0.1 — proposed, not yet implemented (see §2.1, §3.3, §6.1).** The on-chain write is an **EOA-via-gateway commitment** by a **single submitter** attesting for the committee; the analysts' ed25519 signatures ride inside the payload as data verified off-chain (§2.2, ADR-0012 §5). The allocation is the **deterministic mean** of the analysts' vectors converted to bps; a judge agent authors the rationale, not the numbers. Admin may `consensusReleaseReceipt` as a **signalling-only** release (sets `released=true`, emits `ReceiptReleased`; no fund movement, no `setWeights` call — INV-4 `docs/prd.md` §12, `docs/architecture.md` §4.8). Receipts are observable via the indexer/API like votes. Full spec (schema, judge, gateway interface, indexer, `rmpc`, worker) is in §2.1. | Proposed (v0.1) | `docs/prd.md:650-657` INV-4, `docs/architecture.md:4.8,5.1,5.4`, `docs/adr/ADR-0012-dual-curve-identity-policy.md` §4–5 |
 
-#### 2.1 Consensus rebalance receipts — v0.1 scope (proposed)
+#### 2.1 Consensus recommendation receipts — v0.1 scope (proposed)
 
 This is the only delta that is not shipped. It is **not** a one-row table entry —
 receipts are a full subsystem, and this section supersedes the prior one-row
@@ -455,7 +455,7 @@ behaviors the shape leaves open.
   unreachable or a memo fails the digest check, the dapp renders the
   unverified state (§2) instead of hiding the row.
 
-### 3.3 Extend for v0.1 (Consensus rebalance receipts — proposed)
+### 3.3 Extend for v0.1 (Consensus recommendation receipts — proposed)
 
 - **Contract.** New `ConsensusRebalanceReceipt.sol` — `onlyGateway`, signalling-only
   (no `receive`/`fallback`, no vault/router calls — same constraint as
