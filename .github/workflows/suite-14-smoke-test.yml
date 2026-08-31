@@ -103,6 +103,15 @@ jobs:
         working-directory: testing/smoke-test
         run: cargo build -p smoke-test
 
+      # A crate's tests/ binaries are compiled by NOTHING in `cargo test --lib`
+      # (issue #1295). `--all-targets` type-checks them here, in the job named
+      # after the crate, so a struct literal that went short of a newly-required
+      # field fails in THIS job rather than only in the workspace-wide rust-lint
+      # nine minutes later. Enforced by
+      # .github/scripts/check_rust_test_target_compile_coverage.py.
+      - name: cargo clippy -p smoke-test --all-targets (compiles tests/ binaries)
+        run: cargo clippy -p smoke-test --all-targets -- -D warnings
+
       # Issue #255 CI gate: validate fork-block.json against every rule in
       # smoke_test::fork_manifest, and run the genesis-alloc ingester against
       # the committed Anvil fixture to assert the canonical Base USDC ends up
