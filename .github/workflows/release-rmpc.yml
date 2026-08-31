@@ -360,11 +360,11 @@ jobs:
     # `actions/attest-build-provenance` mints a Sigstore attestation using this
     # run's OIDC identity, which needs `id-token: write`, and writes it to the
     # repository's attestation store, which needs `attestations: write`. Neither
-    # is grantable from the workflow-level map, so the map is restated here — and
-    # restating it also DROPS the workflow-level `contents: write` this job never
-    # used: build checks out and compiles, it does not tag or publish. A job-level
-    # map replaces the inherited one outright, so this is a narrowing, not an
-    # addition. `publish` and `bump-manifest` keep the write scopes they need.
+    # is grantable from the workflow-level map, so the map is restated here. Since
+    # #1237 the workflow default is `contents: read`, so this block no longer has
+    # a workflow-level write to drop — it states the two attestation scopes this
+    # job needs and nothing else. `publish` and `bump-manifest` declare the write
+    # scopes they need in their own maps.
     permissions:
       contents: read
       id-token: write

@@ -94,7 +94,7 @@ INSTALL_RMPC_SELFTEST="$REPO_ROOT/scripts/release/install-rmpc-selftest.sh"
 # (reproduced: 30 passed, 0 failed, exit 0). Five assertions now cover the
 # ordering and the extractor's refusal of sandbox-owned / shell-steering names,
 # each proved red with its fix reverted.
-# Raised from 70 to 84 by #1237: release-rmpc.yml granted `contents: write` at
+# Raised from 81 to 95 by #1237 (81 is #1236's floor; +14 here): release-rmpc.yml granted `contents: write` at
 # WORKFLOW scope, so the build matrix — which checks out submodules at a
 # caller-supplied SHA and runs build.rs and proc macros out of that tree — held a
 # repo-write token, and nothing asserted that #1279's `env:` indirection stayed
@@ -526,7 +526,7 @@ echo "--- #1204: checksum-verified rmpc install (positive + corrupted + substitu
 # nothing; must refuse outright when no verifier is present rather than degrade;
 # and release-rmpc.yml's build job must still grant the two scopes that mint the
 # attestation. All eleven were confirmed red against the pre-#1236 installer.
-# 35 -> 49 with #1237's authority audit: the workflow's per-job permission map
+# 46 -> 60 with #1237's authority audit (46 is #1236's floor; +14 here): the workflow's per-job permission map
 # and its `run:` bodies are audited on every PR, each finding is proved reachable
 # on a hostile copy of the real workflow, and the release's own `Validate inputs`
 # step is extracted and RUN against injection payloads.
