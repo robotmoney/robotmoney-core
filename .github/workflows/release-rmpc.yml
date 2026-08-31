@@ -363,8 +363,8 @@ jobs:
     # is grantable from the workflow-level map, so the map is restated here. Since
     # #1237 the workflow default is `contents: read`, so this block no longer has
     # a workflow-level write to drop — it states the two attestation scopes this
-    # job needs and nothing else. `publish` and `bump-manifest` declare the write
-    # scopes they need in their own maps.
+    # job needs, alongside the `contents: read` a checkout requires. `publish` and
+    # `bump-manifest` declare the write scopes they need in their own maps.
     permissions:
       contents: read
       id-token: write
