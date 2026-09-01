@@ -1,5 +1,5 @@
 # RobotMoneyGateway
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:**
 [AccessRoles](/contracts/gateway/AccessRoles.sol/abstract.AccessRoles.md), ReentrancyGuard, [IGateway](/contracts/gateway/interfaces/IGateway.sol/interface.IGateway.md)
@@ -251,7 +251,7 @@ uint256 private _defaultAdminCount
 
 
 ### consensusReceipt
-Consensus Rebalance Receipt contract. When set,
+Consensus Recommendation Receipt contract. When set,
 `consensusRecordReceipt` forwards calls here. Settable by
 `ADMIN_ROLE` via `setConsensusReceipt`. `address(0)` means not
 configured. Appended after the admin-tier counters so no
@@ -259,7 +259,7 @@ preceding storage slot moves.
 
 
 ```solidity
-IConsensusRebalanceReceipt public consensusReceipt
+IConsensusRecommendationReceipt public consensusReceipt
 ```
 
 
@@ -972,7 +972,7 @@ function committeeVoteSubmit(IInvestmentCommitteePolicy.VoteParams calldata p)
 
 ### setConsensusReceipt
 
-Set or update the ConsensusRebalanceReceipt contract address.
+Set or update the ConsensusRecommendationReceipt contract address.
 Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear (disable).
 
 
@@ -983,12 +983,12 @@ function setConsensusReceipt(address receipt_) external onlyRole(ADMIN_ROLE);
 
 |Name|Type|Description|
 |----|----|-----------|
-|`receipt_`|`address`|Address of the deployed `ConsensusRebalanceReceipt` contract, or `address(0)` to disable receipt routing.|
+|`receipt_`|`address`|Address of the deployed `ConsensusRecommendationReceipt` contract, or `address(0)` to disable receipt routing.|
 
 
 ### consensusRecordReceipt
 
-Record a consensus rebalance receipt commitment on chain.
+Record a consensus recommendation receipt commitment on chain.
 Restricted to `AGENT_ROLE`; the caller is the single submitter
 attesting for the committee, and it must additionally hold
 `COMMITTEE_AGENT_ROLE` on the IC policy (checked by the receipt
@@ -1002,7 +1002,7 @@ Release is deliberately NOT routed through the gateway: routing
 it here would require granting the gateway `ADMIN_ROLE` on the
 receipt contract, and INV-3 requires that role to be held by the
 `TimelockController`. The timelock calls
-`ConsensusRebalanceReceipt.releaseReceipt` directly.
+`ConsensusRecommendationReceipt.releaseReceipt` directly.
 
 
 ```solidity

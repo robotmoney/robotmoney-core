@@ -73,7 +73,7 @@ struct Cli {
     #[arg(long, env = "INDEXER_INVESTMENT_COMMITTEE")]
     investment_committee: Option<String>,
 
-    /// Optional ConsensusRebalanceReceipt contract address.
+    /// Optional ConsensusRecommendationReceipt contract address.
     /// When set, the indexer ingests ReceiptRecorded and ReceiptReleased
     /// events, fetches each receipt's payloadUri to recompute its keccak256
     /// digest, and writes to the consensus_receipts table

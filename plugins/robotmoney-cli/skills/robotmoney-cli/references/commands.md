@@ -226,7 +226,7 @@ receipt-timeout-secs, pretty.
 
 ## Consensus receipt commands
 
-`rmpc receipt` handles a **consensus rebalance receipt** — the signed
+`rmpc receipt` handles a **consensus recommendation receipt** — the signed
 off-chain artifact a swarm session produces (Project Fusion). The chain
 stores only `keccak256` of the receipt's canonical bytes, next to the public
 URI serving those exact bytes.

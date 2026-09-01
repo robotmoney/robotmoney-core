@@ -23,7 +23,7 @@
 //   GET /v1/accounts/:address/history
 //   GET /v1/accounts/:address/policies
 //
-// Consensus rebalance receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
+// Consensus recommendation receipts (issue #1247, docs/architecture.md §4.9 / §5.0):
 //   GET /v1/consensus-receipts                        (protocol scope, ?limit=)
 //   GET /v1/consensus-receipts/:receipt_id            (protocol scope, one)
 //   GET /v1/accounts/:address/consensus-receipts      (account scope, by submitter)
@@ -255,7 +255,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/committee/tilts", get(get_committee_tilts))
         .route("/v1/regime/feed", get(get_regime_feed))
-        // Consensus rebalance receipts — issue #1247, docs/architecture.md §4.9.
+        // Consensus recommendation receipts — issue #1247, docs/architecture.md §4.9.
         // Protocol scope (§5.0): no :address segment.
         .route("/v1/consensus-receipts", get(list_consensus_receipts))
         .route("/v1/consensus-receipts/:receipt_id", get(get_consensus_receipt))
@@ -1592,7 +1592,7 @@ async fn get_regime_feed(State(state): State<AppState>) -> ApiResult<Json<Regime
     }))
 }
 
-// ─── Consensus rebalance receipt endpoints ───────────────────────────────────
+// ─── Consensus recommendation receipt endpoints ───────────────────────────────────
 // Canonical: docs/architecture.md §4.9 — issue #1247.
 //
 // Read-scope taxonomy (docs/architecture.md §5.0): a route with no `:address`

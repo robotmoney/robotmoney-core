@@ -603,11 +603,11 @@ not driven by committee output. Because the link is off-chain and
 admin-applied, RouterGovernance is unchanged and no governance-interface
 refactor is required.
 
-### 4.9 Consensus Rebalance Receipt Contract
+### 4.9 Consensus Recommendation Receipt Contract
 
-`contracts/gateway/ConsensusRebalanceReceipt.sol` is a **seventh protocol
+`contracts/gateway/ConsensusRecommendationReceipt.sol` is a **seventh protocol
 contract** and a **signalling-only commitment register** for the swarm's
-consensus rebalance receipts. It anchors the `keccak256` of a receipt's
+consensus recommendation receipts. It anchors the `keccak256` of a receipt's
 canonical bytes on chain, next to the public URI serving those exact bytes.
 
 **Why the anchor exists.** A signed receipt published only at an
@@ -626,7 +626,7 @@ is the cross-repo pin. The preimage is UTF-8
 `robotmoney:consensus-receipt:v1\n` + compact JSON + a trailing newline.
 `tests/fixtures/consensus-receipt.anchor-digest.json` is a **core-only
 sidecar** — deliberately outside the shared set — recording the `keccak256`
-of each committed golden. `ConsensusRebalanceReceiptTest` **derives** those
+of each committed golden. `ConsensusRecommendationReceiptTest` **derives** those
 digests by hashing the golden files and compares them with the sidecar
 constants, so changing either side alone turns the test red.
 
@@ -685,8 +685,8 @@ signatures.
 |---|---|---|
 | `setConsensusReceipt(address)` | `RobotMoneyGateway` | `ADMIN_ROLE` on the gateway |
 | `consensusRecordReceipt(bytes32 receiptId, bytes32 payloadDigest, string payloadUri)` | `RobotMoneyGateway` | `AGENT_ROLE` on the gateway **and** `COMMITTEE_AGENT_ROLE` on the IC policy |
-| `recordReceipt(address submitter, …)` | `ConsensusRebalanceReceipt` | `onlyGateway` |
-| `releaseReceipt(bytes32 receiptId)` | `ConsensusRebalanceReceipt` | `ADMIN_ROLE`, held by the `TimelockController` |
+| `recordReceipt(address submitter, …)` | `ConsensusRecommendationReceipt` | `onlyGateway` |
+| `releaseReceipt(bytes32 receiptId)` | `ConsensusRecommendationReceipt` | `ADMIN_ROLE`, held by the `TimelockController` |
 
 `receiptId` is
 `keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`;
@@ -706,7 +706,7 @@ it. The timelock therefore calls `releaseReceipt` directly, and
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
 `RouterGovernance`. Recording appends a row; releasing flips a boolean.
-`ConsensusRebalanceReceiptTest.testSignallingOnlyBoundary` mirrors
+`ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary` mirrors
 `InvestmentCommitteePolicyTest.testSignallingOnlyBoundary`.
 
 **Events.** `ReceiptRecorded(bytes32 indexed receiptId, address indexed
@@ -830,7 +830,7 @@ to named `RmpcError` variants and to the stable product reason codes in
 use the same protocol/account read envelopes as §5.0.
 
 **Consensus receipt commands.** `rmpc receipt` handles the consensus
-rebalance receipt of §4.9 (issue #1247).
+recommendation receipt of §4.9 (issue #1247).
 
 - `receipt verify` — fetch (or read) a receipt, canonicalize it per
   `tests/fixtures/consensus-receipt.canonicalization.json`, print the

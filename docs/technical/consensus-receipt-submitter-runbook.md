@@ -1,6 +1,6 @@
 # Consensus receipt submitter — custody, operations, and compromise runbook
 
-Canonical: `docs/architecture.md` §4.9 — Consensus Rebalance Receipt Contract
+Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Contract
 Canonical: `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1
 Implements: issue #1247 tasks 4.11, 4.12, 4.13 and acceptance criteria 7, 8
 

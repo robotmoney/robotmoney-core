@@ -23,7 +23,7 @@
 //! committed, so the next run resumes there.
 
 use crate::abi::{
-    IConsensusRebalanceReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
+    IConsensusRecommendationReceiptEvents, IGatewayEvents, IInvestmentCommitteePolicyEvents,
     IPortfolioRouterEvents, IRouterGovernanceEvents, IVaultEvents, IVaultReads,
     IVaultRegistryEvents, Topics,
 };
@@ -75,7 +75,7 @@ pub struct IndexerConfig {
     /// `VoteSubmitted` events and writes to `committee_agents`,
     /// `committee_votes`, and `regime_snapshots` tables (issue #1053).
     pub investment_committee: Option<Address>,
-    /// Optional ConsensusRebalanceReceipt contract address.
+    /// Optional ConsensusRecommendationReceipt contract address.
     /// When set, the indexer ingests `ReceiptRecorded` and `ReceiptReleased`
     /// events, fetches each receipt's `payloadUri` to recompute its keccak256
     /// digest, and writes to the `consensus_receipts` table
@@ -1233,7 +1233,7 @@ pub async fn handle_log(
         return Ok(r);
     }
 
-    // ─── ConsensusRebalanceReceipt event handlers ─────────────────────────────
+    // ─── ConsensusRecommendationReceipt event handlers ─────────────────────────────
     // Canonical: docs/architecture.md §4.9 — issue #1247.
     //
     // Two events: ReceiptRecorded (append) and ReceiptReleased (in-place flip).
@@ -1241,7 +1241,7 @@ pub async fn handle_log(
     // are payload data, never event data.
 
     if topic0 == topics.consensus_receipt_recorded {
-        let decoded = IConsensusRebalanceReceiptEvents::ReceiptRecorded::decode_log(
+        let decoded = IConsensusRecommendationReceiptEvents::ReceiptRecorded::decode_log(
             &into_alloy_log(log),
             true,
         )
@@ -1301,7 +1301,7 @@ pub async fn handle_log(
     }
 
     if topic0 == topics.consensus_receipt_released {
-        let decoded = IConsensusRebalanceReceiptEvents::ReceiptReleased::decode_log(
+        let decoded = IConsensusRecommendationReceiptEvents::ReceiptReleased::decode_log(
             &into_alloy_log(log),
             true,
         )

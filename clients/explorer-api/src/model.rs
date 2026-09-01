@@ -590,7 +590,7 @@ pub struct RegimeFeedResponse {
     pub freshness: Freshness,
 }
 
-// ─── Consensus rebalance receipt models ──────────────────────────────────────
+// ─── Consensus recommendation receipt models ──────────────────────────────────────
 // Canonical: docs/architecture.md §4.9 — issue #1247.
 //
 // One on-chain commitment per row. `verified` is DIGEST verification only:
@@ -601,7 +601,7 @@ pub struct RegimeFeedResponse {
 // payload's signature count as *off-chain analyst signatures*, never as
 // on-chain approvals.
 
-/// A single consensus rebalance receipt commitment.
+/// A single consensus recommendation receipt commitment.
 #[derive(Debug, Serialize)]
 pub struct ConsensusReceipt {
     /// bytes32 receiptId, 0x-prefixed hex.
