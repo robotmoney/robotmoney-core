@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Keep Fusion's canonical proposal and architecture closure in sync (#1249)."""
 from pathlib import Path
+import re
 import sys
 
 
@@ -36,8 +37,30 @@ def missing(path: Path, requirements: tuple[str, ...]) -> list[str]:
     return [f"{path.relative_to(ROOT)} is missing required Fusion closure text: {item!r}" for item in requirements if item not in text]
 
 
+def unresolved_architecture_references() -> list[str]:
+    """Every explicit proposal reference to architecture §N.N names a heading."""
+    if not PROPOSAL.is_file() or not ARCHITECTURE.is_file():
+        return []
+    proposal = PROPOSAL.read_text(encoding="utf-8")
+    architecture = ARCHITECTURE.read_text(encoding="utf-8")
+    sections = set(re.findall(r"docs/architecture\\.md(?:`|:)?\\s*§(\\d+(?:\\.\\d+)+)", proposal))
+    failures = []
+    for section in sorted(sections):
+        heading = re.compile(rf"^#{{2,4}} {re.escape(section)}(?:\\s|$)", re.MULTILINE)
+        if not heading.search(architecture):
+            failures.append(
+                f"{PROPOSAL.relative_to(ROOT)} references architecture §{section}, "
+                f"but {ARCHITECTURE.relative_to(ROOT)} has no matching heading"
+            )
+    return failures
+
+
 def main() -> int:
-    failures = missing(PROPOSAL, PROPOSAL_REQUIREMENTS) + missing(ARCHITECTURE, ARCHITECTURE_REQUIREMENTS)
+    failures = (
+        missing(PROPOSAL, PROPOSAL_REQUIREMENTS)
+        + missing(ARCHITECTURE, ARCHITECTURE_REQUIREMENTS)
+        + unresolved_architecture_references()
+    )
     if failures:
         print("\n".join(f"ERROR: {failure}" for failure in failures), file=sys.stderr)
         return 1
