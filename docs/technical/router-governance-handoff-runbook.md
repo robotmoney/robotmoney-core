@@ -89,7 +89,7 @@ the voter body must vote FOR. Document the chosen value and the voter roster
 ### Step 1 — a receipt is released
 
 A receipt is recorded and then **released** by an admin through the timelock
-(`ConsensusRebalanceReceipt.releaseReceipt`, `onlyRole(ADMIN_ROLE)` — INV-3; the
+(`ConsensusRecommendationReceipt.releaseReceipt`, `onlyRole(ADMIN_ROLE)` — INV-3; the
 receipt contract's `ADMIN_ROLE` is held by the timelock). Release is signalling-
 only (D5, `docs/product/20260623-product-proposal-investment-committee-v0.md` §2.1): it publishes the receipt and emits
 `ReceiptReleased`, moving no funds and calling no `setWeights`. Most receipts

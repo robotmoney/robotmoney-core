@@ -78,8 +78,8 @@ sol!(
 sol!(
     #[sol(abi)]
     #[allow(missing_docs, clippy::too_many_arguments)]
-    ConsensusRebalanceReceipt,
-    "abi/ConsensusRebalanceReceipt.json"
+    ConsensusRecommendationReceipt,
+    "abi/ConsensusRecommendationReceipt.json"
 );
 
 #[cfg(test)]
