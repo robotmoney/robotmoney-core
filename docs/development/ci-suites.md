@@ -150,9 +150,10 @@ compare (it names the mismatch rather than reporting stale docs).
 **Trigger paths:** `clients/rust-payment-client/**`, `testing/ethereum-testnet/e2e-rust/**`, `services/explorer-indexer/**`
 
 **Jobs:**
-- `lint` — fmt and clippy across all crates; runs immediately
+- `lint` — fmt and clippy across all crates, plus the workspace logging-facade guard; runs immediately
 - `audit` — dependency vulnerability scan; runs in parallel with `lint` (independent of build cache)
 - `doc-coverage` — build and rustdoc threshold check; **needs `lint`** (avoids running a full build on code that fails style checks)
+- `test-target-coverage` — every cargo integration-test target is executed by a workflow or allowlisted with a reason (issue #1282); pure Python, no toolchain, so it answers even when the Rust build is broken. See [Integration-test target coverage](#integration-test-target-coverage).
 
 **Steps — `lint` job:**
 1. Checkout repository
@@ -160,6 +161,13 @@ compare (it names the mismatch rather than reporting stale docs).
 3. Cargo cache
 4. `cargo fmt --check` — formatting across all crates
 5. `cargo clippy --all-targets --all-features -- -D warnings` — zero warnings enforced
+6. `cargo_test_require_executed.sh -p rmpc-logging --test workspace_uses_shared_facade` — every binary and service entrypoint initialises logging through `rmpc_logging::init_service` and not `tracing_subscriber::fmt()` (issue #247). Source-text walk, no chain, no Docker. It was executed by no workflow until issue #1282, so the regression it exists to make load-bearing was not.
+
+**Steps — `test-target-coverage` job:**
+1. Checkout repository
+2. `pip install pyyaml`
+3. `python3 .github/scripts/check_cargo_test_target_coverage.py --list-executed` — red on any `tests/*.rs` target no workflow runs
+4. `bash .github/scripts/tests/test_check_cargo_test_target_coverage.sh` — drives the checker's own failure paths against synthetic workspaces and against this repo plus one synthetic dark file
 
 **Steps — `audit` job:**
 1. Checkout repository
@@ -288,6 +296,17 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 - `.github/scripts/assert_manifest_ahead_of_tags.sh` — the rmpc manifest must be strictly ahead of every published `rmpc-v*.*.*` release. Scoped to changes under `clients/rust-payment-client/**`, because the state it reports belongs to the branch rather than to the change; the bare `v*.*.*` namespace belongs to `release-dapp` and cannot raise the rmpc floor.
 - `.github/scripts/tests/test_assert_manifest_ahead_of_tags.sh` and `.github/scripts/tests/test_bump_rmpc_manifest.sh` — synthetic-repository exercises for the two scripts above, neither of whose real caller runs on a PR. See `docs/development/releasing.md`.
 
+**CLI surface — `rmpc-parity` job (issue #1282):** one further step,
+*rmpc CLI surface (deposit, router, status, self-check, get-\*)*, runs the sixteen
+mockito-backed targets that no workflow named before: `cli`, `cli_deposit`,
+`cli_status`, `cli_self_check`, `deposit_router` and the twelve `cli_get_*`
+suites. They drive the built `rmpc` binary through `assert_cmd` against a
+mockito JSON-RPC server — no chain, no Docker — which is why they belong in this
+binary-only job rather than the devnet matrix. `cli_deposit.rs` alone is 687
+lines covering the deposit happy path, chain-id mismatch, paused gateway, fee
+cap, concurrent lock, receipt timeout, duplicate replay and revert. Wrapped in
+`cargo_test_require_executed.sh`.
+
 ---
 
 ### 8. Explorer indexer tests
@@ -296,8 +315,8 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 **Trigger paths:** `services/explorer-indexer/**`, `testing/explorer-indexer/**`
 
 **Jobs:**
-- `fast` — migration idempotency, block ingestion, RPC failure recovery, consensus-receipt indexing, and reorg-rollback coverage; uses Postgres testcontainer + Anvil; runs immediately
-- `explorer-api` — IC committee / regime-feed / consensus-receipt endpoint tests from the `clients/explorer-api` crate (a different crate from the `fast` job, so `fast` never covered it)
+- `fast` — migration idempotency, block ingestion, RPC failure recovery, consensus-receipt indexing, and the reorg + read-path suites; uses a Postgres testcontainer; runs immediately
+- `explorer-api` — the `clients/explorer-api` read API: IC committee / regime / consensus-receipt endpoints, plus the HTTP contract, CORS, router-shape and schema-parity suites; Postgres testcontainer
 - `devnet` — reorg handling and finality-gated indexing against real Geth+Lighthouse; runs in parallel with `fast` (independent environments)
 
 **Steps — `fast` job:**
@@ -309,8 +328,15 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 6. `cargo test --test migrations` — migration idempotency (Postgres testcontainer started by the test)
 7. `cargo test --test idempotency` — block ingestion against known deposit events; double-count guard
 8. `cargo test --test rpc_failure` — RPC failure recovery; reconnect and resume from last confirmed block
-9. `cargo test --test consensus_receipt_indexing` — `ReceiptRecorded` / `ReceiptReleased` ingestion, payload-digest verification, and the reorg rewrite of `consensus_receipts` (issue #1247)
-10. `cargo test --test reorg_cursor_vault_status --test cursor_header_reorg` — reorg rollback coverage: the run cursor (IDX-2), in-place `vaults.status` (IDX-8), the committee/regime tables migration 0014 added, and the assertion that the rollback set is derived from the live schema rather than a literal (issue #1283)
+9. `cargo_test_require_executed.sh -p explorer-indexer --test consensus_receipt_indexing` — ReceiptRecorded / ReceiptReleased ingestion and the reorg rewrite of `consensus_receipts` (issue #1247)
+10. `cargo_test_require_executed.sh -p explorer-indexer --test cursor_header_reorg --test reorg_cursor_vault_status --test account_history --test account_position_vote_power --test committee_indexing --test multi_vault --test vault_detail --test vault_registry` — the eight targets no workflow ran until issue #1282. The first two are the repository's **only** reorg-correctness suites; issue #1283 shipped because they were dark.
+
+**Steps — `explorer-api` job:**
+1. Checkout repository
+2. Verify Docker is available (loud-skip if the testcontainer resource is missing)
+3. Install Rust toolchain + cargo cache
+4. `cargo_test_require_executed.sh -p explorer-api --test committee_api --test regime_api --test consensus_receipt_api` — IC endpoint handlers (issues #1105, #1247)
+5. `cargo_test_require_executed.sh -p explorer-api --test endpoints --test router_introspection --test cors --test canonical_schema` — the four sibling suites left dark when the two above were wired up (issue #1282). `endpoints.rs` is the only executor of the HTTP contract the dApp reads; `router_introspection.rs` is the guard for §11 "the API does not sign, authorize, or write".
 
 Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, which fails the step when zero tests were collected — a `tests/<name>.rs` file cargo was never told to run is a silent skip, not coverage. Step 10 additionally sets `EXPLORER_INDEXER_REQUIRE_PG=1`, which turns an unavailable Postgres testcontainer into a panic: the executed-count guard cannot distinguish a real pass from a test that returned early because its fixture handed it `None`, and that shape counted as passed.
 
@@ -773,6 +799,104 @@ invariant it restores.
 
 ---
 
+## Integration-test target coverage
+
+Every Rust suite here names its cargo test binaries **by hand** — `cargo test
+--lib`, `cargo test --test migrations`, `cargo test --test ${{ matrix.binary }}`.
+There is no bare `cargo test` over a package and no `--test '*'` anywhere in
+`.github/workflows`. That is a deliberate trade (some targets need Postgres, a
+devnet, or a fixture, and running everything everywhere would be unaffordable),
+but it has one consequence that was never handled: **adding a `tests/<name>.rs`
+file adds zero CI coverage unless a workflow is edited in the same change, and
+until issue #1282 nothing detected the omission.**
+
+When the check below was first run it found **35 of 83** integration targets
+executed by nothing at all — including both explorer-indexer reorg suites
+(issue #1283 shipped through that hole), `clients/explorer-api/tests/endpoints.rs`
+(1090 lines, 42 tests) and `clients/rust-payment-client/tests/cli_deposit.rs`
+(687 lines, 10 tests).
+
+### The two guards, and what each one cannot see
+
+| Guard | Catches | Blind to |
+|-------|---------|----------|
+| `.github/scripts/cargo_test_require_executed.sh` | a target a job **does** invoke that collects **zero** tests (testcontainer absent, `--test` filter matched nothing) | a target no job invokes at all |
+| `.github/scripts/check_cargo_test_target_coverage.py` | a target **no workflow executes** | whether the tests that do run assert anything |
+
+They are complements. Wrap a newly wired target in the first so a silent skip is
+red; the second is what stops the next target from being forgotten entirely.
+
+### The coverage check
+
+Run in suite 4 (`cargo-test-target-coverage` job, quick tier, pure Python — no
+toolchain, seconds):
+
+```
+python3 .github/scripts/check_cargo_test_target_coverage.py --list-executed
+```
+
+It enumerates every `tests/*.rs` file across the workspace members, resolves
+which `(package, target)` pairs the workflows actually execute, and exits
+non-zero on any pair that is neither executed nor allowlisted.
+
+Matching is **package-scoped, not a grep**, because a name-only match lies in
+both directions:
+
+- `endpoints` and `cli` appear as prose in workflow comments, so a grep calls
+  them covered while nothing runs them.
+- suite-05 runs `--test governance` from `testing/fork-e2e-rust`, so a grep also
+  credits `testing/smoke-test/tests/governance.rs` — a different crate's file
+  that has never executed anywhere.
+
+The resolver therefore reads `-p`/`--package`, `--manifest-path`, or the step's
+effective `working-directory`, expands `${{ matrix.* }}` (both the axis and
+`include:` forms), and refuses to credit `cargo test --no-run` (compiles only)
+or a `--lib`/`--bins`/`--doc` run (builds no integration target).
+
+Its own failure paths are driven against synthetic workspaces by
+`.github/scripts/tests/test_check_cargo_test_target_coverage.sh`, which also
+performs the negative self-test on the real tree: it drops a synthetic
+`tests/*.rs` into a workspace member, asserts the check goes red and names it,
+then removes it. A guard whose failure path never executes is a guard nobody has
+checked.
+
+### The allowlist
+
+`.github/cargo-test-target-allowlist.txt`, one `package::target` per line. Every
+entry must carry a reason — a comment block immediately above it, or an inline
+`#` comment on the same line. The check fails on an entry with **no** reason, on
+a **stale** entry (the target is executed now), and on an **orphan** entry (the
+file no longer exists). It is a debt ledger, not a mute button.
+
+### Tier assignment for the targets wired by issue #1282
+
+| Target | Suite / job | Tier | Resource | Measured |
+|--------|-------------|------|----------|----------|
+| `rust-payment-client::cli`, `cli_deposit`, `cli_status`, `cli_self_check`, `deposit_router`, and the twelve `cli_get_*` | 7 — `rmpc-parity`, step *rmpc CLI surface* | heavy | mockito + the built `rmpc` binary; **no chain, no Docker** | 67 tests, ~22s |
+| `explorer-indexer::cursor_header_reorg`, `reorg_cursor_vault_status`, `account_history`, `account_position_vote_power`, `committee_indexing`, `multi_vault`, `vault_detail`, `vault_registry` | 8 — `explorer-indexer-fast`, step *Indexer reorg + read-path suites* | quick | Postgres testcontainer (Docker only; no compose stack) | 37 tests, ~2m10s |
+| `explorer-api::endpoints`, `router_introspection`, `cors`, `canonical_schema` | 8 — `explorer-api-committee-regime`, step *explorer-api HTTP contract, CORS, router shape, schema parity* | quick | Postgres testcontainer; `router_introspection` needs none | 49 tests, ~2m40s |
+| `watchdog::cursor_and_volume` | 20 — `watchdog-integration` | quick | Postgres testcontainer | 7 tests, ~25s |
+| `rmpc-logging::workspace_uses_shared_facade` | 4 — `lint`, step *Workspace logging facade guard* | quick | none (source-text walk) | 5 tests, ~0s |
+
+Measured figures are wall-clock on a developer machine with a warm cargo cache;
+CI is slower, and the affected jobs' `timeout-minutes` were raised to match
+(suite 7 `parity` 20→25, suite 8 `fast` 25→35, suite 8 `explorer-api` 25→40,
+suite 20 `pg` 20→30).
+
+### Deliberately not executed
+
+`smoke-test::faucet_eth`, `faucet_rm`, `fund_usdc`, `governance` and
+`vault_deposit_redeem` are allowlisted. Each calls `smoke_test::Fixture`, which
+boots the full Geth + Lighthouse compose stack, deploys with forge, and seeds —
+the same cost as one row of suite 14's devnet matrix, which carries a 70-minute
+per-binary timeout. Rust does not run `Drop` on statics at process exit, so the
+stack outlives the binary and a second binary cannot reuse it: five targets mean
+five more runners, not five more minutes. Whether to fold them into suite 14's
+matrix, give them a push-to-`dev`-only tier, or delete the ones suite 5 already
+covers is owned by **issue #1311** — it is a cost decision, not a hygiene one.
+
+---
+
 ## CI velocity tiers
 
 CI is split into two tiers so a routine PR gets fast, cheap feedback while the
@@ -821,7 +945,7 @@ Every workflow's `name:` and its tier.
 |------------------|------|-------|
 | `forge-unit-invariant-coverage` | quick | `unit`/`invariant` are light (PRs to any branch); the `forge-coverage-gate` job is heavy and `if:`-gated to push-to-`dev` / PR-into-`dev` |
 | `solidity-fmt-natspec-slither` | quick | |
-| `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) |
+| `rust-fmt-clippy-doc-coverage` | quick | includes `audit` job (cargo audit) and `test-target-coverage` (issue #1282 integration-test target inventory) |
 | `fork-protocol-adapter-integration` | heavy | 4 Geth/Anvil devnet slots (20-25 min); gates PRs into `dev`; runs against the **golden fixture** — offline, no secret (ADR-0011) |
 | `fork-live-drift-alarm` | nightly | live Base-mainnet fork at latest via free public RPC (no secret); **non-blocking** drift alarm, opens a tracking issue on failure; dispatched by `nightly-full-suite` (ADR-0011) |
 | `rust-client-unit-tests` | quick | |
@@ -839,7 +963,7 @@ Every workflow's `name:` and its tier.
 | `secrets-scan` | quick | gitleaks secrets scan on every PR (security-model.md §13); pinned binary + `.gitleaks.toml` |
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
 | `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
-| `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9) |
+| `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9); `watchdog-integration` also runs `cursor_and_volume` — the cursor-staleness and deposit-volume-anomaly suite, dark until issue #1282 |
 | `opencode-headless-deposit-read` | nightly | live model coverage is disabled by #1210 option B, so this suite is **deliberately red on every nightly** (owner: #1233); `live-model-coverage-unavailable` fails on schedule/dispatch to report the gap, while keyless `asserter-tests` runs on PRs and validates only the asserter/guard code |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
@@ -854,11 +978,11 @@ Every workflow's `name:` and its tier.
 |---|------------------------|------|-------------|
 | 1–2 | `forge-tests.yml` | `unit` \| `invariant` → `coverage` | `anvil` |
 | 3 | `solidity-quality.yml` | `lint` → `slither` | `none` |
-| 4 | `rust-quality.yml` | `lint` → `doc-coverage` | `none` |
+| 4 | `rust-quality.yml` | `lint` → `doc-coverage` \| `audit` \| `test-target-coverage` | `none` |
 | 5 | `fork-integration.yml` | `pr-smoke` / `full-suite` (golden fixture) + `live-drift-alarm` (nightly, non-blocking) | `fork` |
 | 6 | `rmpc-unit.yml` | `unit` | `none` |
 | 7 | `rmpc-integration.yml` | `geth-tests` \| `nonce-race-stress` | `devnet` |
-| 8 | `explorer-indexer.yml` | `fast` \| `devnet` | `devnet` |
+| 8 | `explorer-indexer.yml` | `fast` \| `explorer-api` \| `devnet` | `devnet` / `postgres-testcontainer` |
 | 9 | `dapp-quality.yml` | `lint-build` | `none` |
 | 10 | `dapp-e2e.yml` | needs suite 9 → `e2e` \| `e2e-history-pane` \| `devnet-e2e` \| `fork-roundtrip` | `devnet` |
 | 11 | `opencode-smoke.yml` + `opencode-headless.yml` | smoke: `plugin-validate` \| `walkthrough-offline` → `walkthrough-fork`; headless: `asserter-tests` (offline, PR + nightly) \| `refusal` (offline, nightly/dispatch) \| explicit unavailable-live-coverage failure (nightly/dispatch) | `none` / `devnet` |

@@ -120,7 +120,11 @@ jobs:
     name: rmpc-parity
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 20
+    # 25 (was 20): the CLI-surface step added by issue #1282 runs 16 previously
+    # dark integration targets (67 tests, ~22s locally) on top of the existing
+    # parity steps. The extra margin covers a cold cargo cache building those
+    # sixteen test binaries.
+    timeout-minutes: 25
     # Read-only, and stated rather than inherited: `Collect the changed-path list`
     # calls the pulls/compare APIs, which need pull-requests/contents read even
     # though nothing in this job writes.
@@ -291,6 +295,47 @@ jobs:
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test cli_version -- --nocapture
+
+      # CLI SURFACE TESTS THAT NOTHING EXECUTED (issue #1282)
+      # These sixteen targets existed and were dark: no job named them, so a
+      # `grep -rn cli_deposit .github/` matched only an unrelated JSON fixture.
+      # cli_deposit.rs alone is 687 lines and ten subprocess scenarios (happy
+      # path, chain-id mismatch, paused gateway, fee cap, concurrent lock,
+      # receipt timeout, duplicate replay, revert); the twelve cli_get_*.rs
+      # suites are the entire read-command surface; deposit_router.rs covers
+      # the multi-leg router deposit. Every one of them is mockito-backed and
+      # drives the built rmpc binary through assert_cmd -- no chain, no Docker,
+      # no fixture beyond a temp keystore -- which is why they belong in this
+      # binary-only parity job and not the devnet matrix. Measured cost: 67
+      # tests, ~22s wall clock on top of an already-built binary.
+      #
+      # tests/cli.rs is the clap parser-level target and needs no RPC at all.
+      #
+      # Wrapped in the executed-count guard so a zero-tests-collected run fails
+      # RED rather than passing as a silent skip. The permanent guard against
+      # this whole class -- a tests/*.rs file no workflow names -- is
+      # .github/scripts/check_cargo_test_target_coverage.py, run in suite 4.
+      - name: rmpc CLI surface (deposit, router, status, self-check, get-*)
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            --release \
+            --manifest-path clients/rust-payment-client/Cargo.toml \
+            --test cli \
+            --test cli_deposit \
+            --test cli_status \
+            --test cli_self_check \
+            --test deposit_router \
+            --test cli_get_agent \
+            --test cli_get_allowance \
+            --test cli_get_balance \
+            --test cli_get_deposit \
+            --test cli_get_gateway \
+            --test cli_get_roles \
+            --test cli_get_router \
+            --test cli_get_timelock \
+            --test cli_get_tx \
+            --test cli_get_vault \
+            --test cli_get_vaults -- --nocapture
 
   # PARALLEL DEVNET MATRIX (issue #600): each e2e binary booted its own Geth+Lighthouse
   # devnet on port 8545, so they were forced to run SERIALLY in one job with a
