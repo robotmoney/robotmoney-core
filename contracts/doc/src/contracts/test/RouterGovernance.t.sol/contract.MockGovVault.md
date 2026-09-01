@@ -58,3 +58,23 @@ function previewDeposit(uint256 assets) external pure returns (uint256);
 function deposit(uint256 assets, address receiver) external returns (uint256 shares);
 ```
 
+### retire
+
+IRetirableVault deposit-halt stubs. MockGovVault has no registry
+link, so these are no-ops that satisfy the interface without
+reverting when the registry drives the pause/deposit-halt flag
+(VaultRegistry.setVaultStatus calls retire()/unretire() on the
+vault address when it has code).
+
+
+```solidity
+function retire() external;
+```
+
+### unretire
+
+
+```solidity
+function unretire() external;
+```
+

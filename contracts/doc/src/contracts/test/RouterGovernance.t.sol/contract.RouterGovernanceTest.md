@@ -292,6 +292,21 @@ AC: forge test: register then revoke eligibility for a vault; call propose() wit
 function test_propose_revertsOnIneligibleVault() public;
 ```
 
+### test_propose_revertsOnPausedVault
+
+propose() with a vault that was Paused (transient registry
+status) reverts VaultNotEligible naming that vault. This is the
+contract-side of the #1248 draft-worker fallback: the worker
+re-checks isRouterEligibleAndActive at draft time precisely
+because a vault Active at receipt time may be Paused by then and
+propose() would revert on exactly this vault.
+AC: forge test: pause a vault; propose() with it reverts VaultNotEligible
+
+
+```solidity
+function test_propose_revertsOnPausedVault() public;
+```
+
 ### test_propose_allEligibleVaultsSucceedsActive
 
 propose() with all eligible vaults succeeds and transitions proposal to Active state.

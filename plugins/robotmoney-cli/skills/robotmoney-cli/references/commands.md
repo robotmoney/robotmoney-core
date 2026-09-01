@@ -319,8 +319,8 @@ rmpc governance --config <CONFIG> draft-proposal --receipt-id <0x...64hex>
 ```
 
 ```
-rmpc governance --config <CONFIG> draft-proposal --from-block <N>
-  [--to-block <TAG>] --receipt-url-template <URL_WITH_{receipt_id}>
+rmpc governance --config <CONFIG> draft-proposal --from-block 0
+  [--to-block latest] --receipt-url-template <URL_WITH_{receipt_id}>
   [--pretty]
 ```
 
