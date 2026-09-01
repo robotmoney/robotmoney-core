@@ -9,7 +9,8 @@ use std::path::Path;
 
 use clap::Parser;
 use rust_payment_client::cli::{
-    Cli, Command, CommitteeIdentitySubcommand, CommitteeSubcommand, ReceiptSubcommand,
+    Cli, Command, CommitteeIdentitySubcommand, CommitteeSubcommand, GovernanceSubcommand,
+    ReceiptSubcommand,
 };
 use rust_payment_client::commands;
 use rust_payment_client::config::Config;
@@ -45,6 +46,7 @@ fn main() {
         Command::WithdrawRouter { config, .. } => Some(config.as_path()),
         Command::Committee { config, .. } => Some(config.as_path()),
         Command::Receipt { config, .. } => Some(config.as_path()),
+        Command::Governance { config, .. } => Some(config.as_path()),
         // No operator config TOML — this is a local-only Ed25519 identity
         // helper with no RPC/chain surface (issue #1111).
         Command::CommitteeIdentity { .. } => None,
@@ -333,6 +335,42 @@ fn main() {
                 fee_cap_wei: fee_cap,
                 pretty,
             }),
+        },
+        Command::Governance {
+            config,
+            subcommand,
+            pretty,
+        } => match subcommand {
+            GovernanceSubcommand::DraftProposal {
+                receipt_id,
+                receipt_url,
+                receipt_file,
+                from_block,
+                to_block,
+                receipt_url_template,
+            } => {
+                let source = match (receipt_url, receipt_file) {
+                    (Some(u), None) => Some(commands::governance_draft::ReceiptSource::Url(u)),
+                    (None, Some(f)) => Some(commands::governance_draft::ReceiptSource::File(f)),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        eprintln!(
+                            "rmpc governance draft-proposal: at most one of --receipt-url or \
+                             --receipt-file may be given"
+                        );
+                        std::process::exit(3);
+                    }
+                };
+                commands::governance_draft::run(commands::governance_draft::Args {
+                    config_path: config,
+                    receipt_id,
+                    source,
+                    from_block,
+                    to_block,
+                    receipt_url_template,
+                    pretty,
+                })
+            }
         },
         Command::CommitteeIdentity {
             path,
