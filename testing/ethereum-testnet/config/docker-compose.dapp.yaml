@@ -25,6 +25,9 @@
 #   #   EXPLORER_API_CHAIN_ID=918453
 #   #   INDEXER_REGISTRY=          — VaultRegistry address (enables /v1/vaults)
 #   #   INDEXER_PORTFOLIO_ROUTER=  — PortfolioRouter address (enables /v1/router/weights)
+#   #   INDEXER_CONSENSUS_RECEIPT= — ConsensusRebalanceReceipt address (enables /v1/consensus-receipts)
+#   #   VITE_VAULT_ADDRESSES=      — JSON {rmUSDC,rmPROTO,rmAGENT,rmRWA} map (enables applied/not-applied)
+#   #   RECEIPT_FIXTURES_PORT=8097
 #   #   POSTGRES_PORT=5432
 #   #   EXPLORER_API_PORT=8080
 #   #   DAPP_PORT=5173
@@ -98,6 +101,13 @@ services:
       INDEXER_GATEWAY: ${INDEXER_GATEWAY:?INDEXER_GATEWAY must be set}
       INDEXER_VAULT: ${INDEXER_VAULT:?INDEXER_VAULT must be set}
       INDEXER_REGISTRY: ${INDEXER_REGISTRY:-}
+      # Issue #1294: INDEXER_CONSENSUS_RECEIPT enables ReceiptRecorded /
+      # ReceiptReleased event ingestion from ConsensusRebalanceReceipt, digest
+      # verification against payload_uri, and writes to consensus_receipts
+      # (issue #1247, docs/architecture.md §4.9). Without this the
+      # /v1/consensus-receipts explorer endpoint returns an empty list even
+      # when receipts were recorded on chain.
+      INDEXER_CONSENSUS_RECEIPT: ${INDEXER_CONSENSUS_RECEIPT:-}
       # Issue #615: INDEXER_PORTFOLIO_ROUTER enables WeightsSet / DefaultWeightsSet
       # and RouterDeposit event ingestion from the PortfolioRouter contract.  Without
       # this the explorer /v1/router/weights endpoint returns an empty weight list
@@ -175,6 +185,15 @@ services:
         # Default to zero address so the RM drip button is hidden in standalone
         # builds without the smoke-test harness deploying the governance+RM stack.
         VITE_RM_TOKEN_ADDRESS: ${VITE_RM_TOKEN_ADDRESS:-0x0000000000000000000000000000000000000000}
+        # Issue #1294: bucket->vault-symbol->address JSON map (rmUSDC, rmPROTO,
+        # rmAGENT, rmRWA — tests/fixtures/consensus-receipt.bucket-vault-map.json)
+        # so ConsensusReceiptPanel can compute the applied/not-applied state
+        # against live router weights. Single-quoted: the value is a raw JSON
+        # object and must not be re-parsed as a YAML mapping by compose's
+        # variable substitution. Defaults to empty so standalone builds without
+        # the smoke-test harness degrade to "cannot determine" rather than
+        # guessing (see consensusReceiptApi.ts parseVaultAddressMap).
+        VITE_VAULT_ADDRESSES: '${VITE_VAULT_ADDRESSES:-}'
         # Issue #466: native Base ETH gas drip amount documented for parity
         # with FAUCET_DRIP_AMOUNT_ETH in clients/dapp/src/lib/chainClassifier.ts.
         # Surfaced through compose so docs/environments.md and the env-doc
@@ -193,6 +212,32 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # Issue #1294: serves the two consensus-receipt payload fixtures at the SAME
+  # literal URL for both consumers of an on-chain `payload_uri`:
+  #   - explorer-indexer (digest verification) reaches this container by its
+  #     Docker service name over the shared `default` compose network — the
+  #     same mechanism explorer-indexer already uses to reach `geth` and
+  #     `postgres`.
+  #   - the Playwright browser reaches the SAME hostname via a
+  #     `--host-resolver-rules` mapping straight to 127.0.0.1
+  #     (clients/dapp/playwright.config.ts), which lands on this service's
+  #     published host port below.
+  # Static, non-secret test fixtures only — no dynamic content, no request
+  # handling beyond serving files from disk.
+  receipt-fixtures:
+    image: python:3-alpine
+    container_name: dapp-receipt-fixtures
+    labels: *testnet-labels
+    restart: unless-stopped
+    working_dir: /fixtures
+    environment:
+      RECEIPT_FIXTURES_PORT: ${RECEIPT_FIXTURES_PORT:-8097}
+    volumes:
+      - ./consensus-receipt-fixtures:/fixtures:ro
+    command: ["sh", "-c", "python3 -m http.server \"$$RECEIPT_FIXTURES_PORT\""]
+    ports:
+      - "127.0.0.1:${RECEIPT_FIXTURES_PORT:-8097}:${RECEIPT_FIXTURES_PORT:-8097}"
 
 # Issue #775: chain-net joins the ethereum-testnet_default Docker network
 # created by docker-compose.yaml (the chain compose stack) so that

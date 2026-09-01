@@ -80,6 +80,15 @@ pub const HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX: &str =
 /// `Fixture::fund_usdc` (as the transfer sender).
 pub const HARNESS_USDC_HOLDER_ADDRESS_HEX: &str = "0xaE67A1B2A267a124Cf762098E3Cbf6B03329E6d5";
 
+/// Fixed host+container port for the `receipt-fixtures` compose service
+/// (issue #1294). Not randomized like [`DappPorts`] — that service's
+/// container_name is already fixed (`dapp-receipt-fixtures`), so this
+/// compose project is already single-instance-per-host; using a fixed port
+/// here matches that existing constraint rather than introducing a new one.
+/// See `testing/ethereum-testnet/config/docker-compose.dapp.yaml` and
+/// `Fixture::seed_consensus_receipts`.
+pub const RECEIPT_FIXTURES_PORT: u16 = 8097;
+
 /// 32-byte secp256k1 private key for the test agent EOA. Test-only —
 /// never use on a real chain.
 /// Derives `0xf93Ee4Cf8c6c40b329b0c0626F28333c132CF241`.
@@ -195,6 +204,20 @@ struct RmTokenDeploymentJson {
     chain_id: u64,
 }
 
+/// Typed view over the IC policy + consensus receipt deployment JSON
+/// produced by DeployInvestmentCommitteePolicy.s.sol. Deploys BOTH
+/// `InvestmentCommitteePolicy` and `ConsensusRebalanceReceipt` in one
+/// ceremony (issue #1247 AC10) so a single ceremony wires both into the
+/// gateway. Issue #1294: consumed by the dapp e2e devnet wiring.
+#[derive(Debug, Deserialize)]
+struct IcPolicyDeploymentJson {
+    policy: String,
+    consensus_receipt: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    chain_id: u64,
+}
+
 /// Typed view over the Uniswap V3 stub deployment JSON produced by
 /// DeployDemoUniswapV3Stubs.s.sol (issue #531). Four `UniswapV3PoolSlot0Stub`
 /// contracts deployed at deterministic CREATE2 addresses (Arachnid factory,
@@ -267,6 +290,9 @@ pub struct Fixture {
     router_deployment: RouterDeploymentJson,
     governance_deployment: GovernanceDeploymentJson,
     rm_token_deployment: RmTokenDeploymentJson,
+    /// InvestmentCommitteePolicy + ConsensusRebalanceReceipt (issue #1247
+    /// AC10, issue #1294). One ceremony deploys both.
+    ic_policy_deployment: IcPolicyDeploymentJson,
     /// Demo-only extra vaults registered alongside the primary RobotMoneyVault
     /// (issue #465). Two passthrough-backed `RobotMoneyVault` stand-ins that
     /// let the smoke-test exercise multi-vault router weights without
@@ -1010,6 +1036,27 @@ impl Fixture {
 
         let demo_uniswap_v3_stubs = read_demo_uniswap_v3_stubs_deployment(&stubs_out)?;
 
+        // Deploy InvestmentCommitteePolicy + ConsensusRebalanceReceipt in one
+        // ceremony (issue #1247 AC10, issue #1294). RECEIPT_ADMIN_ADDRESS is
+        // left unset so the script defaults it to ADMIN_ADDRESS (the deployer)
+        // for this devnet ceremony — in production it is the TimelockController.
+        let ic_policy_out = tmp.path().join("ic-policy.json");
+        run_forge_deploy_ic_policy(&repo_root, &rpc_url, &ic_policy_out, &deployment.gateway)
+            .inspect_err(|err| {
+                logging::error("smoke-test", format!("forge deploy IC policy failed: {err}"));
+                log_compose_state(
+                    &compose_dir,
+                    &compose_files_owned,
+                    &compose_log_env,
+                    "chain-compose",
+                    "IC policy deployment failure",
+                    200,
+                );
+                cleanup();
+            })?;
+
+        let ic_policy_deployment = read_ic_policy_deployment(&ic_policy_out)?;
+
         fund_eth_from_deployer(&rpc_url, &agent_hex, "1000000000000000000").inspect_err(|err| {
             logging::error("smoke-test", format!("funding agent failed: {err}"));
             log_compose_state(
@@ -1050,6 +1097,7 @@ impl Fixture {
             router_deployment,
             governance_deployment,
             rm_token_deployment,
+            ic_policy_deployment,
             demo_extra_vaults,
             demo_uniswap_v3_stubs,
             repo_root,
@@ -1076,6 +1124,29 @@ impl Fixture {
                 );
                 cleanup();
             })?;
+
+        // Seed two fixture consensus receipts (issue #1294) so the dapp e2e
+        // spec has something to assert on: one verifies + is released, one
+        // does not verify + stays unreleased + does not match live router
+        // weights. Payload bytes only need to exist by the time the indexer's
+        // first tick fetches `payload_uri` — well after `--full-stack` brings
+        // up the `receipt-fixtures` compose service — so seeding here (before
+        // that service exists) is safe.
+        fx.seed_consensus_receipts().inspect_err(|err| {
+            logging::error(
+                "smoke-test",
+                format!("consensus receipt fixture seeding failed: {err}"),
+            );
+            log_compose_state(
+                &fx.compose_dir,
+                &compose_files_owned,
+                &compose_log_env,
+                "chain-compose",
+                "consensus receipt fixture seeding failure",
+                200,
+            );
+            cleanup();
+        })?;
 
         Ok(fx)
     }
@@ -1193,6 +1264,24 @@ impl Fixture {
     pub fn rm_token_hex(&self) -> &str {
         &self.rm_token_deployment.rm_token
     }
+    /// `InvestmentCommitteePolicy` deployed by
+    /// `DeployInvestmentCommitteePolicy.s.sol` (issue #1247/#1294).
+    pub fn ic_policy(&self) -> Address {
+        parse_addr(&self.ic_policy_deployment.policy)
+    }
+    /// Raw string form of the InvestmentCommitteePolicy address.
+    pub fn ic_policy_hex(&self) -> &str {
+        &self.ic_policy_deployment.policy
+    }
+    /// `ConsensusRebalanceReceipt` deployed in the same ceremony as
+    /// [`Fixture::ic_policy`] (issue #1247 AC10, issue #1294).
+    pub fn consensus_receipt(&self) -> Address {
+        parse_addr(&self.ic_policy_deployment.consensus_receipt)
+    }
+    /// Raw string form of the ConsensusRebalanceReceipt address.
+    pub fn consensus_receipt_hex(&self) -> &str {
+        &self.ic_policy_deployment.consensus_receipt
+    }
 
     /// `ProtocolAssetVault` (PRD §11.2). Seeded with devnet stand-in basket
     /// tokens (wETH, cbBTC, wSOL) and made router-eligible by the demo seed
@@ -1238,6 +1327,21 @@ impl Fixture {
     /// Raw string form of the RWA/Thematic placeholder address.
     pub fn rwa_vault_hex(&self) -> &str {
         &self.demo_extra_vaults.rwa_vault
+    }
+    /// JSON `{rmUSDC,rmPROTO,rmAGENT,rmRWA}` bucket-vault-symbol map matching
+    /// `tests/fixtures/consensus-receipt.bucket-vault-map.json`'s
+    /// `required_vault_symbols` (issue #1294). Threaded through as
+    /// `VITE_VAULT_ADDRESSES` so `consensusReceiptApi.ts::parseVaultAddressMap`
+    /// can compute the applied-vs-not-applied consensus receipt state against
+    /// live router weights instead of always reporting "cannot determine".
+    pub fn vault_address_map_json(&self) -> String {
+        serde_json::json!({
+            "rmUSDC": format!("{:#x}", self.vault()),
+            "rmPROTO": format!("{:#x}", self.demo_protocol_vault()),
+            "rmAGENT": format!("{:#x}", self.demo_agent_vault()),
+            "rmRWA": format!("{:#x}", self.rwa_vault()),
+        })
+        .to_string()
     }
     /// Router weight (bps) assigned to the primary vault after demo seeding.
     /// The primary is the only router-eligible vault, so this is always
@@ -1919,6 +2023,121 @@ impl Fixture {
             "transfer(address,uint256)",
             &[&format!("{recipient:#x}"), &amount.to_string()],
         )
+    }
+
+    /// keccak256(abi.encodePacked(RECEIPT_ID_DOMAIN, sessionId, "\n",
+    /// subjectId)), mirroring `ConsensusRebalanceReceipt.computeReceiptId`
+    /// exactly (contracts/gateway/ConsensusRebalanceReceipt.sol). `abi.encodePacked`
+    /// on `string` params is a plain byte concatenation, so this is
+    /// reproducible off-chain without an RPC round trip.
+    fn compute_receipt_id(session_id: &str, subject_id: &str) -> [u8; 32] {
+        const RECEIPT_ID_DOMAIN: &str = "robotmoney:consensus-receipt-id:v1\n";
+        let mut buf = Vec::with_capacity(
+            RECEIPT_ID_DOMAIN.len() + session_id.len() + 1 + subject_id.len(),
+        );
+        buf.extend_from_slice(RECEIPT_ID_DOMAIN.as_bytes());
+        buf.extend_from_slice(session_id.as_bytes());
+        buf.push(b'\n');
+        buf.extend_from_slice(subject_id.as_bytes());
+        keccak256(&buf).0
+    }
+
+    /// Seed two fixture consensus receipts (issue #1294) so the dapp e2e
+    /// spec can assert every rendered state distinctly:
+    ///
+    /// - `receipt-a.json`: submitted with its OWN correct digest and
+    ///   released — renders "Verified" and "Released", and its weights
+    ///   match the live 8 500/500/500/500 bps router split from
+    ///   `DeployDemoExtraVaults.s.sol::_applyFourVaultWeights` — renders
+    ///   "Applied".
+    /// - `receipt-b.json`: submitted with a deliberately WRONG digest and
+    ///   never released — renders "Unverified" and "Recorded, not
+    ///   released", and its weights deliberately do not match the live
+    ///   split — renders "Not applied".
+    ///
+    /// Both payload files are served by the `receipt-fixtures` compose
+    /// service (issue #1294) at [`RECEIPT_FIXTURES_PORT`] under the
+    /// hostname `receipt-fixtures` — reachable from the indexer container
+    /// via Docker's embedded DNS on the compose `default` network, and from
+    /// the Playwright browser via a `--host-resolver-rules` mapping of that
+    /// same hostname straight to 127.0.0.1 (see
+    /// `clients/dapp/playwright.config.ts`), which resolves to the SAME
+    /// published host port. One literal on-chain `payload_uri` string is
+    /// therefore fetchable, byte-identically, from both vantage points.
+    fn seed_consensus_receipts(&self) -> Result<(), HarnessError> {
+        let fixtures_dir = self
+            .repo_root
+            .join("testing/ethereum-testnet/config/consensus-receipt-fixtures");
+        let receipt_a_bytes = std::fs::read(fixtures_dir.join("receipt-a.json"))
+            .map_err(|e| HarnessError::other(format!("read receipt-a.json: {e}")))?;
+        // receipt-b.json is served byte-for-byte too, but its ON-CHAIN digest
+        // is deliberately wrong (below) — its own bytes are never hashed.
+
+        // Allowlist the agent EOA as a committee member: gateway.committeeRegister
+        // requires ADMIN_ROLE on the gateway (the deployer), and forwards to
+        // InvestmentCommitteePolicy.registerAgent, which the gateway may call
+        // because DeployInvestmentCommitteePolicy.s.sol already granted it the
+        // IC contract's ADMIN_ROLE.
+        let agent_hex = format!("{:#x}", self.agent());
+        self.cast_send(
+            DEPLOYER_PRIVATE_KEY_HEX,
+            self.gateway(),
+            "committeeRegister(address,string)",
+            &[&agent_hex, "smoke-test-receipt-agent"],
+        )?;
+
+        let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
+        let uri_a = format!(
+            "http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-a.json"
+        );
+        let uri_b = format!(
+            "http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-b.json"
+        );
+
+        let session_a = "smoke-test-fusion-1294-a";
+        let subject_a = "treasury-allocation";
+        let receipt_id_a = Self::compute_receipt_id(session_a, subject_a);
+        let digest_a = keccak256(&receipt_a_bytes).0;
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[
+                &format!("0x{}", hex::encode(receipt_id_a)),
+                &format!("0x{}", hex::encode(digest_a)),
+                &uri_a,
+            ],
+        )?;
+        // Release receipt A — an admin signalling-only act (no funds move, no
+        // router weight changes). RECEIPT_ADMIN_ADDRESS defaults to the
+        // deployer for this devnet ceremony.
+        self.cast_send(
+            DEPLOYER_PRIVATE_KEY_HEX,
+            self.consensus_receipt(),
+            "releaseReceipt(bytes32)",
+            &[&format!("0x{}", hex::encode(receipt_id_a))],
+        )?;
+
+        let session_b = "smoke-test-fusion-1294-b";
+        let subject_b = "treasury-allocation";
+        let receipt_id_b = Self::compute_receipt_id(session_b, subject_b);
+        // Deliberately WRONG digest — receipt-b.json is valid JSON the
+        // browser can still render, but the indexer's re-fetched keccak256
+        // will never match this value, so `verified` stays false.
+        let digest_b = keccak256(b"smoke-test-wrong-digest-marker-for-1294").0;
+        self.cast_send(
+            &agent_pk_hex,
+            self.gateway(),
+            "consensusRecordReceipt(bytes32,bytes32,string)",
+            &[
+                &format!("0x{}", hex::encode(receipt_id_b)),
+                &format!("0x{}", hex::encode(digest_b)),
+                &uri_b,
+            ],
+        )?;
+        // Receipt B is deliberately left unreleased.
+
+        Ok(())
     }
 
     /// Fund `recipient` with `value_wei` native ETH by signing a plain value
@@ -3002,6 +3221,51 @@ fn read_rm_token_deployment(path: &Path) -> Result<RmTokenDeploymentJson, Harnes
         .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
 }
 
+/// Deploy InvestmentCommitteePolicy + ConsensusRebalanceReceipt in one
+/// ceremony via `DeployInvestmentCommitteePolicy.s.sol` (issue #1247 AC10,
+/// issue #1294). `RECEIPT_ADMIN_ADDRESS` is left unset so the script
+/// defaults it to `ADMIN_ADDRESS` (the deployer) for this devnet ceremony —
+/// production deployments hold it with the TimelockController.
+fn run_forge_deploy_ic_policy(
+    repo_root: &Path,
+    rpc_url: &str,
+    ic_policy_out: &Path,
+    gateway_address: &str,
+) -> Result<(), HarnessError> {
+    let mut cmd = Command::new("forge");
+    cmd.args([
+        "script",
+        "contracts/script/DeployInvestmentCommitteePolicy.s.sol:DeployInvestmentCommitteePolicy",
+    ])
+    .args(["--rpc-url", rpc_url])
+    .args(["--private-key", DEPLOYER_PRIVATE_KEY_HEX])
+    .arg("--broadcast")
+    .arg("--slow")
+    .arg("-vvv")
+    .env("ADMIN_ADDRESS", DEPLOYER_ADDRESS_HEX)
+    .env("GATEWAY_ADDRESS", gateway_address)
+    .env("DEPLOYMENT_OUT", ic_policy_out)
+    .current_dir(repo_root);
+    let out = cmd.output()?;
+    logging::log_command_output("forge-ic-policy", &out);
+    if !out.status.success() {
+        return Err(HarnessError::DeployFailed(format!(
+            "forge script DeployInvestmentCommitteePolicy exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
+fn read_ic_policy_deployment(path: &Path) -> Result<IcPolicyDeploymentJson, HarnessError> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| HarnessError::DeploymentJson(path.to_path_buf(), e.to_string()))
+}
+
 /// Deploy the PRD §11 demo vault catalog via `DeployDemoExtraVaults.s.sol`:
 /// ProtocolAssetVault (§11.2) seeded with wETH/cbBTC/wSOL stand-ins,
 /// AgentTokenVault (§11.3) seeded with the six MVP shortlist symbols, and an
@@ -3520,12 +3784,27 @@ impl DappStack {
             // RM drip + balance reads point at the real ERC-20 contract
             // instead of falling back to the compose 0x0 default.
             ("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex().to_string()),
+            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
+            // compute applied vs not-applied against live router weights.
+            ("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json()),
             ("INDEXER_GATEWAY", gateway_hex.to_string()),
             ("INDEXER_VAULT", vault_hex.to_string()),
             ("INDEXER_REGISTRY", fixture.registry_hex().to_string()),
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter
             // (issue #615); router deposits trigger fresh TVL snapshots for all registered vaults.
             ("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex().to_string()),
+            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
+            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
+            (
+                "INDEXER_CONSENSUS_RECEIPT",
+                fixture.consensus_receipt_hex().to_string(),
+            ),
+            // Issue #1294: fixed port for the receipt-fixtures compose service
+            // (see Fixture::seed_consensus_receipts and RECEIPT_FIXTURES_PORT).
+            (
+                "RECEIPT_FIXTURES_PORT",
+                RECEIPT_FIXTURES_PORT.to_string(),
+            ),
             // Issue #775: indexer reaches Geth via the chain Docker network
             // (ethereum-testnet_default) using the service name, not via
             // host.docker.internal which is unreachable on some Docker configs.
@@ -3612,6 +3891,12 @@ impl DappStack {
                 "VITE_RM_TOKEN_ADDRESS".into(),
                 fixture.rm_token_hex().to_string(),
             ),
+            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
+            // compute applied vs not-applied against live router weights.
+            (
+                "VITE_VAULT_ADDRESSES".into(),
+                fixture.vault_address_map_json(),
+            ),
             ("INDEXER_GATEWAY".into(), gateway_hex.to_string()),
             ("INDEXER_VAULT".into(), vault_hex.to_string()),
             (
@@ -3622,6 +3907,17 @@ impl DappStack {
             (
                 "INDEXER_PORTFOLIO_ROUTER".into(),
                 fixture.router_hex().to_string(),
+            ),
+            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
+            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
+            (
+                "INDEXER_CONSENSUS_RECEIPT".into(),
+                fixture.consensus_receipt_hex().to_string(),
+            ),
+            // Issue #1294: fixed port for the receipt-fixtures compose service.
+            (
+                "RECEIPT_FIXTURES_PORT".into(),
+                RECEIPT_FIXTURES_PORT.to_string(),
             ),
             // Issue #775: see dapp_log_env comment above.
             ("INDEXER_RPC_URL".into(), "http://geth:8545".to_string()),
@@ -3667,11 +3963,19 @@ impl DappStack {
             // drip points at the real ERC-20 contract instead of the compose
             // 0x0 default.
             .env("VITE_RM_TOKEN_ADDRESS", fixture.rm_token_hex())
+            // Issue #1294: bucket-vault-symbol map so ConsensusReceiptPanel can
+            // compute applied vs not-applied against live router weights.
+            .env("VITE_VAULT_ADDRESSES", fixture.vault_address_map_json())
             .env("INDEXER_GATEWAY", gateway_hex)
             .env("INDEXER_VAULT", vault_hex)
             .env("INDEXER_REGISTRY", fixture.registry_hex())
             // Index WeightsSet/DefaultWeightsSet and RouterDeposit events from PortfolioRouter (issue #615).
             .env("INDEXER_PORTFOLIO_ROUTER", fixture.router_hex())
+            // Issue #1294: index ReceiptRecorded/ReceiptReleased events from
+            // ConsensusRebalanceReceipt and verify each payload_uri's digest.
+            .env("INDEXER_CONSENSUS_RECEIPT", fixture.consensus_receipt_hex())
+            // Issue #1294: fixed port for the receipt-fixtures compose service.
+            .env("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string())
             // Issue #775: indexer reaches Geth via the chain Docker network
             // (ethereum-testnet_default) using the `geth` service name — no
             // host port needed. The dapp compose connects to that network via
