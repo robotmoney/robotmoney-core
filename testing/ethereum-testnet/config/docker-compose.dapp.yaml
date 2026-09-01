@@ -85,6 +85,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Issue #1294: the indexer verifies each receipt's payload_uri digest on
+      # its FIRST scan of the ReceiptRecorded events (which are already on
+      # chain before this compose stack boots). A fetch failure at that moment
+      # is stored with verified=false and never re-verified, so the receipt-
+      # fixtures server MUST be accepting connections before the indexer's first
+      # tick. depends_on service_healthy turns that ordering requirement into a
+      # hard gate instead of a race.
+      receipt-fixtures:
+        condition: service_healthy
     # Issue #775: join the ethereum-testnet_default network so the indexer
     # can reach Geth directly via the `geth` service hostname (port 8545
     # inside the chain network) instead of relying on host.docker.internal,
@@ -238,6 +247,17 @@ services:
     command: ["sh", "-c", "python3 -m http.server \"$$RECEIPT_FIXTURES_PORT\""]
     ports:
       - "127.0.0.1:${RECEIPT_FIXTURES_PORT:-8097}:${RECEIPT_FIXTURES_PORT:-8097}"
+    healthcheck:
+      # python:3-alpine ships python3 but no guaranteed curl/wget; open a TCP
+      # socket to the http.server's port via os.environ (no shell expansion
+      # needed, so no quoting hazards). Gates the explorer-indexer's first
+      # scan, which must find the payload the moment it ingests ReceiptRecorded
+      # (verified=false is stored once and never re-verified).
+      test: ["CMD-SHELL", "python3 -c 'import os,socket; s=socket.socket(); s.settimeout(2); s.connect((\"127.0.0.1\", int(os.environ[\"RECEIPT_FIXTURES_PORT\"]))); s.close()'"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 2s
 
 # Issue #775: chain-net joins the ethereum-testnet_default Docker network
 # created by docker-compose.yaml (the chain compose stack) so that
