@@ -17,10 +17,12 @@
 
 mod common;
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, U256};
 use common::{try_pg_fixture, StubRpcServer};
-use explorer_indexer::db::CountTable;
+use explorer_indexer::db::{CountTable, REORG_ROLLBACK_EXCLUSIONS};
 use explorer_indexer::{indexer::run_once, indexer::IndexerConfig, rpc::JsonRpc};
+use sqlx::postgres::PgPool;
+use std::collections::BTreeSet;
 
 const CHAIN: i64 = 8453;
 
@@ -325,4 +327,405 @@ async fn delete_above_block_leaves_unchanged_vault_status() {
         0,
         "an unchanged vault must remain Active after a rollback"
     );
+}
+
+// ─── #1283: block-scoped rollback coverage ───────────────────────────────────
+//
+// The rollback used to iterate a literal list of table names. Migration 0014
+// added `committee_votes` and `regime_snapshots` and nobody edited the literal,
+// so a reorg past a `VoteSubmitted` left both tables serving orphaned rows as
+// current state — the exact drift `src/schema.rs` had predicted in a comment.
+// The fix derives the set from the live schema; these tests assert the derived
+// set is right, that it stays right when a migration adds a table, and that its
+// deletion order respects the live foreign keys.
+
+/// Every table the live schema marks block-scoped (`block_number` column on a
+/// base table), derived independently of `Db` so the assertions below compare
+/// two derivations rather than one derivation against a copy of itself.
+async fn live_block_scoped_tables(pool: &PgPool) -> BTreeSet<String> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT c.table_name::text \
+         FROM information_schema.columns c \
+         JOIN information_schema.tables t \
+           ON t.table_schema = c.table_schema AND t.table_name = c.table_name \
+         WHERE c.table_schema = current_schema() \
+           AND t.table_type = 'BASE TABLE' \
+           AND c.column_name = 'block_number'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("catalog query");
+    rows.into_iter().map(|(t,)| t).collect()
+}
+
+async fn raw_pool(fx: &common::PgFixture) -> PgPool {
+    PgPool::connect(&fx.url).await.expect("raw pool")
+}
+
+async fn row_count(pool: &PgPool, table: &str) -> i64 {
+    let q = format!("SELECT COUNT(*)::BIGINT FROM \"{table}\"");
+    let (n,): (i64,) = sqlx::query_as(&q).fetch_one(pool).await.expect("count");
+    n
+}
+
+/// Seed a committee agent (not block-scoped — it survives the rollback and
+/// keeps the `committee_votes` foreign key satisfiable) and one vote plus one
+/// regime snapshot at `block`.
+async fn seed_committee_activity(
+    db: &explorer_indexer::Db,
+    agent: [u8; 20],
+    vault: [u8; 20],
+    block: i64,
+    vote_id: i64,
+) {
+    db.upsert_committee_agent(CHAIN, agent, "agent-1283", 1)
+        .await
+        .unwrap();
+    db.insert_committee_vote(
+        CHAIN,
+        vote_id,
+        block,
+        0,
+        [0xAAu8; 32],
+        agent,
+        vault,
+        0,
+        7_500,
+        90,
+        "ipfs://memo",
+        [0xBBu8; 32],
+        1_700_000_000,
+        true,
+    )
+    .await
+    .unwrap();
+    db.upsert_regime_snapshot(CHAIN, vault, block, 7_500.0, 1)
+        .await
+        .unwrap();
+}
+
+/// AC1 — the shipped defect. A reorg past a `VoteSubmitted` must clear both
+/// tables migration 0014 added. Red before the fix: the hard-coded list did not
+/// name `committee_votes` or `regime_snapshots`, so both rows survived and the
+/// committee / regime-feed endpoints kept serving them as current state.
+#[tokio::test]
+async fn delete_above_block_clears_committee_votes_and_regime_snapshots() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    let agent = [0x51u8; 20];
+    let vault_a = [0x61u8; 20];
+    let vault_b = [0x62u8; 20];
+
+    // One vote + snapshot below the reorg root (must survive) and one above it
+    // (must be rolled back).
+    seed_committee_activity(db, agent, vault_a, 100, 1).await;
+    seed_committee_activity(db, agent, vault_b, 105, 2).await;
+    assert_eq!(db.count(CountTable::CommitteeVotes).await.unwrap(), 2);
+    assert_eq!(db.count(CountTable::RegimeSnapshots).await.unwrap(), 2);
+
+    db.delete_above_block(CHAIN, 100).await.unwrap();
+
+    assert_eq!(
+        db.count(CountTable::CommitteeVotes).await.unwrap(),
+        1,
+        "the vote at block 105 must be rolled back by a reorg to root=100"
+    );
+    assert_eq!(
+        db.count(CountTable::RegimeSnapshots).await.unwrap(),
+        1,
+        "the regime snapshot at block 105 must be rolled back by a reorg to root=100"
+    );
+
+    // A deeper reorg orphans everything: both tables must be empty.
+    db.delete_above_block(CHAIN, 99).await.unwrap();
+    assert_eq!(
+        db.count(CountTable::CommitteeVotes).await.unwrap(),
+        0,
+        "no committee vote may survive a reorg below its block"
+    );
+    assert_eq!(
+        db.count(CountTable::RegimeSnapshots).await.unwrap(),
+        0,
+        "no regime snapshot may survive a reorg below its block"
+    );
+    // The agent registry is not block-scoped and is intentionally untouched.
+    assert_eq!(db.count(CountTable::CommitteeAgents).await.unwrap(), 1);
+}
+
+/// AC2 (part 1) — the rollback set is the live schema's block-scoped set minus
+/// the documented exclusions. Nothing is covered by being remembered.
+#[tokio::test]
+async fn rollback_set_equals_live_block_scoped_schema() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let pool = raw_pool(&fx).await;
+
+    let live = live_block_scoped_tables(&pool).await;
+    let rollback: BTreeSet<String> = fx
+        .db
+        .block_scoped_rollback_tables()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    let excluded: BTreeSet<String> = REORG_ROLLBACK_EXCLUSIONS
+        .iter()
+        .map(|(t, _)| (*t).to_string())
+        .collect();
+
+    let uncovered: Vec<&String> = live
+        .iter()
+        .filter(|t| !rollback.contains(*t) && !excluded.contains(*t))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "block-scoped tables neither rolled back nor on the documented exclusion \
+         list: {uncovered:?}. Add them to the rollback, or add an entry with a \
+         reason to db::REORG_ROLLBACK_EXCLUSIONS."
+    );
+
+    let phantom: Vec<&String> = rollback.iter().filter(|t| !live.contains(*t)).collect();
+    assert!(
+        phantom.is_empty(),
+        "rollback names tables the live schema does not mark block-scoped: {phantom:?}"
+    );
+
+    // The two tables issue #1283 is about, named explicitly so a regression that
+    // re-hard-codes the list cannot pass this file.
+    for required in ["committee_votes", "regime_snapshots"] {
+        assert!(
+            rollback.contains(required),
+            "{required} (migration 0014) must be rolled back by a reorg"
+        );
+    }
+    // Every table the pre-#1283 literal named must still be covered.
+    for required in [
+        "wallet_positions",
+        "vault_snapshots",
+        "vault_status_events",
+        "agent_deposits",
+        "agent_policies",
+        "governance_votes",
+        "governance_proposals",
+        "router_weight_snapshots",
+        "router_deposit_legs",
+        "adapter_allocations",
+        "vault_fee_events",
+        "vault_transfer_events",
+        "account_history_events",
+        "consensus_receipts",
+        "transactions",
+        "blocks",
+    ] {
+        assert!(
+            rollback.contains(required),
+            "{required} was covered before #1283 and must still be covered"
+        );
+    }
+}
+
+/// AC2 (part 2) — the negative self-test. A synthetic block-scoped table stands
+/// in for "the next migration": it is created after the crate was compiled, so
+/// no literal in the source can name it. The rollback must pick it up from the
+/// schema and clear its orphaned rows.
+///
+/// This is the assertion that fails against the pre-#1283 implementation, and
+/// it fails for the same reason `committee_votes` was missed.
+#[tokio::test]
+async fn rollback_covers_a_block_scoped_table_added_after_compile_time() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let pool = raw_pool(&fx).await;
+    fx.db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    sqlx::query(
+        "CREATE TABLE synthetic_block_scoped_probe ( \
+             chain_id     BIGINT NOT NULL, \
+             block_number BIGINT NOT NULL, \
+             PRIMARY KEY (chain_id, block_number) \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create synthetic table");
+    sqlx::query("INSERT INTO synthetic_block_scoped_probe (chain_id, block_number) VALUES ($1, 100), ($1, 105)")
+        .bind(CHAIN)
+        .execute(&pool)
+        .await
+        .expect("seed synthetic rows");
+
+    let rollback: BTreeSet<String> = fx
+        .db
+        .block_scoped_rollback_tables()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert!(
+        rollback.contains("synthetic_block_scoped_probe"),
+        "a block-scoped table added by a migration must enter the rollback set \
+         without anyone editing a list in db.rs"
+    );
+
+    fx.db.delete_above_block(CHAIN, 100).await.unwrap();
+    assert_eq!(
+        row_count(&pool, "synthetic_block_scoped_probe").await,
+        1,
+        "the row above the reorg root must be deleted from a newly added \
+         block-scoped table"
+    );
+
+    fx.db.delete_above_block(CHAIN, 99).await.unwrap();
+    assert_eq!(
+        row_count(&pool, "synthetic_block_scoped_probe").await,
+        0,
+        "a deeper reorg must clear the newly added block-scoped table entirely"
+    );
+}
+
+/// Validate one exclusion table against the live schema. Returned as a `Result`
+/// rather than asserted inline so the check itself can be exercised on inputs
+/// the real (currently empty) list does not contain — otherwise AC3 would be
+/// enforced by a rule no test ever ran.
+fn check_exclusion(
+    entry: (&str, &str),
+    live: &BTreeSet<String>,
+    rollback: &BTreeSet<String>,
+) -> Result<(), String> {
+    let (table, reason) = entry;
+    if reason.trim().len() < 10 {
+        return Err(format!(
+            "exclusion {table:?} has no stated reason; every exemption from reorg \
+             rollback must say why those rows legitimately survive an orphaned block"
+        ));
+    }
+    if !live.contains(table) {
+        return Err(format!(
+            "exclusion {table:?} is stale: the live schema has no block-scoped \
+             table by that name"
+        ));
+    }
+    if rollback.contains(table) {
+        return Err(format!(
+            "exclusion {table:?} is contradicted: the rollback covers it anyway"
+        ));
+    }
+    Ok(())
+}
+
+/// AC3 — every exclusion carries a reason and matches a live block-scoped table.
+/// The list is empty today, so the test also runs the check on synthetic bad
+/// entries: an empty list must not make this a rule that has never executed.
+#[tokio::test]
+async fn reorg_rollback_exclusions_are_documented_and_live() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let pool = raw_pool(&fx).await;
+    let live = live_block_scoped_tables(&pool).await;
+    let rollback: BTreeSet<String> = fx
+        .db
+        .block_scoped_rollback_tables()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+
+    for entry in REORG_ROLLBACK_EXCLUSIONS {
+        if let Err(e) = check_exclusion(*entry, &live, &rollback) {
+            panic!("db::REORG_ROLLBACK_EXCLUSIONS: {e}");
+        }
+    }
+
+    // The rule itself, exercised. An undocumented exemption is rejected...
+    assert!(
+        check_exclusion(("committee_votes", ""), &live, &rollback).is_err(),
+        "an exclusion with no stated reason must be rejected"
+    );
+    // ...as is one naming a table the live schema does not have...
+    assert!(
+        check_exclusion(
+            ("table_that_does_not_exist", "kept for a stated reason"),
+            &live,
+            &rollback
+        )
+        .is_err(),
+        "a stale exclusion naming a non-existent table must be rejected"
+    );
+    // ...and one that contradicts what the rollback actually does.
+    assert!(
+        check_exclusion(
+            ("committee_votes", "kept for a stated reason"),
+            &live,
+            &rollback
+        )
+        .is_err(),
+        "an exclusion for a table the rollback still covers must be rejected"
+    );
+}
+
+/// The derived deletion order must respect the live foreign keys.
+/// `governance_votes` references `governance_proposals` and both are
+/// block-scoped: deleting the proposals first raises a foreign-key violation.
+/// A set derived in name order would do exactly that, so this asserts the
+/// FK-aware ordering, not just the membership.
+#[tokio::test]
+async fn rollback_order_deletes_children_before_parents() {
+    let Some(fx) = try_pg_fixture().await else {
+        return;
+    };
+    let db = &fx.db;
+    db.upsert_chain(CHAIN, "base", "stub").await.unwrap();
+
+    db.insert_proposal(
+        CHAIN,
+        1,
+        105,
+        0,
+        [0xC1u8; 32],
+        [0x71u8; 20],
+        "orphaned proposal",
+        1_700_000_000,
+        200,
+    )
+    .await
+    .unwrap();
+    db.insert_vote(
+        CHAIN,
+        1,
+        [0x72u8; 20],
+        106,
+        0,
+        [0xC2u8; 32],
+        true,
+        U256::from(42u64),
+    )
+    .await
+    .unwrap();
+
+    let order = db.block_scoped_rollback_tables().await.unwrap();
+    let pos = |name: &str| {
+        order
+            .iter()
+            .position(|t| t == name)
+            .unwrap_or_else(|| panic!("{name} missing from rollback order: {order:?}"))
+    };
+    assert!(
+        pos("governance_votes") < pos("governance_proposals"),
+        "governance_votes references governance_proposals, so it must be deleted \
+         first; order was {order:?}"
+    );
+
+    // The rollback itself must therefore succeed rather than raise 23503.
+    db.delete_above_block(CHAIN, 100)
+        .await
+        .expect("rollback must not violate a foreign key");
+    assert_eq!(db.count(CountTable::GovernanceVotes).await.unwrap(), 0);
+    assert_eq!(db.count(CountTable::GovernanceProposals).await.unwrap(), 0);
 }

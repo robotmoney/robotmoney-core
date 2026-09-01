@@ -1,8 +1,12 @@
 //! Shared helpers for the explorer-indexer integration tests.
 //!
-//! - `pg_container()` boots a Postgres testcontainer and returns a
-//!   ready-to-use `Db` (with migrations applied). Tests skip cleanly
-//!   if Docker isn't available.
+//! - `try_pg_fixture()` boots a Postgres testcontainer and returns a
+//!   ready-to-use `Db` (with migrations applied). On a developer machine
+//!   without Docker it returns `None` and the caller returns early. **In CI it
+//!   panics instead** (issue #1283): a silent skip there is a false green, and
+//!   the executed-count guard cannot see the difference because a test that
+//!   returns early still reports as passed. See
+//!   `skills/_shared/test-coverage-policy.md` (loud-skip, never silent-skip).
 //! - `StubRpcServer` is an in-process tokio TCP listener that returns
 //!   canned JSON-RPC responses keyed by method name, plus a forced-failure
 //!   knob. Used to exercise the failure path without a real chain.
@@ -24,42 +28,80 @@ use tokio::net::TcpListener;
 
 pub struct PgFixture {
     pub db: Db,
+    /// Connection URL of the testcontainer, so a test can open its own pool for
+    /// raw SQL the `Db` API deliberately does not expose (catalog queries, DDL
+    /// for the synthetic block-scoped table in the reorg coverage tests).
+    pub url: String,
     // Container handle is held to keep the postgres process alive
     // for the test's lifetime.
     _container: ContainerAsync<Postgres>,
 }
 
+/// True when a missing Postgres must FAIL the run rather than skip it.
+///
+/// Issue #1283 / test-coverage-policy invariant: `cargo_test_require_executed.sh`
+/// counts executed tests, but a test that returns early because this helper
+/// handed it `None` still counts as passed — so on CI the absence of Docker has
+/// to be an error, not a `None`. Locally it stays a skip so `cargo test` is
+/// still usable without Docker.
+fn pg_is_required() -> bool {
+    ["EXPLORER_INDEXER_REQUIRE_PG", "CI"].iter().any(|k| {
+        matches!(
+            std::env::var(k).as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE")
+        )
+    })
+}
+
+fn skip_or_panic(reason: &str) -> Option<PgFixture> {
+    if pg_is_required() {
+        panic!(
+            "[explorer-indexer-tests] Postgres testcontainer is REQUIRED here but \
+             unavailable: {reason}. This test asserts on real schema and real \
+             rollback SQL; skipping it would be a silent false green. Give the \
+             runner Docker, or unset CI / EXPLORER_INDEXER_REQUIRE_PG to allow a \
+             local skip."
+        );
+    }
+    eprintln!("[explorer-indexer-tests] skipping: {reason}");
+    None
+}
+
 /// Returns `Some(fixture)` if Docker is available and Postgres came
 /// up; `None` otherwise. Callers should print a skip line and return
 /// when this is None — matches the fork-e2e harness convention.
+///
+/// In CI (see [`pg_is_required`]) there is no `None`: an unavailable Postgres
+/// panics so the job goes red instead of passing zero real assertions.
 pub async fn try_pg_fixture() -> Option<PgFixture> {
     if which::which("docker").is_err() {
-        eprintln!("[explorer-indexer-tests] skipping: docker not on PATH");
-        return None;
+        return skip_or_panic("docker not on PATH");
     }
     let container = match Postgres::default().start().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[explorer-indexer-tests] skipping: postgres container failed to start: {e}");
-            return None;
+            return skip_or_panic(&format!("postgres container failed to start: {e}"));
         }
     };
-    let host = container.get_host().await.ok()?;
-    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let host = match container.get_host().await {
+        Ok(h) => h,
+        Err(e) => return skip_or_panic(&format!("container host unavailable: {e}")),
+    };
+    let port = match container.get_host_port_ipv4(5432).await {
+        Ok(p) => p,
+        Err(e) => return skip_or_panic(&format!("container port unavailable: {e}")),
+    };
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
     let db = match Db::connect(&url).await {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("[explorer-indexer-tests] skipping: db connect failed: {e}");
-            return None;
-        }
+        Err(e) => return skip_or_panic(&format!("db connect failed: {e}")),
     };
     if let Err(e) = db.migrate().await {
-        eprintln!("[explorer-indexer-tests] skipping: migrate failed: {e}");
-        return None;
+        return skip_or_panic(&format!("migrate failed: {e}"));
     }
     Some(PgFixture {
         db,
+        url,
         _container: container,
     })
 }

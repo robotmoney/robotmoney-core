@@ -296,7 +296,8 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 **Trigger paths:** `services/explorer-indexer/**`, `testing/explorer-indexer/**`
 
 **Jobs:**
-- `fast` — migration idempotency, block ingestion, RPC failure recovery; uses Postgres testcontainer + Anvil; runs immediately
+- `fast` — migration idempotency, block ingestion, RPC failure recovery, consensus-receipt indexing, and reorg-rollback coverage; uses Postgres testcontainer + Anvil; runs immediately
+- `explorer-api` — IC committee / regime-feed / consensus-receipt endpoint tests from the `clients/explorer-api` crate (a different crate from the `fast` job, so `fast` never covered it)
 - `devnet` — reorg handling and finality-gated indexing against real Geth+Lighthouse; runs in parallel with `fast` (independent environments)
 
 **Steps — `fast` job:**
@@ -308,6 +309,10 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 6. `cargo test --test migrations` — migration idempotency (Postgres testcontainer started by the test)
 7. `cargo test --test idempotency` — block ingestion against known deposit events; double-count guard
 8. `cargo test --test rpc_failure` — RPC failure recovery; reconnect and resume from last confirmed block
+9. `cargo test --test consensus_receipt_indexing` — `ReceiptRecorded` / `ReceiptReleased` ingestion, payload-digest verification, and the reorg rewrite of `consensus_receipts` (issue #1247)
+10. `cargo test --test reorg_cursor_vault_status --test cursor_header_reorg` — reorg rollback coverage: the run cursor (IDX-2), in-place `vaults.status` (IDX-8), the committee/regime tables migration 0014 added, and the assertion that the rollback set is derived from the live schema rather than a literal (issue #1283)
+
+Steps 9 and 10 run through `.github/scripts/cargo_test_require_executed.sh`, which fails the step when zero tests were collected — a `tests/<name>.rs` file cargo was never told to run is a silent skip, not coverage. Step 10 additionally sets `EXPLORER_INDEXER_REQUIRE_PG=1`, which turns an unavailable Postgres testcontainer into a panic: the executed-count guard cannot distinguish a real pass from a test that returned early because its fixture handed it `None`, and that shape counted as passed.
 
 **Steps — `devnet` job:**
 1. Checkout repository
