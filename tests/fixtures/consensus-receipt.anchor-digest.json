@@ -35,8 +35,8 @@
       },
       {
         "file": "consensus-receipt.canonicalization.json",
-        "byte_length": 12017,
-        "sha256": "0x40a798a0ccb7e6cc15f157065cb8e908c50cdc250684f48573114551361e58d8"
+        "byte_length": 21183,
+        "sha256": "0x80f5182ec508181e8e3bf0a579beb2825e560cbba872e8729be2f1c71c2d5022"
       },
       {
         "file": "consensus-receipt.bucket-vault-map.json",

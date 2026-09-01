@@ -507,8 +507,9 @@ behaviors the shape leaves open.
   (`tests/fixtures/committee-vote.schema.json:22-33`), and
   `RouterGovernance.propose` hard-rejects a vector that does not sum to
   `BPS_DENOMINATOR` (`RouterGovernance.sol:377`). The converter needs a stated
-  rounding rule with a settle-the-last-entry step — the same technique
-  `meanTakeWeights` already uses for floats — plus a property test at the boundary.
+  apportionment rule that closes on the denominator for *every* share vector —
+  §7.1 settles it as largest remainder in binary64, with the exact-tie break
+  pinned to canonical bucket order — plus a property test at the boundary.
 
 ### 3.4 No contract refactor — and who recommends vs. who approves
 
@@ -809,41 +810,77 @@ converter that hard-coded the four bucket names would agree with the golden no
 matter what the published spec said; the property test scrambles the spec's order
 and asserts the output follows it.
 
-The rule is *settle-the-last-entry*: round each bucket except the last half-up,
-then set the last to `BPS_DENOMINATOR − prefix_sum`, refusing if that falls
-outside `0..BPS_DENOMINATOR`. Half-up and not half-even is load-bearing — they
-differ at every exact `.5` boundary, and a receipt that disagrees on one is a
-receipt that fails to reproduce.
+The rule is **largest remainder (Hare quota)**, in **IEEE-754 binary64**. Floor
+every bucket's `share × BPS_DENOMINATOR`; hand the leftover —
+`BPS_DENOMINATOR` minus the sum of those floors — out one basis point at a time
+to the largest fractional remainders, largest first, at most one bp per bucket.
+It closes on `BPS_DENOMINATOR` **by construction**, for every share vector,
+whatever the last bucket holds. The only refusals left are of inputs that were
+never share vectors: a canonical bucket missing, a share outside `0..1`, or a
+total more than `1e-6` from 1.
 
-**The one thing the property test found, and why it is documented rather than
-fixed.** The refusal branch is not a corner case. When the last canonical bucket
-`real_world_assets` is **exactly zero**, the three prefix buckets carry the whole
-distribution, their true bps sum is exactly `BPS_DENOMINATOR`, and their three
-independent roundings sum to `+1` bps about **one time in eight** — settling the
-last entry to `−1` and refusing the vector, so no receipt can be assembled for
-that session. Measured over a seeded corpus:
+Two clauses of the rule are load-bearing and easy to get wrong:
 
-| last bucket | vectors refused |
-|---|---|
-| `real_world_assets == 0` | **12.5 %** (6 256 / 50 000) |
-| `real_world_assets > 0` | 0 % (0 / 50 000) |
+- **The exact-tie break is canonical bucket order.** Two buckets holding the
+  identical share hold bitwise-identical binary64 remainders (a three-way mean
+  of thirds does it), and which one takes the leftover bp changes the canonical
+  bytes and so the anchored `keccak256`. The comparison is the total order
+  *(remainder descending, `canonical_bucket_order` index ascending)*, stated
+  rather than inherited from a language's sort stability — the two repos hand
+  their sorts independently-constructed arrays, so stability guarantees nothing
+  about agreement between them.
+- **The arithmetic domain is binary64, and decimal recomputation is forbidden
+  by name.** `bps_conversion.divergent_example` ships a share vector where two
+  remainders are *exactly equal in decimal* and *one ULP apart in binary64*: the
+  tie-break fires in one domain and not the other, the bp lands in a different
+  bucket, and the receipt fails to verify. The schema-1.0 implementation here
+  used `Decimal(str(x))`; #1290 replaced it with bare `float`, and the spec's
+  self-test vector is converted in CI as proof.
 
-`real_world_assets` is exactly 0 in **four of the six** archived allocations
-(§7.3), so this is the shape the committee actually produces. Those four convert
-only because their means are whole bps (9 500 / 500 / 0 / 0) with no rounding to
-accumulate — which the test suite asserts, with that reasoning attached, so a
-future archived vector that is *not* whole-bps reads as the known defect rather
-than as a converter bug.
+**What the rule replaced, and why.** Schema 1.0 shipped *settle-the-last-entry*:
+round the first three canonical buckets to nearest and set `real_world_assets`
+to `BPS_DENOMINATOR − prefix_sum`, refusing a result outside
+`0..BPS_DENOMINATOR`. When `real_world_assets` is **exactly zero** the three
+prefix buckets carry the whole distribution, their true bps sum is exactly
+`BPS_DENOMINATOR`, and their three independent roundings sum to `+1` bps about
+**one time in eight** — settling the last entry to `−1` and refusing the vector,
+so no receipt could be assembled for that session. `real_world_assets` is
+exactly 0 in **four of the six** archived allocations (§7.3), so the refusal sat
+on the shape the committee actually produces.
 
-It is not fixed here because `bps_conversion` is one of the nine byte-identical
-shared fixtures: changing the settle rule changes canonical bytes and the
-anchored `keccak256` on **both** sides, which is a schema event under §7.4 and
-never a unilateral edit. The rate is instead **pinned by a passing test**
-(`test_a_zero_last_bucket_is_where_the_final_rule_refusal_lives`) so it cannot
-drift unnoticed or be rediscovered from scratch, and the coordinated fix —
-largest-remainder apportionment is the standard answer — is
-**`robotmoney-core#1290`**. No receipt has been anchored yet, so it is still
-resolvable inside `1.0`; that window closes with the first anchor.
+| last bucket | settle-the-last | largest remainder |
+|---|---|---|
+| `real_world_assets == 0` | **12.5 %** refused | **0 %** refused |
+| `real_world_assets > 0` | 0 % refused | 0 % refused |
+
+The refusal had a second sign that no range check caught: when the three prefix
+roundings *undershot*, settle-the-last silently handed **1 bp of a vault the
+session had allocated nothing to** — a wrong receipt rather than no receipt
+(12.44 % on the same corpus, measured by `robotmoney-frontend`). Largest
+remainder cannot do it: a zero share has remainder 0 and is last in the
+apportionment order.
+
+**The six archived allocations do not move.** Their means are whole bps, so
+there is nothing to redistribute, and
+`test_the_six_archived_vectors_do_not_move_under_the_new_rule` recomputes the
+superseded rule inside the test and asserts both rules produce identical arrays
+for all six. The rule change moves no already-settled data, and the receipt
+bytes and anchored `keccak256` are untouched — `bps_conversion` is a derivation
+rule, not a serialization rule.
+
+**How the change landed, given the fixture is a cross-repo pin.**
+`bps_conversion` is data in one of the nine byte-identical shared fixtures, so
+this side did **not** author the replacement text. `robotmoney-frontend`
+published the rewritten `consensus-receipt.canonicalization.json` first
+(frontend PR #801), and this repo **adopted those exact bytes**, restoring the
+byte identity the frontend's publish had temporarily broken. The two
+implementations were then checked against each other at the meeting point: the
+four exact-tie conformance vectors `robotmoney-frontend` published from its own
+CI are converted by this repo's Python in
+`test_the_published_cross_repo_tie_break_vectors_reproduce_exactly` and produce
+the identical arrays. Tracked as **`robotmoney-core#1290`** and
+`robotmoney-frontend#798`. No receipt had been anchored when this landed, so it
+was resolvable inside `1.0` rather than by a version bump.
 
 ### 7.2 `within_bucket_weights` — DROPPED from schema 1.0
 

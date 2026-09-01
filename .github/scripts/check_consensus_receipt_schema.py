@@ -38,9 +38,9 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import re
 import sys
-from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -366,24 +366,59 @@ def bps_denominator(schema: dict[str, Any]) -> int:
     return maximum
 
 
-def _decimal(value: Any, where: str) -> Decimal:
-    """A weight as an EXACT decimal.
+# THE ARITHMETIC DOMAIN IS IEEE-754 BINARY64, AND THAT IS PART OF THE RULE.
+# `bps_conversion.arithmetic_domain` forbids decimal, rational and fixed-point
+# recomputation BY NAME, because the same prose applied in a different domain
+# produces different bytes on real vectors — `bps_conversion.divergent_example`
+# ships a share vector where decimal arithmetic ties two remainders that binary64
+# separates by one ULP, so the leftover bp lands in a different bucket and the
+# receipt fails to verify against its anchored digest. Python's `float` IS
+# binary64, so every share below is a bare `float` and NOT a `Decimal`. The
+# previous schema-1.0 implementation here used `Decimal(str(x))`; that is exactly
+# the instinct the clause was written to forbid, and `test_consensus_receipt_bps.py`
+# converts `divergent_example` as an executed self-test of the domain.
 
-    `Decimal(str(x))` and not `Decimal(x)`: the archived payloads and the signed
-    submissions are JSON text, so 0.05 means the two-place decimal a human wrote,
-    not the binary double 0.05000000000000000277... that `Decimal(float)` would
-    faithfully reproduce. Converting through the text keeps a rounding boundary
-    where the spec puts it.
+
+# `bps_conversion.refusal` and `bps_conversion.negative_dust_clamp` both state
+# this bound in prose ("more than 1e-6 away from 1", "-1e-6..0"). It is the same
+# 1e-6 the frontend reference implementation calls SHARE_SUM_TOLERANCE. There is
+# no machine-readable field to read it out of, so it is restated here — and
+# `spec_states_share_sum_tolerance()` asserts the spec text still names it, so a
+# spec that moved the bound cannot leave this constant silently stale.
+SHARE_SUM_TOLERANCE = 1e-6
+
+
+def spec_states_share_sum_tolerance(spec: dict[str, Any]) -> bool:
+    """The one number this module restates instead of reading. Kept honest."""
+    conversion = spec.get("bps_conversion", {})
+    text = " ".join(
+        value for value in (
+            conversion.get("refusal", ""),
+            conversion.get("negative_dust_clamp", {}).get("rule", "")
+            if isinstance(conversion.get("negative_dust_clamp"), dict) else "",
+        ) if isinstance(value, str)
+    )
+    return "1e-6" in text
+
+
+def _share(value: Any, where: str) -> float:
+    """A weight as the IEEE-754 binary64 double the JSON parser produced.
+
+    Deliberately NOT `Decimal(str(x))`. See the arithmetic_domain note above: the
+    frontend producer holds these as JS numbers, which are binary64, and the
+    conversion below is specified to run on that exact double. Reading the
+    decimal text instead would change the remainders and therefore the bytes.
     """
-    if isinstance(value, Decimal):
-        return value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CanonicalizationError(f"{where} is {value!r}, not a number")
-    return Decimal(str(value))
+    result = float(value)
+    if result != result or result in (float("inf"), float("-inf")):
+        raise CanonicalizationError(f"{where} is {value!r}, not a finite number")
+    return result
 
 
-def normalize_weights(raw: dict[str, Any]) -> dict[str, Decimal]:
-    """Scale a raw [0,1] vector so it sums to exactly 1.
+def normalize_weights(raw: dict[str, Any]) -> dict[str, float]:
+    """Scale a raw [0,1] vector so it sums to 1.
 
     Separate from the conversion below ON PURPOSE. `bps_conversion.input` says
     the converter's input is the mean of vectors that are ALREADY normalized, so
@@ -392,11 +427,11 @@ def normalize_weights(raw: dict[str, Any]) -> dict[str, Decimal]:
     maps and for generated test vectors — never silently applied to a mean that
     is supposed to already sum to 1.
     """
-    values = {bucket: _decimal(value, f"weight for {bucket!r}") for bucket, value in raw.items()}
+    values = {bucket: _share(value, f"weight for {bucket!r}") for bucket, value in raw.items()}
     for bucket, value in values.items():
         if value < 0:
             raise CanonicalizationError(f"weight for {bucket!r} is negative ({value})")
-    total = sum(values.values(), Decimal(0))
+    total = sum(values.values())
     if total <= 0:
         raise CanonicalizationError("weight vector totals zero; there is no allocation to convert")
     return {bucket: value / total for bucket, value in values.items()}
@@ -405,19 +440,46 @@ def normalize_weights(raw: dict[str, Any]) -> dict[str, Decimal]:
 def mean_weights_to_bps(
     mean_by_bucket: dict[str, Any], spec: dict[str, Any], denominator: int
 ) -> list[dict[str, Any]]:
-    """`bps_conversion`, applied. Settle-the-last-entry, half-up on the prefix.
+    """`bps_conversion`, applied. LARGEST REMAINDER (Hare quota), in binary64.
 
     Returns the receipt's `weights` array: exactly the spec's
     canonical_bucket_order, each entry `{bucket, weight_bps}`, summing to
-    `denominator` EXACTLY or raising rather than returning a vector that
-    RouterGovernance.propose would revert on.
+    `denominator` EXACTLY for every share vector — whatever the last bucket
+    holds, and whatever the positional order is.
 
-    The `final_rule` range check is a REAL branch, not defensive decoration.
-    Each prefix bucket rounds half-up independently, so a vector whose last
-    bucket is ~0 and whose prefix fractions sit on .5 boundaries can overshoot
-    the denominator by up to (len(prefix) / 2) bps and drive the settled last
-    entry negative. That vector has no representation under this rule and is
-    REFUSED; test_consensus_receipt_bps.py constructs one so the branch executes.
+    THE RULE, AND WHY IT REPLACED THE ONE SCHEMA 1.0 SHIPPED WITH. Floor every
+    bucket's `share * denominator`; the leftover — `denominator` minus the sum of
+    those floors — goes out ONE BASIS POINT AT A TIME to the largest fractional
+    remainders, largest first, at most one bp per bucket. It closes on
+    `denominator` by construction rather than by a settle step that can go out of
+    range. The superseded rule rounded the first three canonical buckets to
+    nearest and settled `real_world_assets` to `denominator - prefix_sum`,
+    refusing a result outside `0..denominator`; when `real_world_assets` was
+    exactly zero the three prefix roundings overshot by +1 bp about ONE TIME IN
+    EIGHT, and the vector had NO REPRESENTATION — no receipt for that session.
+    `real_world_assets` is zero in four of the six real archived allocations, so
+    the refusal sat on the committee's commonest shape (robotmoney-core#1290).
+
+    THE TIE-BREAK IS CANONICAL BUCKET ORDER, NOT SORT STABILITY. Two buckets
+    holding the identical share hold bitwise-identical binary64 remainders (a
+    three-way mean of thirds does it), and which of them takes the leftover bp
+    CHANGES THE CANONICAL BYTES and so the anchored digest. The sort key is the
+    total order `(remainder descending, canonical_bucket_order index ascending)`,
+    stated rather than inherited from `sorted`'s stability — this repo and
+    robotmoney-frontend hand their sorts independently-constructed arrays, so
+    stability guarantees nothing about agreement between them.
+
+    NEGATIVE SETTLE DUST IS ABSORBED, NOT AUTHORED. The producer's own
+    `meanTakeWeights` settles its positionally last float entry to
+    `round(1 - prefix, 8)`, which lands on exactly `-1e-8` (or on negative zero)
+    for ~12.4% of zero-RWA sessions. `bps_conversion.negative_dust_clamp` floors
+    a share in `-SHARE_SUM_TOLERANCE..0` to POSITIVE zero; refusing it would
+    reintroduce the very defect largest remainder was adopted to remove, and as
+    an unnamed error rather than a named refusal. The comparison is `> 0` and not
+    `< 0` because `-0.0 < 0` is FALSE in IEEE-754, and `floor(-0.0 * 10000)` is
+    `-0.0` — an integer weight that only a stringifier launders. A share MORE
+    negative than the tolerance is a real negative allocation and stays refused
+    by name.
     """
     order = spec.get("canonical_bucket_order")
     if not isinstance(order, list) or len(order) < 2 or not all(isinstance(b, str) for b in order):
@@ -430,32 +492,50 @@ def mean_weights_to_bps(
     if unknown:
         raise CanonicalizationError(f"mean vector names non-canonical bucket(s): {', '.join(unknown)}")
 
-    mean = {bucket: _decimal(mean_by_bucket[bucket], f"mean weight for {bucket!r}") for bucket in order}
-    for bucket, value in mean.items():
-        if value < 0:
-            raise CanonicalizationError(f"mean weight for {bucket!r} is negative ({value})")
-    total = sum(mean.values(), Decimal(0))
-    # The caller normalizes (normalize_weights); this only refuses an input that
-    # never was a distribution. The tolerance absorbs Decimal division residue
-    # (~1e-27 for a 1/3 split), not a genuinely unnormalized vector.
-    if abs(total - 1) > Decimal("1e-9"):
-        raise CanonicalizationError(f"mean vector sums to {total}, not 1 — normalize before converting")
-
-    scale = Decimal(denominator)
-    prefix = [
-        int((mean[bucket] * scale).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-        for bucket in order[:-1]
-    ]
-    final = denominator - sum(prefix)
-    if not 0 <= final <= denominator:
-        raise CanonicalizationError(
-            f"settled last bucket {order[-1]!r} is {final} bps, outside 0..{denominator} "
-            "— this vector has no representation under bps_conversion.final_rule"
+    total = 0.0
+    entries: list[dict[str, Any]] = []
+    for index, bucket in enumerate(order):
+        supplied = _share(mean_by_bucket[bucket], f"mean weight for {bucket!r}")
+        if supplied < -SHARE_SUM_TOLERANCE or supplied > 1:
+            raise CanonicalizationError(
+                f"mean weight for {bucket!r} is {supplied!r} — every bucket in canonical_bucket_order "
+                f"must hold a finite share in 0..1 (a share in -{SHARE_SUM_TOLERANCE}..0 is producer "
+                "settle dust and is floored to 0; anything more negative is refused by name)"
+            )
+        share = supplied if supplied > 0 else 0.0
+        # Accumulated in canonical_bucket_order, because binary64 addition is
+        # order-dependent and the other repo accumulates in that same order.
+        total += share
+        raw = share * denominator
+        floored = math.floor(raw)
+        entries.append(
+            {"bucket": bucket, "index": index, "weight_bps": floored, "remainder": raw - floored}
         )
-    return [
-        {"bucket": bucket, "weight_bps": value}
-        for bucket, value in zip(order, prefix + [final])
-    ]
+
+    if abs(total - 1) > SHARE_SUM_TOLERANCE:
+        raise CanonicalizationError(
+            f"mean vector sums to {total}, not 1 — normalize before converting; this function "
+            "changes representation and never authors a weight"
+        )
+
+    leftover = denominator - sum(entry["weight_bps"] for entry in entries)
+    for entry in sorted(entries, key=lambda e: (-e["remainder"], e["index"])):
+        if leftover <= 0:
+            break
+        entry["weight_bps"] += 1
+        leftover -= 1
+    # THE HEADLINE INVARIANT, ASSERTED RATHER THAN ARGUED. Every remainder is < 1
+    # so the leftover is < len(order) and one bp per bucket always suffices — but
+    # that is a proof, and a proof is the kind of thing that stops holding when
+    # someone widens SHARE_SUM_TOLERANCE. A vector that does not close on the
+    # denominator must never leave this function: RouterGovernance.propose
+    # reverts on it, and by then it is signed.
+    if leftover != 0:
+        raise CanonicalizationError(
+            f"{leftover} basis point(s) could not be apportioned across {len(order)} buckets "
+            f"— the shares summed to {total}, which is not a share vector"
+        )
+    return [{"bucket": entry["bucket"], "weight_bps": entry["weight_bps"]} for entry in entries]
 
 
 def float_vector_to_bps(
@@ -507,9 +587,12 @@ def semantic_errors(receipt: dict[str, Any], spec: dict[str, Any], denominator: 
         if submission.get("subjectId") != receipt["subject_id"]:
             errors.append(f"analyst_signatures[{index}] subject does not match receipt")
         if "weights" in submission:
-            weighted_submissions.append(
-                json.loads(item["canonical_submission"], parse_float=Decimal)
-            )
+            # Parsed with the DEFAULT float hook, not parse_float=Decimal:
+            # `bps_conversion.arithmetic_domain` pins this pipeline to binary64,
+            # and the frontend producer holds these submitted weights as JS
+            # numbers. Reading them as exact decimals here would be a second
+            # arithmetic domain feeding one shared rounding rule.
+            weighted_submissions.append(json.loads(item["canonical_submission"]))
             for weight_index, weight in enumerate(submission["weights"]):
                 if list(weight) != ["bucket", "weight"]:
                     errors.append(
@@ -526,7 +609,7 @@ def semantic_errors(receipt: dict[str, Any], spec: dict[str, Any], denominator: 
         if not weighted_submissions:
             errors.append("receipt weights require at least one signed weighted submission")
         else:
-            totals = {bucket: Decimal(0) for bucket in EXPECTED_BUCKETS}
+            totals = {bucket: 0.0 for bucket in EXPECTED_BUCKETS}
             for submission in weighted_submissions:
                 submitted_weights = submission["weights"]
                 if [entry["bucket"] for entry in submitted_weights] != EXPECTED_BUCKETS:
@@ -538,7 +621,7 @@ def semantic_errors(receipt: dict[str, Any], spec: dict[str, Any], denominator: 
                     continue
                 for entry in submitted_weights:
                     totals[entry["bucket"]] += entry["weight"] / submitted_total
-            count = Decimal(len(weighted_submissions))
+            count = float(len(weighted_submissions))
             mean = {bucket: totals[bucket] / count for bucket in EXPECTED_BUCKETS}
             # ONE conversion implementation, shared with the legacy reconciliation
             # and with the property tests. A second copy here is exactly the
@@ -747,7 +830,7 @@ def legacy_errors(
             )
             continue
         for bucket, share in normalize_weights(archived).items():
-            drift = abs(Decimal(recovered[bucket]) - share * denominator)
+            drift = abs(recovered[bucket] - share * denominator)
             if drift > tolerance:
                 errors.append(
                     f"{where}: {bucket} drifts {drift} bps across the round trip, over the pinned "
@@ -1098,18 +1181,65 @@ def self_test() -> int:
         ]),
     ))
 
-    # 15. bps_conversion.final_rule's range check is a REAL branch. Three prefix
-    #     buckets each rounding half-up can overshoot the denominator by up to
-    #     1.5 bps, driving the settled last entry negative; that vector has no
-    #     representation and must be REFUSED rather than proposed and reverted.
+    # 15. THE VECTOR THE SUPERSEDED RULE REFUSED NOW CONVERTS. Under
+    #     settle-the-last this exact vector overshot by 1 bp and settled the last
+    #     bucket to -1, so it had no representation at all; under largest
+    #     remainder it converts and closes on the denominator (#1290).
     order = spec["canonical_bucket_order"]
-    overshoot = {order[0]: "0.33335", order[1]: "0.33335", order[2]: "0.3333", order[3]: "0"}
-    refused = False
+    overshoot = {order[0]: 0.33335, order[1]: 0.33335, order[2]: 0.3333, order[3]: 0.0}
     try:
-        mean_weights_to_bps({k: Decimal(v) for k, v in overshoot.items()}, spec, denominator)
+        settled = mean_weights_to_bps(overshoot, spec, denominator)
+        converts = sum(entry["weight_bps"] for entry in settled) == denominator
     except CanonicalizationError:
-        refused = True
-    cases.append(("a vector whose settled last bucket goes negative is refused", refused))
+        converts = False
+    cases.append((
+        "the vector the superseded settle-the-last rule refused now converts and sums exactly",
+        converts,
+    ))
+
+    # 16. THE TIE-BREAK IS CANONICAL BUCKET ORDER, and it is asserted on a vector
+    #     with BITWISE-EQUAL binary64 remainders. A three-way mean of thirds ties
+    #     three buckets on the same fractional part and leaves exactly 1 bp; the
+    #     EARLIEST bucket in canonical_bucket_order must take it. Reversing the
+    #     spec's order must move the bp, or the tie-break is coming from `sorted`
+    #     stability rather than from the rule.
+    third = 1.0 / 3.0
+    tie = {order[0]: third, order[1]: third, order[2]: third, order[3]: 0.0}
+    forward = {e["bucket"]: e["weight_bps"] for e in mean_weights_to_bps(tie, spec, denominator)}
+    reversed_spec_for_tie = copy.deepcopy(spec)
+    reversed_spec_for_tie["canonical_bucket_order"] = list(reversed(order))
+    backward = {
+        e["bucket"]: e["weight_bps"]
+        for e in mean_weights_to_bps(tie, reversed_spec_for_tie, denominator)
+    }
+    cases.append((
+        "an exact-tie vector gives the leftover bp to the EARLIEST canonical bucket, not a stable-sort artefact",
+        forward[order[0]] == denominator // 3 + 1
+        and backward[order[2]] == denominator // 3 + 1
+        and backward[order[0]] == denominator // 3,
+    ))
+
+    # 17. THE ARITHMETIC DOMAIN, PROVED RATHER THAN DESCRIBED. bps_conversion
+    #     ships `divergent_example` precisely so an implementer can show their
+    #     arithmetic is binary64 before anything is anchored: decimal or rational
+    #     recomputation of the SAME prose returns bps_decimal_WRONG.
+    divergent = spec["bps_conversion"]["divergent_example"]
+    produced = [
+        entry["weight_bps"]
+        for entry in mean_weights_to_bps(divergent["shares"], spec, denominator)
+    ]
+    cases.append((
+        "the spec's divergent_example converts to its binary64 answer, not its decimal one",
+        produced == divergent["bps_binary64"] and produced != divergent["bps_decimal_WRONG"],
+    ))
+
+    # 18. The one number this module restates instead of reading. If the spec
+    #     ever moves the share-sum tolerance, SHARE_SUM_TOLERANCE goes stale
+    #     silently — so the spec is asserted to still name it.
+    cases.append((
+        "the spec still states the 1e-6 share-sum tolerance this module restates",
+        spec_states_share_sum_tolerance(spec),
+    ))
 
     failed = [name for name, passed in cases if not passed]
     for name, passed in cases:
