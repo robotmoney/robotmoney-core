@@ -481,8 +481,17 @@ jobs:
         # This step is extracted and executed with sha256sum removed from PATH by
         # scripts/release/install-rmpc-selftest.sh on every PR. That extractor
         # parses this step-level `env:` and splices the values into its `env -i`
-        # invocation, so any NEW `${{ }}` key added to this block must also be
-        # added to that script's SUBS map or the extraction is refused.
+        # invocation, so a NEW key here needs TWO edits in that script, and is
+        # refused (loudly, reddening the PR) until it gets them:
+        #   - `SUBS`, so the `${{ }}` expression renders instead of being dropped;
+        #   - `ALLOWED_ENV_NAMES`, which is an ALLOW-list, not a deny-list.
+        # The allow-list is deliberate friction (issue #1292). The harness runs
+        # this step's body, so any name this block declares reaches the loader
+        # and the shell that start that body: `LD_AUDIT` alone bought arbitrary
+        # code execution outside the harness's fixture root while every assertion
+        # stayed green. Refusing everything but the three names below closes that
+        # whole family rather than the members of it anyone happened to list, and
+        # puts a human in front of each new one.
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           OS_LABEL: ${{ matrix.os_label }}
