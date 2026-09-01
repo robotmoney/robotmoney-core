@@ -497,7 +497,7 @@ export const gatewayAbiGenerated = [
       {
         name: "",
         type: "address",
-        internalType: "contract IConsensusRebalanceReceipt",
+        internalType: "contract IConsensusRecommendationReceipt",
       },
     ],
     stateMutability: "view",

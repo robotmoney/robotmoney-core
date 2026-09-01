@@ -2,7 +2,7 @@
 // Canonical: docs/architecture.md — Investment Committee Policy
 // Implements: issue #1048 — InvestmentCommitteePolicy.sol deploy script
 // Implements: issue #1049 — gateway wiring (setICPolicy + IC ADMIN_ROLE grant)
-// Implements: issue #1247 — ConsensusRebalanceReceipt deploys in the SAME ceremony
+// Implements: issue #1247 — ConsensusRecommendationReceipt deploys in the SAME ceremony
 pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
@@ -10,13 +10,13 @@ import {stdJson} from "forge-std/StdJson.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
-import {ConsensusRebalanceReceipt} from "../gateway/ConsensusRebalanceReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 
 /// @title DeployInvestmentCommitteePolicy
 /// @notice Foundry deploy script for the InvestmentCommitteePolicy contract.
 ///
-///         Deploys InvestmentCommitteePolicy AND ConsensusRebalanceReceipt in
+///         Deploys InvestmentCommitteePolicy AND ConsensusRecommendationReceipt in
 ///         one ceremony (issue #1247 AC10 — one greenfield rollout, no
 ///         migration, no registered agent to preserve), wires both into the
 ///         gateway (`setICPolicy`, `setConsensusReceipt`), and grants the
@@ -51,7 +51,7 @@ contract DeployInvestmentCommitteePolicy is Script {
     /// @notice Result struct returned to in-process callers (e.g. forge tests).
     struct Deployed {
         InvestmentCommitteePolicy policy;
-        ConsensusRebalanceReceipt receipts;
+        ConsensusRecommendationReceipt receipts;
         address admin;
         address receiptAdmin;
         address gateway;
@@ -128,7 +128,7 @@ contract DeployInvestmentCommitteePolicy is Script {
         d.policy = new InvestmentCommitteePolicy(admin_, gateway_);
         // One ceremony: the receipt contract reads COMMITTEE_AGENT_ROLE off the
         // IC policy, so it keeps no registry of its own (issue #1247 task 4.0).
-        d.receipts = new ConsensusRebalanceReceipt(receiptAdmin_, gateway_, address(d.policy));
+        d.receipts = new ConsensusRecommendationReceipt(receiptAdmin_, gateway_, address(d.policy));
     }
 
     /// @notice Wire the deployed IC policy into the gateway.
@@ -160,7 +160,7 @@ contract DeployInvestmentCommitteePolicy is Script {
     }
 
     function _logResult(Deployed memory d) internal pure {
-        console2.log("InvestmentCommitteePolicy + ConsensusRebalanceReceipt deployed");
+        console2.log("InvestmentCommitteePolicy + ConsensusRecommendationReceipt deployed");
         console2.log("  policy       :", address(d.policy));
         console2.log("  receipts     :", address(d.receipts));
         console2.log("  admin        :", d.admin);

@@ -1,4 +1,4 @@
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Implements: issue #1247 acceptance criterion 6 and task 4.14
 //
 // The four claims the surface must make correctly, asserted individually:

@@ -23,7 +23,7 @@
 #   clients/rust-payment-client/abi/PortfolioRouter.json — partial excerpt
 #   clients/rust-payment-client/abi/RouterGovernance.json — partial excerpt
 #   clients/rust-payment-client/abi/VaultRegistry.json  — old VaultRecord schema
-#   clients/rust-payment-client/abi/ConsensusRebalanceReceipt.json — partial excerpt
+#   clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json — partial excerpt
 #     (issue #1248 — only the reads `rmpc governance draft-proposal` needs)
 #
 # These four files contain extra or renamed fields that the Rust client depends on

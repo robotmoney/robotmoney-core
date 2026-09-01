@@ -1,14 +1,14 @@
-# ConsensusRebalanceReceipt
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/gateway/ConsensusRebalanceReceipt.sol)
+# ConsensusRecommendationReceipt
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/gateway/ConsensusRecommendationReceipt.sol)
 
 **Inherits:**
-AccessControl, ReentrancyGuard, [IConsensusRebalanceReceipt](/contracts/gateway/interfaces/IConsensusRebalanceReceipt.sol/interface.IConsensusRebalanceReceipt.md)
+AccessControl, ReentrancyGuard, [IConsensusRecommendationReceipt](/contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol/interface.IConsensusRecommendationReceipt.md)
 
 **Title:**
-ConsensusRebalanceReceipt
+ConsensusRecommendationReceipt
 
-On-chain commitment register for the swarm's consensus rebalance
-receipts. Stores a `receiptId`, the `keccak256` of the receipt's
+On-chain commitment register for the swarm's consensus
+recommendation receipts. Stores a `receiptId`, the `keccak256` of the receipt's
 canonical bytes, and the public URI serving those exact bytes.
 Why the anchor exists (docs/product/…-investment-committee-v0.md §2.1): a
 signed receipt published only at an RM-controlled URL can still be silently

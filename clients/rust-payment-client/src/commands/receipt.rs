@@ -1,7 +1,7 @@
-//! Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Implements: issue #1247 — anchor the consensus receipt on chain (rmpc side).
 //!
-//! `rmpc receipt` — verify a consensus rebalance receipt off-chain, and anchor
+//! `rmpc receipt` — verify a consensus recommendation receipt off-chain, and anchor
 //! its digest on chain through `RobotMoneyGateway.consensusRecordReceipt`.
 //!
 //! Subcommands:
@@ -25,7 +25,7 @@
 //!
 //! # Why the call goes to the gateway, not to the receipt contract
 //!
-//! `ConsensusRebalanceReceipt.recordReceipt` is `onlyGateway`. The calldata is
+//! `ConsensusRecommendationReceipt.recordReceipt` is `onlyGateway`. The calldata is
 //! `RobotMoneyGateway::consensusRecordReceiptCall` and it is sent to
 //! `cfg.gateway_address`; the caller must hold `AGENT_ROLE` on the gateway and
 //! `COMMITTEE_AGENT_ROLE` on the IC policy (docs/architecture.md §4.9.2).
