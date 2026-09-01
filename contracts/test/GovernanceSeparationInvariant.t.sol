@@ -103,10 +103,8 @@ contract GovernanceSeparationInvariant is Test {
         bytes32 committeeRole = ic.COMMITTEE_AGENT_ROLE();
         return !_overlap(committeeRole, committeeAthena)
             && !_overlap(committeeRole, committeeRobotMoney)
-            && !_overlap(committeeRole, committeeWoon)
-            && !_overlap(committeeRole, voter1)
-            && !_overlap(committeeRole, voter2)
-            && !_overlap(committeeRole, voter3)
+            && !_overlap(committeeRole, committeeWoon) && !_overlap(committeeRole, voter1)
+            && !_overlap(committeeRole, voter2) && !_overlap(committeeRole, voter3)
             && !_overlap(committeeRole, intruder);
     }
 
