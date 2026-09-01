@@ -3,8 +3,10 @@
 # rmpc install path.
 #
 # Canonical: scripts/release/install-rmpc.sh, .github/workflows/release-rmpc.yml
-# Issue: #1204; #1242 (the extracted steps must not be able to reconfigure the
-# sandbox that runs them — see "disarm the sandbox judging it" below); #1236 (the
+# Issue: #1204; #1242 and #1292 (the extracted steps must not be able to
+# reconfigure the sandbox that runs them — see "disarm the sandbox judging it"
+# below; #1292 is why the env: refusal is an allow-list, and why the macOS
+# non-vacuity guard counts matrix entries rather than text); #1236 (the
 # checksum shares a trust root with the archive, so the install path also has to
 # verify build provenance — see "build provenance" below).
 #
@@ -455,38 +457,70 @@ ENV_ONLY_SUBS = {
     "inputs.tag": "rmpc-v0.0.0",
 }
 
-# Names this selftest's sandbox owns, plus the ones bash consults BEFORE it runs
-# a single line of the extracted body. Issue #1242: these used to be spliced
-# straight through from release-rmpc.yml into the `env -i` that contains the
-# extracted step, which let the file under test rewrite the containment the
-# assertions depend on. `PATH:` put sha256sum back inside the "macOS runner"
-# simulation, so the packaging step's macOS dispatch could be deleted outright
-# with every assertion still green; `BASH_ENV:` makes bash source a file that is
-# not the step body at all, and `--noprofile --norc` do NOT suppress it. There is
-# no value of these names that a workflow can safely supply to its own test
-# harness, so they are refused at extraction time: an extractor error blocks
-# execution and turns the parse assertion red, which is exactly what should
-# happen to a step trying to configure the sandbox that judges it.
-REFUSED_ENV_NAMES = {
-    "BASHOPTS",
-    "BASH_ENV",
-    "ENV",
-    "GITHUB_ENV",
-    "GITHUB_OUTPUT",
-    "HOME",
-    "IFS",
-    "LD_LIBRARY_PATH",
-    "LD_PRELOAD",
-    "PATH",
-    "SHELLOPTS",
+# THE NAMES AN EXTRACTED STEP MAY DECLARE. AN ALLOW-LIST, NOT A DENY-LIST.
+#
+# Issue #1242: a step's `env:` used to be spliced straight through from
+# release-rmpc.yml into the `env -i` that contains the extracted step, which let
+# the file under test rewrite the containment the assertions depend on. `PATH:`
+# put sha256sum back inside the "macOS runner" simulation, so the packaging
+# step's macOS dispatch could be deleted outright with every assertion still
+# green; `BASH_ENV:` makes bash source a file that is not the step body at all,
+# and `--noprofile --norc` do NOT suppress it.
+#
+# #1242's fix enumerated ten such names and refused those. Issue #1292 then
+# demonstrated, against that fixed code, that the enumeration was the wrong
+# shape rather than merely short: `LD_AUDIT` still bought loader-level arbitrary
+# code execution outside the fixture root (35 passed, 0 failed, exit 0, marker
+# file written twice outside the root), and `LD_DEBUG` + `LD_DEBUG_OUTPUT` still
+# bought an arbitrary file write there with no compiler needed. Both are the same
+# glibc loader-level hook family as the `LD_PRELOAD` / `LD_LIBRARY_PATH` that
+# WERE refused; they were simply not among the ten.
+#
+# THE ORDERING DEFENCE CANNOT COVER THIS FAMILY. Ordering works by having the
+# sandbox's own assignments win the last-wins `env -i` race. The sandbox never
+# assigns `LD_AUDIT`, so there is nothing to win — the name arrives from the
+# workflow into an otherwise-empty slot. Refusal is the only defence for a name
+# the sandbox does not itself set, which is why refusal must close the CLASS and
+# not the members of it we happened to think of.
+#
+# So the direction is inverted. The extracted steps legitimately need exactly the
+# six names below; every other name — known hook, unknown hook, or innocuous — is
+# refused. Membership is exact: there is no deny-list left to fall back on and no
+# pattern to match, so a name absent from this set is refused whether or not
+# anyone ever thought of it. Adding a genuinely needed key is a two-line change
+# here plus SUBS/ENV_ONLY_SUBS above, and is the deliberate speed bump: it puts a
+# human in front of every new name the harness agrees to import from the file it
+# is judging. Refusal is an extractor error, which blocks execution and turns the
+# parse assertion red.
+#
+# WHY SIX AND NOT THREE. `Package tar.gz` needs OS_LABEL / TARGET / VERSION;
+# `Validate inputs` — extracted and EXECUTED by #1237 so the tag refusal is run
+# rather than argued for — needs EVENT_NAME / DRY_RUN / INPUT_TAG, which is the
+# `env:` indirection that keeps `${{ inputs.tag }}` out of the shell SOURCE and
+# is therefore the very shape under test. #1292 was written before #1237 landed
+# and listed only the first three; the two changes are orthogonal, so the set is
+# their UNION, not either one of them. None of the three added names is read by
+# bash or by the glibc loader before a step body's first line, so admitting them
+# gives the file under test no purchase on the sandbox that judges it — and the
+# packaging step is separately pinned to exactly its own three by the
+# `PKG_ENV_NAMES` non-vacuity assertion further down, so this set being wider
+# than that step needs cannot go unnoticed.
+ALLOWED_ENV_NAMES = {
+    "DRY_RUN",
+    "EVENT_NAME",
+    "INPUT_TAG",
+    "OS_LABEL",
+    "TARGET",
+    "VERSION",
 }
 
 # What the sandbox hands every extracted body. A body may read these without
 # declaring them; anything else it reads has to come from its own `env:` block.
 # GITHUB_OUTPUT joins them for issue #1237: the runner always defines it, the
 # `Validate inputs` body names it, and a step is never the thing that should
-# decide where its own step outputs land — so it is supplied by the sandbox and
-# refused in REFUSED_ENV_NAMES above, exactly like GITHUB_ENV.
+# decide where its own step outputs land — so it is supplied by the sandbox and,
+# being absent from ALLOWED_ENV_NAMES above, refused from the step, exactly like
+# GITHUB_ENV.
 SANDBOX_PROVIDED = {"GITHUB_ENV", "GITHUB_OUTPUT", "HOME", "PATH"}
 
 # `$NAME` / `${NAME}` reads, and the two shapes that bind a name inside the body
@@ -549,13 +583,18 @@ def step_env_block(body, step_name):
                     )
                     return env
                 name = m.group(1)
-                if name in REFUSED_ENV_NAMES:
+                if name not in ALLOWED_ENV_NAMES:
                     errors.append(
-                        "step '%s' declares env: %s — this selftest's sandbox owns "
-                        "that name, or bash reads it before the step body runs, so "
-                        "the workflow would be configuring the harness that tests "
-                        "it (issue #1242). Refusing to splice it."
-                        % (step_name, name)
+                        "step '%s' declares env: %s — this selftest's sandbox only "
+                        "splices the names the extracted steps legitimately need "
+                        "(%s). Every other name is refused rather than enumerated: "
+                        "bash and the glibc loader between them read a whole family "
+                        "of names before the step body runs (BASH_ENV, ENV, "
+                        "SHELLOPTS, LD_PRELOAD, LD_AUDIT, LD_DEBUG_OUTPUT, ...), and "
+                        "the sandbox sets none of those, so ordering cannot beat them "
+                        "and a deny-list only closes the ones we thought of "
+                        "(issues #1242, #1292). Refusing to splice it."
+                        % (step_name, name, ", ".join(sorted(ALLOWED_ENV_NAMES)))
                     )
                     k += 1
                     continue
@@ -650,26 +689,28 @@ def step_run_block(step_name):
     return None, step_env
 
 
-# Every runner the build matrix names, plus any literal runs-on in the file.
-runners = []
-for line in lines:
-    m = re.match(r"\s*-?\s*runner:\s*(\S+)\s*$", line)
-    if m:
-        runners.append(m.group(1))
-    m = re.match(r"\s*runs-on:\s*([A-Za-z][\w.-]*)\s*$", line)
-    if m:
-        runners.append(m.group(1))
-(out / "runners.txt").write_text("\n".join(runners) + "\n")
-
-
 def matrix_include_entries():
-    """Count jobs.build.strategy.matrix.include entries structurally.
+    """Walk jobs.build.strategy.matrix.include structurally.
+
+    Returns (entry count, the `runner:` value of each entry).
 
     Counting `runner:` lines instead would miscount an entry that inherits its
     runner, or over-count a stray `runner:` key elsewhere in the file — the
     number would then disagree with the real archive count while the equality
     assertion still passed. This walks the actual nesting, and reports an error
     (turning the parse assertion red) rather than guessing.
+
+    THE RUNNERS COME FROM THIS SAME WALK (issue #1292). They used to come from a
+    regex sweep of the WHOLE FILE for `runner:` / `runs-on:` text, which fed the
+    non-vacuity guard that exists to prove the macOS packaging assertion is
+    testing something. Reproduced: switch both `runner: macos-latest` matrix
+    entries to ubuntu-latest and add one stray top-level `runner: macos-latest`
+    key in an unrelated block, and the sweep still reports "builds on 1 macOS
+    runner(s) — not vacuous" over a workflow that builds on ZERO macOS targets
+    (`matrix.os_label` is hard-substituted by SUBS, so nothing downstream
+    notices). Same shape as #1242: a green tick over a vacuous assertion,
+    obtained by editing the guarded file. An entry's runner is only an entry's
+    runner if it is nested under that entry.
     """
     base = -1
     i = 0
@@ -690,10 +731,12 @@ def matrix_include_entries():
             i += 1
         if not found:
             errors.append("could not locate '%s' on the path to the build matrix" % key)
-            return 0
+            return 0, []
 
     count = 0
+    entry_runners = []
     item_indent = None
+    in_entry = False
     while i < len(lines):
         line = lines[i]
         if line.strip() and not line.lstrip().startswith("#"):
@@ -702,15 +745,30 @@ def matrix_include_entries():
             if line.lstrip().startswith("- "):
                 if item_indent is None:
                     item_indent = indent(line)
-                if indent(line) == item_indent:
+                in_entry = indent(line) == item_indent
+                if in_entry:
                     count += 1
+            elif item_indent is not None and indent(line) <= item_indent:
+                # Dedented back out of the entry list without starting a new
+                # entry: whatever this key is, it is not an entry's own.
+                in_entry = False
+            if in_entry:
+                m = re.match(r"\s*(?:-\s+)?runner:\s*(\S+)\s*$", line)
+                if m:
+                    entry_runners.append(m.group(1))
         i += 1
     if count == 0:
         errors.append("the build matrix's include: list is empty")
-    return count
+    return count, entry_runners
 
 
-meta.append("matrix_entries=%d" % matrix_include_entries())
+matrix_entries, matrix_runners = matrix_include_entries()
+meta.append("matrix_entries=%d" % matrix_entries)
+meta.append("matrix_runners=%s" % ",".join(matrix_runners))
+meta.append(
+    "matrix_macos_runners=%d"
+    % sum(1 for r in matrix_runners if r.strip("\"'").startswith("macos"))
+)
 
 
 def job_body(job_name):
@@ -811,7 +869,9 @@ extract_workflow "$RELEASE_WORKFLOW" "$WF_DIR"
 
 WF_ERRORS="$(cat "$WF_DIR/errors.txt" 2>/dev/null || echo "extractor did not run")"
 MATRIX_ENTRIES=$(sed -n 's/^matrix_entries=//p' "$WF_DIR/meta.txt" 2>/dev/null || echo 0)
-MACOS_RUNNERS=$(grep -c '^macos' "$WF_DIR/runners.txt" 2>/dev/null || true)
+# Structural, from jobs.build.strategy.matrix.include — NOT a whole-file sweep
+# for `runner:` text (issue #1292; see matrix_include_entries()).
+MACOS_RUNNERS=$(sed -n 's/^matrix_macos_runners=//p' "$WF_DIR/meta.txt" 2>/dev/null || true)
 MACOS_RUNNERS=${MACOS_RUNNERS:-0}
 
 if [[ -z "$WF_ERRORS" ]]; then
@@ -821,11 +881,14 @@ else
 fi
 
 # Non-vacuity guard. Every macOS assertion below is worthless if the matrix has
-# no macOS entry, so the count is asserted rather than assumed.
+# no macOS entry, so the count is asserted rather than assumed. The count is the
+# number of build-matrix ENTRIES whose own `runner:` is a macOS runner, read out
+# of the structural walk — a `runner:` key anywhere else in the file does not
+# satisfy it (issue #1292; the hostile zero-macOS fixture below proves it).
 if [[ "$MACOS_RUNNERS" -ge 1 ]]; then
-  pass "release-rmpc.yml builds on $MACOS_RUNNERS macOS runner(s) — the no-sha256sum packaging check is not vacuous"
+  pass "release-rmpc.yml's build matrix has $MACOS_RUNNERS entries on a macOS runner — the no-sha256sum packaging check is not vacuous"
 else
-  fail "release-rmpc.yml names no macOS runner — either the matrix shrank or the extractor stopped seeing it"
+  fail "release-rmpc.yml's build matrix has no entry on a macOS runner — either the matrix shrank or the extractor stopped seeing it"
 fi
 
 # The macOS simulation: PATH holds only the tools a runner would provide, and
@@ -1041,9 +1104,12 @@ fi
 # single edit away from silence:
 #   1. ORDERING — the sandbox's PATH/HOME/GITHUB_ENV are applied after anything
 #      the step declares, so a spliced value can never win.
-#   2. REFUSAL — the extractor rejects the names the sandbox owns (and the ones
-#      bash reads before the body runs, e.g. BASH_ENV) rather than ordering
-#      around them, recording an extractor error that blocks execution outright.
+#   2. REFUSAL — the extractor imports only an ALLOW-LIST of env: names and
+#      records an extractor error, blocking execution outright, for every other
+#      one. This is the load-bearing half for any name the sandbox does not
+#      itself assign, because ordering has nothing to win the race with there:
+#      issue #1292 demonstrated `LD_AUDIT` executing code outside the fixture
+#      root against the enumerated ten-name deny-list #1242 shipped.
 # The fixtures below are hostile COPIES of release-rmpc.yml run through the same
 # extractor; the real workflow is never modified.
 echo ""
@@ -1118,6 +1184,47 @@ elif mutation == "step-env-bash-env":
     lines.insert(
         env_block_start(step_start()) + 1, "          BASH_ENV: /hostile/preamble.sh\n"
     )
+elif mutation.startswith("step-env="):
+    # Generic: `step-env=NAME=VALUE|NAME2=VALUE2` adds arbitrary keys to the
+    # packaging step's own `env:` block. Issue #1292 — the refusal is now an
+    # ALLOW-list, so the fixtures that prove it have to be able to name an
+    # arbitrary hostile key, including ones no deny-list ever enumerated. The
+    # multi-key form exists because the loader-debug escape needs two of them
+    # (`LD_DEBUG` selects, `LD_DEBUG_OUTPUT` redirects) and neither is an escape
+    # on its own.
+    _, _, spec = mutation.partition("=")
+    at = env_block_start(step_start()) + 1
+    added = 0
+    for pair in spec.split("|"):
+        name, sep, value = pair.partition("=")
+        if not name or not sep:
+            sys.exit("step-env mutation needs NAME=VALUE pairs, got '%s'" % pair)
+        lines.insert(at + added, "          %s: %s\n" % (name, value))
+        added += 1
+    if not added:
+        sys.exit("step-env mutation added nothing: '%s'" % mutation)
+elif mutation == "zero-macos-builds":
+    # Issue #1292's second defect, reproduced exactly. Every macOS entry in the
+    # BUILD MATRIX becomes ubuntu, and one stray `runner: macos-latest` key is
+    # added to an unrelated top-level block. A whole-file regex sweep for
+    # `runner:` text still reports one macOS runner and calls the macOS packaging
+    # assertion non-vacuous; a structural walk of matrix.include reports zero.
+    swapped = 0
+    for j, line in enumerate(lines):
+        if line.strip() == "runner: macos-latest":
+            lines[j] = line.replace("macos-latest", "ubuntu-latest")
+            swapped += 1
+    if swapped != 2:
+        sys.exit(
+            "expected 2 'runner: macos-latest' matrix entries in %s, found %d — "
+            "this fixture's anchor moved" % (src, swapped)
+        )
+    for j, line in enumerate(lines):
+        if line.rstrip("\n") == "env:":
+            lines.insert(j + 1, "  runner: macos-latest\n")
+            break
+    else:
+        sys.exit("no top-level 'env:' block in %s — this fixture's anchor moved" % src)
 elif mutation == "duplicate-step":
     i = step_start()
     lines[i:i] = ["      %s\n" % STEP, "        run: |\n", "          echo decoy\n", "\n"]
@@ -1137,21 +1244,37 @@ else:
 pathlib.Path(dst).write_text("".join(lines))
 PY
 
-# hostile_extract — build one hostile copy, run the REAL extractor over it, and
-# echo whatever it recorded in errors.txt. A fixture that failed to build reports
-# itself in that same channel, so it can only ever produce a FAIL, never a quiet
-# pass.
+# hostile_prepare — build one hostile copy and run the REAL extractor over it,
+# leaving everything the extractor produced in $HOSTILE_DIR/out. Returns 1 (with
+# the mutator's complaint in $HOSTILE_BUILD_ERR) if the fixture's anchor moved,
+# so a fixture that did not build can only ever produce a FAIL, never a quiet
+# pass. `$2` is a filesystem-safe slug, because a mutation string may contain
+# paths.
+HOSTILE_DIR=""
+HOSTILE_BUILD_ERR=""
+hostile_prepare() {
+  local mutation="$1" slug="$2"
+  HOSTILE_DIR="$WORKDIR/hostile/$slug"
+  HOSTILE_BUILD_ERR=""
+  rm -rf "$HOSTILE_DIR"
+  mkdir -p "$HOSTILE_DIR/out"
+  if ! HOSTILE_BUILD_ERR=$(python3 "$MUTATOR_PY" "$RELEASE_WORKFLOW" \
+    "$HOSTILE_DIR/release-rmpc.yml" "$mutation" 2>&1); then
+    return 1
+  fi
+  extract_workflow "$HOSTILE_DIR/release-rmpc.yml" "$HOSTILE_DIR/out" >/dev/null 2>&1
+  return 0
+}
+
+# hostile_extract — as above, echoing whatever the extractor recorded in
+# errors.txt. A fixture that failed to build reports itself in that same channel.
 hostile_extract() {
-  local mutation="$1" dir="$WORKDIR/hostile/$1" mutate_err
-  rm -rf "$dir"
-  mkdir -p "$dir/out"
-  if ! mutate_err=$(python3 "$MUTATOR_PY" "$RELEASE_WORKFLOW" "$dir/release-rmpc.yml" \
-    "$mutation" 2>&1); then
-    echo "FIXTURE DID NOT BUILD: $mutate_err"
+  local mutation="$1" slug="${2:-$1}"
+  if ! hostile_prepare "$mutation" "$slug"; then
+    echo "FIXTURE DID NOT BUILD: $HOSTILE_BUILD_ERR"
     return 0
   fi
-  extract_workflow "$dir/release-rmpc.yml" "$dir/out" >/dev/null 2>&1
-  cat "$dir/out/errors.txt" 2>/dev/null
+  cat "$HOSTILE_DIR/out/errors.txt" 2>/dev/null
 }
 
 HOSTILE_PATH_ERRORS="$(hostile_extract step-env-path)"
@@ -1182,6 +1305,132 @@ if grep -q 'reads ${VERSION}' <<<"$HOSTILE_MOVED_ERRORS"; then
   pass "a body reading a name its own env: no longer declares is refused — the extractor reads step-level env: only, and says so instead of rendering an empty string"
 else
   fail "a body reading \${VERSION} with no step-level declaration was extracted anyway — moved to a job- or workflow-level env: that name expands to empty here, and the step 'succeeds' having packaged nothing (extractor errors: ${HOSTILE_MOVED_ERRORS:-<none>})"
+fi
+
+# (3) The loader-level family, and why the refusal had to become an allow-list.
+# Issue #1292, reproduced against the code #1288 landed: `env: LD_AUDIT:` bought
+# arbitrary code execution outside the fixture root with 35 passed / 0 failed /
+# exit 0, and `LD_DEBUG` + `LD_DEBUG_OUTPUT` bought an arbitrary file write there
+# with no compiler needed. Neither was among the ten names #1242 enumerated, and
+# the ORDERING defence above cannot reach either: ordering works by having the
+# sandbox's own assignment win the last-wins race, and the sandbox assigns
+# neither, so the name lands in an empty slot uncontested. Refusal is the whole
+# defence for this family, which is why it is now an allow-list.
+echo ""
+echo "--- selftest: the loader-level env: family is refused, not enumerated ---"
+
+HOSTILE_LD_AUDIT_ERRORS="$(hostile_extract \
+  "step-env=LD_AUDIT=$WORKDIR/hostile-audit.so" ld-audit)"
+if grep -q "declares env: LD_AUDIT" <<<"$HOSTILE_LD_AUDIT_ERRORS"; then
+  pass "a packaging step declaring 'env: LD_AUDIT:' is refused — glibc would run that library's la_version() before the step body, outside anything this sandbox contains"
+else
+  fail "a packaging step declaring 'env: LD_AUDIT:' was accepted — the loader runs that shared object's entry points before the body's first line, so code executes outside the fixture root with every assertion still green (issue #1292) (extractor errors: ${HOSTILE_LD_AUDIT_ERRORS:-<none>})"
+fi
+
+HOSTILE_LD_DEBUG_ERRORS="$(hostile_extract \
+  "step-env=LD_DEBUG=files|LD_DEBUG_OUTPUT=$WORKDIR/hostile-loader-log" ld-debug)"
+if grep -q "declares env: LD_DEBUG_OUTPUT" <<<"$HOSTILE_LD_DEBUG_ERRORS"; then
+  pass "a packaging step declaring 'env: LD_DEBUG_OUTPUT:' is refused — the loader writes its trace to that path before the step body runs"
+else
+  fail "a packaging step declaring 'env: LD_DEBUG_OUTPUT:' was accepted — with LD_DEBUG set the loader writes files at that path, an arbitrary write outside the fixture root that needs no compiler (issue #1292) (extractor errors: ${HOSTILE_LD_DEBUG_ERRORS:-<none>})"
+fi
+
+# The class, not the members. TMPDIR was never on the enumerated deny-list and is
+# not a loader hook at all — it is here because the allow-list is supposed to
+# close names nobody thought of, and this assertion is the one that goes red if
+# the fix is quietly walked back to "the ten plus LD_AUDIT plus LD_DEBUG*".
+HOSTILE_TMPDIR_ERRORS="$(hostile_extract "step-env=TMPDIR=/hostile/tmp" tmpdir)"
+if grep -q "declares env: TMPDIR" <<<"$HOSTILE_TMPDIR_ERRORS"; then
+  pass "a packaging step declaring 'env: TMPDIR:' is refused — the allow-list closes names no deny-list enumerated, which is the point of inverting it"
+else
+  fail "a packaging step declaring 'env: TMPDIR:' was accepted — the refusal is back to enumerating the names we thought of, so the next unlisted one escapes exactly as LD_AUDIT did (extractor errors: ${HOSTILE_TMPDIR_ERRORS:-<none>})"
+fi
+
+# THE EXECUTED PROOF, not a string match on an error message.
+#
+# escape_probe runs the REAL extractor over a hostile copy, takes whatever that
+# extractor AGREED TO IMPORT (the copy's own package.env), splices it through
+# run_extracted_step() — the same function that runs release-rmpc.yml's real
+# packaging step, with the same `env -i`, the same sandbox assignments, the same
+# ordering — and then looks for files outside the fixture root. The body is
+# deliberately inert: nothing in it is under test, only what the loader does
+# before its first line. "Outside the fixture root" is the boundary the sandbox
+# actually claims (the step's cwd and HOME), so the probe's marker directory is a
+# sibling of the root rather than somewhere on the real filesystem.
+#
+# Before the allow-list: LD_DEBUG_OUTPUT survives into package.env, the loader
+# writes `loader-marker.<pid>` in the sibling directory, and this goes red. After:
+# the extractor refuses the name, nothing is spliced, the directory stays empty.
+escape_root() { echo "$WORKDIR/escape/$1/root"; }
+escape_outside() { echo "$WORKDIR/escape/$1/outside"; }
+
+escape_probe() {
+  local slug="$1" mutation="$2" root outside
+  root="$(escape_root "$slug")"
+  outside="$(escape_outside "$slug")"
+  rm -rf "$WORKDIR/escape/$slug"
+  mkdir -p "$root" "$outside"
+  printf ': "inert on purpose — the loader is what is under test"\n' > "$root/body.sh"
+  if ! hostile_prepare "$mutation" "escape-$slug"; then
+    echo "FIXTURE DID NOT BUILD: $HOSTILE_BUILD_ERR"
+    return 0
+  fi
+  read_step_env "$HOSTILE_DIR/out/package.env"
+  run_extracted_step "$root/body.sh" "$root" >/dev/null 2>&1
+  STEP_ENV=()
+  # Glob rather than `ls`: nullglob makes "nothing leaked" an empty string, and
+  # the shopt stays inside the subshell so it cannot change how the rest of this
+  # file globs.
+  ( shopt -s nullglob dotglob; cd "$outside" && printf '%s ' * )
+}
+
+LD_ESCAPE_MARKER="$(escape_outside ld-debug-output)/loader-marker"
+LD_ESCAPE_LEAKED="$(escape_probe ld-debug-output \
+  "step-env=LD_DEBUG=files|LD_DEBUG_OUTPUT=$LD_ESCAPE_MARKER")"
+LD_ESCAPE_LEAKED="${LD_ESCAPE_LEAKED% }"
+
+if [[ -z "$LD_ESCAPE_LEAKED" ]]; then
+  pass "sandbox escape: a workflow env: block asking the loader to write outside the fixture root produces no file there — the name never reached the splice"
+else
+  fail "sandbox escape: the extracted step wrote outside its fixture root ('$LD_ESCAPE_LEAKED' appeared in $(escape_outside ld-debug-output)) — release-rmpc.yml reconfigured the loader that starts the harness testing it, so code and file writes escape the sandbox while every assertion stays green (issue #1292)"
+fi
+
+# Non-vacuity for the allow-list itself. An allow-list emptied to `{}` would
+# refuse everything and leave every hostile assertion above green; this is the
+# assertion that notices the real packaging step's own three names stopped being
+# importable.
+PKG_ENV_NAMES=$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*$/\1/p' "$WF_DIR/package.env" \
+  2>/dev/null | sort | tr '\n' ' ')
+PKG_ENV_NAMES="${PKG_ENV_NAMES% }"
+if [[ "$PKG_ENV_NAMES" == "OS_LABEL TARGET VERSION" ]]; then
+  pass "the allow-list still admits exactly the three names the real packaging step declares (OS_LABEL, TARGET, VERSION) — refusing everything is not a way to pass the assertions above"
+else
+  fail "the packaging step's importable env: names are '${PKG_ENV_NAMES:-<none>}', not 'OS_LABEL TARGET VERSION' — either release-rmpc.yml added a key without adding it to ALLOWED_ENV_NAMES and SUBS, or the allow-list stopped admitting a name the step needs"
+fi
+
+# (4) Issue #1292's second defect: the non-vacuity guard used to sweep the whole
+# file for `runner:` / `runs-on:` text, so a workflow that builds on ZERO macOS
+# targets satisfied the guard that exists to prove the macOS packaging assertion
+# is testing something — one stray `runner: macos-latest` key in an unrelated
+# top-level block was enough. Containment was never touched by this; the
+# relevance meta-check was. The count now comes from the structural
+# matrix.include walk, and this fixture is the difference.
+echo ""
+echo "--- selftest: the non-vacuity guard counts macOS BUILDS, not macOS text ---"
+
+if hostile_prepare zero-macos-builds zero-macos-builds; then
+  ZERO_MACOS_META="$(sed -n 's/^matrix_macos_runners=//p' "$HOSTILE_DIR/out/meta.txt" \
+    2>/dev/null || true)"
+  ZERO_MACOS_ERRORS="$(cat "$HOSTILE_DIR/out/errors.txt" 2>/dev/null)"
+else
+  ZERO_MACOS_META="fixture did not build: $HOSTILE_BUILD_ERR"
+  ZERO_MACOS_ERRORS="fixture did not build"
+fi
+
+if [[ "$ZERO_MACOS_META" == "0" && -z "$ZERO_MACOS_ERRORS" ]]; then
+  pass "a workflow whose build matrix has no macOS entry reports 0 macOS runners — the non-vacuity guard fails on it even with a stray 'runner: macos-latest' elsewhere in the file"
+else
+  fail "a workflow with zero macOS build-matrix entries plus one stray top-level 'runner: macos-latest' reported '${ZERO_MACOS_META:-<none>}' macOS runners (extractor errors: ${ZERO_MACOS_ERRORS:-<none>}) — the guard that proves the macOS packaging assertion is not vacuous is itself satisfiable by text the matrix never runs on (issue #1292)"
 fi
 
 # ---------- release-rmpc.yml's authority surface and its injection sinks ----------
