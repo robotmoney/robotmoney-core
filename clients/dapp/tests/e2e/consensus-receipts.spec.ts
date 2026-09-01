@@ -32,9 +32,7 @@ test.describe("consensus receipts — full-stack devnet e2e", () => {
     endpoints = loadEndpoints();
   });
 
-  test("the four receipt states render distinctly against the live devnet", async ({
-    page,
-  }) => {
+  test("the four receipt states render distinctly against the live devnet", async ({ page }) => {
     await openDapp(page, endpoints, { role: "admin" });
 
     // The consensus-receipts tab is on the main dapp surface (not AdminFlow).
@@ -49,16 +47,24 @@ test.describe("consensus receipts — full-stack devnet e2e", () => {
     await expect(rows).toHaveCount(2, { timeout: 30_000 });
 
     // (1) Verified state — receipt-a's digest matches the re-fetched payload.
-    await expect(panel.getByText(/Verified — the published payload hashes to the anchored digest/)).toBeVisible();
+    await expect(
+      panel.getByText(/Verified — the published payload hashes to the anchored digest/),
+    ).toBeVisible();
     // (2) Unverified state — receipt-b's on-chain digest is deliberately wrong.
-    await expect(panel.getByText(/Unverified — the published payload does not hash to the anchored digest/)).toBeVisible();
+    await expect(
+      panel.getByText(/Unverified — the published payload does not hash to the anchored digest/),
+    ).toBeVisible();
 
     // (3) Released vs recorded-not-released.
     await expect(panel.getByText(/^Released\b/)).toBeVisible();
     await expect(panel.getByText("Recorded, not released")).toBeVisible();
 
     // (4) Applied vs not-applied, against the live router split.
-    await expect(panel.getByText(/Applied — live router weights match this recommendation/)).toBeVisible();
-    await expect(panel.getByText(/Not applied — live router weights differ from this recommendation/)).toBeVisible();
+    await expect(
+      panel.getByText(/Applied — live router weights match this recommendation/),
+    ).toBeVisible();
+    await expect(
+      panel.getByText(/Not applied — live router weights differ from this recommendation/),
+    ).toBeVisible();
   });
 });

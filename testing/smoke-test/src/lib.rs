@@ -1043,7 +1043,10 @@ impl Fixture {
         let ic_policy_out = tmp.path().join("ic-policy.json");
         run_forge_deploy_ic_policy(&repo_root, &rpc_url, &ic_policy_out, &deployment.gateway)
             .inspect_err(|err| {
-                logging::error("smoke-test", format!("forge deploy IC policy failed: {err}"));
+                logging::error(
+                    "smoke-test",
+                    format!("forge deploy IC policy failed: {err}"),
+                );
                 log_compose_state(
                     &compose_dir,
                     &compose_files_owned,
@@ -2032,9 +2035,8 @@ impl Fixture {
     /// reproducible off-chain without an RPC round trip.
     fn compute_receipt_id(session_id: &str, subject_id: &str) -> [u8; 32] {
         const RECEIPT_ID_DOMAIN: &str = "robotmoney:consensus-receipt-id:v1\n";
-        let mut buf = Vec::with_capacity(
-            RECEIPT_ID_DOMAIN.len() + session_id.len() + 1 + subject_id.len(),
-        );
+        let mut buf =
+            Vec::with_capacity(RECEIPT_ID_DOMAIN.len() + session_id.len() + 1 + subject_id.len());
         buf.extend_from_slice(RECEIPT_ID_DOMAIN.as_bytes());
         buf.extend_from_slice(session_id.as_bytes());
         buf.push(b'\n');
@@ -2087,12 +2089,8 @@ impl Fixture {
         )?;
 
         let agent_pk_hex = format!("0x{}", hex::encode(AGENT_PRIVATE_KEY));
-        let uri_a = format!(
-            "http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-a.json"
-        );
-        let uri_b = format!(
-            "http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-b.json"
-        );
+        let uri_a = format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-a.json");
+        let uri_b = format!("http://receipt-fixtures:{RECEIPT_FIXTURES_PORT}/receipt-b.json");
 
         let session_a = "smoke-test-fusion-1294-a";
         let subject_a = "treasury-allocation";
@@ -3801,10 +3799,7 @@ impl DappStack {
             ),
             // Issue #1294: fixed port for the receipt-fixtures compose service
             // (see Fixture::seed_consensus_receipts and RECEIPT_FIXTURES_PORT).
-            (
-                "RECEIPT_FIXTURES_PORT",
-                RECEIPT_FIXTURES_PORT.to_string(),
-            ),
+            ("RECEIPT_FIXTURES_PORT", RECEIPT_FIXTURES_PORT.to_string()),
             // Issue #775: indexer reaches Geth via the chain Docker network
             // (ethereum-testnet_default) using the service name, not via
             // host.docker.internal which is unreachable on some Docker configs.
