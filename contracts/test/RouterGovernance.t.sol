@@ -58,6 +58,15 @@ contract MockGovVault is ERC20 {
         shares = assets;
         _mint(receiver, shares);
     }
+
+    /// @dev IRetirableVault deposit-halt stubs. MockGovVault has no registry
+    ///      link, so these are no-ops that satisfy the interface without
+    ///      reverting when the registry drives the pause/deposit-halt flag
+    ///      (VaultRegistry.setVaultStatus calls retire()/unretire() on the
+    ///      vault address when it has code).
+    function retire() external {}
+
+    function unretire() external {}
 }
 
 // ─── RouterGovernanceTest ─────────────────────────────────────────────────────
@@ -321,6 +330,37 @@ contract RouterGovernanceTest is Test {
         // vaultA is registered and eligible in setUp; revoke its eligibility.
         vm.prank(registryAdmin);
         registry.setRouterEligible(address(vaultA), false);
+
+        address[] memory vaults = new address[](2);
+        vaults[0] = address(vaultA);
+        vaults[1] = address(vaultB);
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 6_000;
+        bps[1] = 4_000;
+
+        vm.prank(govAdmin);
+        vm.expectRevert(
+            abi.encodeWithSelector(RouterGovernance.VaultNotEligible.selector, address(vaultA))
+        );
+        gov.propose(vaults, bps);
+    }
+
+    /// @notice propose() with a vault that was Paused (transient registry
+    ///         status) reverts VaultNotEligible naming that vault. This is the
+    ///         contract-side of the #1248 draft-worker fallback: the worker
+    ///         re-checks isRouterEligibleAndActive at draft time precisely
+    ///         because a vault Active at receipt time may be Paused by then and
+    ///         propose() would revert on exactly this vault.
+    /// AC: forge test: pause a vault; propose() with it reverts VaultNotEligible
+    function test_propose_revertsOnPausedVault() public {
+        // Mark vaultA Paused (transient status; eligibility flag stays set).
+        vm.startPrank(registryAdmin);
+        registry.setRouterEligible(address(vaultA), true);
+        registry.setVaultStatus(address(vaultA), VaultRegistry.VaultStatus.Paused);
+        vm.stopPrank();
+        assertFalse(
+            router.isRouterEligibleAndActive(address(vaultA)), "Paused vault must be ineligible"
+        );
 
         address[] memory vaults = new address[](2);
         vaults[0] = address(vaultA);

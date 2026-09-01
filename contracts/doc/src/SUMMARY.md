@@ -205,6 +205,7 @@
     - [UnderPullRouter](contracts/test/GatewayRouter.t.sol/contract.UnderPullRouter.md)
     - [LeakyRedeemRouterVault](contracts/test/GatewayRouter.t.sol/contract.LeakyRedeemRouterVault.md)
     - [GatewayRouterTest](contracts/test/GatewayRouter.t.sol/contract.GatewayRouterTest.md)
+    - [GovernanceSeparationInvariant](contracts/test/GovernanceSeparationInvariant.t.sol/contract.GovernanceSeparationInvariant.md)
     - [ICGatewayIntegration](contracts/test/ICGatewayIntegration.t.sol/contract.ICGatewayIntegration.md)
     - [MockPositionAdapter](contracts/test/IPositionAdapter.t.sol/contract.MockPositionAdapter.md)
     - [IPositionAdapterInterfaceTest](contracts/test/IPositionAdapter.t.sol/contract.IPositionAdapterInterfaceTest.md)

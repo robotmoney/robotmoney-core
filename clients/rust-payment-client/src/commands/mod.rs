@@ -20,6 +20,7 @@ pub mod get_timelock;
 pub mod get_tx;
 pub mod get_vault;
 pub mod get_vaults;
+pub mod governance_draft;
 pub mod propose;
 pub mod receipt;
 pub mod self_check;

@@ -297,6 +297,46 @@ Other named errors: `ErrReceiptFetchFailed`, `ErrReceiptReadFailed`,
 `ErrReceiptDigestMalformed`, `ErrReceiptRecordReverted` (missing role, or a
 receipt id already recorded — one receipt per session per subject).
 
+## Governance handoff commands
+
+`rmpc governance` turns a **released** consensus receipt into a draft
+`RouterGovernance.propose(vaults, bps)` call for a human to review (Project
+Fusion). This is the recommending side only: the committee that authors a
+receipt and the `RouterGovernance` voter set that must approve a weight
+change are separate governing bodies, and this command never signs, never
+takes a nonce lock, and never broadcasts a transaction — there is no code
+path here that submits anything.
+
+### `rmpc governance draft-proposal`
+
+Requires `receipt_address`, `router_address`, `governance_address`, and a
+`[vault_addresses]` table (`rmUSDC`, `rmPROTO`, `rmAGENT`, `rmRWA`) in
+config. Exactly one of `--receipt-id` or `--from-block` is required.
+
+```
+rmpc governance --config <CONFIG> draft-proposal --receipt-id <0x...64hex>
+  --receipt-url <URL> [--pretty]
+```
+
+```
+rmpc governance --config <CONFIG> draft-proposal --from-block 0
+  [--to-block latest] --receipt-url-template <URL_WITH_{receipt_id}>
+  [--pretty]
+```
+
+For each released receipt: refuses if `isReleased` is false
+(`ErrReceiptNotReleased`); skips (not an error) a receipt with no `weights`
+vector (`status: "skipped_no_weights"`); re-checks
+`PortfolioRouter.isRouterEligibleAndActive` for every mapped vault and, if any
+is ineligible, drops it and redistributes its bps across the remaining
+eligible vaults (`fallback_applied: true`), refusing with
+`ErrNoEligibleVaults` only if every vault is ineligible; and reports
+`status: "blocked_active_proposal"` with the blocking proposal id instead of
+a submittable draft when `RouterGovernance` already has an `Active` or
+`Queued` proposal. A ready draft carries `propose_calldata` — hex calldata for
+a human to submit via `rmpc propose`, a Safe, or the runbook's timelock path.
+Never submitted by this command.
+
 ## Investment Swarm signing identity commands
 
 `rmpc committee-identity` manages the local Ed25519 signing identity every
