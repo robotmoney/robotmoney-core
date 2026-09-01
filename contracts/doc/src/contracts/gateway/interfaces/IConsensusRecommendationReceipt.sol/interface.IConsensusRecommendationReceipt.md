@@ -1,10 +1,10 @@
-# IConsensusRebalanceReceipt
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/gateway/interfaces/IConsensusRebalanceReceipt.sol)
+# IConsensusRecommendationReceipt
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/gateway/interfaces/IConsensusRecommendationReceipt.sol)
 
 **Title:**
-IConsensusRebalanceReceipt
+IConsensusRecommendationReceipt
 
-Interface for the ConsensusRebalanceReceipt contract.
+Interface for the ConsensusRecommendationReceipt contract.
 Design constraints (docs/architecture.md §4.9, settled by issue #1247 task 4.0):
 - **Signalling only.** Recording or releasing a receipt moves no value and
 sets no router weight. INV-4 (`docs/prd.md` §12).

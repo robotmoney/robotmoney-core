@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Implements: issue #1247 — consensus receipt event indexing acceptance tests.
 //!
 //! Five cases, modelled on `tests/committee_indexing.rs` (hand-encoded logs
@@ -25,7 +25,7 @@ use alloy_primitives::{Address, FixedBytes, LogData, U256};
 use alloy_sol_types::SolEvent as _;
 use common::{try_pg_fixture, StubRpcServer};
 use explorer_indexer::{
-    abi::IConsensusRebalanceReceiptEvents,
+    abi::IConsensusRecommendationReceiptEvents,
     db::CountTable,
     indexer::{run_once, IndexerConfig},
     rpc::JsonRpc,
@@ -122,7 +122,7 @@ fn encode_receipt_recorded_log(
     tx_hash: [u8; 32],
     log_index: u32,
 ) -> serde_json::Value {
-    let event = IConsensusRebalanceReceiptEvents::ReceiptRecorded {
+    let event = IConsensusRecommendationReceiptEvents::ReceiptRecorded {
         receiptId: FixedBytes(receipt_id),
         submitter,
         index: U256::from(index),
@@ -149,7 +149,7 @@ fn encode_receipt_released_log(
     tx_hash: [u8; 32],
     log_index: u32,
 ) -> serde_json::Value {
-    let event = IConsensusRebalanceReceiptEvents::ReceiptReleased {
+    let event = IConsensusRecommendationReceiptEvents::ReceiptReleased {
         receiptId: FixedBytes(receipt_id),
         releasedBy: released_by,
         releasedAt: released_at,

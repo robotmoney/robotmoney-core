@@ -245,7 +245,7 @@ jobs:
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test committee -- --nocapture
 
-      # Consensus rebalance receipt: canonicalization goldens + the anchoring
+      # Consensus recommendation receipt: canonicalization goldens + the anchoring
       # refusal gate (issue #1247, and the second half of issue #1280).
       # mockito-backed, drives the release rmpc binary via assert_cmd — no chain.
       #

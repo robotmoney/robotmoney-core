@@ -1,10 +1,10 @@
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 tasks 4.9 and 4.14 — receipt list, verification state,
 //             released state, applied vs not-applied.
 
 /**
- * Consensus rebalance receipt API client.
+ * Consensus recommendation receipt API client.
  *
  * Reads the anchored receipt commitments from the indexed explorer API, and
  * optionally the receipt payload itself from the public `payload_uri` the

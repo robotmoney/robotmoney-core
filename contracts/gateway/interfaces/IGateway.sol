@@ -4,7 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {IInvestmentCommitteePolicy} from "./IInvestmentCommitteePolicy.sol";
-import {IConsensusRebalanceReceipt} from "./IConsensusRebalanceReceipt.sol";
+import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt.sol";
 
 /// @title IGateway
 /// @notice Minimal interface stub for the RobotMoney deposit gateway.
@@ -394,13 +394,13 @@ interface IGateway {
         external
         returns (uint256 voteId);
 
-    /// @notice Set or update the ConsensusRebalanceReceipt contract address.
+    /// @notice Set or update the ConsensusRecommendationReceipt contract address.
     ///         Restricted to `ADMIN_ROLE`. Pass `address(0)` to clear.
-    /// @param receipt_ Address of the deployed `ConsensusRebalanceReceipt`
+    /// @param receipt_ Address of the deployed `ConsensusRecommendationReceipt`
     ///                 contract, or `address(0)` to disable receipt routing.
     function setConsensusReceipt(address receipt_) external;
 
-    /// @notice Record a consensus rebalance receipt commitment. Restricted to
+    /// @notice Record a consensus recommendation receipt commitment. Restricted to
     ///         `AGENT_ROLE`. Reverts if `consensusReceipt` is not set.
     ///         Signalling only — see `docs/architecture.md` §4.9 and INV-4.
     ///         There is no gateway release entrypoint: `ADMIN_ROLE` on the
@@ -438,8 +438,8 @@ interface IGateway {
     /// @notice Investment Committee policy contract, or `address(0)` if not configured.
     function icPolicy() external view returns (IInvestmentCommitteePolicy);
 
-    /// @notice Consensus rebalance receipt contract, or `address(0)` if not configured.
-    function consensusReceipt() external view returns (IConsensusRebalanceReceipt);
+    /// @notice Consensus recommendation receipt contract, or `address(0)` if not configured.
+    function consensusReceipt() external view returns (IConsensusRecommendationReceipt);
 
     /// @notice Recorded owner (depositor EOA) for `agent`, or `address(0)`
     ///         if no policy is recorded.

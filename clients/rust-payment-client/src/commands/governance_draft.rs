@@ -19,7 +19,7 @@
 //! 1. **Observes `ReceiptReleased`.** Either a single `--receipt-id` (as a
 //!    log-watcher would receive from the event) or a `--from-block` /
 //!    `--to-block` range scanned via `eth_getLogs`. A receipt that has not
-//!    been released (`ConsensusRebalanceReceipt.isReleased == false`) is
+//!    been released (`ConsensusRecommendationReceipt.isReleased == false`) is
 //!    refused — release is a human admin-discretion gate (D5) and this
 //!    command does not second-guess it.
 //! 2. **Fetches and validates the payload** at `--receipt-url` (mirrors
@@ -60,7 +60,7 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::consensus_receipt::{BucketWeight, ConsensusReceipt, CANONICAL_BUCKET_ORDER};
-use crate::gateway::{ConsensusRebalanceReceipt, PortfolioRouter, RouterGovernance};
+use crate::gateway::{ConsensusRecommendationReceipt, PortfolioRouter, RouterGovernance};
 use crate::rpc::{CallRequest, FailoverRpcClient, RawLog};
 
 const EXIT_OK: i32 = 0;
@@ -624,7 +624,7 @@ async fn call_is_released(
     receipt_addr: Address,
     receipt_id: alloy_primitives::B256,
 ) -> Result<bool, String> {
-    let data = ConsensusRebalanceReceipt::isReleasedCall {
+    let data = ConsensusRecommendationReceipt::isReleasedCall {
         receiptId: receipt_id,
     }
     .abi_encode();
@@ -639,7 +639,7 @@ async fn call_is_released(
         )
         .await
         .map_err(|e| format!("eth_call(isReleased) failed: {e}"))?;
-    let r = ConsensusRebalanceReceipt::isReleasedCall::abi_decode_returns(&out, true)
+    let r = ConsensusRecommendationReceipt::isReleasedCall::abi_decode_returns(&out, true)
         .map_err(|e| format!("isReleased abi decode: {e}"))?;
     Ok(r._0)
 }
@@ -740,7 +740,7 @@ async fn scan_released(
     from_block: u64,
     to_block: &str,
 ) -> Result<Vec<alloy_primitives::B256>, String> {
-    let topic0 = ConsensusRebalanceReceipt::ReceiptReleased::SIGNATURE_HASH;
+    let topic0 = ConsensusRecommendationReceipt::ReceiptReleased::SIGNATURE_HASH;
     let filter = json!({
         "address": receipt_addr,
         "fromBlock": format!("0x{from_block:x}"),

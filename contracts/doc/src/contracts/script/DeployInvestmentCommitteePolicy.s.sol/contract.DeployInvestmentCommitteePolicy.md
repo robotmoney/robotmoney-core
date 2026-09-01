@@ -1,5 +1,5 @@
 # DeployInvestmentCommitteePolicy
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/script/DeployInvestmentCommitteePolicy.s.sol)
 
 **Inherits:**
 Script
@@ -8,7 +8,7 @@ Script
 DeployInvestmentCommitteePolicy
 
 Foundry deploy script for the InvestmentCommitteePolicy contract.
-Deploys InvestmentCommitteePolicy AND ConsensusRebalanceReceipt in
+Deploys InvestmentCommitteePolicy AND ConsensusRecommendationReceipt in
 one ceremony (issue #1247 AC10 — one greenfield rollout, no
 migration, no registered agent to preserve), wires both into the
 gateway (`setICPolicy`, `setConsensusReceipt`), and grants the
@@ -169,7 +169,7 @@ Result struct returned to in-process callers (e.g. forge tests).
 ```solidity
 struct Deployed {
     InvestmentCommitteePolicy policy;
-    ConsensusRebalanceReceipt receipts;
+    ConsensusRecommendationReceipt receipts;
     address admin;
     address receiptAdmin;
     address gateway;

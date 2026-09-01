@@ -1,10 +1,10 @@
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 tasks 4.9 and 4.14, acceptance criterion 6
 
 /**
  * ConsensusReceiptPanel — the protocol-layer surface for anchored consensus
- * rebalance receipts.
+ * recommendation receipts.
  *
  * Four things this surface must get right, each a first-class product
  * requirement rather than polish:
@@ -145,7 +145,7 @@ export function ConsensusReceiptPanel(props: ConsensusReceiptPanelProps) {
 
   return (
     <section data-testid="consensus-receipt-panel">
-      <h2>Consensus Rebalance Receipts</h2>
+      <h2>Consensus Recommendation Receipts</h2>
       <p className="hint" data-testid="consensus-receipt-disclosure">
         Each receipt is an on-chain commitment to the keccak256 of a published consensus receipt.
         The commitment records that the committee produced the recommendation and that a single

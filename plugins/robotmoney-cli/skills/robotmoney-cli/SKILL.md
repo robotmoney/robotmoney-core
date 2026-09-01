@@ -7,7 +7,7 @@ description: >
   get-deposit, get-tx, get-vaults, get-router, get-governance, get-timelock),
   write commands (deposit, withdraw, status, self-check), governance write
   commands (propose, vote), Investment Committee commands (committee
-  register, committee vote-submit), consensus rebalance receipt commands
+  register, committee vote-submit), consensus recommendation receipt commands
   (receipt verify, receipt submit), and the Investment Swarm signing
   identity commands (committee-identity create, show-public-key, sign).
   Covers all flags, output shapes, preflight rules, and the get-governance
@@ -60,7 +60,7 @@ rmpc get-tx          Look up a transaction's receipt status by hash
 rmpc propose         Submit a new weight-reallocation proposal to RouterGovernance
 rmpc vote            Cast a vote on an active RouterGovernance proposal
 rmpc committee       Investment Committee: register agents and submit signed allocation votes
-rmpc receipt         Consensus rebalance receipt: verify a receipt off-chain and anchor its digest on chain
+rmpc receipt         Consensus recommendation receipt: verify a receipt off-chain and anchor its digest on chain
 rmpc committee-identity  Investment Swarm signing identity: local Ed25519 identity, public-key export, and canonical-payload signing
 ```
 
@@ -222,7 +222,7 @@ fee-cap, receipt-timeout-secs, pretty).
 
 ## Consensus receipt commands
 
-`rmpc receipt` handles a **consensus rebalance receipt** — the signed
+`rmpc receipt` handles a **consensus recommendation receipt** — the signed
 off-chain artifact a Project Fusion swarm session produces. The chain stores
 only the `keccak256` of the receipt's canonical bytes, beside the public URI
 serving those exact bytes.

@@ -1,11 +1,11 @@
-# ConsensusRebalanceReceiptTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/test/ConsensusRebalanceReceipt.t.sol)
+# ConsensusRecommendationReceiptTest
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/test/ConsensusRecommendationReceipt.t.sol)
 
 **Inherits:**
 Test
 
 **Title:**
-ConsensusRebalanceReceiptTest
+ConsensusRecommendationReceiptTest
 
 Full on-chain path for the consensus receipt anchor:
 gateway → receipt contract → event, plus the signalling-only
@@ -154,7 +154,7 @@ InvestmentCommitteePolicy ic
 ### receipts
 
 ```solidity
-ConsensusRebalanceReceipt receipts
+ConsensusRecommendationReceipt receipts
 ```
 
 

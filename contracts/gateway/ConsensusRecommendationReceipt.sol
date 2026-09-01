@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
 pragma solidity ^0.8.24;
@@ -9,11 +9,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
-import {IConsensusRebalanceReceipt} from "./interfaces/IConsensusRebalanceReceipt.sol";
+import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 
-/// @title ConsensusRebalanceReceipt
-/// @notice On-chain commitment register for the swarm's consensus rebalance
-///         receipts. Stores a `receiptId`, the `keccak256` of the receipt's
+/// @title ConsensusRecommendationReceipt
+/// @notice On-chain commitment register for the swarm's consensus
+///         recommendation receipts. Stores a `receiptId`, the `keccak256` of the receipt's
 ///         canonical bytes, and the public URI serving those exact bytes.
 ///
 /// Why the anchor exists (docs/product/…-investment-committee-v0.md §2.1): a
@@ -49,7 +49,11 @@ import {IConsensusRebalanceReceipt} from "./interfaces/IConsensusRebalanceReceip
 /// `contract/src/__fixtures__/` in `robotmoney-frontend`.
 ///
 /// Emits: `ReceiptRecorded`, `ReceiptReleased`.
-contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensusRebalanceReceipt {
+contract ConsensusRecommendationReceipt is
+    AccessControl,
+    ReentrancyGuard,
+    IConsensusRecommendationReceipt
+{
     // ─── Roles ───────────────────────────────────────────────────────────────
 
     /// @notice Releases receipts. Held by the `TimelockController` (INV-3).
@@ -68,10 +72,10 @@ contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensus
 
     // ─── State ───────────────────────────────────────────────────────────────
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     address public immutable gateway;
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     address public immutable icPolicy;
 
     /// @dev Append-only receipt log.
@@ -109,7 +113,7 @@ contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensus
 
     // ─── Write surface ───────────────────────────────────────────────────────
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function recordReceipt(
         address submitter,
         bytes32 receiptId,
@@ -142,7 +146,7 @@ contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensus
         emit ReceiptRecorded(receiptId, submitter, index, payloadDigest, payloadUri, recordedAt);
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function releaseReceipt(bytes32 receiptId) external onlyRole(ADMIN_ROLE) nonReentrant {
         uint256 slot = _indexPlusOne[receiptId];
         if (slot == 0) revert ReceiptNotFound();
@@ -159,36 +163,36 @@ contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensus
 
     // ─── Read surface ────────────────────────────────────────────────────────
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function receiptCount() external view returns (uint256) {
         return _receipts.length;
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function getReceipt(uint256 index) external view returns (Receipt memory) {
         return _receipts[index];
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function getReceiptById(bytes32 receiptId) external view returns (Receipt memory) {
         uint256 slot = _indexPlusOne[receiptId];
         if (slot == 0) revert ReceiptNotFound();
         return _receipts[slot - 1];
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function isRecorded(bytes32 receiptId) external view returns (bool) {
         return _indexPlusOne[receiptId] != 0;
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function isReleased(bytes32 receiptId) external view returns (bool) {
         uint256 slot = _indexPlusOne[receiptId];
         if (slot == 0) return false;
         return _receipts[slot - 1].released;
     }
 
-    /// @inheritdoc IConsensusRebalanceReceipt
+    /// @inheritdoc IConsensusRecommendationReceipt
     function computeReceiptId(string calldata sessionId, string calldata subjectId)
         external
         pure
@@ -203,5 +207,5 @@ contract ConsensusRebalanceReceipt is AccessControl, ReentrancyGuard, IConsensus
     // `receive` and NO `fallback`. It holds no ERC-20 balance and cannot call
     // `RouterGovernance.execute()`, `PortfolioRouter.setWeights()` or
     // `RobotMoneyGateway.deposit()`. Verified by
-    // ConsensusRebalanceReceiptTest.testSignallingOnlyBoundary.
+    // ConsensusRecommendationReceiptTest.testSignallingOnlyBoundary.
 }

@@ -100,7 +100,7 @@ jobs:
         working-directory: services/explorer-indexer
         run: cargo test --test rpc_failure -- --nocapture
 
-      # CONSENSUS REBALANCE RECEIPT INDEXING (issue #1247, docs/architecture.md §4.9)
+      # CONSENSUS RECOMMENDATION RECEIPT INDEXING (issue #1247, docs/architecture.md §4.9)
       # A `tests/<name>.rs` file is executed by NOTHING unless a job names it with an
       # explicit `--test <name>`. This step wires the receipt-event ingestion tests
       # (ReceiptRecorded / ReceiptReleased, payload-digest verification, and the

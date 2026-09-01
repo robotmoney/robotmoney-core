@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Implements: issue #1247 acceptance criteria 2 and 10, task 4.10
 pragma solidity ^0.8.24;
 
@@ -10,19 +10,21 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 
 import {DeployInvestmentCommitteePolicy} from "../script/DeployInvestmentCommitteePolicy.s.sol";
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
-import {ConsensusRebalanceReceipt} from "../gateway/ConsensusRebalanceReceipt.sol";
-import {IConsensusRebalanceReceipt} from "../gateway/interfaces/IConsensusRebalanceReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 
-/// @title DeployConsensusRebalanceReceiptTest
+/// @title DeployConsensusRecommendationReceiptTest
 /// @notice AC10: the receipt contract deploys **alongside**
 ///         InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on
 ///         the receipt contract lands on the `TimelockController` and nowhere
 ///         else. This is a single greenfield rollout — no migration and no
 ///         registered agent to preserve.
-contract DeployConsensusRebalanceReceiptTest is Test {
+contract DeployConsensusRecommendationReceiptTest is Test {
     address admin = address(0xA0);
     address pauser = address(0xA1);
     address submitter = address(0xB1);

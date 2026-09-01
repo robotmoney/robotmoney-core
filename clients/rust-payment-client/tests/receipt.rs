@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Implements: issue #1247 (AC4, AC13) and the second half of issue #1280.
 //!
 //! Integration tests for `rmpc receipt`.

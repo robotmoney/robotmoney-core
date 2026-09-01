@@ -92,7 +92,7 @@ pub enum CountTable {
     CommitteeVotes,
     /// Added in migration 0014 — aggregated per-vault tilt snapshots (issue #1053).
     RegimeSnapshots,
-    /// Added in migration 0015 — on-chain consensus rebalance receipt
+    /// Added in migration 0015 — on-chain consensus recommendation receipt
     /// commitments (issue #1247, docs/architecture.md §4.9).
     ConsensusReceipts,
 }
@@ -1461,7 +1461,7 @@ impl Db {
 
     // ─── End InvestmentCommitteePolicy writers ────────────────────────────────
 
-    // ─── ConsensusRebalanceReceipt writers ────────────────────────────────────
+    // ─── ConsensusRecommendationReceipt writers ────────────────────────────────────
     // Canonical: docs/architecture.md §4.9 — issue #1247.
     //
     // Two events drive one table:
@@ -1551,7 +1551,7 @@ impl Db {
         Ok(r.rows_affected())
     }
 
-    // ─── End ConsensusRebalanceReceipt writers ────────────────────────────────
+    // ─── End ConsensusRecommendationReceipt writers ────────────────────────────────
 
     /// Row count for any of the nine §11 tables.
     ///

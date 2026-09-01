@@ -108,7 +108,7 @@ pub struct Config {
     /// When absent those subcommands exit with `EXIT_STARTUP_FAIL`.
     #[serde(default)]
     pub ic_policy_address: Option<String>,
-    /// `ConsensusRebalanceReceipt` contract address (0x-prefixed hex). Optional —
+    /// `ConsensusRecommendationReceipt` contract address (0x-prefixed hex). Optional —
     /// only required for `rmpc governance draft-proposal`, which reads
     /// `isReleased`/`getReceiptById` and scans `ReceiptReleased` logs here.
     /// When absent that command exits with `EXIT_STARTUP_FAIL`.

@@ -420,7 +420,7 @@ pub enum Command {
         #[arg(long, global = true)]
         pretty: bool,
     },
-    /// Consensus rebalance receipt (Project Fusion) — verify a receipt
+    /// Consensus recommendation receipt (Project Fusion) — verify a receipt
     /// off-chain, and anchor its digest on chain through
     /// `RobotMoneyGateway.consensusRecordReceipt`.
     ///
@@ -525,7 +525,7 @@ pub enum GovernanceSubcommand {
 /// Subcommands for `rmpc receipt`.
 #[derive(Debug, Subcommand)]
 pub enum ReceiptSubcommand {
-    /// Fetch (or read) a consensus rebalance receipt, canonicalize it, print
+    /// Fetch (or read) a consensus recommendation receipt, canonicalize it, print
     /// the derived `payload_digest` and `receipt_id`, and report per-analyst
     /// Ed25519 verification. Read-only: no signer, no nonce, no chain. Exits
     /// non-zero on any validation or signature failure.

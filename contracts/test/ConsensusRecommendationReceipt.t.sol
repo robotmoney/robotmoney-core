@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Implements: issue #1247 acceptance criteria 1, 2, 3, 11, 12, 13 and Test plan
 //             items 1, 2, 3, 8. Discharges the second half of issue #1280.
 pragma solidity ^0.8.24;
@@ -11,18 +11,20 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 
 import {RobotMoneyGateway} from "../gateway/RobotMoneyGateway.sol";
 import {InvestmentCommitteePolicy} from "../gateway/InvestmentCommitteePolicy.sol";
-import {ConsensusRebalanceReceipt} from "../gateway/ConsensusRebalanceReceipt.sol";
-import {IConsensusRebalanceReceipt} from "../gateway/interfaces/IConsensusRebalanceReceipt.sol";
+import {ConsensusRecommendationReceipt} from "../gateway/ConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../gateway/interfaces/IConsensusRecommendationReceipt.sol";
 import {IGateway} from "../gateway/interfaces/IGateway.sol";
 import {TestERC20} from "./helpers/TestERC20.sol";
 import {MockVault} from "../gateway/MockVault.sol";
 
-/// @title ConsensusRebalanceReceiptTest
+/// @title ConsensusRecommendationReceiptTest
 /// @notice Full on-chain path for the consensus receipt anchor:
 ///         gateway → receipt contract → event, plus the signalling-only
 ///         boundary, the timelock-held `ADMIN_ROLE`, the 3-topic event limit,
 ///         and the anchoring-digest assertion that closes issue #1280.
-contract ConsensusRebalanceReceiptTest is Test {
+contract ConsensusRecommendationReceiptTest is Test {
     // ─── Fixture paths (goldens are byte-identical to robotmoney-frontend's
     //     contract/src/__fixtures__/ — that byte identity IS the cross-repo
     //     pin, issue #1244 AC5; nothing here may edit them). ────────────────
@@ -53,7 +55,7 @@ contract ConsensusRebalanceReceiptTest is Test {
     MockVault vault;
     RobotMoneyGateway gateway;
     InvestmentCommitteePolicy ic;
-    ConsensusRebalanceReceipt receipts;
+    ConsensusRecommendationReceipt receipts;
     TimelockController timelock;
 
     uint256 constant MIN_DELAY = 1 hours;
@@ -82,7 +84,8 @@ contract ConsensusRebalanceReceiptTest is Test {
         // else — deliberately NOT to the gateway, because a gateway-routed
         // release would need the gateway to hold it (see docs/architecture.md
         // §4.9, "why release is not a gateway entrypoint").
-        receipts = new ConsensusRebalanceReceipt(address(timelock), address(gateway), address(ic));
+        receipts =
+            new ConsensusRecommendationReceipt(address(timelock), address(gateway), address(ic));
 
         bytes32 icAdminRole = ic.ADMIN_ROLE();
         vm.prank(admin);
@@ -154,14 +157,14 @@ contract ConsensusRebalanceReceiptTest is Test {
     ///      submitter: the gateway is the sole choke point.
     function testDirectRecordReverts() public {
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRebalanceReceipt.CallerNotGateway.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.CallerNotGateway.selector);
         receipts.recordReceipt(submitter, keccak256("r"), keccak256("d"), PAYLOAD_URI);
     }
 
     /// @dev Even an ADMIN_ROLE holder cannot bypass the gateway.
     function testDirectRecordFromTimelockReverts() public {
         vm.prank(address(timelock));
-        vm.expectRevert(IConsensusRebalanceReceipt.CallerNotGateway.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.CallerNotGateway.selector);
         receipts.recordReceipt(submitter, keccak256("r"), keccak256("d"), PAYLOAD_URI);
     }
 
@@ -193,7 +196,7 @@ contract ConsensusRebalanceReceiptTest is Test {
         gateway.authorizeAgent(rogue, policy);
 
         vm.prank(rogue);
-        vm.expectRevert(IConsensusRebalanceReceipt.SubmitterNotAllowlisted.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.SubmitterNotAllowlisted.selector);
         gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), PAYLOAD_URI);
     }
 
@@ -209,19 +212,19 @@ contract ConsensusRebalanceReceiptTest is Test {
 
     function testEmptyReceiptIdReverts() public {
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRebalanceReceipt.EmptyReceiptId.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.EmptyReceiptId.selector);
         gateway.consensusRecordReceipt(bytes32(0), keccak256("d"), PAYLOAD_URI);
     }
 
     function testEmptyPayloadDigestReverts() public {
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRebalanceReceipt.EmptyPayloadDigest.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.EmptyPayloadDigest.selector);
         gateway.consensusRecordReceipt(keccak256("r"), bytes32(0), PAYLOAD_URI);
     }
 
     function testEmptyPayloadUriReverts() public {
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRebalanceReceipt.EmptyPayloadUri.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.EmptyPayloadUri.selector);
         gateway.consensusRecordReceipt(keccak256("r"), keccak256("d"), "");
     }
 
@@ -231,7 +234,7 @@ contract ConsensusRebalanceReceiptTest is Test {
         bytes32 id = keccak256("r");
         _record(id, keccak256("d"));
         vm.prank(submitter);
-        vm.expectRevert(IConsensusRebalanceReceipt.ReceiptAlreadyRecorded.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.ReceiptAlreadyRecorded.selector);
         gateway.consensusRecordReceipt(id, keccak256("d2"), PAYLOAD_URI);
     }
 
@@ -266,7 +269,7 @@ contract ConsensusRebalanceReceiptTest is Test {
         receipts.releaseReceipt(id);
 
         // Routed through the timelock: schedule, wait out the delay, execute.
-        bytes memory payload = abi.encodeCall(IConsensusRebalanceReceipt.releaseReceipt, (id));
+        bytes memory payload = abi.encodeCall(IConsensusRecommendationReceipt.releaseReceipt, (id));
         vm.prank(proposer);
         timelock.schedule(address(receipts), 0, payload, bytes32(0), bytes32(0), MIN_DELAY);
 
@@ -280,7 +283,7 @@ contract ConsensusRebalanceReceiptTest is Test {
         timelock.execute(address(receipts), 0, payload, bytes32(0), bytes32(0));
 
         assertTrue(receipts.isReleased(id), "timelock-routed release must succeed");
-        IConsensusRebalanceReceipt.Receipt memory r = receipts.getReceiptById(id);
+        IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(id);
         assertEq(r.releasedAt, uint64(block.timestamp));
     }
 
@@ -290,13 +293,13 @@ contract ConsensusRebalanceReceiptTest is Test {
         vm.prank(address(timelock));
         receipts.releaseReceipt(id);
         vm.prank(address(timelock));
-        vm.expectRevert(IConsensusRebalanceReceipt.ReceiptAlreadyReleased.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.ReceiptAlreadyReleased.selector);
         receipts.releaseReceipt(id);
     }
 
     function testReleaseUnknownReceiptReverts() public {
         vm.prank(address(timelock));
-        vm.expectRevert(IConsensusRebalanceReceipt.ReceiptNotFound.selector);
+        vm.expectRevert(IConsensusRecommendationReceipt.ReceiptNotFound.selector);
         receipts.releaseReceipt(keccak256("never-recorded"));
     }
 
@@ -312,7 +315,7 @@ contract ConsensusRebalanceReceiptTest is Test {
         assertTrue(receipts.isRecorded(id));
         assertFalse(receipts.isReleased(id), "a fresh receipt is unreleased");
 
-        IConsensusRebalanceReceipt.Receipt memory r = receipts.getReceipt(0);
+        IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceipt(0);
         assertEq(r.receiptId, id);
         assertEq(r.payloadDigest, digest);
         assertEq(r.payloadUri, PAYLOAD_URI);
@@ -332,7 +335,7 @@ contract ConsensusRebalanceReceiptTest is Test {
 
         vm.warp(block.timestamp + 3650 days);
 
-        IConsensusRebalanceReceipt.Receipt memory r = receipts.getReceiptById(id);
+        IConsensusRecommendationReceipt.Receipt memory r = receipts.getReceiptById(id);
         assertTrue(receipts.isRecorded(id), "record survives indefinitely");
         assertFalse(r.released, "no timeout releases a receipt");
         assertEq(r.recordedAt, recordedAt, "no timeout mutates a receipt");

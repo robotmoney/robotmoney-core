@@ -1,6 +1,6 @@
 //! Consensus-receipt liveness monitoring (issue #1247 task 4.13).
 //!
-//! Canonical: `docs/architecture.md` §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: `docs/architecture.md` §4.9 — Consensus Recommendation Receipt Contract
 //! Canonical: `docs/technical/consensus-receipt-submitter-runbook.md` §5.3
 //!
 //! # Why this exists

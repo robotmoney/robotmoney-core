@@ -1,10 +1,10 @@
-//! Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Implements: issue #1247 — anchor the consensus receipt on chain (rmpc side);
 //! discharges the second half of issue #1280 (the anchoring path must submit the
 //! digest pinned by `tests/fixtures/consensus-receipt.anchor-digest.json`).
 //!
 //! Canonicalization, digest derivation and Ed25519 verification for the swarm's
-//! **consensus rebalance receipt**.
+//! **consensus recommendation receipt**.
 //!
 //! The normative specification of these bytes is
 //! `tests/fixtures/consensus-receipt.canonicalization.json`, which is
@@ -253,7 +253,7 @@ pub struct BucketWeight {
     pub weight_bps: u32,
 }
 
-/// A consensus rebalance receipt, schema 1.0.
+/// A consensus recommendation receipt, schema 1.0.
 ///
 /// Unknown input fields are dropped rather than refused, matching the
 /// canonicalization contract's `evolution_rule` ("Unknown input fields are

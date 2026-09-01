@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+// Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 // Canonical: docs/product/20260623-product-proposal-investment-committee-v0.md §2.1
 // Implements: issue #1247 — (fusion) anchor the receipt on chain
 pragma solidity ^0.8.24;
 
-/// @title IConsensusRebalanceReceipt
-/// @notice Interface for the ConsensusRebalanceReceipt contract.
+/// @title IConsensusRecommendationReceipt
+/// @notice Interface for the ConsensusRecommendationReceipt contract.
 ///
 /// Design constraints (docs/architecture.md §4.9, settled by issue #1247 task 4.0):
 /// - **Signalling only.** Recording or releasing a receipt moves no value and
@@ -19,7 +19,7 @@ pragma solidity ^0.8.24;
 ///   `created_at`.
 /// - `recordReceipt` is `onlyGateway`; `releaseReceipt` is `ADMIN_ROLE`, which
 ///   the `TimelockController` holds (INV-3).
-interface IConsensusRebalanceReceipt {
+interface IConsensusRecommendationReceipt {
     // ─── Types ───────────────────────────────────────────────────────────────
 
     /// @notice A single on-chain consensus-receipt commitment.

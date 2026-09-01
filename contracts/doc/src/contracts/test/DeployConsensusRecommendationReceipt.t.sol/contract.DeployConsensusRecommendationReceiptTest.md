@@ -1,11 +1,11 @@
-# DeployConsensusRebalanceReceiptTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/743c60bd2a8cdaa5170640645e0c5bf35685c012/contracts/test/DeployConsensusRebalanceReceipt.t.sol)
+# DeployConsensusRecommendationReceiptTest
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2a9fcb34331b03f9e13845e26eac35a6f0cc7642/contracts/test/DeployConsensusRecommendationReceipt.t.sol)
 
 **Inherits:**
 Test
 
 **Title:**
-DeployConsensusRebalanceReceiptTest
+DeployConsensusRecommendationReceiptTest
 
 AC10: the receipt contract deploys **alongside**
 InvestmentCommitteePolicy in one ceremony, and AC2: `ADMIN_ROLE` on

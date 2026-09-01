@@ -1,4 +1,4 @@
-//! Canonical: docs/architecture.md §4.9 — Consensus Rebalance Receipt Contract
+//! Canonical: docs/architecture.md §4.9 — Consensus Recommendation Receipt Contract
 //! Canonical: docs/architecture.md §5.0 — Read Surface Taxonomy
 //! Implements: issue #1247 — consensus receipt API endpoint tests.
 //!
