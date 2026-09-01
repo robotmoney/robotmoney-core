@@ -63,7 +63,9 @@ jobs:
   pg:
     name: watchdog-integration
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30 (was 20): issue #1282 added cursor_and_volume (7 tests, ~25s locally),
+    # each test booting its own Postgres testcontainer.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,3 +88,21 @@ jobs:
       - name: Threshold breach integration test
         working-directory: services/watchdog
         run: cargo test --test threshold_breach -- --nocapture
+
+      # THE THIRD WATCHDOG TARGET NOTHING EXECUTED (issue #1282)
+      # tests/cursor_and_volume.rs is 569 lines and the largest test file in the
+      # crate -- it covers the indexer-cursor staleness alarm and the deposit
+      # volume anomaly detector, i.e. the two conditions the watchdog exists to
+      # raise. It was executed by no workflow: only alert_webhook and
+      # threshold_breach were ever named. It uses the same
+      # tests/common/mod.rs::try_pg_fixture Postgres testcontainer as the two
+      # steps above, so it needs nothing this job does not already have.
+      # Measured cost: 7 tests, ~25s wall clock locally.
+      #
+      # Wrapped in the executed-count guard so a zero-tests-collected run fails
+      # RED rather than passing as a silent skip.
+      - name: Cursor staleness + deposit volume anomaly integration test
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p watchdog \
+            --test cursor_and_volume -- --test-threads=1 --nocapture

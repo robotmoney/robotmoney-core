@@ -58,7 +58,10 @@ jobs:
   lint:
     name: rust-lint
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 25 (was 20): the logging-facade guard added by issue #1282 is the first
+    # `cargo test` in this job, so on a cold cache it codegens rmpc-logging and
+    # its (small) dependency tree that clippy had only ever type-checked.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,6 +80,22 @@ jobs:
 
       - name: cargo clippy (all crates, all targets)
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # WORKSPACE LOGGING-FACADE GUARD (issue #247, wired by issue #1282)
+      # crates/rmpc-logging/tests/workspace_uses_shared_facade.rs walks every
+      # binary and service entrypoint in the workspace and fails if one
+      # initialises logging with `tracing_subscriber::fmt()` instead of
+      # `rmpc_logging::init_service`. It is a source-text walk: no chain, no
+      # Docker, no fixture, ~0s runtime. It was executed by NO workflow, so the
+      # regression it exists to make load-bearing was not load-bearing at all.
+      # It belongs in this suite because its subject is workspace-wide Rust
+      # quality, which is what this suite is. Wrapped in the executed-count
+      # guard so a zero-tests-collected run fails RED, never silent-green.
+      - name: Workspace logging facade guard
+        run: |
+          bash .github/scripts/cargo_test_require_executed.sh \
+            -p rmpc-logging \
+            --test workspace_uses_shared_facade -- --nocapture
 
   audit:
     name: rust-audit
@@ -145,3 +164,48 @@ jobs:
           RUSTDOC_LOG="${RUNNER_TEMP}/robotmoney-rustdoc/rustdoc.log"
           cargo doc --no-deps --all-features 2>&1 | tee "${RUSTDOC_LOG}"
           python3 .github/scripts/check_rustdoc_coverage.py "${RUSTDOC_LOG}"
+
+  # INTEGRATION-TEST TARGET COVERAGE (issue #1282)
+  #
+  # Every Rust suite in this repository names its cargo test binaries by hand.
+  # There is no bare `cargo test` over a package and no `--test '*'` anywhere in
+  # .github/workflows, so adding a tests/<name>.rs file adds ZERO CI coverage
+  # unless a workflow is edited in the same change -- and nothing detected the
+  # omission. When this check was written it found 35 of 83 integration targets
+  # executed by nothing, including BOTH explorer-indexer reorg suites (issue
+  # #1283 shipped through that hole), clients/explorer-api/tests/endpoints.rs
+  # (42 tests) and clients/rust-payment-client/tests/cli_deposit.rs (687 lines).
+  #
+  # cargo_test_require_executed.sh already fails a target that IS invoked but
+  # collects zero tests. It cannot see a target nobody invoked. This job closes
+  # that half: it enumerates every target, resolves which (package, target)
+  # pairs the workflows actually run, and fails on any that is neither executed
+  # nor allowlisted with a stated reason.
+  #
+  # WHY IT IS ITS OWN JOB AND NOT A STEP IN `lint`
+  # It is pure Python over YAML and source paths -- no toolchain, no cargo cache,
+  # seconds to run. As its own job it reports independently and gives its answer
+  # even when the Rust build is broken, which is exactly when someone is most
+  # likely to be adding a test file.
+  #
+  # The second step drives the checker's OWN failure paths against synthetic
+  # trees (a dark target, an allowlist entry with no reason, a stale entry, an
+  # entry naming a target that does not exist). Without it the checker would
+  # only ever be observed passing, and a guard whose failure path never executes
+  # is a guard nobody has checked -- the same argument the manifest-ahead guard's
+  # self-test makes in suite 7.
+  test-target-coverage:
+    name: cargo-test-target-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Every integration-test target is executed or allowlisted
+        run: python3 .github/scripts/check_cargo_test_target_coverage.py --list-executed
+
+      - name: Exercise the coverage checker's failure paths
+        run: bash .github/scripts/tests/test_check_cargo_test_target_coverage.sh
