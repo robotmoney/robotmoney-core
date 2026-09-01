@@ -135,6 +135,32 @@ jobs:
       - name: Geth read-after-write state-lag doc/back-link invariant
         run: python3 .github/scripts/check_geth_state_lag_docs.py
 
+      # RUST tests/ COMPILE-COVERAGE GUARD (issue #1295)
+      # PyYAML is the only dependency this job adds; the guard parses
+      # .github/workflows/*.yml to find which jobs compile which crates' test
+      # targets. It needs no Rust toolchain, so it belongs in this fast job
+      # rather than behind a cargo build.
+      - name: Install workflow-parsing dependency
+        run: pip install pyyaml
+
+      - name: Self-test Rust tests/ compile-coverage guard (issue #1295)
+        # Seeds three fixtures — compliant, a `--lib` job that never compiles
+        # its crate's tests/, and a workspace lint with `--all-targets` dropped
+        # — and asserts the guard passes the first and fires on the other two.
+        # Runs BEFORE the real check so a silently broken guard cannot pass.
+        run: |
+          python3 .github/scripts/check_rust_test_target_compile_coverage.py \
+            --self-test
+
+      - name: Rust tests/ compile-coverage invariant (issue #1295)
+        # A crate's tests/ binaries are compiled by neither `cargo build
+        # --workspace` nor `cargo test --lib`. This asserts (A) every workspace
+        # member with tests/ is type-checked by an unconditional PR-stage job
+        # and (B) every job that runs `cargo test --lib` for a crate compiles
+        # that crate's tests/ in the same job — so a crate-named job cannot
+        # report green over test binaries that do not compile.
+        run: python3 .github/scripts/check_rust_test_target_compile_coverage.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest

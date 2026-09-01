@@ -54,8 +54,14 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: cargo clippy -p watchdog
-        run: cargo clippy -p watchdog -- -D warnings
+      # A crate's tests/ binaries are compiled by NOTHING in `cargo test --lib`
+      # (issue #1295). `--all-targets` type-checks them here, in the job named
+      # after the crate, so a struct literal that went short of a newly-required
+      # field fails in THIS job rather than only in the workspace-wide rust-lint
+      # nine minutes later. Enforced by
+      # .github/scripts/check_rust_test_target_compile_coverage.py.
+      - name: cargo clippy -p watchdog --all-targets (compiles tests/ binaries)
+        run: cargo clippy -p watchdog --all-targets -- -D warnings
 
       - name: cargo test -p watchdog --lib (unit tests, no Docker)
         run: cargo test -p watchdog --lib -- --nocapture
