@@ -26,6 +26,10 @@ describe("CSP policy", () => {
     expect(CSP_POLICY).toContain("frame-ancestors 'none'");
   });
 
+  it("allows the full-stack devnet receipt fixture origin", () => {
+    expect(CSP_POLICY).toContain("http://receipt-fixtures:8097");
+  });
+
   it("injects a CSP meta tag via transformIndexHtml", () => {
     const plugin = cspPlugin();
     const transform = plugin.transformIndexHtml;

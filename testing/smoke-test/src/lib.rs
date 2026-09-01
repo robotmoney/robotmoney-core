@@ -1426,31 +1426,55 @@ impl Fixture {
         );
         let gas_limit = self.estimate_gas_buffered(&from_hex, &to_hex, sig, args)?;
         let gas_limit_s = gas_limit.to_string();
-        let mut cmd = Command::new("cast");
-        cmd.args([
-            "send",
-            "--rpc-url",
-            &self.rpc_url,
-            "--private-key",
-            private_key_hex,
-            "--gas-limit",
-            &gas_limit_s,
-            &to_hex,
-            sig,
-        ]);
-        for a in args {
-            cmd.arg(a);
-        }
-        cmd.arg("--json");
-        let out = cmd.output()?;
-        logging::log_command_output("cast", &out);
-        if !out.status.success() {
-            return Err(HarnessError::other(format!(
-                "cast send {sig} failed: stdout={} stderr={}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
+        // Geth can briefly report the latest nonce behind a just-mined
+        // transaction when several independent EOAs are submitting to the
+        // same devnet. If cast consequently retries a nonce already present
+        // in the txpool, Geth rejects it as underpriced. Retry this narrow,
+        // transient error after a short backoff; all other send failures remain
+        // hard errors.
+        const NONCE_RETRY_DELAYS: [Duration; 4] = [
+            Duration::ZERO,
+            Duration::from_millis(500),
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        ];
+        let out = 'send: loop {
+            for (attempt, delay) in NONCE_RETRY_DELAYS.iter().enumerate() {
+                if !delay.is_zero() {
+                    thread::sleep(*delay);
+                }
+                let mut cmd = Command::new("cast");
+                cmd.args([
+                    "send",
+                    "--rpc-url",
+                    &self.rpc_url,
+                    "--private-key",
+                    private_key_hex,
+                    "--gas-limit",
+                    &gas_limit_s,
+                    &to_hex,
+                    sig,
+                ]);
+                for a in args {
+                    cmd.arg(a);
+                }
+                cmd.arg("--json");
+                let out = cmd.output()?;
+                logging::log_command_output("cast", &out);
+                if out.status.success() {
+                    break 'send out;
+                }
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if !stderr.contains("replacement transaction underpriced")
+                    || attempt + 1 == NONCE_RETRY_DELAYS.len()
+                {
+                    return Err(HarnessError::other(format!(
+                        "cast send {sig} failed: stdout={stdout} stderr={stderr}"
+                    )));
+                }
+            }
+        };
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
         let tx_hash = v
