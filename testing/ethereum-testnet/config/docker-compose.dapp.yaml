@@ -244,7 +244,7 @@ services:
       RECEIPT_FIXTURES_PORT: ${RECEIPT_FIXTURES_PORT:-8097}
     volumes:
       - ./consensus-receipt-fixtures:/fixtures:ro
-    command: ["sh", "-c", "python3 -m http.server \"$$RECEIPT_FIXTURES_PORT\""]
+    command: ["python3", "/fixtures/server.py"]
     ports:
       - "127.0.0.1:${RECEIPT_FIXTURES_PORT:-8097}:${RECEIPT_FIXTURES_PORT:-8097}"
     healthcheck:
