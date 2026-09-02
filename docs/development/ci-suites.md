@@ -800,6 +800,74 @@ invariant it restores.
 
 ---
 
+### 24. Base Sepolia deployment rehearsal
+**File:** `.github/workflows/suite-24-base-sepolia-rehearsal.yml`
+**CI class / tier:** `dry-run` = `system-correctness` (offline golden fork);
+`live` = `ignore` (operational real-testnet deployment ceremony, nightly + dispatch);
+`record-validator` = `code-hygiene`
+**Environment:** `none` (dry-run: anvil in-process; live: `staging` GitHub environment)
+**Trigger:** code-bearing changes only: dry-run on ready-for-review `pull_request`s
+to `dev` + `push` to `dev` + `workflow_dispatch` + nightly; live on `schedule`
+(nightly 03:30 UTC) + `workflow_dispatch` only — **never** on `pull_request`
+(needs live RPC + funded key). `record-validator` runs on the same code-bearing
+triggers. Markdown/text-only changes skip this code-only workflow.
+
+Rehearses the full 8-step Base Sepolia deployment ceremony
+(`docs/operations/base-sepolia-deployment.md`) end-to-end. The dry-run boots a
+fresh local anvil fork from the checked-in golden fixture (no secrets, no
+network, deterministic), runs all deploy scripts with `--broadcast --slow`, and
+asserts every postcondition via `cast call`. The live job runs the same ceremony
+against real Base Sepolia with funded testnet keys, proving the sequence
+completes on a real chain with real gas and nonce behavior.
+
+**Design rationale:**
+- The dry-run is an offline system-correctness check (no Docker, no devnet); it
+  runs once a PR is ready for review, catching ceremony sequencing bugs before
+  they reach the live job.
+- The live job is nightly + dispatch only: it requires secrets (`BASE_SEPOLIA_RPC_URL`,
+  `BASE_SEPOLIA_DEPLOYER_KEY`, role addresses) and consumes testnet ETH.
+- Suite 21 dispatches this workflow nightly, so `live` intentionally fails loudly
+  until the `BASE_SEPOLIA_*` secrets are provisioned; that red records missing
+  external coverage rather than a skipped rehearsal.
+- The `record-validator` job runs the existing `.github/scripts/check_base_sepolia_record.py`
+  against `deployments/base-sepolia.json` so a malformed or false-green record
+  cannot merge silently.
+- A minimal `RehearsalSafe` contract (`contracts/script/DeployRehearsalSafe.s.sol`)
+  satisfies `DeployTimelock._validate`'s code-length and `getThreshold() >= 2`
+  checks without pulling in the full OpenZeppelin Safe dependency tree.
+
+**Jobs:**
+- `dry-run` — offline ceremony against local anvil fork; runs on ready-for-review
+  PRs, push to `dev`, workflow_dispatch, and nightly; 15 min timeout
+- `live` — real Base Sepolia ceremony; runs nightly + workflow_dispatch only; 30
+  min timeout; uses `staging` GitHub environment; fails loudly if secrets are absent
+- `record-validator` — code-hygiene validation of `deployments/base-sepolia.json`
+  against the record contract; runs on every code-bearing trigger
+
+**Steps — `dry-run` job:**
+1. Checkout repository (recursive submodules)
+2. Install Foundry toolchain (pinned v1.7.1, matching suite 13)
+3. `bash scripts/base-sepolia-rehearsal/dry-run.sh` — boots local anvil fork, funds
+   addresses, runs the full 8-step ceremony, asserts all postconditions, writes
+   and validates the deployment record
+
+**Steps — `live` job:**
+1. Checkout repository (recursive submodules)
+2. Install Foundry toolchain (pinned v1.7.1, matching suite 13)
+3. Pre-flight secret check — fails immediately if `BASE_SEPOLIA_RPC_URL` or
+   `BASE_SEPOLIA_DEPLOYER_KEY` are missing (no `if`-conditional skip)
+4. `bash scripts/base-sepolia-rehearsal/live.sh` — runs `rehearsal.sh --live`
+   against real Base Sepolia; diagnostic logging of RPC reachability, chain id,
+   deployer balance before the ceremony
+
+**Steps — `record-validator` job:**
+1. Checkout repository
+2. `python3 .github/scripts/check_base_sepolia_record.py` — validates the
+   deployment record is well-formed, chain_id=84532, rehearsal=true, all
+   address fields present and lowercase hex
+
+---
+
 ## Integration-test target coverage
 
 Every Rust suite here names its cargo test binaries **by hand** — `cargo test
@@ -1078,6 +1146,7 @@ Every workflow's `name:` and its tier.
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
 | `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
+| `base-sepolia-rehearsal` | quick (dry-run) / nightly (live) | offline ceremony against golden fork (PR-gated) + live Base Sepolia ceremony (nightly/dispatch, `staging` env); loud-fail on missing secrets |
 
 ### Known limitations: release-rmpc selftest macOS non-vacuity guard
 
@@ -1125,3 +1194,4 @@ PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
 | 21 | `suite-21-nightly.yml` | `dispatch-all-suites` | `none` |
 | 22 | `suite-22-formal-verification.yml` | `forge-formal-verification` | `none` |
 | 23 | `suite-23-skill-url-reachability.yml` (live, sweep-only) + `suite-23-skill-url-monitor-selftest.yml` (`reachability-selftest`, every PR) | asserts every published raw `SKILL.md` URL returns 200, including the deprecated compat stubs; the selftest proves the monitor fails red (#1199) | `none` (live network) |
+| 24 | `suite-24-base-sepolia-rehearsal.yml` | `dry-run` \| `live` (nightly) \| `record-validator` | `none` (anvil) / `staging` |

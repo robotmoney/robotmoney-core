@@ -1,0 +1,150 @@
+# Canonical: docs/development/ci-suites.md §24
+#
+# Base Sepolia deployment rehearsal: offline dry-run (LIGHT) + live ceremony (NIGHTLY/dispatch).
+#
+# WHY THIS SUITE EXISTS
+# The Base Sepolia deployment ceremony (vault → adapters → gateway → registry →
+# router → governance → IC policy + receipt → timelock) must be rehearsed before any mainnet
+# commitment. The dry-run verifies the full ceremony against a local offline anvil
+# fork (no secrets, no network, deterministic). The live job runs against real
+# Base Sepolia with funded testnet keys, proving the ceremony completes on a real
+# chain with real gas and nonce behavior.
+#
+# WHY DRY-RUN IS LIGHT (PR-gated)
+# The dry-run boots a fresh anvil from the checked-in golden fixture — no Docker,
+# no devnet, no secrets. It finishes in under 3 minutes and catches ceremony
+# sequencing bugs before they reach the live job.
+#
+# WHY LIVE IS NIGHTLY-ONLY
+# The live job requires secrets (RPC URL, deployer key, role addresses) and
+# consumes testnet ETH. Running it on every PR would be wasteful and fragile.
+# Nightly + dispatch provides adequate coverage for a rehearsal that cannot
+# regress silently (the ceremony is a single sequential flow).
+
+name: base-sepolia-rehearsal
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore: ['**.md', '**.txt']
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['**.md', '**.txt']
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"  # 03:30 UTC nightly, offset from suite 21
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # dry-run: offline ceremony against local anvil fork (LIGHT tier, PR-gated)
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Full deployment ceremony is an offline cross-component integration test:
+    # defer it until a PR is ready for review, but retain merged-commit and sweep
+    # coverage. Docs-only changes bypass the workflow through the trigger filter.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    env:
+      CI_CLASS: system-correctness
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Run dry-run ceremony
+        run: bash scripts/base-sepolia-rehearsal/dry-run.sh
+
+  # ---------------------------------------------------------------------------
+  # live: real Base Sepolia ceremony (NIGHTLY + dispatch, needs secrets)
+  # ---------------------------------------------------------------------------
+  live:
+    name: live-ceremony
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only on schedule and manual dispatch — never on pull_request (needs secrets + funded key).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    env:
+      # This is an operational deployment ceremony that changes Base Sepolia,
+      # not a CI test suite. It is intentionally excluded from PR taxonomy
+      # contexts and is constrained to schedule/manual dispatch by the guard.
+      CI_CLASS: ignore
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Pre-flight secret check
+        env:
+          BASE_SEPOLIA_RPC_URL: ${{ secrets.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_DEPLOYER_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_KEY }}
+        run: |
+          MISSING=()
+          [ -z "$BASE_SEPOLIA_RPC_URL" ] && MISSING+=(BASE_SEPOLIA_RPC_URL)
+          [ -z "$BASE_SEPOLIA_DEPLOYER_KEY" ] && MISSING+=(BASE_SEPOLIA_DEPLOYER_KEY)
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${MISSING[*]}"
+            exit 1
+          fi
+
+      - name: Run live ceremony
+        env:
+          BASE_SEPOLIA_RPC_URL: ${{ secrets.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_DEPLOYER_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_KEY }}
+          BASE_SEPOLIA_ADMIN_ADDRESS: ${{ secrets.BASE_SEPOLIA_ADMIN_ADDRESS }}
+          BASE_SEPOLIA_PAUSER_ADDRESS: ${{ secrets.BASE_SEPOLIA_PAUSER_ADDRESS }}
+          BASE_SEPOLIA_AGENT_ADDRESS: ${{ secrets.BASE_SEPOLIA_AGENT_ADDRESS }}
+          BASE_SEPOLIA_SHARE_RECEIVER_ADDRESS: ${{ secrets.BASE_SEPOLIA_SHARE_RECEIVER_ADDRESS }}
+          BASE_SEPOLIA_EMERGENCY_ADDRESS: ${{ secrets.BASE_SEPOLIA_EMERGENCY_ADDRESS }}
+          BASE_SEPOLIA_SAFE_ADDRESS: ${{ secrets.BASE_SEPOLIA_SAFE_ADDRESS }}
+          BASE_SEPOLIA_USDC_ADDRESS: ${{ secrets.BASE_SEPOLIA_USDC_ADDRESS }}
+          BASE_SEPOLIA_RECEIPT_ADMIN_ADDRESS: ${{ secrets.BASE_SEPOLIA_RECEIPT_ADMIN_ADDRESS }}
+          BASE_SEPOLIA_TIMELOCK_MIN_DELAY: ${{ secrets.BASE_SEPOLIA_TIMELOCK_MIN_DELAY || '172800' }}
+          BASE_SEPOLIA_VOTING_PERIOD: ${{ secrets.BASE_SEPOLIA_VOTING_PERIOD || '3600' }}
+          BASE_SEPOLIA_EXECUTION_DELAY: ${{ secrets.BASE_SEPOLIA_EXECUTION_DELAY || '3600' }}
+          BASE_SEPOLIA_QUORUM_THRESHOLD: ${{ secrets.BASE_SEPOLIA_QUORUM_THRESHOLD || '2' }}
+        run: bash scripts/base-sepolia-rehearsal/live.sh
+
+  # ---------------------------------------------------------------------------
+  # record-validator: assert the deployment record is well-formed (PR-gated)
+  # ---------------------------------------------------------------------------
+  record-validator:
+    name: record-validator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI_CLASS: code-hygiene
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment record
+        run: |
+          if [ -f deployments/base-sepolia.json ]; then
+            python3 .github/scripts/check_base_sepolia_record.py deployments/base-sepolia.json
+          else
+            echo "WARN: deployments/base-sepolia.json not found — checking example record" >&2
+            python3 .github/scripts/check_base_sepolia_record.py
+          fi
