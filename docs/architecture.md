@@ -181,9 +181,12 @@ caps, an exit fee ceiling, adapter routing, rebalance controls, and
 emergency shutdown. It is a direct non-proxy deployment on Base.
 
 The source tree also contains the basket-vault family — an abstract
-`BasketVault` base with Uniswap V3 TWAP NAV pricing and slippage
-controls, plus concrete `ProtocolAssetVault` (wETH/cbBTC/wSOL exposure)
-and `AgentTokenVault` (admin-curated agent-economy tokens) subclasses.
+`BasketVault` base with hybrid NAV model: Uniswap V3 TWAP pricing for
+protocol-level guards (NAV growth limit, ORA-4 deviation, TVL cap), while
+user share value = market price of underlying assets. See
+`docs/technical/asset-valuation-hybrid.md` for the hybrid design rationale.
+Concrete `ProtocolAssetVault` (wETH/cbBTC/wSOL exposure) and
+`AgentTokenVault` (admin-curated agent-economy tokens) subclasses.
 Router eligibility for any vault — basket-vault or otherwise — is
 registry state expressed by `VaultRegistry.isRouterEligible(vault)`,
 set by ADMIN_ROLE via `setRouterEligible`. Basket vaults stay
@@ -199,16 +202,20 @@ for tokenised real-world assets. The current deployment holds deSPXA
 (Centrifuge / Janus Henderson / Anemoy tokenised S&P 500 on Base).
 Key architectural characteristics:
 
-- **Entry and exit via Aerodrome secondary market only.** Primary NAV
-  redemption through the Centrifuge V3 ERC-7540 epoch operator is a
-  permanent non-goal: a permissionless smart-contract vault cannot
+- **Entry and exit via Aerodrome secondary market only.** NAV (TWAP) prices
+  protocol-level guards (growth limit, ORA-4 deviation, TVL cap); user share
+  value = market price of held deSPXA tokens. See
+  `docs/technical/asset-valuation-hybrid.md` for the hybrid design rationale.
+  Primary NAV redemption through the Centrifuge V3 ERC-7540 epoch operator
+  is a permanent non-goal: a permissionless smart-contract vault cannot
   satisfy the KYC requirement. All deposits and withdrawals swap
   USDC↔deSPXA through an Aerodrome CL pool.
 - **Chronicle push oracle for NAV pricing.** Aerodrome DEX TWAP is
   unsuitable for thin RWA liquidity. `ChronicleOracleAdapter` prices NAV
   and slippage floors via a Chronicle on-chain signed price feed.
   `RwaVault` enforces a heartbeat window (default 24 h); price-sensitive
-  operations revert with `StalePriceFeed` if the feed is stale.
+  operations revert with `StalePriceFeed` if the feed is stale. NAV used
+  for system guards only; user position value via separate market pricing.
 - **Issuer freeze-control risk.** The deSPXA issuer may freeze token
   transfers at any time, blocking all Aerodrome swaps and therefore all
   vault deposits and withdrawals. Existing rmRWA holders retain their
@@ -348,8 +355,13 @@ deltas from the current state:
   `IBasketSwapAdapter` venue seam (Aerodrome, Uniswap V4,
   Chronicle-priced Aerodrome), and self-price via TWAP or Chronicle —
   custody and pricing move out of the vault and into the adapter.
-- The vault mints on realized NAV delta, which degenerates to the
-  exact-amount accounting the lending adapters already exhibit.
+- The vault mints on realized NAV delta for **protocol-level guards only**
+  (NAV growth limit, ORA-4 deviation, TVL cap, withdrawal liveness). User
+  share VALUE = market price of underlying assets held; NAV is system
+  accounting. See `docs/technical/asset-valuation-hybrid.md` for the hybrid
+  design rationale.
+  The vault's realized NAV delta degenerates to the exact-amount accounting
+  the lending adapters already exhibit (at protocol level, not user level).
 - `withdraw()` is permitted iff every active adapter reports
   `isExact()`; otherwise the vault is redeem-only.
 - Governance controls apply uniformly per adapter: allowlist plus
