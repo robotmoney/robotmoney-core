@@ -117,12 +117,18 @@ jobs:
         continue-on-error: true
         env:
           FORK_RPC_URL: ${{ vars.RMPC_FORK_RPC_URL || 'https://base-rpc.publicnode.com' }}
+        run: scripts/devnet/run-live-base-fork-drift.sh
+      - name: Report unavailable live fork provider
+        if: steps.drift.outputs.classification == 'provider'
         run: |
-          forge test --match-path "contracts/test/VaultForkRegressions.t.sol" -vvv
-          forge test --match-contract "DeploySeedDeposit" -vvv
-          forge test --match-path "contracts/test/SafeIntegration.t.sol" -vvv
+          echo "::warning::Live Base fork provider remained unavailable after retries; no drift issue was created."
+      - name: Report invalid live fork harness
+        if: steps.drift.outputs.classification == 'harness'
+        run: |
+          echo "::error::Live Base fork alarm did not execute its selected tests; no drift issue was created."
+          exit 1
       - name: Open or update fork drift tracking issue
-        if: steps.drift.outcome == 'failure'
+        if: steps.drift.outputs.classification == 'drift'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
