@@ -706,11 +706,6 @@ jobs:
           RELEASED="${RELEASED#v}"
 
           BRANCH="chore/post-release-manifest-bump-${NEXT}"
-          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
-            echo "branch ${BRANCH} already exists on origin — the bump PR was already opened"
-            exit 0
-          fi
-
           TITLE="chore(rmpc): bump manifest to ${NEXT} after releasing ${VERSION}"
 
           # Written to a file rather than inlined so the message keeps its line
@@ -726,6 +721,26 @@ jobs:
 
           Runbook: docs/development/releasing.md. Reconciliation: issue #1243.
           EOF
+
+          # A retry can arrive after a prior run pushed the branch but failed at
+          # `gh pr create` (for example, because the repository disallows
+          # Actions from creating PRs). A branch alone is not completion: only
+          # an open PR means the bump can reach dev. Check the actual PR before
+          # treating this job as green.
+          if git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+            if [ "$(gh pr list --base dev --head "${BRANCH}" --state open --json number --jq 'length')" -gt 0 ]; then
+              echo "open bump PR already exists for ${BRANCH}"
+              exit 0
+            fi
+
+            echo "branch ${BRANCH} exists on origin but has no open bump PR; retrying PR creation"
+            gh pr create \
+              --base dev \
+              --head "${BRANCH}" \
+              --title "${TITLE}" \
+              --body-file "${RUNNER_TEMP}/bump-body.md"
+            exit 0
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
