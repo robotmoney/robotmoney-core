@@ -39,5 +39,14 @@ export default defineConfig({
   use: {
     trace: "retain-on-failure",
     screenshot: "on",
+    // Issue #1294: the consensus-receipt `payload_uri` serves fixture bytes
+    // from the `receipt-fixtures` compose service, which is reachable from
+    // within Docker by its service name but not from the Playwright browser on
+    // the host. Map that hostname straight to 127.0.0.1 (the service publishes
+    // its host port on loopback) so the browser fetches the SAME literal URL
+    // the explorer-indexer verifies against. Everything else resolves normally.
+    launchOptions: {
+      args: ["--host-resolver-rules=MAP receipt-fixtures 127.0.0.1"],
+    },
   },
 });

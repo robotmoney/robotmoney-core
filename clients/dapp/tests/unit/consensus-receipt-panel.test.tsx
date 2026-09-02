@@ -13,6 +13,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { ConsensusReceiptPanel } from "../../src/components/ConsensusReceiptPanel";
 import {
   computeAppliedState,
+  ConsensusReceiptApiClient,
   parseVaultAddressMap,
   payloadSignatureCount,
   type ReceiptPayload,
@@ -158,6 +159,25 @@ describe("payloadSignatureCount", () => {
 
   it("returns null rather than 0 when the payload is unavailable", () => {
     expect(payloadSignatureCount(null)).toBeNull();
+  });
+});
+
+describe("ConsensusReceiptApiClient", () => {
+  it("binds the browser fetch default to its global receiver", async () => {
+    const originalFetch = globalThis.fetch;
+    const browserFetch = async function (this: typeof globalThis) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return { ok: true, status: 200, json: async () => ({ receipts: [] }) };
+    };
+
+    globalThis.fetch = browserFetch as unknown as typeof globalThis.fetch;
+    try {
+      await expect(
+        new ConsensusReceiptApiClient("https://api.test").listReceipts(),
+      ).resolves.toEqual({ receipts: [] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

@@ -51,6 +51,9 @@ const REQUIRED_KEYS = [
   // Issue #477: governance fresh-account E2E.
   "governance_addr",
   "rm_token_addr",
+  // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
+  "ic_policy_addr",
+  "consensus_receipt_addr",
 ] as const;
 type RequiredKey = (typeof REQUIRED_KEYS)[number];
 
@@ -189,6 +192,9 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     // Issue #477: governance fresh-account E2E.
     governance_addr: raw.governance_addr,
     rm_token_addr: raw.rm_token_addr,
+    // Issue #1294: consensus receipt dapp e2e against the full-stack devnet.
+    ic_policy_addr: raw.ic_policy_addr,
+    consensus_receipt_addr: raw.consensus_receipt_addr,
   };
 
   console.log("devnet-global-setup: endpoint summary received");

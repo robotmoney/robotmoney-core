@@ -271,6 +271,11 @@ fn run() -> i32 {
         // RouterGovernance and RmToken without hard-coding them.
         println!("governance_addr={:#x}", fixture.governance());
         println!("rm_token_addr={:#x}", fixture.rm_token());
+        // Issue #1294: surface the IC policy + consensus receipt addresses so
+        // the dapp e2e consensus-receipts spec can locate them without
+        // hard-coding devnet addresses.
+        println!("ic_policy_addr={:#x}", fixture.ic_policy());
+        println!("consensus_receipt_addr={:#x}", fixture.consensus_receipt());
         // Issue #363: surface real adapter addresses for dapp e2e tests.
         println!("aave_adapter_addr={:#x}", fixture.aave_adapter());
         println!("compound_adapter_addr={:#x}", fixture.compound_adapter());

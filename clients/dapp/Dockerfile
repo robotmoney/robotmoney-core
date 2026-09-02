@@ -37,6 +37,12 @@ ARG VITE_GOVERNANCE_ADDRESS=0x0000000000000000000000000000000000000000
 # RM row and the Faucet tab 'Get RM tokens' button. Defaults to zero so
 # standalone builds without the smoke-test harness hide the RM surfaces.
 ARG VITE_RM_TOKEN_ADDRESS=0x0000000000000000000000000000000000000000
+# Issue #1294: bucket-vault-symbol -> address JSON map (rmUSDC, rmPROTO,
+# rmAGENT, rmRWA) so ConsensusReceiptPanel can compute the applied/
+# not-applied state against live router weights. Defaults to empty so
+# standalone builds degrade to "cannot determine" (see
+# clients/dapp/src/lib/consensusReceiptApi.ts parseVaultAddressMap).
+ARG VITE_VAULT_ADDRESSES=
 
 ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_GATEWAY_ADDRESS=$VITE_GATEWAY_ADDRESS \
@@ -51,7 +57,8 @@ ENV VITE_EXPLORER_API_URL=$VITE_EXPLORER_API_URL \
     VITE_REGISTRY_ADDRESS=$VITE_REGISTRY_ADDRESS \
     VITE_ROUTER_ADDRESS=$VITE_ROUTER_ADDRESS \
     VITE_GOVERNANCE_ADDRESS=$VITE_GOVERNANCE_ADDRESS \
-    VITE_RM_TOKEN_ADDRESS=$VITE_RM_TOKEN_ADDRESS
+    VITE_RM_TOKEN_ADDRESS=$VITE_RM_TOKEN_ADDRESS \
+    VITE_VAULT_ADDRESSES=$VITE_VAULT_ADDRESSES
 
 COPY clients/dapp/package.json clients/dapp/bun.lock ./
 RUN bun install --frozen-lockfile

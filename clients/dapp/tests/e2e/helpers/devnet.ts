@@ -34,6 +34,10 @@ export interface DevnetEndpoints {
   governance_addr: string;
   /** RmToken ERC-20 address used for governance voting power (issue #477). */
   rm_token_addr: string;
+  /** InvestmentCommitteePolicy contract address (issue #1247/#1294). */
+  ic_policy_addr: string;
+  /** ConsensusRebalanceReceipt contract address (issue #1247/#1294). */
+  consensus_receipt_addr: string;
 }
 
 export function loadEndpoints(): DevnetEndpoints {
