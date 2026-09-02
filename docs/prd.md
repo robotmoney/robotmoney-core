@@ -113,6 +113,7 @@ Access expectations:
   create, expand, or redirect an individual depositor's agent policy.
 - Authorization depends on relationship: a depositor controls only their
   own positions, agent policies, recipients, and permissions.
+- **NAV disclosure:** Vault shares are minted/redeemed proportional to realized NAV delta (ERC-4626 convention). User's share VALUE = market price of underlying assets; NAV is system accounting for protocol guards (growth limit, ORA-4 deviation, TVL cap). UI explicitly discloses this distinction at every point NAV appears.
 
 ## 4. User Stories
 
@@ -345,6 +346,8 @@ Common edge cases:
   products let a holder redeem shares for their current value.
 - Product surfaces must expose fees, net amounts, destinations,
   recipients, limits, and refusal reasons in user-facing language.
+- **NAV disclosure in UIs:** Whenever NAV is displayed (position value, preview estimates, performance metrics), the surface must include the disclaimer: "NAV is the protocol's system-level valuation, used for growth limits and guards. Your share value = market price of underlying assets. See help for details."
+- Product surfaces must itemize fees and slippage in user-facing language where preview estimates diverge from market-adjusted outcomes.
 - Autonomous-agent access must remain bounded by depositor-defined
   amount limits, destination limits, recipients, and expiration.
 - A depositor must remain the authority over their own agent policy.

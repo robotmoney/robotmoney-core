@@ -24,6 +24,38 @@ Examples:
 - Agent-token vault.
 - Future thematic or RWA vaults.
 
+## NAV (Net Asset Value)
+
+Dual-role system valuation:
+
+1. **System-layer role:** NAV = aggregate `totalAssets()` across all active
+   counted adapters. Used for protocol guards: NAV growth rate limiter
+   (prevents admin inflation per §4.3a), ORA-4 NAV-deviation guard (reverts
+   entry-side `deploy()` if market spot > TWAP + 2000 bps), TVL cap
+   enforcement, and withdrawal liveness (exempt from NAV growth gate, per
+   design rationale #1211). This NAV is on-chain, contract-enforced, and
+   atomically consistent.
+
+2. **User-layer role:** User share VALUE = market price of underlying
+   assets held (via adapter routing), NOT this on-chain NAV. The protocol
+   explicitly separates these: NAV guards the system; users' economic
+   outcomes depend on market prices and adapter routing quality. UI must
+   disclose this distinction at every point NAV appears (per
+   `docs/prd.md` §NAV disclosure and `docs/technical/asset-valuation-hybrid.md`
+   hybrid design rationale).
+
+   Mathematical: `user_share_value_market ≠ totalAssets() / supply`,
+   though both are derived from the same underlying adapter `totalAssets()`
+   calls. Divergence occurs due to: TWAP vs. spot pricing, adapter slippage,
+   fee distribution, and market movement between deposit and withdrawal.
+
+Note: `totalAssets()` is the load-bearing C1 denominator for ERC-4626
+conformity (share mint/burn), but its value does not equate to user
+economic outcome. See `docs/technical/asset-flow-semantics.md` for
+implicit vs. explicit asset flow design, and
+`docs/technical/asset-valuation-hybrid.md` for the hybrid approach
+rationale.
+
 ## Underlying Vault
 
 An underlying vault is any individual Robot Money vault used as a
