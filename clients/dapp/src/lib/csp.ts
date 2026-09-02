@@ -43,7 +43,18 @@ const CSP_DIRECTIVES: Array<[string, string[]]> = [
   // smoke-test devnet exposes the Geth RPC and explorer-api on 127.0.0.1:<port>
   // (testing/smoke-test emits http://127.0.0.1 URLs), and without this the dapp's
   // own CSP blocks every devnet connection in suite-10 dapp-e2e (issue #665 CSP).
-  ["connect-src", ["'self'", "https:", "wss:", "ws:", "http://localhost:*", "http://127.0.0.1:*"]],
+  [
+    "connect-src",
+    [
+      "'self'",
+      "https:",
+      "wss:",
+      "ws:",
+      "http://localhost:*",
+      "http://127.0.0.1:*",
+      "http://receipt-fixtures:8097",
+    ],
+  ],
   ["worker-src", ["'self'", "blob:"]],
   ["object-src", ["'none'"]],
   ["base-uri", ["'self'"]],

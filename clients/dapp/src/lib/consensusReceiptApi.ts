@@ -113,7 +113,7 @@ export class ConsensusReceiptApiClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
 
-  constructor(baseUrl: string, fetchImpl: FetchLike = globalThis.fetch) {
+  constructor(baseUrl: string, fetchImpl: FetchLike = globalThis.fetch.bind(globalThis)) {
     this.baseUrl = trimBase(baseUrl);
     this.fetchImpl = fetchImpl;
   }
