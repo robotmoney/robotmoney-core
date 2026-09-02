@@ -1079,6 +1079,26 @@ Every workflow's `name:` and its tier.
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
 | `deploy-contracts` | release | dispatch-only; deploys protocol contracts and asserts BaseScan source verification within one hour (security-model.md §8 / §13) |
 
+### Known limitations: release-rmpc selftest macOS non-vacuity guard
+
+The guard exists to prove the macOS no-sha256sum packaging simulation is not
+vacuous, but the independent security review on PR #1304 (issue #1292) found
+two placements that still fool it:
+
+- The matrix walker (`scripts/release/install-rmpc-selftest.sh:755-758`)
+  matches `runner:` at ANY depth inside a matrix entry — a nested
+  `something: {runner: macos-latest}` under a ubuntu entry counts 1 macOS
+  build on a workflow that builds on zero macOS targets; GitHub ignores the
+  nested key for runner selection, so the workflow stays valid and green.
+- It never reads the job-level `runs-on` that actually selects the runner
+  (`.github/workflows/release-rmpc.yml:358`); a static `runs-on: ubuntu-latest`
+  still reports 2 macOS runners.
+
+Both make the guard vacuous while the harness stays green — a CI-honesty gap,
+not a containment breach (the allow-list fix is unaffected). The "two-edit
+rule" comment (`release-rmpc.yml:484-487`) is actually three edits: the
+PKG_ENV_NAMES pin (`install-rmpc-selftest.sh:1402-1409`) needs updating too.
+
 ---
 
 ## Summary
