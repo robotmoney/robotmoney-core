@@ -86,6 +86,9 @@ jobs:
       - name: Source-doc reconciliation
         run: python3 .github/scripts/check_source_doc_reconciliation.py
 
+      - name: Fusion proposal / architecture close-out invariant (issue #1249)
+        run: python3 .github/scripts/check_fusion_closeout_docs.py
+
       - name: environments.md script-paths and env-var coverage
         run: python3 .github/scripts/check_environments_doc.py
 
