@@ -23,6 +23,8 @@
 - [DeployInvestmentCommitteePolicy](DeployInvestmentCommitteePolicy.s.sol/contract.DeployInvestmentCommitteePolicy.md)
 - [DeployPortfolioRouter](DeployPortfolioRouter.s.sol/contract.DeployPortfolioRouter.md)
 - [DeployProtocolAssetVault](DeployProtocolAssetVault.s.sol/contract.DeployProtocolAssetVault.md)
+- [RehearsalSafe](DeployRehearsalSafe.s.sol/contract.RehearsalSafe.md)
+- [DeployRehearsalSafe](DeployRehearsalSafe.s.sol/contract.DeployRehearsalSafe.md)
 - [DeployRmToken](DeployRmToken.s.sol/contract.DeployRmToken.md)
 - [DeployRouterGovernance](DeployRouterGovernance.s.sol/contract.DeployRouterGovernance.md)
 - [ISafeMinimal](DeployTimelock.s.sol/interface.ISafeMinimal.md)
