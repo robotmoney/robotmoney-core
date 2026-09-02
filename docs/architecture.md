@@ -1323,6 +1323,27 @@ the preview reads the agent's live registration status before signing.
 Committee-specific failures map to the existing stable product reason codes
 (§7.2) — no new codes are required.
 
+### 7.5 Consensus Recommendation Receipt Contract
+
+A consensus receipt follows the same preview → verify → sign → execute boundary
+as a committee vote, while preserving the extra off-chain signature check that
+the EVM cannot perform. `rmpc receipt verify` canonicalizes the receipt and
+verifies every embedded analyst Ed25519 signature before reporting the derived
+digest and receipt id (§5.1). `rmpc receipt submit` repeats those checks before
+loading a signer, taking a nonce lock, or calling
+`RobotMoneyGateway.consensusRecordReceipt`; a tampered or unsupported receipt
+therefore never reaches the chain.
+
+The receipt is a protocol-scope public record once indexed (§5.4). It exposes
+the distinction between recorded, verified, released, and applied states rather
+than implying that an on-chain anchor proves every analyst approved it or that a
+release moves funds. A released receipt may cause a worker to draft a
+`RouterGovernance.propose` item for human review, but it never authorizes an
+unattended governance submission. The normal failure surface is explicit:
+canonicalization or signature failure refuses submission; an unreachable URI or
+digest mismatch remains visible as an unverified indexed record; and an
+unreleased or stale receipt is non-actionable.
+
 ## 8. Security Constraints
 
 These constraints are mandatory for implementation plans derived from
@@ -1409,7 +1430,7 @@ this architecture:
 | Source doc | Rules applied | Rules not applicable |
 | --- | --- | --- |
 | `docs/prd.md` | Problem statement, success metrics, user roles, user stories, workflows, entity lifecycles, integration needs, constraints, out-of-scope boundaries, and the Investment Committee capability (roles, Committee Vote workflow, lifecycle, constraints, INV-4). | Implementation sequencing. |
-| `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership. Used for §2.4, §4.8, §5.1/§5.3/§5.4/§5.5, §7.4. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
+| `docs/product/20260623-product-proposal-investment-committee-v0.md` | Investment Committee scope: extend `rmpc`/analyst/dapp, a signalling-only IC policy contract feeding RouterGovernance, gateway-routed signed votes, admin-gated membership, and local-devnet consensus receipt anchoring. Used for §2.4, §4.8/§4.9, §5.1/§5.3/§5.4/§5.5, §7.4/§7.5. | Product positioning and GTM framing; committee capabilities the proposal excludes from scope (inter-agent debate, retail conversion, network-effect mechanics, engineered Sybil resistance). |
 | `docs/technical/definitions.md` | Canonical meanings for vault, underlying vault, adapter, receipt, router, portfolio position, composite view, router weights, governance, and agent policy. | None. |
 | `docs/technical/adapter-architecture.md` | Adapter interface, vault flow, implemented adapters, adapter controls, risk model, router-vs-adapter separation. | Portfolio Router implementation details; the doc explicitly excludes router design. |
 | `docs/technical/smart-contracts.md` | Current Base deployments, ERC-4626 vault behavior, roles, caps, fees, emergency paths, adapter source behavior, share-scale mitigation, VaultRegistry, PortfolioRouter, RouterGovernance, and basket-vault family (BasketVault base class and ProtocolAssetVault/AgentTokenVault/RwaVault subclasses). | None. |
