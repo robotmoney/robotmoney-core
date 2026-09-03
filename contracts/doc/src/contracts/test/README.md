@@ -182,6 +182,7 @@
 - [UniV4PositionForkMockRouter](UniswapV4AssetPositionAdapter.t.sol/contract.UniV4PositionForkMockRouter.md)
 - [UniV4PositionForkMockPool](UniswapV4AssetPositionAdapter.t.sol/contract.UniV4PositionForkMockPool.md)
 - [UniV4AssetPositionAdapterForkTest](UniswapV4AssetPositionAdapter.t.sol/contract.UniV4AssetPositionAdapterForkTest.md)
+- [UniswapV4RouterEligibilityIntegrationTest](UniswapV4RouterEligibilityIntegration.t.sol/contract.UniswapV4RouterEligibilityIntegrationTest.md)
 - [MigUsdc](V2MigrationIntegration.t.sol/contract.MigUsdc.md)
 - [MigVault](V2MigrationIntegration.t.sol/contract.MigVault.md)
 - [V2MigrationIntegrationTest](V2MigrationIntegration.t.sol/contract.V2MigrationIntegrationTest.md)
