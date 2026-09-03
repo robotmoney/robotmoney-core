@@ -8,9 +8,10 @@
 //! issue #1192 — safe passphrase input (protected file / `/dev/tty`).
 //!
 //! Encrypted-at-rest Ed25519 identity for the Investment Swarm's
-//! plain-REST flow (`robotmoney-frontend`: public apply -> human approval
-//! -> claim via challenge/signature -> participate; no MCP transport is
-//! involved). This is the production signing path for every swarm member,
+//! plain-REST flow (`robotmoney-frontend`: public signed apply
+//! (`POST /api/swarm/apply`) -> admin activation -> token-claim ->
+//! canonical submission payload (`POST /api/swarm/signing-payload`) ->
+//! `POST /api/swarm/submit`). This is the production signing path for every swarm member,
 //! and a **distinct identity type** from the on-chain EVM
 //! signer used by `rmpc committee register` / `vote-submit` (see
 //! [`crate::signer`]): the frontend's HTTP verifier (`@robotmoney/contract`'s
