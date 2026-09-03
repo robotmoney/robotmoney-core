@@ -1,7 +1,8 @@
 # Geth Read-After-Write State-Lag: Why the Devnet Harness Must Poll Reads
 
 > Canonical: `testing/smoke-test/src/lib.rs` (`Fixture::approve_and_confirm`,
-> `Fixture::erc20_allowance`, `wait_for_vault_registered`).
+> `Fixture::erc20_allowance`, `wait_for_vault_registered`, `Fixture::cast_send`
+> via `Fixture::pin_next_nonce`).
 > Sibling class: [`docs/testing/geth-gas-estimation.md`](geth-gas-estimation.md)
 > (state-dependent gas under same-block concurrency).
 
@@ -94,6 +95,43 @@ PortfolioRouter deploy forks a head that already includes the registration. It
 polls with a 30s deadline at 500ms intervals and returns an `Err` naming the
 unsettled registry read if the vault never appears.
 
+### Nonce visibility — `Fixture::cast_send` via `Fixture::pin_next_nonce` (issue #1241)
+
+This is the fourth instance of the class, and the one that hid in plain sight
+the longest: `cast send` itself performs a `latest`-pinned read-after-write
+when it derives a sender's nonce. Called without an explicit `--nonce`, `cast
+send` internally calls `eth_getTransactionCount(from, "latest")` to pick the
+next nonce — and that is exactly the read this document is about. A prior
+send from the same EOA can be receipt-confirmed and yet still invisible to
+that `latest`-pinned count for a short window, so the next `cast send` derives
+a nonce that collides with the one still in flight. Geth then rejects the
+collision as `replacement transaction underpriced` (same nonce, no
+sufficiently-higher gas price to replace the pending entry) rather than
+`nonce too low`, because the prior transaction has not yet cleared the
+txpool — which is what makes this instance look like a txpool/gas-pricing
+problem instead of the familiar read-after-write lag.
+
+`Fixture::cast_send` now pins the nonce itself instead of leaning on `cast
+send`'s implicit lookup: `Fixture::pin_next_nonce` queries the
+**`pending`**-tagged count (mempool-inclusive, not mined-only) and, once it
+has pinned a nonce for that address before, polls until a later read comes
+back strictly past it — the same poll-until-settled shape as
+`approve_and_confirm`'s allowance poll, just applied to the read `cast send`
+was performing implicitly. The resolved nonce is then passed to `cast send`
+via `--nonce`, so no seeding transaction depends on cast's own `latest`
+lookup any more.
+
+Because a *send*, not just a read, is now retried on the narrow
+`replacement transaction underpriced` case, this instance also needed a
+send-layer failure policy the read-only instances above did not: that error
+is safe to retry (the node refused the transaction outright, so nothing
+entered the chain), but `already known` / `nonce too low` are NOT — the
+transaction may already have landed, and blindly re-sending a write like
+`deposit` would double-apply it. Those two are resolved by looking up the
+receipt for whatever transaction actually consumed the pinned nonce, never by
+re-sending. See `Fixture::find_receipt_for_nonce` and the `run_cast_send_retry`
+policy function in `testing/smoke-test/src/lib.rs`.
+
 ## Guidance for harness authors
 
 - **A confirmed receipt does not mean readable state.** Any new devnet test step
@@ -112,3 +150,11 @@ unsettled registry read if the vault never appears.
   lag hides production concurrency; tolerate the lag with a poll instead, the
   same way the gas-estimation class is tolerated by buffering rather than by
   serialising (see [`geth-gas-estimation.md`](geth-gas-estimation.md)).
+- **A send's own implicit nonce lookup is a read too.** `cast send` (or any
+  wallet library) without an explicit nonce performs the exact same
+  `latest`-pinned read-after-write this document covers. Pin the nonce
+  yourself from a `pending`-tagged read instead of trusting the sender's
+  implicit lookup — see the "Nonce visibility" section above — and classify
+  the resulting send failures before retrying: a rejection where nothing
+  entered the chain is safe to retry, but an ambiguous outcome (the write may
+  already have landed) must be resolved by a receipt lookup, never a re-send.

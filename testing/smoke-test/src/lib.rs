@@ -26,7 +26,7 @@ pub mod logging;
 /// Dev-scout map for the real-adapter state injection boundary (issue #739).
 pub mod real_adapter_state;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -304,6 +304,16 @@ pub struct Fixture {
     /// `config/dex-pools.json::devnet.pools`.
     demo_uniswap_v3_stubs: DemoUniswapV3StubsDeploymentJson,
     repo_root: PathBuf,
+    /// Per-sender last-pinned nonce, keyed by lowercase `0x`-EOA hex (issue
+    /// #1241). [`Fixture::cast_send`] is the sole nonce source of truth for
+    /// every EOA it sends from: instead of trusting `cast send`'s own
+    /// implicit `eth_getTransactionCount(from, "latest")` (the read that can
+    /// lag a just-mined transaction — see `docs/testing/geth-state-lag.md`),
+    /// it polls a `pending`-tagged read past the previously pinned nonce and
+    /// passes `--nonce` explicitly. Scoped to this `Fixture` (one devnet
+    /// instance) rather than a process-global map, so nonce state from one
+    /// test's devnet never leaks into another test's freshly-reset chain.
+    nonce_tracker: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1104,6 +1114,7 @@ impl Fixture {
             demo_extra_vaults,
             demo_uniswap_v3_stubs,
             repo_root,
+            nonce_tracker: Mutex::new(HashMap::new()),
         };
 
         // Fund the agent's USDC balance. Deploy.s.sol no longer mints (USDC
@@ -1410,6 +1421,30 @@ impl Fixture {
     /// Reverted transactions (receipt `status != 0x1`, including out-of-gas) now
     /// surface as an `Err` instead of an `Ok(tx_hash)`, so a failed deposit can
     /// no longer masquerade as a successful one.
+    ///
+    /// ## Send-layer failure policy (issue #1241)
+    ///
+    /// This is the fourth instance of the `latest`-pinned read-after-write
+    /// class documented in `docs/testing/geth-state-lag.md`: `cast send`
+    /// without an explicit `--nonce` derives one itself from
+    /// `eth_getTransactionCount(from, "latest")`, and a receipt-confirmed
+    /// prior send does not guarantee that read reflects it yet. Instead of
+    /// leaning on cast's implicit lookup, [`Fixture::pin_next_nonce`] makes
+    /// this harness the nonce source of truth for every sender: it queries
+    /// the `pending`-tagged count (not `latest`) and, once it has pinned a
+    /// nonce for an address, polls until a later pin reads strictly past it.
+    ///
+    /// A failed send is then classified (see [`classify_send_failure`])
+    /// rather than always retried:
+    /// - `replacement transaction underpriced` means the node refused the
+    ///   send outright — nothing entered the chain, so re-sending with the
+    ///   same pinned nonce is idempotent and safe.
+    /// - `already known` / `nonce too low` mean the write may already have
+    ///   landed. Blindly re-sending here could double-apply it (e.g. a
+    ///   second `deposit`), so these are resolved by looking up the receipt
+    ///   for whatever transaction actually consumed the pinned nonce
+    ///   ([`Fixture::find_receipt_for_nonce`]) — never by re-sending. See
+    ///   [`run_cast_send_retry`] for the shared decision logic.
     pub fn cast_send(
         &self,
         private_key_hex: &str,
@@ -1426,22 +1461,20 @@ impl Fixture {
         );
         let gas_limit = self.estimate_gas_buffered(&from_hex, &to_hex, sig, args)?;
         let gas_limit_s = gas_limit.to_string();
-        // Geth can briefly report the latest nonce behind a just-mined
-        // transaction when several independent EOAs are submitting to the
-        // same devnet. If cast consequently retries a nonce already present
-        // in the txpool, Geth rejects it as underpriced. Retry this narrow,
-        // transient error after a short backoff; all other send failures remain
-        // hard errors.
+        let nonce = self.pin_next_nonce(&from_hex)?;
+        let nonce_s = nonce.to_string();
+
         const NONCE_RETRY_DELAYS: [Duration; 4] = [
             Duration::ZERO,
             Duration::from_millis(500),
             Duration::from_secs(1),
             Duration::from_secs(2),
         ];
-        let out = 'send: loop {
-            for (attempt, delay) in NONCE_RETRY_DELAYS.iter().enumerate() {
-                if !delay.is_zero() {
-                    thread::sleep(*delay);
+        let v = run_cast_send_retry(
+            NONCE_RETRY_DELAYS.len() as u32,
+            |attempt| {
+                if !NONCE_RETRY_DELAYS[attempt as usize].is_zero() {
+                    thread::sleep(NONCE_RETRY_DELAYS[attempt as usize]);
                 }
                 let mut cmd = Command::new("cast");
                 cmd.args([
@@ -1452,6 +1485,8 @@ impl Fixture {
                     private_key_hex,
                     "--gas-limit",
                     &gas_limit_s,
+                    "--nonce",
+                    &nonce_s,
                     &to_hex,
                     sig,
                 ]);
@@ -1459,24 +1494,36 @@ impl Fixture {
                     cmd.arg(a);
                 }
                 cmd.arg("--json");
-                let out = cmd.output()?;
+                let out = match cmd.output() {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return SendAttemptOutcome::Failed(
+                            SendFailureClass::Hard,
+                            format!("cast send {sig} IO error: {e}"),
+                        )
+                    }
+                };
                 logging::log_command_output("cast", &out);
                 if out.status.success() {
-                    break 'send out;
+                    return match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                        Ok(v) => SendAttemptOutcome::Mined(v),
+                        Err(e) => SendAttemptOutcome::Failed(
+                            SendFailureClass::Hard,
+                            format!("cast send {sig} json: {e}"),
+                        ),
+                    };
                 }
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if !stderr.contains("replacement transaction underpriced")
-                    || attempt + 1 == NONCE_RETRY_DELAYS.len()
-                {
-                    return Err(HarnessError::other(format!(
-                        "cast send {sig} failed: stdout={stdout} stderr={stderr}"
-                    )));
-                }
-            }
-        };
-        let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-            .map_err(|e| HarnessError::other(format!("cast send {sig} json: {e}")))?;
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let class = classify_send_failure(&stderr);
+                SendAttemptOutcome::Failed(
+                    class,
+                    format!("cast send {sig} failed: stdout={stdout} stderr={stderr}"),
+                )
+            },
+            || self.find_receipt_for_nonce(&from_hex, nonce),
+        )?;
+
         let tx_hash = v
             .get("transactionHash")
             .and_then(|x| x.as_str())
@@ -1489,10 +1536,7 @@ impl Fixture {
         // reverted with a zero process exit. Assert the receipt status so a
         // reverted seeding tx fails loudly instead of being silently accepted.
         let status = v.get("status").and_then(|x| x.as_str()).ok_or_else(|| {
-            HarnessError::other(format!(
-                "cast send {sig} receipt missing status field: {}",
-                String::from_utf8_lossy(&out.stdout)
-            ))
+            HarnessError::other(format!("cast send {sig} receipt missing status field: {v}"))
         })?;
         if !receipt_status_succeeded(status) {
             let reason = self.tx_revert_reason(&tx_hash);
@@ -1501,6 +1545,212 @@ impl Fixture {
             )));
         }
         Ok(tx_hash)
+    }
+
+    /// Pin the nonce for the next send from `from_hex` rather than letting
+    /// `cast send` derive it implicitly (issue #1241).
+    ///
+    /// `cast send` without `--nonce` calls
+    /// `eth_getTransactionCount(from, "latest")` itself — exactly the
+    /// `latest`-pinned read-after-write class documented in
+    /// `docs/testing/geth-state-lag.md`: a receipt-confirmed send does not
+    /// guarantee that read reflects it yet, so the next implicit lookup can
+    /// return a stale (too-low) nonce and collide with the previous send.
+    ///
+    /// Instead this queries the `pending`-tagged count (mempool-inclusive,
+    /// not mined-only) and, when a previous call already pinned a nonce for
+    /// this address, polls (bounded, 200ms apart) until the read comes back
+    /// strictly past that nonce before handing out the next one — the same
+    /// poll-until-settled shape as [`Fixture::approve_and_confirm`]'s
+    /// allowance poll. This makes each sender's nonce sequence a
+    /// harness-owned invariant instead of a hope about cast's internal
+    /// timing, and is scoped per-`Fixture` via `nonce_tracker` so it never
+    /// conflates state across two different devnet instances.
+    fn pin_next_nonce(&self, from_hex: &str) -> Result<u64, HarnessError> {
+        let key = from_hex.to_lowercase();
+        let prev = self
+            .nonce_tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .copied();
+
+        const ATTEMPTS: u32 = 5;
+        const INTERVAL: Duration = Duration::from_millis(200);
+        let mut nonce = self.eth_get_transaction_count(from_hex, "pending")?;
+        for attempt in 0..ATTEMPTS {
+            if prev.is_none_or(|p| nonce > p) {
+                break;
+            }
+            if attempt + 1 == ATTEMPTS {
+                return Err(HarnessError::other(format!(
+                    "pending nonce for {from_hex} stuck at {nonce} (must exceed the last \
+                     pinned nonce {}) after {ATTEMPTS} attempts ({INTERVAL:?} apart): Geth \
+                     state-lag did not settle",
+                    prev.unwrap_or_default()
+                )));
+            }
+            thread::sleep(INTERVAL);
+            nonce = self.eth_get_transaction_count(from_hex, "pending")?;
+        }
+
+        self.nonce_tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, nonce);
+        Ok(nonce)
+    }
+
+    /// Query `eth_getTransactionCount(address, tag)` via `cast rpc`. `tag` is
+    /// `"pending"` (mempool-inclusive; used to pin the next send's nonce) or
+    /// `"latest"` (mined-only; used to detect that a pinned nonce has
+    /// actually landed — see [`Fixture::find_receipt_for_nonce`]).
+    fn eth_get_transaction_count(&self, address_hex: &str, tag: &str) -> Result<u64, HarnessError> {
+        let out = Command::new("cast")
+            .args([
+                "rpc",
+                "--rpc-url",
+                &self.rpc_url,
+                "eth_getTransactionCount",
+                address_hex,
+                tag,
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "eth_getTransactionCount({address_hex}, {tag}) failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        parse_hex_rpc_result(
+            &out.stdout,
+            &format!("eth_getTransactionCount({address_hex}, {tag})"),
+        )
+    }
+
+    /// Query `eth_blockNumber` via `cast rpc`. Used by
+    /// [`Fixture::find_receipt_for_nonce`] to bound the block-scan window.
+    fn eth_block_number(&self) -> Result<u64, HarnessError> {
+        let out = Command::new("cast")
+            .args(["rpc", "--rpc-url", &self.rpc_url, "eth_blockNumber"])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "eth_blockNumber failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        parse_hex_rpc_result(&out.stdout, "eth_blockNumber")
+    }
+
+    /// Fetch a full block (with transaction bodies) via `cast rpc
+    /// eth_getBlockByNumber`. Used by [`Fixture::find_receipt_for_nonce`] to
+    /// scan for the transaction that consumed a given `(from, nonce)`.
+    fn eth_get_block_by_number(&self, block_num: u64) -> Result<serde_json::Value, HarnessError> {
+        let out = Command::new("cast")
+            .args([
+                "rpc",
+                "--rpc-url",
+                &self.rpc_url,
+                "eth_getBlockByNumber",
+                &format!("{block_num:#x}"),
+                "true",
+            ])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "eth_getBlockByNumber({block_num}) failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        serde_json::from_slice(&out.stdout).map_err(|e| {
+            HarnessError::other(format!("eth_getBlockByNumber({block_num}) json: {e}"))
+        })
+    }
+
+    /// Fetch a mined transaction's receipt via `cast receipt --json`. Shares
+    /// the same top-level shape (`transactionHash`, `status`, ...) as `cast
+    /// send --json`'s output, so callers can treat both uniformly.
+    fn fetch_receipt(&self, tx_hash: &str) -> Result<serde_json::Value, HarnessError> {
+        let out = Command::new("cast")
+            .args(["receipt", "--rpc-url", &self.rpc_url, tx_hash, "--json"])
+            .output()?;
+        if !out.status.success() {
+            return Err(HarnessError::other(format!(
+                "cast receipt {tx_hash} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        serde_json::from_slice(&out.stdout)
+            .map_err(|e| HarnessError::other(format!("cast receipt {tx_hash} json: {e}")))
+    }
+
+    /// Resolve an ambiguous send outcome (`already known` / `nonce too low`)
+    /// by finding the transaction that actually consumed `nonce` and
+    /// returning its receipt, instead of re-sending (issue #1241).
+    ///
+    /// [`Fixture::pin_next_nonce`] makes this harness the sole nonce source
+    /// for `from_hex`, so whichever transaction consumed `nonce` — this
+    /// attempt or an earlier one whose success response was lost — IS the
+    /// write this call intended; re-sending on ambiguity risks double-
+    /// applying it (e.g. a double deposit). This waits (bounded, 30s
+    /// deadline / 500ms poll — the same shape as
+    /// `wait_for_vault_registered`'s registry-visibility poll) for the
+    /// mined transaction count to pass `nonce`, then scans back through
+    /// recent blocks for the `(from, nonce)` transaction and returns its
+    /// receipt.
+    fn find_receipt_for_nonce(
+        &self,
+        from_hex: &str,
+        nonce: u64,
+    ) -> Result<serde_json::Value, HarnessError> {
+        const DEADLINE: Duration = Duration::from_secs(30);
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
+        let start = std::time::Instant::now();
+        loop {
+            let mined = self.eth_get_transaction_count(from_hex, "latest")?;
+            if mined > nonce {
+                break;
+            }
+            if start.elapsed() >= DEADLINE {
+                return Err(HarnessError::other(format!(
+                    "ambiguous send outcome for {from_hex} nonce {nonce} never resolved: mined \
+                     transaction count still {mined} after {DEADLINE:?} — refusing to resend a \
+                     write whose effect is unknown"
+                )));
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+
+        let from_lower = from_hex.to_lowercase();
+        let latest_block = self.eth_block_number()?;
+        const SCAN_BLOCKS: u64 = 20;
+        let earliest = latest_block.saturating_sub(SCAN_BLOCKS);
+        for block_num in (earliest..=latest_block).rev() {
+            let block = self.eth_get_block_by_number(block_num)?;
+            let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) else {
+                continue;
+            };
+            for tx in txs {
+                let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or_default();
+                let tx_nonce = tx
+                    .get("nonce")
+                    .and_then(|n| n.as_str())
+                    .and_then(|n| u64::from_str_radix(n.trim_start_matches("0x"), 16).ok());
+                if tx_from.eq_ignore_ascii_case(&from_lower) && tx_nonce == Some(nonce) {
+                    let hash = tx.get("hash").and_then(|h| h.as_str()).ok_or_else(|| {
+                        HarnessError::other(format!(
+                            "found tx for {from_hex} nonce {nonce} in block {block_num} with no hash field"
+                        ))
+                    })?;
+                    return self.fetch_receipt(hash);
+                }
+            }
+        }
+        Err(HarnessError::other(format!(
+            "mined transaction count for {from_hex} passed nonce {nonce}, but no matching \
+             transaction was found scanning the last {SCAN_BLOCKS} blocks ({earliest}..={latest_block})"
+        )))
     }
 
     /// Best-effort decode of a reverted tx's revert reason via `cast run`,
@@ -2295,19 +2545,14 @@ fn derive_address(privkey: &[u8; 32]) -> Address {
     Address::from_slice(&hash[12..])
 }
 
-/// Derive a deterministic simulated-depositor key for the demo seeding flow
-/// (issues #465, #503). Seed is `keccak256("rm-demo-depositor-v1\0" || index)`
-/// so the resulting key is reproducible across runs and cannot collide with the
-/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC holder).
-/// Returns `(0x-prefixed hex private key, derived address)`.
-///
-/// Public so the `demo-seed-depositors` standalone binary can reuse the same
-/// key derivation without depending on the full [`Fixture`] struct (issue #503).
-pub fn demo_depositor_key(index: u32) -> (String, Address) {
-    let mut seed = Vec::with_capacity(64);
-    seed.extend_from_slice(b"rm-demo-depositor-v1\0");
-    seed.extend_from_slice(&index.to_be_bytes());
-    let mut pk = keccak256(&seed).0;
+/// Derive a deterministic harness EOA from an arbitrary domain-separated
+/// seed. Shared by [`demo_depositor_key`] and [`dapp_faucet_key`] so neither
+/// needs a hand-picked, hand-verified hex literal: the key is reproducible
+/// across runs and, by construction (domain-separated seed input), cannot
+/// collide with any other harness key. Returns `(0x-prefixed hex private
+/// key, derived address)`.
+fn derive_deterministic_key(seed: &[u8]) -> (String, Address) {
+    let mut pk = keccak256(seed).0;
     // secp256k1 keys must be in (0, n-1); the chance of `keccak256 >= n` is
     // ~2^-127. If it ever happens (or the all-zero edge case), perturb by
     // hashing again. This loop is bounded; in practice it executes once.
@@ -2322,6 +2567,41 @@ pub fn demo_depositor_key(index: u32) -> (String, Address) {
         }
         pk = keccak256(pk).0;
     }
+}
+
+/// Derive a deterministic simulated-depositor key for the demo seeding flow
+/// (issues #465, #503). Seed is `keccak256("rm-demo-depositor-v1\0" || index)`
+/// so the resulting key is reproducible across runs and cannot collide with the
+/// hand-picked harness keys (deployer/pauser/agent/share-receiver/USDC holder).
+/// Returns `(0x-prefixed hex private key, derived address)`.
+///
+/// Public so the `demo-seed-depositors` standalone binary can reuse the same
+/// key derivation without depending on the full [`Fixture`] struct (issue #503).
+pub fn demo_depositor_key(index: u32) -> (String, Address) {
+    let mut seed = Vec::with_capacity(64);
+    seed.extend_from_slice(b"rm-demo-depositor-v1\0");
+    seed.extend_from_slice(&index.to_be_bytes());
+    derive_deterministic_key(&seed)
+}
+
+/// Derive the dedicated dapp-faucet EOA (issue #1241).
+///
+/// `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` used to be both the key
+/// [`Fixture::fund_usdc`] signs seeding transactions with AND the key baked
+/// into the dapp bundle as `VITE_FAUCET_HARNESS_PRIVATE_KEY`. The dapp is
+/// live and health-checked *before* `seed_demo_depositors` runs, so a
+/// browser-triggered faucet drip during seeding was a genuinely concurrent
+/// sender sharing the harness's own nonce sequence for that key — a hazard
+/// no amount of nonce-pinning inside `cast_send` can fix, because the
+/// browser's `cast`-equivalent (viem) never goes through this harness at
+/// all. Giving the faucet its own EOA, funded once at boot (see
+/// `DappStack::boot`), removes the shared signer entirely.
+///
+/// Seed is `keccak256("rm-dapp-faucet-v1\0")`, following the same
+/// deterministic derivation as [`demo_depositor_key`] so this key also needs
+/// no hand-verified hex literal.
+pub fn dapp_faucet_key() -> (String, Address) {
+    derive_deterministic_key(b"rm-dapp-faucet-v1\0")
 }
 
 fn parse_addr(s: &str) -> Address {
@@ -2987,6 +3267,106 @@ fn run_forge_deploy_with_env(
 fn receipt_status_succeeded(status: &str) -> bool {
     let stripped = status.trim_start_matches("0x").trim_start_matches("0X");
     !stripped.is_empty() && stripped.chars().any(|c| c != '0')
+}
+
+/// Parse a `cast rpc` result that is a single quoted hex-quantity string
+/// (e.g. `"0x1a"`), as returned by `eth_getTransactionCount` /
+/// `eth_blockNumber`. `what` names the call in the error message.
+fn parse_hex_rpc_result(stdout: &[u8], what: &str) -> Result<u64, HarnessError> {
+    let raw = String::from_utf8_lossy(stdout);
+    let hex = raw.trim().trim_matches('"').trim_start_matches("0x");
+    u64::from_str_radix(hex, 16)
+        .map_err(|e| HarnessError::other(format!("{what} returned non-hex result {raw:?}: {e}")))
+}
+
+/// Classification of a failed `cast send` attempt (issue #1241), used by
+/// [`run_cast_send_retry`] to decide whether re-sending is safe. See
+/// `docs/testing/geth-state-lag.md` and [`Fixture::cast_send`]'s doc comment
+/// for the full policy this implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendFailureClass {
+    /// The node rejected the transaction outright (`replacement transaction
+    /// underpriced`): nothing entered the chain, so re-sending is
+    /// idempotent and safe.
+    SafeRetry,
+    /// The transaction may already have landed (`already known` / `nonce
+    /// too low`). Re-sending here could double-apply a write (e.g. a
+    /// double deposit); the caller MUST resolve this via a receipt lookup,
+    /// never by re-sending.
+    Ambiguous,
+    /// Any other failure is a hard, non-retryable error.
+    Hard,
+}
+
+/// Classify a `cast send` failure's stderr text into a [`SendFailureClass`].
+/// Pure and independent of any live chain so the retry/ambiguity policy in
+/// [`run_cast_send_retry`] is unit-testable without a devnet.
+fn classify_send_failure(stderr: &str) -> SendFailureClass {
+    if stderr.contains("replacement transaction underpriced") {
+        SendFailureClass::SafeRetry
+    } else if stderr.contains("already known") || stderr.contains("nonce too low") {
+        SendFailureClass::Ambiguous
+    } else {
+        SendFailureClass::Hard
+    }
+}
+
+/// Outcome of one raw `cast send` attempt, as classified from its process
+/// exit status. Threaded through [`run_cast_send_retry`] so the retry
+/// policy can be exercised by a real `Command` in production and by a fake
+/// closure in tests.
+enum SendAttemptOutcome {
+    /// `cast send` exited 0 and the transaction mined; carries `cast send
+    /// --json`'s parsed receipt.
+    Mined(serde_json::Value),
+    /// `cast send` failed; carries its classification and a fully-formatted
+    /// message for the eventual hard-error text.
+    Failed(SendFailureClass, String),
+}
+
+/// Drives the send-retry/ambiguity policy for [`Fixture::cast_send`] (issue
+/// #1241). `attempt(n)` performs (or, in tests, simulates) the nth raw send;
+/// `lookup_receipt` resolves an ambiguous outcome by looking up whatever
+/// transaction actually consumed the pinned nonce — it must be a real
+/// receipt query, never a re-send.
+///
+/// - [`SendFailureClass::SafeRetry`]: nothing entered the chain, so `attempt`
+///   is called again (up to `max_attempts` total calls).
+/// - [`SendFailureClass::Ambiguous`]: `attempt` is NEVER called again — the
+///   write may already have landed, so the only safe resolution is
+///   `lookup_receipt`.
+/// - [`SendFailureClass::Hard`]: propagated immediately.
+fn run_cast_send_retry(
+    max_attempts: u32,
+    mut attempt: impl FnMut(u32) -> SendAttemptOutcome,
+    mut lookup_receipt: impl FnMut() -> Result<serde_json::Value, HarnessError>,
+) -> Result<serde_json::Value, HarnessError> {
+    assert!(
+        max_attempts > 0,
+        "run_cast_send_retry requires at least one attempt"
+    );
+    for n in 0..max_attempts {
+        match attempt(n) {
+            SendAttemptOutcome::Mined(v) => return Ok(v),
+            SendAttemptOutcome::Failed(SendFailureClass::SafeRetry, msg) => {
+                if n + 1 == max_attempts {
+                    return Err(HarnessError::other(msg));
+                }
+            }
+            SendAttemptOutcome::Failed(SendFailureClass::Ambiguous, msg) => {
+                return lookup_receipt().map_err(|e| {
+                    HarnessError::other(format!(
+                        "cast send outcome ambiguous ({msg}) and could not be resolved by \
+                         receipt lookup: {e}"
+                    ))
+                });
+            }
+            SendAttemptOutcome::Failed(SendFailureClass::Hard, msg) => {
+                return Err(HarnessError::other(msg));
+            }
+        }
+    }
+    unreachable!("loop above always returns before exhausting max_attempts")
 }
 
 fn read_deployment(path: &Path) -> Result<DeploymentJson, HarnessError> {
@@ -3725,6 +4105,48 @@ impl DappStack {
         // together; mint one defensively if a caller boots the dapp stack
         // without first booting the chain fixture.
         ensure_run_identity();
+
+        // Fund the dedicated dapp-faucet EOA (issue #1241) before the dapp
+        // container comes up, so the first browser-triggered faucet drip has
+        // USDC/RM/ETH to send. This key is distinct from
+        // `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` (see `dapp_faucet_key`),
+        // closing the concurrent-signer hazard where a live faucet drip and
+        // `Fixture::seed_demo_depositors`'s own holder-key sends could race
+        // on the same nonce — a hazard nonce-pinning inside `cast_send`
+        // cannot fix on its own, because a browser wallet signing via viem
+        // never goes through this harness's nonce tracker at all.
+        let (faucet_private_key_hex, faucet_address) = dapp_faucet_key();
+        const DAPP_FAUCET_ETH_WEI: &str = "500000000000000000"; // 0.5 ETH
+        const DAPP_FAUCET_USDC_RESERVE: u128 = 50_000 * 1_000_000; // 50k USDC, 6dp
+        const DAPP_FAUCET_RM_RESERVE: u128 = 50_000 * 1_000_000_000_000_000_000; // 50k RM, 18dp
+        fund_eth_from_deployer(
+            fixture.rpc_url(),
+            &format!("{faucet_address:#x}"),
+            DAPP_FAUCET_ETH_WEI,
+        )
+        .inspect_err(|err| {
+            logging::error(
+                "smoke-test",
+                format!("funding dapp-faucet EOA {faucet_address:#x} with ETH failed: {err}"),
+            );
+        })?;
+        fixture
+            .fund_usdc(faucet_address, DAPP_FAUCET_USDC_RESERVE)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("funding dapp-faucet EOA {faucet_address:#x} with USDC failed: {err}"),
+                );
+            })?;
+        fixture
+            .fund_rm_token(faucet_address, DAPP_FAUCET_RM_RESERVE)
+            .inspect_err(|err| {
+                logging::error(
+                    "smoke-test",
+                    format!("funding dapp-faucet EOA {faucet_address:#x} with RM failed: {err}"),
+                );
+            })?;
+
         let compose_dir = fixture.repo_root().join("testing/ethereum-testnet/config");
 
         // Proactively purge any stale dapp compose state (containers, networks,
@@ -3833,7 +4255,7 @@ impl DappStack {
             ("VITE_DAPP_URL", "".to_string()),
             (
                 "VITE_FAUCET_HARNESS_PRIVATE_KEY",
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.to_string(),
+                faucet_private_key_hex.clone(),
             ),
             ("INDEXER_CHAIN_ID", "918453".to_string()),
             ("INDEXER_CHAIN_NAME", "devnet".to_string()),
@@ -3948,7 +4370,7 @@ impl DappStack {
             ("VITE_DAPP_URL".into(), vite_dapp_url.clone()),
             (
                 "VITE_FAUCET_HARNESS_PRIVATE_KEY".into(),
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX.into(),
+                faucet_private_key_hex.clone(),
             ),
             ("INDEXER_CHAIN_ID".into(), "918453".into()),
             ("INDEXER_CHAIN_NAME".into(), "devnet".into()),
@@ -4010,16 +4432,15 @@ impl DappStack {
             .env("VITE_DEVNET_RPC_URL", &vite_rpc_url)
             .env("VITE_EXPLORER_API_URL", &vite_explorer_api_url)
             .env("VITE_DAPP_URL", &vite_dapp_url)
-            // Issue #261: thread the harness USDC holder key through to
-            // the dapp build so the testnet Faucet tab + onboarding seed
-            // can drip canonical USDC via a real ERC-20 `transfer` from
-            // the holder EOA — same path as `Fixture::fund_usdc` on the
-            // Rust side. Trimmed to remove the historical "0x" prefix
-            // because the JS side normalizes both forms.
-            .env(
-                "VITE_FAUCET_HARNESS_PRIVATE_KEY",
-                HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX,
-            )
+            // Issue #261 (superseded by issue #1241): thread the dedicated
+            // dapp-faucet key (`dapp_faucet_key`, funded at the top of
+            // `DappStack::boot`) through to the dapp build so the testnet
+            // Faucet tab + onboarding seed can drip USDC/RM/ETH via a real
+            // signed transfer. This is now a distinct EOA from
+            // `HARNESS_USDC_HOLDER_PRIVATE_KEY_HEX` — a live browser drip
+            // during `Fixture::seed_demo_depositors` can no longer race the
+            // harness's own nonce sequence for the holder key.
+            .env("VITE_FAUCET_HARNESS_PRIVATE_KEY", &faucet_private_key_hex)
             .env("INDEXER_CHAIN_ID", "918453")
             .env("INDEXER_CHAIN_NAME", "devnet")
             .env("EXPLORER_API_CHAIN_ID", "918453")
@@ -4507,5 +4928,207 @@ ccc333\t\teth-beacon
         // A malformed/empty word must never be treated as success.
         assert!(!receipt_status_succeeded("0x"));
         assert!(!receipt_status_succeeded(""));
+    }
+
+    // -- issue #1241: cast_send nonce-pinning + retry/ambiguity policy ----
+
+    #[test]
+    fn classify_send_failure_treats_underpriced_replacement_as_safe_retry() {
+        // The node refused the send outright — nothing entered the chain.
+        let class = classify_send_failure(
+            "Error: server returned an error response: error code -32000: replacement \
+             transaction underpriced",
+        );
+        assert_eq!(class, SendFailureClass::SafeRetry);
+    }
+
+    #[test]
+    fn classify_send_failure_treats_already_known_and_nonce_too_low_as_ambiguous() {
+        // Both mean the write may already have landed; neither is safe to
+        // resolve by re-sending (issue #1241 AC).
+        assert_eq!(
+            classify_send_failure(
+                "Error: server returned an error response: error code -32000: already known"
+            ),
+            SendFailureClass::Ambiguous
+        );
+        assert_eq!(
+            classify_send_failure(
+                "Error: server returned an error response: error code -32003: nonce too low"
+            ),
+            SendFailureClass::Ambiguous
+        );
+    }
+
+    #[test]
+    fn classify_send_failure_treats_unrecognised_errors_as_hard() {
+        assert_eq!(
+            classify_send_failure("Error: insufficient funds for gas * price + value"),
+            SendFailureClass::Hard
+        );
+    }
+
+    #[test]
+    fn retry_policy_retries_a_node_rejected_send_and_never_consults_receipt_lookup() {
+        // A `SafeRetry` classification means nothing entered the chain, so
+        // the policy must call `attempt` again — and must NOT touch
+        // `lookup_receipt` at all, since there is nothing ambiguous to
+        // resolve.
+        let attempts = std::cell::Cell::new(0u32);
+        let lookups = std::cell::Cell::new(0u32);
+        let result = run_cast_send_retry(
+            4,
+            |_n| {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() < 3 {
+                    SendAttemptOutcome::Failed(
+                        SendFailureClass::SafeRetry,
+                        "replacement transaction underpriced".to_string(),
+                    )
+                } else {
+                    SendAttemptOutcome::Mined(serde_json::json!({
+                        "transactionHash": "0xabc",
+                        "status": "0x1",
+                    }))
+                }
+            },
+            || {
+                lookups.set(lookups.get() + 1);
+                panic!("lookup_receipt must never be called for a SafeRetry outcome");
+            },
+        );
+        assert_eq!(
+            attempts.get(),
+            3,
+            "the rejected send must be retried until it lands"
+        );
+        assert_eq!(lookups.get(), 0);
+        assert_eq!(
+            result.expect("retry should eventually succeed")["transactionHash"],
+            "0xabc"
+        );
+    }
+
+    #[test]
+    fn retry_policy_resolves_ambiguous_outcome_by_receipt_lookup_not_resend() {
+        // `already known` / `nonce too low` must resolve via a receipt
+        // lookup, and `attempt` must be called EXACTLY ONCE — a second call
+        // would be a re-send, which for a write like `deposit` would be a
+        // double-deposit. This is the double-deposit-impossible-by-
+        // construction guarantee from the issue #1241 AC.
+        for ambiguous_stderr in ["already known", "nonce too low"] {
+            let attempts = std::cell::Cell::new(0u32);
+            let lookups = std::cell::Cell::new(0u32);
+            let result = run_cast_send_retry(
+                4,
+                |_n| {
+                    attempts.set(attempts.get() + 1);
+                    SendAttemptOutcome::Failed(
+                        classify_send_failure(ambiguous_stderr),
+                        ambiguous_stderr.to_string(),
+                    )
+                },
+                || {
+                    lookups.set(lookups.get() + 1);
+                    Ok(serde_json::json!({
+                        "transactionHash": "0xresolved",
+                        "status": "0x1",
+                    }))
+                },
+            );
+            assert_eq!(
+                attempts.get(),
+                1,
+                "an ambiguous outcome for {ambiguous_stderr:?} must never trigger a re-send"
+            );
+            assert_eq!(
+                lookups.get(),
+                1,
+                "exactly one receipt lookup resolves the ambiguity"
+            );
+            assert_eq!(
+                result.expect("ambiguous outcome resolves via the receipt lookup")
+                    ["transactionHash"],
+                "0xresolved"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_policy_propagates_hard_errors_without_retry_or_lookup() {
+        let attempts = std::cell::Cell::new(0u32);
+        let result = run_cast_send_retry(
+            4,
+            |_n| {
+                attempts.set(attempts.get() + 1);
+                SendAttemptOutcome::Failed(SendFailureClass::Hard, "insufficient funds".to_string())
+            },
+            || panic!("lookup_receipt must never be called for a Hard outcome"),
+        );
+        assert_eq!(attempts.get(), 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn retry_policy_errors_when_the_safe_retry_budget_is_exhausted() {
+        // Exhausting the retry budget on a persistently rejected send must
+        // fail loudly, not silently return a bogus success.
+        let result = run_cast_send_retry(
+            3,
+            |_n| {
+                SendAttemptOutcome::Failed(
+                    SendFailureClass::SafeRetry,
+                    "replacement transaction underpriced".to_string(),
+                )
+            },
+            || panic!("lookup_receipt must never be called for a SafeRetry outcome"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_hex_rpc_result_parses_quoted_hex_quantity() {
+        assert_eq!(parse_hex_rpc_result(b"\"0x1a\"", "test").unwrap(), 26);
+        assert_eq!(parse_hex_rpc_result(b"\"0x0\"\n", "test").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_hex_rpc_result_rejects_non_hex_payload() {
+        assert!(parse_hex_rpc_result(b"not-hex", "test").is_err());
+    }
+
+    #[test]
+    fn dapp_faucet_key_is_distinct_from_every_other_harness_key() {
+        // issue #1241 AC: the dapp faucet must sign from an EOA distinct
+        // from the harness USDC holder (and, defensively, every other
+        // hand-picked harness key and the deterministic depositor keys).
+        let (_priv, faucet_addr) = dapp_faucet_key();
+        assert_ne!(
+            format!("{faucet_addr:#x}"),
+            HARNESS_USDC_HOLDER_ADDRESS_HEX.to_lowercase()
+        );
+        assert_ne!(
+            format!("{faucet_addr:#x}"),
+            DEPLOYER_ADDRESS_HEX.to_lowercase()
+        );
+        assert_ne!(
+            format!("{faucet_addr:#x}"),
+            PAUSER_ADDRESS_HEX.to_lowercase()
+        );
+        assert_ne!(
+            format!("{faucet_addr:#x}"),
+            SHARE_RECEIVER_ADDRESS_HEX.to_lowercase()
+        );
+        for i in 0..8 {
+            let (_priv, depositor_addr) = demo_depositor_key(i);
+            assert_ne!(faucet_addr, depositor_addr);
+        }
+    }
+
+    #[test]
+    fn dapp_faucet_key_is_deterministic_across_calls() {
+        // Reproducible across process restarts, matching the deterministic
+        // derivation contract of `demo_depositor_key`.
+        assert_eq!(dapp_faucet_key(), dapp_faucet_key());
     }
 }
