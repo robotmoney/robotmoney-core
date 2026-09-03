@@ -210,7 +210,7 @@ merged remediation PRs rather than the stale accepted dispositions.
 | FS-VLT-14 | FS-0619 | Medium→Info | dismissed-with-rationale | RwaVault, ChronicleOracleAdapter | — | RWA freshness `latestTimestamp()` "noncanonical" refuted; own IChronicleOracle |
 | FS-VLT-15 | FS-0619 | Medium→down | fixed | RobotMoneyVault | #200 | Receipt-token donation inflation mitigated by 1e18 `_decimalsOffset` (mitigation pre-dates the scan) |
 | FS-VLT-16 | FS-0619 | Medium→Info | dismissed-with-rationale | UniswapV4SwapAdapter | — | "Noncanonical router ABI" refuted; own shim |
-| FS-VLT-17 | FS-0619 | Medium | accepted-with-rationale | UniswapV4SwapAdapter | — | V4 pricing assumes V3 observe() pool; demo vault, not router-eligible |
+| FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | UniswapV4SwapAdapter | #1186 | Router-eligibility now proven end-to-end (`UniswapV4RouterEligibilityIntegration.t.sol`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged |
 | FS-VLT-18 | FS-0619 | Medium | fixed | VaultRegistry, RobotMoneyVault | #959 | Retire left router-eligibility state stale; unified registry-driven `retire()`/`unretire()` on the base vault |
 | FS-VLT-19 | FS-0619 | Medium | accepted-with-rationale | VaultRegistry, BasketVault | — | Registry retire() reverts on basket subclasses; CONFIRMED still-latent — `vaults/` subclasses don't inherit `RobotMoneyVault`/`IRetirableVault`, no fix landed |
 | FS-VLT-20 | FS-0619 | Medium→down | accepted-with-rationale | BasketVault | — | Withdrawals/rebalance push adapters above caps; by design, re-converges |
