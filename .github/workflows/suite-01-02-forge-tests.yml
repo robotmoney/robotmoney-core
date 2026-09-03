@@ -287,6 +287,21 @@ jobs:
       - name: Verify ADR-0011 workflow structure
         run: scripts/devnet/check-adr0011-ci.sh
 
+      - name: Fork RPC configuration self-test (issue #1239)
+        # Offline: proves check-fork-rpc-configured.sh reports a missing
+        # RMPC_FORK_RPC_URL by name and never echoes a configured value,
+        # before the real check below relies on it.
+        run: bash .github/scripts/tests/test_check_fork_rpc_configured.sh
+
+      - name: Check fork RPC configuration (issue #1239)
+        # Makes the public-RPC fallback below loud: if the repo/org Actions
+        # variable is unset, name it explicitly via a `::warning::` annotation
+        # in the run summary instead of only showing up later as an
+        # unexplained Cloudflare 429 on the public fallback endpoint.
+        env:
+          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+        run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
+
       - name: forge test (Uniswap V3 AssetPositionAdapter fork — issue #1118)
         env:
           # UniV3AssetPositionAdapterForkTest swaps USDC<->wETH through a REAL Base

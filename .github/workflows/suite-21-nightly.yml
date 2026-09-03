@@ -112,6 +112,14 @@ jobs:
           # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
           # reddening the repo with no repo change. Unpin via issue #1264.
           version: v1.7.1
+      - name: Check fork RPC configuration (issue #1239)
+        # Makes the public-RPC fallback below loud: if the repo/org Actions
+        # variable is unset, name it explicitly via a `::warning::` annotation
+        # in the run summary instead of only showing up later as an
+        # unexplained Cloudflare 429 on the public fallback endpoint.
+        env:
+          RMPC_FORK_RPC_URL_RAW: ${{ vars.RMPC_FORK_RPC_URL }}
+        run: scripts/devnet/check-fork-rpc-configured.sh "$RMPC_FORK_RPC_URL_RAW"
       - name: Regression tests for provider/drift classification (issue #1235)
         # .github/scripts/tests/test_live_base_fork_drift.sh existed but no
         # workflow invoked it (shape 6, issue #1235) -- it could neither pass
