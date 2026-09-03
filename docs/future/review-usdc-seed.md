@@ -13,6 +13,9 @@ Files touched:
 
 - `contracts/script/Deploy.s.sol` — `SEED_DEPOSIT_AMOUNT` constant.
 - `contracts/test/Deploy.t.sol` — unit assertion of the constant's value.
+- `scripts/base-sepolia-rehearsal/rehearsal.sh` — `seed_deposit_min` postcondition
+  threshold (99.9% of `SEED_DEPOSIT_AMOUNT`), which drifted stale on the first
+  cut of this change and broke the rehearsal CI job.
 
 ## Why this matters
 
