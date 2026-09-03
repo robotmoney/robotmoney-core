@@ -164,6 +164,24 @@ jobs:
         # report green over test binaries that do not compile.
         run: python3 .github/scripts/check_rust_test_target_compile_coverage.py
 
+      - name: Self-test evidence-script sweep (issue #1235)
+        # Seeds a compliant fixture plus both defect shapes -- a doc-named
+        # script that does not exist (shape 5) and a tests/ script no
+        # workflow invokes (shape 6) -- and confirms the guard fires on both,
+        # respects the allow-list mechanism, and does not mistake a workflow
+        # comment for an invocation. Runs BEFORE the real check so a silently
+        # broken guard cannot pass.
+        run: python3 .github/scripts/check_evidence_scripts.py --self-test
+
+      - name: Evidence-script existence and reachability sweep (issue #1235)
+        # For every `.github/scripts/...` path named in docs/** or
+        # .github/workflows/**: (a) the file must exist (shape 5 -- a
+        # guarantee documented as closed by a script that was never written)
+        # and, for every .github/scripts/tests/ script, (b) at least one
+        # workflow must invoke it (shape 6 -- a script that can neither pass
+        # nor fail).
+        run: python3 .github/scripts/check_evidence_scripts.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest

@@ -112,6 +112,13 @@ jobs:
           # switched `forge doc` from mdbook to vocs output and changed `forge fmt`,
           # reddening the repo with no repo change. Unpin via issue #1264.
           version: v1.7.1
+      - name: Regression tests for provider/drift classification (issue #1235)
+        # .github/scripts/tests/test_live_base_fork_drift.sh existed but no
+        # workflow invoked it (shape 6, issue #1235) -- it could neither pass
+        # nor fail. It stubs curl/forge so it needs no network or fork RPC;
+        # runs before the live script so a classification-logic regression is
+        # caught before spending the live-RPC budget below.
+        run: bash .github/scripts/tests/test_live_base_fork_drift.sh
       - name: Run live fork drift suite
         id: drift
         continue-on-error: true
