@@ -559,6 +559,12 @@ isolation, independent of any client (rmpc, dapp, explorer).
 **Environment:** `none`
 **Trigger:** All PRs (no `paths:` filter — these catch drift introduced anywhere)
 
+**CI truthfulness.** This suite is also where the repo's catalogue of known
+false-green CI shapes — a check that reports green while proving nothing —
+is itself kept honest. See
+[false-green-shapes.md](./false-green-shapes.md) for the catalogue; step 11
+below is what keeps it from drifting into a dangling reference.
+
 **Jobs:**
 - `doc-validators` — ADR and runbook compliance checks; runs immediately
 - `schema-validators` — migration file placement invariant; runs in parallel with `doc-validators`
@@ -573,7 +579,8 @@ isolation, independent of any client (rmpc, dapp, explorer).
 7. `check_gateway_coverage.py` — gateway coverage report present and above threshold
 8. `check_source_doc_reconciliation.py` — source-doc reconciliation file up to date
 9. `check_rust_test_target_compile_coverage.py --self-test` then `check_rust_test_target_compile_coverage.py` — asserts every workspace crate with a `tests/` directory is type-checked by an unconditional PR-stage job, and that every `cargo test … --lib` job compiles its own crate's `tests/` binaries (issue #1295). See [Rust `tests/` compile coverage](#rust-tests-compile-coverage). Needs PyYAML, installed by the step above it.
-10. `check_evidence_scripts.py --self-test` then `check_evidence_scripts.py` — sweeps every `.github/scripts/...` path named in `docs/**` or `.github/workflows/**`: asserts it exists (a false-green shape 5, issue #1235) and, for every script under `.github/scripts/tests/`, that some workflow invokes it (shape 6, issue #1235).
+10. `check_evidence_scripts.py --self-test` then `check_evidence_scripts.py` — sweeps every `.github/scripts/...` path named in `docs/**` or `.github/workflows/**` for two of the shapes catalogued in [false-green-shapes.md](./false-green-shapes.md) (issue #1235).
+11. `check_false_green_catalogue.py --self-test` then `check_false_green_catalogue.py` — asserts [false-green-shapes.md](./false-green-shapes.md) exists, every section carries its four required parts, and every workflow path and issue number it cites resolves (issue #1272).
 
 **Steps — `schema-validators` job:**
 1. Checkout repository

@@ -201,6 +201,26 @@ jobs:
         # in scope.
         run: python3 .github/scripts/check_code_review_artifacts.py
 
+      - name: Self-test false-green shape catalogue guard (issue #1272)
+        # Confirms the guard fires on a missing catalogue file (with a
+        # non-zero assertion count, not a vacuous pass), too few shapes, a
+        # section missing a required subsection, a dangling workflow path,
+        # and a dangling issue number -- BEFORE the real check runs, so a
+        # silently broken guard cannot pass.
+        run: python3 .github/scripts/check_false_green_catalogue.py --self-test
+
+      - name: False-green shape catalogue structure and citations (issue #1272)
+        # docs/development/false-green-shapes.md persists the catalogue of
+        # known false-green CI shapes that a review used to receive as
+        # retyped, unversioned prose. Asserts the file exists, every section
+        # carries all four required parts (Name, Mechanism, Instance,
+        # Detecting check), and every cited .github/workflows/*.yml path and
+        # issue number resolves -- so the catalogue itself cannot drift into
+        # a dangling reference.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/check_false_green_catalogue.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest
