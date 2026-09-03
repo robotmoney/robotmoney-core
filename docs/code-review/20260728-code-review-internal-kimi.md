@@ -21,7 +21,7 @@ The codebase demonstrates a strong security architecture with well-enforced cust
 | Severity | Count | Key areas |
 |----------|-------|-----------|
 | Critical | 0 | — |
-| High | 7 | Withdrawals blocked by pause (v1), ISwapRouter/SwapRouter02 V3 ABI mismatch (deploy blocker), ORA-7 same-source TWAP floor, RWA stale-oracle blocks redemptions, missing last-admin-floor (v1), RouterGovernance loses `setWeights` authority after deploy, audits.md stale for 8 fixed Critical/High findings |
+| High | 8 | Withdrawals blocked by pause (v1), ISwapRouter/SwapRouter02 V3 ABI mismatch (deploy blocker), ORA-7 same-source TWAP floor, RWA stale-oracle blocks redemptions, missing last-admin-floor (v1), RouterGovernance loses `setWeights` authority after deploy, audits.md stale for 8 fixed Critical/High findings |
 | Medium | 12 | Timelock dual-ADMIN router vote-bypass, missing `custodiedTokens()` INV-2 risk, emergency floor unimpl, V4 adapter arch incompatibility, V4 fork test mock-only, empty-code vault skip, navDeviationGuard disabled, no admin single-asset sell, CI vm.skip() in formal verification, no BasketVault TWAP fork test, slither `fail_on: high` only, MorphoAdapter theoretical NAV overstated |
 | Low | 13 | CompoundV3 allowance pattern, no duplicate-adapter guard, removeAdapter lying-adapter, exit-fee rounding, no MAX governance params, deploy-script EOA admin, TwapTickMath boundary test, agent-token-shortlist placeholders, watchdog pause-tx receipt, deferred cross-endpoint RPC consensus, dapp keygen fail-closed, revealAuthorization admin-race, BasketVault no caller-specified min-out |
 | Informational | 6 | sweepForeignToken docs, harvest gap, maxRedeem 0, quarantine burn default, RmToken devnet-only, watchdog key config example |
