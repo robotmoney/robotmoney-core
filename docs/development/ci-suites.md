@@ -447,14 +447,11 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
-- `asserter-tests` — offline, keyless pytest of the transcript asserters and live-fail guard, plus the G12 keystore-generate negative control (`negative_control_keystore_generate_flag.sh`, issue #1235); runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
+- `asserter-tests` — offline, keyless pytest of the transcript asserters, live-fail guard, and replay harness, plus the G12 keystore-generate negative control (`negative_control_keystore_generate_flag.sh`, issue #1235); runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
 - `refusal` — offline **rmpc CLI-level** refusal assertions (`cargo test --test opencode_refusal`: unknown subcommand and missing `--config` each exit non-zero with a labelled stderr payload), no chain and no model key; runs nightly/dispatch. It invokes no model, so it is not agent-refusal coverage — gap G10 is reopened, see `headless-opencode-tests.md`.
-- `live-model-coverage-unavailable` — fails nightly/dispatch with the explicit #1210 coverage limitation. This is intentional: live model coverage requires an unavailable external credential and must not silently skip or pass.
-- `deposit` / `read` — disabled live-agent jobs retained for future re-enablement; they do not execute and provide no coverage.
+- `deposit` / `read` — **replay coverage** (issue #1210 option C; closes tracker #1233): no model, no `OPENCODE_API_KEY`. Instead of a live agent choosing tool calls, `.github/scripts/replay_headless_transcript.py` executes the same fixed rmpc command sequence the (removed) live-agent prompts always named explicitly, for real, against the job's live devnet, then emits a transcript in the exact shape `opencode run --format json` produces. Every downstream assertion script runs unchanged against that real, freshly-generated transcript.
 
-**Live-model coverage limitation (issue #1210, option B; re-enablement tracked by #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY`. The `deposit` and `read` live-agent jobs are disabled: no CI job currently proves that a live AI agent drives `rmpc`. On nightly and manual dispatch, `live-model-coverage-unavailable` fails explicitly so this missing external-resource coverage cannot appear green. The offline asserter/guard tests and the CLI-level `refusal` job remain executed in CI, but validate only the assertion code, recorded test inputs, and rmpc's own exit-code contract—not live model behaviour or agent refusal (gap G10). See `docs/technical/opencode-headless-invocation.md` §12.6.
-
-> **Suite 11b is deliberately red every night.** That red is the #1210 decision made visible, not a regression or a flake, and issue #1233 is the open owner of it. Suite 21 (nightly full-suite) dispatches 11b, so 11b's red is expected there too. Do not green this suite by deleting or weakening `live-model-coverage-unavailable`: close #1233 by restoring real coverage (option A or C), or reopen the #1210 decision.
+**Replay coverage (issue #1210 option C; closes re-enablement tracker #1233).** Anonymous OpenCode models no longer execute, and the repository intentionally does not provision `OPENCODE_API_KEY` (option A). Rather than leave the `deposit`/`read` jobs disabled, they now replay the exact rmpc command sequence the disabled live-agent prompts always named explicitly — see `docs/technical/opencode-headless-invocation.md` §12.6. This proves the rmpc CLI contract (syntax, exit codes, output schema) and the full deploy → authorize → deposit pipeline execute correctly, with real on-chain assertions on fresh state every run. It does **not** prove a live LLM would choose this exact tool sequence from the natural-language prompt, and it cannot exercise agent *refusal* on a failed precondition — refusal requires a model making a judgement call, not a fixed script, so gap G10 stays open (see `headless-opencode-tests.md`). Restoring that remains option A.
 
 **Steps — `refusal` job:**
 1. Checkout repository
@@ -462,22 +459,22 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 3. Cargo cache
 4. Run `cargo test --test opencode_refusal` — two CLI-contract assertions (unknown subcommand refuses with non-zero exit; missing required `--config` refuses), no model key and no chain required
 
-**Disabled steps — `deposit` job (not current coverage):**
+**Steps — `deposit` job (replay coverage):**
 1. Checkout repository
-2. Install OpenCode at pinned version + Rust + Foundry
-3. Deploy `MockUSDC` + `MockVault` + `RobotMoneyGateway` via `Deploy.s.sol` on devnet
-4. Generate fresh agent EOA; write keystore via `rmpc-keystore-import`
-5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval via impersonation
-6. `opencode run <deposit-prompt> --format json` against devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / error-only / zero-rmpc transcript (issue #1151)
-7. `assert_headless_deposit_transcript.py` — asserts tool-call order (get-vault → get-agent → get-balance → get-allowance → self-check → deposit), `final-report.json` outcome, tx_hash non-null hex
+2. Install Rust + Foundry
+3. Deploy the real Aave V3 / Compound V3 / Morpho adapter stack via `Deploy.s.sol` on the warmed Base fork-state devnet
+4. Generate fresh agent EOA; write keystore via `rmpc-keystore-import`; assert on-chain authorization
+5. Fund agent ETH balance via `anvil_setBalance`; set USDC approval signed by the generated agent key
+6. `replay_headless_transcript.py` executes get-vault → get-agent → get-balance → get-allowance → self-check → deposit in that fixed order against the live devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / zero-rmpc transcript
+7. `assert_headless_deposit_transcript.py` — asserts tool-call order, deposit exit 0, tx_hash present; `assert_headless_deposit_delta.py` / `assert_headless_deposit_sender.py` — asserts the on-chain vault delta and tx sender
 
-**Disabled steps — `read` job (not current coverage):**
+**Steps — `read` job (replay coverage):**
 1. Checkout repository
-2. Install OpenCode at pinned version + Rust + Foundry
+2. Install Rust + Foundry
 3. Deploy contracts + fund agent on devnet
 4. **Safety step**: read-only isolation assertions — agent in read-only config cannot invoke state-changing tools
-5. `opencode run <read-prompt> --format json` against devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / error-only / zero-rmpc transcript (issue #1151)
-6. `assert_headless_read_transcript.py` — asserts vault state, balance, and allowance queries match JSON schema
+5. `replay_headless_transcript.py` executes get-vault → get-gateway → get-balance in that fixed order against the live devnet, then `assert_headless_live_transcript.py` — loud-fail guard that reds this step on an empty / zero-rmpc transcript
+6. `assert_headless_read_transcript.py` — asserts vault state, gateway state, and balance queries match JSON schema
 
 ---
 
@@ -1153,7 +1150,7 @@ Every workflow's `name:` and its tier.
 | `security-gates` | quick | cargo-audit (Rust), bun-audit (JS/TS), CSP strict-mode gate; allow-list for pre-existing sub-critical advisories with dated expiry (issues #804, #813, #835) |
 | `erc4626-demo-tvl-matrix` | heavy | ERC-4626 precondition matrix (anvil, shard by exit-fee tier) + full-stack demo-TVL test (devnet, 25–35 min); gates PRs into `dev` (issue #804/#814) |
 | `watchdog-rate-monitor` | quick | mint/burn rate watchdog unit + integration tests (issue #658, security-model.md §9); `watchdog-integration` also runs `cursor_and_volume` — the cursor-staleness and deposit-volume-anomaly suite, dark until issue #1282 |
-| `opencode-headless-deposit-read` | nightly | live model coverage is disabled by #1210 option B, so this suite is **deliberately red on every nightly** (owner: #1233); `live-model-coverage-unavailable` fails on schedule/dispatch to report the gap, while keyless `asserter-tests` runs on PRs and validates only the asserter/guard code |
+| `opencode-headless-deposit-read` | nightly | `deposit`/`read` replay coverage (issue #1210 option C, closes #1233): a scripted replay of the fixed rmpc command sequence runs against a live devnet in place of a live model; keyless `asserter-tests` runs on PRs too and validates the asserter/guard/replay code |
 | `nightly-full-suite` | nightly | schedule-only (02:00 UTC) + workflow_dispatch; dispatches all suites against dev HEAD |
 | `release-dapp` | release | tag/dispatch-only; not PR-triggered. Owns the `v*.*.*` tag namespace (issue #1243) |
 | `release-rmpc` | release | tag/dispatch-only; not PR-triggered. Owns the `rmpc-v*.*.*` tag namespace and opens the post-release manifest-bump PR (issue #1243). Runbook: `docs/development/releasing.md` |
