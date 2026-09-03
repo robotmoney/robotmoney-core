@@ -273,7 +273,7 @@ function _guardEmergencyFreshness() private view;
 Emergency unwind with Chronicle staleness gate.
 
 Reverts with `StalePriceFeed` when the feed is stale, unless
-`emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+`emergencyUnwindStaleOverride` has been set to true by ADMIN_ROLE.
 
 
 ```solidity
@@ -285,7 +285,7 @@ function emergencyUnwind() public override onlyRole(EMERGENCY_ROLE);
 High-risk emergency unwind with Chronicle staleness gate.
 
 Reverts with `StalePriceFeed` when the feed is stale, unless
-`emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+`emergencyUnwindStaleOverride` has been set to true by ADMIN_ROLE.
 
 
 ```solidity
@@ -320,7 +320,7 @@ event OracleHeartbeatUpdated(uint256 oldHeartbeat, uint256 newHeartbeat);
 ```
 
 ### EmergencyUnwindStaleOverrideUpdated
-Emitted when EMERGENCY_ROLE toggles the stale-price override flag.
+Emitted when ADMIN_ROLE toggles the stale-price override flag.
 
 
 ```solidity
