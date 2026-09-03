@@ -443,7 +443,7 @@ Split into two files because the structural/offline checks are cheap, keyless, a
 4. `cargo test --test read_only_walkthrough` — rmpc envelope contract against devnet (current reality: skip-cleans without a live RPC; ADR-0011 target is the offline golden fixture — no secret, loud on missing)
 
 **Jobs — `opencode-headless.yml`:**
-- `asserter-tests` — offline, keyless pytest of the transcript asserters and live-fail guard; runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
+- `asserter-tests` — offline, keyless pytest of the transcript asserters and live-fail guard, plus the G12 keystore-generate negative control (`negative_control_keystore_generate_flag.sh`, issue #1235); runs on **every** trigger, including `pull_request`. pytest exits non-zero if it collects zero tests, so a mis-pathed suite reds the job.
 - `refusal` — offline **rmpc CLI-level** refusal assertions (`cargo test --test opencode_refusal`: unknown subcommand and missing `--config` each exit non-zero with a labelled stderr payload), no chain and no model key; runs nightly/dispatch. It invokes no model, so it is not agent-refusal coverage — gap G10 is reopened, see `headless-opencode-tests.md`.
 - `live-model-coverage-unavailable` — fails nightly/dispatch with the explicit #1210 coverage limitation. This is intentional: live model coverage requires an unavailable external credential and must not silently skip or pass.
 - `deposit` / `read` — disabled live-agent jobs retained for future re-enablement; they do not execute and provide no coverage.
@@ -572,6 +572,7 @@ isolation, independent of any client (rmpc, dapp, explorer).
 7. `check_gateway_coverage.py` — gateway coverage report present and above threshold
 8. `check_source_doc_reconciliation.py` — source-doc reconciliation file up to date
 9. `check_rust_test_target_compile_coverage.py --self-test` then `check_rust_test_target_compile_coverage.py` — asserts every workspace crate with a `tests/` directory is type-checked by an unconditional PR-stage job, and that every `cargo test … --lib` job compiles its own crate's `tests/` binaries (issue #1295). See [Rust `tests/` compile coverage](#rust-tests-compile-coverage). Needs PyYAML, installed by the step above it.
+10. `check_evidence_scripts.py --self-test` then `check_evidence_scripts.py` — sweeps every `.github/scripts/...` path named in `docs/**` or `.github/workflows/**`: asserts it exists (a false-green shape 5, issue #1235) and, for every script under `.github/scripts/tests/`, that some workflow invokes it (shape 6, issue #1235).
 
 **Steps — `schema-validators` job:**
 1. Checkout repository
@@ -745,8 +746,15 @@ signal regardless of whether that day's commits touch each suite's path filters.
 **Jobs:**
 - `dispatch-all-suites` — single job; iterates over all suite workflow files and
   calls `gh workflow run <file> --ref dev`
+- `live-base-fork-drift` — non-blocking nightly alarm that classifies live
+  Base-mainnet fork drift vs. provider/harness failure (issue #1217); runs
+  `.github/scripts/tests/test_live_base_fork_drift.sh` (offline, stubbed
+  curl/forge, no live RPC) before `scripts/devnet/run-live-base-fork-drift.sh`
+  so a classification-logic regression is caught before spending the
+  live-RPC budget (issue #1235; the unit test previously existed but no
+  workflow invoked it).
 
-**Steps:**
+**Steps — `dispatch-all-suites` job:**
 1. Dispatch each suite workflow via `gh workflow run` against the `dev` ref
 2. (Suites run independently; this job only fires the dispatches and exits)
 

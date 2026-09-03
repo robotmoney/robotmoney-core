@@ -44,8 +44,11 @@ on:
       - ".github/scripts/assert_headless_deposit_transcript.py"
       - ".github/scripts/tests/test_live_guard.py"
       - ".github/scripts/tests/test_transcript_asserter_provenance.py"
+      - ".github/scripts/tests/negative_control_keystore_generate_flag.sh"
       - ".github/scripts/tests/fixtures/**"
       - ".github/workflows/suite-11b-opencode-headless.yml"
+      - "clients/rust-payment-client/src/bin/rmpc_keystore_import.rs"
+      - "clients/rust-payment-client/Cargo.toml"
 
 # These two values are consumed ONLY by the disabled `deposit` / `read` jobs
 # below. They are NOT a working no-credential path — issue #1210 proved every
@@ -89,6 +92,24 @@ jobs:
           python -m pytest -v \
             .github/scripts/tests/test_transcript_asserter_provenance.py \
             .github/scripts/tests/test_live_guard.py
+
+      # G12 negative control (issue #1235). This proves the historical broken
+      # `rmpc-keystore-import -- --generate` invocation (issue #469) cannot
+      # silently come back. It needs the built binary but no chain and no
+      # model key, so it belongs in this offline job rather than the disabled
+      # live `deposit` job it documents. Previously existed but was invoked by
+      # no workflow (shape 6, issue #1235) — contributed zero executed
+      # coverage.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust-payment-client
+
+      - name: G12 negative control — rmpc-keystore-import -- --generate must still fail
+        run: bash .github/scripts/tests/negative_control_keystore_generate_flag.sh
 
   live-model-coverage-unavailable:
     name: opencode-live-model-coverage-unavailable
