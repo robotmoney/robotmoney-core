@@ -249,7 +249,7 @@ contract RwaVault is BasketVault {
     ///         `oracleHeartbeat`.
     bool public emergencyUnwindStaleOverride;
 
-    /// @dev Emitted when EMERGENCY_ROLE toggles the stale-price override flag.
+    /// @dev Emitted when ADMIN_ROLE toggles the stale-price override flag.
     event EmergencyUnwindStaleOverrideUpdated(bool allowed);
 
     /// @notice Allow (true) or forbid (false, default) emergency unwind when the
@@ -273,7 +273,7 @@ contract RwaVault is BasketVault {
 
     /// @notice Emergency unwind with Chronicle staleness gate.
     /// @dev Reverts with `StalePriceFeed` when the feed is stale, unless
-    ///      `emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+    ///      `emergencyUnwindStaleOverride` has been set to true by ADMIN_ROLE.
     function emergencyUnwind() public override onlyRole(EMERGENCY_ROLE) {
         _guardEmergencyFreshness();
         super.emergencyUnwind();
@@ -281,7 +281,7 @@ contract RwaVault is BasketVault {
 
     /// @notice High-risk emergency unwind with Chronicle staleness gate.
     /// @dev Reverts with `StalePriceFeed` when the feed is stale, unless
-    ///      `emergencyUnwindStaleOverride` has been set to true by EMERGENCY_ROLE.
+    ///      `emergencyUnwindStaleOverride` has been set to true by ADMIN_ROLE.
     function emergencyUnwindWithOverride(address[] calldata tokens)
         public
         override
