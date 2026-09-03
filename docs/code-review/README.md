@@ -28,6 +28,48 @@ YYYYMMDD-code-review-<vendor>.md
   `…-internal-claude-scan-verification.md` (a verification of an external scan),
   `…-internal-claude-gap-analysis.md`.
 
+## The `.json` companion and CI enforcement (issue #1240)
+
+`YYYYMMDD-code-review-<vendor>.json` is an optional machine-readable
+companion to the `.md` of the same name, first landed alongside
+`20260728-code-review-internal-kimi.{md,json}` by PR #1197. Its
+`findings[]` entries are the source of truth for a severity's count and id
+set; the `.md`'s `#### SEC-<S>-NNN` sections, Severity Summary table, and
+(when present) `-verification.md` verdicts must all agree with it.
+
+`.github/scripts/check_code_review_artifacts.py`, wired into the
+`doc-validators` job of `suite-13-doc-checks.yml`, enforces this
+automatically on every PR (that workflow carries no `paths:` filter, so a
+docs-only PR is checked too):
+
+1. The `.json` parses, and every `findings[]` entry has a non-empty `id`,
+   `severity`, and `classification`.
+2. Per severity that renders as `#### SEC-<S>-NNN` sections (critical/high/
+   medium), the section count in the `.md` equals the `.json` entry count
+   for that severity.
+3. The Severity Summary table's `Count` column matches: the section count
+   for a `#### SEC-<S>-NNN` severity, or the row count of the
+   Low-Severity Findings table's `L-` rows for `Low`.
+4. Each `Key areas` cell holds exactly `Count` comma-separated phrases, and
+   no phrase (verbatim) appears under more than one severity row.
+5. `SEC-<S>-NNN` / `L-NNN` ids are dense and gapless from `001`.
+6. Every `SEC-<S>-NNN` / `L-NNN` id referenced anywhere else in the `.md`
+   (e.g. "Documentation Changes Required") resolves to a real section/row.
+7. When a `-verification.md` exists: every `.json` id appears in it exactly
+   once, each `## <SEVERITY> SEVERITY — ...` header's counts match its own
+   `### ` subsections, and the totals match the doc's Verdict Summary table.
+
+**Scope decision:** these checks only run against a `<stem>.md` when a
+sibling `<stem>.json` exists. Every snapshot older than 20260728 predates
+the `.json` convention and the `#### SEC-<S>-NNN` / Severity Summary format
+entirely (free-form finding headings, no machine-readable companion) —
+checking them against a convention they never claimed to follow would be
+noise, not signal. A new dated snapshot that ships a `.json` companion is
+expected to satisfy all seven checks; a historical snapshot is never
+rewritten to satisfy them (immutable point-in-time record) — if one someday
+needs an exemption, it is added to the checker script as an explicit, dated
+allowlist entry with a comment, never by weakening a rule.
+
 ## Conventions
 
 - **Internal vs external:** "internal" means a review *we* commissioned/ran with

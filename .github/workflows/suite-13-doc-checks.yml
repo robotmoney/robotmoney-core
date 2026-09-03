@@ -182,6 +182,25 @@ jobs:
         # nor fail).
         run: python3 .github/scripts/check_evidence_scripts.py
 
+      - name: Self-test code-review artifact cross-check (issue #1240)
+        # Confirms the guard fires for a Severity Summary count that
+        # disagrees with its section count, a Key areas phrase belonging to
+        # the wrong severity, a phrase duplicated across two severity rows,
+        # a dangling SEC-* reference, and a -verification.md header whose
+        # "N of M" disagrees with its actual subsection count -- BEFORE the
+        # real check runs, so a silently broken guard cannot pass. PR #1197
+        # (issue #1207) shipped five such defects through a green CI three
+        # times; this guard is the automated version of the hand-count that
+        # eventually caught them.
+        run: python3 .github/scripts/check_code_review_artifacts.py --self-test
+
+      - name: Code-review .json / .md / -verification.md cross-check (issue #1240)
+        # Only opens a `.md` (and its optional `-verification.md`) when a
+        # sibling `.json` exists -- see docs/code-review/README.md and this
+        # script's docstring for why historical pre-.json snapshots are not
+        # in scope.
+        run: python3 .github/scripts/check_code_review_artifacts.py
+
   schema-validators:
     name: schema-validators
     runs-on: ubuntu-latest
