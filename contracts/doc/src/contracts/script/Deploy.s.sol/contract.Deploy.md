@@ -1,5 +1,5 @@
 # Deploy
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/script/Deploy.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/413da8bdffbc8ba6d1fa45a3135d43625cb83440/contracts/script/Deploy.s.sol)
 
 **Inherits:**
 Script
@@ -144,10 +144,12 @@ Minimum seed deposit required before the vault is opened to the public.
 Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
 even with `_decimalsOffset() == 18`.
 See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
+TEMPORARY: lowered from 1,000 USDC to unblock Base Sepolia rehearsal faucet
+limits. See docs/future/review-usdc-seed.md — must be reverted before mainnet.
 
 
 ```solidity
-uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6
+uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6
 ```
 
 

@@ -231,9 +231,14 @@ assert_role() {
   fi
 }
 
+# 99.9% of SEED_DEPOSIT_AMOUNT (contracts/script/Deploy.s.sol), matching the
+# tolerance Deploy.s.sol itself asserts post-seed-deposit. SEED_DEPOSIT_AMOUNT
+# is temporarily 1 USDC (docs/future/review-usdc-seed.md) — this threshold
+# must move with it, including on the eventual revert to 1,000 USDC.
+seed_deposit_min=999000
 total_assets="$(rcall_int "totalAssets()(uint256)" "$VAULT")"
-if (( total_assets < 999000000 )); then
-  fail "seed deposit postcondition: vault totalAssets $total_assets < 999000000"
+if (( total_assets < seed_deposit_min )); then
+  fail "seed deposit postcondition: vault totalAssets $total_assets < $seed_deposit_min"
 fi
 info "postcondition OK: vault totalAssets=$total_assets"
 assert_role "$GATEWAY" "$ADMIN_ROLE" "$ADMIN_ADDRESS" true "gateway ADMIN_ROLE admin"

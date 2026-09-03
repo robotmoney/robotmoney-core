@@ -118,7 +118,9 @@ contract Deploy is Script {
     ///         Protects against ERC-4626 share-price inflation attacks on a zero-supply vault
     ///         even with `_decimalsOffset() == 18`.
     ///         See docs/technical/security-model.md §3 and docs/technical/smart-contracts.md §8.3.
-    uint256 public constant SEED_DEPOSIT_AMOUNT = 1_000 * 1e6; // 1,000 USDC (6 decimals)
+    ///         TEMPORARY: lowered from 1,000 USDC to unblock Base Sepolia rehearsal faucet
+    ///         limits. See docs/future/review-usdc-seed.md — must be reverted before mainnet.
+    uint256 public constant SEED_DEPOSIT_AMOUNT = 1 * 1e6; // 1 USDC (6 decimals)
 
     /// @notice Forge broadcast entrypoint. Reads env vars, deploys all contracts, and writes a JSON file.
     /// @return d Struct containing all deployed contract addresses and key parameters.
