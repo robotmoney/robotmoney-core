@@ -4,9 +4,10 @@
 //!
 //! `rmpc committee-identity create|show-public-key|sign` — local-only
 //! Ed25519 identity management for the Investment Swarm's plain-REST flow
-//! (`POST /api/swarm/apply` -> approval -> token claim ->
-//! `POST /api/swarm/signing-payload` -> `POST /api/swarm/submit`; no MCP
-//! transport is involved). No RPC, no operator config TOML, no on-chain
+//! (public signed apply (`POST /api/swarm/apply`) -> admin activation ->
+//! token-claim -> canonical submission payload
+//! (`POST /api/swarm/signing-payload`) -> `POST /api/swarm/submit`). No
+//! RPC, no operator config TOML, no on-chain
 //! state: this is a pure client-side crypto helper so a prospective member
 //! never has to hand-roll Ed25519 code (issue #1111 AC-1). See
 //! [`crate::committee_identity`] for the wire-format rationale and for the
