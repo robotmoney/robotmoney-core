@@ -1,5 +1,5 @@
 # DeployTest
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/93e714f46f12a94cb2f63f7a8dab827ff15fac4f/contracts/test/Deploy.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/413da8bdffbc8ba6d1fa45a3135d43625cb83440/contracts/test/Deploy.t.sol)
 
 **Inherits:**
 Test
@@ -165,15 +165,16 @@ function test_deploy_revertsWhenAdminEqualsAgent() public;
 function test_deploy_revertsWhenPauserEqualsAgent() public;
 ```
 
-### test_deploy_seedDepositAmount_isOneThousandUsdc
+### test_deploy_seedDepositAmount_isOneUsdc
 
-SEED_DEPOSIT_AMOUNT constant equals 1,000 USDC (1_000_000_000 wei).
+SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 wei).
 This is a pure unit check — no protocol interaction required.
 The fork-level post-conditions are in DeploySeedDeposit.t.sol.
+TEMPORARY: was 1,000 USDC; see docs/future/review-usdc-seed.md.
 
 
 ```solidity
-function test_deploy_seedDepositAmount_isOneThousandUsdc() public view;
+function test_deploy_seedDepositAmount_isOneUsdc() public view;
 ```
 
 ### test_deploy_envDriven_runInProcessSucceeds

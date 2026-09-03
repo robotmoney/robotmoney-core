@@ -279,14 +279,15 @@ contract DeployTest is Test {
 
     // --- Seed deposit constant (issue #656) --------------------------------
 
-    /// @notice SEED_DEPOSIT_AMOUNT constant equals 1,000 USDC (1_000_000_000 wei).
+    /// @notice SEED_DEPOSIT_AMOUNT constant equals 1 USDC (1_000_000 wei).
     ///         This is a pure unit check — no protocol interaction required.
     ///         The fork-level post-conditions are in DeploySeedDeposit.t.sol.
-    function test_deploy_seedDepositAmount_isOneThousandUsdc() public view {
+    ///         TEMPORARY: was 1,000 USDC; see docs/future/review-usdc-seed.md.
+    function test_deploy_seedDepositAmount_isOneUsdc() public view {
         assertEq(
             script.SEED_DEPOSIT_AMOUNT(),
-            1_000_000_000,
-            "SEED_DEPOSIT_AMOUNT must be 1_000_000_000 (1,000 USDC in 6-decimal wei)"
+            1_000_000,
+            "SEED_DEPOSIT_AMOUNT must be 1_000_000 (1 USDC in 6-decimal wei)"
         );
     }
 

@@ -1,5 +1,14 @@
 # Base Sepolia deployment runbook + rehearsal
 
+> **Not the default verification path.** Per ADR-0013, deploy-tooling and
+> dapp-integration verification defaults to the Robot Money Devnet
+> (`docs/technical/full-stack-devnet.md`), not a live Base Sepolia deploy.
+> Base Sepolia lacks a production-parity Compound V3 or Morpho deployment (see
+> "Adapter address honesty" below) — a live rehearsal here cannot complete the
+> full three-adapter ceremony without deviating from `Deploy.s.sol`'s real
+> adapter wiring. This runbook remains useful for what only a public testnet
+> gives you: real network conditions, gas, and nonce behaviour.
+
 ## Why this exists — the D9 no-man's-land
 
 D9 scoped Project Fusion to "build and prove locally": the pipeline ends
@@ -63,15 +72,29 @@ checks in the live path.
 | Canonical USDC | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (Circle `FiatTokenProxy`) |
 | RPC | `https://sepolia.base.org` (public) or a private provider RPC |
 
-> **Adapter address honesty.** `Deploy.s.sol` pins the **Base-mainnet** Aave V3
-> Pool / Compound V3 Comet / Morpho Gauntlet addresses as constants. On Base
-> Sepolia those exact pools are not deployed, so the adapters register (the
-> registration is a no-delegatecall bytecode + codehash pin, not a pool
-> interaction) but their yield legs do not resolve against a live pool until a
-> Base-Sepolia-compatible adapter set is supplied. The dry-run rehearsal forks
-> the **Base mainnet** golden fixture, so the protocol storage resolves there;
-> the live Base Sepolia run currently exercises the core ceremony and the
-> adapter *registration*, not live pool yield. Tracked separately.
+> **Adapter address honesty (corrected — see ADR-0013).** `Deploy.s.sol` pins
+> the **Base-mainnet** Aave V3 Pool / Compound V3 Comet / Morpho Gauntlet
+> addresses as constants. Checked against real Base Sepolia (`cast code` plus
+> each protocol's official docs, verified twice independently):
+>
+> - **Aave V3** has a real Base Sepolia Pool
+>   (`0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27`) — registration *and* NAV
+>   reads against it work.
+> - **Compound V3 (Comet)** has **no Base Sepolia deployment at all** — the
+>   pinned mainnet Comet address has zero bytecode on Base Sepolia.
+> - **Morpho** only has its bare core contracts on Base Sepolia (`Morpho`,
+>   `AdaptiveCurveIrm`, an oracle factory) — no USDC-specific market or vault
+>   exists for the adapter to point at.
+>
+> This is not merely a "yield doesn't resolve" gap. `RobotMoneyVault.totalAssets()`
+> sums every *registered* adapter's `totalAssets()`, and the deploy script's
+> mandatory seed deposit calls `totalAssets()` as part of the deposit flow —
+> so registering the Compound or Morpho adapter against its pinned mainnet
+> address reverts the ceremony outright at the seed-deposit step, before any
+> yield is ever queried. A live Base Sepolia rehearsal that needs to complete
+> the full ceremony must explicitly skip those two adapters. The dry-run
+> rehearsal is unaffected: it forks the **Base mainnet** golden fixture, where
+> all three protocols resolve correctly.
 
 ## Ceremony — one-ceremony rule (task 4.10)
 
