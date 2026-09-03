@@ -328,10 +328,13 @@ supersedes the relevant details above where they conflict.
 ### 12.2 Drive rmpc deterministically through the bash tool
 
 Because the skill is not registered, a vague prompt makes the agent improvise
-with `task`/`read` (and even suggest explorer URLs). The disabled live jobs
-retain explicit prompts naming the exact rmpc commands and instructing the
-agent to use the `bash` tool only. They currently provide no CI coverage: see
-§12.6 for the unavailable live-model dependency.
+with `task`/`read` (and even suggest explorer URLs). While the live jobs
+called a real model (before issue #1210), their prompts named the exact rmpc
+commands and instructed the agent to use the `bash` tool only — every command,
+flag, and order was already fully determined by the prompt text, and the
+model's only real job was reading it and invoking `bash` with the named
+string. Issue #1233's replay coverage (§12.6) executes that exact same fixed
+command sequence directly, without a model in the loop at all.
 
 - Read job commands: `get-vault`, `get-gateway`, `get-balance`.
 - Deposit job commands (read prefix in the asserter's required order, then the
@@ -387,7 +390,7 @@ These are independent of OpenCode and were missing from the original workflow:
   the deposit tx `from` equals the generated agent key — both updated only to
   read `tx_hash`/`amount` out of the real `part.state.output` JSON.
 
-### 12.6 Live-transcript loud-fail guard and unavailable model coverage (issues #1151/#1210)
+### 12.6 Live-transcript loud-fail guard and replay coverage (issues #1151/#1210/#1233)
 
 **The failure.** From 2026-07-01 the nightly was red every day: the pinned free
 zen model `opencode/big-pickle` on `opencode-ai@1.14.29` began 400ing. First the
@@ -401,52 +404,63 @@ fork-state Anvil, deploy, on-chain authorization asserts) still passed.
 **Loud-fail guard.** `opencode run` **exits 0** even on that dead session, and the
 error-only transcript is non-empty, so the previous `test -s <transcript>` guard
 green-lit it and the outage only surfaced three steps later at the transcript
-asserter — reading as an assertion failure rather than a model outage. The read
-and deposit "Headless … run" steps now run
+asserter — reading as an assertion failure rather than a model outage.
 [`assert_headless_live_transcript.py`](../../.github/scripts/assert_headless_live_transcript.py)
-immediately after `opencode run`. It reds **that step** when the transcript is
-empty, contains any `error` event, or contains **zero `rmpc …` bash tool
-invocations** — a broken model path fails loudly at the agent step
-(loud-skip policy), never silent-green. It deliberately does **not** re-check
-command order / exit codes / envelopes; those remain the transcript asserters'
-job, unchanged (the order and exit-code checks were not weakened).
+reds its step when the transcript is empty, contains any `error` event, or
+contains **zero `rmpc …` bash tool invocations** — a broken agent path fails
+loudly (loud-skip policy), never silent-green. It deliberately does **not**
+re-check command order / exit codes / envelopes; those remain the transcript
+asserters' job, unchanged. This guard now runs after the **replay** harness
+below rather than after a live `opencode run`, and still holds: a bug in the
+replay harness that produced an empty or zero-rmpc transcript would still be
+caught here.
 
-**Unavailable model coverage (issue #1210, option B).** The anonymous zen tier
-no longer executes any model, so selecting a different free model cannot restore
-the live runs. This repository intentionally does not provision or require
-`OPENCODE_API_KEY`; the `deposit` and `read` live-agent jobs are therefore
-disabled. They are not replayed from fixtures, and the offline tests below do
-not prove live model behaviour, tool-schema compatibility, or prompt adherence.
-On schedule and manual dispatch, `live-model-coverage-unavailable` fails with
-this limitation explicitly. That deliberate red result satisfies loud-skip:
-missing model access cannot be mistaken for executed coverage or a green suite.
+**Replay coverage (issue #1210 option C; closes tracker #1233).** The
+anonymous zen tier no longer executes any model, so selecting a different free
+model cannot restore the live runs, and this repository intentionally does not
+provision `OPENCODE_API_KEY` (option A). Rather than leave the `deposit` and
+`read` jobs permanently disabled, they no longer invoke OpenCode at all: each
+job's prompt always named the exact rmpc commands, flags, and order it
+required (the model's only real job was reading that prompt and calling
+`bash` with the named string), so
+[`replay_headless_transcript.py`](../../.github/scripts/replay_headless_transcript.py)
+executes that same fixed command sequence directly, for real, against the
+job's live devnet, and emits a transcript in the exact NDJSON shape
+`opencode run --format json` produces (§12.3). Every downstream assertion
+script — the loud-fail guard above,
+`assert_headless_{deposit,read}_transcript.py`, and
+`assert_headless_deposit_{delta,sender}.py` — runs completely unchanged
+against a genuinely fresh, real transcript every run: real keypair, real
+on-chain authorization, real deposit tx, real vault delta.
 
-The disabled jobs are retained in the workflow rather than deleted, so option A
-(provision the key) is a one-line `if:` flip. Everything that flip depends on is
-kept live in the workflow for that reason alone:
+**What replay does not prove.** This is a scripted replay, not a live model
+invocation. It proves the rmpc CLI contract (syntax, exit codes, output
+schema) and the full deploy → authorize → deposit pipeline still work
+end-to-end, but it cannot prove an LLM would still choose this exact tool
+sequence from the natural-language prompt (model/prompt-adherence drift), and
+it cannot exercise agent *refusal* on a failed precondition (gap G10 in
+`headless-opencode-tests.md` stays open — refusal requires a model making a
+judgement call under a failed precondition, not a fixed script that always
+runs the happy path). Restoring those remains option A: provisioning
+`OPENCODE_API_KEY`.
 
-- the workflow-level `env:` block defining `OPENCODE_VERSION` /
-  `OPENCODE_MODEL` — the retained steps run under `set -u` and would die on
-  unbound variables without it; and
-- the step-level `OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}` line on
-  both live run steps — option A *is* provisioning that secret, so deleting the
-  line would make a re-enabled job run anonymously and die in the #1151
-  loud-fail guard, turning the "one-line flip" into a rebuild.
+**Who owns re-enabling option A.** Issue #1233 tracked suite-11b's coverage
+gap while it was disabled and is now closed by this replay implementation.
+Any future decision to provision `OPENCODE_API_KEY` and restore live-model
+coverage (option A) is a new, separate issue — the deposit/read jobs no
+longer retain a "one-line `if:` flip" back to a live `opencode run`
+invocation; that call, its OpenCode/bun install steps, and its
+`OPENCODE_VERSION`/`OPENCODE_MODEL` plumbing were removed along with this
+change (recoverable from git history) since nothing in the workflow
+references them anymore.
 
-Those defaults are **not** a working no-credential path; #1210 disproved that.
-
-**Who owns the deliberate red.** Suite 11b now fails on every nightly by design.
-Issue #1233 is the open tracking issue for restoring coverage and stays open for
-as long as the red does; it is what stops "permanently red nightly" from decaying
-back into the eight-week unowned red that #1210 was filed about. The
-`live-model-coverage-unavailable` step prints that issue URL in its failure
-output so the run log names its own owner.
-
-**Executed-in-CI proof.** The guard and the (previously CI-orphaned) transcript
-asserters are pinned by offline unit tests
+**Executed-in-CI proof.** The guard, the transcript asserters, and the replay
+harness are pinned by offline unit tests
 (`.github/scripts/tests/test_live_guard.py`,
-`test_transcript_asserter_provenance.py`) run by the keyless
+`test_transcript_asserter_provenance.py`,
+`test_replay_headless_transcript.py`) run by the keyless
 `opencode-headless-asserter-tests` job on every trigger — including
-`pull_request`, so a change to the guard or asserters is proven to execute rather
-than silent-skipped. The offline `refusal` job stays schedule/dispatch-only;
-the live `deposit` and `read` jobs are disabled and have no current replacement.
+`pull_request`, so a change to the guard, asserters, or replay harness is
+proven to execute rather than silent-skipped. The offline `refusal` job stays
+schedule/dispatch-only; the `deposit` and `read` jobs now execute real replay
+coverage on the same schedule.

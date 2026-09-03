@@ -1,31 +1,38 @@
 # Canonical: docs/development/ci-suites.md §11 (opencode-headless)
 #
-# COVERAGE LIMITATION (issue #1210, option B; re-enablement tracked by #1233)
-# The hosted anonymous OpenCode tier no longer executes any model. This workflow
-# intentionally does not provision OPENCODE_API_KEY or run live agent/model jobs.
-# Its keyless asserter and refusal tests still execute, but they do not prove that
-# a live AI agent can drive rmpc. Scheduled and manually dispatched runs therefore
-# fail on purpose, in the `live-model-coverage-unavailable` job, so the missing
-# coverage is loudly visible rather than silently green.
+# REPLAY COVERAGE (issue #1210 option C; closes re-enablement tracker #1233)
+# Issue #1210 found the hosted anonymous OpenCode tier no longer executes any
+# model, so `opencode run` cannot drive rmpc without a paid OPENCODE_API_KEY
+# (option A) — a secret this repository does not provision. The `deposit` and
+# `read` jobs below no longer invoke OpenCode at all: they replay the exact
+# rmpc command sequence the (removed) live-agent prompts always named
+# explicitly, via .github/scripts/replay_headless_transcript.py, against the
+# same live devnet the jobs boot. Every downstream assertion script
+# (assert_headless_live_transcript.py, assert_headless_{deposit,read}_
+# transcript.py, assert_headless_deposit_{delta,sender}.py) runs UNCHANGED
+# against a genuinely fresh, real transcript every run.
 #
-# THIS SUITE IS DELIBERATELY RED ON EVERY NIGHTLY. That is not a regression and
-# not a flake: it is the #1210 decision, and #1233 is the open issue that owns
-# it. Do not "fix" the red by deleting or greening this job — close #1233 by
-# restoring real coverage, or reopen the #1210 decision.
+# WHAT THIS DOES NOT PROVE: this is a scripted replay, not a live model
+# invocation. It proves the rmpc CLI contract (syntax, exit codes, output
+# schema) and the full deploy -> authorize -> deposit pipeline still work
+# end-to-end, but — unlike a live agent — it cannot prove an LLM would still
+# choose this exact tool sequence from the natural-language prompt, and it
+# cannot exercise agent *refusal* on a failed precondition (gap G10 in
+# docs/development/headless-opencode-tests.md stays open: refusal requires a
+# model making a judgement call, not a fixed script). Restoring that is
+# option A (provision OPENCODE_API_KEY) — see
+# docs/technical/opencode-headless-invocation.md §12.6.
 #
 # GOTCHAS
 # - assert_headless_deposit_transcript.py validates tool-call ORDER, not just presence.
-#   The agent must call get-vault before self-check before deposit. If the model changes
-#   its reasoning order (common after a model version bump), this assertion fails even if
-#   the final transaction succeeds. Update the expected order in the script if the new
-#   order is intentional and correct.
+#   The replay script runs get-vault, get-agent, get-balance, get-allowance, self-check,
+#   then deposit in that fixed order (see the deposit job's "Build deposit replay steps"
+#   step). That order can now only change if this workflow file changes it — there is no
+#   model left to drift.
 # - The deposit job funds the agent via anvil_setBalance, which sets the ETH balance
 #   directly without a transfer. This only works on Anvil/devnet. If this job is ever
 #   pointed at a non-Anvil chain, the funding step will silently do nothing and the
 #   deposit will fail with "insufficient funds" — which looks like an rmpc bug.
-# - OpenCode is pinned at a specific version. A nightly failure after a new OpenCode
-#   release is most likely a tool schema or prompt format change in the new version,
-#   not a regression in rmpc. Check the OpenCode changelog before debugging rmpc.
 
 name: opencode-headless-deposit-read
 
@@ -42,27 +49,15 @@ on:
       - ".github/scripts/assert_headless_live_transcript.py"
       - ".github/scripts/assert_headless_read_transcript.py"
       - ".github/scripts/assert_headless_deposit_transcript.py"
+      - ".github/scripts/replay_headless_transcript.py"
       - ".github/scripts/tests/test_live_guard.py"
       - ".github/scripts/tests/test_transcript_asserter_provenance.py"
+      - ".github/scripts/tests/test_replay_headless_transcript.py"
       - ".github/scripts/tests/negative_control_keystore_generate_flag.sh"
       - ".github/scripts/tests/fixtures/**"
       - ".github/workflows/suite-11b-opencode-headless.yml"
       - "clients/rust-payment-client/src/bin/rmpc_keystore_import.rs"
       - "clients/rust-payment-client/Cargo.toml"
-
-# These two values are consumed ONLY by the disabled `deposit` / `read` jobs
-# below. They are NOT a working no-credential path — issue #1210 proved every
-# anonymous zen model returns UnknownError, so no value here restores live
-# coverage. They exist, together with the `OPENCODE_API_KEY` env line kept on
-# both live run steps, so that re-enabling those jobs (issue #1233, option A)
-# really is a one-line `if:` flip rather than a rebuild: without them the
-# retained steps would die on `set -u` unbound variables, and without the key
-# line a re-enabled job would still run anonymously and die in the #1151
-# loud-fail guard. The repo variables let an operator re-pin version/model at
-# that point without a code+merge cycle.
-env:
-  OPENCODE_VERSION: ${{ vars.OPENCODE_HEADLESS_VERSION || '1.18.4' }}
-  OPENCODE_MODEL: ${{ vars.OPENCODE_HEADLESS_MODEL || 'opencode/north-mini-code-free' }}
 
 jobs:
   # Offline, keyless unit tests for the transcript asserters and the issue #1151
@@ -87,11 +82,12 @@ jobs:
       - name: Install pytest
         run: python -m pip install --upgrade pytest
 
-      - name: Run transcript-asserter + live-guard unit tests
+      - name: Run transcript-asserter + live-guard + replay-harness unit tests
         run: |
           python -m pytest -v \
             .github/scripts/tests/test_transcript_asserter_provenance.py \
-            .github/scripts/tests/test_live_guard.py
+            .github/scripts/tests/test_live_guard.py \
+            .github/scripts/tests/test_replay_headless_transcript.py
 
       # G12 negative control (issue #1235). This proves the historical broken
       # `rmpc-keystore-import -- --generate` invocation (issue #469) cannot
@@ -110,26 +106,6 @@ jobs:
 
       - name: G12 negative control — rmpc-keystore-import -- --generate must still fail
         run: bash .github/scripts/tests/negative_control_keystore_generate_flag.sh
-
-  live-model-coverage-unavailable:
-    name: opencode-live-model-coverage-unavailable
-    runs-on: ubuntu-latest
-    env:
-      CI_CLASS: feature-correctness
-    # A live-model assertion needs a model credential. Do not skip this absence:
-    # the coverage policy requires the nightly/dispatch signal to fail loudly.
-    # Gated off pull_request so the deliberate red reports the gap on the nightly
-    # signal without blocking unrelated PR merges.
-    if: ${{ github.event_name != 'pull_request' }}
-    steps:
-      - name: Report disabled live-model coverage
-        run: |
-          echo "FAIL: live OpenCode agent coverage is disabled (issue #1210, option B)." >&2
-          echo "Anonymous OpenCode models are unavailable and this repository intentionally does not provide OPENCODE_API_KEY." >&2
-          echo "Only offline transcript-asserter coverage and CLI-level rmpc refusal coverage currently execute; agent-refusal coverage (gap G10) is reopened too." >&2
-          echo "This failure is deliberate and expected on every schedule/dispatch run." >&2
-          echo "Owner: https://github.com/robotmoney/robotmoney-core/issues/1233 (re-enable live agent coverage)." >&2
-          exit 1
 
   refusal:
     name: opencode-refusal
@@ -162,41 +138,19 @@ jobs:
         run: cargo test --manifest-path testing/doctests/Cargo.toml --test opencode_refusal -- --nocapture
 
   deposit:
-    name: opencode-headless-deposit
+    name: opencode-headless-deposit-replay
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CI_CLASS: feature-correctness
     needs: refusal
-    # Disabled by issue #1210 option B: no anonymous model is available, and
-    # this repository intentionally does not add paid OPENCODE_API_KEY access.
-    if: ${{ false }}
+    # Replay coverage (issue #1210 option C; closes tracker #1233). No model
+    # credential is needed — see the workflow header.
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.2.13"
-
-      - name: Install OpenCode at pinned version
-        # Issue #1151: version resolved from the `OPENCODE_HEADLESS_VERSION` repo
-        # variable / default (1.18.4). The #1151 dispatch inputs were removed with
-        # the live coverage (#1210) — a model rotation cannot fix an absent tier.
-        # 1.14.29 shipped a tool-schema serialization bug the hosted
-        # provider began rejecting ("tools[0].function: missing field `name`").
-        # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
-        # outside its default-trusted list, so a plain `bun install -g` leaves
-        # opencode-ai's postinstall unrun and every later `opencode` invocation
-        # dies with "opencode-ai's postinstall script was not run." That is what
-        # reddened this nightly ~110 times between 2026-07 and 2026-08-24.
-        run: |
-          bun install -g --trust opencode-ai@"$OPENCODE_VERSION"
-          # Fail loudly HERE if the install produced an unusable binary, rather
-          # than 5 minutes later as an inscrutable transcript-assertion failure.
-          opencode --version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -441,52 +395,48 @@ jobs:
           ./target/release/rmpc get-vault --config "$RMPC_CONFIG" --pretty \
             > "${RUNNER_TEMP}/robotmoney-opencode/vault-pre.json"
 
-      - name: Install robotmoney-user skill bundle into opencode config
-        # NOTE: plugins/robotmoney-user is a Claude-style SKILL bundle, NOT an
-        # opencode JS plugin. `opencode plugin <path>` records it in
-        # .opencode/opencode.json, but opencode's loader logs "Plugin export is
-        # not a function" and never registers it as a tool. The headless agent
-        # therefore drives rmpc through the built-in `bash` tool, guided by the
-        # explicit prompt below. See docs/technical/opencode-headless-invocation.md.
-        run: opencode plugin "$PWD/plugins/robotmoney-user" || true
-
-      - name: Headless deposit run
-        env:
-          # Belt-and-suspenders: the config already pins state_dir, but export
-          # RMPC_STATE_DIR so any rmpc invocation in the agent's shell resolves
-          # the per-agent nonce-lock dir even if it omits --config nuances.
-          RMPC_STATE_DIR: ${{ runner.temp }}/robotmoney-opencode/state
-          # Retained deliberately (issue #1233, option A): provisioning this
-          # secret is exactly what option A does, so the plumbing has to already
-          # be here for re-enabling to be the one-line `if:` flip the canonical
-          # doc promises. Absent the secret this expands to the empty string and
-          # the (disabled) run would go out anonymously — which is precisely the
-          # unusable path issue #1210 documented.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      # Replay coverage (issue #1210 option C): the same rmpc command sequence
+      # the disabled live-agent prompt always named explicitly, executed for
+      # real against this job's live devnet instead of decided by a model.
+      # See the workflow header and .github/scripts/replay_headless_transcript.py.
+      - name: Build deposit replay steps
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode/state"
           ORDER_ID="0x$(openssl rand -hex 32)"
-          # Explicit, deterministic prompt: opencode cannot load the SKILL
-          # bundle as a tool, so we name the exact rmpc commands (read prefix in
-          # the order the asserter requires, then deposit). The agent runs each
-          # via the bash tool; the transcript then contains real `rmpc` tool
-          # calls with exit 0 against the live devnet.
-          # Single-line prompt (no embedded newlines) so the YAML block scalar
-          # and shell quoting stay simple. The numbered steps are separated by
-          # " | " — the model follows them deterministically.
-          PROMPT="You are operating the Robot Money rmpc client against a local devnet to make a guarded USDC deposit. The rmpc binary is on PATH. RMPC_STATE_DIR and RMPC_KEYSTORE_PASSPHRASE are already set in your shell. Using the bash tool ONLY, run EXACTLY these commands in this exact order, one per bash call, printing each command's output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-agent --config ${RMPC_CONFIG} --agent ${AGENT_ADDRESS} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty | (4) rmpc get-allowance --config ${RMPC_CONFIG} --owner ${AGENT_ADDRESS} --spender ${GATEWAY_ADDRESS} --pretty | (5) rmpc self-check --config ${RMPC_CONFIG} --pretty | (6) rmpc deposit --config ${RMPC_CONFIG} --amount 1000000 --order-id ${ORDER_ID} --pretty. After the deposit, report the deposit's tx_hash and amount, then stop."
-          # This disabled job is retained only as historical implementation
-          # context. Model selection cannot restore anonymous coverage (#1210).
-          opencode run "$PROMPT" --model "$OPENCODE_MODEL" --format json --dangerously-skip-permissions \
-            | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
-          # Loud-fail guard (issue #1151): opencode run exits 0 even when the
-          # hosted model session dies in a provider error with zero tool calls,
-          # and that error-only transcript is non-empty, so the old `test -s`
-          # check green-lit a dead run and the outage only surfaced 3 steps later
-          # at the assert step. This guard reds THIS step when the transcript is
-          # empty, error-only, or has zero rmpc invocations — a broken model path
-          # fails loudly here instead of masquerading as an assertion failure.
+          echo "ORDER_ID=$ORDER_ID" >> $GITHUB_ENV
+          jq -n \
+            --arg c1 "rmpc get-vault --config ${RMPC_CONFIG} --pretty" \
+            --arg c2 "rmpc get-agent --config ${RMPC_CONFIG} --agent ${AGENT_ADDRESS} --pretty" \
+            --arg c3 "rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty" \
+            --arg c4 "rmpc get-allowance --config ${RMPC_CONFIG} --owner ${AGENT_ADDRESS} --spender ${GATEWAY_ADDRESS} --pretty" \
+            --arg c5 "rmpc self-check --config ${RMPC_CONFIG} --pretty" \
+            --arg c6 "rmpc deposit --config ${RMPC_CONFIG} --amount 1000000 --order-id ${ORDER_ID} --pretty" \
+            '[
+              {description: "Get vault info", command: $c1},
+              {description: "Get agent info", command: $c2},
+              {description: "Get balance", command: $c3},
+              {description: "Get allowance", command: $c4},
+              {description: "Self-check", command: $c5},
+              {description: "Execute deposit", command: $c6}
+            ]' > "${RUNNER_TEMP}/robotmoney-opencode/deposit-replay-steps.json"
+
+      - name: Headless deposit replay run
+        env:
+          # Belt-and-suspenders: the config already pins state_dir, but export
+          # RMPC_STATE_DIR so any rmpc invocation resolves the per-agent
+          # nonce-lock dir even if it omits --config nuances.
+          RMPC_STATE_DIR: ${{ runner.temp }}/robotmoney-opencode/state
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/replay_headless_transcript.py \
+            --steps-file "${RUNNER_TEMP}/robotmoney-opencode/deposit-replay-steps.json" \
+            --out "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
+          # Structural check on the replayed transcript, unchanged from the
+          # live-model path (issue #1151): reds THIS step on an empty or
+          # zero-rmpc-invocation transcript. The replay script above already
+          # fails loudly on a failing step; this is a second, independent
+          # check on the transcript shape itself.
           python3 .github/scripts/assert_headless_live_transcript.py \
             "${RUNNER_TEMP}/robotmoney-opencode/headless-deposit.json"
 
@@ -528,41 +478,19 @@ jobs:
           path: ${{ runner.temp }}/robotmoney-opencode/headless-deposit.json
 
   read:
-    name: opencode-headless-read
+    name: opencode-headless-read-replay
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CI_CLASS: feature-correctness
     needs: refusal
-    # Disabled by issue #1210 option B: no anonymous model is available, and
-    # this repository intentionally does not add paid OPENCODE_API_KEY access.
-    if: ${{ false }}
+    # Replay coverage (issue #1210 option C; closes tracker #1233). No model
+    # credential is needed — see the workflow header.
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.2.13"
-
-      - name: Install OpenCode at pinned version
-        # Issue #1151: version resolved from the `OPENCODE_HEADLESS_VERSION` repo
-        # variable / default (1.18.4). The #1151 dispatch inputs were removed with
-        # the live coverage (#1210) — a model rotation cannot fix an absent tier.
-        # 1.14.29 shipped a tool-schema serialization bug the hosted
-        # provider began rejecting ("tools[0].function: missing field `name`").
-        # `--trust` is REQUIRED: bun 1.2.13 blocks lifecycle scripts for packages
-        # outside its default-trusted list, so a plain `bun install -g` leaves
-        # opencode-ai's postinstall unrun and every later `opencode` invocation
-        # dies with "opencode-ai's postinstall script was not run." That is what
-        # reddened this nightly ~110 times between 2026-07 and 2026-08-24.
-        run: |
-          bun install -g --trust opencode-ai@"$OPENCODE_VERSION"
-          # Fail loudly HERE if the install produced an unusable binary, rather
-          # than 5 minutes later as an inscrutable transcript-assertion failure.
-          opencode --version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -656,36 +584,32 @@ jobs:
           EOF
           echo "RMPC_CONFIG=$CONFIG" >> $GITHUB_ENV
 
-      - name: Install robotmoney-user skill bundle into opencode config
-        # plugins/robotmoney-user is a SKILL bundle, not an opencode JS plugin;
-        # opencode cannot register it as a tool. The explicit prompt below drives
-        # rmpc through the bash tool instead. See
-        # docs/technical/opencode-headless-invocation.md.
-        run: opencode plugin "$PWD/plugins/robotmoney-user" || true
-
-      - name: Headless read run
-        env:
-          # Retained deliberately (issue #1233, option A): see the identical note
-          # on the deposit job's run step. Option A is "provision
-          # OPENCODE_API_KEY", so this plumbing must survive the disable for the
-          # re-enable to be a one-line `if:` flip.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      # Replay coverage (issue #1210 option C): the same rmpc read commands
+      # the disabled live-agent prompt always named explicitly, executed for
+      # real against this job's live devnet instead of decided by a model.
+      - name: Build read replay steps
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/robotmoney-opencode"
-          # Explicit, deterministic prompt naming the exact rmpc read commands.
-          # opencode cannot load the SKILL bundle as a tool, so a vague prompt
-          # makes the agent improvise (glob/read/task) and never run rmpc.
-          # Single-line prompt (no embedded newlines) so the YAML block scalar
-          # and shell quoting stay simple.
-          PROMPT="You are operating the Robot Money rmpc client against a local devnet. The rmpc binary is on PATH. Using the bash tool ONLY, run EXACTLY these read commands in this exact order, one per bash call, printing each command's JSON output; do not use any other tool and do not access any explorer or web URL: (1) rmpc get-vault --config ${RMPC_CONFIG} --pretty | (2) rmpc get-gateway --config ${RMPC_CONFIG} --pretty | (3) rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty. After running the three commands, summarize the vault state, gateway state, and balance, then stop."
-          # This disabled job is retained only as historical implementation
-          # context. Model selection cannot restore anonymous coverage (#1210).
-          opencode run "$PROMPT" --model "$OPENCODE_MODEL" --format json --dangerously-skip-permissions \
-            | tee "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
-          # Loud-fail guard (issue #1151): reds THIS step on an empty, error-only,
-          # or zero-rmpc transcript so a broken model path fails loudly here
-          # rather than surfacing later at the assert step. See §12.6.
+          jq -n \
+            --arg c1 "rmpc get-vault --config ${RMPC_CONFIG} --pretty" \
+            --arg c2 "rmpc get-gateway --config ${RMPC_CONFIG} --pretty" \
+            --arg c3 "rmpc get-balance --config ${RMPC_CONFIG} --address ${AGENT_ADDRESS} --pretty" \
+            '[
+              {description: "Get vault state from rmpc", command: $c1},
+              {description: "Get gateway state from rmpc", command: $c2},
+              {description: "Get balance from rmpc", command: $c3}
+            ]' > "${RUNNER_TEMP}/robotmoney-opencode/read-replay-steps.json"
+
+      - name: Headless read replay run
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/replay_headless_transcript.py \
+            --steps-file "${RUNNER_TEMP}/robotmoney-opencode/read-replay-steps.json" \
+            --out "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
+          # Structural check on the replayed transcript, unchanged from the
+          # live-model path (issue #1151): reds THIS step on an empty or
+          # zero-rmpc-invocation transcript.
           python3 .github/scripts/assert_headless_live_transcript.py \
             "${RUNNER_TEMP}/robotmoney-opencode/headless-read.json"
 
