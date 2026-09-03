@@ -21,3 +21,4 @@ File names follow `ADR-NNNN-short-kebab-title.md`.
 | 0010 | [Unified Vault architecture — one Vault class, position adapters for every theme](ADR-0010-unified-vault-architecture.md) | Proposed |
 | 0011 | [Fork tests run against checked-in golden fixtures on every merge; live drift is a non-blocking nightly](ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md) | Accepted |
 | 0012 | [Ed25519 is the default identity algorithm; secp256k1 is confined to the EVM boundary; one keystore primitive serves both curves](ADR-0012-dual-curve-identity-policy.md) | Accepted |
+| 0013 | [Verify deploy tooling and dapp integration against the Robot Money Devnet ("Twin"), not public Base Sepolia](ADR-0013-twin-devnet-over-base-sepolia-for-testnet-verification.md) | Accepted |
