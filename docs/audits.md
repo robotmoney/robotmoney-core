@@ -154,8 +154,11 @@ both directions. The four "High access-control" contract findings collapse
 allowance). The off-chain remediation landed in two phases — **#1009**
 (Off-chain scan remediation) and **#1035** (residual) — so every CONFIRMED
 indexer/watchdog/rmpc/harness/dapp finding now carries its landed PR. CONTRACT
-findings whose "fix specified" never landed (FS-VLT-10, FS-VLT-19) are
-corrected to `accepted-with-rationale` (open); FS-VLT-25 does not reproduce.
+findings whose "fix specified" never landed (FS-VLT-10) are corrected to
+`accepted-with-rationale` (open); FS-VLT-19 is now `fixed` — #1092 gives
+`BasketVault` matching-selector `retire()`/`unretire()` implementations, so
+`vaults/` subclasses no longer revert on `IRetirableVault(vault).retire()`;
+FS-VLT-25 does not reproduce.
 The 2026-07-28 reconciliation found that seven AZ-0623 fixes and the FS-RTR-1
 fix had merged after this ledger was last updated; those rows now record their
 merged remediation PRs rather than the stale accepted dispositions.
@@ -212,7 +215,7 @@ merged remediation PRs rather than the stale accepted dispositions.
 | FS-VLT-16 | FS-0619 | Medium→Info | dismissed-with-rationale | UniswapV4SwapAdapter | — | "Noncanonical router ABI" refuted; own shim |
 | FS-VLT-17 | FS-0619 | Medium→down | accepted-with-rationale | UniswapV4SwapAdapter | #1186 | Router-eligibility now proven end-to-end (`UniswapV4RouterEligibilityIntegration.t.sol`: real Vault + VaultRegistry + PortfolioRouter, deposit drives adapter.deploy()); V4 pricing still assumes a V3-shaped observe() pool rather than real v4-core's PoolManager singleton — that half remains accepted-with-rationale, unchanged |
 | FS-VLT-18 | FS-0619 | Medium | fixed | VaultRegistry, RobotMoneyVault | #959 | Retire left router-eligibility state stale; unified registry-driven `retire()`/`unretire()` on the base vault |
-| FS-VLT-19 | FS-0619 | Medium | accepted-with-rationale | VaultRegistry, BasketVault | — | Registry retire() reverts on basket subclasses; CONFIRMED still-latent — `vaults/` subclasses don't inherit `RobotMoneyVault`/`IRetirableVault`, no fix landed |
+| FS-VLT-19 | FS-0619 | Medium | fixed | VaultRegistry, BasketVault | #1092 | Registry retire() reverted on basket subclasses; `BasketVault` now implements matching-selector `retire()`/`unretire()` so `vaults/` subclasses dispatch correctly, registry-side calls no longer try/catch the hook |
 | FS-VLT-20 | FS-0619 | Medium→down | accepted-with-rationale | BasketVault | — | Withdrawals/rebalance push adapters above caps; by design, re-converges |
 | FS-VLT-21 | FS-0619 | Low | accepted-with-rationale | RobotMoneyVault | — | `redeem()` return diverges from USDC transferred; confirmed, minor |
 | FS-VLT-22 | FS-0619 | Low | accepted-with-rationale | RobotMoneyVault | — | Exact-asset withdraw overcharges fee (ceil gross-up); ±1 unit dust |
@@ -437,7 +440,7 @@ the per-finding rationale lives in the register above.
 | Finding group | Disposition | Second reviewer (verification pass) | Revisit-before path |
 |---|---|---|---|
 | FS-0619 dismissed (FS-IDX-9, FS-WD-3, FS-RTR-3/4, FS-VLT-2/4/6/7/11/14/16/24/25, FS-RPC-6/17, FS-HARN-1/3/4/7/8/9, FS-DAPP-3) | dismissed-with-rationale | 20260619-code-review-internal-claude-scan-verification.md (7 reviewer passes) | The named component before any change to indexer/watchdog/router/gateway/vault/adapter/rmpc/harness/dapp logic those IDs touch |
-| FS-0619 accepted-open (FS-VLT-10, FS-VLT-19, FS-RPC-11 + all FS-* not fixed/dismissed) | accepted-with-rationale | 20260619-code-review-internal-claude-scan-verification.md (7 reviewer passes) | The named component before any change to that finding's code path; FS-VLT-10 / FS-VLT-19 / FS-RPC-11 are CONFIRMED-open with no landed fix — close before mainnet |
+| FS-0619 accepted-open (FS-VLT-10, FS-RPC-11 + all FS-* not fixed/dismissed) | accepted-with-rationale | 20260619-code-review-internal-claude-scan-verification.md (7 reviewer passes) | The named component before any change to that finding's code path; FS-VLT-10 / FS-RPC-11 are CONFIRMED-open with no landed fix — close before mainnet |
 | MC-0619 accepted/dismissed (MC-F-12, MC-F-18, MC-F-19) | accepted-with-rationale / dismissed-with-rationale | 20260619-code-review-pekshield.md (4 reviewer passes) | PortfolioRouter cap config; IUpstreamMonitor wiring; Slither suppressions |
 | HR-0618 accepted (HR-M-10 bypass-half, HR-L-9/11/13, HR-I-1…I-8, HR-L3-F1/F2) | accepted-with-rationale | 20260618-code-review-internal-claude.md (double-checked second pass) | Governance `setWeights`/admin-floor; vault redeemFor/rescue paths; adapter sentinel/oracle scaling before any major change |
 | HR-0618 dismissed (HR-S-1) | dismissed-with-rationale | 20260618-code-review-internal-claude.md + Slither 0.11.5 triage | Production Solidity before re-running Slither / changing suppressions |
