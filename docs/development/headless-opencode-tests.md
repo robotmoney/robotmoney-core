@@ -226,9 +226,14 @@ actually changed — a silent gateway no-op would also pass.
 - Round-trip script: `.github/scripts/assert_headless_deposit_delta.py`.
 - Pytest module: `.github/scripts/tests/test_transcript_asserter_provenance.py`
   pins both positive and negative branches of the provenance check.
-- Negative control: `.github/scripts/tests/negative_control_drop_plugin_flag.sh`
-  proves the workflow-lint one-liner catches a regression that strips
-  the `--plugin` flag.
+- Negative control: **withdrawn (issue #1235).** This closure previously
+  named `.github/scripts/tests/negative_control_drop_plugin_flag.sh` as
+  proving a workflow-lint one-liner catches a regression that strips the
+  `--plugin` flag. That script was never written — the claim was a
+  guarantee documented as closed by a script that does not exist. No
+  CI-executed regression guard currently proves a dropped plugin-provenance
+  argument would be caught; writing one is open work, not part of #1235's
+  scope (which is the sweep that found this gap, not closing it).
 - Registry: `~/.agents/lucky-tensor/robotmoney-skills/agent-ensure-feature.md`
   carries the `opencode plugin provenance` entry with the verify command.
 
@@ -240,9 +245,12 @@ actually changed — a silent gateway no-op would also pass.
 the table below runs inside suite-11b's disabled `deposit` job, so the
 create-key → authorize → deposit onboarding path is not exercised by any current
 CI run. The negative control (`negative_control_keystore_generate_flag.sh`) is
-independent of a live model, but it is invoked by no workflow (tracked by #1235),
-so it contributes zero executed coverage — this gap is fully reopened, not
-partially. Tracked by #1233.
+independent of a live model and now runs on every trigger — including
+`pull_request` — as a step in suite-11b's offline `asserter-tests` job (issue
+#1235; previously invoked by no workflow and contributed zero executed
+coverage). That one regression guard is real coverage, but the create-key →
+authorize → deposit round trip it guards a corner of is still not exercised
+end-to-end by any current CI run. Tracked by #1233.
 
 **Gap description:** Suite-11b's "Generate agent EOA + fund" step ran
 `rmpc-keystore-import -- --generate` and parsed `jq -r '.address'`, but
@@ -290,7 +298,8 @@ against the same freshly-generated key, one assertable step at a time:
   (`-- --generate`, no env), asserts exit ≠ 0, asserts stderr references
   `RMPC_IMPORT_PRIVKEY_HEX`, and asserts the stdout is not JSON
   parseable as `.address` — proving the old broken form cannot silently
-  return.
+  return. Runs as a step in `asserter-tests` on every trigger, including
+  `pull_request` (issue #1235).
 - Pre-deposit fast-fail: the authorization assertion runs before any
   capture/deposit step, so skipping `authorizeAgent` (or pointing it at
   a different key) fails the job immediately.
