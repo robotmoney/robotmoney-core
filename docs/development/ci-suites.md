@@ -244,7 +244,11 @@ A per-test audit of suite-05's coverage against the alternative suites is record
 ### 6. Rust client unit tests
 **Suggested file:** `.github/workflows/rmpc-unit.yml`
 **Environment:** `none`
-**Trigger paths:** `clients/rust-payment-client/**`
+**Trigger paths:** none — runs on every PR and push, with no `paths:` filter.
+This is not an oversight: step 6 (`plugin_skill_command_examples`, issue
+#1203) must run on docs-only PRs that touch only `plugins/**/*.md`, which a
+`clients/rust-payment-client/**` filter would exclude — silently reinstating
+the false-green shape #1199/#1203 were filed about (issue #1231).
 
 **Jobs:**
 - `unit` — single job, no dependencies

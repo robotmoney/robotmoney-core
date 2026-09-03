@@ -87,27 +87,64 @@ fn swarm_skill() -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+/// Recursion cap for [`walk`]. `plugins/` is a handful of levels deep in
+/// practice; this is a generous backstop against a directory tree deep
+/// enough to blow the stack, kept as a distinct guard from the symlink skip
+/// below (issue #1231) so a non-symlink pathological tree still fails fast
+/// and loud instead of hanging to the job's 20-minute timeout.
+const MAX_WALK_DEPTH: usize = 64;
+
 /// Every markdown file shipped under `plugins/`, sorted for a stable failure
 /// order. All of them are skill documents (`SKILL.md` or a `references/*.md`
 /// it links).
 fn plugin_skill_markdown() -> Vec<PathBuf> {
-    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
-        let entries =
-            fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("directory entry").path();
-            if path.is_dir() {
-                walk(&path, found);
-            } else if path.extension().is_some_and(|ext| ext == "md") {
-                found.push(path);
-            }
-        }
-    }
-
     let mut found = Vec::new();
-    walk(&repo_root().join("plugins"), &mut found);
+    walk(&repo_root().join("plugins"), 0, &mut found);
     found.sort();
     found
+}
+
+/// Recursively collect `.md` files under `dir` into `found`.
+///
+/// Two guards, both load-bearing (issue #1231): suite 6 runs on a bare
+/// `pull_request:` trigger with no paths filter, so a fork PR can add
+/// anything under `plugins/` and this walk will see it before any human
+/// review.
+///
+/// * **Never follow symlinks.** `DirEntry::file_type()` reports the entry's
+///   own type without dereferencing it, unlike `Path::is_dir()`
+///   (`walk`'s previous check), which follows the link. A symlinked
+///   directory could otherwise recurse into a cycle (`loop -> .`) for
+///   unbounded recursion, and a symlinked file could point outside the
+///   checkout, whose content would then be read by `harvest_invocations`
+///   and could surface in the public CI failure log.
+/// * **Cap recursion depth.** A backstop independent of the symlink check
+///   above, in case a future caller passes a tree that is merely very deep
+///   rather than cyclic.
+fn walk(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    assert!(
+        depth <= MAX_WALK_DEPTH,
+        "{}: exceeded max plugin-markdown walk depth of {MAX_WALK_DEPTH} — symlink cycle or \
+         pathologically deep tree?",
+        dir.display()
+    );
+    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+    for entry in entries {
+        let entry = entry.expect("directory entry");
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|e| panic!("file_type {}: {e}", path.display()));
+        if file_type.is_symlink() {
+            // Deliberately skipped, not followed: see the doc comment above.
+            continue;
+        }
+        if file_type.is_dir() {
+            walk(&path, depth + 1, found);
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            found.push(path);
+        }
+    }
 }
 
 /// One `rmpc` command line harvested from a skill document.
@@ -618,6 +655,90 @@ fn abbreviated_check_rejects_an_unknown_subcommand() {
     assert!(
         rejection.contains("vote-sumbit"),
         "unexpected rejection: {rejection}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// walk() symlink safety — issue #1231. Suite 6 runs on a bare `pull_request:`
+// trigger with no paths filter, so a fork PR can add a symlink anywhere under
+// `plugins/`; these tests prove `walk` neither follows it outside the
+// checkout nor recurses without bound, by actually running it against a
+// symlink and asserting the outcome rather than by inspection.
+// ---------------------------------------------------------------------------
+
+/// A symlinked directory that points back at its own ancestor must not be
+/// followed into an infinite recursion. Proven by actually running `walk`
+/// over the cycle and observing it return promptly.
+#[cfg(unix)]
+#[test]
+fn walk_does_not_follow_a_cyclic_directory_symlink() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let root = tmp.path().join("plugins");
+    fs::create_dir(&root).expect("create plugins dir");
+    fs::write(root.join("real.md"), "# real").expect("write real.md");
+
+    // plugins/loop -> plugins (a self-referential cycle one level down).
+    std::os::unix::fs::symlink(&root, root.join("loop")).expect("create symlink cycle");
+
+    let mut found = Vec::new();
+    walk(&root, 0, &mut found);
+
+    // The cycle must be skipped entirely, not walked even once: only the
+    // real file directly under `root` is collected.
+    assert_eq!(
+        found,
+        vec![root.join("real.md")],
+        "walk must skip the symlinked directory rather than follow it"
+    );
+}
+
+/// A symlinked file pointing outside the walked tree must never be read: its
+/// content must not appear in the collected markdown paths, which is what
+/// stops `harvest_invocations` from reading (and potentially leaking, via a
+/// failure message) a file from outside the checkout.
+#[cfg(unix)]
+#[test]
+fn walk_does_not_follow_a_symlink_pointing_outside_the_tree() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let outside = tmp.path().join("outside-secret.md");
+    fs::write(&outside, "# should never be read by the plugin walk").expect("write outside file");
+
+    let root = tmp.path().join("plugins");
+    fs::create_dir(&root).expect("create plugins dir");
+    fs::write(root.join("real.md"), "# real").expect("write real.md");
+
+    // plugins/leak.md -> ../outside-secret.md
+    std::os::unix::fs::symlink(&outside, root.join("leak.md")).expect("create symlink out");
+
+    let mut found = Vec::new();
+    walk(&root, 0, &mut found);
+
+    assert_eq!(
+        found,
+        vec![root.join("real.md")],
+        "walk must not collect a symlink target that points outside the walked tree"
+    );
+}
+
+/// A directory tree deeper than [`MAX_WALK_DEPTH`] must fail loudly (a
+/// panic, caught here) rather than blow the stack or hang.
+#[test]
+fn walk_panics_on_a_tree_deeper_than_the_recursion_cap() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut cur = tmp.path().to_path_buf();
+    for i in 0..(MAX_WALK_DEPTH + 2) {
+        cur = cur.join(format!("d{i}"));
+        fs::create_dir(&cur).expect("create nested dir");
+    }
+
+    let root = tmp.path().to_path_buf();
+    let result = std::panic::catch_unwind(move || {
+        let mut found = Vec::new();
+        walk(&root, 0, &mut found);
+    });
+    assert!(
+        result.is_err(),
+        "walk must panic once the recursion depth cap is exceeded"
     );
 }
 
