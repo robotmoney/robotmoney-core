@@ -19,7 +19,8 @@
 #   5. DeployRouterGovernance.s.sol         (pinned cadence env)
 #   6. DeployInvestmentCommitteePolicy.s.sol  IC + receipt, ONE ceremony,
 #                                             BEFORE the timelock handover
-#   7. DeployTimelock.s.sol          five-core ADMIN_ROLE handover (INV-3)
+#   7. DeployTimelock.s.sol          five-core + IC policy + receipt ADMIN_ROLE
+#                                    handover (INV-3, issue #1319)
 #   8. write + validate deployments record
 #
 # Usage:
@@ -326,12 +327,15 @@ receipt_wired="$("$CAST" call --json "$GATEWAY" "consensusReceipt()(address)" --
   || fail "gateway icPolicy()=$ic_wired != $IC_POLICY"
 [[ "$(lower_addr "$receipt_wired")" == "$(lower_addr "$RECEIPTS")" ]] \
   || fail "gateway consensusReceipt()=$receipt_wired != $RECEIPTS"
-assert_role "$RECEIPTS" "$ADMIN_ROLE" "$RECEIPT_ADMIN_ADDRESS" true "receipt ADMIN_ROLE == configured RECEIPT_ADMIN_ADDRESS"
 info "postcondition OK: IC policy + receipt wired into gateway (one ceremony)"
+# NOTE: the receipt's ADMIN_ROLE sits on RECEIPT_ADMIN_ADDRESS only
+# transiently, between this step and the timelock handover below. The final,
+# INV-3-compliant state (timelock holds it, RECEIPT_ADMIN_ADDRESS does not) is
+# asserted after step 7, not here (issue #1319).
 
-# ─── 7. Timelock handover: five-core INV-3 ───────────────────────────────────
+# ─── 7. Timelock handover: five-core + IC policy + receipt (INV-3) ───────────
 TL_OUT="$CUR/timelock.json"
-run_step "DeployTimelock (five-core ADMIN_ROLE handover)" env \
+run_step "DeployTimelock (five-core + IC policy + receipt ADMIN_ROLE handover)" env \
   VAULT_ADDRESS="$VAULT" \
   GATEWAY_ADDRESS="$GATEWAY" \
   REGISTRY_ADDRESS="$REGISTRY" \
@@ -340,6 +344,9 @@ run_step "DeployTimelock (five-core ADMIN_ROLE handover)" env \
   SAFE_ADDRESS="$SAFE_ADDRESS" \
   EMERGENCY_ADDRESS="$EMERGENCY_ADDRESS" \
   TIMELOCK_MIN_DELAY="$TIMELOCK_MIN_DELAY" \
+  IC_POLICY_ADDRESS="$IC_POLICY" \
+  CONSENSUS_RECEIPT_ADDRESS="$RECEIPTS" \
+  RECEIPT_ADMIN_ADDRESS="$RECEIPT_ADMIN_ADDRESS" \
   DEPLOYMENT_OUT="$TL_OUT" \
   "$FORGE" script contracts/script/DeployTimelock.s.sol:DeployTimelock \
   --rpc-url "$RPC_URL" --private-key "$DEPLOYER_KEY" --broadcast --slow -vvv \
@@ -355,6 +362,19 @@ assert_role "$GATEWAY" "$DEFAULT_ADMIN_ROLE" "$DEPLOYER_ADDRESS" false "INV-3: d
 assert_role "$VAULT" "$EMERGENCY_ROLE" "$EMERGENCY_ADDRESS" true "vault EMERGENCY_ROLE on emergency key"
 assert_role "$VAULT" "$EMERGENCY_ROLE" "$DEPLOYER_ADDRESS" false "deployer stripped of vault EMERGENCY_ROLE"
 info "postcondition OK: five-core INV-3 timelock handover verified"
+
+# INV-3 extends to the IC policy + consensus receipt (issue #1319 — closes the
+# gap where these two contracts' ADMIN_ROLE/DEFAULT_ADMIN_ROLE were never
+# verified to leave RECEIPT_ADMIN_ADDRESS / the deployer after the ceremony).
+assert_role "$IC_POLICY" "$ADMIN_ROLE" "$TIMELOCK" true "INV-3: timelock holds ADMIN_ROLE on IC policy"
+assert_role "$IC_POLICY" "$ADMIN_ROLE" "$DEPLOYER_ADDRESS" false "INV-3: deployer stripped of ADMIN_ROLE on IC policy"
+assert_role "$IC_POLICY" "$DEFAULT_ADMIN_ROLE" "$TIMELOCK" true "INV-3: timelock holds DEFAULT_ADMIN_ROLE on IC policy"
+assert_role "$IC_POLICY" "$DEFAULT_ADMIN_ROLE" "$DEPLOYER_ADDRESS" false "INV-3: deployer stripped of DEFAULT_ADMIN_ROLE on IC policy"
+assert_role "$RECEIPTS" "$ADMIN_ROLE" "$TIMELOCK" true "INV-3: timelock holds ADMIN_ROLE on receipt"
+assert_role "$RECEIPTS" "$ADMIN_ROLE" "$RECEIPT_ADMIN_ADDRESS" false "INV-3: RECEIPT_ADMIN_ADDRESS stripped of ADMIN_ROLE on receipt"
+assert_role "$RECEIPTS" "$DEFAULT_ADMIN_ROLE" "$TIMELOCK" true "INV-3: timelock holds DEFAULT_ADMIN_ROLE on receipt"
+assert_role "$RECEIPTS" "$DEFAULT_ADMIN_ROLE" "$RECEIPT_ADMIN_ADDRESS" false "INV-3: RECEIPT_ADMIN_ADDRESS stripped of DEFAULT_ADMIN_ROLE on receipt"
+info "postcondition OK: IC policy + receipt INV-3 timelock handover verified"
 
 # ─── 8. Record ───────────────────────────────────────────────────────────────
 if [[ -n "$RECORD_PATH" ]]; then
